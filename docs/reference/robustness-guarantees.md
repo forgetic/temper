@@ -5,7 +5,7 @@ uphold, the deterministic test support that proves them, and the limitations the
 tests surfaced. It complements `workflow-layer.md`, which defines the runtime
 contract; this page is the safety-property register.
 
-All guarantees are proven by deterministic tests (Phase 8). No test sleeps or
+All guarantees are proven by deterministic tests (Phases 8–10). No test sleeps or
 depends on wall-clock time: faults fire on fixed call counts and every timestamp
 is supplied explicitly, so the suite is reproducible.
 
@@ -26,7 +26,7 @@ is supplied explicitly, so the suite is reproducible.
 
 | Property | Where proven |
 | --- | --- |
-| No duplicate artifact is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
+| No duplicate issue or pull request is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
 | A merge is not authorized, and the pull request is not merged, until review and testing gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
 | The gate mechanism blocks a merge until CI, review, and testing all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together` |
@@ -49,8 +49,9 @@ is supplied explicitly, so the suite is reproducible.
   state is recoverable after a restart: if its effects never landed it is a
   `PartialTransition` to `Repair`; if they already landed it is a `StaleCommand`
   to `MarkReconciled`.
-- **Idempotent create.** `Executor::ensure_issue` stamps the correlation key into
-  the new body before creating, so a create that crashes after it lands is found
+- **Idempotent create.** `Executor::ensure_issue` and
+  `Executor::ensure_pull_request` stamp the correlation key into the new body
+  before creating, so an issue or PR create that crashes after it lands is found
   by the retry instead of being duplicated.
 - **At-most-once merge.** `MergePullRequest` runs before the label commit point
   and is skipped when the freshly loaded pull request is already merged. A crash
@@ -61,8 +62,8 @@ is supplied explicitly, so the suite is reproducible.
 
 ## Limitations discovered by the tests
 
-These are real gaps the Phase 8 tests exposed; they are documented here rather
-than hidden:
+These are real gaps the robustness tests exposed; they are documented here
+rather than hidden:
 
 - **Lease acquisition is not compare-and-swap.** `LeaseManager` loads fresh
   state, plans, then writes. A live lease cannot be taken by a peer (tested), and
@@ -75,9 +76,6 @@ than hidden:
   interleavings. The webhook-accelerated triggering model (ADR 0009) widens this
   concurrency window, so closing it with a compare-and-swap primitive is a
   prioritized follow-up.
-- **Pull-request idempotent create is not implemented.** Only
-  `Executor::ensure_issue` exists. The correlation-key mechanism is identical for
-  pull requests, so the no-duplicate guarantee will transfer once it is added.
 - **The five-role fixture wires no CI gate.** It declares `ci-passed`/`ci-failed`
   labels and a `ci` state dimension, but `approve_merge` requires only
   `review_gate` and `testing_gate`. CI is modeled as external state with no

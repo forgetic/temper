@@ -40,9 +40,10 @@ Status legend: ☐ pending · ☑ done.
   `landed`/`owner-pending` labels as ordinary `add_label` effects on the merge
   transition. `safety_properties` proves no premature merge, at-most-once merge
   under crash/retry, and the post-merge projection.
-- ☐ **10 — PR idempotent create.** `Executor::ensure_pull_request` mirroring
-  `ensure_issue`; execute `CreatePullRequest` with a correlation key. Closes a
-  limitation in `robustness-guarantees.md`.
+- ☑ **10 — PR idempotent create.** `Executor::ensure_pull_request` mirrors
+  `ensure_issue`; `Executor::execute` runs `CreatePullRequest` through that path
+  with a correlation key and runtime create input. Closes the prior
+  PR-create limitation in `robustness-guarantees.md`.
 - ☐ **11 — External-signal gates (ADR).** New gate class satisfied by a
   Forge-projected condition (e.g. `ci = passed`), not only sibling transitions.
   Remove the zero-role `record_ci_pass`/`record_ci_failure` adapter workaround

@@ -9,7 +9,10 @@
 mod support;
 
 use chrono::Duration;
-use harness_forge::{CreateIssue, Forge, IssueQuery, PullRequestState, UserId};
+use harness_forge::{
+    BranchRef, CreateIssue, CreatePullRequest, Forge, IssueQuery, PullRequestQuery,
+    PullRequestState, RepositoryId, UserId,
+};
 use harness_workflow::{
     parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, ExecutionError, Executor,
     InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy, RawWorkflowSpec,
@@ -77,47 +80,95 @@ fn code_issue_input() -> CreateIssue {
     }
 }
 
+fn implementation_pr_input(repo: &RepositoryId) -> CreatePullRequest {
+    CreatePullRequest {
+        title: "Implement login".into(),
+        body: "Implements login.".into(),
+        source: BranchRef {
+            repository_id: repo.clone(),
+            branch: "feature/login".into(),
+        },
+        target: BranchRef {
+            repository_id: repo.clone(),
+            branch: "main".into(),
+        },
+        labels: vec!["implementation".into()],
+        assignees: Vec::<UserId>::new(),
+    }
+}
+
 // Safety property 1: no duplicate artifact is created for one correlation key,
-// even when a create crashes after it lands in the backend.
-//
-// `Executor::ensure_issue` is the implemented idempotent create. Pull-request
-// idempotent create is not implemented yet (see `docs/reference/workflow-layer.md`)
-// but reuses the same correlation-key mechanism, so this guarantee transfers.
+// even when an issue or pull-request create crashes after it lands in the
+// backend.
 #[test]
 fn no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash() {
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
-    // The create lands in the backend, then the call crashes before returning.
-    let crash = CrashForge::new(forge, vec![Fault::after(ForgeOp::CreateIssue, 1)]);
+    // Each create lands in the backend, then the call crashes before returning.
+    let crash = CrashForge::new(
+        forge,
+        vec![
+            Fault::after(ForgeOp::CreateIssue, 1),
+            Fault::after(ForgeOp::CreatePullRequest, 1),
+        ],
+    );
     let workflow = workflow();
     let executor = Executor::new(&workflow, &crash);
 
     let crashed = block_on(executor.ensure_issue(&repo, "code-issue-42", code_issue_input()))
-        .expect_err("the create crashes after it lands");
+        .expect_err("the issue create crashes after it lands");
     assert!(matches!(crashed, ExecutionError::Backend { .. }));
 
-    // The crashed create left exactly one issue, carrying the correlation key it
-    // stamped, so a retry can find it.
     let after_crash =
         block_on(crash.inner().list_issues(&repo, IssueQuery::default())).expect("list issues");
     assert_eq!(
         after_crash.len(),
         1,
-        "the crashed create left exactly one issue"
+        "the crashed issue create left exactly one issue"
     );
 
-    // The retry resolves to the existing issue instead of creating a duplicate.
     let retry = block_on(executor.ensure_issue(&repo, "code-issue-42", code_issue_input()))
-        .expect("the retry resolves to the existing issue");
-    assert!(!retry.was_created(), "no duplicate is created on retry");
+        .expect("the issue retry resolves to the existing issue");
+    assert!(!retry.was_created(), "no duplicate issue is created");
     let after_retry =
         block_on(crash.inner().list_issues(&repo, IssueQuery::default())).expect("list issues");
+    assert_eq!(after_retry.len(), 1, "still exactly one issue");
+
+    let crashed = block_on(executor.ensure_pull_request(
+        &repo,
+        "implementation-pr-42",
+        implementation_pr_input(&repo),
+    ))
+    .expect_err("the pull-request create crashes after it lands");
+    assert!(matches!(crashed, ExecutionError::Backend { .. }));
+
+    let after_crash = block_on(
+        crash
+            .inner()
+            .list_pull_requests(&repo, PullRequestQuery::default()),
+    )
+    .expect("list pull requests");
     assert_eq!(
-        after_retry.len(),
+        after_crash.len(),
         1,
-        "still exactly one issue after the retry"
+        "the crashed PR create left exactly one pull request"
     );
+
+    let retry = block_on(executor.ensure_pull_request(
+        &repo,
+        "implementation-pr-42",
+        implementation_pr_input(&repo),
+    ))
+    .expect("the PR retry resolves to the existing pull request");
+    assert!(!retry.was_created(), "no duplicate PR is created");
+    let after_retry = block_on(
+        crash
+            .inner()
+            .list_pull_requests(&repo, PullRequestQuery::default()),
+    )
+    .expect("list pull requests");
+    assert_eq!(after_retry.len(), 1, "still exactly one pull request");
 }
 
 // Safety property 2: an exclusive claim never holds two active leases at once.

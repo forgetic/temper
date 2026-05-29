@@ -15,13 +15,12 @@
 //! # Non-label effects
 //!
 //! Besides label add/remove, the executor applies `SetAssignee`,
-//! `RemoveAssignee`, `CreateComment` (Phase 9b), and `MergePullRequest`
-//! (Phase 9c). Assignee effects name a
-//! workflow *role*; the [`ExecutionContext`] supplies the role→Forge-user
-//! binding, and an unbound role fails with
-//! [`ExecutionError::UnresolvedAssignee`] before any mutation. Assignee changes
-//! are folded into the same single label update so the state flip is one atomic
-//! backend call.
+//! `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and
+//! `MergePullRequest`. Assignee effects name a workflow *role*; the
+//! [`ExecutionContext`] supplies the role→Forge-user binding, and an unbound
+//! role fails with [`ExecutionError::UnresolvedAssignee`] before any mutation.
+//! Assignee changes are folded into the same single label update so the state
+//! flip is one atomic backend call.
 //!
 //! Comments are not naturally idempotent, so each planned comment is stamped
 //! with a deterministic marker derived from `(transition, comment-index)` and
@@ -32,6 +31,12 @@
 //! after it leaves the transition fully applied (a retry sees stale
 //! preconditions and is correctly refused).
 //!
+//! `CreatePullRequest` is applied through [`Executor::ensure_pull_request`]. The
+//! effect supplies the correlation key; [`ExecutionContext`] supplies the
+//! concrete title, body, branches, labels, and assignees. The create runs before
+//! the label/assignee commit point so a retry after a landed create reuses the
+//! existing pull request rather than duplicating it.
+//!
 //! # Merge and post-merge projection
 //!
 //! `MergePullRequest` is applied through the [`Forge`] merge API. It runs
@@ -41,8 +46,8 @@
 //! response. The transition's post-merge labels (`landed`, `owner-pending`) are
 //! modeled as ordinary `add_label` effects, so they are projected by the same
 //! atomic update and survive on the now-closed pull request — there is no
-//! executor-special-cased post-merge labeling. `CreatePullRequest` and lease
-//! effects remain unsupported until later phases.
+//! executor-special-cased post-merge labeling. Lease effects remain unsupported
+//! until later phases.
 //!
 //! Reloading and re-planning before every mutation is deliberate: Forge state
 //! can be edited by humans or other workers between planning and execution, so
@@ -56,11 +61,12 @@
 //! # Idempotent create
 //!
 //! The current [`Forge`] interface has no native create-once primitive, so
-//! [`Executor::ensure_issue`] implements idempotency in the workflow layer: it
-//! stamps a [correlation key](crate::metadata::WorkflowMetadata::correlation_key)
-//! into the new artifact's metadata block and searches existing artifacts for
-//! that key before creating. Retrying with the same key returns the existing
-//! artifact instead of creating a duplicate.
+//! [`Executor::ensure_issue`] and [`Executor::ensure_pull_request`] implement
+//! idempotency in the workflow layer: they stamp a
+//! [correlation key](crate::metadata::WorkflowMetadata::correlation_key) into
+//! the new artifact's metadata block and search existing artifacts for that key
+//! before creating. Retrying with the same key returns the existing artifact
+//! instead of creating a duplicate.
 
 mod apply;
 
@@ -71,8 +77,8 @@ use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMeta
 use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
-    CreateIssue, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequestId, PullRequestState,
-    RepositoryId,
+    CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequest,
+    PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
 };
 
 /// Outcome of an idempotent ensure-create operation.
@@ -129,8 +135,8 @@ pub struct ExecutionReport {
 /// request itself, a [precondition](ExecutionError::Precondition) problem with
 /// the artifact's current state, and a [backend](ExecutionError::Backend)
 /// failure from the Forge. Classification, missing-target, unsupported-effect,
-/// and postcondition failures are reported distinctly so callers never have to
-/// guess which stage failed.
+/// missing-create-context, and postcondition failures are reported distinctly so
+/// callers never have to guess which stage failed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionError {
     /// The request is invalid regardless of artifact state: an undeclared
@@ -149,6 +155,15 @@ pub enum ExecutionError {
     /// An assignee effect named a role with no Forge user bound in the
     /// [`ExecutionContext`]. Reported before any mutation.
     UnresolvedAssignee { role: RoleId },
+    /// A `CreatePullRequest` effect omitted the correlation key needed for
+    /// idempotent execution. Reported before any mutation.
+    MissingCorrelationKey { effect: WorkflowEffect },
+    /// A `CreatePullRequest` effect has no concrete create input bound in the
+    /// [`ExecutionContext`]. Reported before any mutation.
+    UnresolvedPullRequestCreate {
+        transition: TransitionId,
+        effect_index: usize,
+    },
     /// A postcondition did not hold after the effects were applied.
     PostconditionFailed { postcondition: Postcondition },
     /// A backend operation failed.
@@ -181,6 +196,16 @@ impl std::fmt::Display for ExecutionError {
                     "no Forge user is bound for assignee role `{role}`"
                 )
             }
+            ExecutionError::MissingCorrelationKey { effect } => {
+                write!(formatter, "effect {effect:?} has no correlation key")
+            }
+            ExecutionError::UnresolvedPullRequestCreate {
+                transition,
+                effect_index,
+            } => write!(
+                formatter,
+                "no pull-request create input is bound for transition `{transition}` create effect #{effect_index}"
+            ),
             ExecutionError::PostconditionFailed { postcondition } => {
                 write!(
                     formatter,
@@ -318,11 +343,12 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             .plan_transition(transition, role, loaded.classified())
             .map_err(classify_plan_error)?;
 
-        // `apply` validates every effect (rejecting unsupported effects and
-        // unbound assignee roles) before it mutates anything, posts idempotent
-        // comments, then folds labels and assignees into a single update. A
-        // transition therefore never partially applies its label/assignee flip.
-        self.apply(&loaded, &plan).await?;
+        // `apply` validates every effect (rejecting unsupported effects,
+        // missing create inputs, and unbound assignee roles) before it mutates
+        // anything, posts idempotent comments, ensures pull requests, then
+        // folds labels and assignees into a single update. A transition
+        // therefore never partially applies its label/assignee flip.
+        self.apply(repo_id, &loaded, &plan).await?;
         self.verify(repo_id, target, &plan.postconditions).await?;
 
         Ok(ExecutionReport {
@@ -424,6 +450,35 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         Ok(EnsureOutcome::Created(created))
     }
 
+    /// Idempotently ensures a pull request exists for a correlation key.
+    ///
+    /// Searches existing pull requests for one whose metadata block carries
+    /// `correlation_key`; if found, returns it unchanged. Otherwise stamps the
+    /// key into the new pull request's metadata block and creates it. Retrying
+    /// with the same key therefore returns the existing pull request instead of
+    /// duplicating it.
+    pub async fn ensure_pull_request(
+        &self,
+        repo_id: &RepositoryId,
+        correlation_key: &str,
+        input: CreatePullRequest,
+    ) -> Result<EnsureOutcome<PullRequest>, ExecutionError> {
+        if let Some(existing) = self
+            .find_pull_request_by_correlation(repo_id, correlation_key)
+            .await?
+        {
+            return Ok(EnsureOutcome::Existing(existing));
+        }
+
+        let body = body_with_correlation_key(&input.body, correlation_key)
+            .map_err(|message| ExecutionError::Backend { message })?;
+        let created = self
+            .forge
+            .create_pull_request(repo_id, CreatePullRequest { body, ..input })
+            .await?;
+        Ok(EnsureOutcome::Created(created))
+    }
+
     /// Finds an issue whose metadata block carries the correlation key.
     async fn find_issue_by_correlation(
         &self,
@@ -434,16 +489,36 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             .forge
             .list_issues(repo_id, IssueQuery::default())
             .await?;
-        Ok(issues.into_iter().find(|issue| {
-            matches!(
-                parse_metadata_block(&issue.body),
-                Ok(Some(WorkflowMetadata {
-                    correlation_key: Some(ref key),
-                    ..
-                })) if key == correlation_key
-            )
-        }))
+        Ok(issues
+            .into_iter()
+            .find(|issue| metadata_has_correlation_key(&issue.body, correlation_key)))
     }
+
+    /// Finds a pull request whose metadata block carries the correlation key.
+    async fn find_pull_request_by_correlation(
+        &self,
+        repo_id: &RepositoryId,
+        correlation_key: &str,
+    ) -> Result<Option<PullRequest>, ExecutionError> {
+        let pull_requests = self
+            .forge
+            .list_pull_requests(repo_id, PullRequestQuery::default())
+            .await?;
+        Ok(pull_requests
+            .into_iter()
+            .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
+    }
+}
+
+/// Returns `true` when `body` has a metadata block with `correlation_key`.
+fn metadata_has_correlation_key(body: &str, correlation_key: &str) -> bool {
+    matches!(
+        parse_metadata_block(body),
+        Ok(Some(WorkflowMetadata {
+            correlation_key: Some(ref key),
+            ..
+        })) if key == correlation_key
+    )
 }
 
 /// Returns `body` with `correlation_key` set in its metadata block.

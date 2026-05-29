@@ -154,7 +154,7 @@ CI jobs are associated with a repository, a commit SHA, and optionally a pull re
 
 ## Idempotency
 
-Create operations (`create_issue`, `create_pull_request`, `add_*_comment`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue`; see `docs/reference/workflow-layer.md`. A future revision may add a portable correlation-key contract if it proves broadly useful.
+Create operations (`create_issue`, `create_pull_request`, `add_*_comment`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue` and `Executor::ensure_pull_request`; see `docs/reference/workflow-layer.md`. A future revision may add a portable correlation-key contract if it proves broadly useful.
 
 ## Compatibility notes
 

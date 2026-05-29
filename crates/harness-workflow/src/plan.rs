@@ -82,8 +82,8 @@ pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) ->
 /// except the create variants, which request a brand-new artifact.
 ///
 /// Transition specs can produce label, assignee, comment, pull-request create,
-/// and merge effects. Executors still apply only label effects today; every
-/// other planned variant is rejected as unsupported before mutation.
+/// and merge effects. The executor applies those runtime effects except for the
+/// lease placeholders, which are still rejected as unsupported before mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkflowEffect {
     /// Add a label to the target artifact. Produced from an `add_label` effect.

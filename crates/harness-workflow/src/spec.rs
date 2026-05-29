@@ -184,8 +184,8 @@ pub enum RawEffect {
     /// Request creation of a pull request.
     ///
     /// `correlation_key`, when present, identifies retries of the same create
-    /// request. Branches, title, body, and labels come from runtime context;
-    /// full execution is intentionally deferred to a later phase.
+    /// request. Branches, title, body, and labels come from runtime context at
+    /// execution time.
     CreatePullRequest {
         #[serde(default)]
         correlation_key: Option<String>,

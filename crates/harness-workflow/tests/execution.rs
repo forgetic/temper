@@ -356,37 +356,14 @@ fn unresolved_assignee_refuses_before_comment_or_label_mutation() {
 }
 
 #[test]
-fn pr_create_is_unsupported_but_merge_executes() {
+fn merge_pull_request_effect_executes() {
     let root = TestRoot::new();
     let forge = root.forge();
     let workflow = non_label_workflow();
     let repo = new_repo(&forge);
     let executor = workflow.executor(&forge);
-
-    // Pull-request create is still unsupported (lands in Phase 10).
-    let number = create_issue(&forge, &repo, &["code", "in-progress"]);
-    let error = block_on(executor.execute(
-        &repo,
-        ArtifactSource::Issue { number },
-        &TransitionId::new("open_pr"),
-        &RoleId::new("engineer"),
-    ))
-    .expect_err("PR create remains unsupported in this phase");
-    assert_eq!(
-        error,
-        ExecutionError::UnsupportedEffect {
-            effect: WorkflowEffect::CreatePullRequest {
-                correlation_key: Some("pr-1".into()),
-            },
-        }
-    );
-    assert_eq!(
-        issue_labels(&forge, &repo, number),
-        vec!["code".to_string(), "in-progress".to_string()]
-    );
-
-    // Merge now executes through the Forge merge API.
     let pr = create_pr(&forge, &repo, &["implementation"]);
+
     let report = block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: pr },

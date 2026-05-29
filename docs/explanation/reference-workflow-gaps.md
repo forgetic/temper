@@ -31,23 +31,19 @@ workarounds, which are themselves gaps:
 
 ### P0 — the delivery loop cannot complete without these
 
-1. **Remaining non-label effects (execution).** The spec can express assignee,
-   comment, pull-request create, and pull-request merge effects, and the
-   planner emits them in order. `Executor::execute` now applies assignee,
-   comment, and `MergePullRequest` effects (the merge at-most-once, with the
+1. **Claim-time lease effects.** The spec can express and execute assignee,
+   comment, pull-request create, and pull-request merge effects. `CreatePullRequest`
+   runs through `Executor::ensure_pull_request` with a correlation key and
+   runtime create input, and `MergePullRequest` is at-most-once with the
    post-merge `landed`/`owner-pending` projection modeled as `add_label`
-   effects); it still rejects `CreatePullRequest` with `UnsupportedEffect`.
-   Claim-time lease effects are also not yet emitted.
-2. **Pull-request idempotent create.** `open_pr` needs the
-   `Executor::ensure_issue` correlation-key pattern for PRs so a retry never
-   double-creates. Tied to the `CreatePullRequest` effect above.
+   effects. Claim-time lease effects are still not emitted.
 
 ### P1 — modeled behavior is unsafe or under-gated without these
 
-3. **External-signal gates.** A gate class satisfied by a Forge condition
+2. **External-signal gates.** A gate class satisfied by a Forge condition
    (`ci = passed`), not only by a sibling transition's labels. Removes the
    zero-role adapter-transition workaround and lets CI be a real gate.
-4. **First-class relations + `dependency_gate`.** Relations exist only in
+3. **First-class relations + `dependency_gate`.** Relations exist only in
    metadata (`parents`/`dependencies`), not as a spec primitive. The code→code
    dependency could not be expressed, so `dependency_gate` was omitted and
    `mark_code_ready` is a bare architect label flip with no prerequisite check.
@@ -56,16 +52,16 @@ workarounds, which are themselves gaps:
 
 ### P2 — fidelity/efficiency; expressible workarounds exist
 
-5. **Queue activation policy (`min_depth`/`max_age`).** `RawQueue` has no
+4. **Queue activation policy (`min_depth`/`max_age`).** `RawQueue` has no
    activation fields, so `owner_alignment` is a plain per-item queue instead of
    a batched cohort. A read-side spec field plus a pure planner predicate.
    *Workaround in fixture:* plain queue.
-6. **Multi-artifact-kind queues.** A queue matches exactly one `artifact_kind`,
+5. **Multi-artifact-kind queues.** A queue matches exactly one `artifact_kind`,
    but `escalated`/`needs-human` can sit on issues *or* PRs. *Workaround in
    fixture:* bound `escalations`/`needs_human` to `implementation_pr` only;
    issue-level routing would need duplicate per-kind queues. **Not in the
    design's anticipated list.**
-7. **Disjunctive (OR) queue label-sets.** Queue matching is AND-only, but the
+6. **Disjunctive (OR) queue label-sets.** Queue matching is AND-only, but the
    single conceptual "return to engineer" queue is changes-requested **or**
    testing-failed. *Workaround in fixture:* two queues
    (`pr_changes_requested`, `pr_testing_failed`), engineer subscribed to both.
@@ -73,9 +69,10 @@ workarounds, which are themselves gaps:
 
 ## Corrections to the design's anticipated list
 
-The design's "Anticipated harness additions" listed items 1–5 above. All five
-are confirmed. Two further gaps were hit that the list did not mention: items 6
-(multi-artifact-kind queues) and 7 (disjunctive queue label-sets). Both extend
+The design's "Anticipated harness additions" listed the P0/P1 items above plus
+queue activation. All remain confirmed, with pull-request create/idempotency now
+resolved. Two further gaps were hit that the list did not mention: items 5
+(multi-artifact-kind queues) and 6 (disjunctive queue label-sets). Both extend
 the queue primitive.
 
 ## Decisions to flag (no ADR written yet)
@@ -83,10 +80,10 @@ the queue primitive.
 Several backlog items extend the spec primitives and may each warrant an ADR.
 These are surfaced for a human decision, not decided here:
 
-- **External-signal gate (item 3)** — new gate class; extends the gate
+- **External-signal gate (item 2)** — new gate class; extends the gate
   primitive.
-- **Queue activation policy (item 5)** — new queue fields; extends the queue
+- **Queue activation policy (item 4)** — new queue fields; extends the queue
   primitive.
-- **Queue matching extensions (items 6–7)** — multi-kind and disjunctive
+- **Queue matching extensions (items 5–6)** — multi-kind and disjunctive
   matching also extend the queue primitive; open question whether they fold
   into the activation-policy ADR or stand alone.

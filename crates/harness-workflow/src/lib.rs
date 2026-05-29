@@ -55,11 +55,11 @@
 //! through a [`RecoveryPolicy`].
 //!
 //! Phase 9 added non-label effects: the spec, planner, and [`Effect`] express
-//! assignee, comment, pull-request create, and merge effects (9a), and the
-//! [`Executor`] now applies `SetAssignee`/`RemoveAssignee`/`CreateComment`
-//! through the [`harness_forge::Forge`] trait (9b). Assignee roles are resolved
-//! to Forge users through an [`ExecutionContext`]; comments are made idempotent
-//! with a per-transition marker.
+//! assignee, comment, pull-request create, and merge effects (9a); the
+//! [`Executor`] applies assignee/comment effects (9b) and merges at most once
+//! with post-merge label projection (9c). Phase 10 added idempotent
+//! pull-request creation through [`Executor::ensure_pull_request`] and
+//! `CreatePullRequest` execution with runtime inputs from [`ExecutionContext`].
 
 pub mod artifact;
 pub mod classify;

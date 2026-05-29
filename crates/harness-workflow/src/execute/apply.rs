@@ -6,34 +6,38 @@
 //! files within the source-size budget; it accesses the parent's private
 //! [`Executor`] and [`Loaded`] items as a descendant module.
 //!
-//! The application discipline is "validate everything, then mutate": every
-//! effect is checked (unsupported effects and unbound assignee roles fail here)
-//! before any backend call, idempotent comments are posted, the merge (if any)
-//! is applied, and finally labels and assignees are folded into one update — the
-//! commit point. See the parent module docs for why comments and the merge
-//! precede the label flip, and why the merge is at most once.
+//! The application discipline is "validate everything, then mutate": unsupported
+//! effects, missing create inputs, and unbound assignee roles fail before any
+//! backend call. Idempotent comments and pull-request creates run before the
+//! merge (if any) and final label/assignee update — the commit point. See the
+//! parent module docs for why pre-commit effects are ordered this way.
 
 use super::{ExecutionError, Executor, Loaded};
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
 use harness_forge::{
-    CreateComment, Forge, MergeMethod, MergePullRequest, UpdateIssue, UpdatePullRequest, UserId,
+    CreateComment, CreatePullRequest, Forge, MergeMethod, MergePullRequest, RepositoryId,
+    UpdateIssue, UpdatePullRequest, UserId,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Applies a plan's effects, refusing partial application of the state flip.
     ///
-    /// First it validates *every* effect (rejecting unsupported effects and
-    /// assignee roles with no bound user) before any mutation. Then it posts
-    /// idempotent comments, and finally folds labels and assignees into a single
-    /// backend update — the commit point that flips the artifact's state.
+    /// First it validates *every* effect (rejecting unsupported effects,
+    /// missing create inputs, and assignee roles with no bound user) before any
+    /// mutation. Then it posts idempotent comments, ensures requested pull
+    /// requests, and finally folds labels and assignees into a single backend
+    /// update — the commit point that flips the artifact's state.
     pub(super) async fn apply(
         &self,
+        repo_id: &RepositoryId,
         loaded: &Loaded,
         plan: &TransitionPlan,
     ) -> Result<(), ExecutionError> {
-        let prepared = self.prepare_effects(&plan.effects)?;
+        let prepared = self.prepare_effects(plan)?;
         self.apply_comments(loaded, &plan.transition, &prepared.comments)
+            .await?;
+        self.apply_pull_request_creates(repo_id, &prepared.pull_request_creates)
             .await?;
         self.apply_merge(loaded, prepared.merge).await?;
         self.apply_update(loaded, prepared).await
@@ -72,16 +76,15 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         Ok(())
     }
 
-    /// Partitions plan effects into a backend update, resolving assignee roles.
+    /// Partitions plan effects into concrete backend operations.
     ///
-    /// Runs before any mutation so an unsupported effect or an unbound assignee
-    /// role fails the whole transition cleanly, never half-applied.
-    fn prepare_effects(
-        &self,
-        effects: &[WorkflowEffect],
-    ) -> Result<PreparedEffects, ExecutionError> {
+    /// Runs before any mutation so an unsupported effect, missing create input,
+    /// missing correlation key, or unbound assignee role fails the whole
+    /// transition cleanly, never half-applied.
+    fn prepare_effects(&self, plan: &TransitionPlan) -> Result<PreparedEffects, ExecutionError> {
         let mut prepared = PreparedEffects::default();
-        for effect in effects {
+        let mut pull_request_create_index = 0;
+        for effect in &plan.effects {
             match effect {
                 WorkflowEffect::AddLabel(label) => {
                     prepared.add_labels.push(label.as_str().to_string());
@@ -97,6 +100,29 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 }
                 WorkflowEffect::CreateComment { body } => {
                     prepared.comments.push(body.clone());
+                }
+                WorkflowEffect::CreatePullRequest { correlation_key } => {
+                    let effect_index = pull_request_create_index;
+                    pull_request_create_index += 1;
+                    let correlation_key = correlation_key.clone().ok_or_else(|| {
+                        ExecutionError::MissingCorrelationKey {
+                            effect: effect.clone(),
+                        }
+                    })?;
+                    let input = self
+                        .context
+                        .pull_request_create(&plan.transition, effect_index)
+                        .cloned()
+                        .ok_or_else(|| ExecutionError::UnresolvedPullRequestCreate {
+                            transition: plan.transition.clone(),
+                            effect_index,
+                        })?;
+                    prepared
+                        .pull_request_creates
+                        .push(PreparedPullRequestCreate {
+                            correlation_key,
+                            input,
+                        });
                 }
                 WorkflowEffect::MergePullRequest => {
                     prepared.merge = true;
@@ -117,6 +143,24 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .resolve_assignee(role)
             .cloned()
             .ok_or_else(|| ExecutionError::UnresolvedAssignee { role: role.clone() })
+    }
+
+    /// Creates requested pull requests idempotently before the label commit
+    /// point.
+    ///
+    /// If a create lands but a later effect crashes before the source artifact's
+    /// label flip, retrying the transition reuses the same correlation key and
+    /// resolves to the existing pull request instead of creating a duplicate.
+    async fn apply_pull_request_creates(
+        &self,
+        repo_id: &RepositoryId,
+        creates: &[PreparedPullRequestCreate],
+    ) -> Result<(), ExecutionError> {
+        for create in creates {
+            self.ensure_pull_request(repo_id, &create.correlation_key, create.input.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     /// Merges the target pull request at most once.
@@ -256,11 +300,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     }
 }
 
-/// Effects partitioned into a single backend update plus comment bodies.
+/// Effects partitioned into a single backend update plus pre-commit effects.
 ///
 /// Labels and assignees are applied together in one `UpdateIssue`/
-/// `UpdatePullRequest` so the state flip is atomic; comments are posted
-/// separately (and idempotently) before that update.
+/// `UpdatePullRequest` so the state flip is atomic; comments and pull-request
+/// creates are applied separately (and idempotently) before that update.
 #[derive(Default)]
 struct PreparedEffects {
     add_labels: Vec<String>,
@@ -268,8 +312,16 @@ struct PreparedEffects {
     add_assignees: Vec<UserId>,
     remove_assignees: Vec<UserId>,
     comments: Vec<String>,
+    pull_request_creates: Vec<PreparedPullRequestCreate>,
     /// Whether the plan requests merging the target pull request.
     merge: bool,
+}
+
+/// A concrete, idempotent pull-request create request prepared from a plan
+/// effect plus the runtime [`crate::context::ExecutionContext`].
+struct PreparedPullRequestCreate {
+    correlation_key: String,
+    input: CreatePullRequest,
 }
 
 impl PreparedEffects {
