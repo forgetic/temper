@@ -14,8 +14,11 @@ not add those binaries; it leaves the split as an additive step.
 - `RunnerConfig` carries repository, role→user, PR-create, lease, and poll
   cadence settings without assuming a process layout.
 - `FixpointDriver` remains the deterministic in-process scheduler for L2/L3.
-- `PollLoop` now drives one worker on a poll cadence; `run_bounded` gives tests a
-  no-sleep deterministic form of the same primitive.
+- `PollLoop` now drives one worker on a poll cadence. `run_until` is the
+  production entry point each per-process binary will run; `run_bounded` gives
+  tests a no-sleep deterministic form of the same primitive. Both have
+  deterministic single-worker tests, including the `run_until` post-tick
+  shutdown check that avoids waiting an extra interval.
 - `Stage`/`Scenario` keep seed and assertions backend/topology-neutral.
 - `MultiProcessStage` is the L4 rehearsal: it still runs in one test process, but
   each worker is built from its own Forge handle. The filesystem test factory

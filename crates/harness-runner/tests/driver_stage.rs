@@ -168,6 +168,57 @@ fn poll_loop_run_bounded_ticks_single_role_worker() {
 }
 
 #[test]
+fn poll_loop_run_until_stops_after_post_tick_signal() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    block_on(forge.create_issue(
+        &repo,
+        CreateIssue {
+            title: "implement feature".into(),
+            body: String::new(),
+            labels: vec!["code".into(), "ready".into()],
+            assignees: Vec::new(),
+        },
+    ))
+    .expect("issue is created");
+    let role = RoleId::new("engineer");
+    let engineer_forge = forge.as_user(user("user-engineer", "engineer"));
+    let worker = RoleWorker::new(
+        &workflow,
+        &compiled,
+        &engineer_forge,
+        &repo,
+        role.clone(),
+        Arc::new(ClaimOnlyAgent),
+        runner_config().execution_context(&role),
+    );
+    let poll_loop = PollLoop::with_clock(
+        &worker as &dyn Worker,
+        Duration::seconds(1),
+        ManualClock::default(),
+    );
+
+    // The stop signal is false on the first (pre-tick) check and true on the
+    // post-tick check, so the loop performs exactly one tick and shuts down
+    // without waiting another poll interval. This is the production-shaped
+    // entry point each per-process binary will run.
+    let mut ticked = false;
+    let report = block_on(poll_loop.run_until(|| {
+        let stop = ticked;
+        ticked = true;
+        stop
+    }))
+    .expect("poll loop stops after one tick");
+
+    assert_eq!(report.ticks, 1);
+    assert_eq!(report.action_count("role:engineer"), Some(1));
+    let issues = block_on(forge.list_issues(&repo, IssueQuery::default())).expect("list succeeds");
+    assert!(issues[0].labels.iter().any(|label| label == "in-progress"));
+}
+
+#[test]
 fn in_process_stage_runs_claim_only_scenario_to_quiescence() {
     let forge = MemoryForge::new();
     let mut agents = AgentRegistry::new();
