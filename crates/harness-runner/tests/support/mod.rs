@@ -31,7 +31,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     match Future::poll(future.as_mut(), &mut context) {
         Poll::Ready(value) => value,
-        Poll::Pending => panic!("in-memory forge futures should not park in tests"),
+        Poll::Pending => panic!("reference forge futures should not park in tests"),
     }
 }
 

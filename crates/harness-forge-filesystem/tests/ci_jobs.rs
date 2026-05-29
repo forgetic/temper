@@ -70,7 +70,9 @@ fn ci_jobs_can_be_listed_and_looked_up_by_id() {
         2,
         5,
     );
-    write_ci_jobs(&forge, &repository.id, &[test.clone(), build.clone()]);
+    forge
+        .seed_ci_jobs(&repository.id, vec![test.clone(), build.clone()])
+        .unwrap();
 
     let listed = block_on(forge.list_ci_jobs(&repository.id, CiJobQuery::default())).unwrap();
     assert_eq!(listed, vec![build.clone(), test.clone()]);

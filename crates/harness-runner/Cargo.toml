@@ -13,6 +13,7 @@ harness-forge = { path = "../harness-forge" }
 harness-workflow = { path = "../harness-workflow" }
 
 [dev-dependencies]
+harness-forge-filesystem = { path = "../harness-forge-filesystem" }
 harness-forge-memory = { path = "../harness-forge-memory" }
 serde_json.workspace = true
 

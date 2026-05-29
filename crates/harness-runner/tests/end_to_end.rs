@@ -1,8 +1,8 @@
-//! L2 end-to-end scenarios over the in-process memory stage.
+//! L2/L3 end-to-end scenarios over in-process memory and filesystem stages.
 
 mod support;
 
-use harness_runner::run_scenario_with_budget;
+use harness_runner::{run_scenario_with_budget, Scenario, Stage, StageError};
 
 use support::agents::{
     fake_registry, fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
@@ -15,14 +15,16 @@ use support::scenarios::{
     changes_requested_then_approved, ci_fails_then_passes, dependency_chain_mechanically_unblocked,
     happy_path,
 };
-use support::world::{full_reference_stage, full_reference_stage_with};
+use support::world::{
+    full_reference_filesystem_stage, full_reference_filesystem_stage_with, full_reference_stage,
+    full_reference_stage_with,
+};
 
 const HAPPY_PATH_BUDGET: u64 = 32;
 const VARIANT_BUDGET: u64 = 96;
 
 #[test]
 fn end_to_end_reference_delivery_happy_path_converges() {
-    let stage = block_on(full_reference_stage(runner_config())).expect("stage builds");
     let scenario = happy_path();
 
     // Expected fake-driven loop: intake -> triage_to_code (architect) ->
@@ -32,59 +34,111 @@ fn end_to_end_reference_delivery_happy_path_converges() {
     // accepts two current seams: the produced code issue may stay open after
     // merge, and the single PR keeps `alignment` because owner_alignment needs
     // a cohort of five (or max_age) before it activates.
-    assert_scenario_converges(&stage, &scenario, HAPPY_PATH_BUDGET);
+    assert_scenario_converges_on_backends(
+        &scenario,
+        HAPPY_PATH_BUDGET,
+        || block_on(full_reference_stage(runner_config())),
+        || block_on(full_reference_filesystem_stage(runner_config())),
+    );
 }
 
 #[test]
 fn changes_requested_then_approved_converges_without_premature_merge() {
-    let stage = block_on(full_reference_stage_with(
-        runner_config(),
-        fake_registry_with(FakeArchitect, RequestChangesThenApproveReviewer::new()),
-        FixedCiPolicy::pass(),
-    ))
-    .expect("stage builds");
     let scenario = changes_requested_then_approved();
 
-    assert_scenario_converges(&stage, &scenario, VARIANT_BUDGET);
+    assert_scenario_converges_on_backends(
+        &scenario,
+        VARIANT_BUDGET,
+        || {
+            block_on(full_reference_stage_with(
+                runner_config(),
+                fake_registry_with(FakeArchitect, RequestChangesThenApproveReviewer::new()),
+                FixedCiPolicy::pass(),
+            ))
+        },
+        || {
+            block_on(full_reference_filesystem_stage_with(
+                runner_config(),
+                fake_registry_with(FakeArchitect, RequestChangesThenApproveReviewer::new()),
+                FixedCiPolicy::pass(),
+            ))
+        },
+    );
 }
 
 #[test]
 fn ci_fails_then_passes_converges_without_premature_merge() {
-    let stage = block_on(full_reference_stage_with(
-        runner_config(),
-        fake_registry(),
-        FailThenPassCiPolicy,
-    ))
-    .expect("stage builds");
     let scenario = ci_fails_then_passes();
 
-    assert_scenario_converges(&stage, &scenario, VARIANT_BUDGET);
+    assert_scenario_converges_on_backends(
+        &scenario,
+        VARIANT_BUDGET,
+        || {
+            block_on(full_reference_stage_with(
+                runner_config(),
+                fake_registry(),
+                FailThenPassCiPolicy,
+            ))
+        },
+        || {
+            block_on(full_reference_filesystem_stage_with(
+                runner_config(),
+                fake_registry(),
+                FailThenPassCiPolicy,
+            ))
+        },
+    );
 }
 
 #[test]
 fn dependency_chain_is_mechanically_unblocked_and_merged() {
-    let stage = block_on(full_reference_stage_with(
-        runner_config(),
-        fake_registry_with(ClosingArchitect, FakeReviewer),
-        FixedCiPolicy::pass(),
-    ))
-    .expect("stage builds");
     let scenario = dependency_chain_mechanically_unblocked();
 
-    assert_scenario_converges(&stage, &scenario, VARIANT_BUDGET);
+    assert_scenario_converges_on_backends(
+        &scenario,
+        VARIANT_BUDGET,
+        || {
+            block_on(full_reference_stage_with(
+                runner_config(),
+                fake_registry_with(ClosingArchitect, FakeReviewer),
+                FixedCiPolicy::pass(),
+            ))
+        },
+        || {
+            block_on(full_reference_filesystem_stage_with(
+                runner_config(),
+                fake_registry_with(ClosingArchitect, FakeReviewer),
+                FixedCiPolicy::pass(),
+            ))
+        },
+    );
 }
 
-fn assert_scenario_converges<S: harness_runner::Stage>(
-    stage: &S,
-    scenario: &harness_runner::Scenario,
+fn assert_scenario_converges_on_backends<M, F, MB, FB>(
+    scenario: &Scenario,
     budget: u64,
-) {
-    let report =
-        block_on(run_scenario_with_budget(stage, scenario, budget)).expect("scenario passes");
+    memory_builder: MB,
+    filesystem_builder: FB,
+) where
+    M: Stage,
+    F: Stage,
+    MB: FnOnce() -> Result<M, StageError>,
+    FB: FnOnce() -> Result<F, StageError>,
+{
+    let memory_stage = memory_builder().expect("memory stage builds");
+    assert_scenario_converges("memory", &memory_stage, scenario, budget);
+
+    let filesystem_stage = filesystem_builder().expect("filesystem stage builds");
+    assert_scenario_converges("filesystem", &filesystem_stage, scenario, budget);
+}
+
+fn assert_scenario_converges<S: Stage>(backend: &str, stage: &S, scenario: &Scenario, budget: u64) {
+    let report = block_on(run_scenario_with_budget(stage, scenario, budget))
+        .unwrap_or_else(|error| panic!("{backend} scenario passes: {error}"));
 
     assert!(
         report.ticks <= budget,
-        "scenario used {} ticks, over budget {budget}",
+        "{backend} scenario used {} ticks, over budget {budget}",
         report.ticks
     );
 }

@@ -51,7 +51,8 @@ fn check_expected_version(
 #[async_trait]
 impl Forge for FilesystemForge {
     async fn current_user(&self) -> ForgeResult<User> {
-        Ok(self.read_metadata()?.current_user)
+        let metadata = self.read_metadata()?;
+        Ok(self.effective_user(&metadata))
     }
 
     async fn get_user(&self, id: &UserId) -> ForgeResult<Option<User>> {
@@ -161,6 +162,7 @@ impl Forge for FilesystemForge {
         self.require_repository(repo_id)?;
 
         let mut metadata = self.read_metadata()?;
+        let author_id = self.effective_user(&metadata).id;
         let mut issues = self.read_issues_for_existing_repository(repo_id)?;
         let number = next_issue_number(repo_id, &issues)?;
         let now = next_timestamp(&mut metadata)?;
@@ -171,7 +173,7 @@ impl Forge for FilesystemForge {
             title: input.title,
             body: input.body,
             state: IssueState::Open,
-            author_id: metadata.current_user.id.clone(),
+            author_id,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
             dependencies: Vec::new(),
@@ -282,10 +284,11 @@ impl Forge for FilesystemForge {
         let mut comments = self.read_issue_comments_for_existing_issue(&repo_id, id)?;
         let comment_number = next_issue_comment_number(id, &comments)?;
         let mut metadata = self.read_metadata()?;
+        let author_id = self.effective_user(&metadata).id;
         let now = next_timestamp(&mut metadata)?;
         let comment = Comment {
             id: issue_comment_id(id, comment_number),
-            author_id: metadata.current_user.id.clone(),
+            author_id,
             body: input.body,
             created_at: now,
             updated_at: now,
@@ -323,6 +326,7 @@ impl Forge for FilesystemForge {
         self.require_repository(repo_id)?;
 
         let mut metadata = self.read_metadata()?;
+        let author_id = self.effective_user(&metadata).id;
         let mut pull_requests = self.read_pull_requests_for_existing_repository(repo_id)?;
         let number = next_pull_request_number(repo_id, &pull_requests)?;
         let now = next_timestamp(&mut metadata)?;
@@ -333,7 +337,7 @@ impl Forge for FilesystemForge {
             title: input.title,
             body: input.body,
             state: PullRequestState::Open,
-            author_id: metadata.current_user.id.clone(),
+            author_id,
             source: input.source,
             target: input.target,
             head_sha: None,
@@ -491,10 +495,11 @@ impl Forge for FilesystemForge {
             self.read_pull_request_comments_for_existing_pull_request(&repo_id, id)?;
         let comment_number = next_pull_request_comment_number(id, &comments)?;
         let mut metadata = self.read_metadata()?;
+        let author_id = self.effective_user(&metadata).id;
         let now = next_timestamp(&mut metadata)?;
         let comment = Comment {
             id: pull_request_comment_id(id, comment_number),
-            author_id: metadata.current_user.id.clone(),
+            author_id,
             body: input.body,
             created_at: now,
             updated_at: now,
@@ -534,11 +539,12 @@ impl Forge for FilesystemForge {
         }
 
         let mut metadata = self.read_metadata()?;
+        let merged_by = self.effective_user(&metadata).id;
         let now = next_timestamp(&mut metadata)?;
         let merge = MergeRecord {
             method: input.method,
             commit_sha: merge_commit_sha(metadata.clock_tick),
-            merged_by: metadata.current_user.id.clone(),
+            merged_by,
             merged_at: now,
         };
 

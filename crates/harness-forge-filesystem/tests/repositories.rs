@@ -2,7 +2,7 @@ mod support;
 
 use harness_forge::{
     Forge, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort, RepositorySortField,
-    SortDirection, UserId,
+    SortDirection, User, UserId,
 };
 use support::{block_on, repository, TestRoot};
 
@@ -27,6 +27,40 @@ fn current_user_is_bootstrapped_and_lookup_by_id() {
         block_on(forge.get_user(&UserId::new("missing"))).unwrap(),
         None
     );
+}
+
+#[test]
+fn per_handle_identity_overrides_the_bootstrapped_user() {
+    let root = TestRoot::new("repositories");
+    let base = root.forge();
+    let alice = User {
+        id: UserId::new("user-alice"),
+        handle: "alice".into(),
+        display_name: None,
+        email: None,
+    };
+    let bob = User {
+        id: UserId::new("user-bob"),
+        handle: "bob".into(),
+        display_name: None,
+        email: None,
+    };
+
+    let alice_forge = base.as_user(alice.clone());
+    let bob_forge = base.as_user(bob.clone());
+    let bob_clone = bob_forge.clone();
+
+    assert_eq!(block_on(alice_forge.current_user()).unwrap(), alice.clone());
+    assert_eq!(block_on(bob_clone.current_user()).unwrap(), bob.clone());
+    assert_eq!(
+        block_on(base.current_user()).unwrap().id,
+        UserId::new("user-1")
+    );
+    assert_eq!(
+        block_on(alice_forge.get_user(&alice.id)).unwrap(),
+        Some(alice)
+    );
+    assert_eq!(block_on(alice_forge.get_user(&bob.id)).unwrap(), None);
 }
 
 #[test]

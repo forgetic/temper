@@ -20,21 +20,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 impl FilesystemForge {
-    /// Creates a backend rooted at `root`.
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    /// Returns the filesystem root used by this backend.
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Returns the directory used to store repository records.
-    pub fn repositories_dir(&self) -> PathBuf {
-        self.root.join("repositories")
-    }
-
     /// Creates the backend directory layout if needed.
     pub fn ensure_layout(&self) -> ForgeResult<()> {
         fs::create_dir_all(&self.root).map_err(|error| {

@@ -68,11 +68,12 @@ pub(crate) fn submit_review(
     let mut reviews = forge.read_pull_request_reviews_for_existing_pull_request(&repo_id, id)?;
     let number = next_pull_request_review_number(id, &reviews)?;
     let mut metadata = forge.read_metadata()?;
+    let reviewer_id = forge.effective_user(&metadata).id;
     let now = next_timestamp(&mut metadata)?;
     let review = PullRequestReview {
         id: pull_request_review_id(id, number),
         pull_request_id: id.clone(),
-        reviewer_id: metadata.current_user.id.clone(),
+        reviewer_id,
         decision: input.decision,
         body: input.body,
         submitted_at: now,

@@ -99,10 +99,11 @@ proven safety properties), runnable against the reference backends, plus the
 initial `harness-runner` worker-plane primitives: read-only scans that turn fresh
 Forge state into active-queue work items, `Agent`/`RoleTools`, tickable
 `Worker`/`RoleWorker` units for judgment work, `MechanicalWorker` for the
-controller-plane reconcile → apply loop, and `InProcessStage<MemoryForge>` for
-memory-backed scenario runs. The reference-delivery happy path and failure /
-dependency variants now run to merged, reconciled PRs with fake agents and fake
-CI; see [Run the reference delivery end-to-end scenarios](../how-to/run-reference-delivery-end-to-end.md).
+controller-plane reconcile → apply loop, and in-process stages for memory and
+filesystem scenario runs. The reference-delivery happy path and failure /
+dependency variants now run to merged, reconciled PRs on both reference backends
+with fake agents and fake CI; see
+[Run the reference delivery end-to-end scenarios](../how-to/run-reference-delivery-end-to-end.md).
 The remaining path to a live deployment, in dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
@@ -113,9 +114,9 @@ The remaining path to a live deployment, in dependency order:
 2. **The runner/controller** — partially started in `harness-runner`: `scan`
    reconstructs active judgment work, `RoleWorker` can tick one role,
    `MechanicalWorker` can tick the controller's reconcile → apply loop, and the
-   in-process `FixpointDriver`/`Stage` composition runs memory scenarios. The
-   production poll/webhook loop and wider filesystem/process topologies still
-   need to be built.
+   in-process `FixpointDriver`/`Stage` composition runs the same scenarios on
+   memory and filesystem backends. The production poll/webhook loop and
+   multi-process filesystem topology still need to be built.
 3. **Agent-provider adapter** — wire a compiled `PromptManifest` to a model and
    map model tool calls onto the production `RoleTools` facade.
 4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific

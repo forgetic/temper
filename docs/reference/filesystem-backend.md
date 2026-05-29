@@ -41,7 +41,7 @@ The current implementation supports:
 - `list_ci_jobs`
 - `get_ci_job`
 
-`get_user` only resolves the current user because the Forge interface does not yet include user creation or listing.
+`get_user` only resolves the handle's effective current user because the Forge interface does not yet include user creation or listing.
 
 ## Persistence model
 
@@ -69,7 +69,7 @@ repositories/
 `metadata.json` is a versioned JSON record with:
 
 - `schema_version`: currently `1`
-- `current_user`: the persisted Forge `User`
+- `current_user`: the persisted default Forge `User`
 - `next_repository_number`: the next numeric repository ID suffix
 - `clock_tick`: a deterministic logical clock
 
@@ -78,6 +78,12 @@ Repository files contain serialized Forge `Repository` records. Repository IDs a
 Repository timestamps come from the logical clock, not wall-clock time. Each repository creation advances `clock_tick` by one second from the Unix epoch, so tests can rely on deterministic ordering.
 
 Repository owner/name paths are exact and case-sensitive. `create_repository` rejects empty owner, name, or default branch values and returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
+
+## Per-handle identity
+
+`FilesystemForge::as_user(user)` returns another handle rooted at the same directory but with a handle-local current-user override. Clones of that handle preserve the override; other handles keep their own identity. Operations attributed to the current user — issue/PR creation, comments, reviews, and merges — use the effective user for that handle.
+
+The override is not written to `metadata.json` and does not create a durable user record. `get_user` still only resolves the handle's effective current user, matching the minimal user model shared with the in-memory backend.
 
 Repository labels are stored in `repositories/<repo-id>/labels.json` as serialized Forge `Label` records. Label IDs are deterministic strings derived from the repository ID and hex-encoded label name. Label names are exact and case-sensitive.
 
@@ -95,7 +101,7 @@ Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-
 
 Pull-request reviews are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/reviews.json` as serialized Forge `PullRequestReview` records. Review IDs are deterministic strings of the form `review-<pull-request-id>-<16-digit-number>`. Review numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored review number. New reviews use the current user as `reviewer_id`; `submitted_at` is the logical-clock timestamp. Submitting a review advances `clock_tick` by one second and does not modify the stored pull-request record.
 
-CI jobs are stored in `repositories/<repo-id>/ci_jobs.json` as serialized Forge `CiJob` records. The Forge interface has no CI job creation operation, so tests and local scenarios seed this file directly with deterministic fixture records. CI job IDs are fixture-provided opaque IDs. Stored CI jobs must belong to the repository, have non-empty names and commit SHAs, and not duplicate IDs within the repository. CI job timestamps come from the fixture record.
+CI jobs are stored in `repositories/<repo-id>/ci_jobs.json` as serialized Forge `CiJob` records. The Forge interface has no CI job creation operation, so tests and local scenarios seed this file with deterministic fixture records, usually through `FilesystemForge::seed_ci_jobs(repo_id, jobs)`, which replaces the repository's stored jobs. CI job IDs are fixture-provided opaque IDs. Stored CI jobs must belong to the repository, have non-empty names and commit SHAs, and not duplicate IDs within the repository. CI job timestamps come from the fixture record.
 
 ## Listing and sorting
 
@@ -133,7 +139,7 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 ## Unsupported operations
 
-All current Forge trait methods are implemented. The filesystem backend does not expose operations outside the Forge interface, such as creating CI job records or provider-specific review policy; seed `ci_jobs.json` directly for deterministic local scenarios.
+All current Forge trait methods are implemented. The filesystem backend does not expose provider operations outside the Forge interface, such as provider-specific review policy. CI job creation is still outside the Forge trait; seed `ci_jobs.json` through `FilesystemForge::seed_ci_jobs` or direct deterministic fixtures for local scenarios.
 
 ## Optimistic concurrency
 

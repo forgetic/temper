@@ -63,11 +63,12 @@ the backend to several helpers while keeping one logical store.
 
 `MemoryForge::as_user(user)` returns another handle over the same shared store
 but with a handle-local `current_user` override. Clones of that handle preserve
-the override, while other handles can report and act as different users. This is
-a memory testing hook for runner identity: one in-process test can give each
-role worker the user identity that separate processes or authenticated provider
-clients get naturally. Operations attributed to the current user — issue/PR
-creation, comments, reviews, and merges — use the handle-local override.
+the override, while other handles can report and act as different users. This
+matches the filesystem backend's per-handle identity seam, so one in-process
+test can give each role worker the user identity that separate processes or
+authenticated provider clients get naturally. Operations attributed to the
+current user — issue/PR creation, comments, reviews, and merges — use the
+handle-local override.
 
 `as_user` does not create a durable user directory. `get_user` still only
 resolves the handle's effective current user, matching the in-memory backend's
@@ -77,8 +78,8 @@ minimal user model.
 
 The Forge interface has no CI-job creation operation. Seed jobs directly with
 `MemoryForge::seed_ci_jobs(repo_id, jobs)`, which replaces any previously seeded
-jobs for that repository. This mirrors how the filesystem backend seeds its
-`ci_jobs.json` fixture.
+jobs for that repository. This mirrors `FilesystemForge::seed_ci_jobs`, which
+writes the filesystem backend's `ci_jobs.json` fixture.
 
 ## Fault-injection hook
 

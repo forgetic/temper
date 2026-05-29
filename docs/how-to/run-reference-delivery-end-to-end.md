@@ -1,8 +1,8 @@
 # Run the reference delivery end-to-end scenarios
 
-This guide runs the L2 reference-delivery scenarios on the in-process memory
-world: the happy path plus failure/dependency variants that prove work returns
-from failed gates and mechanical unblock participates in the same loop.
+This guide runs the reference-delivery scenario suite at two in-process layers:
+L2 on `MemoryForge` and L3 on `FilesystemForge`. The same scenario definitions
+seed and assert both backends.
 
 ## Command
 
@@ -11,12 +11,15 @@ cargo test -p harness-runner --test end_to_end
 ```
 
 The tests live in `crates/harness-runner/tests/end_to_end.rs`. They run shared
-scenarios from runner test support on `InProcessStage<MemoryForge>` with:
+scenarios from runner test support on:
 
+- `InProcessStage<MemoryForge>` with per-role `as_user` handles and
+  `CiWorker<MemoryCiSink>`
+- `InProcessStage<FilesystemForge>` rooted in a unique temp dir, with per-role
+  `as_user` handles and `CiWorker<FilesystemCiSink>` seeding `ci_jobs.json`
 - fake architect, engineer, reviewer, owner, and human agents behind the normal
   `Agent`/`RoleTools` boundary
 - `MechanicalWorker` for reconcile → apply
-- `CiWorker<MemoryCiSink>` to produce native CI jobs for tests
 - `FixpointDriver` with small fixed tick budgets
 
 ## Scenarios

@@ -3,6 +3,7 @@ use harness_forge::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, ForgeError, ItemNumber,
     PullRequest, RepositoryId,
 };
+use harness_forge_filesystem::FilesystemForge;
 use harness_forge_memory::MemoryForge;
 use harness_runner::{CiError, CiPolicy, CiSink};
 use harness_workflow::CiStatus;
@@ -37,6 +38,38 @@ impl CiSink for MemoryCiSink {
         let next = jobs.len().saturating_add(1);
         jobs.push(ci_job(repo, &pull_request, next, conclusion));
         self.forge.seed_ci_jobs(repo, jobs);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct FilesystemCiSink {
+    forge: FilesystemForge,
+}
+
+impl FilesystemCiSink {
+    pub fn new(forge: FilesystemForge) -> Self {
+        Self { forge }
+    }
+}
+
+#[async_trait::async_trait]
+impl CiSink for FilesystemCiSink {
+    async fn record(
+        &self,
+        repo: &RepositoryId,
+        pr: ItemNumber,
+        conclusion: CiJobConclusion,
+    ) -> Result<(), CiError> {
+        let pull_request = self
+            .forge
+            .get_pull_request_by_number(repo, pr)
+            .await?
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request #{pr}")))?;
+        let mut jobs = self.forge.list_ci_jobs(repo, CiJobQuery::default()).await?;
+        let next = jobs.len().saturating_add(1);
+        jobs.push(ci_job(repo, &pull_request, next, conclusion));
+        self.forge.seed_ci_jobs(repo, jobs)?;
         Ok(())
     }
 }
@@ -99,7 +132,10 @@ fn ci_job(
         )),
         repo_id: repo.clone(),
         pull_request_id: Some(pull_request.id.clone()),
-        commit_sha: pull_request.head_sha.clone().unwrap_or_default(),
+        commit_sha: pull_request
+            .head_sha
+            .clone()
+            .unwrap_or_else(|| format!("pr-{}-head", pull_request.number.get())),
         name: "ci".into(),
         status: CiJobStatus::Completed,
         conclusion: Some(conclusion),

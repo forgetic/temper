@@ -217,7 +217,10 @@ pub fn seed_ci(
         id: CiJobId::new(format!("ci-{}-{}", repo.as_str(), number.get())),
         repo_id: repo.clone(),
         pull_request_id: Some(pull_request.id.clone()),
-        commit_sha: pull_request.head_sha.clone().unwrap_or_default(),
+        commit_sha: pull_request
+            .head_sha
+            .clone()
+            .unwrap_or_else(|| format!("pr-{}-head", pull_request.number.get())),
         name: "ci".into(),
         status: CiJobStatus::Completed,
         conclusion: Some(conclusion),

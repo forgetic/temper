@@ -2,7 +2,7 @@ mod support;
 
 use harness_forge::{
     CreatePullRequestReview, Forge, ForgeError, PullRequestId, PullRequestReviewStatus,
-    RequestReviewers, ReviewDecision, UserId,
+    RequestReviewers, ReviewDecision, User, UserId,
 };
 use support::{block_on, pull_request, repository, TestRoot};
 
@@ -16,18 +16,24 @@ fn reviews_are_requested_persisted_ordered_and_aggregated() {
         pull_request(&repository.id, "Implement login"),
     ))
     .unwrap();
-    let reviewer = UserId::new("user-1");
+    let reviewer = User {
+        id: UserId::new("user-reviewer"),
+        handle: "reviewer".into(),
+        display_name: None,
+        email: None,
+    };
+    let reviewer_forge = forge.as_user(reviewer.clone());
 
     let requested = block_on(forge.request_pull_request_reviewers(
         &pr.id,
         RequestReviewers {
-            reviewers: vec![reviewer.clone(), reviewer.clone()],
+            reviewers: vec![reviewer.id.clone(), reviewer.id.clone()],
         },
     ))
     .unwrap();
-    assert_eq!(requested.requested_reviewers, vec![reviewer.clone()]);
+    assert_eq!(requested.requested_reviewers, vec![reviewer.id.clone()]);
 
-    block_on(forge.submit_pull_request_review(
+    block_on(reviewer_forge.submit_pull_request_review(
         &pr.id,
         CreatePullRequestReview {
             decision: ReviewDecision::Commented,
@@ -35,7 +41,7 @@ fn reviews_are_requested_persisted_ordered_and_aggregated() {
         },
     ))
     .unwrap();
-    block_on(forge.submit_pull_request_review(
+    block_on(reviewer_forge.submit_pull_request_review(
         &pr.id,
         CreatePullRequestReview {
             decision: ReviewDecision::ChangesRequested,
@@ -43,7 +49,7 @@ fn reviews_are_requested_persisted_ordered_and_aggregated() {
         },
     ))
     .unwrap();
-    block_on(forge.submit_pull_request_review(
+    block_on(reviewer_forge.submit_pull_request_review(
         &pr.id,
         CreatePullRequestReview {
             decision: ReviewDecision::Approved,
@@ -56,7 +62,7 @@ fn reviews_are_requested_persisted_ordered_and_aggregated() {
     let current = block_on(reopened.get_pull_request(&pr.id))
         .unwrap()
         .expect("pull request persists");
-    assert_eq!(current.requested_reviewers, vec![reviewer]);
+    assert_eq!(current.requested_reviewers, vec![reviewer.id.clone()]);
 
     let reviews = block_on(reopened.list_pull_request_reviews(&pr.id)).unwrap();
     assert_eq!(reviews.len(), 3);
@@ -65,6 +71,9 @@ fn reviews_are_requested_persisted_ordered_and_aggregated() {
         format!("review-{}-0000000000000001", pr.id)
     );
     assert!(reviews[0].submitted_at < reviews[1].submitted_at);
+    assert!(reviews
+        .iter()
+        .all(|review| review.reviewer_id == reviewer.id));
 
     let status = PullRequestReviewStatus::from_reviews(&current.requested_reviewers, &reviews);
     assert!(status.is_approved());

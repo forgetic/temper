@@ -5,6 +5,23 @@ use harness_forge::{CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
 use std::path::PathBuf;
 
 impl FilesystemForge {
+    /// Seeds CI jobs for a repository, replacing any previously stored jobs.
+    ///
+    /// The Forge interface has no CI job creation operation. Tests and local
+    /// scenarios use this backend-specific helper to write the same
+    /// `ci_jobs.json` fixture file that
+    /// [`list_ci_jobs`](harness_forge::Forge::list_ci_jobs) reads.
+    pub fn seed_ci_jobs(&self, repo_id: &RepositoryId, ci_jobs: Vec<CiJob>) -> ForgeResult<()> {
+        self.require_repository(repo_id)?;
+        validate_stored_ci_jobs(repo_id, &ci_jobs)?;
+        let Some(path) = self.ci_jobs_file(repo_id) else {
+            return Err(ForgeError::Backend(format!(
+                "invalid repository id {repo_id} for CI jobs path"
+            )));
+        };
+        self.write_json(&path, &ci_jobs)
+    }
+
     pub(crate) fn ci_jobs_file(&self, repo_id: &RepositoryId) -> Option<PathBuf> {
         self.repository_scope_dir(repo_id)
             .map(|repository_dir| repository_dir.join("ci_jobs.json"))

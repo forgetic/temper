@@ -40,11 +40,11 @@
 //!   used to seed native CI jobs for layered scenarios; real deployments rely on
 //!   provider CI and only use the engine's read side.
 //! - [`FixpointDriver`] and [`Stage`]/[`InProcessStage`], which compose workers
-//!   into a deterministic in-process world for layered scenarios while keeping
-//!   per-role Forge identity a handle-construction concern. Integration-test
-//!   support supplies deterministic fake reference-delivery agents behind
-//!   [`Agent`]; they contain behavior only and perform workflow mutations solely
-//!   through [`RoleTools`].
+//!   into deterministic in-process memory and filesystem worlds for layered
+//!   scenarios while keeping per-role Forge identity a handle-construction
+//!   concern. Integration-test support supplies deterministic fake
+//!   reference-delivery agents behind [`Agent`]; they contain behavior only and
+//!   perform workflow mutations solely through [`RoleTools`].
 //!
 //! The runner owns recovery coordination state. In a single-process composition
 //! the command journal value and lease manager live with the worker set. In a
