@@ -37,6 +37,11 @@
 //! Phase 4 added compilation ([`compile`]) of a `ValidatedWorkflow` into role,
 //! prompt, tool, queue, and label manifests plus a runtime transition table. No
 //! transition is executed; compilation only projects the validated model.
+//!
+//! Phase 5 added pure queue evaluation and transition planning ([`plan`]): a
+//! [`Planner`] matches classified artifacts against queues and plans transitions
+//! into typed [`WorkflowEffect`]s and postconditions without touching a Forge
+//! backend.
 
 pub mod artifact;
 pub mod classify;
@@ -44,6 +49,7 @@ pub mod compile;
 pub mod diagnostics;
 pub mod ids;
 pub mod metadata;
+pub mod plan;
 pub mod spec;
 pub mod validate;
 pub mod validated;
@@ -63,6 +69,10 @@ pub use ids::{
 pub use metadata::{
     parse_metadata_block, render_metadata_block, Lease, MetadataError, WorkflowMetadata,
     METADATA_BEGIN, METADATA_END,
+};
+pub use plan::{
+    matches_queue, PlanDiagnostic, PlanError, Planner, Postcondition, QueueQuery, TransitionPlan,
+    WorkflowEffect,
 };
 pub use spec::{
     RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole, RawState, RawStateDimension,

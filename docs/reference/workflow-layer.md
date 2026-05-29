@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–4 have landed spec validation, artifact/metadata modeling, classification, and compilation to manifests; the rest of the contract below (runtime, recovery) is still planned. See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–5 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, and pure queue evaluation and transition planning; the rest of the contract below (runtime execution, recovery) is still planned. See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -59,6 +59,15 @@ Phase 4 added compilation:
 - Roles now carry an optional `concurrency` hint (`RawRole`/`ValidatedRole`), compiled into the role manifest.
 
 Not yet implemented from compilation: generated tool bodies and optional generated Rust code.
+
+Phase 5 added pure queue evaluation and transition planning:
+
+- `plan::Planner` (also `ValidatedWorkflow::planner`) borrows a `ValidatedWorkflow` and never touches a Forge backend. It matches classified artifacts against queues and plans transitions into typed effects.
+- `plan::matches_queue` matches a `ClassifiedArtifact` against any `QueueQuery`. `QueueQuery` is implemented by both `ValidatedQueue` and the compiled `QueueManifest`, so the same matcher serves the validated model and a compiled runtime table.
+- `plan::WorkflowEffect` is the closed planning-effect enum. `plan::Postcondition` carries the conditions that must hold after a plan applies. `plan::TransitionPlan` bundles transition, role, artifact kind, target, effects, and postconditions.
+- `plan::PlanError` collects `plan::PlanDiagnostic`s (unauthorized role, artifact-kind mismatch, stale/contradicted label preconditions, unsatisfied gates, and impossible resulting states).
+
+Not yet implemented: executing plans against a backend, idempotent create behavior, leases, journaling, and reconciliation.
 
 ## Spec primitives
 
@@ -137,6 +146,25 @@ Success yields a `ClassifiedArtifact` (kind, target, source, per-dimension state
 - `ExclusiveStateConflict`: several states of one exclusive dimension are present
 - `MalformedMetadata`: the body's metadata block could not be parsed
 
+## Queue evaluation and transition planning
+
+The planner is the pure, deterministic state-machine layer over classified artifacts. It computes the read-side parts of the runtime guarantees below (authority, preconditions, postconditions) without loading fresh state or applying effects; a later executor phase does that against the `Forge` trait.
+
+Queue matching: a classified artifact matches a queue when its kind equals the queue's artifact kind and every label the queue requires is present. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues.
+
+Transition planning checks, in order, and collects every problem:
+
+- the transition is declared (else `UnknownTransition`)
+- the role is authorized for the transition (else `Unauthorized`)
+- the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
+- each effect's label precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`)
+- every required gate is satisfied — a gate is satisfied when some satisfying transition's added labels are all present (else `GateNotSatisfied`)
+- applying the effects would not leave an exclusive dimension in several states (else `ImpossibleState`)
+
+The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
+
+A successful plan's effects and postconditions follow the transition's declared effect order, so plans are deterministic and safe for snapshot-style assertions.
+
 ## Runtime guarantees
 
 Every transition execution must:
@@ -151,9 +179,11 @@ Agents must not mutate Forge state directly when operating under workflow contro
 
 ## Effects
 
-Workflow effects should be represented as a closed Rust enum so executors and reconcilers must handle every variant. Initial effects should cover label updates, assignee updates, issue creation, PR creation, comments, leases, and PR merge operations.
+Workflow effects are the closed `plan::WorkflowEffect` enum so executors and reconcilers must handle every variant. Variants cover label add/remove, assignee set/remove, comment creation, issue and PR creation requests, lease update/release, and PR merge requests.
 
-Create effects need correlation keys. Retrying a create effect with the same correlation key must return the existing artifact when it already exists.
+Only `AddLabel` and `RemoveLabel` are produced today, because current transition specs model only label effects. The remaining variants are explicit placeholders: they round out the set an executor must handle so later phases can add assignee, comment, create, lease, and merge effects without breaking exhaustive matches. The planning tests document this by asserting that label effects are the only ones a plan currently emits.
+
+Create effects (`CreateIssue`, `CreatePullRequest`) carry correlation keys. Retrying a create effect with the same correlation key must return the existing artifact when it already exists; that idempotency is enforced by the executor phase, not the planner.
 
 ## Claims and leases
 

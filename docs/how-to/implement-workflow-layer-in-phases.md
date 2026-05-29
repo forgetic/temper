@@ -24,9 +24,9 @@ Added `artifact::ArtifactTarget` (artifact kinds now map to a Forge issue or PR 
 
 Added `compile` (`compile::compile` / `ValidatedWorkflow::compile`) producing a `CompiledWorkflow` with `RoleManifest` (id, charter, concurrency hint, subscribed queues, transition authority, role-specific tools, and an embedded `PromptManifest`), `ToolManifest` (intent-level, one per authorized transition), `QueueManifest` (with subscribers), `LabelManifest`/`LabelSpec`/`LabelUsage`, and a `TransitionManifest` runtime table. Added a `concurrency` hint to `RawRole`/`ValidatedRole`. Checked in `crates/harness-workflow/fixtures/five-role-delivery.json` (architect, engineer, reviewer, tester, owner) and `tests/compilation.rs` covering fixture validation, per-role manifests, role-scoped tools/authority, label coverage across artifact/state/queue/gate sites, and deterministic prompts. No transitions are executed.
 
-## Phase 5: Add pure queue evaluation and transition planning
+## Phase 5: Add pure queue evaluation and transition planning (done)
 
-Implement queue matching over classified artifacts and pure transition planning. Produce typed workflow effects without applying them to a backend. Test state-machine behavior without Forge side effects.
+Added `plan` (`plan::Planner` / `ValidatedWorkflow::planner`): a deterministic, side-effect-free state machine over classified artifacts. `plan::matches_queue` and the `QueueQuery` trait match a `ClassifiedArtifact` against a `ValidatedQueue` or a compiled `QueueManifest`. `Planner::plan_transition` checks role authority, label preconditions (stale `remove_label`, contradicted `add_label`), required gates, and impossible resulting exclusive states, returning a `TransitionPlan` of typed `WorkflowEffect`s plus `Postcondition`s or a `PlanError` of `PlanDiagnostic`s. `WorkflowEffect` is the closed effect enum; only label effects are produced today, the rest are documented placeholders. Tests in `tests/planning.rs` cover queue selection, authority, stale/contradicted preconditions, gate enforcement, deterministic plans, and impossible-state diagnosis. No effects are applied to a backend.
 
 ## Phase 6: Execute transitions through `harness-forge`
 
