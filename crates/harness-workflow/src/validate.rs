@@ -79,7 +79,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
         &mut diagnostics,
     );
 
-    check_state_dimensions(spec, &labels, &mut diagnostics);
+    check_state_dimensions(spec, &labels, &artifacts, &mut diagnostics);
 
     if diagnostics.is_empty() {
         Ok(build_validated(spec))
@@ -372,6 +372,7 @@ fn check_condition(
 fn check_state_dimensions(
     spec: &RawWorkflowSpec,
     labels: &HashSet<String>,
+    artifacts: &HashSet<String>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for dimension in &spec.state_dimensions {
@@ -389,6 +390,18 @@ fn check_state_dimensions(
                     label,
                     SymbolKind::Label,
                     ReferenceSite::StateLabel {
+                        dimension: dimension.id.clone(),
+                        state: state.id.clone(),
+                    },
+                    diagnostics,
+                );
+            }
+            for artifact in &state.artifacts {
+                check_reference(
+                    artifacts,
+                    artifact,
+                    SymbolKind::ArtifactKind,
+                    ReferenceSite::StateArtifact {
                         dimension: dimension.id.clone(),
                         state: state.id.clone(),
                     },
@@ -468,6 +481,7 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
                 .map(|state| ValidatedState {
                     id: StateId::new(&state.id),
                     label: state.label.as_ref().map(LabelId::new),
+                    artifacts: state.artifacts.iter().map(ArtifactKindId::new).collect(),
                 })
                 .collect(),
         })

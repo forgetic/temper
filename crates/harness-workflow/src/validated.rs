@@ -138,6 +138,15 @@ pub struct ValidatedArtifactKind {
 pub struct ValidatedState {
     pub id: StateId,
     pub label: Option<LabelId>,
+    /// Artifact kinds this state is legal for. Empty means every artifact kind.
+    pub artifacts: Vec<ArtifactKindId>,
+}
+
+impl ValidatedState {
+    /// Returns whether this state is legal for the given artifact kind.
+    pub fn allows_artifact(&self, artifact: &ArtifactKindId) -> bool {
+        self.artifacts.is_empty() || self.artifacts.contains(artifact)
+    }
 }
 
 /// A validated state dimension and its states.

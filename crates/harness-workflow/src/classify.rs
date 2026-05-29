@@ -96,6 +96,12 @@ pub enum ClassificationDiagnostic {
         dimension: StateDimensionId,
         states: Vec<StateId>,
     },
+    /// A state label is present on an artifact kind for which the state is not legal.
+    StateNotAllowedForArtifact {
+        artifact: ArtifactKindId,
+        dimension: StateDimensionId,
+        state: StateId,
+    },
 }
 
 impl fmt::Display for ClassificationDiagnostic {
@@ -136,6 +142,14 @@ impl fmt::Display for ClassificationDiagnostic {
                 formatter,
                 "exclusive dimension `{dimension}` has conflicting states: {}",
                 join_states(states)
+            ),
+            ClassificationDiagnostic::StateNotAllowedForArtifact {
+                artifact,
+                dimension,
+                state,
+            } => write!(
+                formatter,
+                "state `{state}` in dimension `{dimension}` is not legal for artifact kind `{artifact}`"
             ),
         }
     }
@@ -288,7 +302,7 @@ impl<'a> Classifier<'a> {
 
         let label_set: HashSet<&str> = labels.iter().map(String::as_str).collect();
         let kind = self.resolve_kind(target, &label_set, &metadata, &mut diagnostics);
-        let states = self.resolve_states(&label_set, &mut diagnostics);
+        let states = self.resolve_states(&label_set, kind.as_ref(), &mut diagnostics);
 
         match kind {
             Some(kind) if diagnostics.is_empty() => {
@@ -462,11 +476,12 @@ impl<'a> Classifier<'a> {
     fn resolve_states(
         &self,
         labels: &HashSet<&str>,
+        artifact: Option<&ArtifactKindId>,
         diagnostics: &mut Vec<ClassificationDiagnostic>,
     ) -> BTreeMap<StateDimensionId, Vec<StateId>> {
         let mut states = BTreeMap::new();
         for dimension in self.workflow.state_dimensions() {
-            let active: Vec<StateId> = dimension
+            let active: Vec<_> = dimension
                 .states
                 .iter()
                 .filter(|state| {
@@ -475,19 +490,31 @@ impl<'a> Classifier<'a> {
                         .as_ref()
                         .is_some_and(|label| labels.contains(label.as_str()))
                 })
-                .map(|state| state.id.clone())
                 .collect();
 
             if active.is_empty() {
                 continue;
             }
-            if dimension.exclusive && active.len() > 1 {
+            let active_ids: Vec<StateId> = active.iter().map(|state| state.id.clone()).collect();
+            if dimension.exclusive && active_ids.len() > 1 {
                 diagnostics.push(ClassificationDiagnostic::ExclusiveStateConflict {
                     dimension: dimension.id.clone(),
-                    states: active.clone(),
+                    states: active_ids.clone(),
                 });
             }
-            states.insert(dimension.id.clone(), active);
+            if let Some(artifact) = artifact {
+                for state in active
+                    .iter()
+                    .filter(|state| !state.allows_artifact(artifact))
+                {
+                    diagnostics.push(ClassificationDiagnostic::StateNotAllowedForArtifact {
+                        artifact: artifact.clone(),
+                        dimension: dimension.id.clone(),
+                        state: state.id.clone(),
+                    });
+                }
+            }
+            states.insert(dimension.id.clone(), active_ids);
         }
         states
     }

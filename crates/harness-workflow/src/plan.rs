@@ -24,6 +24,7 @@ mod conditions;
 mod dependency;
 mod queue;
 mod signals;
+mod state;
 mod types;
 
 use crate::classify::ClassifiedArtifact;
@@ -77,8 +78,9 @@ pub enum PlanDiagnostic {
         gate: GateId,
     },
     /// Applying the effects would leave an exclusive dimension in several
-    /// states at once. Diagnosed before planning so the impossible state never
-    /// reaches a Forge backend.
+    /// states at once, or put an artifact into a state not legal for its kind.
+    /// Diagnosed before planning so the impossible state never reaches a Forge
+    /// backend.
     ImpossibleState {
         transition: TransitionId,
         dimension: StateDimensionId,
@@ -315,7 +317,13 @@ impl<'a> Planner<'a> {
             let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
             self.check_preconditions(declared, &labels, &mut diagnostics);
             self.check_gates(declared, artifact, &labels, signals, &mut diagnostics);
-            self.check_resulting_states(declared, &labels, &mut diagnostics);
+            state::check_resulting_states(
+                self.workflow,
+                declared,
+                artifact,
+                &labels,
+                &mut diagnostics,
+            );
         } else {
             diagnostics.push(PlanDiagnostic::ArtifactKindMismatch {
                 transition: declared.id.clone(),
@@ -377,7 +385,7 @@ impl<'a> Planner<'a> {
     /// artifact must declare at least one `dependency` relation, so a blocked
     /// artifact with no recorded dependency is never auto-unblocked even though
     /// the gate would be vacuously satisfied. The reconciler uses this to clear
-    /// `blocked-on-dependency` once every prerequisite has landed.
+    /// `blocked` once every prerequisite has landed.
     pub fn dependency_unblocks(
         &self,
         artifact: &ClassifiedArtifact,
@@ -403,7 +411,13 @@ impl<'a> Planner<'a> {
                 let mut diagnostics = Vec::new();
                 self.check_preconditions(transition, &labels, &mut diagnostics);
                 self.check_gates(transition, artifact, &labels, &signals, &mut diagnostics);
-                self.check_resulting_states(transition, &labels, &mut diagnostics);
+                state::check_resulting_states(
+                    self.workflow,
+                    transition,
+                    artifact,
+                    &labels,
+                    &mut diagnostics,
+                );
                 diagnostics.is_empty().then(|| MechanicalPlan {
                     transition: transition.id.clone(),
                     target: artifact.source,
@@ -490,58 +504,6 @@ impl<'a> Planner<'a> {
                 });
                 any && all_present
             })
-    }
-
-    /// Diagnoses exclusive dimensions that would hold several states after the
-    /// effects are applied.
-    fn check_resulting_states(
-        &self,
-        transition: &ValidatedTransition,
-        labels: &HashSet<&str>,
-        diagnostics: &mut Vec<PlanDiagnostic>,
-    ) {
-        let mut result: HashSet<String> = labels.iter().map(|label| label.to_string()).collect();
-        for effect in &transition.effects {
-            match effect {
-                Effect::AddLabel(label) => {
-                    result.insert(label.as_str().to_string());
-                }
-                Effect::RemoveLabel(label) => {
-                    result.remove(label.as_str());
-                }
-                Effect::SetAssignee(_)
-                | Effect::RemoveAssignee(_)
-                | Effect::CreateComment { .. }
-                | Effect::CreatePullRequest { .. }
-                | Effect::RequestReviewers { .. }
-                | Effect::SubmitReview { .. }
-                | Effect::MergePullRequest => {}
-            }
-        }
-
-        for dimension in self.workflow.state_dimensions() {
-            if !dimension.exclusive {
-                continue;
-            }
-            let active: Vec<StateId> = dimension
-                .states
-                .iter()
-                .filter(|state| {
-                    state
-                        .label
-                        .as_ref()
-                        .is_some_and(|label| result.contains(label.as_str()))
-                })
-                .map(|state| state.id.clone())
-                .collect();
-            if active.len() > 1 {
-                diagnostics.push(PlanDiagnostic::ImpossibleState {
-                    transition: transition.id.clone(),
-                    dimension: dimension.id.clone(),
-                    states: active,
-                });
-            }
-        }
     }
 }
 

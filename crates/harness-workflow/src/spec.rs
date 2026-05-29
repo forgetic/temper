@@ -130,6 +130,9 @@ pub struct RawState {
     /// Optional label that projects this state onto a Forge label.
     #[serde(default)]
     pub label: Option<String>,
+    /// Artifact kinds this state is legal for. Empty means every artifact kind.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 /// Queue declaration: a query over artifacts that need attention.

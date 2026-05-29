@@ -474,3 +474,41 @@ fn impossible_state_dimensions_are_diagnosed_before_planning() {
                 && states.contains(&StateId::new("in_progress"))
     )));
 }
+
+#[test]
+fn artifact_scoped_state_legality_is_checked_before_planning() {
+    let json = r#"{
+        "name": "scoped-state-demo",
+        "roles": [{"id": "architect", "queues": []}],
+        "labels": [{"id": "design"}, {"id": "code"}, {"id": "ready"}],
+        "artifact_kinds": [
+            {"id": "design", "target": "issue", "identifying_labels": ["design"]},
+            {"id": "code", "target": "issue", "identifying_labels": ["code"]}
+        ],
+        "state_dimensions": [{"id": "work_lifecycle", "states": [
+            {"id": "ready", "label": "ready", "artifacts": ["code"]}
+        ]}],
+        "transitions": [{"id": "bad_ready", "artifact": "design", "roles": ["architect"],
+            "effects": [{"kind": "add_label", "label": "ready"}]}]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("json parses");
+    let workflow = spec.validate().expect("workflow validates");
+    let artifact = classify_issue(&workflow, 1, &["design"]);
+
+    let error = workflow
+        .planner()
+        .plan_transition(
+            &TransitionId::new("bad_ready"),
+            &RoleId::new("architect"),
+            &artifact,
+        )
+        .expect_err("ready is not legal for design in this workflow");
+
+    assert!(error
+        .diagnostics()
+        .contains(&PlanDiagnostic::ImpossibleState {
+            transition: TransitionId::new("bad_ready"),
+            dimension: StateDimensionId::new("work_lifecycle"),
+            states: vec![StateId::new("ready")],
+        }));
+}

@@ -120,7 +120,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.artifact_kinds().len(), 5);
     // The `ci` and `merge` dimensions are retired: CI is a native gate signal
     // and merge eligibility is derived, not stored (ADR 0014).
-    assert_eq!(workflow.state_dimensions().len(), 6);
+    assert_eq!(workflow.state_dimensions().len(), 5);
     assert_eq!(workflow.queues().len(), 10);
     assert_eq!(workflow.transitions().len(), 20);
     assert_eq!(workflow.gates().len(), 4);
@@ -250,7 +250,7 @@ fn intake_triage_is_a_normal_queue_match() {
         vec![
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("code")),
-            WorkflowEffect::AddLabel(LabelId::new("code-ready")),
+            WorkflowEffect::AddLabel(LabelId::new("ready")),
         ]
     );
 }
@@ -305,7 +305,7 @@ fn owner_alignment_queue_activates_by_depth_or_age() {
 fn engineer_claims_ready_code_but_reviewer_cannot() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
-    let artifact = classify_issue(&workflow, 42, &["code", "code-ready"]);
+    let artifact = classify_issue(&workflow, 42, &["code", "ready"]);
 
     let plan = planner
         .plan_transition(
@@ -317,7 +317,7 @@ fn engineer_claims_ready_code_but_reviewer_cannot() {
     assert_eq!(
         plan.effects,
         vec![
-            WorkflowEffect::RemoveLabel(LabelId::new("code-ready")),
+            WorkflowEffect::RemoveLabel(LabelId::new("ready")),
             WorkflowEffect::AddLabel(LabelId::new("in-progress")),
             WorkflowEffect::SetAssignee {
                 role: RoleId::new("engineer"),
@@ -351,7 +351,7 @@ fn reference_metadata_relations_classify_to_declared_kinds() {
     let code = classifier
         .classify_issue(&Issue {
             body: code_body,
-            ..issue(1, &["code", "blocked-on-dependency"])
+            ..issue(1, &["code", "blocked"])
         })
         .expect("code issue with relations classifies");
 
@@ -426,7 +426,7 @@ fn classify_blocked_code(
     Classifier::new(workflow)
         .classify_issue(&issue_with_dependencies(
             number,
-            &["code", "blocked-on-dependency"],
+            &["code", "blocked"],
             dependencies,
         ))
         .expect("blocked code issue classifies")
@@ -466,8 +466,8 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
     assert_eq!(
         unblocks[0].effects,
         vec![
-            WorkflowEffect::RemoveLabel(LabelId::new("blocked-on-dependency")),
-            WorkflowEffect::AddLabel(LabelId::new("code-ready")),
+            WorkflowEffect::RemoveLabel(LabelId::new("blocked")),
+            WorkflowEffect::AddLabel(LabelId::new("ready")),
         ]
     );
 

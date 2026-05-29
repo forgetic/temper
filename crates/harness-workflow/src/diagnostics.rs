@@ -77,6 +77,8 @@ pub enum ReferenceSite {
     ArtifactLabel { artifact: String },
     /// A state's `label` referenced a label.
     StateLabel { dimension: String, state: String },
+    /// A state's `artifacts` list referenced an artifact kind.
+    StateArtifact { dimension: String, state: String },
     /// A gate's `satisfied_by` list referenced a transition.
     GateTransition { gate: String },
     /// A relation's source endpoint referenced an artifact kind.
@@ -110,7 +112,8 @@ impl fmt::Display for ReferenceSite {
             ReferenceSite::ArtifactLabel { artifact } => {
                 write!(formatter, "artifact kind `{artifact}`")
             }
-            ReferenceSite::StateLabel { dimension, state } => {
+            ReferenceSite::StateLabel { dimension, state }
+            | ReferenceSite::StateArtifact { dimension, state } => {
                 write!(formatter, "state `{state}` in dimension `{dimension}`")
             }
             ReferenceSite::RelationSource { relation } => {

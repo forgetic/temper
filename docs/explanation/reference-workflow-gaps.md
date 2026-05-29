@@ -4,10 +4,11 @@ This page records the expression and runtime gaps discovered while transcribing
 `reference-workflow.md` into `crates/harness-workflow/fixtures/reference-delivery.json`
 and exercising it through `tests/reference_delivery.rs`.
 
-The label-state-machine core — roles, type/state labels, exclusive and
-non-exclusive dimensions, queues with activation and richer matching,
-role-authorized label transitions, transition-satisfied gates, external-signal
-gates, relation declarations, the relation-driven `dependency_gate`, non-label
+The label-state-machine core — roles, type/state labels, artifact-scoped state
+legality, exclusive and non-exclusive dimensions, queues with activation and
+richer matching, role-authorized label transitions, transition-satisfied gates,
+external-signal gates, relation declarations, the relation-driven
+`dependency_gate`, non-label
 effects for assignees/comments/PR create/reviewer requests/review submissions/merge,
 and native dependency links plus native reviews — **validates, compiles, and
 plans today**.
@@ -30,7 +31,7 @@ plans today**.
 - **Relation-driven dependency unblocking.** The `dependencies_resolved` gate
   condition powers a `dependency_gate`; `Planner::dependency_unblocks` and a
   reconciler `DependenciesResolved` finding / `Unblock` action clear
-  `blocked-on-dependency` mechanically once every prerequisite has landed. The
+  `blocked` mechanically once every prerequisite has landed. The
   runtime derives landed status from native Forge dependency targets (closed
   issues or merged pull requests), like the CI signal.
 - **Applying reconciler actions.** `recover::Applier` applies a

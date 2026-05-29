@@ -18,7 +18,9 @@ primitives instead of prose:
 
 1. **Every label is serviced by a queue or is a gate condition.** No decorative
    labels.
-2. **One label, one meaning.** No overloaded states.
+2. **One label, one meaning.** Generic lifecycle labels are allowed only when
+   the meaning stays stable and the workflow declares which artifact kinds may
+   carry each state.
 3. **Prefer modeling over prose.** If a behavior can be a transition, gate,
    lease, or relation, it must not be a paragraph of prompt instructions.
 4. **Queue state is not gate state.** A queue label means "a role must act"; a
@@ -36,10 +38,10 @@ These were decided during design and are not open:
 - **CI and review results are gates fed by native Forge state.** No `needs-ci`
   queue or review-result labels; CI readiness is `ci_gate`, and review approval
   is `review_gate` from the Forge review aggregate.
-- **`blocked` is split.** Dependency blocking is a modeled relation + gate
-  (`blocked_on_dependency`, cleared mechanically). Judgment escalation is a
-  separate `escalated` flag routed to the architect. Human input is `needs_human`
-  routed to the owner.
+- **`blocked` is dependency-only.** Dependency blocking is a modeled relation +
+  gate (`blocked`, cleared mechanically). Judgment escalation is a separate
+  `escalated` flag routed to the architect. Human input is `needs_human` routed
+  to the owner.
 - **Claims are explicit leases.** The engineer's claim is a `metadata::Lease`
   with a TTL; the reconciler handles expiry. The original prose stale-claim
   recovery procedure is dropped.
@@ -74,8 +76,10 @@ type label") so intake is a normal queue match. The architect triages them into
 
 Exclusive unless noted; each state projects to one label.
 
-- `design_lifecycle`: `draft`, `ready`.
-- `code_lifecycle`: `ready`, `in_progress`, `blocked_on_dependency`.
+- `work_lifecycle`: `draft` (legal for `design`), `ready` (legal for
+  `design` and `code`), `in_progress` (legal for `epic` and `code`), and
+  `blocked` (legal for `code`). The generic labels keep stable meanings; the
+  artifact-specific legality matrix prevents combinations such as `code + draft`.
 - Review results are not a workflow-owned state dimension; `needs_review` is a
   routing label, while `approved` / `changes_requested` are native Forge review
   decisions read through review gate conditions.
@@ -104,9 +108,8 @@ failed review or testing gate returns the PR to the engineer (native
 ## Relations
 
 - `design → epic` (parent), `code → design`/`epic` (parent).
-- `code → code` (dependency): a code issue is `blocked_on_dependency` until its
-  prerequisite's PR lands, then `dependency_gate` clears it to `ready`
-  mechanically.
+- `code → code` (dependency): a code issue is `blocked` until its prerequisite's
+  PR lands, then `dependency_gate` clears it to `ready` mechanically.
 - `implementation_pr → code` (implements/closes): merging the PR closes the
   issue and fires post-merge handling.
 
@@ -171,7 +174,7 @@ expected backlog was:
 - **Relation-driven dependency handling** — the `relation` primitive declares
   parent/dependency/produced-PR links, native Forge dependency links feed the
   `dependencies_resolved` gate, and the reconciler mechanically produces and
-  applies the `blocked-on-dependency` unblock once every prerequisite lands.
+  applies the `blocked` unblock once every prerequisite lands.
 - **Queue activation and richer matching** — `min_depth`/`max_age`, multi-kind
   queue targets, disjunctive label-set matching, and queue conditions such as
   `review_changes_requested` are implemented as read-side planner predicates.

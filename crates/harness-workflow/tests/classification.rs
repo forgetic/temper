@@ -34,9 +34,9 @@ fn workflow() -> ValidatedWorkflow {
         ],
         "state_dimensions": [
             {"id": "code_lifecycle", "exclusive": true, "states": [
-                {"id": "ready", "label": "ready"},
-                {"id": "in_progress", "label": "in-progress"},
-                {"id": "blocked", "label": "blocked"}
+                {"id": "ready", "label": "ready", "artifacts": ["code"]},
+                {"id": "in_progress", "label": "in-progress", "artifacts": ["code"]},
+                {"id": "blocked", "label": "blocked", "artifacts": ["code"]}
             ]},
             {"id": "review", "exclusive": true, "states": [
                 {"id": "needs_review", "label": "needs-review"},
@@ -170,6 +170,24 @@ fn exclusive_state_conflict_is_diagnosed() {
         ClassificationDiagnostic::ExclusiveStateConflict { dimension, states }
             if dimension == &StateDimensionId::new("code_lifecycle") && states.len() == 2
     )));
+}
+
+#[test]
+fn state_limited_to_another_artifact_kind_is_diagnosed() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+
+    let error = classifier
+        .classify_issue(&issue(1, &["epic", "ready"], ""))
+        .expect_err("ready is only legal for code in this fixture");
+
+    assert!(error
+        .diagnostics()
+        .contains(&ClassificationDiagnostic::StateNotAllowedForArtifact {
+            artifact: ArtifactKindId::new("epic"),
+            dimension: StateDimensionId::new("code_lifecycle"),
+            state: StateId::new("ready"),
+        }));
 }
 
 #[test]

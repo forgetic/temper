@@ -54,7 +54,7 @@ Status legend: ☐ pending · ☑ done.
 - ☑ **12b — `dependency_gate` + reconcile unblock.** Added the
   `dependencies_resolved` gate condition and a relation-driven `dependency_gate`
   (gating `mark_code_ready`). `Planner::dependency_unblocks` plus a reconciler
-  `DependenciesResolved` finding / `Unblock` action clear `blocked-on-dependency`
+  `DependenciesResolved` finding / `Unblock` action clear `blocked`
   mechanically once every prerequisite lands; ADR 0015 later made landed status
   derive from native Forge dependency targets. No new ADR here (extends existing
   relation and gate primitives).

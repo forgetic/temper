@@ -40,7 +40,7 @@ Phase 2 implemented the spec and validation foundations:
 Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
 
 - `artifact::ArtifactTarget` maps each artifact kind to a Forge `Issue` or `PullRequest`. Artifact kinds now carry `target` and `identifying_labels`.
-- State dimensions carry an `exclusive` flag (default `true`) so the classifier can reject impossible label combinations.
+- State dimensions carry an `exclusive` flag (default `true`) so the classifier can reject impossible label combinations. Individual states may also list the artifact kinds they are legal for; an empty list means all kinds.
 - `metadata::WorkflowMetadata` (with `Lease`) is the machine-readable block parsed from and rendered into artifact bodies. See "Metadata block format".
 - `classify::Classifier` turns a `harness_forge::Issue` or `PullRequest` into a typed `ClassifiedArtifact`, or a `ClassificationError` carrying `ClassificationDiagnostic`s. See "Artifact classification".
 - `harness-workflow` now depends on `harness-forge` because classification consumes Forge domain types.
@@ -138,7 +138,7 @@ A workflow spec contains these logical primitives.
 | --- | --- |
 | `role` | Actor authority, queues, concurrency limits, and prose charter |
 | `artifact_kind` | Logical item with a Forge `target` (issue or PR) and `identifying_labels` |
-| `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
+| `state_dimension` | Named state group with an `exclusive` flag, projected as labels; states may restrict legal artifact kinds |
 | `queue` | Query that selects artifacts needing attention by artifact kind(s), label filters, optional native/projected condition, and optional read-side activation policy |
 | `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, request reviewers, submit reviews, or request PR merge |
 | `gate` | Condition that unlocks another transition, either from sibling transition outcomes, a Forge-projected label/state condition, or a runtime-supplied signal such as native CI or reviews |
@@ -148,7 +148,7 @@ A workflow spec contains these logical primitives.
 
 Labels are a portable Forge projection of workflow-owned state; native CI, dependency links, and review decisions are observed from the Forge instead of mirrored as labels. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee and reviewer-request effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, `submit_review` carries a portable decision, and `merge_pull_request` has no payload. The workflow layer uses native Forge dependency links for `dependency`; metadata blocks still carry correlation keys plus `parent`/`produced_pr` links and fallback dependency numbers.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects, external-signal gates, relation declarations, the relation-driven `dependency_gate`, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). Any remaining gaps are tracked in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its orthogonal lifecycle labels plus artifact-scoped state legality, non-label effects, external-signal gates, relation declarations, the relation-driven `dependency_gate`, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). Any remaining gaps are tracked in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
@@ -164,7 +164,7 @@ Validation must reject or diagnose:
 
 Validation should also warn about unreachable queues, terminal states with no explanation, and labels that are declared but unused (planned).
 
-In the current model, labels are the only cross-referenced projection of state: artifact mappings, queues, state declarations, and transition effects all reference label ids. States are not referenced by id outside their dimension, so undeclared-state references are not a current diagnostic.
+State labels are the main cross-referenced projection of workflow state: artifact mappings, queues, state declarations, and transition effects reference label ids. State declarations may also reference legal artifact kinds, and `state_equals` conditions reference state ids within a dimension.
 
 ## Metadata block format
 
@@ -198,7 +198,7 @@ JSON-in-an-HTML-comment is deliberate: it renders invisibly in Forge markdown, n
 
 Kind resolution: when metadata names a `kind`, that kind is authoritative. Otherwise the kind is inferred from `identifying_labels` — a kind matches when all of its identifying labels are present, and the most specific match (most identifying labels) wins.
 
-State resolution: for each dimension, the active states are those whose label is present. An exclusive dimension with more than one active state is an impossible combination.
+State resolution: for each dimension, the active states are those whose label is present. An exclusive dimension with more than one active state is an impossible combination. If a state declares an `artifacts` list, the classifier also rejects that state on any other artifact kind.
 
 Relation resolution: native artifact dependency links are the source of truth for `dependency` relations. If an artifact has no native dependencies, metadata `dependencies` is used as a compatibility fallback. Metadata `parents` still feeds `parent` relations, and `produced_pr` declarations are read from the `parents` projection on PR artifacts. The classifier emits `ClassifiedRelation`s for declarations whose source is the artifact kind, preserving the linked item number and declared possible target artifact kinds.
 
@@ -210,6 +210,7 @@ Success yields a `ClassifiedArtifact` (kind, target, source, optional `updated_a
 - `TargetMismatch`: the kind maps to a different Forge target than the artifact
 - `MissingIdentifyingLabel`: metadata named a kind whose identifying label is absent (drift)
 - `ExclusiveStateConflict`: several states of one exclusive dimension are present
+- `StateNotAllowedForArtifact`: a state label is present on an artifact kind for which that state is not legal
 - `MalformedMetadata`: the body's metadata block could not be parsed
 
 ## Queue evaluation and transition planning
@@ -227,7 +228,7 @@ Transition planning checks, in order, and collects every problem:
 - the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
 - each label effect's precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`); non-label effects have no label precondition
 - every required gate is satisfied — a gate is satisfied when its condition holds (label/state, dependency, CI, or review signal) or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
-- applying the effects would not leave an exclusive dimension in several states (else `ImpossibleState`)
+- applying the effects would not leave an exclusive dimension in several states or put the resulting artifact kind into an illegal state (else `ImpossibleState`)
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
 

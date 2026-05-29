@@ -69,24 +69,20 @@
       "description": "identifies an implementation pull request"
     },
     {
-      "id": "design-draft",
-      "description": "design is still being shaped"
+      "id": "draft",
+      "description": "work item is still being shaped"
     },
     {
-      "id": "design-ready",
-      "description": "design is ready to break into code issues"
-    },
-    {
-      "id": "code-ready",
-      "description": "code issue is ready to claim"
+      "id": "ready",
+      "description": "work item is ready for the next workflow step"
     },
     {
       "id": "in-progress",
-      "description": "code issue is being implemented"
+      "description": "work item is currently being advanced"
     },
     {
-      "id": "blocked-on-dependency",
-      "description": "code issue is blocked on a native dependency link"
+      "id": "blocked",
+      "description": "work item is blocked by unmet dependencies"
     },
     {
       "id": "needs-review",
@@ -187,34 +183,38 @@
   ],
   "state_dimensions": [
     {
-      "id": "design_lifecycle",
+      "id": "work_lifecycle",
       "exclusive": true,
       "states": [
         {
           "id": "draft",
-          "label": "design-draft"
+          "label": "draft",
+          "artifacts": [
+            "design"
+          ]
         },
         {
           "id": "ready",
-          "label": "design-ready"
-        }
-      ]
-    },
-    {
-      "id": "code_lifecycle",
-      "exclusive": true,
-      "states": [
-        {
-          "id": "ready",
-          "label": "code-ready"
+          "label": "ready",
+          "artifacts": [
+            "design",
+            "code"
+          ]
         },
         {
           "id": "in_progress",
-          "label": "in-progress"
+          "label": "in-progress",
+          "artifacts": [
+            "epic",
+            "code"
+          ]
         },
         {
-          "id": "blocked_on_dependency",
-          "label": "blocked-on-dependency"
+          "id": "blocked",
+          "label": "blocked",
+          "artifacts": [
+            "code"
+          ]
         }
       ]
     },
@@ -283,7 +283,7 @@
       "id": "code_ready",
       "artifact": "code",
       "labels": [
-        "code-ready"
+        "ready"
       ]
     },
     {
@@ -375,7 +375,7 @@
         },
         {
           "kind": "add_label",
-          "label": "code-ready"
+          "label": "ready"
         }
       ]
     },
@@ -396,7 +396,7 @@
         },
         {
           "kind": "add_label",
-          "label": "design-draft"
+          "label": "draft"
         }
       ]
     },
@@ -409,11 +409,11 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "design-draft"
+          "label": "draft"
         },
         {
           "kind": "add_label",
-          "label": "design-ready"
+          "label": "ready"
         }
       ]
     },
@@ -429,11 +429,11 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "blocked-on-dependency"
+          "label": "blocked"
         },
         {
           "kind": "add_label",
-          "label": "code-ready"
+          "label": "ready"
         }
       ]
     },
@@ -485,7 +485,7 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "code-ready"
+          "label": "ready"
         },
         {
           "kind": "add_label",

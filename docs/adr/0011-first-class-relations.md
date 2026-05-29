@@ -56,7 +56,7 @@ artifact's kind.
 - `dependency_gate` landed as Phase 12b: the `dependencies_resolved` gate
   condition evaluates the declared `dependency` relations against
   `DependencyStatus`, and the reconciler mechanically unblocks
-  `blocked-on-dependency` work once every prerequisite lands. ADR 0015 later
+  `blocked` work once every prerequisite lands. ADR 0015 later
   made runtime layers derive that status from native Forge dependency links.
 
 ## Alternatives considered

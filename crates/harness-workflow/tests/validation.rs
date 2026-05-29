@@ -77,10 +77,12 @@ fn valid_spec() -> RawWorkflowSpec {
                 RawState {
                     id: "ready".to_string(),
                     label: Some("ready".to_string()),
+                    artifacts: Vec::new(),
                 },
                 RawState {
                     id: "in_progress".to_string(),
                     label: Some("in-progress".to_string()),
+                    artifacts: Vec::new(),
                 },
             ],
         }],
@@ -206,6 +208,7 @@ fn duplicate_state_id_is_diagnosed_per_dimension() {
     spec.state_dimensions[0].states.push(RawState {
         id: "ready".to_string(),
         label: None,
+        artifacts: Vec::new(),
     });
 
     let errors = spec.validate().expect_err("duplicate state must fail");
@@ -213,6 +216,26 @@ fn duplicate_state_id_is_diagnosed_per_dimension() {
         dimension: "code_lifecycle".to_string(),
         id: "ready".to_string(),
     }));
+}
+
+#[test]
+fn missing_state_artifact_reference_is_diagnosed() {
+    let mut spec = valid_spec();
+    spec.state_dimensions[0].states[0]
+        .artifacts
+        .push("ghost".to_string());
+
+    let errors = spec.validate().expect_err("missing artifact must fail");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::UndeclaredReference {
+            expected: SymbolKind::ArtifactKind,
+            id: "ghost".to_string(),
+            site: ReferenceSite::StateArtifact {
+                dimension: "code_lifecycle".to_string(),
+                state: "ready".to_string(),
+            },
+        }));
 }
 
 #[test]
