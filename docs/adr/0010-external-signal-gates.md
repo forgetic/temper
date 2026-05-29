@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; CI-specific projection superseded by ADR 0014
 
 ## Context
 
@@ -34,10 +34,11 @@ Add an external-signal gate condition to the workflow spec. A gate may still use
   occupies the declared state in that dimension.
 
 The condition is evaluated on the same classified artifact as the guarded
-transition. For CI, adapters remain outside `harness-forge`: they observe the
-provider-specific CI result and project it into labels/state that the workflow
-already knows how to classify. The planner then treats `ci = passed` exactly as
-it treats any other portable artifact condition.
+transition. For CI, adapters originally remained outside `harness-forge`: they observed the
+provider-specific CI result and projected it into labels/state that the workflow
+already knew how to classify. ADR 0014 supersedes that CI-specific projection by
+adding a native `ci_passed` gate condition fed from portable `CiJob` conclusions;
+`label_present` and `state_equals` remain valid for other projected signals.
 
 A required gate is satisfied when either its external condition holds or one of
 its `satisfied_by` transition outcomes is visible. Existing transition-satisfied
@@ -47,8 +48,9 @@ gates therefore keep their behavior unchanged.
 
 - CI and similar signals are modeled as portable workflow state instead of
   provider-specific concepts or role prose.
-- The reference delivery fixture can express `ci_gate` directly over
-  `ci = passed` and remove the zero-role adapter transitions.
+- The reference delivery fixture could express `ci_gate` directly over
+  `ci = passed` and remove the zero-role adapter transitions. ADR 0014 later
+  replaced that CI projection with the native `ci_passed` condition.
 - Label manifests can identify labels that exist because they are external gate
   conditions, even when no workflow transition writes them.
 - External adapters must be idempotent projectors of Forge-observed state; the

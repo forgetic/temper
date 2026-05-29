@@ -49,6 +49,14 @@
 //! executor-special-cased post-merge labeling. Lease effects remain unsupported
 //! until later phases.
 //!
+//! # Gate signals
+//!
+//! Before planning, the executor reads runtime-supplied gate facts from fresh
+//! Forge state into [`GateSignals`]. The `ci_passed` gate is fed by native CI
+//! jobs from [`Forge::list_ci_jobs`](harness_forge::Forge::list_ci_jobs) (see
+//! [`CiStatus::from_jobs`] and ADR 0014), so merge eligibility is derived from
+//! review/testing/CI gates rather than a stored label.
+//!
 //! Reloading and re-planning before every mutation is deliberate: Forge state
 //! can be edited by humans or other workers between planning and execution, so
 //! the executor never trusts a plan computed against stale state. It always
@@ -74,11 +82,13 @@ use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, C
 use crate::context::ExecutionContext;
 use crate::ids::{RoleId, TransitionId};
 use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMetadata};
-use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect};
+use crate::plan::{
+    CiStatus, GateSignals, PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect,
+};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
-    CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
+    CiJobQuery, CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery,
+    PullRequest, PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
 };
 
 /// Outcome of an idempotent ensure-create operation.
@@ -274,6 +284,9 @@ enum Loaded {
         /// Whether the freshly loaded pull request is already merged. Lets the
         /// merge effect be at-most-once: an already-merged target is skipped.
         merged: bool,
+        /// Head commit SHA, when the backend records one. Scopes the CI signal
+        /// to the pull request's head commit (see [`Executor::gate_signals`]).
+        head_sha: Option<String>,
         classified: ClassifiedArtifact,
     },
 }
@@ -336,11 +349,12 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         role: &RoleId,
     ) -> Result<ExecutionReport, ExecutionError> {
         let loaded = self.load(repo_id, target).await?;
+        let signals = self.gate_signals(repo_id, &loaded).await?;
 
         let plan = self
             .workflow
             .planner()
-            .plan_transition(transition, role, loaded.classified())
+            .plan_transition_with(transition, role, loaded.classified(), &signals)
             .map_err(classify_plan_error)?;
 
         // `apply` validates every effect (rejecting unsupported effects,
@@ -375,10 +389,39 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         role: &RoleId,
     ) -> Result<TransitionPlan, ExecutionError> {
         let loaded = self.load(repo_id, target).await?;
+        let signals = self.gate_signals(repo_id, &loaded).await?;
         self.workflow
             .planner()
-            .plan_transition(transition, role, loaded.classified())
+            .plan_transition_with(transition, role, loaded.classified(), &signals)
             .map_err(classify_plan_error)
+    }
+
+    /// Reads the runtime gate signals for the loaded artifact from fresh state.
+    ///
+    /// Pull requests carry a native CI signal computed from
+    /// [`Forge::list_ci_jobs`](harness_forge::Forge::list_ci_jobs) for the
+    /// pull request (scoped to its head commit when the backend records one);
+    /// the pass rule lives in [`CiStatus::from_jobs`]. Issues carry no CI, so
+    /// they get the empty bundle. Dependency status is not yet read here, so it
+    /// stays the default; the planner keeps it pure by only reading these
+    /// signals (see ADR 0014).
+    async fn gate_signals(
+        &self,
+        repo_id: &RepositoryId,
+        loaded: &Loaded,
+    ) -> Result<GateSignals, ExecutionError> {
+        match loaded {
+            Loaded::Issue { .. } => Ok(GateSignals::new()),
+            Loaded::PullRequest { id, head_sha, .. } => {
+                let query = CiJobQuery {
+                    pull_request_id: Some(id.clone()),
+                    commit_sha: head_sha.clone(),
+                    ..CiJobQuery::default()
+                };
+                let jobs = self.forge.list_ci_jobs(repo_id, query).await?;
+                Ok(GateSignals::new().with_ci(CiStatus::from_jobs(&jobs)))
+            }
+        }
     }
 
     /// Loads and classifies the target artifact from fresh Forge state.
@@ -410,12 +453,14 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .await?
                     .ok_or(ExecutionError::TargetMissing { target })?;
                 let merged = matches!(pull_request.state, PullRequestState::Merged);
+                let head_sha = pull_request.head_sha.clone();
                 let classified = classifier
                     .classify_pull_request(&pull_request)
                     .map_err(ExecutionError::Classification)?;
                 Ok(Loaded::PullRequest {
                     id: pull_request.id,
                     merged,
+                    head_sha,
                     classified,
                 })
             }

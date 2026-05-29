@@ -76,9 +76,9 @@ Exclusive unless noted; each state projects to one label.
 - `code_lifecycle`: `ready`, `in_progress`, `blocked_on_dependency`.
 - `review`: `needs_review`, `approved`, `changes_requested`.
 - `testing`: `needs_testing`, `passed`, `failed`.
-- `ci`: `pending`, `passed`, `failed` — projected by an adapter from the Forge
-  CI signal, not written by an agent role.
-- `merge`: `merge_ready` (single state).
+- CI is not a workflow-owned state dimension; merge eligibility reads native
+  CI job conclusions through the `ci_passed` gate.
+- Merge readiness is derived from gates rather than stored as a state.
 - `escalation` (non-exclusive): `escalated` — judgment escalation flag.
 - `human` (non-exclusive): `needs_human` — owner-input flag.
 - `post_merge` (non-exclusive): `landed` (awaiting architect reconcile),
@@ -88,8 +88,8 @@ Exclusive unless noted; each state projects to one label.
 
 - `review_gate` — satisfied by the reviewer's approve transition.
 - `testing_gate` — satisfied by the tester's pass transition.
-- `ci_gate` — satisfied by the external CI signal (`ci = passed`) using the
-  external-signal gate class.
+- `ci_gate` — satisfied by the runtime's native CI signal (`ci_passed`) derived
+  from Forge CI job conclusions.
 - `dependency_gate` — satisfied when every prerequisite relation of a code issue
   is merged. Drives mechanical unblocking.
 

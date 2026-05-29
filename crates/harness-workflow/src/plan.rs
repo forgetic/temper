@@ -22,6 +22,7 @@
 
 mod dependency;
 mod queue;
+mod signals;
 mod types;
 
 use crate::classify::ClassifiedArtifact;
@@ -37,6 +38,7 @@ use std::fmt;
 
 pub use dependency::{DependencyStatus, MechanicalPlan};
 pub use queue::{matches_queue, queue_active, QueueMember, QueueQuery};
+pub use signals::{CiStatus, GateSignals};
 pub use types::{Postcondition, TransitionPlan, WorkflowEffect};
 
 /// A single reason a transition cannot be planned.
@@ -235,27 +237,27 @@ impl<'a> Planner<'a> {
     /// satisfied, and the result would not create an impossible exclusive state.
     /// Otherwise returns a [`PlanError`] collecting every problem.
     ///
-    /// Dependency gates are evaluated with empty [`DependencyStatus`], so a
-    /// transition gated on `dependency_gate` plans only for an artifact whose
-    /// dependency relations are empty. Use [`Planner::plan_transition_with`]
-    /// when the runtime knows which prerequisites have landed.
+    /// Gate signals are empty, so dependency gates are open only for artifacts
+    /// with no dependency relations and `ci_passed` gates stay closed. Use
+    /// [`Planner::plan_transition_with`] when the runtime knows which
+    /// prerequisites have landed and whether CI passed.
     pub fn plan_transition(
         &self,
         transition: &TransitionId,
         role: &RoleId,
         artifact: &ClassifiedArtifact,
     ) -> Result<TransitionPlan, PlanError> {
-        self.plan_transition_with(transition, role, artifact, &DependencyStatus::default())
+        self.plan_transition_with(transition, role, artifact, &GateSignals::default())
     }
 
     /// Plans a transition like [`Planner::plan_transition`], but evaluates
-    /// dependency gates against the supplied [`DependencyStatus`].
+    /// runtime-fed gate conditions against the supplied [`GateSignals`].
     pub fn plan_transition_with(
         &self,
         transition: &TransitionId,
         role: &RoleId,
         artifact: &ClassifiedArtifact,
-        deps: &DependencyStatus,
+        signals: &GateSignals,
     ) -> Result<TransitionPlan, PlanError> {
         let mut diagnostics = Vec::new();
 
@@ -285,7 +287,7 @@ impl<'a> Planner<'a> {
         if declared.artifact == artifact.kind {
             let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
             self.check_preconditions(declared, &labels, &mut diagnostics);
-            self.check_gates(declared, artifact, &labels, deps, &mut diagnostics);
+            self.check_gates(declared, artifact, &labels, signals, &mut diagnostics);
             self.check_resulting_states(declared, &labels, &mut diagnostics);
         } else {
             diagnostics.push(PlanDiagnostic::ArtifactKindMismatch {
@@ -362,6 +364,9 @@ impl<'a> Planner<'a> {
             return Vec::new();
         }
         let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
+        // Mechanical unblock is a dependency-gate concern, so CI is irrelevant
+        // here; bundle the dependency status with a default (not-passed) CI.
+        let signals = GateSignals::new().with_dependencies(deps.clone());
         self.workflow
             .transitions()
             .iter()
@@ -370,7 +375,7 @@ impl<'a> Planner<'a> {
             .filter_map(|transition| {
                 let mut diagnostics = Vec::new();
                 self.check_preconditions(transition, &labels, &mut diagnostics);
-                self.check_gates(transition, artifact, &labels, deps, &mut diagnostics);
+                self.check_gates(transition, artifact, &labels, &signals, &mut diagnostics);
                 self.check_resulting_states(transition, &labels, &mut diagnostics);
                 diagnostics.is_empty().then(|| MechanicalPlan {
                     transition: transition.id.clone(),
@@ -402,11 +407,11 @@ impl<'a> Planner<'a> {
         transition: &ValidatedTransition,
         artifact: &ClassifiedArtifact,
         labels: &HashSet<&str>,
-        deps: &DependencyStatus,
+        signals: &GateSignals,
         diagnostics: &mut Vec<PlanDiagnostic>,
     ) {
         for gate in &transition.requires_gates {
-            if !self.gate_satisfied(gate, artifact, labels, deps) {
+            if !self.gate_satisfied(gate, artifact, labels, signals) {
                 diagnostics.push(PlanDiagnostic::GateNotSatisfied {
                     transition: transition.id.clone(),
                     gate: gate.clone(),
@@ -422,7 +427,7 @@ impl<'a> Planner<'a> {
         gate: &GateId,
         artifact: &ClassifiedArtifact,
         labels: &HashSet<&str>,
-        deps: &DependencyStatus,
+        signals: &GateSignals,
     ) -> bool {
         let Some(declared) = self.workflow.gates().iter().find(|g| &g.id == gate) else {
             return false;
@@ -430,7 +435,7 @@ impl<'a> Planner<'a> {
         declared
             .condition
             .as_ref()
-            .is_some_and(|condition| gate_condition_satisfied(condition, artifact, labels, deps))
+            .is_some_and(|condition| gate_condition_satisfied(condition, artifact, labels, signals))
             || declared.satisfied_by.iter().any(|transition_id| {
                 let Some(transition) = self
                     .workflow
@@ -513,7 +518,7 @@ fn gate_condition_satisfied(
     condition: &GateCondition,
     artifact: &ClassifiedArtifact,
     labels: &HashSet<&str>,
-    deps: &DependencyStatus,
+    signals: &GateSignals,
 ) -> bool {
     match condition {
         GateCondition::LabelPresent(label) => labels.contains(label.as_str()),
@@ -525,7 +530,8 @@ fn gate_condition_satisfied(
             .relations
             .iter()
             .filter(|relation| relation.kind == RelationKind::Dependency)
-            .all(|relation| deps.is_landed(relation.target)),
+            .all(|relation| signals.dependencies().is_landed(relation.target)),
+        GateCondition::CiPassed => signals.ci().is_passed(),
     }
 }
 

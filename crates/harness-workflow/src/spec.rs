@@ -257,8 +257,8 @@ pub struct RawGate {
     /// a transition id.
     #[serde(default)]
     pub satisfied_by: Vec<String>,
-    /// Portable Forge-projected condition that can satisfy this gate, such as
-    /// `ci = passed` after a backend adapter projects CI into labels/state.
+    /// Portable condition that can satisfy this gate, such as a projected
+    /// label/state condition or a runtime-supplied native CI/dependency signal.
     #[serde(default)]
     pub condition: Option<RawGateCondition>,
 }
@@ -273,7 +273,12 @@ pub enum RawGateCondition {
     StateEquals { dimension: String, state: String },
     /// Every `dependency` relation target of the artifact must have landed
     /// (its prerequisite work merged). Which targets have landed is supplied by
-    /// the runtime as an external signal, mirroring how `ci_gate` is fed; the
-    /// condition references relations by kind, so it carries no payload.
+    /// the runtime as an external signal; the condition references relations by
+    /// kind, so it carries no payload.
     DependenciesResolved,
+    /// The artifact's native CI must have passed. Whether CI passed is supplied
+    /// by the runtime as a signal computed from the Forge's `CiJob`
+    /// conclusions (see ADR 0014); the condition references the artifact's CI,
+    /// so it carries no payload.
+    CiPassed,
 }

@@ -9,9 +9,9 @@
 use chrono::{DateTime, Duration, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
-    compile, render_metadata_block, ArtifactKindId, ClassifiedArtifact, ClassifiedRelation,
-    Classifier, DependencyStatus, GateCondition, GateId, LabelId, LabelUsage, PlanDiagnostic,
-    QueueId, RawWorkflowSpec, RelationKind, RoleId, StateDimensionId, StateId, TransitionId,
+    compile, render_metadata_block, ArtifactKindId, CiStatus, ClassifiedArtifact,
+    ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals, LabelId,
+    LabelUsage, PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, RoleId, TransitionId,
     ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
 };
 
@@ -111,7 +111,9 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.name(), "reference-delivery");
     assert_eq!(workflow.roles().len(), 5);
     assert_eq!(workflow.artifact_kinds().len(), 5);
-    assert_eq!(workflow.state_dimensions().len(), 9);
+    // The `ci` and `merge` dimensions are retired: CI is a native gate signal
+    // and merge eligibility is derived, not stored (ADR 0014).
+    assert_eq!(workflow.state_dimensions().len(), 7);
     assert_eq!(workflow.queues().len(), 9);
     assert_eq!(workflow.transitions().len(), 19);
     assert_eq!(workflow.gates().len(), 4);
@@ -120,19 +122,19 @@ fn reference_fixture_validates_with_expected_shape() {
         .transitions()
         .iter()
         .all(|transition| !transition.id.as_str().starts_with("record_ci_")));
+    assert!(!workflow
+        .labels()
+        .iter()
+        .any(|label| label.as_str() == "merge-ready" || label.as_str().starts_with("ci-")));
 
     let ci_gate = workflow
         .gates()
         .iter()
         .find(|gate| gate.id.as_str() == "ci_gate")
         .expect("ci_gate is declared");
-    assert_eq!(
-        ci_gate.condition.as_ref(),
-        Some(&GateCondition::StateEquals {
-            dimension: StateDimensionId::new("ci"),
-            state: StateId::new("passed"),
-        })
-    );
+    // The CI gate now reads native CI conclusions, not an adapter-projected
+    // label/state.
+    assert_eq!(ci_gate.condition.as_ref(), Some(&GateCondition::CiPassed));
 
     let owner_alignment = workflow
         .queues()
@@ -174,14 +176,12 @@ fn reference_fixture_compiles_every_role() {
         vec!["architect", "engineer", "owner", "reviewer", "tester"]
     );
 
-    let ci_passed = compiled
+    // The retired adapter labels and the derived merge marker are gone.
+    assert!(compiled.labels().get(&LabelId::new("ci-passed")).is_none());
+    assert!(compiled
         .labels()
-        .get(&LabelId::new("ci-passed"))
-        .expect("ci-passed label is in the manifest");
-    assert!(ci_passed.usages.iter().any(|usage| matches!(
-        usage,
-        LabelUsage::GateCondition { gate } if gate.as_str() == "ci_gate"
-    )));
+        .get(&LabelId::new("merge-ready"))
+        .is_none());
 
     let owner_alignment = compiled
         .queues()
@@ -457,12 +457,13 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
     );
 
     // The same dependency status lets the architect plan the flip directly.
+    let signals = GateSignals::new().with_dependencies(landed.clone());
     let plan = planner
         .plan_transition_with(
             &TransitionId::new("mark_code_ready"),
             &RoleId::new("architect"),
             &blocked,
-            &landed,
+            &signals,
         )
         .expect("architect can mark ready once dependencies land");
     assert_eq!(plan.effects, unblocks[0].effects);
@@ -491,51 +492,46 @@ fn three_gate_merge_requires_review_testing_and_ci() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    // All three gates satisfied: review approved, testing passed, CI passed.
+    // Review approved and testing passed, but the runtime CI signal has not
+    // reported passed: the derived merge gate stays shut.
     let ready = classify_pr(
         &workflow,
         10,
-        &[
-            "implementation",
-            "review-approved",
-            "testing-passed",
-            "ci-passed",
-        ],
+        &["implementation", "review-approved", "testing-passed"],
     );
-    let plan = planner
+    let blocked = planner
         .plan_transition(
             &TransitionId::new("approve_merge"),
             &RoleId::new("owner"),
             &ready,
         )
-        .expect("owner can approve a fully gated merge");
-    assert_eq!(
-        plan.effects,
-        vec![
-            WorkflowEffect::AddLabel(LabelId::new("merge-ready")),
-            WorkflowEffect::MergePullRequest,
-        ]
-    );
-
-    // CI gate unsatisfied: the merge cannot be planned.
-    let pending = classify_pr(
-        &workflow,
-        11,
-        &["implementation", "review-approved", "testing-passed"],
-    );
-    let error = planner
-        .plan_transition(
-            &TransitionId::new("approve_merge"),
-            &RoleId::new("owner"),
-            &pending,
-        )
-        .expect_err("an ungated merge must not plan");
-    assert!(error
+        .expect_err("a merge cannot plan until the CI signal reports passed");
+    assert!(blocked
         .diagnostics()
         .contains(&PlanDiagnostic::GateNotSatisfied {
             transition: TransitionId::new("approve_merge"),
             gate: GateId::new("ci_gate"),
         }));
+
+    // Once the runtime supplies a passed CI signal, all three gates are met and
+    // the merge plans: it merges and projects the post-merge re-run guard.
+    let signals = GateSignals::new().with_ci(CiStatus::passed());
+    let plan = planner
+        .plan_transition_with(
+            &TransitionId::new("approve_merge"),
+            &RoleId::new("owner"),
+            &ready,
+            &signals,
+        )
+        .expect("owner can approve a fully gated merge once CI passes");
+    assert_eq!(
+        plan.effects,
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::AddLabel(LabelId::new("landed")),
+            WorkflowEffect::AddLabel(LabelId::new("owner-pending")),
+        ]
+    );
 }
 
 #[test]

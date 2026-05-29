@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–14 have landed spec validation, artifact/metadata modeling, classification, first-class relation declarations, compilation to manifests, pure queue evaluation/activation and transition planning, external-signal gates, runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–14 have landed spec validation, artifact/metadata modeling, classification, first-class relation declarations, compilation to manifests, pure queue evaluation/activation and transition planning, external/runtime-signal gates (including native CI), runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -47,7 +47,7 @@ Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
 
 Not yet modeled: `invariant` and spec-level `recovery_policy`. Effects cover label add/remove plus assignee, comment, pull-request create, and pull-request merge requests.
 
-Gate/transition wiring is modeled in both directions for role actions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions. A gate may also declare a portable external condition over artifact labels/state.
+Gate/transition wiring is modeled in both directions for role actions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions. A gate may also declare a portable condition over artifact labels/state or runtime-supplied signals such as dependency resolution and native CI.
 
 Phase 4 added compilation:
 
@@ -84,7 +84,7 @@ Phase 7 added recovery primitives — leases, command journaling, and reconcilia
 Phase 9c added merge execution and post-merge projection:
 
 - `Executor::execute` applies `MergePullRequest` through the `Forge` merge API. The merge runs *before* the label/assignee commit point and is skipped when the freshly loaded pull request is already merged, so a merge is applied at most once even when a crash lands the merge but loses the response.
-- The post-merge `landed` and `owner-pending` labels are modeled as ordinary `add_label` effects on the merge transition (preferring modeling over executor special-casing), so they are projected by the same atomic label update and survive on the now-closed pull request. The merge transition's `merge-ready`/`landed`/`owner-pending` labels also double as the "already done" marker that makes a retry's planner refuse to re-run a completed merge.
+- The post-merge `landed` and `owner-pending` labels are modeled as ordinary `add_label` effects on the merge transition (preferring modeling over executor special-casing), so they are projected by the same atomic label update and survive on the now-closed pull request. `landed`/`owner-pending` now double as the "already done" marker that makes a retry's planner refuse to re-run a completed merge; merge eligibility itself is derived from gates, not a stored `merge-ready` label.
 
 Phase 10 added pull-request idempotent create:
 
@@ -93,8 +93,8 @@ Phase 10 added pull-request idempotent create:
 
 Phase 11 added external-signal gates:
 
-- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, or `dependencies_resolved`. `label_present`/`state_equals` are satisfied from the classified artifact's current Forge-projected labels/state.
-- Transition-satisfied gates continue to use `satisfied_by`; a required gate passes when either its external condition holds or one of its satisfying transition outcomes is visible.
+- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, `dependencies_resolved`, or `ci_passed`. `label_present`/`state_equals` are satisfied from classified labels/state; `dependencies_resolved` and `ci_passed` read runtime-supplied signals.
+- Transition-satisfied gates continue to use `satisfied_by`; a required gate passes when either its condition holds or one of its satisfying transition outcomes is visible.
 
 Phase 12a added first-class relations:
 
@@ -105,7 +105,7 @@ Phase 12a added first-class relations:
 Phase 12b added the relation-driven `dependency_gate` and a mechanical reconcile unblock:
 
 - The `dependencies_resolved` gate condition (`GateCondition::DependenciesResolved`) is satisfied when every `dependency` relation target of the artifact has landed. It is vacuously true for an artifact with no dependency relations.
-- "Has it landed" is a runtime/adapter signal, never derived in the pure planner (mirroring the CI signal behind `ci_gate`). `plan::DependencyStatus` carries the set of landed item numbers; `Planner::plan_transition` evaluates dependency gates with empty status, and `Planner::plan_transition_with` takes an explicit `DependencyStatus`.
+- "Has it landed" is a runtime/adapter signal, never derived in the pure planner. `plan::DependencyStatus` carries the set of landed item numbers; `Planner::plan_transition` evaluates runtime-fed gates with default signals, and `Planner::plan_transition_with` takes an explicit `GateSignals` bundle.
 - `Planner::dependency_unblocks(artifact, deps)` returns the mechanical (actor-less) `MechanicalPlan`s an artifact admits: transitions gated on a `dependencies_resolved` gate whose preconditions, gates, and resulting states all hold. It requires the artifact to declare at least one `dependency` relation, so a blocked artifact with no recorded dependency is never auto-unblocked.
 - The reconciler turns each available unblock into a `DependenciesResolved` finding and an `Unblock { effects }` action (see "Reconciliation").
 
@@ -123,7 +123,7 @@ Phase 8 added robustness and crash-injection tests (no new runtime types):
 
 - `tests/support/crash.rs` provides `CrashForge`, a `Forge` wrapper that injects a deterministic fault before or after a chosen operation's chosen call, so a backend mutation can fail either before it lands (state intact) or after it lands (state changed, caller sees failure).
 - `tests/crash_injection.rs` proves crash-before/after retry safety, a fault matrix showing label effects are applied at most once, journaled restart recovery (partial transition → repair, landed effect → reconciled), and at-most-once claiming under duplicated tool calls and interleaved workers.
-- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required gates pass (review/testing in the five-role fixture and external CI/review/testing in an inline three-gate workflow), a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review gate returns work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
+- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required gates pass (review/testing in the five-role fixture and native CI/review/testing in a three-gate fixture), a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review gate returns work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
 
 See `robustness-guarantees.md` for the full safety-property register and the limitations these tests surfaced. Lease acquisition is now a compare-and-swap: `LeaseManager` captures each artifact's `Version` at load time and writes the lease conditionally (ADR 0013), so two acquirers over the same "no lease" snapshot cannot both win.
 
@@ -138,7 +138,7 @@ A workflow spec contains these logical primitives.
 | `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
 | `queue` | Query that selects artifacts needing attention by artifact kind(s), label filters, and optional read-side activation policy |
 | `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, or request PR merge |
-| `gate` | Condition that unlocks another transition, either from sibling transition outcomes or a Forge-projected label/state condition |
+| `gate` | Condition that unlocks another transition, either from sibling transition outcomes, a Forge-projected label/state condition, or a runtime-supplied signal such as native CI |
 | `relation` | Typed link between artifacts, such as parent, dependency, or produced PR |
 | `invariant` | Condition that must hold during runtime scans |
 | `recovery_policy` | What to do with expired leases, partial transitions, and drift |
@@ -223,7 +223,7 @@ Transition planning checks, in order, and collects every problem:
 - the role is authorized for the transition (else `Unauthorized`)
 - the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
 - each label effect's precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`); non-label effects have no label precondition
-- every required gate is satisfied — a gate is satisfied when its external label/state condition holds or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
+- every required gate is satisfied — a gate is satisfied when its condition holds (label/state, dependency, or CI signal) or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
 - applying the effects would not leave an exclusive dimension in several states (else `ImpossibleState`)
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
@@ -236,11 +236,12 @@ Every transition execution must:
 
 1. load fresh Forge state for the target artifact
 2. classify it according to the validated workflow
-3. check role authority and transition preconditions
-4. apply effects through an idempotent executor
-5. verify postconditions or emit diagnostics
+3. compute runtime gate signals such as native CI
+4. check role authority, transition preconditions, and gates
+5. apply effects through an idempotent executor
+6. verify postconditions or emit diagnostics
 
-`Executor::execute` implements this loop today for labels, assignees, comments, pull-request creates, and pull-request merges. It never trusts a plan computed against stale state: it re-loads and re-plans against fresh state immediately before mutating, and it refuses to mutate at all if planning fails, if a plan contains an unsupported effect, if an assignee role has no runtime user binding, if a create lacks a correlation key, or if no pull-request create input is bound. It posts idempotent comments first, ensures pull requests next, merges the target pull request next (skipping an already-merged target), then applies label and assignee changes together in one backend update. Because creates and merges precede the label commit point, retries can dedupe a landed create and finish post-create state, while post-merge labels become the marker that makes a retry refuse to re-run; already-merged targets are skipped, so the merge is at most once. Postconditions are verified by re-reading the artifact's labels and assignees after the update; a mismatch yields `PostconditionFailed`.
+`Executor::execute` implements this loop today for labels, assignees, comments, pull-request creates, and pull-request merges. It never trusts a plan computed against stale state: it re-loads, computes gate signals (including native CI from `list_ci_jobs` for PRs), and re-plans against fresh state immediately before mutating. It refuses to mutate at all if planning fails, if a plan contains an unsupported effect, if an assignee role has no runtime user binding, if a create lacks a correlation key, or if no pull-request create input is bound. It posts idempotent comments first, ensures pull requests next, merges the target pull request next (skipping an already-merged target), then applies label and assignee changes together in one backend update. Because creates and merges precede the label commit point, retries can dedupe a landed create and finish post-create state, while post-merge labels become the marker that makes a retry refuse to re-run; already-merged targets are skipped, so the merge is at most once. Postconditions are verified by re-reading the artifact's labels and assignees after the update; a mismatch yields `PostconditionFailed`.
 
 Idempotency: re-running a label transition that already applied fails as a `Precondition` error (the source label is gone and/or the target label is present), so a retry never double-applies. `SetAssignee` is cleanly idempotent when the resolved user is already assigned, and `RemoveAssignee` is cleanly idempotent when the resolved user is already absent. `CreateComment` is guarded by a hidden marker appended to the body (`<!-- harness:comment-key=<transition>:<comment-index> -->`); the executor lists comments on the same target and skips posting when the marker already exists, so a retry after a crash-before-state-flip cannot duplicate the comment. Comments have no postcondition; instead the marker check is the verified idempotency mechanism. Idempotent artifact create is handled by `Executor::ensure_issue` and `Executor::ensure_pull_request` through correlation keys.
 
@@ -254,7 +255,7 @@ Transition specs now emit `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssig
 
 Leases are not yet emitted as transition effects (`UpdateLease`/`ReleaseLease` remain placeholders). Lease changes go through `lease::LeaseManager` as standalone operations on the metadata block; see "Claims and leases".
 
-`Executor::execute` applies `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest` through the `Forge` trait. `CreatePullRequest` runs before the label/assignee commit point through `Executor::ensure_pull_request`, using the effect's correlation key and the transition-bound runtime input. `MergePullRequest` merges through the Forge merge API at most once (an already-merged target is skipped) using a default merge-commit method; its transition's post-merge labels are projected as ordinary `add_label` effects in the same atomic update. The executor still rejects `UpdateLease` and `ReleaseLease` with `ExecutionError::UnsupportedEffect` before any mutation.
+`Executor::execute` applies `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest` through the `Forge` trait. `CreatePullRequest` runs before the label/assignee commit point through `Executor::ensure_pull_request`, using the effect's correlation key and the transition-bound runtime input. `MergePullRequest` merges through the Forge merge API at most once (an already-merged target is skipped) using a default merge-commit method; its transition's post-merge labels are projected as ordinary `add_label` effects in the same atomic update and act as the planner re-run guard. The executor still rejects `UpdateLease` and `ReleaseLease` with `ExecutionError::UnsupportedEffect` before any mutation.
 
 Create effects use correlation keys for idempotent retries: `CreateIssue` requires one, while `CreatePullRequest` must have one to execute. `Executor::ensure_issue` and `Executor::ensure_pull_request` stamp the key into artifact metadata and search existing artifacts before creating.
 
@@ -274,7 +275,7 @@ Expired leases are handled by recovery policy. Common actions are requeue, exten
 
 ## Reconciliation
 
-The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; `recover::Applier` then applies the decision through the executor, lease manager, and journal (see "Applying reconciler actions"). `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, a `DependencyStatus`, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order. `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`; the caller still supplies the `DependencyStatus` (the same runtime/adapter signal as CI).
+The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; `recover::Applier` then applies the decision through the executor, lease manager, and journal (see "Applying reconciler actions"). `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, a `DependencyStatus`, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order. `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`; the caller still supplies the `DependencyStatus`, following the same runtime-supplied signal pattern as native CI.
 
 Findings (`ReconcileFinding`) cover: `ExpiredLease`, `ImpossibleState` (an exclusive dimension with several active states), `ClassificationDrift` (other classification failures), `PartialTransition` (a journaled command whose label effects are not all realized), `StaleCommand` (an incomplete command whose effects already landed or whose target is gone), and `DependenciesResolved` (a blocked artifact whose `dependency` relations have all landed, so its dependency-gated unblock transition can be applied). Each finding gets exactly one `RecoveryAction`: `RequeueLease`, `Escalate`, `Repair { effects }`, `MarkReconciled`, `Unblock { effects }`, or `Diagnose`. The scan order is stable: per snapshot, its expired lease then either its classification problems (when it fails to classify) or its mechanical dependency unblocks (when it classifies cleanly), in snapshot order, then incomplete journal commands in journal order. `scan`/`reconcile` take a `DependencyStatus` so the runtime supplies which prerequisites have landed.
 

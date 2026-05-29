@@ -180,13 +180,13 @@ fn label_manifest_covers_every_workflow_site() {
         LabelUsage::ArtifactIdentity { artifact } if artifact.as_str() == "code"
     )));
 
-    // State-dimension projection with no transition or queue (CI is external).
-    let ci_passed = labels
-        .get(&"ci-passed".into())
-        .expect("ci-passed label is in the manifest");
-    assert!(ci_passed.usages.iter().any(|usage| matches!(
+    // State-dimension projection: `in-progress` projects the code lifecycle.
+    let in_progress = labels
+        .get(&"in-progress".into())
+        .expect("in-progress label is in the manifest");
+    assert!(in_progress.usages.iter().any(|usage| matches!(
         usage,
-        LabelUsage::StateProjection { dimension, .. } if dimension.as_str() == "ci"
+        LabelUsage::StateProjection { dimension, .. } if dimension.as_str() == "code_lifecycle"
     )));
 
     // Queue filter label.
@@ -211,8 +211,10 @@ fn label_manifest_covers_every_workflow_site() {
         .iter()
         .any(|usage| matches!(usage, LabelUsage::TransitionEffect { .. })));
 
-    // Every declared label appears exactly once in the manifest.
-    assert_eq!(labels.labels().len(), 22);
+    // Every declared label appears exactly once in the manifest. The `ci-*`
+    // and `merge-ready` labels were retired (ADR 0014), so the count dropped
+    // from 22 to 18.
+    assert_eq!(labels.labels().len(), 18);
 }
 
 #[test]

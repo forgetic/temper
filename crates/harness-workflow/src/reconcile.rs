@@ -497,8 +497,8 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     /// Loads snapshots and journal entries from a backend, then scans them.
     ///
     /// `deps` is supplied by the caller (the runtime/adapter that knows which
-    /// prerequisites have landed), mirroring the external CI signal behind
-    /// `ci_gate`; it is threaded straight into [`Reconciler::scan`].
+    /// prerequisites have landed), following the same runtime-supplied signal
+    /// pattern as native CI; it is threaded straight into [`Reconciler::scan`].
     pub async fn reconcile<F, J>(
         &self,
         forge: &F,

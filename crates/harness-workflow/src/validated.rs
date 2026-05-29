@@ -215,4 +215,7 @@ pub enum GateCondition {
     /// landed, per runtime-supplied dependency status. Vacuously true for an
     /// artifact with no dependency relations.
     DependenciesResolved,
+    /// Satisfied when the artifact's native CI passed, per the runtime-supplied
+    /// CI signal computed from the Forge's `CiJob` conclusions (see ADR 0014).
+    CiPassed,
 }

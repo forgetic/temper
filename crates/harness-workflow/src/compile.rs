@@ -559,6 +559,9 @@ fn gate_condition_label<'a>(
         // Reads `dependency` relations by kind, not a label, so it tracks no
         // label usage.
         GateCondition::DependenciesResolved => None,
+        // Reads native CI conclusions, not a label, so it tracks no label
+        // usage (see ADR 0014).
+        GateCondition::CiPassed => None,
     }
 }
 

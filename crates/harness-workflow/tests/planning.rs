@@ -8,9 +8,9 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
-    compile, matches_queue, ArtifactKindId, ClassifiedArtifact, Classifier, GateId, LabelId,
-    PlanDiagnostic, Postcondition, QueueId, RawWorkflowSpec, RoleId, StateDimensionId, StateId,
-    TransitionId, ValidatedWorkflow, WorkflowEffect,
+    compile, matches_queue, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier, GateId,
+    GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId, RawWorkflowSpec, RoleId,
+    StateDimensionId, StateId, TransitionId, ValidatedWorkflow, WorkflowEffect,
 };
 
 /// The checked-in five-role delivery workflow fixture.
@@ -260,12 +260,12 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
             &ready,
         )
         .expect("owner can approve a fully gated merge");
-    // The merge transition adds the merge-ready marker, merges the pull request,
-    // and projects the post-merge labels in declaration order.
+    // Merge eligibility is derived from the gates, not a stored marker: the
+    // transition merges the pull request and projects the post-merge labels
+    // (the `landed` re-run guard) in declaration order.
     assert_eq!(
         plan.effects,
         vec![
-            WorkflowEffect::AddLabel(LabelId::new("merge-ready")),
             WorkflowEffect::MergePullRequest,
             WorkflowEffect::AddLabel(LabelId::new("landed")),
             WorkflowEffect::AddLabel(LabelId::new("owner-pending")),
@@ -287,6 +287,61 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
             transition: TransitionId::new("approve_merge"),
             gate: GateId::new("testing_gate"),
         }));
+}
+
+#[test]
+fn ci_gate_requires_runtime_ci_signal_before_merge_plans() {
+    let json = r#"{
+        "name": "ci-gated-merge",
+        "roles": [{"id": "owner", "queues": []}],
+        "labels": [{"id": "implementation"}, {"id": "landed"}],
+        "artifact_kinds": [
+            {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+        ],
+        "transitions": [
+            {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
+             "requires_gates": ["ci_gate"], "effects": [
+                {"kind": "merge_pull_request"},
+                {"kind": "add_label", "label": "landed"}
+             ]}
+        ],
+        "gates": [{"id": "ci_gate", "condition": {"kind": "ci_passed"}}]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("json parses");
+    let workflow = spec.validate().expect("workflow validates");
+    let planner = workflow.planner();
+    let artifact = classify_pr(&workflow, 10, &["implementation"]);
+
+    let blocked = planner
+        .plan_transition(
+            &TransitionId::new("approve_merge"),
+            &RoleId::new("owner"),
+            &artifact,
+        )
+        .expect_err("CI has not passed by default");
+    assert!(blocked
+        .diagnostics()
+        .contains(&PlanDiagnostic::GateNotSatisfied {
+            transition: TransitionId::new("approve_merge"),
+            gate: GateId::new("ci_gate"),
+        }));
+
+    let signals = GateSignals::new().with_ci(CiStatus::passed());
+    let plan = planner
+        .plan_transition_with(
+            &TransitionId::new("approve_merge"),
+            &RoleId::new("owner"),
+            &artifact,
+            &signals,
+        )
+        .expect("a passed CI signal opens the gate");
+    assert_eq!(
+        plan.effects,
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::AddLabel(LabelId::new("landed")),
+        ]
+    );
 }
 
 #[test]

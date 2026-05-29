@@ -357,6 +357,11 @@ fn check_gate_condition(
             // relations by kind, not by id, and the resolved targets are
             // supplied by the runtime rather than declared in the spec.
         }
+        RawGateCondition::CiPassed => {
+            // No id references to check: the condition reads the artifact's
+            // native CI, and whether CI passed is supplied by the runtime
+            // rather than declared in the spec.
+        }
     }
 }
 
@@ -533,6 +538,7 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
             GateCondition::LabelPresent(LabelId::new(label))
         }
         RawGateCondition::DependenciesResolved => GateCondition::DependenciesResolved,
+        RawGateCondition::CiPassed => GateCondition::CiPassed,
         RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {
             dimension: StateDimensionId::new(dimension),
             state: StateId::new(state),

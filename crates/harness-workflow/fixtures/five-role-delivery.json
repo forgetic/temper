@@ -48,10 +48,6 @@
     {"id": "needs-testing", "description": "pull request awaits testing"},
     {"id": "testing-passed", "description": "testing passed"},
     {"id": "testing-failed", "description": "testing failed"},
-    {"id": "ci-pending", "description": "CI has not finished"},
-    {"id": "ci-passed", "description": "CI passed"},
-    {"id": "ci-failed", "description": "CI failed"},
-    {"id": "merge-ready", "description": "all merge gates passed"},
     {"id": "landed", "description": "merged PR awaiting architect reconcile"},
     {"id": "owner-pending", "description": "merged PR awaiting owner alignment"},
     {"id": "needs-owner", "description": "requires owner judgment"}
@@ -84,14 +80,6 @@
       {"id": "needs_testing", "label": "needs-testing"},
       {"id": "passed", "label": "testing-passed"},
       {"id": "failed", "label": "testing-failed"}
-    ]},
-    {"id": "ci", "exclusive": true, "states": [
-      {"id": "pending", "label": "ci-pending"},
-      {"id": "passed", "label": "ci-passed"},
-      {"id": "failed", "label": "ci-failed"}
-    ]},
-    {"id": "merge", "exclusive": true, "states": [
-      {"id": "ready", "label": "merge-ready"}
     ]},
     {"id": "post_merge", "exclusive": false, "states": [
       {"id": "landed", "label": "landed"},
@@ -153,7 +141,6 @@
     ]},
     {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
       "requires_gates": ["review_gate", "testing_gate"], "effects": [
-      {"kind": "add_label", "label": "merge-ready"},
       {"kind": "merge_pull_request"},
       {"kind": "add_label", "label": "landed"},
       {"kind": "add_label", "label": "owner-pending"}

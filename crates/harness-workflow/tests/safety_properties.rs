@@ -2,7 +2,7 @@
 //!
 //! Each test asserts one of the safety properties listed in
 //! `docs/reference/robustness-guarantees.md` over the checked-in five-role
-//! fixture (and one inline three-gate workflow for the external CI gate). All time is
+//! fixture (and one three-gate fixture for the native CI gate). All time is
 //! supplied through fixed timestamps and all faults fire on fixed call counts,
 //! so the suite is deterministic.
 
@@ -10,8 +10,8 @@ mod support;
 
 use chrono::Duration;
 use harness_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, Forge, IssueQuery, PullRequestQuery,
-    PullRequestState, RepositoryId, UserId,
+    BranchRef, CiJobConclusion, CreateIssue, CreatePullRequest, Forge, IssueQuery,
+    PullRequestQuery, PullRequestState, RepositoryId, UserId,
 };
 use harness_workflow::{
     parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, DependencyStatus, ExecutionError,
@@ -20,52 +20,15 @@ use harness_workflow::{
 };
 use support::crash::{CrashForge, Fault, ForgeOp};
 use support::{
-    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state, ts, workflow,
-    TestRoot,
+    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state, seed_ci, ts,
+    workflow, TestRoot,
 };
 
-/// An inline workflow whose merge gate requires external CI, review, and testing.
-const THREE_GATE: &str = r#"{
-    "name": "three-gate-merge",
-    "roles": [
-        {"id": "reviewer", "queues": []},
-        {"id": "tester", "queues": []},
-        {"id": "owner", "queues": []}
-    ],
-    "labels": [
-        {"id": "implementation"},
-        {"id": "ci-passed"},
-        {"id": "review-approved"},
-        {"id": "testing-passed"},
-        {"id": "merge-ready"}
-    ],
-    "artifact_kinds": [
-        {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
-    ],
-    "state_dimensions": [
-        {"id": "ci", "exclusive": true, "states": [{"id": "passed", "label": "ci-passed"}]},
-        {"id": "review", "exclusive": true, "states": [{"id": "approved", "label": "review-approved"}]},
-        {"id": "testing", "exclusive": true, "states": [{"id": "passed", "label": "testing-passed"}]},
-        {"id": "merge", "exclusive": true, "states": [{"id": "ready", "label": "merge-ready"}]}
-    ],
-    "transitions": [
-        {"id": "approve_review", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
-            {"kind": "add_label", "label": "review-approved"}
-        ]},
-        {"id": "record_test_pass", "artifact": "implementation_pr", "roles": ["tester"], "effects": [
-            {"kind": "add_label", "label": "testing-passed"}
-        ]},
-        {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
-            "requires_gates": ["ci_gate", "review_gate", "testing_gate"], "effects": [
-            {"kind": "add_label", "label": "merge-ready"}
-        ]}
-    ],
-    "gates": [
-        {"id": "ci_gate", "condition": {"kind": "state_equals", "dimension": "ci", "state": "passed"}},
-        {"id": "review_gate", "satisfied_by": ["approve_review"]},
-        {"id": "testing_gate", "satisfied_by": ["record_test_pass"]}
-    ]
-}"#;
+/// A workflow whose merge gate requires native CI, review, and testing.
+///
+/// CI is driven by seeded native jobs, not `ci-passed`; merge eligibility is
+/// derived from gates, with `landed` as the post-merge re-run guard.
+const THREE_GATE: &str = include_str!("../fixtures/three-gate-merge.json");
 
 fn code_issue_input() -> CreateIssue {
     CreateIssue {
@@ -283,11 +246,8 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
     ))
     .expect_err("a merge cannot be authorized before testing passes");
     assert!(matches!(blocked, ExecutionError::Precondition { .. }));
-    assert!(
-        !pr_labels(&forge, &repo, ungated).contains(&"merge-ready".to_string()),
-        "no merge-ready label is set while a gate is unmet"
-    );
-    // No premature merge: the pull request is untouched.
+    // No premature merge or post-merge projection while a gate is unmet.
+    assert!(!pr_labels(&forge, &repo, ungated).contains(&"landed".to_string()));
     assert_eq!(pr_state(&forge, &repo, ungated), PullRequestState::Open);
 
     // Both gates met: review approved and testing passed.
@@ -305,10 +265,9 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
     ))
     .expect("a fully gated merge is authorized");
     // The pull request is merged and carries the post-merge projection, which
-    // survives on the now-closed pull request.
+    // survives on the now-closed pull request and acts as the re-run guard.
     assert_eq!(pr_state(&forge, &repo, gated), PullRequestState::Merged);
     let labels = pr_labels(&forge, &repo, gated);
-    assert!(labels.contains(&"merge-ready".to_string()));
     assert!(labels.contains(&"landed".to_string()));
     assert!(labels.contains(&"owner-pending".to_string()));
 }
@@ -348,7 +307,7 @@ fn a_merge_executes_at_most_once_under_retry() {
         .expect("lookup succeeds")
         .expect("pull request exists");
     assert_eq!(after_crash.state, PullRequestState::Merged);
-    assert!(!after_crash.labels.contains(&"merge-ready".to_string()));
+    assert!(!after_crash.labels.contains(&"landed".to_string()));
 
     // The retry skips the already-merged target and finishes the projection.
     block_on(executor.execute(
@@ -364,13 +323,13 @@ fn a_merge_executes_at_most_once_under_retry() {
         "the pull request is merged at most once"
     );
     let labels = pr_labels(crash.inner(), &repo, number);
-    assert!(labels.contains(&"merge-ready".to_string()));
     assert!(labels.contains(&"landed".to_string()));
     assert!(labels.contains(&"owner-pending".to_string()));
 }
 
-// Safety property 3b: the gate mechanism blocks a merge until external CI,
-// review, and testing all pass.
+// Safety property 3b: the gate mechanism blocks a merge until native CI,
+// review, and testing all pass. CI is read from `list_ci_jobs`, so it is driven
+// by seeded CI jobs rather than a projected label.
 #[test]
 fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
     let spec: RawWorkflowSpec = serde_json::from_str(THREE_GATE).expect("three-gate json parses");
@@ -380,14 +339,21 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
     let repo = new_repo(&forge);
     let executor = Executor::new(&workflow, &forge);
 
-    // Dropping any single gate blocks the merge.
-    let missing_one = [
-        ["implementation", "review-approved", "testing-passed"], // no CI
-        ["implementation", "ci-passed", "testing-passed"],       // no review
-        ["implementation", "ci-passed", "review-approved"],      // no testing
+    // Each case drops exactly one of the three gates; `ci` is whether a passing
+    // CI job is seeded for the pull request.
+    let cases: [(&[&str], bool); 3] = [
+        (
+            &["implementation", "review-approved", "testing-passed"],
+            false,
+        ), // no CI
+        (&["implementation", "testing-passed"], true), // no review
+        (&["implementation", "review-approved"], true), // no testing
     ];
-    for labels in missing_one {
-        let number = create_pr(&forge, &repo, &labels, "");
+    for (labels, ci) in cases {
+        let number = create_pr(&forge, &repo, labels, "");
+        if ci {
+            seed_ci(&forge, &repo, number, CiJobConclusion::Success);
+        }
         let error = block_on(executor.execute(
             &repo,
             ArtifactSource::PullRequest { number },
@@ -399,21 +365,17 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
             matches!(error, ExecutionError::Precondition { .. }),
             "a missing gate is a precondition failure: {error:?}"
         );
-        assert!(!pr_labels(&forge, &repo, number).contains(&"merge-ready".to_string()));
+        assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Open);
     }
 
-    // All three gates satisfied: the merge is authorized.
+    // All three gates satisfied: review and testing labels plus a passing CI job.
     let number = create_pr(
         &forge,
         &repo,
-        &[
-            "implementation",
-            "ci-passed",
-            "review-approved",
-            "testing-passed",
-        ],
+        &["implementation", "review-approved", "testing-passed"],
         "",
     );
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
     block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number },
@@ -421,7 +383,55 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
         &RoleId::new("owner"),
     ))
     .expect("all three gates satisfied authorizes the merge");
-    assert!(pr_labels(&forge, &repo, number).contains(&"merge-ready".to_string()));
+    assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Merged);
+    assert!(pr_labels(&forge, &repo, number).contains(&"landed".to_string()));
+}
+
+// Safety property 3d: the CI gate is derived from native `CiJob` conclusions
+// read through `list_ci_jobs`, not from a projected label. A failing CI job
+// blocks the merge even with review and testing satisfied; replacing it with a
+// passing job opens the gate.
+#[test]
+fn ci_gate_reads_native_ci_job_conclusions() {
+    let spec: RawWorkflowSpec = serde_json::from_str(THREE_GATE).expect("three-gate json parses");
+    let workflow = spec.validate().expect("three-gate workflow validates");
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let executor = Executor::new(&workflow, &forge);
+
+    let number = create_pr(
+        &forge,
+        &repo,
+        &["implementation", "review-approved", "testing-passed"],
+        "",
+    );
+    let pr = ArtifactSource::PullRequest { number };
+
+    // A failing native CI conclusion leaves the gate shut even though review and
+    // testing are satisfied.
+    seed_ci(&forge, &repo, number, CiJobConclusion::Failure);
+    let blocked = block_on(executor.execute(
+        &repo,
+        pr,
+        &TransitionId::new("approve_merge"),
+        &RoleId::new("owner"),
+    ))
+    .expect_err("a failing CI conclusion blocks the merge");
+    assert!(matches!(blocked, ExecutionError::Precondition { .. }));
+    assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Open);
+
+    // A passing native CI conclusion opens the gate and the merge proceeds.
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
+    block_on(executor.execute(
+        &repo,
+        pr,
+        &TransitionId::new("approve_merge"),
+        &RoleId::new("owner"),
+    ))
+    .expect("a passing CI conclusion authorizes the merge");
+    assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Merged);
+    assert!(pr_labels(&forge, &repo, number).contains(&"landed".to_string()));
 }
 
 // Safety property 4: a failed review gate returns the work to the engineer, and

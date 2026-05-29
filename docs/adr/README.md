@@ -17,3 +17,4 @@ Current ADRs:
 - [ADR 0011: Promote workflow relations to first-class spec declarations](0011-first-class-relations.md)
 - [ADR 0012: Extend queues with activation and richer matching](0012-queue-primitive-extensions.md)
 - [ADR 0013: Portable optimistic concurrency for conditional artifact writes](0013-portable-optimistic-concurrency.md)
+- [ADR 0014: Derive merge eligibility from gates and read native CI](0014-derive-merge-eligibility-and-native-ci-gate.md)

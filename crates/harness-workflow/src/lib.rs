@@ -121,8 +121,9 @@ pub use metadata::{
     WorkflowMetadata, METADATA_BEGIN, METADATA_END,
 };
 pub use plan::{
-    matches_queue, queue_active, DependencyStatus, MechanicalPlan, PlanDiagnostic, PlanError,
-    Planner, Postcondition, QueueMember, QueueQuery, TransitionPlan, WorkflowEffect,
+    matches_queue, queue_active, CiStatus, DependencyStatus, GateSignals, MechanicalPlan,
+    PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, TransitionPlan,
+    WorkflowEffect,
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,

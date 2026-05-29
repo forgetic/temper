@@ -13,8 +13,8 @@ pub mod crash;
 
 use chrono::{DateTime, Utc};
 use harness_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, Forge, ItemNumber, PullRequestState, RepositoryId,
-    UserId,
+    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest, Forge,
+    ItemNumber, PullRequestState, RepositoryId, UserId,
 };
 use harness_forge_memory::MemoryForge;
 use harness_workflow::{RawWorkflowSpec, ValidatedWorkflow};
@@ -166,6 +166,39 @@ pub fn pr_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -
         .labels;
     labels.sort();
     labels
+}
+
+/// Seeds a single completed CI job for a pull request, scoped to its id/commit.
+///
+/// CI jobs have no create operation on the Forge interface, so tests inject
+/// deterministic fixture jobs through [`MemoryForge::seed_ci_jobs`]. The job is
+/// tagged with the pull request's id (and head commit when the backend records
+/// one) so the executor's native CI signal — derived from `list_ci_jobs` — picks
+/// it up. Seeding replaces any previously seeded jobs for the repository.
+pub fn seed_ci(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    conclusion: CiJobConclusion,
+) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    let job = CiJob {
+        id: CiJobId::new(format!("ci-{}-{}", repo.as_str(), number.get())),
+        repo_id: repo.clone(),
+        pull_request_id: Some(pull_request.id.clone()),
+        commit_sha: pull_request.head_sha.clone().unwrap_or_default(),
+        name: "ci".into(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(conclusion),
+        url: None,
+        created_at: ts("2026-05-29T00:00:00Z"),
+        started_at: Some(ts("2026-05-29T00:00:30Z")),
+        completed_at: Some(ts("2026-05-29T00:01:00Z")),
+        updated_at: ts("2026-05-29T00:01:00Z"),
+    };
+    forge.seed_ci_jobs(repo, vec![job]);
 }
 
 /// Reads a pull request's current state from the backend.

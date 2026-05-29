@@ -34,7 +34,7 @@ is supplied explicitly, so the suite is reproducible.
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
 | Two acquirers that both observe "no lease" cannot both win: lease acquisition is a compare-and-swap, so the loser observes a conflict | `two_no_lease_acquirers_cannot_both_win_the_same_claim`, `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue` |
 | A merge is not authorized, and the pull request is not merged, until review and testing gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
-| The gate mechanism blocks a merge until an external CI condition plus review and testing gates all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together` |
+| The gate mechanism blocks a merge until native CI conclusions plus review and testing gates all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
@@ -92,8 +92,9 @@ window, but a wider window can no longer produce a lost-update lease race.
   and is skipped when the freshly loaded pull request is already merged. A crash
   that lands the merge but loses the response leaves the post-merge labels
   unapplied; the retry observes the merged state, skips the merge, and finishes
-  the `landed`/`owner-pending` projection, so the merge happens exactly once and
-  the post-merge labels survive on the closed pull request.
+  the `landed`/`owner-pending` projection. Those labels are also the planner
+  re-run guard, so the merge happens exactly once and the post-merge projection
+  survives on the closed pull request.
 - **Applied reconciler actions.** `recover::Applier` applies a `ReconcileReport`
   through the existing components (the executor's idempotent label-apply path,
   `LeaseManager::clear`, and the command journal). Each mutating action loads
@@ -109,12 +110,11 @@ window, but a wider window can no longer produce a lost-update lease race.
 These are real gaps the robustness tests exposed; they are documented here
 rather than hidden:
 
-- **The stable five-role fixture wires no CI gate.** It declares
-  `ci-passed`/`ci-failed` labels and a `ci` state dimension, but `approve_merge`
-  requires only `review_gate` and `testing_gate`. The evolving
-  `reference-delivery` fixture now models CI as an external gate, and the CI
-  gate property is proven over an inline three-gate workflow with the same
-  external condition.
+- **The stable five-role fixture wires no CI gate.** It is kept focused on the
+  execution capabilities it exercises, so `approve_merge` there requires only
+  `review_gate` and `testing_gate`. The evolving `reference-delivery` fixture
+  models native CI with `ci_passed`, and the CI gate property is proven over a
+  small three-gate fixture that drives `list_ci_jobs`.
 - **Testing failure has no modeled return path.** `record_test_failure` sets
   `testing-failed`, but no transition clears it back to `needs-testing`. The
   review path (`request_changes` → `address_review_changes`) is the modeled

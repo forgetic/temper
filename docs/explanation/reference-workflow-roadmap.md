@@ -45,9 +45,9 @@ Status legend: ☐ pending · ☑ done.
   with a correlation key and runtime create input. Closes the prior
   PR-create limitation in `robustness-guarantees.md`.
 - ☑ **11 — External-signal gates (ADR).** New gate class satisfied by a
-  Forge-projected condition (e.g. `ci = passed`), not only sibling transitions.
-  Removed the zero-role `record_ci_pass`/`record_ci_failure` adapter workaround
-  from `reference-delivery`.
+  Forge-projected condition, not only sibling transitions. Removed the zero-role
+  CI adapter-transition workaround from `reference-delivery`; native CI later
+  replaced the projected CI labels in ADR 0014.
 - ☑ **12a — First-class relations (ADR).** A `relation` spec primitive
   (parent/dependency/produced-PR) in spec/validated/validation/classification,
   superseding metadata-only relations for the spec.

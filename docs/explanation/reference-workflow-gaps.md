@@ -19,9 +19,9 @@ relations — **validates, compiles, and plans today**.
 - **Pull-request idempotent create.** `CreatePullRequest` runs through
   `Executor::ensure_pull_request` with a correlation key and runtime create
   input.
-- **External-signal gates.** `ci_gate` is a `state_equals` external condition
-  over `ci = passed`; adapters project CI into labels/state outside
-  `harness-forge`.
+- **External-signal gates.** `ci_gate` now uses the `ci_passed` condition fed by
+  native Forge CI jobs; the old adapter-projected `ci = passed` labels/state are
+  retired.
 - **Relation primitive.** The spec declares `parent`, `dependency`, and
   `produced_pr` relations; classifiers type metadata projections using those
   declarations.

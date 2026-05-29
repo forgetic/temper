@@ -49,10 +49,6 @@
     {"id": "needs-testing", "description": "pull request awaits testing"},
     {"id": "testing-passed", "description": "testing passed"},
     {"id": "testing-failed", "description": "testing failed"},
-    {"id": "ci-pending", "description": "CI has not finished (projected by an adapter)"},
-    {"id": "ci-passed", "description": "CI passed (projected by an adapter)"},
-    {"id": "ci-failed", "description": "CI failed (projected by an adapter)"},
-    {"id": "merge-ready", "description": "all merge gates passed"},
     {"id": "escalated", "description": "judgment escalation flag routed to the architect"},
     {"id": "needs-human", "description": "owner-input flag routed to the owner"},
     {"id": "landed", "description": "merged PR awaiting architect reconcile"},
@@ -91,14 +87,6 @@
       {"id": "needs_testing", "label": "needs-testing"},
       {"id": "passed", "label": "testing-passed"},
       {"id": "failed", "label": "testing-failed"}
-    ]},
-    {"id": "ci", "exclusive": true, "states": [
-      {"id": "pending", "label": "ci-pending"},
-      {"id": "passed", "label": "ci-passed"},
-      {"id": "failed", "label": "ci-failed"}
-    ]},
-    {"id": "merge", "exclusive": true, "states": [
-      {"id": "merge_ready", "label": "merge-ready"}
     ]},
     {"id": "escalation", "exclusive": false, "states": [
       {"id": "escalated", "label": "escalated"}
@@ -197,14 +185,15 @@
     ]},
     {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
       "requires_gates": ["review_gate", "testing_gate", "ci_gate"], "effects": [
-      {"kind": "add_label", "label": "merge-ready"},
-      {"kind": "merge_pull_request"}
+      {"kind": "merge_pull_request"},
+      {"kind": "add_label", "label": "landed"},
+      {"kind": "add_label", "label": "owner-pending"}
     ]}
   ],
   "gates": [
     {"id": "review_gate", "satisfied_by": ["approve_review"]},
     {"id": "testing_gate", "satisfied_by": ["record_test_pass"]},
-    {"id": "ci_gate", "condition": {"kind": "state_equals", "dimension": "ci", "state": "passed"}},
+    {"id": "ci_gate", "condition": {"kind": "ci_passed"}},
     {"id": "dependency_gate", "condition": {"kind": "dependencies_resolved"}}
   ]
 }
