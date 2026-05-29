@@ -146,12 +146,11 @@
     ]},
     {"id": "claim_code", "artifact": "code", "roles": ["engineer"], "effects": [
       {"kind": "remove_label", "label": "code-ready"},
-      {"kind": "add_label", "label": "in-progress"}
+      {"kind": "add_label", "label": "in-progress"},
+      {"kind": "set_assignee", "role": "engineer"}
     ]},
-    {"id": "open_pr", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
-      {"kind": "add_label", "label": "needs-review"},
-      {"kind": "add_label", "label": "needs-testing"},
-      {"kind": "add_label", "label": "ci-pending"}
+    {"id": "open_pr", "artifact": "code", "roles": ["engineer"], "effects": [
+      {"kind": "create_pull_request"}
     ]},
     {"id": "address_review_changes", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
       {"kind": "remove_label", "label": "review-changes-requested"},
@@ -196,7 +195,8 @@
     ]},
     {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
       "requires_gates": ["review_gate", "testing_gate", "ci_gate"], "effects": [
-      {"kind": "add_label", "label": "merge-ready"}
+      {"kind": "add_label", "label": "merge-ready"},
+      {"kind": "merge_pull_request"}
     ]}
   ],
   "gates": [

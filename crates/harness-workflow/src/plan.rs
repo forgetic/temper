@@ -81,11 +81,9 @@ pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) ->
 /// variant. Effects are relative to the plan's [`TransitionPlan::target`],
 /// except the create variants, which request a brand-new artifact.
 ///
-/// Current transition specs model only label effects, so a planner produces
-/// only [`WorkflowEffect::AddLabel`] and [`WorkflowEffect::RemoveLabel`] today.
-/// The remaining variants are deliberate placeholders: they round out the set
-/// an executor must handle so later phases can add assignee, comment, create,
-/// lease, and merge effects without breaking exhaustive matches.
+/// Transition specs can produce label, assignee, comment, pull-request create,
+/// and merge effects. Executors still apply only label effects today; every
+/// other planned variant is rejected as unsupported before mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkflowEffect {
     /// Add a label to the target artifact. Produced from an `add_label` effect.
@@ -93,26 +91,20 @@ pub enum WorkflowEffect {
     /// Remove a label from the target artifact. Produced from a `remove_label`
     /// effect.
     RemoveLabel(LabelId),
-    /// Set an assignee on the target artifact.
-    ///
-    /// Placeholder: no current transition spec produces this effect.
-    SetAssignee { assignee: String },
-    /// Remove an assignee from the target artifact.
-    ///
-    /// Placeholder (see [`WorkflowEffect::SetAssignee`]).
-    RemoveAssignee { assignee: String },
-    /// Post a comment on the target artifact.
-    ///
-    /// Placeholder: comment effects are not modeled in specs yet.
+    /// Set the target artifact's assignee to the worker/user resolved for this
+    /// declared workflow role.
+    SetAssignee { role: RoleId },
+    /// Remove the assignee resolved for this declared workflow role from the
+    /// target artifact.
+    RemoveAssignee { role: RoleId },
+    /// Post a prose/template comment body on the target artifact.
     CreateComment { body: String },
     /// Request creation of a new issue, keyed for idempotent retries.
-    ///
-    /// Placeholder: create effects are not modeled in specs yet.
     CreateIssue { correlation_key: String },
-    /// Request creation of a new pull request, keyed for idempotent retries.
-    ///
-    /// Placeholder (see [`WorkflowEffect::CreateIssue`]).
-    CreatePullRequest { correlation_key: String },
+    /// Request creation of a new pull request. The optional correlation key
+    /// identifies retries; branch, title, body, and labels come from runtime
+    /// context in a later execution phase.
+    CreatePullRequest { correlation_key: Option<String> },
     /// Set or refresh the claim lease on the target artifact.
     ///
     /// Placeholder: leases are modeled in [`crate::metadata`] but no transition
@@ -122,9 +114,7 @@ pub enum WorkflowEffect {
     ///
     /// Placeholder (see [`WorkflowEffect::UpdateLease`]).
     ReleaseLease,
-    /// Request merging the target pull request.
-    ///
-    /// Placeholder: merge effects are not modeled in specs yet.
+    /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
 }
 
@@ -387,7 +377,11 @@ impl<'a> Planner<'a> {
                 artifact: declared.artifact.clone(),
                 target: artifact.source,
                 effects: declared.effects.iter().map(to_effect).collect(),
-                postconditions: declared.effects.iter().map(to_postcondition).collect(),
+                postconditions: declared
+                    .effects
+                    .iter()
+                    .filter_map(to_postcondition)
+                    .collect(),
             })
         } else {
             Err(PlanError { diagnostics })
@@ -454,7 +448,12 @@ impl<'a> Planner<'a> {
             };
             let mut produced = transition.effects.iter().filter_map(|effect| match effect {
                 Effect::AddLabel(label) => Some(label),
-                Effect::RemoveLabel(_) => None,
+                Effect::RemoveLabel(_)
+                | Effect::SetAssignee(_)
+                | Effect::RemoveAssignee(_)
+                | Effect::CreateComment { .. }
+                | Effect::CreatePullRequest { .. }
+                | Effect::MergePullRequest => None,
             });
             let mut any = false;
             let all_present = produced.all(|label| {
@@ -482,6 +481,11 @@ impl<'a> Planner<'a> {
                 Effect::RemoveLabel(label) => {
                     result.remove(label.as_str());
                 }
+                Effect::SetAssignee(_)
+                | Effect::RemoveAssignee(_)
+                | Effect::CreateComment { .. }
+                | Effect::CreatePullRequest { .. }
+                | Effect::MergePullRequest => {}
             }
         }
 
@@ -525,13 +529,25 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
     match effect {
         Effect::AddLabel(label) => WorkflowEffect::AddLabel(label.clone()),
         Effect::RemoveLabel(label) => WorkflowEffect::RemoveLabel(label.clone()),
+        Effect::SetAssignee(role) => WorkflowEffect::SetAssignee { role: role.clone() },
+        Effect::RemoveAssignee(role) => WorkflowEffect::RemoveAssignee { role: role.clone() },
+        Effect::CreateComment { body } => WorkflowEffect::CreateComment { body: body.clone() },
+        Effect::CreatePullRequest { correlation_key } => WorkflowEffect::CreatePullRequest {
+            correlation_key: correlation_key.clone(),
+        },
+        Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
     }
 }
 
-/// Derives the postcondition implied by a transition effect.
-fn to_postcondition(effect: &Effect) -> Postcondition {
+/// Derives the postcondition implied by a transition effect, if any.
+fn to_postcondition(effect: &Effect) -> Option<Postcondition> {
     match effect {
-        Effect::AddLabel(label) => Postcondition::LabelPresent(label.clone()),
-        Effect::RemoveLabel(label) => Postcondition::LabelAbsent(label.clone()),
+        Effect::AddLabel(label) => Some(Postcondition::LabelPresent(label.clone())),
+        Effect::RemoveLabel(label) => Some(Postcondition::LabelAbsent(label.clone())),
+        Effect::SetAssignee(_)
+        | Effect::RemoveAssignee(_)
+        | Effect::CreateComment { .. }
+        | Effect::CreatePullRequest { .. }
+        | Effect::MergePullRequest => None,
     }
 }

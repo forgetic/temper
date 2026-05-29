@@ -446,12 +446,14 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
 
     for transition in workflow.transitions() {
         for effect in &transition.effects {
-            record(
-                effect_label(effect),
-                LabelUsage::TransitionEffect {
-                    transition: transition.id.clone(),
-                },
-            );
+            if let Some(label) = effect_label(effect) {
+                record(
+                    label,
+                    LabelUsage::TransitionEffect {
+                        transition: transition.id.clone(),
+                    },
+                );
+            }
         }
     }
 
@@ -465,12 +467,14 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
                 continue;
             };
             for effect in &transition.effects {
-                record(
-                    effect_label(effect),
-                    LabelUsage::GateOutcome {
-                        gate: gate.id.clone(),
-                    },
-                );
+                if let Some(label) = effect_label(effect) {
+                    record(
+                        label,
+                        LabelUsage::GateOutcome {
+                            gate: gate.id.clone(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -478,8 +482,13 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
     LabelManifest { labels: specs }
 }
 
-fn effect_label(effect: &Effect) -> &LabelId {
+fn effect_label(effect: &Effect) -> Option<&LabelId> {
     match effect {
-        Effect::AddLabel(label) | Effect::RemoveLabel(label) => label,
+        Effect::AddLabel(label) | Effect::RemoveLabel(label) => Some(label),
+        Effect::SetAssignee(_)
+        | Effect::RemoveAssignee(_)
+        | Effect::CreateComment { .. }
+        | Effect::CreatePullRequest { .. }
+        | Effect::MergePullRequest => None,
     }
 }

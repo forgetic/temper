@@ -31,14 +31,11 @@ workarounds, which are themselves gaps:
 
 ### P0 — the delivery loop cannot complete without these
 
-1. **Non-label effects (spec + execution).** `RawEffect` only has
-   `add_label`/`remove_label`, so the spec cannot even express
-   `CreatePullRequest` (engineer opening a PR), `MergePullRequest` (the actual
-   merge behind `approve_merge`), `CreateComment`, `SetAssignee`, or a
-   claim-time lease. `plan::WorkflowEffect` models these variants but
-   `Executor::execute` rejects them with `UnsupportedEffect`. This is broader
-   than the design's "modeled but not applied" note: it is also a
-   spec-expression gap. Without merge execution the loop never closes.
+1. **Non-label effects (execution).** The spec can now express assignee,
+   comment, pull-request create, and pull-request merge effects, and the
+   planner emits them in order. `Executor::execute` still rejects non-label
+   effects with `UnsupportedEffect`; claim-time lease effects are also not yet
+   emitted. Without merge execution the loop never closes.
 2. **Pull-request idempotent create.** `open_pr` needs the
    `Executor::ensure_issue` correlation-key pattern for PRs so a retry never
    double-creates. Tied to the `CreatePullRequest` effect above.

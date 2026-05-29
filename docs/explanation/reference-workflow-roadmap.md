@@ -24,7 +24,7 @@ loop). This doc is the durable record of the plan and progress.
 
 Status legend: ☐ pending · ☑ done.
 
-- ☐ **9a — Non-label effect expression.** Extend `RawEffect`/`Effect`/
+- ☑ **9a — Non-label effect expression.** Extend `RawEffect`/`Effect`/
   `plan::WorkflowEffect` so transitions can express `SetAssignee`,
   `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, `MergePullRequest`.
   Wire validation and planner emission. Make `reference-delivery` use them

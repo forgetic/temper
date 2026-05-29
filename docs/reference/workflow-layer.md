@@ -45,7 +45,7 @@ Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
 - `classify::Classifier` turns a `harness_forge::Issue` or `PullRequest` into a typed `ClassifiedArtifact`, or a `ClassificationError` carrying `ClassificationDiagnostic`s. See "Artifact classification".
 - `harness-workflow` now depends on `harness-forge` because classification consumes Forge domain types.
 
-Not yet modeled: `relation` as a first-class spec primitive (only metadata relations exist), `invariant`, `recovery_policy`, and runtime execution. Effects still cover only label add/remove.
+Not yet modeled: `relation` as a first-class spec primitive (only metadata relations exist), `invariant`, `recovery_policy`, and full runtime execution. Effects cover label add/remove plus expression of assignee, comment, pull-request create, and pull-request merge requests.
 
 Gate/transition wiring is modeled in both directions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions.
 
@@ -81,7 +81,7 @@ Phase 7 added recovery primitives — leases, command journaling, and reconcilia
 - `execute::Executor::execute_journaled` records the lifecycle (`Planned` → `Applying` → `Completed`/`Failed`) around the existing execute loop; `Executor::plan` previews a transition's plan without mutating. Planning failures are returned unjournaled because no mutation was attempted.
 - `reconcile::Reconciler` scans `ArtifactSnapshot`s and `CommandRecord`s and decides repair/escalation actions through a `RecoveryPolicy`. See "Command journal", "Claims and leases", and "Reconciliation".
 
-Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge) inside `Executor::execute`, applying reconciler actions automatically, and durable journal/lease storage backends.
+Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge) inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
 
 Phase 8 added robustness and crash-injection tests (no new runtime types):
 
@@ -101,15 +101,15 @@ A workflow spec contains these logical primitives.
 | `artifact_kind` | Logical item with a Forge `target` (issue or PR) and `identifying_labels` |
 | `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
 | `queue` | Query that selects artifacts needing attention |
-| `transition` | Guarded state change authorized for one or more roles |
+| `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, or request PR merge |
 | `gate` | Condition that unlocks another transition, such as merge readiness |
 | `relation` | Typed link between artifacts, such as parent, dependency, or produced PR |
 | `invariant` | Condition that must hold during runtime scans |
 | `recovery_policy` | What to do with expired leases, partial transitions, and drift |
 
-Labels are a portable Forge projection of workflow state. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and typed relations.
+Labels are a portable Forge projection of workflow state. Non-label effect payloads stay portable: assignee effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch and title come from runtime context, and `merge_pull_request` has no payload. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and typed relations.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core validates, compiles, and plans (`tests/reference_delivery.rs`). The capabilities that design needs beyond the current primitives — non-label effect expression/execution, PR idempotent create, external-signal gates, first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effect expression validate, compile, and plan (`tests/reference_delivery.rs`). The capabilities that design still needs — non-label effect execution, PR idempotent create, external-signal gates, first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
@@ -181,13 +181,13 @@ Transition planning checks, in order, and collects every problem:
 - the transition is declared (else `UnknownTransition`)
 - the role is authorized for the transition (else `Unauthorized`)
 - the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
-- each effect's label precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`)
+- each label effect's precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`); non-label effects have no label precondition
 - every required gate is satisfied — a gate is satisfied when some satisfying transition's added labels are all present (else `GateNotSatisfied`)
 - applying the effects would not leave an exclusive dimension in several states (else `ImpossibleState`)
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
 
-A successful plan's effects and postconditions follow the transition's declared effect order, so plans are deterministic and safe for snapshot-style assertions.
+A successful plan's effects follow the transition's declared effect order. Postconditions are derived only from label effects and keep that relative order, so plans are deterministic and safe for snapshot-style assertions.
 
 ## Runtime guarantees
 
@@ -209,13 +209,13 @@ Agents must not mutate Forge state directly when operating under workflow contro
 
 Workflow effects are the closed `plan::WorkflowEffect` enum so executors and reconcilers must handle every variant. Variants cover label add/remove, assignee set/remove, comment creation, issue and PR creation requests, lease update/release, and PR merge requests.
 
-Only `AddLabel` and `RemoveLabel` are produced today, because current transition specs model only label effects. The remaining variants are explicit placeholders: they round out the set an executor must handle so later phases can add assignee, comment, create, lease, and merge effects without breaking exhaustive matches. The planning tests document this by asserting that label effects are the only ones a plan currently emits.
+Transition specs now emit `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest`. `SetAssignee`/`RemoveAssignee` carry a workflow role id, not a Forge user id; the runtime resolves the role to a concrete worker/user. `CreateComment` carries a prose/template `body`. `CreatePullRequest` carries an optional correlation key only; branch, title, body, and labels are runtime context and full create execution lands later. `MergePullRequest` has no payload.
 
 Leases are not yet emitted as transition effects (`UpdateLease`/`ReleaseLease` remain placeholders). Lease changes go through `lease::LeaseManager` as standalone operations on the metadata block; see "Claims and leases".
 
-`Executor::execute` applies `AddLabel` and `RemoveLabel` through `update_issue`/`update_pull_request`; any other effect variant in a plan is rejected with `ExecutionError::UnsupportedEffect` before any mutation, so the closed enum stays honest as later phases wire up the remaining variants.
+`Executor::execute` applies `AddLabel` and `RemoveLabel` through `update_issue`/`update_pull_request`; any other effect variant in a plan is rejected with `ExecutionError::UnsupportedEffect` before any mutation, so expression can land before execution.
 
-Create effects (`CreateIssue`, `CreatePullRequest`) carry correlation keys. Retrying a create effect with the same correlation key must return the existing artifact when it already exists. The current `Forge` interface has no native create-once primitive, so `Executor::ensure_issue` enforces this idempotency in the workflow layer: it stamps the correlation key into the new issue's metadata block and searches existing issues for that key before creating. Pull-request idempotent create follows the same pattern and is not implemented yet.
+Create effects use correlation keys for idempotent retries: `CreateIssue` requires one, while `CreatePullRequest` may omit it until Phase 10 supplies runtime context. `Executor::ensure_issue` already stamps a key into issue metadata and searches existing issues before creating. Pull-request idempotent create follows the same pattern and is not implemented yet.
 
 ## Command journal
 

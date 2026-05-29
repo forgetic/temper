@@ -207,6 +207,25 @@ fn missing_transition_role_reference_is_diagnosed() {
 }
 
 #[test]
+fn missing_assignee_effect_role_reference_is_diagnosed() {
+    let mut spec = valid_spec();
+    spec.transitions[0].effects.push(RawEffect::SetAssignee {
+        role: "ghost".to_string(),
+    });
+
+    let errors = spec.validate().expect_err("missing effect role must fail");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::UndeclaredReference {
+            expected: SymbolKind::Role,
+            id: "ghost".to_string(),
+            site: ReferenceSite::TransitionEffectRole {
+                transition: "claim_code".to_string(),
+            },
+        }));
+}
+
+#[test]
 fn missing_queue_artifact_reference_is_diagnosed() {
     let mut spec = valid_spec();
     spec.queues[0].artifact = "nonexistent".to_string();

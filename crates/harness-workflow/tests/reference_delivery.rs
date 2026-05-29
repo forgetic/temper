@@ -2,9 +2,9 @@
 //!
 //! These prove the label-state-machine core of the reference delivery design
 //! (see `docs/explanation/reference-workflow.md`) validates, compiles, and
-//! plans through the current `harness-workflow` primitives. Parts of the design
-//! the spec types cannot yet express are recorded in
-//! `docs/explanation/reference-workflow-gaps.md`, not here.
+//! plans through the current `harness-workflow` primitives. Remaining execution
+//! and modeling gaps are recorded in `docs/explanation/reference-workflow-gaps.md`,
+//! not here.
 
 use chrono::{DateTime, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
@@ -145,13 +145,23 @@ fn engineer_claims_ready_code_but_reviewer_cannot() {
     let planner = workflow.planner();
     let artifact = classify_issue(&workflow, 42, &["code", "code-ready"]);
 
-    planner
+    let plan = planner
         .plan_transition(
             &TransitionId::new("claim_code"),
             &RoleId::new("engineer"),
             &artifact,
         )
         .expect("engineer is authorized to claim ready code");
+    assert_eq!(
+        plan.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("code-ready")),
+            WorkflowEffect::AddLabel(LabelId::new("in-progress")),
+            WorkflowEffect::SetAssignee {
+                role: RoleId::new("engineer"),
+            },
+        ]
+    );
 
     let error = planner
         .plan_transition(
@@ -164,6 +174,28 @@ fn engineer_claims_ready_code_but_reviewer_cannot() {
         transition: TransitionId::new("claim_code"),
         role: RoleId::new("reviewer"),
     }));
+}
+
+#[test]
+fn engineer_open_pr_expresses_pr_creation() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let artifact = classify_issue(&workflow, 43, &["code", "in-progress"]);
+
+    let plan = planner
+        .plan_transition(
+            &TransitionId::new("open_pr"),
+            &RoleId::new("engineer"),
+            &artifact,
+        )
+        .expect("engineer can request PR creation from in-progress code");
+    assert_eq!(
+        plan.effects,
+        vec![WorkflowEffect::CreatePullRequest {
+            correlation_key: None,
+        }]
+    );
+    assert!(plan.postconditions.is_empty());
 }
 
 #[test]
@@ -191,7 +223,10 @@ fn three_gate_merge_requires_review_testing_and_ci() {
         .expect("owner can approve a fully gated merge");
     assert_eq!(
         plan.effects,
-        vec![WorkflowEffect::AddLabel(LabelId::new("merge-ready"))]
+        vec![
+            WorkflowEffect::AddLabel(LabelId::new("merge-ready")),
+            WorkflowEffect::MergePullRequest,
+        ]
     );
 
     // CI gate unsatisfied: the merge cannot be planned.

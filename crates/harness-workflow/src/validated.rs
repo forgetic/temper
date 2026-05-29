@@ -146,11 +146,16 @@ pub struct ValidatedQueue {
     pub labels: Vec<LabelId>,
 }
 
-/// A validated transition effect. Phase 2 models only label projections.
+/// A validated transition effect with typed references.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Effect {
     AddLabel(LabelId),
     RemoveLabel(LabelId),
+    SetAssignee(RoleId),
+    RemoveAssignee(RoleId),
+    CreateComment { body: String },
+    CreatePullRequest { correlation_key: Option<String> },
+    MergePullRequest,
 }
 
 /// A validated transition with typed references.

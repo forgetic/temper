@@ -220,16 +220,28 @@ fn check_references(
             );
         }
         for effect in &transition.effects {
-            let label = effect_label(effect);
-            check_reference(
-                declared.labels,
-                label,
-                SymbolKind::Label,
-                ReferenceSite::TransitionEffectLabel {
-                    transition: transition.id.clone(),
-                },
-                diagnostics,
-            );
+            if let Some(label) = effect_label(effect) {
+                check_reference(
+                    declared.labels,
+                    label,
+                    SymbolKind::Label,
+                    ReferenceSite::TransitionEffectLabel {
+                        transition: transition.id.clone(),
+                    },
+                    diagnostics,
+                );
+            }
+            if let Some(role) = effect_role(effect) {
+                check_reference(
+                    declared.roles,
+                    role,
+                    SymbolKind::Role,
+                    ReferenceSite::TransitionEffectRole {
+                        transition: transition.id.clone(),
+                    },
+                    diagnostics,
+                );
+            }
         }
     }
 
@@ -279,10 +291,27 @@ fn check_state_dimensions(
     }
 }
 
-/// Returns the label id referenced by a raw effect.
-fn effect_label(effect: &RawEffect) -> &str {
+/// Returns the label id referenced by a raw effect, if any.
+fn effect_label(effect: &RawEffect) -> Option<&str> {
     match effect {
-        RawEffect::AddLabel { label } | RawEffect::RemoveLabel { label } => label,
+        RawEffect::AddLabel { label } | RawEffect::RemoveLabel { label } => Some(label),
+        RawEffect::SetAssignee { .. }
+        | RawEffect::RemoveAssignee { .. }
+        | RawEffect::CreateComment { .. }
+        | RawEffect::CreatePullRequest { .. }
+        | RawEffect::MergePullRequest => None,
+    }
+}
+
+/// Returns the role id referenced by a raw effect, if any.
+fn effect_role(effect: &RawEffect) -> Option<&str> {
+    match effect {
+        RawEffect::SetAssignee { role } | RawEffect::RemoveAssignee { role } => Some(role),
+        RawEffect::AddLabel { .. }
+        | RawEffect::RemoveLabel { .. }
+        | RawEffect::CreateComment { .. }
+        | RawEffect::CreatePullRequest { .. }
+        | RawEffect::MergePullRequest => None,
     }
 }
 
@@ -380,5 +409,12 @@ fn build_effect(effect: &RawEffect) -> Effect {
     match effect {
         RawEffect::AddLabel { label } => Effect::AddLabel(LabelId::new(label)),
         RawEffect::RemoveLabel { label } => Effect::RemoveLabel(LabelId::new(label)),
+        RawEffect::SetAssignee { role } => Effect::SetAssignee(RoleId::new(role)),
+        RawEffect::RemoveAssignee { role } => Effect::RemoveAssignee(RoleId::new(role)),
+        RawEffect::CreateComment { body } => Effect::CreateComment { body: body.clone() },
+        RawEffect::CreatePullRequest { correlation_key } => Effect::CreatePullRequest {
+            correlation_key: correlation_key.clone(),
+        },
+        RawEffect::MergePullRequest => Effect::MergePullRequest,
     }
 }

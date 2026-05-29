@@ -65,6 +65,8 @@ pub enum ReferenceSite {
     TransitionGate { transition: String },
     /// A transition effect referenced a label.
     TransitionEffectLabel { transition: String },
+    /// A transition effect referenced a role.
+    TransitionEffectRole { transition: String },
     /// A queue's `artifact` referenced an artifact kind.
     QueueArtifact { queue: String },
     /// A queue's `labels` list referenced a label.
@@ -90,7 +92,8 @@ impl fmt::Display for ReferenceSite {
             ReferenceSite::TransitionGate { transition } => {
                 write!(formatter, "transition `{transition}`")
             }
-            ReferenceSite::TransitionEffectLabel { transition } => {
+            ReferenceSite::TransitionEffectLabel { transition }
+            | ReferenceSite::TransitionEffectRole { transition } => {
                 write!(formatter, "an effect of transition `{transition}`")
             }
             ReferenceSite::QueueArtifact { queue } => write!(formatter, "queue `{queue}`"),

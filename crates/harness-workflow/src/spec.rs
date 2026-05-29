@@ -160,14 +160,38 @@ pub struct RawTransition {
     pub effects: Vec<RawEffect>,
 }
 
-/// A raw transition effect. Phase 2 models only label projection effects.
+/// A raw transition effect.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RawEffect {
-    /// Add a label to the artifact. References a label id.
+    /// Add a label to the target artifact. References a label id.
     AddLabel { label: String },
-    /// Remove a label from the artifact. References a label id.
+    /// Remove a label from the target artifact. References a label id.
     RemoveLabel { label: String },
+    /// Assign the target artifact to the worker/user resolved for `role`.
+    ///
+    /// The payload references a declared workflow role, not a concrete Forge
+    /// user. Runtime resolution of role-to-user/worker is deferred to the
+    /// executor/runner layer.
+    SetAssignee { role: String },
+    /// Remove the assignee resolved for `role` from the target artifact.
+    ///
+    /// As with [`RawEffect::SetAssignee`], `role` is a declared workflow role
+    /// id rather than a concrete Forge user id.
+    RemoveAssignee { role: String },
+    /// Post a prose/template comment body on the target artifact.
+    CreateComment { body: String },
+    /// Request creation of a pull request.
+    ///
+    /// `correlation_key`, when present, identifies retries of the same create
+    /// request. Branches, title, body, and labels come from runtime context;
+    /// full execution is intentionally deferred to a later phase.
+    CreatePullRequest {
+        #[serde(default)]
+        correlation_key: Option<String>,
+    },
+    /// Request merging the target pull request. Carries no portable payload.
+    MergePullRequest,
 }
 
 /// Gate declaration: a condition that unlocks transitions.
