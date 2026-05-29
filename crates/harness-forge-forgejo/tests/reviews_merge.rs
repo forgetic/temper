@@ -329,6 +329,7 @@ fn merge_conflict_status_maps_to_conflict() {
 fn conditional_update_conflicts_when_validator_changes() {
     let client = MockHttpClient::new();
     client.push_response_with_etag(pr_json(42, "open", ""), "etag-v1"); // initial read
+    client.push_response(200, "[]"); // initial read's dependency enrichment
     client.push_response_with_etag(pr_json(42, "open", ""), "etag-v2"); // update's read
     let forge = forge(client.clone());
 
@@ -348,14 +349,15 @@ fn conditional_update_conflicts_when_validator_changes() {
         },
     ));
     assert!(matches!(result, Err(ForgeError::Conflict(_))));
-    // Only the two reads happened; no PATCH was issued.
-    assert_eq!(client.call_count(), 2);
+    // Read + dependency enrichment for the get, then the update's read; no PATCH.
+    assert_eq!(client.call_count(), 3);
 }
 
 #[test]
 fn conditional_update_succeeds_when_validator_matches() {
     let client = MockHttpClient::new();
     client.push_response_with_etag(pr_json(42, "open", ""), "etag-v1"); // initial read
+    client.push_response(200, "[]"); // initial read's dependency enrichment
     client.push_response_with_etag(pr_json(42, "open", ""), "etag-v1"); // update's read
     client.push_response(200, "{}"); // PATCH pull
     client.push_response_with_etag(pr_json(42, "open", ""), "etag-v1"); // refetch
@@ -375,6 +377,7 @@ fn conditional_update_succeeds_when_validator_matches() {
     ))
     .unwrap();
     assert_eq!(updated.number.get(), 42);
-    // read, read, patch, refetch.
-    assert_eq!(client.call_count(), 4);
+    // get read + dependency enrichment, then the update's read, patch, refetch.
+    // The mutation refetch does not re-read dependencies.
+    assert_eq!(client.call_count(), 5);
 }

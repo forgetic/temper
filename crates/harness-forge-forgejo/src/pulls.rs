@@ -50,6 +50,12 @@ impl<C: HttpClient> ForgejoForge<C> {
             .map(|dto| self.materialize_pull_request(&repo, dto, None))
             .collect();
         pulls.retain(|pull| pull_matches_query(pull, &query));
+        // Enrich the matching pull requests with their dependency links. This is
+        // an N+1 read against the dependencies endpoint, acceptable for a first
+        // best-effort backend; the helper is isolated for later batching.
+        for pull in &mut pulls {
+            pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
+        }
         pulls.sort_by(|left, right| compare_pull_requests(left, right, &query));
         Ok(pulls)
     }
@@ -57,7 +63,7 @@ impl<C: HttpClient> ForgejoForge<C> {
     /// Looks up a pull request by stable backend identifier.
     pub async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
         let (repo, number) = parse_pull_request_id(id)?;
-        self.fetch_pull_request(&repo, number).await
+        self.fetch_pull_request_with_dependencies(&repo, number).await
     }
 
     /// Looks up a pull request by its repository-scoped number.
@@ -67,7 +73,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
         let repo = parse_repository_id(repo_id)?;
-        self.fetch_pull_request(&repo, number).await
+        self.fetch_pull_request_with_dependencies(&repo, number).await
     }
 
     /// Creates a pull request, then applies labels/assignees via issue endpoints.
@@ -390,6 +396,24 @@ impl<C: HttpClient> ForgejoForge<C> {
         })
     }
 
+    /// Fetches a pull request and enriches it with its dependency links.
+    ///
+    /// Used by the read paths and the dependency-link methods so a returned
+    /// pull request always carries its dependencies. The internal
+    /// [`Self::fetch_pull_request`] used by mutation paths (create/update/merge/
+    /// reviewer requests) deliberately skips the extra dependency read.
+    pub(crate) async fn fetch_pull_request_with_dependencies(
+        &self,
+        repo: &RepoCoord,
+        number: ItemNumber,
+    ) -> ForgeResult<Option<PullRequest>> {
+        let Some(mut pull) = self.fetch_pull_request(repo, number).await? else {
+            return Ok(None);
+        };
+        pull.dependencies = self.load_item_dependencies(repo, number).await?;
+        Ok(Some(pull))
+    }
+
     /// Fetches a single pull request, returning `None` on `404`.
     async fn fetch_pull_request(
         &self,
@@ -430,7 +454,7 @@ impl<C: HttpClient> ForgejoForge<C> {
 
 /// Returns the response validator: the `ETag` header if present, else `None`
 /// (callers fall back to `updated_at`).
-fn response_validator(response: &crate::HttpResponse) -> Option<String> {
+pub(crate) fn response_validator(response: &crate::HttpResponse) -> Option<String> {
     response.header("etag").map(str::to_string)
 }
 

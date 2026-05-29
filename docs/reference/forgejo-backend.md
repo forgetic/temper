@@ -35,8 +35,8 @@ opaque and never parse them.
 
 ## Implemented operations
 
-This phase implements the pull-request surface. Repository, label, issue,
-dependency, and CI operations are added in their own phases.
+This crate implements the pull-request surface and native dependency links.
+Repository, label, issue, and CI operations are added in their own phases.
 
 - `list_pull_requests`, `get_pull_request`, `get_pull_request_by_number`
 - `create_pull_request`, `update_pull_request`
@@ -44,6 +44,8 @@ dependency, and CI operations are added in their own phases.
 - `request_pull_request_reviewers`
 - `list_pull_request_reviews`, `submit_pull_request_review`
 - `merge_pull_request`
+- `add_issue_dependency`, `remove_issue_dependency`
+- `add_pull_request_dependency`, `remove_pull_request_dependency`
 
 ## Pull requests
 
@@ -127,6 +129,51 @@ request for the merge commit SHA, merger, and timestamp; the returned
 `MergeRecord` reports the method that was requested. A success with no merge
 record maps to `Backend`. `404` maps to `NotFound`; `405`/`409`/`412`/`422`
 (already merged, not mergeable, failed precondition) map to `Conflict`.
+
+## Dependency links
+
+Issue and pull-request dependency links use Forgejo's (Gitea's) issue
+dependency endpoints under
+`/repos/{owner}/{repo}/issues/{number}/dependencies`. Pull requests share the
+issue-number namespace on Forgejo, so the **pull-request** dependency methods
+use the **same** endpoint with the pull-request number as the source — a
+provider-specific adaptation. The endpoint shapes are isolated in
+`dependencies.rs` so live refinement only edits one module.
+
+- read: `GET /issues/{number}/dependencies` returns the items the source is
+  blocked by; the backend maps each to its repository-scoped `ItemNumber` and
+  returns them sorted and deduplicated. `Issue::dependencies` and
+  `PullRequest::dependencies` are populated this way during `get`/`list` reads
+  and by the dependency-link methods' returned source. A `404` on the read
+  (no dependencies, or an unsupported provider endpoint) yields an **empty**
+  list — a safe, documented behavior. List enrichment is an N+1 read against
+  the dependencies endpoint per matching item; this is accepted for a
+  first best-effort backend and the helper is isolated for later batching.
+- add: `POST /issues/{number}/dependencies` with a best-effort
+  `{ "index": <target-number> }` body (Gitea's `IssueMeta`; `owner`/`name` are
+  omitted for same-repository links). The body field name is not verified
+  against a live instance and may need refinement.
+- remove: `DELETE /issues/{number}/dependencies` with the same
+  `{ "index": <target-number> }` body.
+
+Semantics match the portable contract:
+
+- The source must exist; a missing source returns `NotFound`.
+- Add resolves the target through the issue endpoint (which serves both issues
+  and pull requests); a missing target returns `NotFound`.
+- Add is idempotent: when the target is already a dependency the source is
+  returned unchanged without a write. Remove of an absent link is a successful
+  no-op once the source exists and does not require the target to exist.
+- Add/remove never silently claim success on an unsupported endpoint: a `404`
+  from the add/remove request (after the target was verified to exist) maps to
+  `InvalidRequest`, in contrast to the read path's empty-list behavior.
+
+The returned source artifact is re-fetched after a changed link, which advances
+its `Version` through the validator cache (Forgejo bumps the artifact's
+`updated_at` on a dependency change). The mutation paths
+(`create`/`update`/`merge`/reviewer requests) deliberately do **not** re-read
+dependencies, so their returned artifacts may report empty dependencies; read
+the item through `get`/`list` for an enriched dependency view.
 
 ## Optimistic concurrency (best-effort)
 

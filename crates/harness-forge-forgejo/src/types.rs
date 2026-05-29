@@ -60,6 +60,43 @@ pub(crate) struct CommentDto {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Forgejo issue.
+///
+/// Forgejo serves both issues and pull requests through the issue endpoints, so
+/// a pull request looked up by number also deserializes into this DTO. As with
+/// pull requests, absent collections serialize as JSON `null`, so they are
+/// optional and mapping treats `None` as an empty set.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct IssueDto {
+    pub number: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub state: String,
+    pub user: UserDto,
+    #[serde(default)]
+    pub labels: Option<Vec<LabelDto>>,
+    #[serde(default)]
+    pub assignees: Option<Vec<UserDto>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub closed_at: Option<DateTime<Utc>>,
+}
+
+/// Minimal reference to an issue or pull request returned by the dependencies
+/// endpoint.
+///
+/// Forgejo's `GET /issues/{index}/dependencies` returns full issue objects, but
+/// the backend only needs the repository-scoped number to build a portable
+/// dependency list, so this DTO captures just that and ignores the rest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct DependencyRefDto {
+    pub number: u64,
+}
+
 /// Repository reference embedded in a pull-request branch (`head`/`base`).
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub(crate) struct PrRepoDto {

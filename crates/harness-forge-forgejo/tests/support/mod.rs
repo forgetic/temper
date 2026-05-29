@@ -4,7 +4,7 @@
 //! client. No test in this crate touches the network.
 
 use async_trait::async_trait;
-use harness_forge::{PullRequestId, RepositoryId};
+use harness_forge::{IssueId, PullRequestId, RepositoryId};
 use harness_forge_forgejo::{
     CasMode, ForgejoConfig, ForgejoForge, HttpClient, HttpError, HttpRequest, HttpResponse,
 };
@@ -37,6 +37,11 @@ pub fn repo_id() -> RepositoryId {
 /// Returns the backend pull-request id for `acme/widgets#number`.
 pub fn pull_id(number: u64) -> PullRequestId {
     PullRequestId::new(format!("forgejo:{OWNER}/{REPO}:pull:{number}"))
+}
+
+/// Returns the backend issue id for `acme/widgets#number`.
+pub fn issue_id(number: u64) -> IssueId {
+    IssueId::new(format!("forgejo:{OWNER}/{REPO}:issue:{number}"))
 }
 
 /// Parses a recorded request body as JSON for field-by-field assertions.

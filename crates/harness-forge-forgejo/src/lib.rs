@@ -12,6 +12,7 @@
 
 mod client;
 mod config;
+mod dependencies;
 mod error;
 mod ids;
 mod items;

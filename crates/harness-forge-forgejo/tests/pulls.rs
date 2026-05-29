@@ -41,6 +41,8 @@ fn list_pull_requests_constructs_request_and_filters_by_label() {
         pr_json(2, "open", r#"[{"id":2,"name":"draft"}]"#, ""),
     );
     client.push_response(200, body);
+    // Only the matching pull request is enriched with its dependency links.
+    client.push_response(200, "[]");
     let forge = forge(client.clone());
 
     let query = PullRequestQuery {
@@ -54,8 +56,10 @@ fn list_pull_requests_constructs_request_and_filters_by_label() {
     // client-side after mapping.
     assert_eq!(pulls.len(), 1);
     assert_eq!(pulls[0].number, ItemNumber::new(1));
+    assert!(pulls[0].dependencies.is_empty());
 
-    let request = client.last_request().unwrap();
+    // The first request is the /pulls list; dependency enrichment follows.
+    let request = &client.recorded()[0];
     assert_eq!(request.method, HttpMethod::Get);
     assert_eq!(request.path, format!("/api/v1/repos/{OWNER}/{REPO}/pulls"));
     assert!(request
@@ -67,6 +71,11 @@ fn list_pull_requests_constructs_request_and_filters_by_label() {
     assert!(request
         .query
         .contains(&("page".to_string(), "1".to_string())));
+    // Exactly one dependency lookup for the single matching pull request.
+    assert_eq!(
+        client.last_request().unwrap().path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/1/dependencies")
+    );
 }
 
 #[test]
@@ -96,6 +105,10 @@ fn list_pull_requests_sorts_by_number_descending() {
         pr_json(2, "open", "[]", ""),
     );
     client.push_response(200, body);
+    // Both pull requests match (no filter), so each is enriched with its
+    // dependency links.
+    client.push_response(200, "[]");
+    client.push_response(200, "[]");
     let forge = forge(client);
 
     let query = PullRequestQuery {
@@ -118,13 +131,17 @@ fn list_pull_requests_paginates_until_short_page() {
     client.push_response(200, format!("[{}]", pr_json(1, "open", "[]", "")));
     client.push_response(200, format!("[{}]", pr_json(2, "open", "[]", "")));
     client.push_response(200, "[]");
+    // Dependency enrichment for the two listed pull requests, after paging.
+    client.push_response(200, "[]");
+    client.push_response(200, "[]");
     let config = ForgejoConfig::new("https://forge.example.com", "test-token").with_page_limit(1);
     let forge = ForgejoForge::with_client(config, client.clone());
 
     let pulls =
         block_on(forge.list_pull_requests(&repo_id(), PullRequestQuery::default())).unwrap();
     assert_eq!(pulls.len(), 2);
-    assert_eq!(client.call_count(), 3);
+    // Three list pages followed by two dependency lookups.
+    assert_eq!(client.call_count(), 5);
     let pages: Vec<String> = client
         .recorded()
         .iter()
@@ -136,6 +153,7 @@ fn list_pull_requests_paginates_until_short_page() {
                 .map(|(_, value)| value.clone())
         })
         .collect();
+    // Only the list requests carry a page parameter; dependency reads do not.
     assert_eq!(pages, vec!["1", "2", "3"]);
 }
 
@@ -143,6 +161,8 @@ fn list_pull_requests_paginates_until_short_page() {
 fn get_pull_request_by_number_maps_fields() {
     let client = MockHttpClient::new();
     client.push_response(200, pr_json(42, "open", r#"[{"id":1,"name":"ready"}]"#, ""));
+    // The read enriches the pull request with its dependency links.
+    client.push_response(200, r#"[{"number": 7}, {"number": 3}, {"number": 7}]"#);
     let forge = forge(client.clone());
 
     let pull = block_on(forge.get_pull_request_by_number(&repo_id(), ItemNumber::new(42)))
@@ -156,12 +176,18 @@ fn get_pull_request_by_number_maps_fields() {
     assert_eq!(pull.head_sha.as_deref(), Some("head42"));
     assert_eq!(pull.base_sha.as_deref(), Some("base42"));
     assert_eq!(pull.labels, vec!["ready".to_string()]);
+    // Dependency item numbers are sorted and deduplicated.
+    assert_eq!(pull.dependencies, vec![ItemNumber::new(3), ItemNumber::new(7)]);
 
-    let request = client.last_request().unwrap();
-    assert_eq!(request.method, HttpMethod::Get);
+    let requests = client.recorded();
+    assert_eq!(requests[0].method, HttpMethod::Get);
     assert_eq!(
-        request.path,
+        requests[0].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/pulls/42")
+    );
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/42/dependencies")
     );
 }
 
