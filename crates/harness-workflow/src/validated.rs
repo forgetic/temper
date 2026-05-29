@@ -6,6 +6,7 @@
 //! require a `ValidatedWorkflow` and trust that duplicate ids and undeclared
 //! references have already been ruled out.
 
+use crate::artifact::ArtifactTarget;
 use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
@@ -73,6 +74,11 @@ impl ValidatedWorkflow {
         &self.artifact_kinds
     }
 
+    /// Returns the artifact kind with the given id, if declared.
+    pub fn artifact_kind(&self, id: &ArtifactKindId) -> Option<&ValidatedArtifactKind> {
+        self.artifact_kinds.iter().find(|kind| &kind.id == id)
+    }
+
     /// Returns the validated state dimensions.
     pub fn state_dimensions(&self) -> &[ValidatedStateDimension] {
         &self.state_dimensions
@@ -106,7 +112,11 @@ pub struct ValidatedRole {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedArtifactKind {
     pub id: ArtifactKindId,
-    pub labels: Vec<LabelId>,
+    /// Forge artifact type this kind maps to (issue or pull request).
+    pub target: ArtifactTarget,
+    /// Labels that must all be present for a Forge artifact to be classified as
+    /// this kind.
+    pub identifying_labels: Vec<LabelId>,
 }
 
 /// A validated state within a dimension.
@@ -120,6 +130,8 @@ pub struct ValidatedState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedStateDimension {
     pub id: StateDimensionId,
+    /// When `true`, an artifact may occupy at most one state of this dimension.
+    pub exclusive: bool,
     pub states: Vec<ValidatedState>,
 }
 

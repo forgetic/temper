@@ -24,21 +24,36 @@
 //! references are ruled out before any prompt, tool manifest, or transition is
 //! produced.
 //!
-//! # What Phase 2 implements
+//! # What is implemented
 //!
-//! Typed ids ([`ids`]), the raw spec ([`spec`]), diagnostics
+//! Phase 2 added typed ids ([`ids`]), the raw spec ([`spec`]), diagnostics
 //! ([`diagnostics`]), the validated model ([`validated`]), and static
 //! validation ([`validate`]) covering duplicate ids and undeclared references.
+//!
+//! Phase 3 added artifact-to-Forge target mapping ([`artifact`]), workflow
+//! metadata blocks ([`metadata`]), and classification of Forge issues and pull
+//! requests into typed workflow artifacts ([`classify`]).
 
+pub mod artifact;
+pub mod classify;
 pub mod diagnostics;
 pub mod ids;
+pub mod metadata;
 pub mod spec;
 pub mod validate;
 pub mod validated;
 
+pub use artifact::ArtifactTarget;
+pub use classify::{
+    ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
+};
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
+};
+pub use metadata::{
+    parse_metadata_block, render_metadata_block, Lease, MetadataError, WorkflowMetadata,
+    METADATA_BEGIN, METADATA_END,
 };
 pub use spec::{
     RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole, RawState, RawStateDimension,

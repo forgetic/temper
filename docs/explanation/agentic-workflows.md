@@ -43,7 +43,9 @@ CI, reviewer, and tester gates proceed independently. If all gates pass, the PR 
 
 Agents are disposable. They may crash, repeat calls, lose context, or resume after another worker has changed the same artifact. The workflow runtime is the authority that checks fresh Forge state before every transition.
 
-The Forge projection should remain understandable to humans: labels and comments show public state. Machine-readable metadata in bodies or comments can store workflow kind, parent links, dependency links, correlation keys, and leases.
+The Forge projection should remain understandable to humans: labels and comments show public state. Machine-readable metadata in bodies or comments can store workflow kind, parent links, dependency links, correlation keys, and leases. The harness stores this as a JSON block inside an HTML comment so it renders invisibly while staying deterministic to parse; see the metadata block format in `docs/reference/workflow-layer.md`.
+
+The workflow layer reads labels plus that metadata block to classify a Forge issue or pull request into a typed artifact. Classification detects impossible label combinations (for example, two states of one mutually exclusive dimension) and label/metadata drift, so the reconciler and operator queues have a precise picture of state before any transition runs.
 
 Claims should be leases with expiration. If an engineer crashes while an issue is `in-progress`, the reconciler can detect the expired lease and return the issue to `ready`, escalate it, or leave a diagnostic comment.
 

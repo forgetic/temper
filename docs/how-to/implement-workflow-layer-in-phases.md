@@ -16,9 +16,9 @@ Renamed `crates/harness-core` to `crates/harness-workflow` and updated Cargo met
 
 Added focused modules in `crates/harness-workflow/src`: `ids` (typed ids), `spec` (`RawWorkflowSpec` and raw children), `diagnostics` (`Diagnostic`, `Severity`, `SymbolKind`, `ReferenceSite`, `ValidationErrors`), `validated` (`ValidatedWorkflow` with a crate-private constructor), and `validate` (diagnostic-collecting static validation). Implemented checks for duplicate ids and undeclared references (roles, labels, artifact kinds, queues, transitions, gates). Integration tests in `tests/validation.rs` cover valid workflows, duplicate ids, missing references across every site, serde loading, and the `ValidatedWorkflow`-only API shape.
 
-## Phase 3: Model artifacts, labels, and metadata
+## Phase 3: Model artifacts, labels, and metadata (done)
 
-Add artifact-kind mappings, state dimensions, label projections, and metadata block parsing/rendering for workflow kind, relations, correlation keys, and leases. Add classifiers that turn Forge issues/PRs into workflow artifacts or invariant violations.
+Added `artifact::ArtifactTarget` (artifact kinds now map to a Forge issue or PR via `target` and carry `identifying_labels`), an `exclusive` flag on state dimensions, `metadata::WorkflowMetadata`/`Lease` with JSON-in-HTML-comment render/parse, and `classify::Classifier` that turns a `harness_forge::Issue` or `PullRequest` into a `ClassifiedArtifact` or a `ClassificationError` of `ClassificationDiagnostic`s. `harness-workflow` now depends on `harness-forge`. Tests in `tests/metadata.rs` and `tests/classification.rs` cover round-trips, label-based classification, exclusive conflicts, and missing/malformed metadata.
 
 ## Phase 4: Compile role, prompt, tool, and label manifests
 

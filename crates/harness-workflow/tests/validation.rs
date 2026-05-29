@@ -1,9 +1,9 @@
 //! Validation tests for `harness-workflow` Phase 2 (spec + validation).
 
 use harness_workflow::{
-    Diagnostic, RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole, RawState,
-    RawStateDimension, RawTransition, RawWorkflowSpec, ReferenceSite, Severity, SymbolKind,
-    ValidatedWorkflow,
+    ArtifactTarget, Diagnostic, RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole,
+    RawState, RawStateDimension, RawTransition, RawWorkflowSpec, ReferenceSite, Severity,
+    SymbolKind, ValidatedWorkflow,
 };
 
 /// Builds a small but complete workflow that exercises every reference kind:
@@ -14,6 +14,10 @@ fn valid_spec() -> RawWorkflowSpec {
     RawWorkflowSpec {
         name: "code-review".to_string(),
         labels: vec![
+            RawLabel {
+                id: "code".to_string(),
+                description: Some("identifies a code artifact".to_string()),
+            },
             RawLabel {
                 id: "ready".to_string(),
                 description: Some("ready to claim".to_string()),
@@ -45,10 +49,12 @@ fn valid_spec() -> RawWorkflowSpec {
         ],
         artifact_kinds: vec![RawArtifactKind {
             id: "code".to_string(),
-            labels: vec!["ready".to_string(), "in-progress".to_string()],
+            target: ArtifactTarget::Issue,
+            identifying_labels: vec!["code".to_string()],
         }],
         state_dimensions: vec![RawStateDimension {
             id: "code_lifecycle".to_string(),
+            exclusive: true,
             states: vec![
                 RawState {
                     id: "ready".to_string(),
@@ -111,7 +117,7 @@ fn minimal_valid_workflow_validates() {
 
     assert_eq!(workflow.name(), "code-review");
     assert_eq!(workflow.roles().len(), 2);
-    assert_eq!(workflow.labels().len(), 4);
+    assert_eq!(workflow.labels().len(), 5);
     assert_eq!(workflow.artifact_kinds().len(), 1);
     assert_eq!(workflow.state_dimensions().len(), 1);
     assert_eq!(workflow.queues().len(), 2);
@@ -217,7 +223,9 @@ fn missing_queue_artifact_reference_is_diagnosed() {
 #[test]
 fn missing_label_references_are_diagnosed_across_sites() {
     let mut spec = valid_spec();
-    spec.artifact_kinds[0].labels.push("a-missing".to_string());
+    spec.artifact_kinds[0]
+        .identifying_labels
+        .push("a-missing".to_string());
     spec.queues[0].labels.push("q-missing".to_string());
     spec.state_dimensions[0].states[0].label = Some("s-missing".to_string());
     spec.transitions[0].effects.push(RawEffect::AddLabel {
@@ -320,7 +328,7 @@ fn raw_spec_loads_from_json() {
     let json = r#"{
         "name": "from-json",
         "labels": [{"id": "ready"}],
-        "artifact_kinds": [{"id": "code", "labels": ["ready"]}],
+        "artifact_kinds": [{"id": "code", "target": "issue", "identifying_labels": ["ready"]}],
         "queues": [{"id": "code_ready", "artifact": "code", "labels": ["ready"]}],
         "roles": [{"id": "engineer", "queues": ["code_ready"]}],
         "transitions": [{

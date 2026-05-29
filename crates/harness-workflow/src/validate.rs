@@ -151,7 +151,7 @@ fn check_references(
     }
 
     for artifact in &spec.artifact_kinds {
-        for label in &artifact.labels {
+        for label in &artifact.identifying_labels {
             check_reference(
                 declared.labels,
                 label,
@@ -305,7 +305,12 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         .iter()
         .map(|artifact| ValidatedArtifactKind {
             id: ArtifactKindId::new(&artifact.id),
-            labels: artifact.labels.iter().map(LabelId::new).collect(),
+            target: artifact.target,
+            identifying_labels: artifact
+                .identifying_labels
+                .iter()
+                .map(LabelId::new)
+                .collect(),
         })
         .collect();
 
@@ -314,6 +319,7 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         .iter()
         .map(|dimension| ValidatedStateDimension {
             id: StateDimensionId::new(&dimension.id),
+            exclusive: dimension.exclusive,
             states: dimension
                 .states
                 .iter()

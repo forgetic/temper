@@ -14,11 +14,11 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 ## Current repository state
 
 - `harness-forge` defines the backend-agnostic Forge domain model and async interface.
-- `harness-workflow` is the workflow/orchestration crate; it now provides the typed workflow spec (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2). Compilation, runtime, and recovery are still planned (see ADR 0007).
+- `harness-workflow` is the workflow/orchestration crate; it provides the typed workflow spec (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2), plus artifact/Forge target mapping, workflow metadata blocks, and a classifier for Forge issues and pull requests (Phase 3). It depends on `harness-forge`. Compilation, runtime, and recovery are still planned (see ADR 0007).
 - `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
-- The next likely work is continuing `harness-workflow` in phases (Phase 3: model artifacts, labels, and metadata), or adding another concrete Forge backend.
+- The next likely work is continuing `harness-workflow` in phases (Phase 4: compile role, prompt, tool, and label manifests), or adding another concrete Forge backend.
 
 ## Ground rules
 

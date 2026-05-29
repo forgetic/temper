@@ -9,6 +9,7 @@
 //! compiler and runtime APIs can require an already-validated workflow rather
 //! than re-checking an arbitrary document.
 
+use crate::artifact::ArtifactTarget;
 use crate::validate::validate;
 use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
@@ -73,19 +74,43 @@ pub struct RawLabel {
 #[serde(deny_unknown_fields)]
 pub struct RawArtifactKind {
     pub id: String,
-    /// Labels that identify or describe this artifact kind. Each entry
+    /// Forge artifact type this kind maps to (issue or pull request).
+    pub target: ArtifactTarget,
+    /// Labels that identify this artifact kind. A Forge artifact is classified
+    /// as this kind only when all identifying labels are present. Each entry
     /// references a label id.
     #[serde(default)]
-    pub labels: Vec<String>,
+    pub identifying_labels: Vec<String>,
 }
 
 /// State dimension declaration: a named, usually mutually exclusive, state group.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+///
+/// `exclusive` defaults to `true`: an artifact may carry the label for at most
+/// one state of the dimension at a time. Set it to `false` for dimensions whose
+/// states can coexist.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawStateDimension {
     pub id: String,
+    #[serde(default = "default_true")]
+    pub exclusive: bool,
     #[serde(default)]
     pub states: Vec<RawState>,
+}
+
+impl Default for RawStateDimension {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            exclusive: true,
+            states: Vec::new(),
+        }
+    }
+}
+
+/// Serde default for [`RawStateDimension::exclusive`].
+fn default_true() -> bool {
+    true
 }
 
 /// A single state within a state dimension.

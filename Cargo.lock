@@ -123,6 +123,8 @@ dependencies = [
 name = "harness-workflow"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "harness-forge",
  "serde",
  "serde_json",
 ]

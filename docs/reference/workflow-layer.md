@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phase 2 has landed the spec and validation foundations; the rest of the contract below (compilation, runtime, recovery) is still planned. See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2 and 3 have landed spec validation, artifact/metadata modeling, and classification; the rest of the contract below (compilation, runtime, recovery) is still planned. See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -30,14 +30,22 @@ Validation errors should be diagnostic collections so users can fix multiple spe
 
 ## Implementation status
 
-Phase 2 implements the first two phases and their supporting types:
+Phase 2 implemented the spec and validation foundations:
 
 - `spec::RawWorkflowSpec` and its raw child structs (`RawRole`, `RawLabel`, `RawArtifactKind`, `RawStateDimension`, `RawState`, `RawQueue`, `RawTransition`, `RawEffect`, `RawGate`) load from serde input.
 - `validated::ValidatedWorkflow` is the normalized model. It has no public constructor; the only way to build one is `RawWorkflowSpec::validate` / `validate::validate`, so compiler and runtime APIs added later can require it by type.
 - `ids` provides typed ids: `RoleId`, `LabelId`, `ArtifactKindId`, `StateDimensionId`, `StateId`, `QueueId`, `TransitionId`, `GateId`.
 - `diagnostics` provides `Diagnostic`, `Severity`, `SymbolKind`, `ReferenceSite`, and the `ValidationErrors` collection.
 
-Not yet modeled: `relation`, `invariant`, `recovery_policy`, concurrency limits, compilation outputs, and runtime execution. Effects in Phase 2 cover only label add/remove.
+Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
+
+- `artifact::ArtifactTarget` maps each artifact kind to a Forge `Issue` or `PullRequest`. Artifact kinds now carry `target` and `identifying_labels`.
+- State dimensions carry an `exclusive` flag (default `true`) so the classifier can reject impossible label combinations.
+- `metadata::WorkflowMetadata` (with `Lease`) is the machine-readable block parsed from and rendered into artifact bodies. See "Metadata block format".
+- `classify::Classifier` turns a `harness_forge::Issue` or `PullRequest` into a typed `ClassifiedArtifact`, or a `ClassificationError` carrying `ClassificationDiagnostic`s. See "Artifact classification".
+- `harness-workflow` now depends on `harness-forge` because classification consumes Forge domain types.
+
+Not yet modeled: `relation` as a first-class spec primitive (only metadata relations exist), `invariant`, `recovery_policy`, concurrency limits, compilation outputs, and runtime execution. Effects still cover only label add/remove.
 
 Gate/transition wiring is modeled in both directions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions.
 
@@ -48,8 +56,8 @@ A workflow spec contains these logical primitives.
 | Primitive | Meaning |
 | --- | --- |
 | `role` | Actor authority, queues, concurrency limits, and prose charter |
-| `artifact_kind` | Logical item mapped to a Forge issue or pull request |
-| `state_dimension` | Named state group, often projected as mutually exclusive labels |
+| `artifact_kind` | Logical item with a Forge `target` (issue or PR) and `identifying_labels` |
+| `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
 | `queue` | Query that selects artifacts needing attention |
 | `transition` | Guarded state change authorized for one or more roles |
 | `gate` | Condition that unlocks another transition, such as merge readiness |
@@ -72,7 +80,51 @@ Validation must reject or diagnose:
 
 Validation should also warn about unreachable queues, terminal states with no explanation, and labels that are declared but unused (planned).
 
-In the Phase 2 model, labels are the only cross-referenced projection of state: artifact mappings, queues, state declarations, and transition effects all reference label ids. States are not referenced by id outside their dimension, so undeclared-state references are not a current diagnostic.
+In the current model, labels are the only cross-referenced projection of state: artifact mappings, queues, state declarations, and transition effects all reference label ids. States are not referenced by id outside their dimension, so undeclared-state references are not a current diagnostic.
+
+## Metadata block format
+
+Workflow information that has no portable Forge field lives in a metadata block embedded in an issue or pull-request body. The block is JSON wrapped in an HTML comment:
+
+```text
+<!-- harness:workflow
+{
+  "kind": "code",
+  "parents": [12],
+  "dependencies": [34],
+  "correlation_key": "code-issue-42",
+  "lease": {
+    "role": "engineer",
+    "worker": "run-abc",
+    "claimed_at": "2026-05-29T00:00:00Z",
+    "heartbeat_at": "2026-05-29T00:05:00Z",
+    "expires_at": "2026-05-29T00:30:00Z"
+  }
+}
+-->
+```
+
+JSON-in-an-HTML-comment is deliberate: it renders invisibly in Forge markdown, needs no parser beyond `serde_json` (no YAML/TOML dependency), and serializes deterministically because field order follows the struct declaration and empty fields are omitted. The block ends at the first `-->`, so values must not contain that sequence.
+
+`render_metadata_block` and `parse_metadata_block` are inverses. Parsing returns `Ok(None)` when no block is present, `Ok(Some(_))` when one parses, and `Err(MetadataError)` when a block is present but unterminated or contains invalid JSON. Relations (`parents`, `dependencies`) are Forge item numbers in the same repository, matching the shared issue/PR number namespace.
+
+## Artifact classification
+
+`Classifier::classify_issue` and `Classifier::classify_pull_request` interpret a Forge artifact under a `ValidatedWorkflow`. Classification reads labels and the metadata block; it never mutates Forge state.
+
+Kind resolution: when metadata names a `kind`, that kind is authoritative. Otherwise the kind is inferred from `identifying_labels` — a kind matches when all of its identifying labels are present, and the most specific match (most identifying labels) wins.
+
+State resolution: for each dimension, the active states are those whose label is present. An exclusive dimension with more than one active state is an impossible combination.
+
+Success yields a `ClassifiedArtifact` (kind, target, source, per-dimension states, parsed metadata, raw labels). Otherwise a `ClassificationError` collects every `ClassificationDiagnostic`:
+
+- `Unclassified`: no kind matched and metadata named none
+- `AmbiguousArtifactKind`: several kinds matched equally well
+- `UnknownMetadataKind`: metadata named an undeclared kind
+- `TargetMismatch`: the kind maps to a different Forge target than the artifact
+- `MissingIdentifyingLabel`: metadata named a kind whose identifying label is absent (drift)
+- `ExclusiveStateConflict`: several states of one exclusive dimension are present
+- `MalformedMetadata`: the body's metadata block could not be parsed
 
 ## Runtime guarantees
 
