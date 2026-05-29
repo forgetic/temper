@@ -65,7 +65,9 @@ than hidden:
   atomic compare-and-swap or conditional update primitive that the portable
   `Forge` interface does not yet expose. The deterministic tests serialize
   backend calls and assert the single-holder outcome for the tested
-  interleavings.
+  interleavings. The webhook-accelerated triggering model (ADR 0009) widens this
+  concurrency window, so closing it with a compare-and-swap primitive is a
+  prioritized follow-up.
 - **Pull-request idempotent create is not implemented.** Only
   `Executor::ensure_issue` exists. The correlation-key mechanism is identical for
   pull requests, so the no-duplicate guarantee will transfer once it is added.

@@ -51,6 +51,28 @@ Claims should be leases with expiration. If an engineer crashes while an issue i
 
 Create operations should be idempotent. A tool that creates a PR for an issue should first look for an existing PR with the same correlation key and return it instead of creating a duplicate.
 
+## Triggering model
+
+The runtime is pull-based: queues are queries and the executor re-loads fresh
+Forge state before every transition. Triggering decides *when* to run a queue
+scan; it is deliberately not part of the `harness-forge` trait, which stays a
+request/response query+mutation contract.
+
+The intended model is level-triggered with an edge-triggered accelerator, the
+Kubernetes-controller pattern:
+
+- Periodic polling is level-triggered: authoritative, lossless, and the liveness
+  backstop. It is mandatory, not optional.
+- Webhooks (Forgejo, in the real backend) are edge-triggered hints that lower
+  latency between one agent delivering work and the next reacting. They are
+  lossy and must be treated as a signal to pull, never as a source of truth.
+
+Both feed the same reaction path (pull → classify → plan → execute → reconcile).
+Webhook receipt, verification, and payload parsing are provider-specific and
+live in the backend/runner layer. A normalized `ChangeHint` and an optional
+`ChangeSource` companion trait may carry push portably later, but stay off the
+`Forge` trait. See ADR 0009 for the decision and follow-up work.
+
 ## Rust's role
 
 Rust should make invalid internal states hard to express. Runtime code should accept only validated workflows, handle workflow effects exhaustively, and use typed identifiers instead of raw strings.

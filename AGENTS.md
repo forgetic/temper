@@ -19,6 +19,7 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 - `harness-forge-memory` implements the same Forge contract in memory (`MemoryForge`), reproducing the filesystem backend's deterministic identifiers, logical clock, ordering, and query semantics; it adds a one-shot fault hook (`MemoryForge::fail_next`) for testing backend error paths and is the backend the workflow-layer tests run against. Concrete backends follow the `harness-forge-<provider>` naming convention (see ADR 0008).
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
+- The intended real-world Forgejo deployment is webhook-accelerated and poll-backstopped, with triggering kept off the `harness-forge` trait; see ADR 0009 and `docs/explanation/agentic-workflows.md` (Triggering model). Two prioritized follow-ups feed this direction: solving compare-and-swap lease acquisition (a faster trigger widens the lost-update window) and introducing the `ChangeHint` abstraction (plus an optional `ChangeSource` companion trait) when the runner layer is built.
 - The next likely work is addressing the limitations the robustness tests surfaced (compare-and-swap lease acquisition, pull-request idempotent create, applying reconciler actions automatically, non-label transition effects), or adding another concrete Forge backend (the `harness-forge-<provider>` convention and two reference backends are now in place).
 
 ## Ground rules
