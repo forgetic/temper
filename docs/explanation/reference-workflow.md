@@ -152,7 +152,10 @@ at-most-once claiming; no duplicate creates; and no premature merge.
 ## Anticipated harness additions
 
 The design deliberately leans on capabilities the runtime does not yet execute.
-The fixture exercise will confirm the exact list, but the expected backlog is:
+The fixture exercise has now confirmed and prioritized the exact backlog in
+`reference-workflow-gaps.md` (it also found two queue-primitive gaps this list
+missed: multi-artifact-kind and disjunctive queue matching). The expected
+backlog was:
 
 - **Execute non-label effects** (`CreateComment`, `SetAssignee`,
   `CreatePullRequest`, `MergePullRequest`) — currently modeled but not applied.

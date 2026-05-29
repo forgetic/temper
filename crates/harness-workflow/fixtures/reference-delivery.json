@@ -1,0 +1,207 @@
+{
+  "name": "reference-delivery",
+  "roles": [
+    {
+      "id": "architect",
+      "charter": "Turn requests into epics, design issues, and ready code issues; resolve escalations; reconcile landed PRs.",
+      "concurrency": 1,
+      "queues": ["design_triage", "escalations", "landed_inbox"]
+    },
+    {
+      "id": "engineer",
+      "charter": "Claim ready code issues, implement them, open PRs, and address failed review or testing gates.",
+      "concurrency": 3,
+      "queues": ["code_ready", "pr_changes_requested", "pr_testing_failed"]
+    },
+    {
+      "id": "reviewer",
+      "charter": "Statically review PRs against the contract catalog; approve or request changes.",
+      "concurrency": 2,
+      "queues": ["pr_needs_review"]
+    },
+    {
+      "id": "tester",
+      "charter": "Exercise the change and record whether testing passed or failed.",
+      "concurrency": 2,
+      "queues": ["pr_needs_testing"]
+    },
+    {
+      "id": "owner",
+      "charter": "Resolve needs-human items and run holistic alignment review of landed cohorts.",
+      "concurrency": 1,
+      "queues": ["needs_human", "owner_alignment"]
+    }
+  ],
+  "labels": [
+    {"id": "untriaged", "description": "human-filed issue awaiting triage by the architect"},
+    {"id": "epic", "description": "identifies a long-lived epic issue"},
+    {"id": "design", "description": "identifies a design issue"},
+    {"id": "code", "description": "identifies a code issue"},
+    {"id": "implementation", "description": "identifies an implementation pull request"},
+    {"id": "design-draft", "description": "design is still being shaped"},
+    {"id": "design-ready", "description": "design is ready to break into code issues"},
+    {"id": "code-ready", "description": "code issue is ready to claim"},
+    {"id": "in-progress", "description": "code issue is being implemented"},
+    {"id": "blocked-on-dependency", "description": "code issue is blocked on a prerequisite"},
+    {"id": "needs-review", "description": "pull request awaits review"},
+    {"id": "review-approved", "description": "review approved the pull request"},
+    {"id": "review-changes-requested", "description": "review requested changes"},
+    {"id": "needs-testing", "description": "pull request awaits testing"},
+    {"id": "testing-passed", "description": "testing passed"},
+    {"id": "testing-failed", "description": "testing failed"},
+    {"id": "ci-pending", "description": "CI has not finished (projected by an adapter)"},
+    {"id": "ci-passed", "description": "CI passed (projected by an adapter)"},
+    {"id": "ci-failed", "description": "CI failed (projected by an adapter)"},
+    {"id": "merge-ready", "description": "all merge gates passed"},
+    {"id": "escalated", "description": "judgment escalation flag routed to the architect"},
+    {"id": "needs-human", "description": "owner-input flag routed to the owner"},
+    {"id": "landed", "description": "merged PR awaiting architect reconcile"},
+    {"id": "owner-pending", "description": "merged PR awaiting owner alignment review"}
+  ],
+  "artifact_kinds": [
+    {"id": "intake", "target": "issue", "identifying_labels": ["untriaged"]},
+    {"id": "epic", "target": "issue", "identifying_labels": ["epic"]},
+    {"id": "design", "target": "issue", "identifying_labels": ["design"]},
+    {"id": "code", "target": "issue", "identifying_labels": ["code"]},
+    {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+  ],
+  "state_dimensions": [
+    {"id": "design_lifecycle", "exclusive": true, "states": [
+      {"id": "draft", "label": "design-draft"},
+      {"id": "ready", "label": "design-ready"}
+    ]},
+    {"id": "code_lifecycle", "exclusive": true, "states": [
+      {"id": "ready", "label": "code-ready"},
+      {"id": "in_progress", "label": "in-progress"},
+      {"id": "blocked_on_dependency", "label": "blocked-on-dependency"}
+    ]},
+    {"id": "review", "exclusive": true, "states": [
+      {"id": "needs_review", "label": "needs-review"},
+      {"id": "approved", "label": "review-approved"},
+      {"id": "changes_requested", "label": "review-changes-requested"}
+    ]},
+    {"id": "testing", "exclusive": true, "states": [
+      {"id": "needs_testing", "label": "needs-testing"},
+      {"id": "passed", "label": "testing-passed"},
+      {"id": "failed", "label": "testing-failed"}
+    ]},
+    {"id": "ci", "exclusive": true, "states": [
+      {"id": "pending", "label": "ci-pending"},
+      {"id": "passed", "label": "ci-passed"},
+      {"id": "failed", "label": "ci-failed"}
+    ]},
+    {"id": "merge", "exclusive": true, "states": [
+      {"id": "merge_ready", "label": "merge-ready"}
+    ]},
+    {"id": "escalation", "exclusive": false, "states": [
+      {"id": "escalated", "label": "escalated"}
+    ]},
+    {"id": "human", "exclusive": false, "states": [
+      {"id": "needs_human", "label": "needs-human"}
+    ]},
+    {"id": "post_merge", "exclusive": false, "states": [
+      {"id": "landed", "label": "landed"},
+      {"id": "owner_pending", "label": "owner-pending"}
+    ]}
+  ],
+  "queues": [
+    {"id": "design_triage", "artifact": "intake", "labels": ["untriaged"]},
+    {"id": "code_ready", "artifact": "code", "labels": ["code-ready"]},
+    {"id": "pr_needs_review", "artifact": "implementation_pr", "labels": ["needs-review"]},
+    {"id": "pr_needs_testing", "artifact": "implementation_pr", "labels": ["needs-testing"]},
+    {"id": "pr_changes_requested", "artifact": "implementation_pr", "labels": ["review-changes-requested"]},
+    {"id": "pr_testing_failed", "artifact": "implementation_pr", "labels": ["testing-failed"]},
+    {"id": "escalations", "artifact": "implementation_pr", "labels": ["escalated"]},
+    {"id": "needs_human", "artifact": "implementation_pr", "labels": ["needs-human"]},
+    {"id": "landed_inbox", "artifact": "implementation_pr", "labels": ["landed"]},
+    {"id": "owner_alignment", "artifact": "implementation_pr", "labels": ["owner-pending"]}
+  ],
+  "transitions": [
+    {"id": "triage_to_code", "artifact": "intake", "roles": ["architect"], "effects": [
+      {"kind": "remove_label", "label": "untriaged"},
+      {"kind": "add_label", "label": "code"},
+      {"kind": "add_label", "label": "code-ready"}
+    ]},
+    {"id": "triage_to_design", "artifact": "intake", "roles": ["architect"], "effects": [
+      {"kind": "remove_label", "label": "untriaged"},
+      {"kind": "add_label", "label": "design"},
+      {"kind": "add_label", "label": "design-draft"}
+    ]},
+    {"id": "refine_design", "artifact": "design", "roles": ["architect"], "effects": [
+      {"kind": "remove_label", "label": "design-draft"},
+      {"kind": "add_label", "label": "design-ready"}
+    ]},
+    {"id": "mark_code_ready", "artifact": "code", "roles": ["architect"], "effects": [
+      {"kind": "remove_label", "label": "blocked-on-dependency"},
+      {"kind": "add_label", "label": "code-ready"}
+    ]},
+    {"id": "reconcile_landed", "artifact": "implementation_pr", "roles": ["architect"], "effects": [
+      {"kind": "remove_label", "label": "landed"}
+    ]},
+    {"id": "resolve_escalation", "artifact": "implementation_pr", "roles": ["architect"], "effects": [
+      {"kind": "remove_label", "label": "escalated"}
+    ]},
+    {"id": "request_human_input", "artifact": "implementation_pr", "roles": ["architect"], "effects": [
+      {"kind": "add_label", "label": "needs-human"}
+    ]},
+    {"id": "claim_code", "artifact": "code", "roles": ["engineer"], "effects": [
+      {"kind": "remove_label", "label": "code-ready"},
+      {"kind": "add_label", "label": "in-progress"}
+    ]},
+    {"id": "open_pr", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
+      {"kind": "add_label", "label": "needs-review"},
+      {"kind": "add_label", "label": "needs-testing"},
+      {"kind": "add_label", "label": "ci-pending"}
+    ]},
+    {"id": "address_review_changes", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
+      {"kind": "remove_label", "label": "review-changes-requested"},
+      {"kind": "add_label", "label": "needs-review"}
+    ]},
+    {"id": "address_test_failure", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
+      {"kind": "remove_label", "label": "testing-failed"},
+      {"kind": "add_label", "label": "needs-testing"}
+    ]},
+    {"id": "escalate_pr", "artifact": "implementation_pr", "roles": ["engineer", "reviewer", "tester"], "effects": [
+      {"kind": "add_label", "label": "escalated"}
+    ]},
+    {"id": "approve_review", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
+      {"kind": "remove_label", "label": "needs-review"},
+      {"kind": "add_label", "label": "review-approved"}
+    ]},
+    {"id": "request_changes", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
+      {"kind": "remove_label", "label": "needs-review"},
+      {"kind": "add_label", "label": "review-changes-requested"}
+    ]},
+    {"id": "record_test_pass", "artifact": "implementation_pr", "roles": ["tester"], "effects": [
+      {"kind": "remove_label", "label": "needs-testing"},
+      {"kind": "add_label", "label": "testing-passed"}
+    ]},
+    {"id": "record_test_failure", "artifact": "implementation_pr", "roles": ["tester"], "effects": [
+      {"kind": "remove_label", "label": "needs-testing"},
+      {"kind": "add_label", "label": "testing-failed"}
+    ]},
+    {"id": "record_ci_pass", "artifact": "implementation_pr", "roles": [], "effects": [
+      {"kind": "remove_label", "label": "ci-pending"},
+      {"kind": "add_label", "label": "ci-passed"}
+    ]},
+    {"id": "record_ci_failure", "artifact": "implementation_pr", "roles": [], "effects": [
+      {"kind": "remove_label", "label": "ci-pending"},
+      {"kind": "add_label", "label": "ci-failed"}
+    ]},
+    {"id": "clear_human_flag", "artifact": "implementation_pr", "roles": ["owner"], "effects": [
+      {"kind": "remove_label", "label": "needs-human"}
+    ]},
+    {"id": "review_alignment", "artifact": "implementation_pr", "roles": ["owner"], "effects": [
+      {"kind": "remove_label", "label": "owner-pending"}
+    ]},
+    {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
+      "requires_gates": ["review_gate", "testing_gate", "ci_gate"], "effects": [
+      {"kind": "add_label", "label": "merge-ready"}
+    ]}
+  ],
+  "gates": [
+    {"id": "review_gate", "satisfied_by": ["approve_review"]},
+    {"id": "testing_gate", "satisfied_by": ["record_test_pass"]},
+    {"id": "ci_gate", "satisfied_by": ["record_ci_pass"]}
+  ]
+}

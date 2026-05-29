@@ -109,6 +109,8 @@ A workflow spec contains these logical primitives.
 
 Labels are a portable Forge projection of workflow state. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and typed relations.
 
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core validates, compiles, and plans (`tests/reference_delivery.rs`). The capabilities that design needs beyond the current primitives — non-label effect expression/execution, PR idempotent create, external-signal gates, first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
+
 ## Static validation
 
 Validation must reject or diagnose:
