@@ -11,7 +11,7 @@
       "id": "engineer",
       "charter": "Claim ready code issues, implement them, open PRs, and address failed review or testing gates.",
       "concurrency": 3,
-      "queues": ["code_ready", "pr_changes_requested", "pr_testing_failed"]
+      "queues": ["code_ready", "pr_changes_requested"]
     },
     {
       "id": "reviewer",
@@ -116,10 +116,12 @@
     {"id": "code_ready", "artifact": "code", "labels": ["code-ready"]},
     {"id": "pr_needs_review", "artifact": "implementation_pr", "labels": ["needs-review"]},
     {"id": "pr_needs_testing", "artifact": "implementation_pr", "labels": ["needs-testing"]},
-    {"id": "pr_changes_requested", "artifact": "implementation_pr", "labels": ["review-changes-requested"]},
-    {"id": "pr_testing_failed", "artifact": "implementation_pr", "labels": ["testing-failed"]},
-    {"id": "escalations", "artifact": "implementation_pr", "labels": ["escalated"]},
-    {"id": "needs_human", "artifact": "implementation_pr", "labels": ["needs-human"]},
+    {"id": "pr_changes_requested", "artifact": "implementation_pr", "any_of": [
+      {"labels": ["review-changes-requested"]},
+      {"labels": ["testing-failed"]}
+    ]},
+    {"id": "escalations", "artifact": ["intake", "epic", "design", "code", "implementation_pr"], "labels": ["escalated"]},
+    {"id": "needs_human", "artifact": ["intake", "epic", "design", "code", "implementation_pr"], "labels": ["needs-human"]},
     {"id": "landed_inbox", "artifact": "implementation_pr", "labels": ["landed"]},
     {"id": "owner_alignment", "artifact": "implementation_pr", "labels": ["owner-pending"], "min_depth": 5, "max_age": 604800}
   ],

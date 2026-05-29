@@ -29,20 +29,19 @@ The planner exposes a pure predicate `queue_active(queue, members, now)`. A
 queue with no activation policy remains active whenever it has at least one
 matched member. A policy queue is active when `depth >= min_depth` **or** the
 oldest timestamped member reaches `max_age`; empty queues are never active.
-Existing queue matching stays unchanged.
+Activation does not change matching semantics.
 
 Member age is measured from the classified artifact's portable Forge
 `updated_at` timestamp. Workflow label updates move that timestamp when an item
 enters a queue; if a caller classifies from snapshots without timestamps, only
 `min_depth` can activate that queue.
 
-Phase 14 should extend the same queue primitive instead of adding a second
-routing object:
+Phase 14 extends the same queue primitive instead of adding a second routing
+object:
 
-- multi-kind queues should let one queue select more than one artifact kind;
-- disjunctive matching should let a queue match any of several AND-label
-  clauses while preserving the current `labels` field as the single-clause
-  shorthand.
+- multi-kind queues let one queue select more than one artifact kind;
+- disjunctive matching lets a queue match any of several AND-label clauses while
+  preserving the current `labels` field as the common AND-label shorthand.
 
 ## Consequences
 

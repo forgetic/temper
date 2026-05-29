@@ -2,8 +2,8 @@
 
 use harness_workflow::{
     ArtifactTarget, Diagnostic, RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel,
-    RawQueue, RawRelation, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
-    ReferenceSite, RelationKind, Severity, SymbolKind, ValidatedWorkflow,
+    RawQueue, RawQueueLabelSet, RawRelation, RawRole, RawState, RawStateDimension, RawTransition,
+    RawWorkflowSpec, ReferenceSite, RelationKind, Severity, SymbolKind, ValidatedWorkflow,
 };
 
 /// Builds a small but complete workflow that exercises every reference kind:
@@ -87,15 +87,17 @@ fn valid_spec() -> RawWorkflowSpec {
         queues: vec![
             RawQueue {
                 id: "code_ready".to_string(),
-                artifact: "code".to_string(),
+                artifacts: vec!["code".to_string()],
                 labels: vec!["ready".to_string()],
+                any_of: Vec::new(),
                 min_depth: None,
                 max_age: None,
             },
             RawQueue {
                 id: "needs_review".to_string(),
-                artifact: "code".to_string(),
+                artifacts: vec!["code".to_string()],
                 labels: vec!["needs-review".to_string()],
+                any_of: Vec::new(),
                 min_depth: None,
                 max_age: None,
             },
@@ -280,7 +282,7 @@ fn missing_relation_endpoint_references_are_diagnosed() {
 #[test]
 fn missing_queue_artifact_reference_is_diagnosed() {
     let mut spec = valid_spec();
-    spec.queues[0].artifact = "nonexistent".to_string();
+    spec.queues[0].artifacts = vec!["nonexistent".to_string()];
 
     let errors = spec.validate().expect_err("missing artifact must fail");
     assert!(errors
@@ -301,6 +303,9 @@ fn missing_label_references_are_diagnosed_across_sites() {
         .identifying_labels
         .push("a-missing".to_string());
     spec.queues[0].labels.push("q-missing".to_string());
+    spec.queues[0].any_of.push(RawQueueLabelSet {
+        labels: vec!["q-any-missing".to_string()],
+    });
     spec.state_dimensions[0].states[0].label = Some("s-missing".to_string());
     spec.transitions[0].effects.push(RawEffect::AddLabel {
         label: "e-missing".to_string(),
@@ -326,6 +331,13 @@ fn missing_label_references_are_diagnosed_across_sites() {
     assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
         expected: SymbolKind::Label,
         id: "q-missing".to_string(),
+        site: ReferenceSite::QueueLabel {
+            queue: "code_ready".to_string(),
+        },
+    }));
+    assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
+        expected: SymbolKind::Label,
+        id: "q-any-missing".to_string(),
         site: ReferenceSite::QueueLabel {
             queue: "code_ready".to_string(),
         },
@@ -451,6 +463,48 @@ fn validation_collects_multiple_diagnostics_at_once() {
         "expected several diagnostics, got {}",
         errors.len()
     );
+}
+
+#[test]
+fn multi_artifact_disjunctive_queue_validates() {
+    let mut spec = valid_spec();
+    spec.queues.push(RawQueue {
+        id: "mixed_return".to_string(),
+        artifacts: vec!["epic".to_string(), "code".to_string()],
+        labels: Vec::new(),
+        any_of: vec![
+            RawQueueLabelSet {
+                labels: vec!["ready".to_string()],
+            },
+            RawQueueLabelSet {
+                labels: vec!["needs-review".to_string()],
+            },
+        ],
+        min_depth: None,
+        max_age: None,
+    });
+
+    let workflow = spec.validate().expect("multi-kind OR queue validates");
+    let queue = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "mixed_return")
+        .expect("queue exists");
+    assert_eq!(queue.artifacts.len(), 2);
+    assert_eq!(queue.any_of.len(), 2);
+}
+
+#[test]
+fn empty_queue_artifacts_are_diagnosed() {
+    let mut spec = valid_spec();
+    spec.queues[0].artifacts.clear();
+
+    let errors = spec.validate().expect_err("empty artifact list must fail");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::EmptyQueueArtifacts {
+            queue: "code_ready".to_string(),
+        }));
 }
 
 #[test]

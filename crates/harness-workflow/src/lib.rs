@@ -63,7 +63,8 @@
 //! Phase 11 added external-signal gates over Forge-projected label/state
 //! conditions. Phase 12a added first-class relation declarations and typed
 //! classification of metadata-projected relations. Phase 13 added queue
-//! activation policies for depth- or age-gated servicing.
+//! activation policies for depth- or age-gated servicing. Phase 14 added
+//! multi-kind queues and disjunctive queue label filters.
 
 pub mod artifact;
 pub mod classify;
@@ -115,11 +116,12 @@ pub use reconcile::{
 };
 pub use relation::RelationKind;
 pub use spec::{
-    RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawRelation,
-    RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
+    RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawQueueLabelSet,
+    RawRelation, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
-    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, QueueLabelSet, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
+    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
+    ValidatedWorkflow,
 };

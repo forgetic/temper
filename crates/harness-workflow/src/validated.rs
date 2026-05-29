@@ -152,10 +152,17 @@ pub struct ValidatedStateDimension {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedQueue {
     pub id: QueueId,
-    pub artifact: ArtifactKindId,
+    pub artifacts: Vec<ArtifactKindId>,
     pub labels: Vec<LabelId>,
+    pub any_of: Vec<QueueLabelSet>,
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
+}
+
+/// One AND-clause in a queue's disjunctive label filter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueueLabelSet {
+    pub labels: Vec<LabelId>,
 }
 
 /// A validated transition effect with typed references.

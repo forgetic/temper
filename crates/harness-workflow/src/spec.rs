@@ -14,7 +14,7 @@ use crate::relation::RelationKind;
 use crate::validate::validate;
 use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Raw workflow specification as loaded from an authored document.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -136,18 +136,51 @@ pub struct RawState {
 #[serde(deny_unknown_fields)]
 pub struct RawQueue {
     pub id: String,
-    /// Artifact kind the queue selects. References an artifact-kind id.
-    pub artifact: String,
-    /// Labels that must be present for an artifact to match. Each entry
-    /// references a label id.
+    /// Artifact kind or kinds the queue selects. References artifact-kind ids.
+    /// Serde accepts the legacy single string form or a list at the `artifact`
+    /// field so existing specs remain valid.
+    #[serde(rename = "artifact", deserialize_with = "deserialize_one_or_many")]
+    pub artifacts: Vec<String>,
+    /// Labels that must be present for an artifact to match every branch. Each
+    /// entry references a label id.
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Alternative label sets. When present, at least one set must match in
+    /// addition to the common `labels` list.
+    #[serde(default)]
+    pub any_of: Vec<RawQueueLabelSet>,
     /// Optional depth threshold before the queue should be serviced.
     #[serde(default)]
     pub min_depth: Option<u32>,
     /// Optional age threshold in seconds for the oldest matched member.
     #[serde(default)]
     pub max_age: Option<u32>,
+}
+
+/// One AND-clause in a queue's disjunctive label filter.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawQueueLabelSet {
+    /// Labels that must all be present for this alternative to match.
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+fn deserialize_one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(value) => Ok(vec![value]),
+        OneOrMany::Many(values) => Ok(values),
+    }
 }
 
 /// Transition declaration: a guarded, role-authorized state change.

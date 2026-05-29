@@ -11,8 +11,9 @@ use crate::ids::{
 };
 use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
 use crate::validated::{
-    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
-    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, QueueLabelSet, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
+    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
+    ValidatedWorkflow,
 };
 use crate::ValidationErrors;
 use chrono::Duration;
@@ -188,25 +189,25 @@ fn check_references(
     }
 
     for queue in &spec.queues {
-        check_reference(
-            declared.artifacts,
-            &queue.artifact,
-            SymbolKind::ArtifactKind,
-            ReferenceSite::QueueArtifact {
+        if queue.artifacts.is_empty() {
+            diagnostics.push(Diagnostic::EmptyQueueArtifacts {
                 queue: queue.id.clone(),
-            },
-            diagnostics,
-        );
-        for label in &queue.labels {
+            });
+        }
+        for artifact in &queue.artifacts {
             check_reference(
-                declared.labels,
-                label,
-                SymbolKind::Label,
-                ReferenceSite::QueueLabel {
+                declared.artifacts,
+                artifact,
+                SymbolKind::ArtifactKind,
+                ReferenceSite::QueueArtifact {
                     queue: queue.id.clone(),
                 },
                 diagnostics,
             );
+        }
+        check_queue_labels(queue.labels.iter(), &queue.id, declared, diagnostics);
+        for label_set in &queue.any_of {
+            check_queue_labels(label_set.labels.iter(), &queue.id, declared, diagnostics);
         }
     }
 
@@ -283,6 +284,25 @@ fn check_references(
         if let Some(condition) = &gate.condition {
             check_gate_condition(spec, declared, &gate.id, condition, diagnostics);
         }
+    }
+}
+
+fn check_queue_labels<'a>(
+    labels: impl Iterator<Item = &'a String>,
+    queue: &str,
+    declared: &Declared<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for label in labels {
+        check_reference(
+            declared.labels,
+            label,
+            SymbolKind::Label,
+            ReferenceSite::QueueLabel {
+                queue: queue.to_string(),
+            },
+            diagnostics,
+        );
     }
 }
 
@@ -441,8 +461,15 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         .iter()
         .map(|queue| ValidatedQueue {
             id: QueueId::new(&queue.id),
-            artifact: ArtifactKindId::new(&queue.artifact),
+            artifacts: queue.artifacts.iter().map(ArtifactKindId::new).collect(),
             labels: queue.labels.iter().map(LabelId::new).collect(),
+            any_of: queue
+                .any_of
+                .iter()
+                .map(|label_set| QueueLabelSet {
+                    labels: label_set.labels.iter().map(LabelId::new).collect(),
+                })
+                .collect(),
             min_depth: queue.min_depth,
             max_age: queue
                 .max_age

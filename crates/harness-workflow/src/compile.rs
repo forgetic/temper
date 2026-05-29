@@ -21,7 +21,7 @@ use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
 use crate::validated::{
-    Effect, GateCondition, ValidatedRole, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, QueueLabelSet, ValidatedRole, ValidatedTransition, ValidatedWorkflow,
 };
 use chrono::Duration;
 
@@ -106,12 +106,13 @@ pub struct ToolManifest {
     pub effects: Vec<Effect>,
 }
 
-/// A queue projected for runtime evaluation, with subscribers and activation.
+/// A queue projected for runtime evaluation, with filters, subscribers, and activation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueManifest {
     pub id: QueueId,
-    pub artifact: ArtifactKindId,
+    pub artifacts: Vec<ArtifactKindId>,
     pub labels: Vec<LabelId>,
+    pub any_of: Vec<QueueLabelSet>,
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
     /// Roles that draw work from this queue, in role declaration order.
@@ -270,8 +271,9 @@ fn compile_queues(workflow: &ValidatedWorkflow) -> Vec<QueueManifest> {
         .iter()
         .map(|queue| QueueManifest {
             id: queue.id.clone(),
-            artifact: queue.artifact.clone(),
+            artifacts: queue.artifacts.clone(),
             labels: queue.labels.clone(),
+            any_of: queue.any_of.clone(),
             min_depth: queue.min_depth,
             max_age: queue.max_age,
             subscribers: workflow
@@ -378,12 +380,40 @@ fn build_prompt(
 }
 
 fn describe_queue(queue: &QueueManifest) -> String {
-    let labels = if queue.labels.is_empty() {
+    let artifacts = join_strs(queue.artifacts.iter().map(ArtifactKindId::as_str));
+    format!(
+        "{}: {} where {}",
+        queue.id,
+        artifacts,
+        describe_queue_filter(queue)
+    )
+}
+
+fn describe_queue_filter(queue: &QueueManifest) -> String {
+    let common = describe_labels(&queue.labels);
+    if queue.any_of.is_empty() {
+        return common;
+    }
+
+    let alternatives = queue
+        .any_of
+        .iter()
+        .map(|label_set| describe_labels(&label_set.labels))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if queue.labels.is_empty() {
+        alternatives
+    } else {
+        format!("{common} AND ({alternatives})")
+    }
+}
+
+fn describe_labels(labels: &[LabelId]) -> String {
+    if labels.is_empty() {
         "no extra labels".to_string()
     } else {
-        join_strs(queue.labels.iter().map(LabelId::as_str))
-    };
-    format!("{}: {} where {}", queue.id, queue.artifact, labels)
+        join_strs(labels.iter().map(LabelId::as_str))
+    }
 }
 
 fn describe_tool(tool: &ToolManifest) -> String {
@@ -450,6 +480,16 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
                     queue: queue.id.clone(),
                 },
             );
+        }
+        for label_set in &queue.any_of {
+            for label in &label_set.labels {
+                record(
+                    label,
+                    LabelUsage::QueueFilter {
+                        queue: queue.id.clone(),
+                    },
+                );
+            }
         }
     }
 

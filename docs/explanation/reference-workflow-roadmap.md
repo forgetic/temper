@@ -57,10 +57,10 @@ Status legend: ☐ pending · ☑ done.
 - ☑ **13 — Queue activation policy (ADR).** Added `min_depth`/`max_age` to the
   queue primitive and a pure planner predicate so `owner_alignment` services
   cohorts. ADR 0012 covers all queue-primitive extensions (13 and 14).
-- ☐ **14 — Queue matching extensions.** Multi-artifact-kind queues and
-  disjunctive (OR) label-sets, referencing ADR 0012. Collapse the
-  fixture's split `pr_changes_requested`/`pr_testing_failed` workaround and bind
-  `escalations`/`needs_human` to both issues and PRs.
+- ☑ **14 — Queue matching extensions.** Multi-artifact-kind queues and
+  disjunctive (OR) label-sets, referencing ADR 0012. Collapsed the
+  fixture's split `pr_changes_requested`/`pr_testing_failed` workaround and bound
+  `escalations`/`needs_human` to both issue and PR artifact kinds.
 
 ## Adjacent pre-existing limitations (not in this backlog)
 

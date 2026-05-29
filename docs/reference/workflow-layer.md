@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–13 have landed spec validation, artifact/metadata modeling, classification, first-class relation declarations, compilation to manifests, pure queue evaluation/activation and transition planning, external-signal gates, runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–14 have landed spec validation, artifact/metadata modeling, classification, first-class relation declarations, compilation to manifests, pure queue evaluation/activation and transition planning, external-signal gates, runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -54,7 +54,7 @@ Phase 4 added compilation:
 - `compile::compile` (also `ValidatedWorkflow::compile`) projects a validated workflow into a `CompiledWorkflow`. Compilation is infallible because it consumes an already-validated workflow.
 - `RoleManifest` carries role id, charter, concurrency hint, subscribed queues, transition `authority`, role-specific `tools`, and a `PromptManifest`.
 - `ToolManifest` is an intent-level operation (named after its transition) carrying artifact, required gates, and effects. Tools are derived from the transitions a role is authorized for, so a role can never see a tool outside its authority.
-- `QueueManifest` adds `subscribers` and activation policy to each queue; `TransitionManifest` is the runtime transition table; `LabelManifest`/`LabelSpec`/`LabelUsage` enumerate every label a workflow site needs and why.
+- `QueueManifest` adds `subscribers`, multi-kind/disjunctive matching, and activation policy to each queue; `TransitionManifest` is the runtime transition table; `LabelManifest`/`LabelSpec`/`LabelUsage` enumerate every label a workflow site needs and why.
 - `PromptManifest`/`PromptSection` hold deterministic prompt sections (`Role`, `Charter`, `Queues`, `Authorized actions`) with a stable `render` method.
 - Roles now carry an optional `concurrency` hint (`RawRole`/`ValidatedRole`), compiled into the role manifest.
 
@@ -102,13 +102,15 @@ Phase 12a added first-class relations:
 - Validation checks relation endpoints against declared artifact kinds.
 - Classification surfaces typed relations from metadata `parents`/`dependencies` item numbers using the validated declarations.
 
-Phase 13 added queue activation policy:
+Phases 13–14 added queue primitive extensions:
 
 - `RawQueue`/`ValidatedQueue` carry optional `min_depth` and `max_age` fields; raw `max_age` is seconds.
+- A queue selects one or more artifact kinds. Raw specs use the `artifact` field as either a string or a list of strings; the validated and compiled models normalize this to `artifacts`.
+- Queue `labels` are common AND labels. Optional `any_of` entries are OR branches, each with its own AND `labels` list.
 - `plan::queue_active(queue, members, now)` is pure and activates a non-empty queue when it has no policy, reaches `min_depth`, or its oldest timestamped member reaches `max_age`.
 - The executor, leases, journal, and reconciler are unchanged.
 
-Not yet implemented: relation-driven `dependency_gate`, multi-kind/disjunctive queue matching, lease effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
+Not yet implemented: relation-driven `dependency_gate`, lease effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
 
 Phase 8 added robustness and crash-injection tests (no new runtime types):
 
@@ -127,7 +129,7 @@ A workflow spec contains these logical primitives.
 | `role` | Actor authority, queues, concurrency limits, and prose charter |
 | `artifact_kind` | Logical item with a Forge `target` (issue or PR) and `identifying_labels` |
 | `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
-| `queue` | Query that selects artifacts needing attention, with optional read-side activation policy |
+| `queue` | Query that selects artifacts needing attention by artifact kind(s), label filters, and optional read-side activation policy |
 | `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, or request PR merge |
 | `gate` | Condition that unlocks another transition, either from sibling transition outcomes or a Forge-projected label/state condition |
 | `relation` | Typed link between artifacts, such as parent, dependency, or produced PR |
@@ -136,13 +138,14 @@ A workflow spec contains these logical primitives.
 
 Labels are a portable Forge projection of workflow state. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, and `merge_pull_request` has no payload. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and relation item numbers.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects, external-signal gates, relation declarations, and queue activation policy validate, compile, and plan (`tests/reference_delivery.rs`). The remaining capabilities that design still needs — relation-driven `dependency_gate` and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects, external-signal gates, relation declarations, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). The remaining capabilities that design still needs, notably relation-driven `dependency_gate`, are tracked in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
 Validation must reject or diagnose:
 
 - duplicate role, label, artifact, state-dimension, queue, transition, or gate IDs (implemented; state ids are checked for uniqueness within each dimension)
+- empty queue artifact-kind lists (implemented)
 - references to undeclared roles, labels, artifact kinds, queues, transitions, gates, relation endpoints, or gate-condition labels/states (implemented)
 - transitions whose effects contradict declared mutually exclusive dimensions (planned)
 - gates that cannot be satisfied by any declared transition or external condition (planned)
@@ -203,7 +206,7 @@ Success yields a `ClassifiedArtifact` (kind, target, source, optional `updated_a
 
 The planner is the pure, deterministic state-machine layer over classified artifacts. It computes the read-side parts of the runtime guarantees below (authority, preconditions, postconditions) without loading fresh state or applying effects; a later executor phase does that against the `Forge` trait.
 
-Queue matching: a classified artifact matches a queue when its kind equals the queue's artifact kind and every label the queue requires is present. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues. Matching does not consider activation policy.
+Queue matching: a classified artifact matches a queue when its kind is one of the queue's artifact kinds, every common `labels` entry is present, and either `any_of` is empty or at least one `any_of` clause's labels are all present. The raw schema keeps the legacy `artifact: "code"` shorthand and also accepts `artifact: ["code", "implementation_pr"]`; `any_of` is an array of objects such as `{ "labels": ["review-changes-requested"] }`. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues. Matching does not consider activation policy.
 
 Queue activation: a queue with no activation policy is active whenever it has at least one matched member. A queue with `min_depth` and/or `max_age` is active when it is non-empty and either its member count is at least `min_depth` or the oldest timestamped member is at least `max_age` old at `now`. `max_age` uses the classified artifact's Forge `updated_at` timestamp; snapshot-classified artifacts without timestamps cannot satisfy the age branch.
 
@@ -276,7 +279,7 @@ Findings (`ReconcileFinding`) cover: `ExpiredLease`, `ImpossibleState` (an exclu
 
 - `RoleManifest` per role, embedding its `PromptManifest` and role-specific `tools`
 - `ToolManifest` entries (intent-level, one per authorized transition)
-- `QueueManifest` entries with subscribers and activation policy, for runtime queue evaluation
+- `QueueManifest` entries with subscribers, multi-kind/disjunctive filters, and activation policy, for runtime queue evaluation
 - `LabelManifest` (a list of `LabelSpec` with `LabelUsage` annotations) for Forge label setup
 - `TransitionManifest` entries forming the runtime transition table
 

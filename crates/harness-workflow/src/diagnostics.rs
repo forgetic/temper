@@ -136,6 +136,8 @@ pub enum Diagnostic {
         id: String,
         site: ReferenceSite,
     },
+    /// A queue did not select any artifact kinds.
+    EmptyQueueArtifacts { queue: String },
 }
 
 impl Diagnostic {
@@ -144,7 +146,8 @@ impl Diagnostic {
         match self {
             Diagnostic::DuplicateId { .. }
             | Diagnostic::DuplicateState { .. }
-            | Diagnostic::UndeclaredReference { .. } => Severity::Error,
+            | Diagnostic::UndeclaredReference { .. }
+            | Diagnostic::EmptyQueueArtifacts { .. } => Severity::Error,
         }
     }
 }
@@ -161,6 +164,9 @@ impl fmt::Display for Diagnostic {
             ),
             Diagnostic::UndeclaredReference { expected, id, site } => {
                 write!(formatter, "{site} references undeclared {expected} `{id}`")
+            }
+            Diagnostic::EmptyQueueArtifacts { queue } => {
+                write!(formatter, "queue `{queue}` selects no artifact kinds")
             }
         }
     }

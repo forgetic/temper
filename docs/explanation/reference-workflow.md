@@ -151,10 +151,10 @@ at-most-once claiming; no duplicate creates; and no premature merge.
 ## Anticipated harness additions
 
 The design deliberately leans on capabilities the runtime does not yet execute.
-The fixture exercise has now confirmed and prioritized the exact backlog in
-`reference-workflow-gaps.md` (it also found two queue-primitive gaps this list
-missed: multi-artifact-kind and disjunctive queue matching). The expected
-backlog was:
+The fixture exercise confirmed and prioritized the exact backlog in
+`reference-workflow-gaps.md` (including two queue-primitive gaps this list
+missed: multi-artifact-kind and disjunctive queue matching, now resolved). The
+expected backlog was:
 
 - **Execute remaining non-label effects** — `CreateComment`, assignee,
   `CreatePullRequest`, and `MergePullRequest` effects now apply through the
@@ -166,8 +166,9 @@ backlog was:
 - **Relation-driven dependency handling** — the `relation` primitive now
   declares parent/dependency/produced-PR links; `dependency_gate` and the
   reconcile action for mechanical unblocking remain future work.
-- **Queue activation policy** (`min_depth`/`max_age`) for batched roles — now
-  implemented as a read-side planner predicate.
+- **Queue activation and richer matching** — `min_depth`/`max_age`, multi-kind
+  queue targets, and disjunctive label-set matching are implemented as read-side
+  planner predicates.
 
 The contract catalog and the layered prompt system stay as prose the runner
 injects; they are not modeled as harness machinery in this design.

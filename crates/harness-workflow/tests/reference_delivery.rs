@@ -110,7 +110,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.roles().len(), 5);
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 9);
-    assert_eq!(workflow.queues().len(), 10);
+    assert_eq!(workflow.queues().len(), 9);
     assert_eq!(workflow.transitions().len(), 19);
     assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
@@ -139,6 +139,27 @@ fn reference_fixture_validates_with_expected_shape() {
         .expect("owner_alignment queue is declared");
     assert_eq!(owner_alignment.min_depth, Some(5));
     assert_eq!(owner_alignment.max_age, Some(Duration::days(7)));
+
+    let return_queue = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "pr_changes_requested")
+        .expect("work-return queue is declared");
+    assert_eq!(return_queue.any_of.len(), 2);
+    assert!(!workflow
+        .queues()
+        .iter()
+        .any(|queue| queue.id.as_str() == "pr_testing_failed"));
+
+    let escalations = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "escalations")
+        .expect("escalations queue is declared");
+    assert!(escalations.artifacts.contains(&ArtifactKindId::new("code")));
+    assert!(escalations
+        .artifacts
+        .contains(&ArtifactKindId::new("implementation_pr")));
 }
 
 #[test]
@@ -167,6 +188,22 @@ fn reference_fixture_compiles_every_role() {
         .expect("owner_alignment queue is compiled");
     assert_eq!(owner_alignment.min_depth, Some(5));
     assert_eq!(owner_alignment.max_age, Some(Duration::days(7)));
+
+    let return_queue = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "pr_changes_requested")
+        .expect("work-return queue is compiled");
+    assert_eq!(return_queue.any_of.len(), 2);
+
+    let testing_failed = compiled
+        .labels()
+        .get(&LabelId::new("testing-failed"))
+        .expect("testing-failed label is in the manifest");
+    assert!(testing_failed.usages.iter().any(|usage| matches!(
+        usage,
+        LabelUsage::QueueFilter { queue } if queue.as_str() == "pr_changes_requested"
+    )));
 }
 
 #[test]
@@ -412,21 +449,40 @@ fn three_gate_merge_requires_review_testing_and_ci() {
 }
 
 #[test]
-fn failed_gates_route_back_to_engineer_queues() {
+fn failed_gates_route_back_to_one_engineer_queue() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
+    let return_queue = QueueId::new("pr_changes_requested");
 
     let changes = classify_pr(
         &workflow,
         20,
         &["implementation", "review-changes-requested"],
     );
-    assert!(planner
-        .matching_queues(&changes)
-        .contains(&harness_workflow::QueueId::new("pr_changes_requested")));
+    assert!(planner.matching_queues(&changes).contains(&return_queue));
 
     let failed = classify_pr(&workflow, 21, &["implementation", "testing-failed"]);
+    assert!(planner.matching_queues(&failed).contains(&return_queue));
+}
+
+#[test]
+fn escalation_and_human_queues_cover_issues_and_pull_requests() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+
+    let escalated_issue = classify_issue(&workflow, 30, &["code", "escalated"]);
+    let escalated_pr = classify_pr(&workflow, 31, &["implementation", "escalated"]);
+    let escalations = QueueId::new("escalations");
     assert!(planner
-        .matching_queues(&failed)
-        .contains(&harness_workflow::QueueId::new("pr_testing_failed")));
+        .matching_queues(&escalated_issue)
+        .contains(&escalations));
+    assert!(planner
+        .matching_queues(&escalated_pr)
+        .contains(&escalations));
+
+    let human_issue = classify_issue(&workflow, 32, &["code", "needs-human"]);
+    let human_pr = classify_pr(&workflow, 33, &["implementation", "needs-human"]);
+    let needs_human = QueueId::new("needs_human");
+    assert!(planner.matching_queues(&human_issue).contains(&needs_human));
+    assert!(planner.matching_queues(&human_pr).contains(&needs_human));
 }

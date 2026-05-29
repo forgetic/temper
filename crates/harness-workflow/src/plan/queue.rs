@@ -3,20 +3,22 @@
 use crate::classify::ClassifiedArtifact;
 use crate::compile::QueueManifest;
 use crate::ids::{ArtifactKindId, LabelId};
-use crate::validated::ValidatedQueue;
+use crate::validated::{QueueLabelSet, ValidatedQueue};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
 
-/// A queue query: an artifact kind, required labels, and optional activation.
+/// A queue query: artifact kinds, required labels, and optional activation.
 ///
 /// Implemented by both [`ValidatedQueue`] and the compiled [`QueueManifest`] so
 /// the same matcher and activation predicate work from the validated model or a
 /// compiled manifest.
 pub trait QueueQuery {
-    /// Artifact kind the queue selects.
-    fn queue_artifact(&self) -> &ArtifactKindId;
-    /// Labels that must all be present for an artifact to match.
+    /// Artifact kinds the queue selects.
+    fn queue_artifacts(&self) -> &[ArtifactKindId];
+    /// Labels that must all be present for an artifact to match every branch.
     fn queue_labels(&self) -> &[LabelId];
+    /// Alternative AND-label clauses; an empty list means no disjunction.
+    fn queue_any_of(&self) -> &[QueueLabelSet];
     /// Optional depth threshold before the queue should be serviced.
     fn queue_min_depth(&self) -> Option<u32> {
         None
@@ -28,11 +30,14 @@ pub trait QueueQuery {
 }
 
 impl QueueQuery for ValidatedQueue {
-    fn queue_artifact(&self) -> &ArtifactKindId {
-        &self.artifact
+    fn queue_artifacts(&self) -> &[ArtifactKindId] {
+        &self.artifacts
     }
     fn queue_labels(&self) -> &[LabelId] {
         &self.labels
+    }
+    fn queue_any_of(&self) -> &[QueueLabelSet] {
+        &self.any_of
     }
     fn queue_min_depth(&self) -> Option<u32> {
         self.min_depth
@@ -43,11 +48,14 @@ impl QueueQuery for ValidatedQueue {
 }
 
 impl QueueQuery for QueueManifest {
-    fn queue_artifact(&self) -> &ArtifactKindId {
-        &self.artifact
+    fn queue_artifacts(&self) -> &[ArtifactKindId] {
+        &self.artifacts
     }
     fn queue_labels(&self) -> &[LabelId] {
         &self.labels
+    }
+    fn queue_any_of(&self) -> &[QueueLabelSet] {
+        &self.any_of
     }
     fn queue_min_depth(&self) -> Option<u32> {
         self.min_depth
@@ -77,11 +85,12 @@ impl<T: QueueMember + ?Sized> QueueMember for &T {
 
 /// Returns `true` when a classified artifact matches a queue query.
 ///
-/// An artifact matches when its kind equals the queue's artifact kind and every
-/// label the queue requires is present on the artifact. Queue activation policy
-/// is deliberately separate so existing matching semantics stay unchanged.
+/// An artifact matches when its kind is one of the queue's artifact kinds, every
+/// common label is present, and either no `any_of` clauses are declared or at
+/// least one clause's labels are all present. Queue activation policy is
+/// deliberately separate from matching.
 pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) -> bool {
-    if query.queue_artifact() != &artifact.kind {
+    if !query.queue_artifacts().contains(&artifact.kind) {
         return false;
     }
     let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
@@ -89,6 +98,13 @@ pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) ->
         .queue_labels()
         .iter()
         .all(|label| labels.contains(label.as_str()))
+        && (query.queue_any_of().is_empty()
+            || query.queue_any_of().iter().any(|label_set| {
+                label_set
+                    .labels
+                    .iter()
+                    .all(|label| labels.contains(label.as_str()))
+            }))
 }
 
 /// Returns `true` when matched members make a queue eligible for servicing.
