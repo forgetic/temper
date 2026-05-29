@@ -28,6 +28,9 @@ The current implementation supports:
 - `get_pull_request`
 - `get_pull_request_by_number`
 - `update_pull_request`
+- `list_pull_request_comments`
+- `add_pull_request_comment`
+- `merge_pull_request`
 
 `get_user` only resolves the current user because the Forge interface does not yet include user creation or listing.
 
@@ -45,6 +48,9 @@ repositories/
     pull_requests.json
     issues/
       issue-repo-0000000000000001-0000000000000001/
+        comments.json
+    pull_requests/
+      pull-request-repo-0000000000000001-0000000000000001/
         comments.json
   repo-0000000000000002.json
 ```
@@ -72,7 +78,9 @@ Issue comments are stored in `repositories/<repo-id>/issues/<issue-id>/comments.
 
 Repository pull requests are stored in `repositories/<repo-id>/pull_requests.json` as serialized Forge `PullRequest` records. Pull-request numbers are repository-scoped within pull requests, start at `1`, and use the next value above the highest stored pull-request number. Pull-request IDs are deterministic strings of the form `pull-request-<repo-id>-<16-digit-number>`. New pull requests use the current user as `author_id`; labels and assignees are stored as sorted, de-duplicated sets. Source and target branch references are stored from the create input. `head_sha`, `base_sha`, and `merge` start as `None`.
 
-Pull-request timestamps use the same logical clock as repositories and issues. Creating or updating a pull request advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. The filesystem backend does not produce the `merged` state until merge support is implemented.
+Pull-request timestamps use the same logical clock as repositories and issues. Creating or updating a pull request advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. Merging a pull request advances `clock_tick`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits.
+
+Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<pull-request-id>-<16-digit-number>`. Comment numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored pull-request record.
 
 ## Listing and sorting
 
@@ -96,17 +104,19 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 `list_pull_requests` supports `PullRequestQuery` filters for state, conjunctive labels, author ID, and assignee ID. Without a requested sort, pull requests are sorted by number ascending, then pull-request ID. `ItemSort` supports number, creation time, and update time with the requested direction; ties use number ascending, then pull-request ID.
 
-`create_pull_request` and `list_pull_requests` return `ForgeError::NotFound` when the target repository is missing. `get_pull_request` returns `Ok(None)` when the pull request is not found; `get_pull_request_by_number` returns `Ok(None)` when the repository or number is not found. `update_pull_request` returns `ForgeError::NotFound` when the pull request is missing. Pull-request label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations. `UpdatePullRequest` can close and reopen pull requests, but merge remains unsupported and cannot be represented by update.
+`create_pull_request` and `list_pull_requests` return `ForgeError::NotFound` when the target repository is missing. `get_pull_request` returns `Ok(None)` when the pull request is not found; `get_pull_request_by_number` returns `Ok(None)` when the repository or number is not found. `update_pull_request` returns `ForgeError::NotFound` when the pull request is missing. Pull-request label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations. `UpdatePullRequest` can close and reopen pull requests, but cannot represent merges.
+
+`list_pull_request_comments` returns comments sorted by creation time ascending, then comment ID. `list_pull_request_comments` and `add_pull_request_comment` return `ForgeError::NotFound` when the target pull request is missing.
+
+`merge_pull_request` returns `ForgeError::NotFound` when the target pull request is missing. It supports all current `MergeMethod` values, records the current user as `merged_by`, and stores the requested method. It returns `ForgeError::Conflict` when the pull request is closed or already merged. `commit_title` and `commit_body` are accepted but not persisted because `MergeRecord` has no portable fields for them.
 
 ## Unsupported operations
 
-The following Forge areas are not implemented yet:
+The following Forge area is not implemented yet:
 
-- pull-request comments
-- merges
 - CI jobs
 
-Methods in those areas return `ForgeError::InvalidRequest` with a message of the form:
+Methods in that area return `ForgeError::InvalidRequest` with a message of the form:
 
 ```text
 filesystem backend does not support <operation> yet

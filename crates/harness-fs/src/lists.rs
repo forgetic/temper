@@ -1,9 +1,10 @@
-use crate::record_ids::stored_comment_number;
+use crate::record_ids::{stored_issue_comment_number, stored_pull_request_comment_number};
 use chrono::{DateTime, Utc};
 use harness_forge::{
-    Comment, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState, ItemNumber,
-    ItemSortField, Label, PullRequest, PullRequestQuery, PullRequestState, PullRequestUpdateState,
-    Repository, RepositoryId, RepositoryQuery, RepositorySortField, SortDirection, UserId,
+    Comment, CommentId, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState,
+    ItemNumber, ItemSortField, Label, PullRequest, PullRequestId, PullRequestQuery,
+    PullRequestState, PullRequestUpdateState, Repository, RepositoryId, RepositoryQuery,
+    RepositorySortField, SortDirection, UserId,
 };
 use std::cmp::Ordering;
 
@@ -45,17 +46,43 @@ pub(crate) fn next_pull_request_number(
     Ok(ItemNumber::new(next))
 }
 
-pub(crate) fn next_comment_number(issue_id: &IssueId, comments: &[Comment]) -> ForgeResult<u64> {
+pub(crate) fn next_issue_comment_number(
+    issue_id: &IssueId,
+    comments: &[Comment],
+) -> ForgeResult<u64> {
+    next_comment_number("issue", issue_id.as_str(), comments, |comment_id| {
+        stored_issue_comment_number(issue_id, comment_id)
+    })
+}
+
+pub(crate) fn next_pull_request_comment_number(
+    pull_request_id: &PullRequestId,
+    comments: &[Comment],
+) -> ForgeResult<u64> {
+    next_comment_number(
+        "pull request",
+        pull_request_id.as_str(),
+        comments,
+        |comment_id| stored_pull_request_comment_number(pull_request_id, comment_id),
+    )
+}
+
+fn next_comment_number(
+    target_kind: &str,
+    target_id: &str,
+    comments: &[Comment],
+    mut stored_number: impl FnMut(&CommentId) -> ForgeResult<u64>,
+) -> ForgeResult<u64> {
     comments
         .iter()
-        .map(|comment| stored_comment_number(issue_id, &comment.id))
+        .map(|comment| stored_number(&comment.id))
         .try_fold(0, |highest, number| {
             number.map(|number| highest.max(number))
         })?
         .checked_add(1)
         .ok_or_else(|| {
             ForgeError::Backend(format!(
-                "comment id counter overflowed for issue {issue_id}"
+                "comment id counter overflowed for {target_kind} {target_id}"
             ))
         })
 }

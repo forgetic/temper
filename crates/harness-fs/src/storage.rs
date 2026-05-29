@@ -5,8 +5,8 @@ use crate::lists::{
 use crate::metadata::{default_metadata, Metadata};
 use crate::record_ids::is_record_id;
 use crate::validation::{
-    validate_stored_comments, validate_stored_issues, validate_stored_labels,
-    validate_stored_pull_requests,
+    validate_stored_issue_comments, validate_stored_issues, validate_stored_labels,
+    validate_stored_pull_request_comments, validate_stored_pull_requests,
 };
 use crate::FilesystemForge;
 use harness_forge::{
@@ -166,6 +166,31 @@ impl FilesystemForge {
             .map(|issue_dir| issue_dir.join("comments.json"))
     }
 
+    pub(crate) fn pull_request_scope_dir(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+    ) -> Option<PathBuf> {
+        if !is_record_id(pull_request_id.as_str()) {
+            return None;
+        }
+
+        self.repository_scope_dir(repo_id).map(|repository_dir| {
+            repository_dir
+                .join("pull_requests")
+                .join(pull_request_id.as_str())
+        })
+    }
+
+    pub(crate) fn pull_request_comments_file(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+    ) -> Option<PathBuf> {
+        self.pull_request_scope_dir(repo_id, pull_request_id)
+            .map(|pull_request_dir| pull_request_dir.join("comments.json"))
+    }
+
     pub(crate) fn find_repository_by_id(
         &self,
         id: &RepositoryId,
@@ -314,7 +339,7 @@ impl FilesystemForge {
         }
 
         let mut comments: Vec<Comment> = self.read_json(&path)?;
-        validate_stored_comments(issue_id, &comments)?;
+        validate_stored_issue_comments(issue_id, &comments)?;
         sort_comments(&mut comments);
         Ok(comments)
     }
@@ -328,6 +353,41 @@ impl FilesystemForge {
         let Some(path) = self.issue_comments_file(repo_id, issue_id) else {
             return Err(ForgeError::Backend(format!(
                 "invalid issue id {issue_id} for issue comments path"
+            )));
+        };
+
+        self.write_json(&path, &comments)
+    }
+
+    pub(crate) fn read_pull_request_comments_for_existing_pull_request(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+    ) -> ForgeResult<Vec<Comment>> {
+        let Some(path) = self.pull_request_comments_file(repo_id, pull_request_id) else {
+            return Err(ForgeError::Backend(format!(
+                "invalid pull request id {pull_request_id} for pull request comments path"
+            )));
+        };
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut comments: Vec<Comment> = self.read_json(&path)?;
+        validate_stored_pull_request_comments(pull_request_id, &comments)?;
+        sort_comments(&mut comments);
+        Ok(comments)
+    }
+
+    pub(crate) fn write_pull_request_comments(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+        comments: &[Comment],
+    ) -> ForgeResult<()> {
+        let Some(path) = self.pull_request_comments_file(repo_id, pull_request_id) else {
+            return Err(ForgeError::Backend(format!(
+                "invalid pull request id {pull_request_id} for pull request comments path"
             )));
         };
 

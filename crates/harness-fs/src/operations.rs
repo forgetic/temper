@@ -1,13 +1,16 @@
 use crate::errors::unsupported;
 use crate::lists::{
-    apply_assignee_update, apply_label_update, issue_matches_query, next_comment_number,
-    next_issue_number, next_pull_request_number, normalize_string_set, normalize_user_set,
-    pull_request_matches_query, sort_comments, sort_issues, sort_issues_by_number, sort_labels,
-    sort_pull_requests, sort_pull_requests_by_number, sort_repositories, update_issue_state,
-    update_pull_request_state,
+    apply_assignee_update, apply_label_update, issue_matches_query, next_issue_comment_number,
+    next_issue_number, next_pull_request_comment_number, next_pull_request_number,
+    normalize_string_set, normalize_user_set, pull_request_matches_query, sort_comments,
+    sort_issues, sort_issues_by_number, sort_labels, sort_pull_requests,
+    sort_pull_requests_by_number, sort_repositories, update_issue_state, update_pull_request_state,
 };
 use crate::metadata::next_timestamp;
-use crate::record_ids::{comment_id, issue_id, label_id, pull_request_id};
+use crate::record_ids::{
+    issue_comment_id, issue_id, label_id, merge_commit_sha, pull_request_comment_id,
+    pull_request_id,
+};
 use crate::validation::{validate_create_repository, validate_upsert_label};
 use crate::FilesystemForge;
 use async_trait::async_trait;
@@ -235,11 +238,11 @@ impl Forge for FilesystemForge {
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
 
         let mut comments = self.read_issue_comments_for_existing_issue(&repo_id, id)?;
-        let comment_number = next_comment_number(id, &comments)?;
+        let comment_number = next_issue_comment_number(id, &comments)?;
         let mut metadata = self.read_metadata()?;
         let now = next_timestamp(&mut metadata)?;
         let comment = Comment {
-            id: comment_id(id, comment_number),
+            id: issue_comment_id(id, comment_number),
             author_id: metadata.current_user.id.clone(),
             body: input.body,
             created_at: now,
@@ -376,24 +379,88 @@ impl Forge for FilesystemForge {
         Ok(updated)
     }
 
-    async fn list_pull_request_comments(&self, _id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
-        unsupported("list_pull_request_comments")
+    async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
+        let repo_id = self
+            .find_pull_request_repository_by_id(id)?
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+
+        self.read_pull_request_comments_for_existing_pull_request(&repo_id, id)
     }
 
     async fn add_pull_request_comment(
         &self,
-        _id: &PullRequestId,
-        _input: CreateComment,
+        id: &PullRequestId,
+        input: CreateComment,
     ) -> ForgeResult<Comment> {
-        unsupported("add_pull_request_comment")
+        let repo_id = self
+            .find_pull_request_repository_by_id(id)?
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+
+        let mut comments =
+            self.read_pull_request_comments_for_existing_pull_request(&repo_id, id)?;
+        let comment_number = next_pull_request_comment_number(id, &comments)?;
+        let mut metadata = self.read_metadata()?;
+        let now = next_timestamp(&mut metadata)?;
+        let comment = Comment {
+            id: pull_request_comment_id(id, comment_number),
+            author_id: metadata.current_user.id.clone(),
+            body: input.body,
+            created_at: now,
+            updated_at: now,
+        };
+
+        comments.push(comment.clone());
+        sort_comments(&mut comments);
+        self.write_pull_request_comments(&repo_id, id, &comments)?;
+        self.write_metadata(&metadata)?;
+
+        Ok(comment)
     }
 
     async fn merge_pull_request(
         &self,
-        _id: &PullRequestId,
-        _input: MergePullRequest,
+        id: &PullRequestId,
+        input: MergePullRequest,
     ) -> ForgeResult<MergeRecord> {
-        unsupported("merge_pull_request")
+        let repo_id = self
+            .find_pull_request_repository_by_id(id)?
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+
+        let mut pull_requests = self.read_pull_requests_for_existing_repository(&repo_id)?;
+        let pull_request = pull_requests
+            .iter_mut()
+            .find(|pull_request| &pull_request.id == id)
+            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+
+        match pull_request.state {
+            PullRequestState::Open => {}
+            PullRequestState::Closed => {
+                return Err(ForgeError::Conflict(format!("pull request {id} is closed")));
+            }
+            PullRequestState::Merged => {
+                return Err(ForgeError::Conflict(format!("pull request {id} is merged")));
+            }
+        }
+
+        let mut metadata = self.read_metadata()?;
+        let now = next_timestamp(&mut metadata)?;
+        let merge = MergeRecord {
+            method: input.method,
+            commit_sha: merge_commit_sha(metadata.clock_tick),
+            merged_by: metadata.current_user.id.clone(),
+            merged_at: now,
+        };
+
+        pull_request.state = PullRequestState::Merged;
+        pull_request.merge = Some(merge.clone());
+        pull_request.updated_at = now;
+        pull_request.closed_at = Some(now);
+
+        sort_pull_requests_by_number(&mut pull_requests);
+        self.write_pull_requests(&repo_id, &pull_requests)?;
+        self.write_metadata(&metadata)?;
+
+        Ok(merge)
     }
 
     async fn list_ci_jobs(

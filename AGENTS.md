@@ -15,10 +15,10 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 
 - `harness-forge` defines the backend-agnostic Forge domain model and async interface.
 - `harness-core` is reserved for workflow and orchestration logic to be defined later.
-- `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, and pull requests; remaining Forge operations intentionally return portable unsupported-operation errors.
+- `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, and pull-request merges; remaining Forge operations intentionally return portable unsupported-operation errors.
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
-- The next likely work is extending the filesystem backend with pull-request comments or merge support, refining the interface only as backend constraints appear.
+- The next likely work is extending the filesystem backend with CI job support, refining the interface only as backend constraints appear.
 
 ## Ground rules
 

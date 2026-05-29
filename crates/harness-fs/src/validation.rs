@@ -1,7 +1,10 @@
-use crate::record_ids::{comment_id, issue_id, pull_request_id, stored_comment_number};
+use crate::record_ids::{
+    issue_comment_id, issue_id, pull_request_comment_id, pull_request_id,
+    stored_issue_comment_number, stored_pull_request_comment_number,
+};
 use harness_forge::{
-    Comment, CreateRepository, ForgeError, ForgeResult, Issue, IssueId, Label, PullRequest,
-    RepositoryId, UpsertLabel,
+    Comment, CommentId, CreateRepository, ForgeError, ForgeResult, Issue, IssueId, Label,
+    PullRequest, PullRequestId, PullRequestState, RepositoryId, UpsertLabel,
 };
 
 pub(crate) fn validate_create_repository(input: &CreateRepository) -> ForgeResult<()> {
@@ -151,28 +154,79 @@ pub(crate) fn validate_stored_pull_requests(
                 pull_request.number
             )));
         }
+
+        match (pull_request.state, &pull_request.merge) {
+            (PullRequestState::Merged, Some(merge)) if merge.commit_sha.trim().is_empty() => {
+                return Err(ForgeError::Backend(format!(
+                    "merged pull request {} in repository {repo_id} has empty merge commit SHA",
+                    pull_request.id
+                )));
+            }
+            (PullRequestState::Merged, None) => {
+                return Err(ForgeError::Backend(format!(
+                    "merged pull request {} in repository {repo_id} has no merge record",
+                    pull_request.id
+                )));
+            }
+            (PullRequestState::Open | PullRequestState::Closed, Some(_)) => {
+                return Err(ForgeError::Backend(format!(
+                    "unmerged pull request {} in repository {repo_id} has a merge record",
+                    pull_request.id
+                )));
+            }
+            _ => {}
+        }
     }
 
     Ok(())
 }
 
-pub(crate) fn validate_stored_comments(
+pub(crate) fn validate_stored_issue_comments(
     issue_id: &IssueId,
     comments: &[Comment],
 ) -> ForgeResult<()> {
+    validate_stored_comments(
+        "issue",
+        issue_id.as_str(),
+        comments,
+        |comment| stored_issue_comment_number(issue_id, &comment.id),
+        |number| issue_comment_id(issue_id, number),
+    )
+}
+
+pub(crate) fn validate_stored_pull_request_comments(
+    pull_request_id: &PullRequestId,
+    comments: &[Comment],
+) -> ForgeResult<()> {
+    validate_stored_comments(
+        "pull request",
+        pull_request_id.as_str(),
+        comments,
+        |comment| stored_pull_request_comment_number(pull_request_id, &comment.id),
+        |number| pull_request_comment_id(pull_request_id, number),
+    )
+}
+
+fn validate_stored_comments(
+    target_kind: &str,
+    target_id: &str,
+    comments: &[Comment],
+    mut stored_number: impl FnMut(&Comment) -> ForgeResult<u64>,
+    mut expected_id: impl FnMut(u64) -> CommentId,
+) -> ForgeResult<()> {
     for (index, comment) in comments.iter().enumerate() {
-        let comment_number = stored_comment_number(issue_id, &comment.id)?;
+        let comment_number = stored_number(comment)?;
         if comment_number == 0 {
             return Err(ForgeError::Backend(format!(
-                "comment {} on issue {issue_id} has number 0",
+                "comment {} on {target_kind} {target_id} has number 0",
                 comment.id
             )));
         }
 
-        let expected_id = comment_id(issue_id, comment_number);
-        if comment.id.as_str() != expected_id.as_str() {
+        let expected_comment_id = expected_id(comment_number);
+        if comment.id.as_str() != expected_comment_id.as_str() {
             return Err(ForgeError::Backend(format!(
-                "comment {} on issue {issue_id} should have deterministic id {expected_id}",
+                "comment {} on {target_kind} {target_id} should have deterministic id {expected_comment_id}",
                 comment.id
             )));
         }
@@ -182,7 +236,7 @@ pub(crate) fn validate_stored_comments(
             .any(|previous| previous.id == comment.id)
         {
             return Err(ForgeError::Backend(format!(
-                "filesystem storage contains duplicate comment id {} on issue {issue_id}",
+                "filesystem storage contains duplicate comment id {} on {target_kind} {target_id}",
                 comment.id
             )));
         }

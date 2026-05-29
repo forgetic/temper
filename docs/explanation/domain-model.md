@@ -67,4 +67,4 @@ A CI job represents a provider-reported check for a commit. Jobs are linked to a
 
 The filesystem backend is the reference backend for development and tests. It lets agents iterate quickly without network access, provider credentials, or rate limits. It should behave like a small deterministic Forge, not like an exact clone of any one provider.
 
-Its local store uses versioned JSON records and a logical clock so repository, issue, pull-request, and comment IDs, timestamps, and list ordering are reproducible in tests.
+Its local store uses versioned JSON records and a logical clock so repository, issue, pull-request, comment, and merge metadata, timestamps, and list ordering are reproducible in tests.

@@ -1,13 +1,11 @@
 mod support;
 
 use harness_forge::{
-    CiJobId, CiJobQuery, Forge, ForgeError, ItemNumber, ItemSort, ItemSortField, MergeMethod,
-    MergePullRequest, PullRequest, PullRequestId, PullRequestQuery, PullRequestState,
-    PullRequestUpdateState, RepositoryId, SortDirection, UpdatePullRequest, UserId,
+    CiJobId, CiJobQuery, Forge, ForgeError, ItemNumber, ItemSort, ItemSortField, PullRequest,
+    PullRequestId, PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId,
+    SortDirection, UpdatePullRequest, UserId,
 };
-use support::{
-    block_on, branch, comment, pull_request, pull_request_with, repository, user_ids, TestRoot,
-};
+use support::{block_on, branch, pull_request, pull_request_with, repository, user_ids, TestRoot};
 
 fn pull_request_titles(pull_requests: &[PullRequest]) -> Vec<String> {
     pull_requests
@@ -501,56 +499,10 @@ fn pull_request_close_and_reopen_updates_closed_at_deterministically() {
 }
 
 #[test]
-fn pull_request_comments_merges_and_ci_jobs_remain_unsupported() {
+fn ci_jobs_remain_unsupported() {
     let root = TestRoot::new("pull-requests");
     let forge = root.forge();
     let repository = block_on(forge.create_repository(repository("alice", "project"))).unwrap();
-    let pull_request = block_on(forge.create_pull_request(
-        &repository.id,
-        pull_request(&repository.id, "Unsupported operations"),
-    ))
-    .unwrap();
-
-    let list_comments_error =
-        block_on(forge.list_pull_request_comments(&pull_request.id)).unwrap_err();
-    assert!(matches!(
-        list_comments_error,
-        ForgeError::InvalidRequest(message)
-            if message == "filesystem backend does not support list_pull_request_comments yet"
-    ));
-
-    let add_comment_error =
-        block_on(forge.add_pull_request_comment(&pull_request.id, comment("Still unsupported")))
-            .unwrap_err();
-    assert!(matches!(
-        add_comment_error,
-        ForgeError::InvalidRequest(message)
-            if message == "filesystem backend does not support add_pull_request_comment yet"
-    ));
-
-    let merge_error = block_on(forge.merge_pull_request(
-        &pull_request.id,
-        MergePullRequest {
-            method: MergeMethod::Squash,
-            commit_title: None,
-            commit_body: None,
-        },
-    ))
-    .unwrap_err();
-    assert!(matches!(
-        merge_error,
-        ForgeError::InvalidRequest(message)
-            if message == "filesystem backend does not support merge_pull_request yet"
-    ));
-
-    assert_eq!(
-        block_on(forge.get_pull_request(&pull_request.id))
-            .unwrap()
-            .unwrap()
-            .state,
-        PullRequestState::Open
-    );
-
     let list_ci_error =
         block_on(forge.list_ci_jobs(&repository.id, CiJobQuery::default())).unwrap_err();
     assert!(matches!(
