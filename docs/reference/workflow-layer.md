@@ -117,7 +117,7 @@ Phases 13–14 added queue primitive extensions:
 - `plan::queue_active(queue, members, now)` is pure and activates a non-empty queue when it has no policy, reaches `min_depth`, or its oldest timestamped member reaches `max_age`.
 - The executor, leases, journal, and reconciler are unchanged.
 
-Not yet implemented: lease effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically (including the `Unblock` action), and durable journal/lease storage backends.
+Reconciler actions are now applied automatically through `recover::Applier` (including the mechanical `Unblock`); see "Applying reconciler actions". Not yet implemented: lease effects inside `Executor::execute`, expressing lease effects in transition specs, projecting `Escalate`/`Diagnose` into labels or comments, and durable journal/lease storage backends.
 
 Phase 8 added robustness and crash-injection tests (no new runtime types):
 
@@ -274,11 +274,23 @@ Expired leases are handled by recovery policy. Common actions are requeue, exten
 
 ## Reconciliation
 
-The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; applying the decision is left to the executor and lease manager. `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, a `DependencyStatus`, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order. `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`; the caller still supplies the `DependencyStatus` (the same runtime/adapter signal as CI).
+The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; `recover::Applier` then applies the decision through the executor, lease manager, and journal (see "Applying reconciler actions"). `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, a `DependencyStatus`, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order. `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`; the caller still supplies the `DependencyStatus` (the same runtime/adapter signal as CI).
 
 Findings (`ReconcileFinding`) cover: `ExpiredLease`, `ImpossibleState` (an exclusive dimension with several active states), `ClassificationDrift` (other classification failures), `PartialTransition` (a journaled command whose label effects are not all realized), `StaleCommand` (an incomplete command whose effects already landed or whose target is gone), and `DependenciesResolved` (a blocked artifact whose `dependency` relations have all landed, so its dependency-gated unblock transition can be applied). Each finding gets exactly one `RecoveryAction`: `RequeueLease`, `Escalate`, `Repair { effects }`, `MarkReconciled`, `Unblock { effects }`, or `Diagnose`. The scan order is stable: per snapshot, its expired lease then either its classification problems (when it fails to classify) or its mechanical dependency unblocks (when it classifies cleanly), in snapshot order, then incomplete journal commands in journal order. `scan`/`reconcile` take a `DependencyStatus` so the runtime supplies which prerequisites have landed.
 
 `RecoveryPolicy` is the hook layer: one defaulted method per finding class, so a workflow overrides only what it needs. `DefaultRecoveryPolicy` requeues expired leases, escalates impossible states and drift, repairs partial transitions with their pending effects, marks stale commands reconciled, and mechanically unblocks dependency-gated work (`on_resolved_dependencies` → `Unblock`) once its prerequisites land. Still planned for the reconciler: duplicated correlation keys, missing required relations, merged PRs whose linked code issue stays open, and validation-failure labels on merged PRs.
+
+### Applying reconciler actions
+
+`recover::Applier` turns the decided actions into mutations, routing each through the component that already owns the matching path rather than re-implementing one. `Applier::apply_report` walks the report's parallel findings and actions and:
+
+- `RequeueLease` → `LeaseManager::clear`, the reconciler's authority path that force-clears a presumed-gone holder's lease (unlike `release`, it does not check the holder) conditionally on the load-time version.
+- `Repair` → `Executor::apply_label_effects`, the executor's idempotent label-apply path (load fresh, apply only the not-yet-realized labels in one update, verify), then marks the originating journal command `Reconciled`.
+- `Unblock` → the same idempotent label apply, journaling a fresh `Planned`→`Applying`→`Completed` command (id derived from target and transition) so a crash mid-apply is recoverable; a terminal command is skipped on a later pass.
+- `MarkReconciled` → `CommandJournal::transition_state` to `Reconciled`.
+- `Escalate`/`Diagnose` → recorded in `ApplyOutcome::advisory`; the applier performs no Forge mutation, so an escalation is never silently turned into a label or comment change.
+
+Every mutating action loads fresh state and applies at most once, so re-running the same report is a no-op rather than a double-apply, and running scan→apply to a fixpoint converges. `ApplyOutcome` partitions what was `applied` versus left `advisory`; `ApplyError` separates executor, lease, and journal failures.
 
 ## Compilation outputs
 

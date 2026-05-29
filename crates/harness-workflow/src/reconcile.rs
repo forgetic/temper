@@ -18,10 +18,12 @@
 //!   journal entries from a [`Forge`] and a [`CommandJournal`], then calls
 //!   `scan`.
 //!
-//! Applying the chosen actions is left to the existing
-//! [`Executor`](crate::execute::Executor) and [`LeaseManager`](crate::lease)
-//! runtime layers; the reconciler only decides, so a caller can review or filter
-//! actions before any mutation.
+//! Applying the chosen actions is the job of
+//! [`recover::Applier`](crate::recover::Applier), which routes each action
+//! through the existing [`Executor`](crate::execute::Executor),
+//! [`LeaseManager`](crate::lease), and [`CommandJournal`](crate::journal)
+//! runtime layers. The reconciler itself only decides, so a caller can still
+//! review or filter actions before handing the report to the applier.
 //!
 //! # Recovery policy hooks
 //!

@@ -465,6 +465,30 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         self.write_lease(&loaded, lease, target).await
     }
 
+    /// Forcibly clears any lease on `target`, regardless of which worker holds
+    /// it.
+    ///
+    /// This is the reconciler's authority path for an expired lease: unlike
+    /// [`release`](LeaseManager::release) — which refuses a peer's lease so a
+    /// live worker cannot be evicted by another — `clear` drops whatever lease
+    /// is present, because the recovery layer has already judged the holder
+    /// gone. It loads fresh state and writes conditionally on the captured
+    /// version (compare-and-swap), so a racing mutation surfaces as
+    /// [`LeaseError::Contended`] rather than clobbering. Clearing an artifact
+    /// that already has no lease is a no-op, so re-running a recovery report
+    /// never thrashes the metadata or fails on an already-requeued artifact.
+    pub async fn clear(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+    ) -> Result<(), LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        if loaded.metadata().lease.is_none() {
+            return Ok(());
+        }
+        self.write_lease(&loaded, None, target).await
+    }
+
     /// Loads the artifact, its body, and parsed metadata from fresh state.
     async fn load(
         &self,

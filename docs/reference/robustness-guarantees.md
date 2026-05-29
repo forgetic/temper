@@ -19,7 +19,11 @@ is supplied explicitly, so the suite is reproducible.
     mutation lands but the caller observes failure (a crash right after the side
     effect — the case retries must tolerate).
 - `tests/crash_injection.rs` — crash-before/after, a fault matrix, journaled
-  restart recovery, duplicated tool calls, and interleaved workers.
+  restart recovery, duplicated tool calls, interleaved workers, and retry-safe
+  application of reconciler repair/unblock actions.
+- `tests/recovery.rs` — applying reconciler actions through the runtime: lease
+  clear, label repair/unblock, journal-state transitions, advisory escalation,
+  no-op re-apply, and scan→apply convergence.
 - `tests/safety_properties.rs` — the safety assertions below.
 
 ## Proven safety properties
@@ -35,6 +39,9 @@ is supplied explicitly, so the suite is reproducible.
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
+| Reconciler actions are applied through the runtime and re-applying a report is a no-op | `recovery.rs` (`requeue_lease_clears_the_lease_through_the_manager`, `repair_realizes_pending_labels_and_reconciles_the_command`, `unblock_realizes_labels_and_journals_a_completed_command`, `re_applying_a_report_is_a_no_op`) |
+| Applying a repair/unblock is retry-safe across a crash before or after the write | `crash_injection.rs` (`applying_a_repair_is_retry_safe_under_a_crash`, `applying_an_unblock_is_retry_safe_under_a_crash`) |
+| The scan→apply loop converges to a clean state | `recovery.rs` (`the_scan_apply_loop_converges_to_a_clean_state`) |
 
 ## Lease acquisition is compare-and-swap
 
@@ -87,6 +94,15 @@ window, but a wider window can no longer produce a lost-update lease race.
   unapplied; the retry observes the merged state, skips the merge, and finishes
   the `landed`/`owner-pending` projection, so the merge happens exactly once and
   the post-merge labels survive on the closed pull request.
+- **Applied reconciler actions.** `recover::Applier` applies a `ReconcileReport`
+  through the existing components (the executor's idempotent label-apply path,
+  `LeaseManager::clear`, and the command journal). Each mutating action loads
+  fresh state and applies at most once, so re-running the same report is a
+  no-op, not a double-apply. Repairs and unblocks are journaled, so a crash
+  between the mutation and the terminal journal update leaves the command
+  incomplete for the next scan to re-derive. `Escalate`/`Diagnose` are recorded
+  as advisory and never silently mutate workflow state. Running scan→apply to a
+  fixpoint therefore converges.
 
 ## Limitations discovered by the tests
 
@@ -103,9 +119,11 @@ rather than hidden:
   `testing-failed`, but no transition clears it back to `needs-testing`. The
   review path (`request_changes` → `address_review_changes`) is the modeled
   failed-gate return path; the testing path would need an equivalent transition.
-- **Reconciler actions are decided, not applied.** `Reconciler::scan` and
-  `reconcile` choose `RecoveryAction`s; applying them through the executor and
-  lease manager is left to the caller and is not yet automated.
+- **Escalation/diagnosis is record-only.** `recover::Applier` applies the
+  mutating recovery actions, but `Escalate` and `Diagnose` are advisory: the
+  applier records them in `ApplyOutcome::advisory` and performs no Forge
+  mutation. Projecting an escalation into a label or comment is left to a
+  workflow-specific adapter on top of the advisory list, not decided here.
 
 ## Out of scope
 

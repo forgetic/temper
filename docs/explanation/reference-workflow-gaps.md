@@ -30,6 +30,12 @@ relations — **validates, compiles, and plans today**.
   reconciler `DependenciesResolved` finding / `Unblock` action clear
   `blocked-on-dependency` mechanically once every prerequisite has landed. The
   runtime supplies landed status via `DependencyStatus`, like the CI signal.
+- **Applying reconciler actions.** `recover::Applier` applies a
+  `ReconcileReport` through the existing runtime components: lease clears go
+  through `LeaseManager::clear`, label repairs and the mechanical unblock reuse
+  the executor's idempotent label-apply path, and journal transitions go through
+  the command journal. Applying is idempotent and crash-safe, and the scan→apply
+  loop converges.
 - **Queue activation policy.** `RawQueue`/`ValidatedQueue` carry optional
   `min_depth`/`max_age`; `owner_alignment` uses the planner's pure activation
   predicate for cohorts.
@@ -48,6 +54,7 @@ activation policy plus Phase 14's multi-kind and disjunctive matching.
 - **Claim-time lease effects.** Claims can be represented with
   `metadata::Lease` and managed through `LeaseManager`, but transition specs do
   not yet emit lease effects inside `Executor::execute`.
-- **Applying the mechanical unblock.** The reconciler now *produces* the
-  dependency `Unblock` action, but applying reconciler actions automatically is
-  still future work (tracked in `robustness-guarantees.md`).
+- **Escalation/diagnosis projection.** `recover::Applier` applies the mutating
+  recovery actions (including the mechanical `Unblock`), but `Escalate` and
+  `Diagnose` stay advisory: projecting them into a label or comment is left to a
+  workflow-specific adapter rather than being decided in the runtime layer.

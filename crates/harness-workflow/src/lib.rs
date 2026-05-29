@@ -52,7 +52,10 @@
 //! backend-applying manager, command journaling ([`journal`]) behind a trait
 //! with an in-memory implementation, and a reconciler ([`reconcile`]) that scans
 //! Forge artifacts and journal entries and decides repair or escalation actions
-//! through a [`RecoveryPolicy`].
+//! through a [`RecoveryPolicy`]. [`recover::Applier`] then applies a decided
+//! report through the executor, lease manager, and journal — idempotently and
+//! crash-safely — so the scan→apply loop converges; `Escalate`/`Diagnose` stay
+//! advisory.
 //!
 //! Phase 9 added non-label effects: the spec, planner, and [`Effect`] express
 //! assignee, comment, pull-request create, and merge effects (9a); the
@@ -86,6 +89,7 @@ pub mod lease;
 pub mod metadata;
 pub mod plan;
 pub mod reconcile;
+pub mod recover;
 pub mod relation;
 pub mod spec;
 pub mod validate;
@@ -124,6 +128,7 @@ pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
     Reconciler, RecoveryAction, RecoveryPolicy,
 };
+pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
     RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawQueueLabelSet,

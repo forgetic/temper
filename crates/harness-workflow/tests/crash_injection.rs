@@ -17,10 +17,13 @@
 
 mod support;
 
+use chrono::Duration;
+use harness_forge::ItemNumber;
 use harness_workflow::{
-    ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
-    DependencyStatus, ExecutionError, Executor, InMemoryJournal, Postcondition, ReconcileFinding,
-    RecoveryAction, RoleId, TransitionId, WorkflowEffect,
+    render_metadata_block, Applier, ApplyError, ArtifactKindId, ArtifactSource, CommandId,
+    CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus,
+    ExecutionError, Executor, InMemoryJournal, LeaseManager, LeasePolicy, Postcondition,
+    ReconcileFinding, RecoveryAction, RoleId, TransitionId, WorkflowEffect, WorkflowMetadata,
 };
 use support::crash::{CrashForge, Fault, FaultPoint, ForgeOp};
 use support::{block_on, create_issue, issue_labels, new_repo, ts, workflow, TestRoot};
@@ -370,4 +373,160 @@ fn duplicated_tool_calls_and_interleaved_workers_claim_an_item_at_most_once() {
     assert!(matches!(second, ExecutionError::Precondition { .. }));
 
     assert_eq!(issue_labels(&forge, &repo, number), claimed());
+}
+
+/// Body for a `code` issue depending on the given prerequisite item numbers.
+fn dependent_body(dependencies: &[u64]) -> String {
+    render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
+        ..WorkflowMetadata::default()
+    })
+}
+
+fn command_state(journal: &InMemoryJournal, id: &str) -> CommandState {
+    block_on(journal.get(&CommandId::new(id)))
+        .expect("journal get")
+        .expect("command exists")
+        .state
+}
+
+// Applying a `Repair` is retry-safe across a crash before or after the write:
+// before, the labels are untouched and a retry repairs them; after, the labels
+// already landed and a retry neither double-applies nor errors, then resolves
+// the command. The reconciler reuses the executor's idempotent label-apply path.
+#[test]
+fn applying_a_repair_is_retry_safe_under_a_crash() {
+    for point in [FaultPoint::Before, FaultPoint::After] {
+        let root = TestRoot::new();
+        let forge = root.forge();
+        let repo = new_repo(&forge);
+        let number = create_issue(&forge, &repo, &["code", "ready"], "");
+        let target = ArtifactSource::Issue { number };
+        let crash = CrashForge::new(
+            forge,
+            vec![Fault {
+                op: ForgeOp::UpdateIssue,
+                occurrence: 1,
+                point,
+            }],
+        );
+        let workflow = workflow();
+        let executor = Executor::new(&workflow, &crash);
+        let manager = LeaseManager::new(&crash, LeasePolicy::new(Duration::minutes(30)));
+        let journal = InMemoryJournal::new();
+
+        // A claim was journaled and marked applying; its labels may or may not
+        // have landed before the crash.
+        block_on(journal.append(CommandRecord::planned(
+            CommandId::new("claim-1"),
+            target,
+            TransitionId::new(CLAIM),
+            RoleId::new(ENGINEER),
+            vec![
+                WorkflowEffect::RemoveLabel("ready".into()),
+                WorkflowEffect::AddLabel("in-progress".into()),
+            ],
+            ts("2026-05-29T00:00:00Z"),
+        )))
+        .expect("append");
+        block_on(journal.transition_state(
+            &CommandId::new("claim-1"),
+            CommandState::Applying,
+            None,
+            ts("2026-05-29T00:00:30Z"),
+        ))
+        .expect("applying");
+
+        let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
+            &crash,
+            &repo,
+            &journal,
+            &DependencyStatus::default(),
+            ts("2026-05-29T00:05:00Z"),
+        ))
+        .expect("reconcile");
+
+        let applier = Applier::new(&executor, &manager, &journal);
+        // The first apply crashes on the repair write.
+        let crashed = block_on(applier.apply_report(&repo, &report, ts("2026-05-29T00:05:00Z")))
+            .expect_err("the injected fault crashes the apply");
+        assert!(matches!(
+            crashed,
+            ApplyError::Execution(ExecutionError::Backend { .. })
+        ));
+        // The command is not resolved while the repair is incomplete.
+        assert_eq!(command_state(&journal, "claim-1"), CommandState::Applying);
+
+        // A retry re-applies the same report. Occurrence #1 was the faulted
+        // write; the retry either writes (after a before-crash) or no-ops (after
+        // an after-crash), and never double-applies.
+        block_on(applier.apply_report(&repo, &report, ts("2026-05-29T00:06:00Z")))
+            .expect("the retry repairs cleanly");
+        assert_eq!(
+            issue_labels(crash.inner(), &repo, number),
+            claimed(),
+            "labels are coherent after a {point:?} crash"
+        );
+        assert_eq!(command_state(&journal, "claim-1"), CommandState::Reconciled);
+    }
+}
+
+// Applying an `Unblock` is retry-safe across a crash before or after the write.
+// The applier journals its own command, so a crash mid-apply leaves it
+// incomplete and a retry finishes it without re-running a completed unblock.
+#[test]
+fn applying_an_unblock_is_retry_safe_under_a_crash() {
+    for point in [FaultPoint::Before, FaultPoint::After] {
+        let root = TestRoot::new();
+        let forge = root.forge();
+        let repo = new_repo(&forge);
+        let number = create_issue(&forge, &repo, &["code", "blocked"], &dependent_body(&[9]));
+        let crash = CrashForge::new(
+            forge,
+            vec![Fault {
+                op: ForgeOp::UpdateIssue,
+                occurrence: 1,
+                point,
+            }],
+        );
+        let workflow = workflow();
+        let executor = Executor::new(&workflow, &crash);
+        let manager = LeaseManager::new(&crash, LeasePolicy::new(Duration::minutes(30)));
+        let journal = InMemoryJournal::new();
+        let landed = DependencyStatus::landed([ItemNumber::new(9)]);
+
+        let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
+            &crash,
+            &repo,
+            &journal,
+            &landed,
+            ts("2026-05-29T00:00:00Z"),
+        ))
+        .expect("reconcile");
+
+        let applier = Applier::new(&executor, &manager, &journal);
+        let unblock_id = format!("reconcile-unblock:issue-{number}:mark_code_ready");
+
+        let crashed = block_on(applier.apply_report(&repo, &report, ts("2026-05-29T00:00:00Z")))
+            .expect_err("the injected fault crashes the unblock apply");
+        assert!(matches!(
+            crashed,
+            ApplyError::Execution(ExecutionError::Backend { .. })
+        ));
+        // The applier journaled the unblock before mutating, so it is recoverable.
+        assert_eq!(command_state(&journal, &unblock_id), CommandState::Applying);
+
+        block_on(applier.apply_report(&repo, &report, ts("2026-05-29T00:01:00Z")))
+            .expect("the retry unblocks cleanly");
+        assert_eq!(
+            issue_labels(crash.inner(), &repo, number),
+            ready(),
+            "the block is cleared exactly once after a {point:?} crash"
+        );
+        assert_eq!(
+            command_state(&journal, &unblock_id),
+            CommandState::Completed
+        );
+    }
 }

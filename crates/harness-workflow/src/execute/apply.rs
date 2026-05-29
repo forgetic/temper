@@ -13,12 +13,14 @@
 //! parent module docs for why pre-commit effects are ordered this way.
 
 use super::{ExecutionError, Executor, Loaded};
+use crate::classify::ArtifactSource;
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
 use harness_forge::{
     CreateComment, CreatePullRequest, Forge, MergeMethod, MergePullRequest, RepositoryId,
     UpdateIssue, UpdatePullRequest, UserId,
 };
+use std::collections::HashSet;
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Applies a plan's effects, refusing partial application of the state flip.
@@ -47,7 +49,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     pub(super) async fn verify(
         &self,
         repo_id: &harness_forge::RepositoryId,
-        target: crate::classify::ArtifactSource,
+        target: ArtifactSource,
         postconditions: &[Postcondition],
     ) -> Result<(), ExecutionError> {
         if postconditions.is_empty() {
@@ -74,6 +76,62 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
         }
         Ok(())
+    }
+
+    /// Re-applies label effects against fresh state, idempotently.
+    ///
+    /// This is the reconciler applier's reuse of the executor's label-apply
+    /// path: it realizes a partial transition's still-pending labels or a
+    /// mechanical unblock's labels without re-running a full transition plan,
+    /// rather than hand-rolling a second mutation path. It loads fresh state,
+    /// keeps only the not-yet-realized label effects, folds them into the same
+    /// single [`apply_update`](Self::apply_update) call the executor uses, then
+    /// verifies the resulting labels. Non-label effects are rejected, mirroring
+    /// [`prepare_effects`](Self::prepare_effects)'s discipline. Returns the
+    /// effects it actually applied; an empty result means every label already
+    /// held, so a re-run is a clean no-op (it issues no backend update).
+    pub(crate) async fn apply_label_effects(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        effects: &[WorkflowEffect],
+    ) -> Result<Vec<WorkflowEffect>, ExecutionError> {
+        let loaded = self.load(repo_id, target).await?;
+        let labels: HashSet<&str> = loaded
+            .classified()
+            .labels
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let mut prepared = PreparedEffects::default();
+        let mut postconditions = Vec::new();
+        let mut applied = Vec::new();
+        for effect in effects {
+            match effect {
+                WorkflowEffect::AddLabel(label) => {
+                    postconditions.push(Postcondition::LabelPresent(label.clone()));
+                    if !labels.contains(label.as_str()) {
+                        prepared.add_labels.push(label.as_str().to_string());
+                        applied.push(effect.clone());
+                    }
+                }
+                WorkflowEffect::RemoveLabel(label) => {
+                    postconditions.push(Postcondition::LabelAbsent(label.clone()));
+                    if labels.contains(label.as_str()) {
+                        prepared.remove_labels.push(label.as_str().to_string());
+                        applied.push(effect.clone());
+                    }
+                }
+                other => {
+                    return Err(ExecutionError::UnsupportedEffect {
+                        effect: other.clone(),
+                    })
+                }
+            }
+        }
+        self.apply_update(&loaded, prepared).await?;
+        self.verify(repo_id, target, &postconditions).await?;
+        Ok(applied)
     }
 
     /// Partitions plan effects into concrete backend operations.
@@ -276,9 +334,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     async fn current_state(
         &self,
         repo_id: &harness_forge::RepositoryId,
-        target: crate::classify::ArtifactSource,
+        target: ArtifactSource,
     ) -> Result<(Vec<String>, Vec<UserId>), ExecutionError> {
-        use crate::classify::ArtifactSource;
         match target {
             ArtifactSource::Issue { number } => {
                 let issue = self
