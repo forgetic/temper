@@ -35,6 +35,7 @@
       "concurrency": 1,
       "queues": [
         "needs_owner",
+        "merge_ready",
         "owner_alignment"
       ]
     },
@@ -99,6 +100,10 @@
     {
       "id": "needs-human",
       "description": "human-input flag routed to the human"
+    },
+    {
+      "id": "needs-merge",
+      "description": "implementation PR awaits owner merge approval once gates pass"
     },
     {
       "id": "landed",
@@ -231,6 +236,13 @@
           "artifacts": [
             "design"
           ]
+        },
+        {
+          "id": "needs_merge",
+          "label": "needs-merge",
+          "artifacts": [
+            "implementation_pr"
+          ]
         }
       ]
     },
@@ -318,6 +330,16 @@
       "labels": [
         "landed"
       ]
+    },
+    {
+      "id": "merge_ready",
+      "artifact": "implementation_pr",
+      "labels": [
+        "needs-merge"
+      ],
+      "condition": {
+        "kind": "ci_passed"
+      }
     },
     {
       "id": "owner_alignment",
@@ -493,6 +515,10 @@
           "label": "needs-reviewer"
         },
         {
+          "kind": "add_label",
+          "label": "needs-merge"
+        },
+        {
           "kind": "request_reviewers",
           "roles": [
             "reviewer"
@@ -655,6 +681,10 @@
       "effects": [
         {
           "kind": "merge_pull_request"
+        },
+        {
+          "kind": "remove_label",
+          "label": "needs-merge"
         },
         {
           "kind": "add_label",

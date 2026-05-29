@@ -98,9 +98,12 @@ classify → plan → execute → reconcile → apply, with leases, journaling, 
 proven safety properties), runnable against the reference backends, plus the
 initial `harness-runner` worker-plane primitives: read-only scans that turn fresh
 Forge state into active-queue work items, `Agent`/`RoleTools`, tickable
-`Worker`/`RoleWorker` units for judgment work, and `MechanicalWorker` for the
-controller-plane reconcile → apply loop. The remaining path to a live
-deployment, in dependency order:
+`Worker`/`RoleWorker` units for judgment work, `MechanicalWorker` for the
+controller-plane reconcile → apply loop, and `InProcessStage<MemoryForge>` for
+memory-backed scenario runs. The reference-delivery happy path now runs to a
+merged, reconciled PR with fake agents and fake CI; see
+[Run the reference delivery end-to-end scenario](../how-to/run-reference-delivery-end-to-end.md).
+The remaining path to a live deployment, in dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
    API, including the `Version`/`expected_version` CAS primitive
@@ -108,9 +111,11 @@ deployment, in dependency order:
    `list_ci_jobs` over Forgejo Actions, keeping observable-contract parity with
    the reference backends ([ADR 0008](../adr/0008-in-memory-backend-and-backend-naming.md)).
 2. **The runner/controller** — partially started in `harness-runner`: `scan`
-   reconstructs active judgment work, `RoleWorker` can tick one role, and
-   `MechanicalWorker` can tick the controller's reconcile → apply loop. The
-   trigger loop and composition across all workers still need to be built.
+   reconstructs active judgment work, `RoleWorker` can tick one role,
+   `MechanicalWorker` can tick the controller's reconcile → apply loop, and the
+   in-process `FixpointDriver`/`Stage` composition runs memory scenarios. The
+   production poll/webhook loop and wider filesystem/process topologies still
+   need to be built.
 3. **Agent-provider adapter** — wire a compiled `PromptManifest` to a model and
    map model tool calls onto the production `RoleTools` facade.
 4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific

@@ -59,7 +59,7 @@ These were decided during design and are not open:
 | `architect` | Turn requests into epics/design/ready code issues; resolve `needs-architect`; reconcile landed PRs. | `design_triage`, `needs_architect`, `landed_inbox` |
 | `engineer` | Claim ready code issues, implement, open PRs, address failed review or CI gates. | `code_ready`, `pr_changes_requested`, `pr_ci_failed` |
 | `reviewer` | Static review against the contract catalog; approve or request changes. | `pr_needs_review` |
-| `owner` | Resolve `needs-owner` design feedback; holistic alignment review of landed cohorts. | `needs_owner`, `owner_alignment` |
+| `owner` | Resolve design feedback, approve gated merges, and run holistic alignment review of landed cohorts. | `needs_owner`, `merge_ready`, `owner_alignment` |
 | `human` | Resolve `needs-human` items that require non-agent judgment. | `needs_human` |
 
 ## Artifact kinds
@@ -87,10 +87,11 @@ Exclusive unless noted; each state projects to one label.
 - CI/test status is not a workflow-owned state dimension; merge eligibility and
   failed-CI routing read native CI job conclusions through `ci_passed` and
   `ci_failed` conditions.
-- Merge readiness is derived from gates rather than stored as a state.
+- Merge eligibility is derived from gates rather than stored as a state;
+  `needs-merge` is only an owner-routing label.
 - `attention` (non-exclusive): `needs_architect` (`needs-architect`),
-  `needs_owner` (`needs-owner`), and `needs_human` (`needs-human`) route
-  explicit feedback requests to the named role.
+  `needs_owner` (`needs-owner`), `needs_human` (`needs-human`), and
+  `needs_merge` (`needs-merge`) route explicit role work.
 - `post_merge` (non-exclusive): `landed` (awaiting architect reconcile),
   `alignment` (awaiting owner alignment).
 
@@ -102,17 +103,20 @@ Exclusive unless noted; each state projects to one label.
 - `dependency_gate` — satisfied when every prerequisite relation of a code issue
   is merged. Drives mechanical unblocking.
 
-The merge transition requires `review_gate` and `ci_gate`. A failed review or
-CI run returns the PR to the engineer (native `review_changes_requested` or
-`ci_failed` → engineer queues); work is never lost.
+The merge transition requires `review_gate` and `ci_gate`. The engineer marks
+an implementation PR with `needs-merge`; the `merge_ready` queue wakes the owner
+once native CI has passed, and `approve_merge` still rechecks both gates before
+mutating. A failed review or CI run returns the PR to the engineer (native
+`review_changes_requested` or `ci_failed` → engineer queues); work is never lost.
 
 ## Relations
 
 - `design → epic` (parent), `code → design`/`epic` (parent).
 - `code → code` (dependency): a code issue is `blocked` until its prerequisite's
   PR lands, then `dependency_gate` clears it to `ready` mechanically.
-- `implementation_pr → code` (implements/closes): merging the PR closes the
-  issue and fires post-merge handling.
+- `implementation_pr → code` (implements): the PR is produced for a code issue.
+  Closing that issue on merge is intended, but the current runner happy path
+  accepts it staying open while post-merge PR handling runs.
 
 ## Escalation and the human loop
 

@@ -8,6 +8,7 @@ Current guides:
 - [End a development session cleanly](end-a-development-session.md)
 - [Record an agent lesson](record-agent-lesson.md)
 - [Implement the workflow layer in phases](implement-workflow-layer-in-phases.md)
+- [Run the reference delivery end-to-end scenario](run-reference-delivery-end-to-end.md)
 
 Planned guides:
 

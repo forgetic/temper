@@ -34,7 +34,9 @@ from fresh Forge state, and the planner only reads it. CI fits the same shape.
 1. **`merge-ready` ceases to be owned state.** No transition writes it and no
    gate reads it. Merge eligibility is *derived*: the merge transition is gated
    on the AND of the review, testing, and CI gates. The reference fixtures drop
-   the `merge-ready` label and the `merge` state dimension.
+   the `merge-ready` label and the `merge` state dimension. A separate
+   owner-routing label such as `needs-merge` may say that a PR needs owner
+   attention; it must not be treated as proof that the gates are satisfied.
 
 2. **Merge eligibility is the AND of review/testing/CI gates.** This is the
    existing `requires_gates` mechanism on `approve_merge`; no new primitive is

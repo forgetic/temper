@@ -90,7 +90,7 @@ fn engineer_fake_claims_code_opens_pr_and_requests_review() {
     let pr = &pull_requests[0];
     assert_eq!(
         labels(pr.labels.clone()),
-        vec!["implementation", "needs-reviewer"]
+        vec!["implementation", "needs-merge", "needs-reviewer"]
     );
     assert_eq!(pr.requested_reviewers, vec![UserId::new("user-reviewer")]);
     assert!(pr.body.contains("pr-for-code-"));
@@ -225,7 +225,13 @@ fn human_fake_clears_human_flag() {
 fn owner_fake_merges_fully_gated_pr_when_serviced() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
-    let number = create_pr(&forge, &repo, &["implementation"], "impl", "");
+    let number = create_pr(
+        &forge,
+        &repo,
+        &["implementation", "needs-merge"],
+        "impl",
+        "",
+    );
     approve_as_requested_reviewer(&forge, &repo, number);
     block_on(MemoryCiSink::new(forge.clone()).record(
         &repo,

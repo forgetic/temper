@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod ci;
+pub mod scenarios;
 pub mod world;
 
 use chrono::{DateTime, Duration, Utc};

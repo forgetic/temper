@@ -112,7 +112,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.roles().len(), 5);
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
-    assert_eq!(workflow.queues().len(), 10);
+    assert_eq!(workflow.queues().len(), 11);
     assert_eq!(workflow.transitions().len(), 20);
     assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
@@ -134,6 +134,15 @@ fn reference_fixture_validates_with_expected_shape() {
         .expect("ci_gate is declared");
     assert_eq!(ci_gate.condition.as_ref(), Some(&GateCondition::CiPassed));
 
+    let merge_ready = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "merge_ready")
+        .expect("merge_ready queue is declared");
+    assert_eq!(
+        merge_ready.condition.as_ref(),
+        Some(&GateCondition::CiPassed)
+    );
     let owner_alignment = workflow
         .queues()
         .iter()
@@ -470,7 +479,7 @@ fn merge_requires_review_and_native_ci() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    let ready = classify_pr(&workflow, 10, &["implementation"]);
+    let ready = classify_pr(&workflow, 10, &["implementation", "needs-merge"]);
     let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
     let blocked = planner
         .plan_transition_with(
@@ -502,6 +511,7 @@ fn merge_requires_review_and_native_ci() {
         plan.effects,
         vec![
             WorkflowEffect::MergePullRequest,
+            WorkflowEffect::RemoveLabel(LabelId::new("needs-merge")),
             WorkflowEffect::AddLabel(LabelId::new("landed")),
             WorkflowEffect::AddLabel(LabelId::new("alignment")),
         ]
