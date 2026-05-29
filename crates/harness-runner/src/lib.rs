@@ -15,10 +15,20 @@
 //! 3. **Layered testing.** Narrow pure/backend tests should exercise reusable
 //!    primitives before broader end-to-end scenarios reuse the same code.
 //!
-//! The first primitive is [`scan`], which reads fresh Forge state and turns
-//! active queue members into role-addressed [`WorkItem`]s without mutating
-//! anything.
+//! The crate now provides:
+//!
+//! - [`scan`], which reads fresh Forge state and turns active queue members into
+//!   role-addressed [`WorkItem`]s without mutating anything.
+//! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
+//!   agents mutate workflow state only by running authorized transitions or the
+//!   idempotent pull-request creation seam through role-scoped tools.
+//! - [`Worker`] and [`RoleWorker`], the tickable per-role unit that re-scans on
+//!   each tick and delegates behavior to an agent.
 
+pub mod agent;
 pub mod scan;
+pub mod worker;
 
+pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use scan::{scan, scan_role, ScanError, WorkItem};
+pub use worker::{Progress, RoleWorker, Worker, WorkerError};

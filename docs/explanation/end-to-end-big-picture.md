@@ -82,21 +82,23 @@ runtime does it for free) or *judgment* (it costs an actor):
   table; queue activation policy (`min_depth`/`max_age`) decides *when* a cohort
   is worth a worker.
 
-In both cases mutations cross the same boundary: the agent's only state-changing
-tools are its role's `ToolManifest` entries, each backed by `Executor::execute`,
-which re-loads fresh state and re-plans before mutating. Agents do their real
-work (write code, push a branch, run a review) freely; they touch *workflow
-state* only through generated transition tools. See the runtime guarantees in
-[the workflow-layer reference](../reference/workflow-layer.md).
+In both cases mutations cross the same boundary: the agent receives a
+role-scoped `RoleTools` facade, and its only state-changing operations are
+`Executor::execute` for that role's authorized transitions plus the documented
+idempotent pull-request creation seam. The executor re-loads fresh state and
+re-plans before mutating. Agents do their real work (write code, push a branch,
+run a review) freely; they touch *workflow state* only through `RoleTools`. See
+the runtime guarantees in [the workflow-layer reference](../reference/workflow-layer.md).
 
 ## From core-complete to a running deployment
 
 What exists today is the whole decision core (spec → validate → compile →
 classify → plan → execute → reconcile → apply, with leases, journaling, and
 proven safety properties), runnable against the reference backends, plus the
-first `harness-runner` primitive: a read-only scan that turns fresh Forge state
-into active-queue work items for subscriber roles. The remaining path to a live
-deployment, in dependency order:
+initial `harness-runner` worker-plane primitives: read-only scans that turn fresh
+Forge state into active-queue work items, `Agent`/`RoleTools`, and tickable
+`Worker`/`RoleWorker` units. The remaining path to a live deployment, in
+dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
    API, including the `Version`/`expected_version` CAS primitive
@@ -104,12 +106,12 @@ deployment, in dependency order:
    `list_ci_jobs` over Forgejo Actions, keeping observable-contract parity with
    the reference backends ([ADR 0008](../adr/0008-in-memory-backend-and-backend-naming.md)).
 2. **The runner/controller** — partially started in `harness-runner`: `scan`
-   now reconstructs active judgment work, but the trigger loop, workers, and
-   mechanical-vs-judgment dispatch still need to be built. Nothing loops today;
-   tests drive `Executor`/`Reconciler` directly.
-3. **Agent-provider + tool boundary** — net-new: wire a compiled
-   `PromptManifest` to a model and expose that role's `ToolManifest` as the only
-   state-mutating tools.
+   now reconstructs active judgment work and `RoleWorker` can tick one role, but
+   the trigger loop and mechanical-vs-judgment dispatch still need to be built.
+   Nothing composes all workers in a loop today; tests drive one worker or the
+   workflow `Executor`/`Reconciler` directly.
+3. **Agent-provider adapter** — wire a compiled `PromptManifest` to a model and
+   map model tool calls onto the production `RoleTools` facade.
 4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific
    receipt/verify/parse normalized into a hint the runner coalesces; stays off
    the `Forge` trait.
