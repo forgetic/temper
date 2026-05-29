@@ -121,13 +121,21 @@ pub enum WorkflowEffect {
 /// A condition that must hold after a plan's effects are applied.
 ///
 /// Postconditions let an executor verify a transition actually took effect on
-/// fresh Forge state. They are derived from the transition's label effects.
+/// fresh Forge state. They are derived from the transition's label and assignee
+/// effects. Comment effects have no postcondition: a comment is an append-only
+/// event, not a queryable state projection, so there is no after-the-fact
+/// predicate to assert (the executor instead guarantees a comment is posted
+/// at most once through an idempotency marker — see [`crate::execute`]).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Postcondition {
     /// The label must be present on the target artifact.
     LabelPresent(LabelId),
     /// The label must be absent from the target artifact.
     LabelAbsent(LabelId),
+    /// The Forge user resolved for this role must be assigned to the target.
+    AssigneePresent { role: RoleId },
+    /// The Forge user resolved for this role must not be assigned to the target.
+    AssigneeAbsent { role: RoleId },
 }
 
 /// A planned, not-yet-executed transition.
@@ -544,9 +552,9 @@ fn to_postcondition(effect: &Effect) -> Option<Postcondition> {
     match effect {
         Effect::AddLabel(label) => Some(Postcondition::LabelPresent(label.clone())),
         Effect::RemoveLabel(label) => Some(Postcondition::LabelAbsent(label.clone())),
-        Effect::SetAssignee(_)
-        | Effect::RemoveAssignee(_)
-        | Effect::CreateComment { .. }
+        Effect::SetAssignee(role) => Some(Postcondition::AssigneePresent { role: role.clone() }),
+        Effect::RemoveAssignee(role) => Some(Postcondition::AssigneeAbsent { role: role.clone() }),
+        Effect::CreateComment { .. }
         | Effect::CreatePullRequest { .. }
         | Effect::MergePullRequest => None,
     }

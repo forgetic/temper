@@ -12,6 +12,26 @@
 //! 4. apply the planned effects through the [`Forge`] trait,
 //! 5. verify the transition's postconditions against fresh state.
 //!
+//! # Non-label effects
+//!
+//! Besides label add/remove, the executor applies `SetAssignee`,
+//! `RemoveAssignee`, and `CreateComment` (Phase 9b). Assignee effects name a
+//! workflow *role*; the [`ExecutionContext`] supplies the role→Forge-user
+//! binding, and an unbound role fails with
+//! [`ExecutionError::UnresolvedAssignee`] before any mutation. Assignee changes
+//! are folded into the same single label update so the state flip is one atomic
+//! backend call.
+//!
+//! Comments are not naturally idempotent, so each planned comment is stamped
+//! with a deterministic marker derived from `(transition, comment-index)` and
+//! posted only when no existing comment already carries that marker. Comments
+//! are posted *before* the label/assignee update so that the label flip remains
+//! the commit point: a crash before it leaves preconditions intact (a retry
+//! re-plans, the marker dedupes the comment, the flip commits), and a crash
+//! after it leaves the transition fully applied (a retry sees stale
+//! preconditions and is correctly refused). `CreatePullRequest`,
+//! `MergePullRequest`, and lease effects remain unsupported until later phases.
+//!
 //! Reloading and re-planning before every mutation is deliberate: Forge state
 //! can be edited by humans or other workers between planning and execution, so
 //! the executor never trusts a plan computed against stale state. It always
@@ -30,14 +50,16 @@
 //! that key before creating. Retrying with the same key returns the existing
 //! artifact instead of creating a duplicate.
 
+mod apply;
+
 use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, Classifier};
+use crate::context::ExecutionContext;
 use crate::ids::{RoleId, TransitionId};
 use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMetadata};
 use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
     CreateIssue, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequestId, RepositoryId,
-    UpdateIssue, UpdatePullRequest,
 };
 
 /// Outcome of an idempotent ensure-create operation.
@@ -111,6 +133,9 @@ pub enum ExecutionError {
     TargetMissing { target: ArtifactSource },
     /// The planner produced an effect the executor cannot apply yet.
     UnsupportedEffect { effect: WorkflowEffect },
+    /// An assignee effect named a role with no Forge user bound in the
+    /// [`ExecutionContext`]. Reported before any mutation.
+    UnresolvedAssignee { role: RoleId },
     /// A postcondition did not hold after the effects were applied.
     PostconditionFailed { postcondition: Postcondition },
     /// A backend operation failed.
@@ -136,6 +161,12 @@ impl std::fmt::Display for ExecutionError {
             }
             ExecutionError::UnsupportedEffect { effect } => {
                 write!(formatter, "executor cannot apply effect {effect:?}")
+            }
+            ExecutionError::UnresolvedAssignee { role } => {
+                write!(
+                    formatter,
+                    "no Forge user is bound for assignee role `{role}`"
+                )
             }
             ExecutionError::PostconditionFailed { postcondition } => {
                 write!(
@@ -222,12 +253,31 @@ impl Loaded {
 pub struct Executor<'a, F: Forge + ?Sized> {
     workflow: &'a ValidatedWorkflow,
     forge: &'a F,
+    context: ExecutionContext,
 }
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
-    /// Creates an executor bound to a validated workflow and a backend.
+    /// Creates an executor bound to a validated workflow and a backend with an
+    /// empty [`ExecutionContext`].
+    ///
+    /// Use [`Executor::with_context`] when a transition can plan assignee
+    /// effects, so role→user resolution is available.
     pub fn new(workflow: &'a ValidatedWorkflow, forge: &'a F) -> Self {
-        Self { workflow, forge }
+        Self::with_context(workflow, forge, ExecutionContext::new())
+    }
+
+    /// Creates an executor with an explicit [`ExecutionContext`] supplying the
+    /// role→Forge-user bindings that assignee effects need.
+    pub fn with_context(
+        workflow: &'a ValidatedWorkflow,
+        forge: &'a F,
+        context: ExecutionContext,
+    ) -> Self {
+        Self {
+            workflow,
+            forge,
+            context,
+        }
     }
 
     /// Executes a transition for a role against a target Forge artifact.
@@ -252,10 +302,11 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             .plan_transition(transition, role, loaded.classified())
             .map_err(classify_plan_error)?;
 
-        // `apply` folds the effects into a single update and rejects any
-        // unsupported effect before it issues that update, so a transition can
-        // never partially apply.
-        self.apply(&loaded, &plan.effects).await?;
+        // `apply` validates every effect (rejecting unsupported effects and
+        // unbound assignee roles) before it mutates anything, posts idempotent
+        // comments, then folds labels and assignees into a single update. A
+        // transition therefore never partially applies its label/assignee flip.
+        self.apply(&loaded, &plan).await?;
         self.verify(repo_id, target, &plan.postconditions).await?;
 
         Ok(ExecutionReport {
@@ -327,95 +378,6 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         }
     }
 
-    /// Applies the planned label effects with a single backend update.
-    ///
-    /// Effects are folded into one `add_labels`/`remove_labels` update so the
-    /// mutation is a single backend call per artifact rather than one call per
-    /// label.
-    async fn apply(
-        &self,
-        loaded: &Loaded,
-        effects: &[WorkflowEffect],
-    ) -> Result<(), ExecutionError> {
-        let mut add_labels = Vec::new();
-        let mut remove_labels = Vec::new();
-        for effect in effects {
-            match label_change(effect) {
-                Some((LabelChange::Add, label)) => add_labels.push(label),
-                Some((LabelChange::Remove, label)) => remove_labels.push(label),
-                None => {
-                    return Err(ExecutionError::UnsupportedEffect {
-                        effect: effect.clone(),
-                    })
-                }
-            }
-        }
-
-        match loaded {
-            Loaded::Issue { id, .. } => {
-                let update = UpdateIssue {
-                    add_labels,
-                    remove_labels,
-                    ..UpdateIssue::default()
-                };
-                self.forge.update_issue(id, update).await?;
-            }
-            Loaded::PullRequest { id, .. } => {
-                let update = UpdatePullRequest {
-                    add_labels,
-                    remove_labels,
-                    ..UpdatePullRequest::default()
-                };
-                self.forge.update_pull_request(id, update).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Reloads fresh state and checks every postcondition holds.
-    async fn verify(
-        &self,
-        repo_id: &RepositoryId,
-        target: ArtifactSource,
-        postconditions: &[Postcondition],
-    ) -> Result<(), ExecutionError> {
-        let labels = self.current_labels(repo_id, target).await?;
-        for postcondition in postconditions {
-            let satisfied = match postcondition {
-                Postcondition::LabelPresent(label) => labels.iter().any(|l| l == label.as_str()),
-                Postcondition::LabelAbsent(label) => labels.iter().all(|l| l != label.as_str()),
-            };
-            if !satisfied {
-                return Err(ExecutionError::PostconditionFailed {
-                    postcondition: postcondition.clone(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Reads the artifact's current labels from fresh Forge state.
-    async fn current_labels(
-        &self,
-        repo_id: &RepositoryId,
-        target: ArtifactSource,
-    ) -> Result<Vec<String>, ExecutionError> {
-        match target {
-            ArtifactSource::Issue { number } => Ok(self
-                .forge
-                .get_issue_by_number(repo_id, number)
-                .await?
-                .ok_or(ExecutionError::TargetMissing { target })?
-                .labels),
-            ArtifactSource::PullRequest { number } => Ok(self
-                .forge
-                .get_pull_request_by_number(repo_id, number)
-                .await?
-                .ok_or(ExecutionError::TargetMissing { target })?
-                .labels),
-        }
-    }
-
     /// Idempotently ensures an issue exists for a correlation key.
     ///
     /// Searches existing issues for one whose metadata block carries
@@ -466,28 +428,6 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
     }
 }
 
-/// Whether a label effect adds or removes its label.
-enum LabelChange {
-    Add,
-    Remove,
-}
-
-/// Extracts the label mutation from an effect, or `None` for non-label effects.
-///
-/// Only [`WorkflowEffect::AddLabel`] and [`WorkflowEffect::RemoveLabel`] are
-/// applied by this executor today; every other variant is a planner placeholder
-/// (see [`crate::plan::WorkflowEffect`]) and maps to `None`, which the executor
-/// reports as [`ExecutionError::UnsupportedEffect`] before mutating anything.
-fn label_change(effect: &WorkflowEffect) -> Option<(LabelChange, String)> {
-    match effect {
-        WorkflowEffect::AddLabel(label) => Some((LabelChange::Add, label.as_str().to_string())),
-        WorkflowEffect::RemoveLabel(label) => {
-            Some((LabelChange::Remove, label.as_str().to_string()))
-        }
-        _ => None,
-    }
-}
-
 /// Returns `body` with `correlation_key` set in its metadata block.
 ///
 /// Any existing metadata fields are preserved; only the correlation key is set.
@@ -504,8 +444,19 @@ fn body_with_correlation_key(body: &str, correlation_key: &str) -> Result<String
 impl ValidatedWorkflow {
     /// Returns an [`Executor`] bound to this workflow and a backend.
     ///
-    /// Convenience wrapper around [`Executor::new`].
+    /// Convenience wrapper around [`Executor::new`]; the executor has an empty
+    /// [`ExecutionContext`].
     pub fn executor<'a, F: Forge + ?Sized>(&'a self, forge: &'a F) -> Executor<'a, F> {
         Executor::new(self, forge)
+    }
+
+    /// Returns an [`Executor`] bound to this workflow, a backend, and an
+    /// explicit [`ExecutionContext`] for assignee resolution.
+    pub fn executor_with_context<'a, F: Forge + ?Sized>(
+        &'a self,
+        forge: &'a F,
+        context: ExecutionContext,
+    ) -> Executor<'a, F> {
+        Executor::with_context(self, forge, context)
     }
 }

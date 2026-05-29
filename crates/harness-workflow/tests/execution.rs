@@ -5,18 +5,57 @@
 //! backend state, idempotency, and the typed failure classes.
 
 use harness_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, Forge, ItemNumber, RepositoryId, UserId,
+    BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, ItemNumber, RepositoryId,
+    UserId,
 };
 use harness_forge_memory::{FaultOp, MemoryForge};
 use harness_workflow::{
-    parse_metadata_block, ArtifactSource, ExecutionError, Executor, PlanDiagnostic,
-    RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    parse_metadata_block, ArtifactSource, ExecutionContext, ExecutionError, Executor,
+    PlanDiagnostic, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
 };
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 const FIXTURE: &str = include_str!("../fixtures/five-role-delivery.json");
+
+const NON_LABEL_FIXTURE: &str = r#"
+{
+  "name": "non-label-execution",
+  "roles": [{"id": "engineer"}, {"id": "owner"}],
+  "labels": [
+    {"id": "code"},
+    {"id": "ready"},
+    {"id": "in-progress"},
+    {"id": "done"},
+    {"id": "implementation"}
+  ],
+  "artifact_kinds": [
+    {"id": "code", "target": "issue", "identifying_labels": ["code"]},
+    {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+  ],
+  "transitions": [
+    {"id": "claim_with_note", "artifact": "code", "roles": ["engineer"], "effects": [
+      {"kind": "remove_label", "label": "ready"},
+      {"kind": "add_label", "label": "in-progress"},
+      {"kind": "set_assignee", "role": "engineer"},
+      {"kind": "create_comment", "body": "Claimed for implementation."}
+    ]},
+    {"id": "finish_with_note", "artifact": "code", "roles": ["engineer"], "effects": [
+      {"kind": "remove_label", "label": "in-progress"},
+      {"kind": "add_label", "label": "done"},
+      {"kind": "remove_assignee", "role": "engineer"},
+      {"kind": "create_comment", "body": "Implementation finished."}
+    ]},
+    {"id": "open_pr", "artifact": "code", "roles": ["engineer"], "effects": [
+      {"kind": "create_pull_request", "correlation_key": "pr-1"}
+    ]},
+    {"id": "merge_pr", "artifact": "implementation_pr", "roles": ["owner"], "effects": [
+      {"kind": "merge_pull_request"}
+    ]}
+  ]
+}
+"#;
 
 /// Owns one in-memory backend store for a test.
 struct TestRoot {
@@ -58,6 +97,12 @@ fn workflow() -> ValidatedWorkflow {
     spec.validate().expect("five-role fixture validates")
 }
 
+fn non_label_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec = serde_json::from_str(NON_LABEL_FIXTURE)
+        .expect("non-label fixture is valid RawWorkflowSpec JSON");
+    spec.validate().expect("non-label fixture validates")
+}
+
 fn new_repo(forge: &MemoryForge) -> RepositoryId {
     let repo = block_on(forge.create_repository(harness_forge::CreateRepository {
         owner: "acme".into(),
@@ -70,13 +115,22 @@ fn new_repo(forge: &MemoryForge) -> RepositoryId {
 }
 
 fn create_issue(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str]) -> ItemNumber {
+    create_issue_with_assignees(forge, repo, labels, Vec::new())
+}
+
+fn create_issue_with_assignees(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    labels: &[&str],
+    assignees: Vec<UserId>,
+) -> ItemNumber {
     block_on(forge.create_issue(
         repo,
         CreateIssue {
             title: "code work".into(),
             body: String::new(),
             labels: labels.iter().map(|l| (*l).to_string()).collect(),
-            assignees: Vec::new(),
+            assignees,
         },
     ))
     .expect("issue is created")
@@ -114,6 +168,32 @@ fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) ->
     labels
 }
 
+fn issue_assignees(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<UserId> {
+    block_on(forge.get_issue_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("issue exists")
+        .assignees
+}
+
+fn issue_comments(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
+    let issue = block_on(forge.get_issue_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("issue exists");
+    block_on(forge.list_issue_comments(&issue.id))
+        .expect("comments list succeeds")
+        .into_iter()
+        .map(|comment| comment.body)
+        .collect()
+}
+
+fn add_issue_comment(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber, body: &str) {
+    let issue = block_on(forge.get_issue_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("issue exists");
+    block_on(forge.add_issue_comment(&issue.id, CreateComment { body: body.into() }))
+        .expect("comment is created");
+}
+
 #[test]
 fn claim_transition_updates_labels_through_the_backend() {
     let root = TestRoot::new();
@@ -145,6 +225,178 @@ fn claim_transition_updates_labels_through_the_backend() {
     assert_eq!(
         issue_labels(&forge, &repo, number),
         vec!["code".to_string(), "in-progress".to_string()]
+    );
+}
+
+#[test]
+fn assignee_and_comment_effects_apply_once_under_retry() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = non_label_workflow();
+    let repo = new_repo(&forge);
+    let engineer = UserId::new("engineer-bot");
+    let number =
+        create_issue_with_assignees(&forge, &repo, &["code", "ready"], vec![engineer.clone()]);
+
+    // SetAssignee is naturally idempotent when the user is already assigned.
+    // Simulate a crash after the first comment write but before the state flip:
+    // the retry must see the marker and not post the comment again.
+    add_issue_comment(
+        &forge,
+        &repo,
+        number,
+        "Claimed for implementation.\n\n<!-- harness:comment-key=claim_with_note:0 -->",
+    );
+
+    let context = ExecutionContext::new().with_assignee(RoleId::new("engineer"), engineer.clone());
+    let executor = workflow.executor_with_context(&forge, context);
+    let report = block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number },
+        &TransitionId::new("claim_with_note"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("engineer can claim with assignee and comment effects");
+
+    assert_eq!(
+        report.applied,
+        vec![
+            WorkflowEffect::RemoveLabel("ready".into()),
+            WorkflowEffect::AddLabel("in-progress".into()),
+            WorkflowEffect::SetAssignee {
+                role: RoleId::new("engineer"),
+            },
+            WorkflowEffect::CreateComment {
+                body: "Claimed for implementation.".into(),
+            },
+        ]
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo, number),
+        vec!["code".to_string(), "in-progress".to_string()]
+    );
+    assert_eq!(
+        issue_assignees(&forge, &repo, number),
+        vec![engineer.clone()]
+    );
+    let comments = issue_comments(&forge, &repo, number);
+    assert_eq!(comments.len(), 1);
+    assert!(comments[0].contains("<!-- harness:comment-key=claim_with_note:0 -->"));
+
+    let retry = block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number },
+        &TransitionId::new("claim_with_note"),
+        &RoleId::new("engineer"),
+    ))
+    .expect_err("a full retry sees fresh state and is refused");
+    assert!(matches!(retry, ExecutionError::Precondition { .. }));
+    assert_eq!(issue_comments(&forge, &repo, number).len(), 1);
+    assert_eq!(
+        issue_assignees(&forge, &repo, number),
+        vec![engineer.clone()]
+    );
+
+    block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number },
+        &TransitionId::new("finish_with_note"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("engineer can finish and clear the assignee");
+    assert_eq!(
+        issue_labels(&forge, &repo, number),
+        vec!["code".to_string(), "done".to_string()]
+    );
+    assert!(issue_assignees(&forge, &repo, number).is_empty());
+    let comments = issue_comments(&forge, &repo, number);
+    assert_eq!(comments.len(), 2);
+    assert!(comments[1].contains("<!-- harness:comment-key=finish_with_note:0 -->"));
+
+    let retry = block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number },
+        &TransitionId::new("finish_with_note"),
+        &RoleId::new("engineer"),
+    ))
+    .expect_err("a finish retry is also refused by fresh preconditions");
+    assert!(matches!(retry, ExecutionError::Precondition { .. }));
+    assert_eq!(issue_comments(&forge, &repo, number).len(), 2);
+}
+
+#[test]
+fn unresolved_assignee_refuses_before_comment_or_label_mutation() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = non_label_workflow();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "ready"]);
+
+    let executor = Executor::new(&workflow, &forge);
+    let error = block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number },
+        &TransitionId::new("claim_with_note"),
+        &RoleId::new("engineer"),
+    ))
+    .expect_err("assignee roles require runtime user bindings");
+
+    assert_eq!(
+        error,
+        ExecutionError::UnresolvedAssignee {
+            role: RoleId::new("engineer"),
+        }
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo, number),
+        vec!["code".to_string(), "ready".to_string()]
+    );
+    assert!(issue_assignees(&forge, &repo, number).is_empty());
+    assert!(issue_comments(&forge, &repo, number).is_empty());
+}
+
+#[test]
+fn unsupported_pr_create_and_merge_effects_are_rejected_before_mutation() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = non_label_workflow();
+    let repo = new_repo(&forge);
+    let executor = workflow.executor(&forge);
+
+    let number = create_issue(&forge, &repo, &["code", "in-progress"]);
+    let error = block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number },
+        &TransitionId::new("open_pr"),
+        &RoleId::new("engineer"),
+    ))
+    .expect_err("PR create remains unsupported in this phase");
+    assert_eq!(
+        error,
+        ExecutionError::UnsupportedEffect {
+            effect: WorkflowEffect::CreatePullRequest {
+                correlation_key: Some("pr-1".into()),
+            },
+        }
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo, number),
+        vec!["code".to_string(), "in-progress".to_string()]
+    );
+
+    let pr = create_pr(&forge, &repo, &["implementation"]);
+    let error = block_on(executor.execute(
+        &repo,
+        ArtifactSource::PullRequest { number: pr },
+        &TransitionId::new("merge_pr"),
+        &RoleId::new("owner"),
+    ))
+    .expect_err("PR merge remains unsupported in this phase");
+    assert_eq!(
+        error,
+        ExecutionError::UnsupportedEffect {
+            effect: WorkflowEffect::MergePullRequest,
+        }
     );
 }
 

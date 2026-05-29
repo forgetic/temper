@@ -53,10 +53,18 @@
 //! with an in-memory implementation, and a reconciler ([`reconcile`]) that scans
 //! Forge artifacts and journal entries and decides repair or escalation actions
 //! through a [`RecoveryPolicy`].
+//!
+//! Phase 9 added non-label effects: the spec, planner, and [`Effect`] express
+//! assignee, comment, pull-request create, and merge effects (9a), and the
+//! [`Executor`] now applies `SetAssignee`/`RemoveAssignee`/`CreateComment`
+//! through the [`harness_forge::Forge`] trait (9b). Assignee roles are resolved
+//! to Forge users through an [`ExecutionContext`]; comments are made idempotent
+//! with a per-transition marker.
 
 pub mod artifact;
 pub mod classify;
 pub mod compile;
+pub mod context;
 pub mod diagnostics;
 pub mod execute;
 pub mod ids;
@@ -77,6 +85,7 @@ pub use compile::{
     compile, CompiledWorkflow, LabelManifest, LabelSpec, LabelUsage, PromptManifest, PromptSection,
     QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
 };
+pub use context::ExecutionContext;
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use execute::{EnsureOutcome, ExecutionError, ExecutionReport, Executor};
 pub use ids::{

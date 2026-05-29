@@ -64,14 +64,14 @@ Phase 5 added pure queue evaluation and transition planning:
 
 - `plan::Planner` (also `ValidatedWorkflow::planner`) borrows a `ValidatedWorkflow` and never touches a Forge backend. It matches classified artifacts against queues and plans transitions into typed effects.
 - `plan::matches_queue` matches a `ClassifiedArtifact` against any `QueueQuery`. `QueueQuery` is implemented by both `ValidatedQueue` and the compiled `QueueManifest`, so the same matcher serves the validated model and a compiled runtime table.
-- `plan::WorkflowEffect` is the closed planning-effect enum. `plan::Postcondition` carries the conditions that must hold after a plan applies. `plan::TransitionPlan` bundles transition, role, artifact kind, target, effects, and postconditions.
+- `plan::WorkflowEffect` is the closed planning-effect enum. `plan::Postcondition` carries the label and assignee conditions that must hold after a plan applies. `plan::TransitionPlan` bundles transition, role, artifact kind, target, effects, and postconditions.
 - `plan::PlanError` collects `plan::PlanDiagnostic`s (unauthorized role, artifact-kind mismatch, stale/contradicted label preconditions, unsatisfied gates, and impossible resulting states).
 
 Phase 6 added runtime execution of transitions through the `Forge` trait:
 
 - `execute::Executor` (also `ValidatedWorkflow::executor`) is generic over `F: Forge + ?Sized`, so it runs against a concrete backend or a `&dyn Forge`. It owns no durable state, so one executor is reusable across executions.
-- `Executor::execute` runs the full transition loop against fresh state: load the target by item number, classify it, re-plan the transition (re-checking authority, preconditions, gates, and resulting states), apply the planned label effects as one backend update, and verify the postconditions. It returns an `ExecutionReport` or a typed `ExecutionError`.
-- `ExecutionError` separates the failure classes a runtime must distinguish: `Validation` (undeclared transition, unauthorized role, artifact-kind mismatch), `Precondition` (stale/contradicted labels, unsatisfied gate, impossible state), `Backend` (any `ForgeError`), plus `Classification`, `TargetMissing`, `UnsupportedEffect`, and `PostconditionFailed`.
+- `Executor::execute` runs the full transition loop against fresh state: load the target by item number, classify it, re-plan the transition (re-checking authority, preconditions, gates, and resulting states), apply supported effects, and verify the postconditions. It applies labels and assignees in one backend update and posts idempotent comments before that update. It returns an `ExecutionReport` or a typed `ExecutionError`.
+- `ExecutionError` separates the failure classes a runtime must distinguish: `Validation` (undeclared transition, unauthorized role, artifact-kind mismatch), `Precondition` (stale/contradicted labels, unsatisfied gate, impossible state), `Backend` (any `ForgeError`), plus `Classification`, `TargetMissing`, `UnsupportedEffect`, `UnresolvedAssignee`, and `PostconditionFailed`.
 - `Executor::ensure_issue` is idempotent create for issues: it searches existing issues for a metadata `correlation_key`, returns the existing issue if found, or stamps the key into the new issue's metadata block and creates it. `EnsureOutcome` reports whether the artifact was `Created` or `Existing`.
 
 Phase 7 added recovery primitives — leases, command journaling, and reconciliation:
@@ -81,7 +81,7 @@ Phase 7 added recovery primitives — leases, command journaling, and reconcilia
 - `execute::Executor::execute_journaled` records the lifecycle (`Planned` → `Applying` → `Completed`/`Failed`) around the existing execute loop; `Executor::plan` previews a transition's plan without mutating. Planning failures are returned unjournaled because no mutation was attempted.
 - `reconcile::Reconciler` scans `ArtifactSnapshot`s and `CommandRecord`s and decides repair/escalation actions through a `RecoveryPolicy`. See "Command journal", "Claims and leases", and "Reconciliation".
 
-Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge) inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
+Not yet implemented: executing create-PR, lease, and merge effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
 
 Phase 8 added robustness and crash-injection tests (no new runtime types):
 
@@ -109,7 +109,7 @@ A workflow spec contains these logical primitives.
 
 Labels are a portable Forge projection of workflow state. Non-label effect payloads stay portable: assignee effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch and title come from runtime context, and `merge_pull_request` has no payload. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and typed relations.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effect expression validate, compile, and plan (`tests/reference_delivery.rs`). The capabilities that design still needs — non-label effect execution, PR idempotent create, external-signal gates, first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effect expression validate, compile, and plan (`tests/reference_delivery.rs`). The capabilities that design still needs — PR create/merge execution, PR idempotent create, external-signal gates, first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
@@ -187,7 +187,7 @@ Transition planning checks, in order, and collects every problem:
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
 
-A successful plan's effects follow the transition's declared effect order. Postconditions are derived only from label effects and keep that relative order, so plans are deterministic and safe for snapshot-style assertions.
+A successful plan's effects follow the transition's declared effect order. Postconditions are derived from label and assignee effects and keep that relative order, so plans are deterministic and safe for snapshot-style assertions. Comment effects do not produce postconditions because comments are append-only events rather than label-style state predicates.
 
 ## Runtime guarantees
 
@@ -199,9 +199,9 @@ Every transition execution must:
 4. apply effects through an idempotent executor
 5. verify postconditions or emit diagnostics
 
-`Executor::execute` implements this loop today for label transitions. It never trusts a plan computed against stale state: it re-loads and re-plans against fresh state immediately before mutating, and it refuses to mutate at all if planning fails or if a plan contains an effect it cannot apply, so a transition can never partially apply. Postconditions are verified by re-reading the artifact's labels after the update; a mismatch yields `PostconditionFailed`.
+`Executor::execute` implements this loop today for labels, assignees, and comments. It never trusts a plan computed against stale state: it re-loads and re-plans against fresh state immediately before mutating, and it refuses to mutate at all if planning fails, if a plan contains an unsupported effect, or if an assignee role has no runtime user binding. It posts idempotent comments first, then applies label and assignee changes together in one backend update. Postconditions are verified by re-reading the artifact's labels and assignees after the update; a mismatch yields `PostconditionFailed`.
 
-Idempotency: re-running a label transition that already applied fails as a `Precondition` error (the source label is gone and/or the target label is present), so a retry never double-applies. Idempotent create is handled separately by `Executor::ensure_issue` through correlation keys.
+Idempotency: re-running a label transition that already applied fails as a `Precondition` error (the source label is gone and/or the target label is present), so a retry never double-applies. `SetAssignee` is cleanly idempotent when the resolved user is already assigned, and `RemoveAssignee` is cleanly idempotent when the resolved user is already absent. `CreateComment` is guarded by a hidden marker appended to the body (`<!-- harness:comment-key=<transition>:<comment-index> -->`); the executor lists comments on the same target and skips posting when the marker already exists, so a retry after a crash-before-state-flip cannot duplicate the comment. Comments have no postcondition; instead the marker check is the verified idempotency mechanism. Idempotent create is handled separately by `Executor::ensure_issue` through correlation keys.
 
 Agents must not mutate Forge state directly when operating under workflow control. Generated tools are the transition boundary.
 
@@ -209,11 +209,11 @@ Agents must not mutate Forge state directly when operating under workflow contro
 
 Workflow effects are the closed `plan::WorkflowEffect` enum so executors and reconcilers must handle every variant. Variants cover label add/remove, assignee set/remove, comment creation, issue and PR creation requests, lease update/release, and PR merge requests.
 
-Transition specs now emit `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest`. `SetAssignee`/`RemoveAssignee` carry a workflow role id, not a Forge user id; the runtime resolves the role to a concrete worker/user. `CreateComment` carries a prose/template `body`. `CreatePullRequest` carries an optional correlation key only; branch, title, body, and labels are runtime context and full create execution lands later. `MergePullRequest` has no payload.
+Transition specs now emit `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest`. `SetAssignee`/`RemoveAssignee` carry a workflow role id, not a Forge user id; `execute::ExecutionContext` resolves the role to a concrete Forge user at runtime, and missing bindings fail with `ExecutionError::UnresolvedAssignee` before mutation. `CreateComment` carries a prose/template `body`. `CreatePullRequest` carries an optional correlation key only; branch, title, body, and labels come from runtime context and full create execution lands later. `MergePullRequest` has no payload.
 
 Leases are not yet emitted as transition effects (`UpdateLease`/`ReleaseLease` remain placeholders). Lease changes go through `lease::LeaseManager` as standalone operations on the metadata block; see "Claims and leases".
 
-`Executor::execute` applies `AddLabel` and `RemoveLabel` through `update_issue`/`update_pull_request`; any other effect variant in a plan is rejected with `ExecutionError::UnsupportedEffect` before any mutation, so expression can land before execution.
+`Executor::execute` applies `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, and `CreateComment` through the `Forge` trait. It still rejects `CreatePullRequest`, `UpdateLease`, `ReleaseLease`, and `MergePullRequest` with `ExecutionError::UnsupportedEffect` before any mutation.
 
 Create effects use correlation keys for idempotent retries: `CreateIssue` requires one, while `CreatePullRequest` may omit it until Phase 10 supplies runtime context. `Executor::ensure_issue` already stamps a key into issue metadata and searches existing issues before creating. Pull-request idempotent create follows the same pattern and is not implemented yet.
 

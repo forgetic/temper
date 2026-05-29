@@ -30,10 +30,10 @@ Status legend: ☐ pending · ☑ done.
   Wire validation and planner emission. Make `reference-delivery` use them
   (`open_pr` creates a PR, `approve_merge` merges, `claim_code` sets assignee).
   No execution yet; `Executor` still rejects them with `UnsupportedEffect`.
-- ☐ **9b — Execute assignee + comment effects.** `Executor::execute` applies
+- ☑ **9b — Execute assignee + comment effects.** `Executor::execute` applies
   `SetAssignee`/`RemoveAssignee`/`CreateComment` through the `Forge` trait, with
-  idempotency and postconditions. Exercise via the five-role fixture or a
-  dedicated execution test.
+  role-to-user resolution, comment idempotency markers, and assignee/label
+  postconditions. Exercised by a dedicated execution test.
 - ☐ **9c — Execute merge + post-merge labels.** `Executor` applies
   `MergePullRequest` and the post-merge `landed`/`owner-pending` projection.
   Preserve "no merge before required gates" (safety_properties).
