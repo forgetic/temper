@@ -1,0 +1,10 @@
+# Local development defaults.
+#
+# Keep `build.jobs` unset: Cargo's default is to use all available logical CPU
+# cores. Agents should not add a fixed job count unless a task explicitly needs
+# reproducible resource limits.
+
+[alias]
+dev-check = "check --workspace --all-targets"
+dev-test = "test --workspace --all-targets"
+dev-doc = "doc --workspace --no-deps"

@@ -1,0 +1,13 @@
+[package]
+name = "harness-fs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Filesystem-backed Forge implementation for harness development and tests."
+
+[dependencies]
+harness-forge = { path = "../harness-forge" }
+
+[lints]
+workspace = true

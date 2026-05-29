@@ -1,0 +1,41 @@
+[workspace]
+members = [
+    "crates/harness-core",
+    "crates/harness-forge",
+    "crates/harness-fs",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.76"
+
+[workspace.dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Fast local iteration is the default. Production/release profiles can be tuned
+# later when we have deployable artifacts. Cargo uses all available logical CPU
+# cores by default; keep `.cargo/config.toml` free of a fixed `build.jobs` value.
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true
+codegen-units = 256
+lto = false
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+opt-level = 0
+debug = 1
+incremental = true
+codegen-units = 256
+lto = false
