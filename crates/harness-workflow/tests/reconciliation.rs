@@ -11,9 +11,9 @@ mod support;
 use harness_forge::ItemNumber;
 use harness_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactSnapshot, ArtifactSource, CommandId,
-    CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy, InMemoryJournal, Lease,
-    Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy, RoleId, StateDimensionId,
-    StateId, TransitionId, WorkflowEffect, WorkflowMetadata,
+    CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus,
+    InMemoryJournal, Lease, Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy,
+    RoleId, StateDimensionId, StateId, TransitionId, WorkflowEffect, WorkflowMetadata,
 };
 use support::{block_on, create_issue, new_repo, ts, workflow, TestRoot};
 
@@ -53,9 +53,12 @@ fn expired_lease_is_requeued_by_default_policy() {
         body: leased_body("run-1", "2026-05-29T00:30:00Z"),
     };
 
-    let report = workflow
-        .reconciler(&policy)
-        .scan(&[snapshot], &[], ts("2026-05-29T01:00:00Z"));
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[],
+        &DependencyStatus::default(),
+        ts("2026-05-29T01:00:00Z"),
+    );
 
     assert_eq!(
         report.findings,
@@ -94,9 +97,12 @@ fn expired_lease_action_follows_the_policy_hook() {
         body: leased_body("run-9", "2026-05-29T00:30:00Z"),
     };
 
-    let report = workflow
-        .reconciler(&policy)
-        .scan(&[snapshot], &[], ts("2026-05-29T01:00:00Z"));
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[],
+        &DependencyStatus::default(),
+        ts("2026-05-29T01:00:00Z"),
+    );
 
     assert_eq!(
         report.actions,
@@ -121,7 +127,12 @@ fn live_lease_is_not_reconciled() {
     let report = workflow
         .reconciler(&policy)
         // Before expiry: nothing to do.
-        .scan(&[snapshot], &[], ts("2026-05-29T01:00:00Z"));
+        .scan(
+            &[snapshot],
+            &[],
+            &DependencyStatus::default(),
+            ts("2026-05-29T01:00:00Z"),
+        );
     assert!(report.is_clean());
 }
 
@@ -136,9 +147,12 @@ fn impossible_label_combination_is_detected_deterministically() {
         body: String::new(),
     };
 
-    let report = workflow
-        .reconciler(&policy)
-        .scan(&[snapshot], &[], ts("2026-05-29T00:00:00Z"));
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[],
+        &DependencyStatus::default(),
+        ts("2026-05-29T00:00:00Z"),
+    );
 
     assert_eq!(
         report.findings,
@@ -178,10 +192,12 @@ fn partial_transition_emits_repair_effects() {
     );
     record.state = CommandState::Applying;
 
-    let report =
-        workflow
-            .reconciler(&policy)
-            .scan(&[snapshot], &[record], ts("2026-05-29T00:05:00Z"));
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[record],
+        &DependencyStatus::default(),
+        ts("2026-05-29T00:05:00Z"),
+    );
 
     assert_eq!(
         report.findings,
@@ -230,10 +246,12 @@ fn already_applied_command_is_marked_reconciled() {
     );
     record.state = CommandState::Applying;
 
-    let report =
-        workflow
-            .reconciler(&policy)
-            .scan(&[snapshot], &[record], ts("2026-05-29T00:05:00Z"));
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[record],
+        &DependencyStatus::default(),
+        ts("2026-05-29T00:05:00Z"),
+    );
 
     assert_eq!(
         report.findings,
@@ -270,10 +288,12 @@ fn terminal_commands_are_ignored() {
     );
     record.state = CommandState::Completed;
 
-    let report =
-        workflow
-            .reconciler(&policy)
-            .scan(&[snapshot], &[record], ts("2026-05-29T00:05:00Z"));
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[record],
+        &DependencyStatus::default(),
+        ts("2026-05-29T00:05:00Z"),
+    );
     assert!(
         report.is_clean(),
         "a completed command needs no reconciliation"
@@ -318,6 +338,7 @@ fn reconcile_loads_backend_state_and_finds_interrupted_work() {
         &forge,
         &repo,
         &restarted_journal,
+        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile loads state");
@@ -342,6 +363,59 @@ fn reconcile_loads_backend_state_and_finds_interrupted_work() {
             effects: vec![
                 WorkflowEffect::RemoveLabel("ready".into()),
                 WorkflowEffect::AddLabel("in-progress".into()),
+            ],
+        }]
+    );
+}
+
+/// Body for a `code` issue that depends on the given prerequisite item numbers.
+fn dependent_body(dependencies: &[u64]) -> String {
+    render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
+        ..WorkflowMetadata::default()
+    })
+}
+
+#[test]
+fn blocked_code_issue_unblocks_only_after_dependencies_land() {
+    let workflow = workflow();
+    let policy = DefaultRecoveryPolicy;
+    let snapshot = ArtifactSnapshot {
+        source: issue_source(8),
+        labels: vec!["code".into(), "blocked".into()],
+        body: dependent_body(&[9]),
+    };
+
+    // Prerequisite #9 has not landed: the reconciler leaves the block in place.
+    let quiet = workflow.reconciler(&policy).scan(
+        std::slice::from_ref(&snapshot),
+        &[],
+        &DependencyStatus::default(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    assert!(quiet.is_clean(), "a still-blocked issue is not unblocked");
+
+    // Once #9 lands, the reconciler mechanically produces the unblock action.
+    let landed = DependencyStatus::landed([ItemNumber::new(9)]);
+    let report =
+        workflow
+            .reconciler(&policy)
+            .scan(&[snapshot], &[], &landed, ts("2026-05-29T00:00:00Z"));
+    assert_eq!(
+        report.findings,
+        vec![ReconcileFinding::DependenciesResolved {
+            target: issue_source(8),
+            transition: TransitionId::new("mark_code_ready"),
+        }]
+    );
+    assert_eq!(
+        report.actions,
+        vec![RecoveryAction::Unblock {
+            target: issue_source(8),
+            effects: vec![
+                WorkflowEffect::RemoveLabel("blocked".into()),
+                WorkflowEffect::AddLabel("ready".into()),
             ],
         }]
     );

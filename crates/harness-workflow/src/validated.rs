@@ -211,4 +211,8 @@ pub enum GateCondition {
         dimension: StateDimensionId,
         state: StateId,
     },
+    /// Satisfied when every `dependency` relation target of the artifact has
+    /// landed, per runtime-supplied dependency status. Vacuously true for an
+    /// artifact with no dependency relations.
+    DependenciesResolved,
 }

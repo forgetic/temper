@@ -93,7 +93,7 @@ Phase 10 added pull-request idempotent create:
 
 Phase 11 added external-signal gates:
 
-- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present` or `state_equals`. The condition is satisfied from the classified artifact's current Forge-projected labels/state.
+- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, or `dependencies_resolved`. `label_present`/`state_equals` are satisfied from the classified artifact's current Forge-projected labels/state.
 - Transition-satisfied gates continue to use `satisfied_by`; a required gate passes when either its external condition holds or one of its satisfying transition outcomes is visible.
 
 Phase 12a added first-class relations:
@@ -101,6 +101,13 @@ Phase 12a added first-class relations:
 - `RawRelation`/`ValidatedRelation` declare `parent`, `dependency`, and `produced_pr` links between source and target artifact kinds.
 - Validation checks relation endpoints against declared artifact kinds.
 - Classification surfaces typed relations from metadata `parents`/`dependencies` item numbers using the validated declarations.
+
+Phase 12b added the relation-driven `dependency_gate` and a mechanical reconcile unblock:
+
+- The `dependencies_resolved` gate condition (`GateCondition::DependenciesResolved`) is satisfied when every `dependency` relation target of the artifact has landed. It is vacuously true for an artifact with no dependency relations.
+- "Has it landed" is a runtime/adapter signal, never derived in the pure planner (mirroring the CI signal behind `ci_gate`). `plan::DependencyStatus` carries the set of landed item numbers; `Planner::plan_transition` evaluates dependency gates with empty status, and `Planner::plan_transition_with` takes an explicit `DependencyStatus`.
+- `Planner::dependency_unblocks(artifact, deps)` returns the mechanical (actor-less) `MechanicalPlan`s an artifact admits: transitions gated on a `dependencies_resolved` gate whose preconditions, gates, and resulting states all hold. It requires the artifact to declare at least one `dependency` relation, so a blocked artifact with no recorded dependency is never auto-unblocked.
+- The reconciler turns each available unblock into a `DependenciesResolved` finding and an `Unblock { effects }` action (see "Reconciliation").
 
 Phases 13–14 added queue primitive extensions:
 
@@ -110,7 +117,7 @@ Phases 13–14 added queue primitive extensions:
 - `plan::queue_active(queue, members, now)` is pure and activates a non-empty queue when it has no policy, reaches `min_depth`, or its oldest timestamped member reaches `max_age`.
 - The executor, leases, journal, and reconciler are unchanged.
 
-Not yet implemented: relation-driven `dependency_gate`, lease effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
+Not yet implemented: lease effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically (including the `Unblock` action), and durable journal/lease storage backends.
 
 Phase 8 added robustness and crash-injection tests (no new runtime types):
 
@@ -138,7 +145,7 @@ A workflow spec contains these logical primitives.
 
 Labels are a portable Forge projection of workflow state. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, and `merge_pull_request` has no payload. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and relation item numbers.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects, external-signal gates, relation declarations, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). The remaining capabilities that design still needs, notably relation-driven `dependency_gate`, are tracked in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects, external-signal gates, relation declarations, the relation-driven `dependency_gate`, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). Any remaining gaps are tracked in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
@@ -267,11 +274,11 @@ Expired leases are handled by recovery policy. Common actions are requeue, exten
 
 ## Reconciliation
 
-The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; applying the decision is left to the executor and lease manager. `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order (each snapshot's expired lease then its classification problems, in snapshot order, then incomplete journal commands in journal order). `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`.
+The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; applying the decision is left to the executor and lease manager. `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, a `DependencyStatus`, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order. `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`; the caller still supplies the `DependencyStatus` (the same runtime/adapter signal as CI).
 
-Findings (`ReconcileFinding`) cover: `ExpiredLease`, `ImpossibleState` (an exclusive dimension with several active states), `ClassificationDrift` (other classification failures), `PartialTransition` (a journaled command whose label effects are not all realized), and `StaleCommand` (an incomplete command whose effects already landed or whose target is gone). Each finding gets exactly one `RecoveryAction`: `RequeueLease`, `Escalate`, `Repair { effects }`, `MarkReconciled`, or `Diagnose`.
+Findings (`ReconcileFinding`) cover: `ExpiredLease`, `ImpossibleState` (an exclusive dimension with several active states), `ClassificationDrift` (other classification failures), `PartialTransition` (a journaled command whose label effects are not all realized), `StaleCommand` (an incomplete command whose effects already landed or whose target is gone), and `DependenciesResolved` (a blocked artifact whose `dependency` relations have all landed, so its dependency-gated unblock transition can be applied). Each finding gets exactly one `RecoveryAction`: `RequeueLease`, `Escalate`, `Repair { effects }`, `MarkReconciled`, `Unblock { effects }`, or `Diagnose`. The scan order is stable: per snapshot, its expired lease then either its classification problems (when it fails to classify) or its mechanical dependency unblocks (when it classifies cleanly), in snapshot order, then incomplete journal commands in journal order. `scan`/`reconcile` take a `DependencyStatus` so the runtime supplies which prerequisites have landed.
 
-`RecoveryPolicy` is the hook layer: one defaulted method per finding class, so a workflow overrides only what it needs. `DefaultRecoveryPolicy` requeues expired leases, escalates impossible states and drift, repairs partial transitions with their pending effects, and marks stale commands reconciled. Still planned for the reconciler: duplicated correlation keys, missing required relations, merged PRs whose linked code issue stays open, and validation-failure labels on merged PRs.
+`RecoveryPolicy` is the hook layer: one defaulted method per finding class, so a workflow overrides only what it needs. `DefaultRecoveryPolicy` requeues expired leases, escalates impossible states and drift, repairs partial transitions with their pending effects, marks stale commands reconciled, and mechanically unblocks dependency-gated work (`on_resolved_dependencies` → `Unblock`) once its prerequisites land. Still planned for the reconciler: duplicated correlation keys, missing required relations, merged PRs whose linked code issue stays open, and validation-failure labels on merged PRs.
 
 ## Compilation outputs
 

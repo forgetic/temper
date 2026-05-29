@@ -27,16 +27,19 @@
 //!
 //! [`RecoveryPolicy`] has one defaulted hook per finding class, so a workflow
 //! can override how it handles expired leases, partial transitions, impossible
-//! states, classification drift, or stale commands by implementing only the
-//! hooks it cares about. [`DefaultRecoveryPolicy`] uses the safe defaults:
-//! requeue expired leases, escalate ambiguous drift, repair partial transitions,
-//! and mark already-realized commands reconciled.
+//! states, classification drift, stale commands, or resolved dependencies by
+//! implementing only the hooks it cares about. [`DefaultRecoveryPolicy`] uses
+//! the safe defaults: requeue expired leases, escalate ambiguous drift, repair
+//! partial transitions, mark already-realized commands reconciled, and
+//! mechanically unblock dependency-gated work once its prerequisites land.
 
-use crate::classify::{ArtifactSource, ClassificationDiagnostic, Classifier};
-use crate::ids::{StateDimensionId, StateId};
+use crate::classify::{
+    ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
+};
+use crate::ids::{StateDimensionId, StateId, TransitionId};
 use crate::journal::{CommandId, CommandJournal, CommandRecord, CommandState, JournalError};
 use crate::metadata::{parse_metadata_block, Lease};
-use crate::plan::{Postcondition, WorkflowEffect};
+use crate::plan::{DependencyStatus, Planner, Postcondition, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
     Forge, ForgeError, Issue, IssueQuery, PullRequest, PullRequestQuery, RepositoryId,
@@ -115,6 +118,12 @@ pub enum ReconcileFinding {
         target: ArtifactSource,
         state: CommandState,
     },
+    /// A blocked artifact's `dependency` relations have all landed, so its
+    /// dependency-gated unblock `transition` can be applied mechanically.
+    DependenciesResolved {
+        target: ArtifactSource,
+        transition: TransitionId,
+    },
 }
 
 /// What the policy decided to do about a [`ReconcileFinding`].
@@ -134,6 +143,12 @@ pub enum RecoveryAction {
     },
     /// Mark a journaled command [`Reconciled`](CommandState::Reconciled).
     MarkReconciled { command: CommandId },
+    /// Mechanically apply a dependency-gated unblock transition's effects (clear
+    /// the blocked label, mark the work ready) now that prerequisites landed.
+    Unblock {
+        target: ArtifactSource,
+        effects: Vec<WorkflowEffect>,
+    },
     /// Record a diagnostic for review without an automated change.
     Diagnose {
         target: ArtifactSource,
@@ -204,6 +219,20 @@ pub trait RecoveryPolicy {
     ) -> RecoveryAction {
         RecoveryAction::MarkReconciled {
             command: command.clone(),
+        }
+    }
+
+    /// Decides what to do when a blocked artifact's dependencies have all
+    /// landed. Default: mechanically apply the unblock transition's effects.
+    fn on_resolved_dependencies(
+        &self,
+        target: ArtifactSource,
+        _transition: &TransitionId,
+        effects: &[WorkflowEffect],
+    ) -> RecoveryAction {
+        RecoveryAction::Unblock {
+            target,
+            effects: effects.to_vec(),
         }
     }
 }
@@ -287,13 +316,18 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     /// Deterministically scans snapshots and journal entries for recovery work.
     ///
     /// Produces one (finding, action) pair per detected problem, in a stable
-    /// order: each snapshot's expired lease then its classification problems, in
-    /// snapshot order, followed by each incomplete journal command in journal
-    /// order. Pure and backend-free.
+    /// order: for each snapshot in order, its expired lease then either its
+    /// classification problems (when it fails to classify) or its mechanical
+    /// dependency unblocks (when it classifies cleanly), followed by each
+    /// incomplete journal command in journal order. `deps` carries which
+    /// prerequisite item numbers have landed (see [`DependencyStatus`]); it is
+    /// supplied by the runtime, like the CI signal behind `ci_gate`. Pure and
+    /// backend-free.
     pub fn scan(
         &self,
         snapshots: &[ArtifactSnapshot],
         journal: &[CommandRecord],
+        deps: &DependencyStatus,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ReconcileReport {
         let mut report = ReconcileReport::default();
@@ -301,7 +335,10 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
 
         for snapshot in snapshots {
             self.scan_lease(snapshot, now, &mut report);
-            self.scan_classification(&classifier, snapshot, &mut report);
+            match classifier.classify_snapshot(snapshot.source, &snapshot.labels, &snapshot.body) {
+                Ok(artifact) => self.scan_dependency_unblocks(&artifact, deps, &mut report),
+                Err(error) => self.scan_classification(snapshot.source, &error, &mut report),
+            }
         }
 
         for record in journal.iter().filter(|record| record.state.is_incomplete()) {
@@ -337,29 +374,22 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         }
     }
 
-    /// Detects impossible states and other classification drift.
+    /// Detects impossible states and other classification drift for a snapshot
+    /// that failed to classify.
     fn scan_classification(
         &self,
-        classifier: &Classifier<'_>,
-        snapshot: &ArtifactSnapshot,
+        source: ArtifactSource,
+        error: &ClassificationError,
         report: &mut ReconcileReport,
     ) {
-        let Err(error) =
-            classifier.classify_snapshot(snapshot.source, &snapshot.labels, &snapshot.body)
-        else {
-            return;
-        };
-
         let mut drift = Vec::new();
         for diagnostic in error.diagnostics() {
             match diagnostic {
                 ClassificationDiagnostic::ExclusiveStateConflict { dimension, states } => {
-                    let action =
-                        self.policy
-                            .on_impossible_state(snapshot.source, dimension, states);
+                    let action = self.policy.on_impossible_state(source, dimension, states);
                     report.push(
                         ReconcileFinding::ImpossibleState {
-                            target: snapshot.source,
+                            target: source,
                             dimension: dimension.clone(),
                             states: states.clone(),
                         },
@@ -371,11 +401,36 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         }
 
         if !drift.is_empty() {
-            let action = self.policy.on_classification_drift(snapshot.source, &drift);
+            let action = self.policy.on_classification_drift(source, &drift);
             report.push(
                 ReconcileFinding::ClassificationDrift {
-                    target: snapshot.source,
+                    target: source,
                     diagnostics: drift,
+                },
+                action,
+            );
+        }
+    }
+
+    /// Detects mechanical dependency unblocks available for a classified
+    /// artifact under the supplied dependency status.
+    fn scan_dependency_unblocks(
+        &self,
+        artifact: &ClassifiedArtifact,
+        deps: &DependencyStatus,
+        report: &mut ReconcileReport,
+    ) {
+        let planner = Planner::new(self.workflow);
+        for unblock in planner.dependency_unblocks(artifact, deps) {
+            let action = self.policy.on_resolved_dependencies(
+                artifact.source,
+                &unblock.transition,
+                &unblock.effects,
+            );
+            report.push(
+                ReconcileFinding::DependenciesResolved {
+                    target: artifact.source,
+                    transition: unblock.transition,
                 },
                 action,
             );
@@ -438,11 +493,16 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     }
 
     /// Loads snapshots and journal entries from a backend, then scans them.
+    ///
+    /// `deps` is supplied by the caller (the runtime/adapter that knows which
+    /// prerequisites have landed), mirroring the external CI signal behind
+    /// `ci_gate`; it is threaded straight into [`Reconciler::scan`].
     pub async fn reconcile<F, J>(
         &self,
         forge: &F,
         repo_id: &RepositoryId,
         journal: &J,
+        deps: &DependencyStatus,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<ReconcileReport, ReconcileError>
     where
@@ -462,7 +522,7 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         );
 
         let entries = journal.list().await?;
-        Ok(self.scan(&snapshots, &entries, now))
+        Ok(self.scan(&snapshots, &entries, deps, now))
     }
 }
 

@@ -42,7 +42,9 @@ fn five_role_fixture_validates() {
     assert_eq!(workflow.name(), "five-role-delivery");
     assert_eq!(workflow.roles().len(), 5);
     assert_eq!(workflow.artifact_kinds().len(), 4);
-    assert_eq!(workflow.gates().len(), 2);
+    // review_gate, testing_gate, and the dependency_gate that drives mechanical
+    // unblocking of blocked code issues.
+    assert_eq!(workflow.gates().len(), 3);
 }
 
 #[test]

@@ -556,6 +556,9 @@ fn gate_condition_label<'a>(
             .find(|candidate| &candidate.id == state)?
             .label
             .as_ref(),
+        // Reads `dependency` relations by kind, not a label, so it tracks no
+        // label usage.
+        GateCondition::DependenciesResolved => None,
     }
 }
 

@@ -140,7 +140,8 @@
       {"kind": "remove_label", "label": "design-draft"},
       {"kind": "add_label", "label": "design-ready"}
     ]},
-    {"id": "mark_code_ready", "artifact": "code", "roles": ["architect"], "effects": [
+    {"id": "mark_code_ready", "artifact": "code", "roles": ["architect"],
+      "requires_gates": ["dependency_gate"], "effects": [
       {"kind": "remove_label", "label": "blocked-on-dependency"},
       {"kind": "add_label", "label": "code-ready"}
     ]},
@@ -203,6 +204,7 @@
   "gates": [
     {"id": "review_gate", "satisfied_by": ["approve_review"]},
     {"id": "testing_gate", "satisfied_by": ["record_test_pass"]},
-    {"id": "ci_gate", "condition": {"kind": "state_equals", "dimension": "ci", "state": "passed"}}
+    {"id": "ci_gate", "condition": {"kind": "state_equals", "dimension": "ci", "state": "passed"}},
+    {"id": "dependency_gate", "condition": {"kind": "dependencies_resolved"}}
   ]
 }

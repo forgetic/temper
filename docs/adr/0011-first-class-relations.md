@@ -50,8 +50,10 @@ artifact's kind.
   without changing `harness-forge`.
 - Existing metadata blocks remain compatible; no provider-specific relation API
   is added.
-- `dependency_gate` remains a separate Phase 12b change that will evaluate the
-  declared `dependency` relations against fresh Forge state.
+- `dependency_gate` landed as Phase 12b: the `dependencies_resolved` gate
+  condition evaluates the declared `dependency` relations against a
+  runtime-supplied `DependencyStatus`, and the reconciler mechanically unblocks
+  `blocked-on-dependency` work once every prerequisite lands.
 
 ## Alternatives considered
 

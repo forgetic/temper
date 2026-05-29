@@ -352,6 +352,11 @@ fn check_gate_condition(
                 });
             }
         }
+        RawGateCondition::DependenciesResolved => {
+            // No id references to check: the condition reads `dependency`
+            // relations by kind, not by id, and the resolved targets are
+            // supplied by the runtime rather than declared in the spec.
+        }
     }
 }
 
@@ -527,6 +532,7 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
         RawGateCondition::LabelPresent { label } => {
             GateCondition::LabelPresent(LabelId::new(label))
         }
+        RawGateCondition::DependenciesResolved => GateCondition::DependenciesResolved,
         RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {
             dimension: StateDimensionId::new(dimension),
             state: StateId::new(state),

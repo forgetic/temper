@@ -163,9 +163,11 @@ expected backlog was:
   Claim-time lease effects remain future work.
 - **External-signal gates** (`ci_gate`) — implemented as gates satisfied by a
   Forge-projected label/state condition, not only a sibling transition's labels.
-- **Relation-driven dependency handling** — the `relation` primitive now
-  declares parent/dependency/produced-PR links; `dependency_gate` and the
-  reconcile action for mechanical unblocking remain future work.
+- **Relation-driven dependency handling** — the `relation` primitive declares
+  parent/dependency/produced-PR links, the `dependencies_resolved` gate condition
+  powers `dependency_gate`, and the reconciler mechanically produces the
+  `blocked-on-dependency` unblock once every prerequisite lands (applying that
+  action automatically is the only remaining piece, tracked separately).
 - **Queue activation and richer matching** — `min_depth`/`max_age`, multi-kind
   queue targets, and disjunctive label-set matching are implemented as read-side
   planner predicates.

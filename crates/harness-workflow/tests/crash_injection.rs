@@ -19,8 +19,8 @@ mod support;
 
 use harness_workflow::{
     ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
-    ExecutionError, Executor, InMemoryJournal, Postcondition, ReconcileFinding, RecoveryAction,
-    RoleId, TransitionId, WorkflowEffect,
+    DependencyStatus, ExecutionError, Executor, InMemoryJournal, Postcondition, ReconcileFinding,
+    RecoveryAction, RoleId, TransitionId, WorkflowEffect,
 };
 use support::crash::{CrashForge, Fault, FaultPoint, ForgeOp};
 use support::{block_on, create_issue, issue_labels, new_repo, ts, workflow, TestRoot};
@@ -228,6 +228,7 @@ fn a_journaled_claim_that_crashes_before_the_write_is_repaired_after_restart() {
         crash.inner(),
         &repo,
         &restarted,
+        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile loads state");
@@ -309,6 +310,7 @@ fn a_journaled_claim_that_lands_before_a_crash_is_marked_reconciled_after_restar
         crash.inner(),
         &repo,
         &restarted,
+        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile loads state");

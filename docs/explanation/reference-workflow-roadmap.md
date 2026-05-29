@@ -51,9 +51,13 @@ Status legend: ☐ pending · ☑ done.
 - ☑ **12a — First-class relations (ADR).** A `relation` spec primitive
   (parent/dependency/produced-PR) in spec/validated/validation/classification,
   superseding metadata-only relations for the spec.
-- ☐ **12b — `dependency_gate` + reconcile unblock.** A relation-driven
-  `dependency_gate` that clears `blocked-on-dependency` when prerequisites land,
-  plus a reconcile action that applies it mechanically.
+- ☑ **12b — `dependency_gate` + reconcile unblock.** Added the
+  `dependencies_resolved` gate condition and a relation-driven `dependency_gate`
+  (gating `mark_code_ready`). `Planner::dependency_unblocks` plus a reconciler
+  `DependenciesResolved` finding / `Unblock` action clear `blocked-on-dependency`
+  mechanically once every prerequisite lands; landed status is a runtime-supplied
+  `DependencyStatus`, like the CI signal. No new ADR (extends existing relation
+  and gate primitives).
 - ☑ **13 — Queue activation policy (ADR).** Added `min_depth`/`max_age` to the
   queue primitive and a pure planner predicate so `owner_alignment` services
   cohorts. ADR 0012 covers all queue-primitive extensions (13 and 14).
@@ -74,5 +78,12 @@ the phases above but are out of scope for the reference-workflow backlog:
 
 All phases ☑, `reference-delivery.json` carries no expression workarounds, the
 reference workflow's full loop (intake → triage → claim → PR → review/test/CI →
-merge → post-merge reconcile/alignment) is executable, and
+merge → post-merge reconcile/alignment) is expressible/plannable, and
 `reference-workflow-gaps.md` is updated to a "resolved" record.
+
+**Status: complete.** Phases 9a–14 have all landed. The fixture carries no
+expression workarounds and the full loop validates, compiles, and plans. The
+only residual items are the adjacent pre-existing limitations below
+(compare-and-swap leases; automatically *applying* reconciler actions, including
+the dependency `Unblock`), which were always out of scope for this backlog and
+are tracked in `docs/reference/robustness-guarantees.md`.

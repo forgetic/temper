@@ -62,6 +62,9 @@
     {"id": "code", "target": "issue", "identifying_labels": ["code"]},
     {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
   ],
+  "relations": [
+    {"kind": "dependency", "source": "code", "target": "code"}
+  ],
   "state_dimensions": [
     {"id": "design_lifecycle", "exclusive": true, "states": [
       {"id": "draft", "label": "design-draft"},
@@ -113,7 +116,8 @@
     {"id": "escalate_to_owner", "artifact": "design", "roles": ["architect"], "effects": [
       {"kind": "add_label", "label": "needs-owner"}
     ]},
-    {"id": "mark_code_ready", "artifact": "code", "roles": ["architect"], "effects": [
+    {"id": "mark_code_ready", "artifact": "code", "roles": ["architect"],
+      "requires_gates": ["dependency_gate"], "effects": [
       {"kind": "remove_label", "label": "blocked"},
       {"kind": "add_label", "label": "ready"}
     ]},
@@ -157,6 +161,7 @@
   ],
   "gates": [
     {"id": "review_gate", "satisfied_by": ["approve_review"]},
-    {"id": "testing_gate", "satisfied_by": ["record_test_pass"]}
+    {"id": "testing_gate", "satisfied_by": ["record_test_pass"]},
+    {"id": "dependency_gate", "condition": {"kind": "dependencies_resolved"}}
   ]
 }

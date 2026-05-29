@@ -7,9 +7,9 @@ and exercising it through `tests/reference_delivery.rs`.
 The label-state-machine core — roles, type/state labels, exclusive and
 non-exclusive dimensions, queues with activation and richer matching,
 role-authorized label transitions, transition-satisfied gates, external-signal
-gates, relation declarations, non-label effects for assignees/comments/PR
-create/merge, and metadata-projected relations — **validates, compiles, and
-plans today**.
+gates, relation declarations, the relation-driven `dependency_gate`, non-label
+effects for assignees/comments/PR create/merge, and metadata-projected
+relations — **validates, compiles, and plans today**.
 
 ## Resolved expression gaps
 
@@ -25,6 +25,11 @@ plans today**.
 - **Relation primitive.** The spec declares `parent`, `dependency`, and
   `produced_pr` relations; classifiers type metadata projections using those
   declarations.
+- **Relation-driven dependency unblocking.** The `dependencies_resolved` gate
+  condition powers a `dependency_gate`; `Planner::dependency_unblocks` and a
+  reconciler `DependenciesResolved` finding / `Unblock` action clear
+  `blocked-on-dependency` mechanically once every prerequisite has landed. The
+  runtime supplies landed status via `DependencyStatus`, like the CI signal.
 - **Queue activation policy.** `RawQueue`/`ValidatedQueue` carry optional
   `min_depth`/`max_age`; `owner_alignment` uses the planner's pure activation
   predicate for cohorts.
@@ -43,6 +48,6 @@ activation policy plus Phase 14's multi-kind and disjunctive matching.
 - **Claim-time lease effects.** Claims can be represented with
   `metadata::Lease` and managed through `LeaseManager`, but transition specs do
   not yet emit lease effects inside `Executor::execute`.
-- **Relation-driven dependency unblocking.** Relations are typed, but the
-  `dependency_gate` and mechanical reconcile action remain future work (roadmap
-  Phase 12b).
+- **Applying the mechanical unblock.** The reconciler now *produces* the
+  dependency `Unblock` action, but applying reconciler actions automatically is
+  still future work (tracked in `robustness-guarantees.md`).

@@ -271,4 +271,9 @@ pub enum RawGateCondition {
     LabelPresent { label: String },
     /// The artifact must occupy `state` within `dimension`.
     StateEquals { dimension: String, state: String },
+    /// Every `dependency` relation target of the artifact must have landed
+    /// (its prerequisite work merged). Which targets have landed is supplied by
+    /// the runtime as an external signal, mirroring how `ci_gate` is fed; the
+    /// condition references relations by kind, so it carries no payload.
+    DependenciesResolved,
 }

@@ -10,8 +10,8 @@ use chrono::{DateTime, Duration, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
     compile, render_metadata_block, ArtifactKindId, ClassifiedArtifact, ClassifiedRelation,
-    Classifier, GateCondition, GateId, LabelId, LabelUsage, PlanDiagnostic, QueueId,
-    RawWorkflowSpec, RelationKind, RoleId, StateDimensionId, StateId, TransitionId,
+    Classifier, DependencyStatus, GateCondition, GateId, LabelId, LabelUsage, PlanDiagnostic,
+    QueueId, RawWorkflowSpec, RelationKind, RoleId, StateDimensionId, StateId, TransitionId,
     ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
 };
 
@@ -112,7 +112,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.state_dimensions().len(), 9);
     assert_eq!(workflow.queues().len(), 9);
     assert_eq!(workflow.transitions().len(), 19);
-    assert_eq!(workflow.gates().len(), 3);
+    assert_eq!(workflow.gates().len(), 4);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow
         .transitions()
@@ -394,6 +394,94 @@ fn engineer_open_pr_expresses_pr_creation() {
         }]
     );
     assert!(plan.postconditions.is_empty());
+}
+
+/// Classifies a blocked code issue whose metadata records `dependencies`.
+fn classify_blocked_code(
+    workflow: &ValidatedWorkflow,
+    number: u64,
+    dependencies: &[u64],
+) -> ClassifiedArtifact {
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
+        ..WorkflowMetadata::default()
+    });
+    Classifier::new(workflow)
+        .classify_issue(&Issue {
+            body,
+            ..issue(number, &["code", "blocked-on-dependency"])
+        })
+        .expect("blocked code issue classifies")
+}
+
+#[test]
+fn dependency_gate_unblocks_only_when_prerequisites_land() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let blocked = classify_blocked_code(&workflow, 50, &[51]);
+
+    // Prerequisite #51 has not landed: no mechanical unblock is available, and
+    // the architect-driven `mark_code_ready` is gated shut.
+    assert!(planner
+        .dependency_unblocks(&blocked, &DependencyStatus::default())
+        .is_empty());
+    let gated = planner
+        .plan_transition(
+            &TransitionId::new("mark_code_ready"),
+            &RoleId::new("architect"),
+            &blocked,
+        )
+        .expect_err("mark_code_ready is gated until dependencies land");
+    assert!(gated
+        .diagnostics()
+        .contains(&PlanDiagnostic::GateNotSatisfied {
+            transition: TransitionId::new("mark_code_ready"),
+            gate: GateId::new("dependency_gate"),
+        }));
+
+    // Once #51 lands, the gate opens: one mechanical unblock clears the blocked
+    // label and marks the issue ready.
+    let landed = DependencyStatus::landed([ItemNumber::new(51)]);
+    let unblocks = planner.dependency_unblocks(&blocked, &landed);
+    assert_eq!(unblocks.len(), 1);
+    assert_eq!(unblocks[0].transition, TransitionId::new("mark_code_ready"));
+    assert_eq!(
+        unblocks[0].effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("blocked-on-dependency")),
+            WorkflowEffect::AddLabel(LabelId::new("code-ready")),
+        ]
+    );
+
+    // The same dependency status lets the architect plan the flip directly.
+    let plan = planner
+        .plan_transition_with(
+            &TransitionId::new("mark_code_ready"),
+            &RoleId::new("architect"),
+            &blocked,
+            &landed,
+        )
+        .expect("architect can mark ready once dependencies land");
+    assert_eq!(plan.effects, unblocks[0].effects);
+}
+
+#[test]
+fn dependency_gate_requires_every_prerequisite() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let blocked = classify_blocked_code(&workflow, 60, &[61, 62]);
+
+    // Only one of two prerequisites landed: the gate stays shut.
+    let partial = DependencyStatus::landed([ItemNumber::new(61)]);
+    assert!(
+        planner.dependency_unblocks(&blocked, &partial).is_empty(),
+        "every prerequisite must land before the unblock"
+    );
+
+    // Both landed: the mechanical unblock becomes available.
+    let both = DependencyStatus::landed([ItemNumber::new(61), ItemNumber::new(62)]);
+    assert_eq!(planner.dependency_unblocks(&blocked, &both).len(), 1);
 }
 
 #[test]
