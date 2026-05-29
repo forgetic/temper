@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2 and 3 have landed spec validation, artifact/metadata modeling, and classification; the rest of the contract below (compilation, runtime, recovery) is still planned. See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–4 have landed spec validation, artifact/metadata modeling, classification, and compilation to manifests; the rest of the contract below (runtime, recovery) is still planned. See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -45,9 +45,20 @@ Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
 - `classify::Classifier` turns a `harness_forge::Issue` or `PullRequest` into a typed `ClassifiedArtifact`, or a `ClassificationError` carrying `ClassificationDiagnostic`s. See "Artifact classification".
 - `harness-workflow` now depends on `harness-forge` because classification consumes Forge domain types.
 
-Not yet modeled: `relation` as a first-class spec primitive (only metadata relations exist), `invariant`, `recovery_policy`, concurrency limits, compilation outputs, and runtime execution. Effects still cover only label add/remove.
+Not yet modeled: `relation` as a first-class spec primitive (only metadata relations exist), `invariant`, `recovery_policy`, and runtime execution. Effects still cover only label add/remove.
 
 Gate/transition wiring is modeled in both directions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions.
+
+Phase 4 added compilation:
+
+- `compile::compile` (also `ValidatedWorkflow::compile`) projects a validated workflow into a `CompiledWorkflow`. Compilation is infallible because it consumes an already-validated workflow.
+- `RoleManifest` carries role id, charter, concurrency hint, subscribed queues, transition `authority`, role-specific `tools`, and a `PromptManifest`.
+- `ToolManifest` is an intent-level operation (named after its transition) carrying artifact, required gates, and effects. Tools are derived from the transitions a role is authorized for, so a role can never see a tool outside its authority.
+- `QueueManifest` adds `subscribers` to each queue; `TransitionManifest` is the runtime transition table; `LabelManifest`/`LabelSpec`/`LabelUsage` enumerate every label a workflow site needs and why.
+- `PromptManifest`/`PromptSection` hold deterministic prompt sections (`Role`, `Charter`, `Queues`, `Authorized actions`) with a stable `render` method.
+- Roles now carry an optional `concurrency` hint (`RawRole`/`ValidatedRole`), compiled into the role manifest.
+
+Not yet implemented from compilation: generated tool bodies and optional generated Rust code.
 
 ## Spec primitives
 
@@ -166,13 +177,14 @@ Repairs should be deterministic when safe. Ambiguous drift should be routed to a
 
 ## Compilation outputs
 
-Compilation should produce:
+`compile::compile` produces a `CompiledWorkflow` with:
 
-- role prompt manifests
-- role-specific tool manifests
-- queue manifests
-- label manifests for Forge setup
-- runtime transition tables
-- optional generated Rust code for statically checked workflows
+- `RoleManifest` per role, embedding its `PromptManifest` and role-specific `tools`
+- `ToolManifest` entries (intent-level, one per authorized transition)
+- `QueueManifest` entries with subscribers, for runtime queue evaluation
+- `LabelManifest` (a list of `LabelSpec` with `LabelUsage` annotations) for Forge label setup
+- `TransitionManifest` entries forming the runtime transition table
 
-Generated tools should expose intent-level operations such as `claim_code_issue` or `record_test_failure`, not generic Forge mutation operations.
+Still planned: optional generated Rust code for statically checked workflows, and generated tool bodies that enforce preconditions and apply effects.
+
+Generated tools expose intent-level operations such as `claim_code` or `record_test_failure`, not generic Forge mutation operations. Each `ToolManifest` is named after its transition and carries that transition's artifact, required gates, and effects.

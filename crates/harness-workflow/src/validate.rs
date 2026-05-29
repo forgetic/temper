@@ -294,6 +294,7 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         .map(|role| ValidatedRole {
             id: RoleId::new(&role.id),
             charter: role.charter.clone(),
+            concurrency: role.concurrency,
             queues: role.queues.iter().map(QueueId::new).collect(),
         })
         .collect();

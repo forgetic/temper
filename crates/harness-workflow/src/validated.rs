@@ -105,6 +105,9 @@ impl ValidatedWorkflow {
 pub struct ValidatedRole {
     pub id: RoleId,
     pub charter: Option<String>,
+    /// Concurrency hint: how many artifacts the role may hold at once, or
+    /// `None` for no declared limit.
+    pub concurrency: Option<u32>,
     pub queues: Vec<QueueId>,
 }
 

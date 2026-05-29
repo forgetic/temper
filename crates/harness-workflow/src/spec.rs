@@ -55,6 +55,11 @@ pub struct RawRole {
     /// Prose charter that guides judgment-heavy behavior for the role.
     #[serde(default)]
     pub charter: Option<String>,
+    /// Optional concurrency hint: how many artifacts the role may hold at once.
+    /// Compiled into the role manifest for runtime claim limits; `None` means
+    /// no declared limit.
+    #[serde(default)]
+    pub concurrency: Option<u32>,
     /// Queues the role draws work from. Each entry references a queue id.
     #[serde(default)]
     pub queues: Vec<String>,

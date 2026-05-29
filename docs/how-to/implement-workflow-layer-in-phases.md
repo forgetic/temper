@@ -20,9 +20,9 @@ Added focused modules in `crates/harness-workflow/src`: `ids` (typed ids), `spec
 
 Added `artifact::ArtifactTarget` (artifact kinds now map to a Forge issue or PR via `target` and carry `identifying_labels`), an `exclusive` flag on state dimensions, `metadata::WorkflowMetadata`/`Lease` with JSON-in-HTML-comment render/parse, and `classify::Classifier` that turns a `harness_forge::Issue` or `PullRequest` into a `ClassifiedArtifact` or a `ClassificationError` of `ClassificationDiagnostic`s. `harness-workflow` now depends on `harness-forge`. Tests in `tests/metadata.rs` and `tests/classification.rs` cover round-trips, label-based classification, exclusive conflicts, and missing/malformed metadata.
 
-## Phase 4: Compile role, prompt, tool, and label manifests
+## Phase 4: Compile role, prompt, tool, and label manifests (done)
 
-Compile a validated workflow into role manifests, prompt manifests, role-specific tool manifests, queue manifests, and label manifests. Include a checked-in five-role workflow fixture and tests for generated manifests.
+Added `compile` (`compile::compile` / `ValidatedWorkflow::compile`) producing a `CompiledWorkflow` with `RoleManifest` (id, charter, concurrency hint, subscribed queues, transition authority, role-specific tools, and an embedded `PromptManifest`), `ToolManifest` (intent-level, one per authorized transition), `QueueManifest` (with subscribers), `LabelManifest`/`LabelSpec`/`LabelUsage`, and a `TransitionManifest` runtime table. Added a `concurrency` hint to `RawRole`/`ValidatedRole`. Checked in `crates/harness-workflow/fixtures/five-role-delivery.json` (architect, engineer, reviewer, tester, owner) and `tests/compilation.rs` covering fixture validation, per-role manifests, role-scoped tools/authority, label coverage across artifact/state/queue/gate sites, and deterministic prompts. No transitions are executed.
 
 ## Phase 5: Add pure queue evaluation and transition planning
 

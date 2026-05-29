@@ -33,9 +33,14 @@
 //! Phase 3 added artifact-to-Forge target mapping ([`artifact`]), workflow
 //! metadata blocks ([`metadata`]), and classification of Forge issues and pull
 //! requests into typed workflow artifacts ([`classify`]).
+//!
+//! Phase 4 added compilation ([`compile`]) of a `ValidatedWorkflow` into role,
+//! prompt, tool, queue, and label manifests plus a runtime transition table. No
+//! transition is executed; compilation only projects the validated model.
 
 pub mod artifact;
 pub mod classify;
+pub mod compile;
 pub mod diagnostics;
 pub mod ids;
 pub mod metadata;
@@ -46,6 +51,10 @@ pub mod validated;
 pub use artifact::ArtifactTarget;
 pub use classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
+};
+pub use compile::{
+    compile, CompiledWorkflow, LabelManifest, LabelSpec, LabelUsage, PromptManifest, PromptSection,
+    QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
 };
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use ids::{

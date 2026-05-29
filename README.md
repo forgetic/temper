@@ -2,7 +2,7 @@
 
 Harness is a Rust workspace for building agentic workflows on top of Forge-like collaboration platforms.
 
-The project is intentionally backend-agnostic. The `harness-forge` crate defines the Forge domain model and abstract interface for repositories, users, issues, pull requests, comments, labels, merges, and CI jobs. Concrete backends can adapt that interface to local files, Forgejo, GitHub, or other systems. The `harness-workflow` crate is the workflow/orchestration layer; it now contains the typed workflow spec, static validation, and artifact/metadata classification of Forge issues and pull requests (Phases 2–3).
+The project is intentionally backend-agnostic. The `harness-forge` crate defines the Forge domain model and abstract interface for repositories, users, issues, pull requests, comments, labels, merges, and CI jobs. Concrete backends can adapt that interface to local files, Forgejo, GitHub, or other systems. The `harness-workflow` crate is the workflow/orchestration layer; it now contains the typed workflow spec, static validation, artifact/metadata classification of Forge issues and pull requests, and compilation to role/prompt/tool/queue/label manifests (Phases 2–4).
 
 ## Status
 
@@ -11,16 +11,16 @@ This repository is at the design-first scaffold stage. Expect the public interfa
 Current state:
 
 - `harness-forge` contains the provider-neutral Forge domain model and async interface.
-- `harness-workflow` implements the workflow spec types (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2), plus artifact/Forge mapping, workflow metadata blocks, and a classifier that turns Forge issues and pull requests into typed artifacts or classification diagnostics (Phase 3). It depends on `harness-forge` for the domain types it classifies. Later phases (compilation, runtime, recovery) are still planned; see ADR 0007.
+- `harness-workflow` implements the workflow spec types (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2), plus artifact/Forge mapping, workflow metadata blocks, and a classifier that turns Forge issues and pull requests into typed artifacts or classification diagnostics (Phase 3), plus compilation of a validated workflow into role, prompt, tool, queue, and label manifests and a runtime transition table (Phase 4). It depends on `harness-forge` for the domain types it classifies. Later phases (runtime, recovery) are still planned; see ADR 0007.
 - `harness-fs` implements filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
-- The next likely implementation task is to continue `harness-workflow` in phases (Phase 4: compile role, prompt, tool, and label manifests), or to add another concrete Forge backend.
+- The next likely implementation task is to continue `harness-workflow` in phases (Phase 5: pure queue evaluation and transition planning), or to add another concrete Forge backend.
 
 ## Workspace layout
 
 ```text
 crates/
   harness-forge/    Domain types and the backend-agnostic Forge interface.
-  harness-workflow/ Workflow/orchestration crate (spec, validation, classification).
+  harness-workflow/ Workflow/orchestration crate (spec, validation, classification, compilation).
   harness-fs/       Local filesystem backend used for fast development and tests.
 docs/
   tutorials/      Learning-oriented walkthroughs.
