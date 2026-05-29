@@ -48,6 +48,10 @@ define_string_id!(
     "Stable backend identifier for a pull request."
 );
 define_string_id!(CommentId, "Stable backend identifier for a comment.");
+define_string_id!(
+    ReviewId,
+    "Stable backend identifier for a pull-request review."
+);
 define_string_id!(LabelId, "Stable backend identifier for a label.");
 define_string_id!(CiJobId, "Stable backend identifier for a CI job.");
 

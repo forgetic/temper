@@ -15,6 +15,7 @@ The `harness_forge::Forge` trait exposes operations for:
 - pull requests
 - native dependency links between repository items
 - comments
+- pull-request reviews
 - pull-request merges
 - CI jobs
 
@@ -29,6 +30,7 @@ Every durable resource has a typed stable identifier:
 - `IssueId`
 - `PullRequestId`
 - `CommentId`
+- `ReviewId`
 - `LabelId`
 - `CiJobId`
 
@@ -140,15 +142,28 @@ Required methods:
 - `update_pull_request`
 - `add_pull_request_dependency`
 - `remove_pull_request_dependency`
+- `request_pull_request_reviewers`
+- `list_pull_request_reviews`
+- `submit_pull_request_review`
 - `list_pull_request_comments`
 - `add_pull_request_comment`
 - `merge_pull_request`
 
-Pull-request state is `open`, `closed`, or `merged`. `PullRequest::dependencies` lists repository item numbers the pull request depends on, sorted deterministically. New pull requests start with no dependencies. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdatePullRequest` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
+Pull-request state is `open`, `closed`, or `merged`. `PullRequest::dependencies` lists repository item numbers the pull request depends on, sorted deterministically. `PullRequest::requested_reviewers` lists users whose review was requested, sorted deterministically. New pull requests start with no dependencies and no requested reviewers. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdatePullRequest` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
 
 Merging must go through `merge_pull_request` so the backend can record merge metadata and produce the `merged` state.
 
 `PullRequestQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive. Pull requests can be sorted by number, creation time, or update time.
+
+## Review operations
+
+`request_pull_request_reviewers` adds users to `PullRequest::requested_reviewers` set-like and idempotently. A call that changes the set advances the pull request's `Version` and `updated_at`; a duplicate request is a no-op. The operation returns `ForgeError::NotFound` when the pull request is missing.
+
+`submit_pull_request_review` appends a `PullRequestReview` authored by the backend client's current user. A review has a typed `ReviewId`, `pull_request_id`, `reviewer_id`, `decision`, optional body, and `submitted_at`. Decisions are `approved`, `changes_requested`, `commented`, or `pending`. Submitting a review creates an event and does not mutate the pull-request artifact record or version. `list_pull_request_reviews` returns review events in deterministic chronological order with stable-id tie-breaks.
+
+The portable aggregate rule is: latest non-comment review per reviewer wins, ordered by `submitted_at` then `ReviewId`. `commented` reviews are ignored for the latest-decision map; `pending` blocks approval without counting as changes requested. A pull request is approved only when at least one reviewer is requested, every requested reviewer's latest non-comment decision is `approved`, and no latest reviewer decision is `changes_requested`. The aggregate reports changes requested when any latest non-comment reviewer decision is `changes_requested`.
+
+Provider-specific review policy is outside this portable contract: CODEOWNERS, required-reviewer rules, stale-review dismissal on push, branch protection, and review threads are not modeled. Backends without those features degrade to requested reviewers plus submitted review events.
 
 ## Merge operations
 
@@ -177,9 +192,10 @@ CI jobs are associated with a repository, a commit SHA, and optionally a pull re
 Issues and pull requests carry a `Version`: a portable, opaque, monotonic
 concurrency token (see ADR 0013). A backend assigns `Version::INITIAL` when the
 artifact is created and advances it on every successful mutation of the artifact
-record — `update_issue`, `update_pull_request`, dependency-link changes, and
-`merge_pull_request`. Adding
-a comment does not modify the artifact record, so it does not change the version.
+record — `update_issue`, `update_pull_request`, dependency-link changes,
+reviewer-request changes, and `merge_pull_request`. Adding a comment or
+submitting a review does not modify the artifact record, so it does not change
+the version.
 
 `UpdateIssue` and `UpdatePullRequest` carry an optional `expected_version`
 precondition that turns an update into a compare-and-swap:
@@ -205,7 +221,7 @@ cannot both win. See `docs/reference/robustness-guarantees.md`.
 
 ## Idempotency
 
-Create operations (`create_issue`, `create_pull_request`, `add_*_comment`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue` and `Executor::ensure_pull_request`; see `docs/reference/workflow-layer.md`. A future revision may add a portable correlation-key contract if it proves broadly useful.
+Create operations (`create_issue`, `create_pull_request`, `add_*_comment`, `submit_pull_request_review`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue`, `Executor::ensure_pull_request`, and review idempotency markers; see `docs/reference/workflow-layer.md`. Reviewer requests are already set-like and idempotent. A future revision may add a portable correlation-key contract if it proves broadly useful.
 
 ## Compatibility notes
 

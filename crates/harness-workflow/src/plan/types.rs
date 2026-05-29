@@ -7,6 +7,7 @@
 use crate::classify::ArtifactSource;
 use crate::ids::{ArtifactKindId, LabelId, RoleId, TransitionId};
 use crate::metadata::Lease;
+use harness_forge::ReviewDecision;
 
 /// A typed side effect a transition plan would apply.
 ///
@@ -38,6 +39,10 @@ pub enum WorkflowEffect {
     /// identifies retries; branch, title, body, and labels come from runtime
     /// context in a later execution phase.
     CreatePullRequest { correlation_key: Option<String> },
+    /// Request reviews from users resolved for workflow roles on the target PR.
+    RequestReviewers { roles: Vec<RoleId> },
+    /// Submit a native pull-request review decision.
+    SubmitReview { decision: ReviewDecision },
     /// Set or refresh the claim lease on the target artifact.
     ///
     /// Placeholder: leases are modeled in [`crate::metadata`] but no transition

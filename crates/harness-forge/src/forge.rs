@@ -1,8 +1,9 @@
 use crate::ids::{CiJobId, IssueId, ItemNumber, PullRequestId, RepositoryId, UserId};
 use crate::model::{
-    CiJob, CiJobStatus, Comment, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
-    Issue, IssueState, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestState,
-    Repository, RepositoryPath, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
+    CiJob, CiJobStatus, Comment, CreateComment, CreateIssue, CreatePullRequest,
+    CreatePullRequestReview, CreateRepository, Issue, IssueState, Label, MergePullRequest,
+    MergeRecord, PullRequest, PullRequestReview, PullRequestState, Repository, RepositoryPath,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -250,6 +251,26 @@ pub trait Forge: Send + Sync {
         id: &PullRequestId,
         target: ItemNumber,
     ) -> ForgeResult<PullRequest>;
+
+    /// Requests reviews from users on a pull request.
+    async fn request_pull_request_reviewers(
+        &self,
+        id: &PullRequestId,
+        input: RequestReviewers,
+    ) -> ForgeResult<PullRequest>;
+
+    /// Lists native review events on a pull request.
+    async fn list_pull_request_reviews(
+        &self,
+        id: &PullRequestId,
+    ) -> ForgeResult<Vec<PullRequestReview>>;
+
+    /// Submits a native review event as the backend client's current user.
+    async fn submit_pull_request_review(
+        &self,
+        id: &PullRequestId,
+        input: CreatePullRequestReview,
+    ) -> ForgeResult<PullRequestReview>;
 
     /// Lists comments on a pull request.
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>>;

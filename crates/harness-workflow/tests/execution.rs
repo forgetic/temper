@@ -6,7 +6,7 @@
 
 use harness_forge::{
     BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, ItemNumber, PullRequestState,
-    RepositoryId, UserId,
+    RepositoryId, ReviewDecision, UserId,
 };
 use harness_forge_memory::{FaultOp, MemoryForge};
 use harness_workflow::{
@@ -381,7 +381,7 @@ fn merge_pull_request_effect_executes() {
 }
 
 #[test]
-fn approve_review_updates_a_pull_request() {
+fn approve_review_submits_a_native_review() {
     let root = TestRoot::new();
     let forge = root.forge();
     let workflow = workflow();
@@ -401,19 +401,20 @@ fn approve_review_updates_a_pull_request() {
         report.applied,
         vec![
             WorkflowEffect::RemoveLabel("needs-review".into()),
-            WorkflowEffect::AddLabel("review-approved".into()),
+            WorkflowEffect::SubmitReview {
+                decision: ReviewDecision::Approved,
+            },
         ]
     );
 
-    let mut labels = block_on(forge.get_pull_request_by_number(&repo, number))
+    let pull_request = block_on(forge.get_pull_request_by_number(&repo, number))
         .expect("lookup succeeds")
-        .expect("pull request exists")
-        .labels;
-    labels.sort();
-    assert_eq!(
-        labels,
-        vec!["implementation".to_string(), "review-approved".to_string()]
-    );
+        .expect("pull request exists");
+    assert_eq!(pull_request.labels, vec!["implementation".to_string()]);
+    let reviews =
+        block_on(forge.list_pull_request_reviews(&pull_request.id)).expect("reviews list succeeds");
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].decision, ReviewDecision::Approved);
 }
 
 #[test]
@@ -519,7 +520,7 @@ fn execution_diagnostics_distinguish_failure_classes() {
     }));
 
     // Precondition failure: a merge cannot proceed until its gates are met.
-    let pr = create_pr(&forge, &repo, &["implementation", "review-approved"]);
+    let pr = create_pr(&forge, &repo, &["implementation"]);
     let precondition = block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: pr },

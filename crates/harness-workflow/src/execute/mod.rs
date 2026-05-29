@@ -53,9 +53,10 @@
 //!
 //! Before planning, the executor reads gate facts from fresh Forge state into
 //! [`GateSignals`]. Dependency gates are fed by native dependency targets
-//! (closed issues or merged pull requests), and the `ci_passed` gate is fed by
+//! (closed issues or merged pull requests), the `ci_passed` gate is fed by
 //! native CI jobs from [`Forge::list_ci_jobs`](harness_forge::Forge::list_ci_jobs)
-//! (see [`CiStatus::from_jobs`] and ADR 0014).
+//! (see [`CiStatus::from_jobs`] and ADR 0014), and review gates are fed by
+//! requested reviewers plus native review events (ADR 0016).
 //!
 //! Reloading and re-planning before every mutation is deliberate: Forge state
 //! can be edited by humans or other workers between planning and execution, so
@@ -87,7 +88,7 @@ use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, Work
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
     CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
+    PullRequestId, PullRequestQuery, PullRequestState, RepositoryId, UserId,
 };
 
 /// Outcome of an idempotent ensure-create operation.
@@ -164,6 +165,8 @@ pub enum ExecutionError {
     /// An assignee effect named a role with no Forge user bound in the
     /// [`ExecutionContext`]. Reported before any mutation.
     UnresolvedAssignee { role: RoleId },
+    /// A reviewer-request effect named a role with no Forge user bound.
+    UnresolvedReviewer { role: RoleId },
     /// A `CreatePullRequest` effect omitted the correlation key needed for
     /// idempotent execution. Reported before any mutation.
     MissingCorrelationKey { effect: WorkflowEffect },
@@ -204,6 +207,9 @@ impl std::fmt::Display for ExecutionError {
                     formatter,
                     "no Forge user is bound for assignee role `{role}`"
                 )
+            }
+            ExecutionError::UnresolvedReviewer { role } => {
+                write!(formatter, "no Forge user is bound for reviewer role `{role}`")
             }
             ExecutionError::MissingCorrelationKey { effect } => {
                 write!(formatter, "effect {effect:?} has no correlation key")
@@ -286,6 +292,8 @@ enum Loaded {
         /// Head commit SHA, when the backend records one. Scopes the CI signal
         /// to the pull request's head commit (see [`Executor::gate_signals`]).
         head_sha: Option<String>,
+        /// Users whose native review has been requested.
+        requested_reviewers: Vec<UserId>,
         classified: ClassifiedArtifact,
     },
 }
@@ -425,6 +433,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .ok_or(ExecutionError::TargetMissing { target })?;
                 let merged = matches!(pull_request.state, PullRequestState::Merged);
                 let head_sha = pull_request.head_sha.clone();
+                let requested_reviewers = pull_request.requested_reviewers.clone();
                 let classified = classifier
                     .classify_pull_request(&pull_request)
                     .map_err(ExecutionError::Classification)?;
@@ -432,6 +441,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     id: pull_request.id,
                     merged,
                     head_sha,
+                    requested_reviewers,
                     classified,
                 })
             }

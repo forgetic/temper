@@ -97,6 +97,7 @@ fn pull_request(number: u64, labels: &[&str], body: &str) -> PullRequest {
         base_sha: None,
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        requested_reviewers: Vec::new(),
         dependencies: Vec::new(),
         merge: None,
         version: Default::default(),

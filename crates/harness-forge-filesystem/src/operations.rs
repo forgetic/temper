@@ -15,15 +15,17 @@ use crate::record_ids::{
     issue_comment_id, issue_id, label_id, merge_commit_sha, pull_request_comment_id,
     pull_request_id,
 };
+use crate::reviews::{list_reviews, request_reviewers, submit_review};
 use crate::validation::{validate_create_repository, validate_upsert_label};
 use crate::FilesystemForge;
 use async_trait::async_trait;
 use harness_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState,
-    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
-    PullRequestState, Repository, RepositoryId, RepositoryPath, RepositoryQuery, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, User, UserId, Version,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
+    IssueQuery, IssueState, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestId, PullRequestQuery, PullRequestReview, PullRequestState, Repository, RepositoryId,
+    RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel,
+    User, UserId, Version,
 };
 
 /// Enforces an optimistic-concurrency precondition.
@@ -338,6 +340,7 @@ impl Forge for FilesystemForge {
             base_sha: None,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            requested_reviewers: Vec::new(),
             dependencies: Vec::new(),
             merge: None,
             version: Version::INITIAL,
@@ -442,6 +445,29 @@ impl Forge for FilesystemForge {
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
         remove_pull_request_dependency(self, id, target)
+    }
+
+    async fn request_pull_request_reviewers(
+        &self,
+        id: &PullRequestId,
+        input: RequestReviewers,
+    ) -> ForgeResult<PullRequest> {
+        request_reviewers(self, id, input)
+    }
+
+    async fn list_pull_request_reviews(
+        &self,
+        id: &PullRequestId,
+    ) -> ForgeResult<Vec<PullRequestReview>> {
+        list_reviews(self, id)
+    }
+
+    async fn submit_pull_request_review(
+        &self,
+        id: &PullRequestId,
+        input: CreatePullRequestReview,
+    ) -> ForgeResult<PullRequestReview> {
+        submit_review(self, id, input)
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {

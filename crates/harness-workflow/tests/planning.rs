@@ -10,8 +10,8 @@ use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullR
 use harness_workflow::{
     compile, matches_queue, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier,
     DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId,
-    RawWorkflowSpec, RoleId, StateDimensionId, StateId, TransitionId, ValidatedWorkflow,
-    WorkflowEffect,
+    RawWorkflowSpec, ReviewStatus, RoleId, StateDimensionId, StateId, TransitionId,
+    ValidatedWorkflow, WorkflowEffect,
 };
 
 /// The checked-in five-role delivery workflow fixture.
@@ -71,6 +71,7 @@ fn pull_request(number: u64, labels: &[&str]) -> PullRequest {
         base_sha: None,
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        requested_reviewers: Vec::new(),
         dependencies: Vec::new(),
         merge: None,
         version: Default::default(),
@@ -265,17 +266,15 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    // Both gates satisfied: review approved and testing passed.
-    let ready = classify_pr(
-        &workflow,
-        10,
-        &["implementation", "review-approved", "testing-passed"],
-    );
+    // Both gates satisfied: native review approved and testing passed.
+    let ready = classify_pr(&workflow, 10, &["implementation", "testing-passed"]);
+    let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
     let plan = planner
-        .plan_transition(
+        .plan_transition_with(
             &TransitionId::new("approve_merge"),
             &RoleId::new("owner"),
             &ready,
+            &review,
         )
         .expect("owner can approve a fully gated merge");
     // Merge eligibility is derived from the gates, not a stored marker: the
@@ -291,12 +290,13 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
     );
 
     // Testing gate unsatisfied: the merge cannot be planned.
-    let pending = classify_pr(&workflow, 11, &["implementation", "review-approved"]);
+    let pending = classify_pr(&workflow, 11, &["implementation"]);
     let error = planner
-        .plan_transition(
+        .plan_transition_with(
             &TransitionId::new("approve_merge"),
             &RoleId::new("owner"),
             &pending,
+            &review,
         )
         .expect_err("an ungated merge must not plan");
     assert!(error

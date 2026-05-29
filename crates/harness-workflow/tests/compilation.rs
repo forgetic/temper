@@ -197,24 +197,20 @@ fn label_manifest_covers_every_workflow_site() {
         |usage| matches!(usage, LabelUsage::QueueFilter { queue } if queue.as_str() == "code_ready")
     ));
 
-    // Gate outcome: review-approved is produced by a transition that satisfies
-    // review_gate, and is also a transition effect.
-    let approved = labels
-        .get(&"review-approved".into())
-        .expect("review-approved label is in the manifest");
-    assert!(approved.usages.iter().any(|usage| matches!(
+    // Review result labels are retired: review_gate reads native review state.
+    assert!(labels.get(&"review-approved".into()).is_none());
+    assert!(labels.get(&"review-changes-requested".into()).is_none());
+    let needs_review = labels
+        .get(&"needs-review".into())
+        .expect("needs-review routing label is in the manifest");
+    assert!(needs_review.usages.iter().any(|usage| matches!(
         usage,
-        LabelUsage::GateOutcome { gate } if gate.as_str() == "review_gate"
+        LabelUsage::TransitionEffect { transition } if transition.as_str() == "request_review"
     )));
-    assert!(approved
-        .usages
-        .iter()
-        .any(|usage| matches!(usage, LabelUsage::TransitionEffect { .. })));
 
-    // Every declared label appears exactly once in the manifest. The `ci-*`
-    // and `merge-ready` labels were retired (ADR 0014), so the count dropped
-    // from 22 to 18.
-    assert_eq!(labels.labels().len(), 18);
+    // Every declared label appears exactly once in the manifest. The `ci-*`,
+    // `review-*`, and `merge-ready` labels were retired.
+    assert_eq!(labels.labels().len(), 16);
 }
 
 #[test]

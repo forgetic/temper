@@ -1,17 +1,18 @@
 use crate::errors::backend_error;
 use crate::lists::{
-    sort_comments, sort_issues_by_number, sort_labels, sort_pull_requests_by_number,
+    sort_comments, sort_issues_by_number, sort_labels, sort_pull_requests_by_number, sort_reviews,
 };
 use crate::metadata::{default_metadata, Metadata};
 use crate::record_ids::is_record_id;
 use crate::validation::{
     validate_stored_issue_comments, validate_stored_issues, validate_stored_labels,
-    validate_stored_pull_request_comments, validate_stored_pull_requests,
+    validate_stored_pull_request_comments, validate_stored_pull_request_reviews,
+    validate_stored_pull_requests,
 };
 use crate::FilesystemForge;
 use harness_forge::{
     Comment, ForgeError, ForgeResult, Issue, IssueId, Label, PullRequest, PullRequestId,
-    Repository, RepositoryId, RepositoryPath,
+    PullRequestReview, Repository, RepositoryId, RepositoryPath,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -58,7 +59,6 @@ impl FilesystemForge {
         } else {
             self.write_metadata(&default_metadata())?;
         }
-
         Ok(())
     }
 
@@ -189,6 +189,15 @@ impl FilesystemForge {
     ) -> Option<PathBuf> {
         self.pull_request_scope_dir(repo_id, pull_request_id)
             .map(|pull_request_dir| pull_request_dir.join("comments.json"))
+    }
+
+    pub(crate) fn pull_request_reviews_file(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+    ) -> Option<PathBuf> {
+        self.pull_request_scope_dir(repo_id, pull_request_id)
+            .map(|pull_request_dir| pull_request_dir.join("reviews.json"))
     }
 
     pub(crate) fn find_repository_by_id(
@@ -392,6 +401,40 @@ impl FilesystemForge {
         };
 
         self.write_json(&path, &comments)
+    }
+
+    pub(crate) fn read_pull_request_reviews_for_existing_pull_request(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+    ) -> ForgeResult<Vec<PullRequestReview>> {
+        let Some(path) = self.pull_request_reviews_file(repo_id, pull_request_id) else {
+            return Err(ForgeError::Backend(format!(
+                "invalid pull request id {pull_request_id} for pull request reviews path"
+            )));
+        };
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut reviews: Vec<PullRequestReview> = self.read_json(&path)?;
+        validate_stored_pull_request_reviews(pull_request_id, &reviews)?;
+        sort_reviews(&mut reviews);
+        Ok(reviews)
+    }
+
+    pub(crate) fn write_pull_request_reviews(
+        &self,
+        repo_id: &RepositoryId,
+        pull_request_id: &PullRequestId,
+        reviews: &[PullRequestReview],
+    ) -> ForgeResult<()> {
+        let Some(path) = self.pull_request_reviews_file(repo_id, pull_request_id) else {
+            return Err(ForgeError::Backend(format!(
+                "invalid pull request id {pull_request_id} for pull request reviews path"
+            )));
+        };
+        self.write_json(&path, &reviews)
     }
 
     pub(crate) fn find_issue_by_id(&self, id: &IssueId) -> ForgeResult<Option<Issue>> {

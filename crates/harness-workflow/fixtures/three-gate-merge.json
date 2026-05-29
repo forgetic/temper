@@ -1,46 +1,128 @@
 {
   "name": "three-gate-merge",
   "roles": [
-    {"id": "reviewer", "queues": []},
-    {"id": "tester", "queues": []},
-    {"id": "owner", "queues": []}
+    {
+      "id": "reviewer",
+      "queues": []
+    },
+    {
+      "id": "tester",
+      "queues": []
+    },
+    {
+      "id": "owner",
+      "queues": []
+    }
   ],
   "labels": [
-    {"id": "implementation"},
-    {"id": "review-approved"},
-    {"id": "testing-passed"},
-    {"id": "landed"}
+    {
+      "id": "implementation"
+    },
+    {
+      "id": "testing-passed"
+    },
+    {
+      "id": "landed"
+    }
   ],
   "artifact_kinds": [
-    {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": [
+        "implementation"
+      ]
+    }
   ],
   "state_dimensions": [
-    {"id": "review", "exclusive": true, "states": [
-      {"id": "approved", "label": "review-approved"}
-    ]},
-    {"id": "testing", "exclusive": true, "states": [
-      {"id": "passed", "label": "testing-passed"}
-    ]},
-    {"id": "post_merge", "exclusive": false, "states": [
-      {"id": "landed", "label": "landed"}
-    ]}
+    {
+      "id": "testing",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "passed",
+          "label": "testing-passed"
+        }
+      ]
+    },
+    {
+      "id": "post_merge",
+      "exclusive": false,
+      "states": [
+        {
+          "id": "landed",
+          "label": "landed"
+        }
+      ]
+    }
   ],
   "transitions": [
-    {"id": "approve_review", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
-      {"kind": "add_label", "label": "review-approved"}
-    ]},
-    {"id": "record_test_pass", "artifact": "implementation_pr", "roles": ["tester"], "effects": [
-      {"kind": "add_label", "label": "testing-passed"}
-    ]},
-    {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
-      "requires_gates": ["ci_gate", "review_gate", "testing_gate"], "effects": [
-      {"kind": "merge_pull_request"},
-      {"kind": "add_label", "label": "landed"}
-    ]}
+    {
+      "id": "approve_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "submit_review",
+          "decision": "approved"
+        }
+      ]
+    },
+    {
+      "id": "record_test_pass",
+      "artifact": "implementation_pr",
+      "roles": [
+        "tester"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "testing-passed"
+        }
+      ]
+    },
+    {
+      "id": "approve_merge",
+      "artifact": "implementation_pr",
+      "roles": [
+        "owner"
+      ],
+      "requires_gates": [
+        "ci_gate",
+        "review_gate",
+        "testing_gate"
+      ],
+      "effects": [
+        {
+          "kind": "merge_pull_request"
+        },
+        {
+          "kind": "add_label",
+          "label": "landed"
+        }
+      ]
+    }
   ],
   "gates": [
-    {"id": "ci_gate", "condition": {"kind": "ci_passed"}},
-    {"id": "review_gate", "satisfied_by": ["approve_review"]},
-    {"id": "testing_gate", "satisfied_by": ["record_test_pass"]}
+    {
+      "id": "ci_gate",
+      "condition": {
+        "kind": "ci_passed"
+      }
+    },
+    {
+      "id": "review_gate",
+      "condition": {
+        "kind": "review_approved"
+      }
+    },
+    {
+      "id": "testing_gate",
+      "satisfied_by": [
+        "record_test_pass"
+      ]
+    }
   ]
 }

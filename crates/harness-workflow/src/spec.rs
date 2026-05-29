@@ -14,6 +14,7 @@ use crate::relation::RelationKind;
 use crate::validate::validate;
 use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
+use harness_forge::ReviewDecision;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Raw workflow specification as loaded from an authored document.
@@ -155,6 +156,9 @@ pub struct RawQueue {
     /// Optional age threshold in seconds for the oldest matched member.
     #[serde(default)]
     pub max_age: Option<u32>,
+    /// Optional native/projected condition that must hold for the queue to match.
+    #[serde(default)]
+    pub condition: Option<RawGateCondition>,
 }
 
 /// One AND-clause in a queue's disjunctive label filter.
@@ -232,6 +236,10 @@ pub enum RawEffect {
         #[serde(default)]
         correlation_key: Option<String>,
     },
+    /// Request reviews from users resolved for workflow roles on the target PR.
+    RequestReviewers { roles: Vec<String> },
+    /// Submit a native pull-request review as the backend client's current user.
+    SubmitReview { decision: ReviewDecision },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
 }
@@ -281,4 +289,8 @@ pub enum RawGateCondition {
     /// conclusions (see ADR 0014); the condition references the artifact's CI,
     /// so it carries no payload.
     CiPassed,
+    /// The pull request's native review aggregate must be approved.
+    ReviewApproved,
+    /// Some reviewer's latest native review decision must request changes.
+    ReviewChangesRequested,
 }

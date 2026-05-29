@@ -8,8 +8,9 @@ The label-state-machine core — roles, type/state labels, exclusive and
 non-exclusive dimensions, queues with activation and richer matching,
 role-authorized label transitions, transition-satisfied gates, external-signal
 gates, relation declarations, the relation-driven `dependency_gate`, non-label
-effects for assignees/comments/PR create/merge, and native dependency links with
-metadata fallback — **validates, compiles, and plans today**.
+effects for assignees/comments/PR create/reviewer requests/review submissions/merge,
+and native dependency links plus native reviews — **validates, compiles, and
+plans today**.
 
 ## Resolved expression gaps
 
@@ -20,8 +21,9 @@ metadata fallback — **validates, compiles, and plans today**.
   `Executor::ensure_pull_request` with a correlation key and runtime create
   input.
 - **External-signal gates.** `ci_gate` now uses the `ci_passed` condition fed by
-  native Forge CI jobs; the old adapter-projected `ci = passed` labels/state are
-  retired.
+  native Forge CI jobs, and `review_gate` uses `review_approved` fed by native
+  pull-request reviews; the old adapter-projected `ci = passed` and review
+  result labels/state are retired.
 - **Relation primitive.** The spec declares `parent`, `dependency`, and
   `produced_pr` relations; classifiers type native dependency links and metadata
   projections using those declarations.
@@ -43,9 +45,10 @@ metadata fallback — **validates, compiles, and plans today**.
 - **Multi-artifact-kind queues.** A queue can now select several artifact kinds.
   `escalations` and `needs_human` cover issue artifact kinds and
   `implementation_pr` without duplicate per-kind queues.
-- **Disjunctive queue label-sets.** Queue `labels` remain an AND filter and
-  `any_of` adds OR branches. The single `pr_changes_requested` queue now routes
-  both `review-changes-requested` and `testing-failed` PRs.
+- **Disjunctive queue label-sets and native queue conditions.** Queue `labels`
+  remain an AND filter and `any_of` adds OR branches. The review return queue
+  now keys off native `review_changes_requested`; testing failure remains a
+  label-routed queue.
 
 ADR 0012 covers the queue primitive extensions as one decision: Phase 13's
 activation policy plus Phase 14's multi-kind and disjunctive matching.

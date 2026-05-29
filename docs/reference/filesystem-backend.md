@@ -32,6 +32,9 @@ The current implementation supports:
 - `update_pull_request`
 - `add_pull_request_dependency`
 - `remove_pull_request_dependency`
+- `request_pull_request_reviewers`
+- `list_pull_request_reviews`
+- `submit_pull_request_review`
 - `list_pull_request_comments`
 - `add_pull_request_comment`
 - `merge_pull_request`
@@ -59,6 +62,7 @@ repositories/
     pull_requests/
       pull-request-repo-0000000000000001-0000000000000001/
         comments.json
+        reviews.json
   repo-0000000000000002.json
 ```
 
@@ -83,11 +87,13 @@ Issue timestamps use the same logical clock as repositories. Creating, updating,
 
 Issue comments are stored in `repositories/<repo-id>/issues/<issue-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<issue-id>-<16-digit-number>`. Comment numbers are issue-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored issue record.
 
-Repository pull requests are stored in `repositories/<repo-id>/pull_requests.json` as serialized Forge `PullRequest` records. Pull-request numbers are repository-scoped within pull requests, start at `1`, and use the next value above the highest stored pull-request number. Pull-request IDs are deterministic strings of the form `pull-request-<repo-id>-<16-digit-number>`. New pull requests use the current user as `author_id`; labels, assignees, and dependency item numbers are stored as sorted, de-duplicated sets. Source and target branch references are stored from the create input. `head_sha`, `base_sha`, and `merge` start as `None`.
+Repository pull requests are stored in `repositories/<repo-id>/pull_requests.json` as serialized Forge `PullRequest` records. Pull-request numbers are repository-scoped within pull requests, start at `1`, and use the next value above the highest stored pull-request number. Pull-request IDs are deterministic strings of the form `pull-request-<repo-id>-<16-digit-number>`. New pull requests use the current user as `author_id`; labels, assignees, requested reviewers, and dependency item numbers are stored as sorted, de-duplicated sets. Source and target branch references are stored from the create input. `head_sha`, `base_sha`, and `merge` start as `None`.
 
-Pull-request timestamps use the same logical clock as repositories and issues. Creating, updating, or changing a pull-request dependency advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. New pull requests start at `Version::INITIAL`, and every successful `update_pull_request` or dependency-link change advances the stored `version`. Merging a pull request advances `clock_tick` and the `version`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits. Idempotent dependency no-ops leave the timestamp and version unchanged.
+Pull-request timestamps use the same logical clock as repositories and issues. Creating, updating, changing a pull-request dependency, or adding requested reviewers advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. New pull requests start at `Version::INITIAL`, and every successful `update_pull_request`, dependency-link change, or reviewer-request change advances the stored `version`. Merging a pull request advances `clock_tick` and the `version`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits. Idempotent dependency and reviewer-request no-ops leave the timestamp and version unchanged.
 
 Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<pull-request-id>-<16-digit-number>`. Comment numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored pull-request record.
+
+Pull-request reviews are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/reviews.json` as serialized Forge `PullRequestReview` records. Review IDs are deterministic strings of the form `review-<pull-request-id>-<16-digit-number>`. Review numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored review number. New reviews use the current user as `reviewer_id`; `submitted_at` is the logical-clock timestamp. Submitting a review advances `clock_tick` by one second and does not modify the stored pull-request record.
 
 CI jobs are stored in `repositories/<repo-id>/ci_jobs.json` as serialized Forge `CiJob` records. The Forge interface has no CI job creation operation, so tests and local scenarios seed this file directly with deterministic fixture records. CI job IDs are fixture-provided opaque IDs. Stored CI jobs must belong to the repository, have non-empty names and commit SHAs, and not duplicate IDs within the repository. CI job timestamps come from the fixture record.
 
@@ -115,6 +121,10 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 `create_pull_request` and `list_pull_requests` return `ForgeError::NotFound` when the target repository is missing. `get_pull_request` returns `Ok(None)` when the pull request is not found; `get_pull_request_by_number` returns `Ok(None)` when the repository or number is not found. `update_pull_request` and pull-request dependency updates return `ForgeError::NotFound` when the pull request is missing. Adding a dependency also returns `NotFound` when no issue or pull request with the target item number exists in the source repository; removing an absent dependency is a no-op. Pull-request label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations. `UpdatePullRequest` can close and reopen pull requests, but cannot represent merges.
 
+`request_pull_request_reviewers` normalizes reviewer IDs as a sorted set, adds missing reviewers idempotently, and returns `ForgeError::NotFound` when the target pull request is missing. A changed reviewer set updates the pull request timestamp and version; a duplicate request does not.
+
+`list_pull_request_reviews` returns reviews sorted by submission time ascending, then review ID. `list_pull_request_reviews` and `submit_pull_request_review` return `ForgeError::NotFound` when the target pull request is missing.
+
 `list_pull_request_comments` returns comments sorted by creation time ascending, then comment ID. `list_pull_request_comments` and `add_pull_request_comment` return `ForgeError::NotFound` when the target pull request is missing.
 
 `merge_pull_request` returns `ForgeError::NotFound` when the target pull request is missing. It supports all current `MergeMethod` values, records the current user as `merged_by`, and stores the requested method. It returns `ForgeError::Conflict` when the pull request is closed or already merged. `commit_title` and `commit_body` are accepted but not persisted because `MergeRecord` has no portable fields for them.
@@ -123,7 +133,7 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 ## Unsupported operations
 
-All current Forge trait methods are implemented. The filesystem backend does not expose operations outside the Forge interface, such as creating CI job records; seed `ci_jobs.json` directly for deterministic local scenarios.
+All current Forge trait methods are implemented. The filesystem backend does not expose operations outside the Forge interface, such as creating CI job records or provider-specific review policy; seed `ci_jobs.json` directly for deterministic local scenarios.
 
 ## Optimistic concurrency
 

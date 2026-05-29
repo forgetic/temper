@@ -1,0 +1,85 @@
+mod support;
+
+use harness_forge::{
+    CreatePullRequestReview, Forge, ForgeError, PullRequestId, PullRequestReviewStatus,
+    RequestReviewers, ReviewDecision, UserId,
+};
+use support::{block_on, pull_request, repository, TestRoot};
+
+#[test]
+fn reviews_are_requested_persisted_ordered_and_aggregated() {
+    let root = TestRoot::new("reviews");
+    let forge = root.forge();
+    let repository = block_on(forge.create_repository(repository("alice", "project"))).unwrap();
+    let pr = block_on(forge.create_pull_request(
+        &repository.id,
+        pull_request(&repository.id, "Implement login"),
+    ))
+    .unwrap();
+    let reviewer = UserId::new("user-1");
+
+    let requested = block_on(forge.request_pull_request_reviewers(
+        &pr.id,
+        RequestReviewers {
+            reviewers: vec![reviewer.clone(), reviewer.clone()],
+        },
+    ))
+    .unwrap();
+    assert_eq!(requested.requested_reviewers, vec![reviewer.clone()]);
+
+    block_on(forge.submit_pull_request_review(
+        &pr.id,
+        CreatePullRequestReview {
+            decision: ReviewDecision::Commented,
+            body: Some("nit".into()),
+        },
+    ))
+    .unwrap();
+    block_on(forge.submit_pull_request_review(
+        &pr.id,
+        CreatePullRequestReview {
+            decision: ReviewDecision::ChangesRequested,
+            body: None,
+        },
+    ))
+    .unwrap();
+    block_on(forge.submit_pull_request_review(
+        &pr.id,
+        CreatePullRequestReview {
+            decision: ReviewDecision::Approved,
+            body: None,
+        },
+    ))
+    .unwrap();
+
+    let reopened = root.forge();
+    let current = block_on(reopened.get_pull_request(&pr.id))
+        .unwrap()
+        .expect("pull request persists");
+    assert_eq!(current.requested_reviewers, vec![reviewer]);
+
+    let reviews = block_on(reopened.list_pull_request_reviews(&pr.id)).unwrap();
+    assert_eq!(reviews.len(), 3);
+    assert_eq!(
+        reviews[0].id.as_str(),
+        format!("review-{}-0000000000000001", pr.id)
+    );
+    assert!(reviews[0].submitted_at < reviews[1].submitted_at);
+
+    let status = PullRequestReviewStatus::from_reviews(&current.requested_reviewers, &reviews);
+    assert!(status.is_approved());
+    assert!(!status.has_changes_requested());
+}
+
+#[test]
+fn review_operations_report_missing_pull_requests() {
+    let root = TestRoot::new("reviews");
+    let forge = root.forge();
+    let missing = PullRequestId::new("pull-request-repo-0000000000000001-0000000000009999");
+    assert!(matches!(
+        block_on(
+            forge.request_pull_request_reviewers(&missing, RequestReviewers { reviewers: vec![] })
+        ),
+        Err(ForgeError::NotFound(_))
+    ));
+}

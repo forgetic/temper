@@ -72,23 +72,24 @@ Status legend: ☐ pending · ☑ done.
   out of scope, noted in the ADR). Prompt:
   `native-forge-state-phase-B-dependencies.md`.
 
-- ☐ **C — Native review model (ADR).** Add a minimal portable review concept to
-  `harness-forge`: request reviewers, list reviews, per-reviewer decision
-  (`approved`/`changes_requested`/`commented`/`pending`), and a portable
-  aggregate. Add `review_approved` / `review_changes_requested` gate conditions
-  fed by a runtime review signal. Retire the `review-approved` /
+- ☑ **C — Native review model (ADR 0016).** Added a minimal portable review
+  concept to `harness-forge`: request reviewers, list reviews, per-reviewer
+  decision (`approved`/`changes_requested`/`commented`/`pending`), and a
+  portable aggregate. Added `review_approved` / `review_changes_requested` gate
+  conditions fed by a runtime review signal. Retired the `review-approved` /
   `review-changes-requested` owned labels and the `approve_review` /
-  `request_changes` sibling-transition gate wiring. Document provider-specific
-  review rules (CODEOWNERS, dismiss-on-push) as out of the portable contract.
-  Prompt: `native-forge-state-phase-C-reviews.md`.
+  `request_changes` sibling-transition gate wiring. Provider-specific review
+  rules (CODEOWNERS, dismiss-on-push, branch protection, review threads) are out
+  of the portable contract. Prompt: `native-forge-state-phase-C-reviews.md`.
 
 > ADR numbering above is indicative; the implementing agent claims the next free
 > number at the time of writing and fixes the cross-references.
 
 ## Done definition for the whole backlog
 
-All phases ☑; `merge-ready` and the `review-*` / `ci-*` adapter labels are gone
-from the fixtures; merge eligibility, dependency resolution, and review state are
-all derived from native Forge state read fresh before each transition; both
-reference backends implement the new Forge surface with conformance tests; and
-`docs/reference/forge-interface.md` plus both backend docs describe the additions.
+Satisfied: all phases are ☑; `merge-ready` and the `review-*` / `ci-*` adapter
+labels are gone from the fixtures; merge eligibility, dependency resolution, and
+review state are all derived from native Forge state read fresh before each
+transition; both reference backends implement the new Forge surface with
+conformance tests; and `docs/reference/forge-interface.md` plus both backend
+docs describe the additions.

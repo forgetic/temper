@@ -1,7 +1,7 @@
 # Agentic workflows
 
 Harness workflows coordinate disposable agents through durable Forge artifacts.
-The Forge layer stores issues, pull requests, comments, labels, CI jobs, and merges. The workflow layer interprets those artifacts as a state machine. The agent layer is compiled from the workflow and receives prompts plus a narrow set of role-specific tools.
+The Forge layer stores issues, pull requests, comments, labels, reviews, CI jobs, dependency links, and merges. The workflow layer interprets those artifacts as a state machine. The agent layer is compiled from the workflow and receives prompts plus a narrow set of role-specific tools.
 
 ## Layer model
 
@@ -17,7 +17,7 @@ This separation keeps provider details out of workflow policy and keeps agent pr
 
 An artifact is a logical work item mapped to a Forge issue or pull request. Examples are `epic`, `design`, `code`, and `implementation_pr`.
 
-A state dimension is a named group of states, often projected as labels. For example, a code issue lifecycle may contain `ready`, `blocked`, and `in-progress`; a review gate may contain `needs-review`, `review-approved`, and `review-changes-requested`.
+A state dimension is a named group of states, often projected as labels. For example, a code issue lifecycle may contain `ready`, `blocked`, and `in-progress`. Review outcomes are native Forge state instead of workflow-owned labels; a workflow can still use a `needs-review` routing label while gates read native review decisions.
 
 A queue is a query over artifacts, such as `code + ready` issues or PRs labeled `needs-testing`.
 
@@ -41,13 +41,13 @@ Once a design is ready, the architect creates code issues. Some are labeled `rea
 
 Engineers claim `code + ready` issues, changing them to `in-progress`, implement the work, and open PRs labeled for CI, review, and testing.
 
-CI, reviewer, and tester gates proceed independently. If all gates pass, the PR can merge. If any gate fails, the work returns to the engineer or escalates according to workflow policy.
+CI, reviewer, and tester gates proceed independently. Reviewers are requested on the PR and submit native review decisions; the workflow reads that native aggregate. If all gates pass, the PR can merge. If any gate fails, the work returns to the engineer or escalates according to workflow policy.
 
 ## Robustness model
 
 Agents are disposable. They may crash, repeat calls, lose context, or resume after another worker has changed the same artifact. The workflow runtime is the authority that checks fresh Forge state before every transition.
 
-The Forge projection should remain understandable to humans: labels and comments show public state. Native Forge dependency links store dependency state; machine-readable metadata in bodies or comments can store workflow kind, parent links, fallback dependency links, correlation keys, and leases. The harness stores this as a JSON block inside an HTML comment so it renders invisibly while staying deterministic to parse; see the metadata block format in `docs/reference/workflow-layer.md`.
+The Forge projection should remain understandable to humans: labels and comments show workflow-owned public state. Native Forge dependency links and pull-request review state store dependency and review facts; machine-readable metadata in bodies or comments can store workflow kind, parent links, fallback dependency links, correlation keys, and leases. The harness stores this as a JSON block inside an HTML comment so it renders invisibly while staying deterministic to parse; see the metadata block format in `docs/reference/workflow-layer.md`.
 
 The workflow layer reads labels plus that metadata block to classify a Forge issue or pull request into a typed artifact. Classification detects impossible label combinations (for example, two states of one mutually exclusive dimension) and label/metadata drift, so the reconciler and operator queues have a precise picture of state before any transition runs.
 

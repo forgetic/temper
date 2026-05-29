@@ -17,8 +17,9 @@ use crate::classify::ArtifactSource;
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
 use harness_forge::{
-    CreateComment, CreatePullRequest, Forge, MergeMethod, MergePullRequest, RepositoryId,
-    UpdateIssue, UpdatePullRequest, UserId,
+    CreateComment, CreatePullRequest, CreatePullRequestReview, Forge, MergeMethod,
+    MergePullRequest, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,
+    UpdatePullRequest, UserId,
 };
 use std::collections::HashSet;
 
@@ -37,9 +38,14 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         plan: &TransitionPlan,
     ) -> Result<(), ExecutionError> {
         let prepared = self.prepare_effects(plan)?;
+        validate_pull_request_effects(loaded, &prepared)?;
         self.apply_comments(loaded, &plan.transition, &prepared.comments)
             .await?;
         self.apply_pull_request_creates(repo_id, &prepared.pull_request_creates)
+            .await?;
+        self.apply_review_requests(loaded, &prepared.review_requests)
+            .await?;
+        self.apply_reviews(loaded, &plan.transition, &prepared.reviews)
             .await?;
         self.apply_merge(loaded, prepared.merge).await?;
         self.apply_update(loaded, prepared).await
@@ -182,6 +188,21 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                             input,
                         });
                 }
+                WorkflowEffect::RequestReviewers { roles } => {
+                    for role in roles {
+                        let reviewer =
+                            self.context
+                                .resolve_assignee(role)
+                                .cloned()
+                                .ok_or_else(|| ExecutionError::UnresolvedReviewer {
+                                    role: role.clone(),
+                                })?;
+                        prepared.review_requests.push(reviewer);
+                    }
+                }
+                WorkflowEffect::SubmitReview { decision } => {
+                    prepared.reviews.push(*decision);
+                }
                 WorkflowEffect::MergePullRequest => {
                     prepared.merge = true;
                 }
@@ -219,6 +240,81 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Requests reviewers on the target pull request idempotently.
+    async fn apply_review_requests(
+        &self,
+        loaded: &Loaded,
+        reviewers: &[UserId],
+    ) -> Result<(), ExecutionError> {
+        if reviewers.is_empty() {
+            return Ok(());
+        }
+        let Loaded::PullRequest { id, .. } = loaded else {
+            return Err(ExecutionError::UnsupportedEffect {
+                effect: WorkflowEffect::RequestReviewers { roles: Vec::new() },
+            });
+        };
+        self.forge
+            .request_pull_request_reviewers(
+                id,
+                RequestReviewers {
+                    reviewers: reviewers.to_vec(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Submits planned native reviews at most once per transition review effect.
+    async fn apply_reviews(
+        &self,
+        loaded: &Loaded,
+        transition: &TransitionId,
+        reviews: &[ReviewDecision],
+    ) -> Result<(), ExecutionError> {
+        let Loaded::PullRequest { id, .. } = loaded else {
+            if reviews.is_empty() {
+                return Ok(());
+            }
+            return Err(ExecutionError::UnsupportedEffect {
+                effect: WorkflowEffect::SubmitReview {
+                    decision: ReviewDecision::Commented,
+                },
+            });
+        };
+        for (index, decision) in reviews.iter().enumerate() {
+            let key = review_key(transition, index);
+            if self.review_exists(id, &key).await? {
+                continue;
+            }
+            self.forge
+                .submit_pull_request_review(
+                    id,
+                    CreatePullRequestReview {
+                        decision: *decision,
+                        body: Some(review_marker(&key)),
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn review_exists(
+        &self,
+        id: &harness_forge::PullRequestId,
+        key: &str,
+    ) -> Result<bool, ExecutionError> {
+        let marker = review_marker(key);
+        let reviews = self.forge.list_pull_request_reviews(id).await?;
+        Ok(reviews.iter().any(|review| {
+            review
+                .body
+                .as_deref()
+                .is_some_and(|body| body.contains(&marker))
+        }))
     }
 
     /// Merges the target pull request at most once.
@@ -370,6 +466,8 @@ struct PreparedEffects {
     remove_assignees: Vec<UserId>,
     comments: Vec<String>,
     pull_request_creates: Vec<PreparedPullRequestCreate>,
+    review_requests: Vec<UserId>,
+    reviews: Vec<ReviewDecision>,
     /// Whether the plan requests merging the target pull request.
     merge: bool,
 }
@@ -379,6 +477,29 @@ struct PreparedEffects {
 struct PreparedPullRequestCreate {
     correlation_key: String,
     input: CreatePullRequest,
+}
+
+fn validate_pull_request_effects(
+    loaded: &Loaded,
+    prepared: &PreparedEffects,
+) -> Result<(), ExecutionError> {
+    if matches!(loaded, Loaded::PullRequest { .. })
+        || (prepared.review_requests.is_empty() && prepared.reviews.is_empty())
+    {
+        return Ok(());
+    }
+    let effect = if prepared.review_requests.is_empty() {
+        WorkflowEffect::SubmitReview {
+            decision: prepared
+                .reviews
+                .first()
+                .copied()
+                .unwrap_or(ReviewDecision::Commented),
+        }
+    } else {
+        WorkflowEffect::RequestReviewers { roles: Vec::new() }
+    };
+    Err(ExecutionError::UnsupportedEffect { effect })
 }
 
 impl PreparedEffects {
@@ -419,4 +540,15 @@ fn comment_marker(key: &str) -> String {
 /// while remaining searchable by [`comment_marker`].
 fn comment_body_with_marker(body: &str, key: &str) -> String {
     format!("{body}\n\n{}", comment_marker(key))
+}
+
+const REVIEW_MARKER_PREFIX: &str = "<!-- harness:review-key=";
+const REVIEW_MARKER_SUFFIX: &str = " -->";
+
+fn review_key(transition: &TransitionId, index: usize) -> String {
+    format!("{transition}:{index}")
+}
+
+fn review_marker(key: &str) -> String {
+    format!("{REVIEW_MARKER_PREFIX}{key}{REVIEW_MARKER_SUFFIX}")
 }

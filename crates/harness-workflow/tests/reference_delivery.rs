@@ -11,8 +11,8 @@ use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullR
 use harness_workflow::{
     compile, render_metadata_block, ArtifactKindId, CiStatus, ClassifiedArtifact,
     ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals, LabelId,
-    LabelUsage, PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, RoleId, TransitionId,
-    ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
+    LabelUsage, PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId,
+    TransitionId, ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
 };
 
 /// The checked-in reference delivery workflow fixture.
@@ -73,6 +73,7 @@ fn pull_request(number: u64, labels: &[&str]) -> PullRequest {
         base_sha: None,
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        requested_reviewers: Vec::new(),
         dependencies: Vec::new(),
         merge: None,
         version: Default::default(),
@@ -119,9 +120,9 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.artifact_kinds().len(), 5);
     // The `ci` and `merge` dimensions are retired: CI is a native gate signal
     // and merge eligibility is derived, not stored (ADR 0014).
-    assert_eq!(workflow.state_dimensions().len(), 7);
-    assert_eq!(workflow.queues().len(), 9);
-    assert_eq!(workflow.transitions().len(), 19);
+    assert_eq!(workflow.state_dimensions().len(), 6);
+    assert_eq!(workflow.queues().len(), 10);
+    assert_eq!(workflow.transitions().len(), 20);
     assert_eq!(workflow.gates().len(), 4);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow
@@ -131,7 +132,9 @@ fn reference_fixture_validates_with_expected_shape() {
     assert!(!workflow
         .labels()
         .iter()
-        .any(|label| label.as_str() == "merge-ready" || label.as_str().starts_with("ci-")));
+        .any(|label| label.as_str() == "merge-ready"
+            || label.as_str().starts_with("ci-")
+            || label.as_str().starts_with("review-")));
 
     let ci_gate = workflow
         .gates()
@@ -155,11 +158,14 @@ fn reference_fixture_validates_with_expected_shape() {
         .iter()
         .find(|queue| queue.id.as_str() == "pr_changes_requested")
         .expect("work-return queue is declared");
-    assert_eq!(return_queue.any_of.len(), 2);
-    assert!(!workflow
+    assert_eq!(
+        return_queue.condition.as_ref(),
+        Some(&GateCondition::ReviewChangesRequested)
+    );
+    assert!(workflow
         .queues()
         .iter()
-        .any(|queue| queue.id.as_str() == "pr_testing_failed"));
+        .any(|queue| queue.id.as_str() == "pr_test_failed"));
 
     let escalations = workflow
         .queues()
@@ -186,6 +192,10 @@ fn reference_fixture_compiles_every_role() {
     assert!(compiled.labels().get(&LabelId::new("ci-passed")).is_none());
     assert!(compiled
         .labels()
+        .get(&LabelId::new("review-approved"))
+        .is_none());
+    assert!(compiled
+        .labels()
         .get(&LabelId::new("merge-ready"))
         .is_none());
 
@@ -202,7 +212,10 @@ fn reference_fixture_compiles_every_role() {
         .iter()
         .find(|queue| queue.id.as_str() == "pr_changes_requested")
         .expect("work-return queue is compiled");
-    assert_eq!(return_queue.any_of.len(), 2);
+    assert_eq!(
+        return_queue.condition,
+        Some(GateCondition::ReviewChangesRequested)
+    );
 
     let testing_failed = compiled
         .labels()
@@ -210,7 +223,7 @@ fn reference_fixture_compiles_every_role() {
         .expect("testing-failed label is in the manifest");
     assert!(testing_failed.usages.iter().any(|usage| matches!(
         usage,
-        LabelUsage::QueueFilter { queue } if queue.as_str() == "pr_changes_requested"
+        LabelUsage::QueueFilter { queue } if queue.as_str() == "pr_test_failed"
     )));
 }
 
@@ -494,18 +507,16 @@ fn three_gate_merge_requires_review_testing_and_ci() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    // Review approved and testing passed, but the runtime CI signal has not
+    // Native review and testing passed, but the runtime CI signal has not
     // reported passed: the derived merge gate stays shut.
-    let ready = classify_pr(
-        &workflow,
-        10,
-        &["implementation", "review-approved", "testing-passed"],
-    );
+    let ready = classify_pr(&workflow, 10, &["implementation", "testing-passed"]);
+    let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
     let blocked = planner
-        .plan_transition(
+        .plan_transition_with(
             &TransitionId::new("approve_merge"),
             &RoleId::new("owner"),
             &ready,
+            &review,
         )
         .expect_err("a merge cannot plan until the CI signal reports passed");
     assert!(blocked
@@ -517,7 +528,9 @@ fn three_gate_merge_requires_review_testing_and_ci() {
 
     // Once the runtime supplies a passed CI signal, all three gates are met and
     // the merge plans: it merges and projects the post-merge re-run guard.
-    let signals = GateSignals::new().with_ci(CiStatus::passed());
+    let signals = GateSignals::new()
+        .with_ci(CiStatus::passed())
+        .with_review(ReviewStatus::new(true, false));
     let plan = planner
         .plan_transition_with(
             &TransitionId::new("approve_merge"),
@@ -537,20 +550,20 @@ fn three_gate_merge_requires_review_testing_and_ci() {
 }
 
 #[test]
-fn failed_gates_route_back_to_one_engineer_queue() {
+fn failed_gates_route_back_to_engineer_queues() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
-    let return_queue = QueueId::new("pr_changes_requested");
 
-    let changes = classify_pr(
-        &workflow,
-        20,
-        &["implementation", "review-changes-requested"],
-    );
-    assert!(planner.matching_queues(&changes).contains(&return_queue));
+    let changes = classify_pr(&workflow, 20, &["implementation"]);
+    let review_signal = GateSignals::new().with_review(ReviewStatus::new(false, true));
+    assert!(planner
+        .matching_queues_with(&changes, &review_signal)
+        .contains(&QueueId::new("pr_changes_requested")));
 
     let failed = classify_pr(&workflow, 21, &["implementation", "testing-failed"]);
-    assert!(planner.matching_queues(&failed).contains(&return_queue));
+    assert!(planner
+        .matching_queues(&failed)
+        .contains(&QueueId::new("pr_test_failed")));
 }
 
 #[test]

@@ -1,10 +1,11 @@
 use crate::record_ids::{
-    issue_comment_id, issue_id, pull_request_comment_id, pull_request_id,
+    issue_comment_id, issue_id, pull_request_comment_id, pull_request_id, pull_request_review_id,
     stored_issue_comment_number, stored_pull_request_comment_number,
+    stored_pull_request_review_number,
 };
 use harness_forge::{
     CiJob, Comment, CommentId, CreateRepository, ForgeError, ForgeResult, Issue, IssueId, Label,
-    PullRequest, PullRequestId, PullRequestState, RepositoryId, UpsertLabel,
+    PullRequest, PullRequestId, PullRequestReview, PullRequestState, RepositoryId, UpsertLabel,
 };
 
 pub(crate) fn validate_create_repository(input: &CreateRepository) -> ForgeResult<()> {
@@ -253,6 +254,38 @@ pub(crate) fn validate_stored_pull_request_comments(
         |comment| stored_pull_request_comment_number(pull_request_id, &comment.id),
         |number| pull_request_comment_id(pull_request_id, number),
     )
+}
+
+pub(crate) fn validate_stored_pull_request_reviews(
+    pull_request_id: &PullRequestId,
+    reviews: &[PullRequestReview],
+) -> ForgeResult<()> {
+    for (index, review) in reviews.iter().enumerate() {
+        if &review.pull_request_id != pull_request_id {
+            return Err(ForgeError::Backend(format!(
+                "review {} belongs to pull request {}, expected {pull_request_id}",
+                review.id, review.pull_request_id
+            )));
+        }
+        let number = stored_pull_request_review_number(pull_request_id, &review.id)?;
+        let expected = pull_request_review_id(pull_request_id, number);
+        if review.id.as_str() != expected.as_str() {
+            return Err(ForgeError::Backend(format!(
+                "review {} on pull request {pull_request_id} should have deterministic id {expected}",
+                review.id
+            )));
+        }
+        if reviews[..index]
+            .iter()
+            .any(|previous| previous.id == review.id)
+        {
+            return Err(ForgeError::Backend(format!(
+                "filesystem storage contains duplicate review id {} on pull request {pull_request_id}",
+                review.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_dependency_set(

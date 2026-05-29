@@ -20,6 +20,7 @@
 //! trait, so the same logic serves the validated model and a compiled runtime
 //! table.
 
+mod conditions;
 mod dependency;
 mod queue;
 mod signals;
@@ -32,13 +33,14 @@ use crate::ids::{
 use crate::relation::RelationKind;
 use crate::validated::{Effect, GateCondition, ValidatedTransition, ValidatedWorkflow};
 use chrono::{DateTime, Utc};
+use conditions::gate_condition_satisfied;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
 pub use dependency::{DependencyStatus, MechanicalPlan};
-pub use queue::{matches_queue, queue_active, QueueMember, QueueQuery};
-pub use signals::{CiStatus, GateSignals};
+pub use queue::{matches_queue, matches_queue_with, queue_active, QueueMember, QueueQuery};
+pub use signals::{CiStatus, GateSignals, ReviewStatus};
 pub use types::{Postcondition, TransitionPlan, WorkflowEffect};
 
 /// A single reason a transition cannot be planned.
@@ -184,10 +186,19 @@ impl<'a> Planner<'a> {
     /// Returns the ids of every queue the artifact matches, in declaration
     /// order.
     pub fn matching_queues(&self, artifact: &ClassifiedArtifact) -> Vec<QueueId> {
+        self.matching_queues_with(artifact, &GateSignals::default())
+    }
+
+    /// Returns matching queues using runtime-fed queue conditions.
+    pub fn matching_queues_with(
+        &self,
+        artifact: &ClassifiedArtifact,
+        signals: &GateSignals,
+    ) -> Vec<QueueId> {
         self.workflow
             .queues()
             .iter()
-            .filter(|queue| matches_queue(*queue, artifact))
+            .filter(|queue| matches_queue_with(*queue, artifact, signals))
             .map(|queue| queue.id.clone())
             .collect()
     }
@@ -206,6 +217,22 @@ impl<'a> Planner<'a> {
         artifacts
             .iter()
             .filter(|artifact| matches_queue(query, artifact))
+            .collect()
+    }
+
+    /// Returns queue members using runtime-fed queue conditions.
+    pub fn queue_members_with<'c>(
+        &self,
+        queue: &QueueId,
+        artifacts: &'c [ClassifiedArtifact],
+        signals: &GateSignals,
+    ) -> Vec<&'c ClassifiedArtifact> {
+        let Some(query) = self.workflow.queues().iter().find(|q| &q.id == queue) else {
+            return Vec::new();
+        };
+        artifacts
+            .iter()
+            .filter(|artifact| matches_queue_with(query, artifact, signals))
             .collect()
     }
 
@@ -452,6 +479,8 @@ impl<'a> Planner<'a> {
                     | Effect::RemoveAssignee(_)
                     | Effect::CreateComment { .. }
                     | Effect::CreatePullRequest { .. }
+                    | Effect::RequestReviewers { .. }
+                    | Effect::SubmitReview { .. }
                     | Effect::MergePullRequest => None,
                 });
                 let mut any = false;
@@ -484,6 +513,8 @@ impl<'a> Planner<'a> {
                 | Effect::RemoveAssignee(_)
                 | Effect::CreateComment { .. }
                 | Effect::CreatePullRequest { .. }
+                | Effect::RequestReviewers { .. }
+                | Effect::SubmitReview { .. }
                 | Effect::MergePullRequest => {}
             }
         }
@@ -514,27 +545,6 @@ impl<'a> Planner<'a> {
     }
 }
 
-fn gate_condition_satisfied(
-    condition: &GateCondition,
-    artifact: &ClassifiedArtifact,
-    labels: &HashSet<&str>,
-    signals: &GateSignals,
-) -> bool {
-    match condition {
-        GateCondition::LabelPresent(label) => labels.contains(label.as_str()),
-        GateCondition::StateEquals { dimension, state } => artifact
-            .states
-            .get(dimension)
-            .is_some_and(|states| states.contains(state)),
-        GateCondition::DependenciesResolved => artifact
-            .relations
-            .iter()
-            .filter(|relation| relation.kind == RelationKind::Dependency)
-            .all(|relation| signals.dependencies().is_landed(relation.target)),
-        GateCondition::CiPassed => signals.ci().is_passed(),
-    }
-}
-
 impl ValidatedWorkflow {
     /// Returns a [`Planner`] bound to this workflow.
     ///
@@ -555,6 +565,12 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
         Effect::CreatePullRequest { correlation_key } => WorkflowEffect::CreatePullRequest {
             correlation_key: correlation_key.clone(),
         },
+        Effect::RequestReviewers { roles } => WorkflowEffect::RequestReviewers {
+            roles: roles.clone(),
+        },
+        Effect::SubmitReview { decision } => WorkflowEffect::SubmitReview {
+            decision: *decision,
+        },
         Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
     }
 }
@@ -568,6 +584,8 @@ fn to_postcondition(effect: &Effect) -> Option<Postcondition> {
         Effect::RemoveAssignee(role) => Some(Postcondition::AssigneeAbsent { role: role.clone() }),
         Effect::CreateComment { .. }
         | Effect::CreatePullRequest { .. }
+        | Effect::RequestReviewers { .. }
+        | Effect::SubmitReview { .. }
         | Effect::MergePullRequest => None,
     }
 }

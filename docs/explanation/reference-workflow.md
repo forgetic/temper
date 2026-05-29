@@ -25,15 +25,17 @@ primitives instead of prose:
    gate label means "a condition holds." Conflating them is the root of most of
    the original workflow's knots.
 5. **External concerns stay at the backend/runner boundary.** Git mergeability,
-   reading CI, and branch protection are projected *into* the workflow as gate
-   conditions or labels by an adapter — never baked into role prose.
+   reading CI, branch protection, and provider-specific review policy are
+   projected *into* the workflow as native gate signals or adapter facts — never
+   baked into role prose.
 
 ## Settled decisions
 
 These were decided during design and are not open:
 
-- **CI is a gate fed by an external signal, not a queue label.** No `needs-ci`
-  queue; CI readiness is `ci_gate`, projected from the Forge CI signal.
+- **CI and review results are gates fed by native Forge state.** No `needs-ci`
+  queue or review-result labels; CI readiness is `ci_gate`, and review approval
+  is `review_gate` from the Forge review aggregate.
 - **`blocked` is split.** Dependency blocking is a modeled relation + gate
   (`blocked_on_dependency`, cleared mechanically). Judgment escalation is a
   separate `escalated` flag routed to the architect. Human input is `needs_human`
@@ -74,7 +76,9 @@ Exclusive unless noted; each state projects to one label.
 
 - `design_lifecycle`: `draft`, `ready`.
 - `code_lifecycle`: `ready`, `in_progress`, `blocked_on_dependency`.
-- `review`: `needs_review`, `approved`, `changes_requested`.
+- Review results are not a workflow-owned state dimension; `needs_review` is a
+  routing label, while `approved` / `changes_requested` are native Forge review
+  decisions read through review gate conditions.
 - `testing`: `needs_testing`, `passed`, `failed`.
 - CI is not a workflow-owned state dimension; merge eligibility reads native
   CI job conclusions through the `ci_passed` gate.
@@ -86,7 +90,7 @@ Exclusive unless noted; each state projects to one label.
 
 ## Gates
 
-- `review_gate` — satisfied by the reviewer's approve transition.
+- `review_gate` — satisfied by the runtime's native review signal (`review_approved`) derived from requested reviewers and review events.
 - `testing_gate` — satisfied by the tester's pass transition.
 - `ci_gate` — satisfied by the runtime's native CI signal (`ci_passed`) derived
   from Forge CI job conclusions.
@@ -94,8 +98,8 @@ Exclusive unless noted; each state projects to one label.
   is merged. Drives mechanical unblocking.
 
 The merge transition requires `review_gate`, `testing_gate`, and `ci_gate`. A
-failed review or testing gate returns the PR to the engineer (`changes_requested`
-/ `failed` → engineer's `pr_changes_requested` queue); work is never lost.
+failed review or testing gate returns the PR to the engineer (native
+`review_changes_requested` or `testing-failed` → engineer queues); work is never lost.
 
 ## Relations
 
@@ -161,15 +165,16 @@ expected backlog was:
   executor (`CreatePullRequest` via idempotent `ensure_pull_request`; merge is
   at-most-once and projects the post-merge `landed`/`owner-pending` labels).
   Claim-time lease effects remain future work.
-- **External-signal gates** (`ci_gate`) — implemented as gates satisfied by a
-  Forge-projected label/state condition, not only a sibling transition's labels.
+- **External-signal gates** (`ci_gate`, `review_gate`) — implemented as gates
+  satisfied by runtime signals from native Forge CI jobs and review events, not
+  only sibling transition labels.
 - **Relation-driven dependency handling** — the `relation` primitive declares
   parent/dependency/produced-PR links, native Forge dependency links feed the
   `dependencies_resolved` gate, and the reconciler mechanically produces and
   applies the `blocked-on-dependency` unblock once every prerequisite lands.
 - **Queue activation and richer matching** — `min_depth`/`max_age`, multi-kind
-  queue targets, and disjunctive label-set matching are implemented as read-side
-  planner predicates.
+  queue targets, disjunctive label-set matching, and queue conditions such as
+  `review_changes_requested` are implemented as read-side planner predicates.
 
 The contract catalog and the layered prompt system stay as prose the runner
 injects; they are not modeled as harness machinery in this design.

@@ -13,8 +13,9 @@ pub mod crash;
 
 use chrono::{DateTime, Utc};
 use harness_forge::{
-    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest, Forge,
-    IssueState, ItemNumber, PullRequestState, RepositoryId, UpdateIssue, UserId,
+    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
+    CreatePullRequestReview, Forge, IssueState, ItemNumber, PullRequestState, RepositoryId,
+    RequestReviewers, ReviewDecision, UpdateIssue, UserId,
 };
 use harness_forge_memory::MemoryForge;
 use harness_workflow::{RawWorkflowSpec, ValidatedWorkflow};
@@ -227,6 +228,33 @@ pub fn seed_ci(
         updated_at: ts("2026-05-29T00:01:00Z"),
     };
     forge.seed_ci_jobs(repo, vec![job]);
+}
+
+/// Records a native review decision by the backend's current user.
+pub fn submit_review(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    decision: ReviewDecision,
+) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    block_on(forge.request_pull_request_reviewers(
+        &pull_request.id,
+        RequestReviewers {
+            reviewers: vec![UserId::new("user-1")],
+        },
+    ))
+    .expect("reviewer requested");
+    block_on(forge.submit_pull_request_review(
+        &pull_request.id,
+        CreatePullRequestReview {
+            decision,
+            body: None,
+        },
+    ))
+    .expect("review submitted");
 }
 
 /// Reads a pull request's current state from the backend.

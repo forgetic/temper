@@ -11,17 +11,17 @@ mod support;
 use chrono::Duration;
 use harness_forge::{
     BranchRef, CiJobConclusion, CreateIssue, CreatePullRequest, Forge, IssueQuery,
-    PullRequestQuery, PullRequestState, RepositoryId, UserId,
+    PullRequestQuery, PullRequestState, RepositoryId, ReviewDecision, UserId,
 };
 use harness_workflow::{
-    parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, ExecutionError, Executor,
-    InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy, RawWorkflowSpec,
-    ReconcileFinding, RecoveryAction, RoleId, TransitionId,
+    parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, ExecutionContext, ExecutionError,
+    Executor, InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy,
+    RawWorkflowSpec, ReconcileFinding, RecoveryAction, RoleId, TransitionId,
 };
 use support::crash::{CrashForge, Fault, ForgeOp};
 use support::{
-    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state, seed_ci, ts,
-    workflow, TestRoot,
+    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state, seed_ci,
+    submit_review, ts, workflow, TestRoot,
 };
 
 /// A workflow whose merge gate requires native CI, review, and testing.
@@ -236,8 +236,9 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
     let workflow = workflow();
     let executor = Executor::new(&workflow, &forge);
 
-    // Only review approved; testing still pending.
-    let ungated = create_pr(&forge, &repo, &["implementation", "review-approved"], "");
+    // Only native review approved; testing still pending.
+    let ungated = create_pr(&forge, &repo, &["implementation"], "");
+    submit_review(&forge, &repo, ungated, ReviewDecision::Approved);
     let blocked = block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: ungated },
@@ -250,13 +251,9 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
     assert!(!pr_labels(&forge, &repo, ungated).contains(&"landed".to_string()));
     assert_eq!(pr_state(&forge, &repo, ungated), PullRequestState::Open);
 
-    // Both gates met: review approved and testing passed.
-    let gated = create_pr(
-        &forge,
-        &repo,
-        &["implementation", "review-approved", "testing-passed"],
-        "",
-    );
+    // Both gates met: native review approved and testing passed.
+    let gated = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    submit_review(&forge, &repo, gated, ReviewDecision::Approved);
     block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: gated },
@@ -281,12 +278,8 @@ fn a_merge_executes_at_most_once_under_retry() {
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
-    let number = create_pr(
-        &forge,
-        &repo,
-        &["implementation", "review-approved", "testing-passed"],
-        "",
-    );
+    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    submit_review(&forge, &repo, number, ReviewDecision::Approved);
     // The merge lands in the backend, then the call crashes before returning.
     let crash = CrashForge::new(forge, vec![Fault::after(ForgeOp::MergePullRequest, 1)]);
     let workflow = workflow();
@@ -339,18 +332,17 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
     let repo = new_repo(&forge);
     let executor = Executor::new(&workflow, &forge);
 
-    // Each case drops exactly one of the three gates; `ci` is whether a passing
-    // CI job is seeded for the pull request.
-    let cases: [(&[&str], bool); 3] = [
-        (
-            &["implementation", "review-approved", "testing-passed"],
-            false,
-        ), // no CI
-        (&["implementation", "testing-passed"], true), // no review
-        (&["implementation", "review-approved"], true), // no testing
+    // Each case drops exactly one of the three gates.
+    let cases: [(&[&str], bool, bool); 3] = [
+        (&["implementation", "testing-passed"], false, true), // no CI
+        (&["implementation", "testing-passed"], true, false), // no review
+        (&["implementation"], true, true),                    // no testing
     ];
-    for (labels, ci) in cases {
+    for (labels, ci, review) in cases {
         let number = create_pr(&forge, &repo, labels, "");
+        if review {
+            submit_review(&forge, &repo, number, ReviewDecision::Approved);
+        }
         if ci {
             seed_ci(&forge, &repo, number, CiJobConclusion::Success);
         }
@@ -368,13 +360,9 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
         assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Open);
     }
 
-    // All three gates satisfied: review and testing labels plus a passing CI job.
-    let number = create_pr(
-        &forge,
-        &repo,
-        &["implementation", "review-approved", "testing-passed"],
-        "",
-    );
+    // All three gates satisfied: native review, testing label, and passing CI.
+    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    submit_review(&forge, &repo, number, ReviewDecision::Approved);
     seed_ci(&forge, &repo, number, CiJobConclusion::Success);
     block_on(executor.execute(
         &repo,
@@ -400,12 +388,8 @@ fn ci_gate_reads_native_ci_job_conclusions() {
     let repo = new_repo(&forge);
     let executor = Executor::new(&workflow, &forge);
 
-    let number = create_pr(
-        &forge,
-        &repo,
-        &["implementation", "review-approved", "testing-passed"],
-        "",
-    );
+    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    submit_review(&forge, &repo, number, ReviewDecision::Approved);
     let pr = ArtifactSource::PullRequest { number };
 
     // A failing native CI conclusion leaves the gate shut even though review and
@@ -442,7 +426,9 @@ fn a_failed_review_gate_returns_work_to_the_engineer() {
     let forge = root.forge();
     let repo = new_repo(&forge);
     let workflow = workflow();
-    let executor = Executor::new(&workflow, &forge);
+    let context =
+        ExecutionContext::new().with_assignee(RoleId::new("reviewer"), UserId::new("user-1"));
+    let executor = workflow.executor_with_context(&forge, context);
 
     let number = create_pr(&forge, &repo, &["implementation", "needs-review"], "");
     let pr = ArtifactSource::PullRequest { number };
@@ -455,7 +441,12 @@ fn a_failed_review_gate_returns_work_to_the_engineer() {
         &RoleId::new("reviewer"),
     ))
     .expect("the reviewer can request changes");
-    assert!(pr_labels(&forge, &repo, number).contains(&"review-changes-requested".to_string()));
+    let pull_request = block_on(forge.get_pull_request_by_number(&repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    let reviews =
+        block_on(forge.list_pull_request_reviews(&pull_request.id)).expect("reviews list succeeds");
+    assert_eq!(reviews[0].decision, ReviewDecision::ChangesRequested);
 
     // The return path belongs to the engineer; the reviewer cannot perform it.
     let unauthorized = block_on(executor.execute(
@@ -480,7 +471,7 @@ fn a_failed_review_gate_returns_work_to_the_engineer() {
         labels.contains(&"needs-review".to_string()),
         "work returns to review"
     );
-    assert!(!labels.contains(&"review-changes-requested".to_string()));
+    assert!(!labels.iter().any(|label| label.starts_with("review-")));
 }
 
 // Safety property 5: expired in-progress work becomes visible for recovery.

@@ -21,10 +21,10 @@
 use async_trait::async_trait;
 use harness_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, ItemNumber,
-    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery, Repository,
-    RepositoryId, RepositoryPath, RepositoryQuery, UpdateIssue, UpdatePullRequest, UpsertLabel,
-    User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
+    IssueQuery, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
+    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -307,6 +307,29 @@ impl<F: Forge> Forge for CrashForge<F> {
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
         self.inner.remove_pull_request_dependency(id, target).await
+    }
+
+    async fn request_pull_request_reviewers(
+        &self,
+        id: &PullRequestId,
+        input: RequestReviewers,
+    ) -> ForgeResult<PullRequest> {
+        self.inner.request_pull_request_reviewers(id, input).await
+    }
+
+    async fn list_pull_request_reviews(
+        &self,
+        id: &PullRequestId,
+    ) -> ForgeResult<Vec<PullRequestReview>> {
+        self.inner.list_pull_request_reviews(id).await
+    }
+
+    async fn submit_pull_request_review(
+        &self,
+        id: &PullRequestId,
+        input: CreatePullRequestReview,
+    ) -> ForgeResult<PullRequestReview> {
+        self.inner.submit_pull_request_review(id, input).await
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {

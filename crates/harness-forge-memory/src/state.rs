@@ -29,6 +29,7 @@ pub(crate) struct State {
     pull_requests: BTreeMap<String, Vec<PullRequest>>,
     issue_comments: BTreeMap<String, Vec<Comment>>,
     pull_request_comments: BTreeMap<String, Vec<Comment>>,
+    pull_request_reviews: BTreeMap<String, Vec<harness_forge::PullRequestReview>>,
     ci_jobs: BTreeMap<String, Vec<CiJob>>,
 }
 
@@ -45,6 +46,7 @@ impl State {
             pull_requests: BTreeMap::new(),
             issue_comments: BTreeMap::new(),
             pull_request_comments: BTreeMap::new(),
+            pull_request_reviews: BTreeMap::new(),
             ci_jobs: BTreeMap::new(),
         }
     }
@@ -200,6 +202,25 @@ impl State {
 
     pub(crate) fn pull_request_comments(&self, id: &PullRequestId) -> Vec<Comment> {
         self.pull_request_comments
+            .get(id.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn pull_request_reviews_mut(
+        &mut self,
+        id: &PullRequestId,
+    ) -> &mut Vec<harness_forge::PullRequestReview> {
+        self.pull_request_reviews
+            .entry(id.as_str().to_string())
+            .or_default()
+    }
+
+    pub(crate) fn pull_request_reviews(
+        &self,
+        id: &PullRequestId,
+    ) -> Vec<harness_forge::PullRequestReview> {
+        self.pull_request_reviews
             .get(id.as_str())
             .cloned()
             .unwrap_or_default()

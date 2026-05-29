@@ -1,10 +1,13 @@
-use crate::record_ids::{stored_issue_comment_number, stored_pull_request_comment_number};
+use crate::record_ids::{
+    stored_issue_comment_number, stored_pull_request_comment_number,
+    stored_pull_request_review_number,
+};
 use chrono::{DateTime, Utc};
 use harness_forge::{
     CiJob, CiJobQuery, CiJobSortField, Comment, CommentId, ForgeError, ForgeResult, Issue, IssueId,
     IssueQuery, IssueState, ItemNumber, ItemSortField, Label, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestState, PullRequestUpdateState, Repository, RepositoryId,
-    RepositoryQuery, RepositorySortField, SortDirection, UserId,
+    PullRequestQuery, PullRequestReview, PullRequestState, PullRequestUpdateState, Repository,
+    RepositoryId, RepositoryQuery, RepositorySortField, SortDirection, UserId,
 };
 use std::cmp::Ordering;
 
@@ -67,6 +70,22 @@ pub(crate) fn next_pull_request_comment_number(
     )
 }
 
+pub(crate) fn next_pull_request_review_number(
+    pull_request_id: &PullRequestId,
+    reviews: &[PullRequestReview],
+) -> ForgeResult<u64> {
+    reviews
+        .iter()
+        .map(|review| stored_pull_request_review_number(pull_request_id, &review.id))
+        .try_fold(0, |highest, number| number.map(|n| highest.max(n)))?
+        .checked_add(1)
+        .ok_or_else(|| {
+            ForgeError::Backend(format!(
+                "review id counter overflowed for pull request {pull_request_id}"
+            ))
+        })
+}
+
 fn next_comment_number(
     target_kind: &str,
     target_id: &str,
@@ -127,6 +146,10 @@ pub(crate) fn sort_pull_requests_by_number(pull_requests: &mut [PullRequest]) {
 
 pub(crate) fn sort_comments(comments: &mut [Comment]) {
     comments.sort_by(compare_comments);
+}
+
+pub(crate) fn sort_reviews(reviews: &mut [PullRequestReview]) {
+    reviews.sort_by(compare_reviews);
 }
 
 pub(crate) fn compare_ci_jobs(left: &CiJob, right: &CiJob, query: &CiJobQuery) -> Ordering {
@@ -211,6 +234,12 @@ pub(crate) fn compare_pull_request_number(left: &PullRequest, right: &PullReques
 pub(crate) fn compare_comments(left: &Comment, right: &Comment) -> Ordering {
     left.created_at
         .cmp(&right.created_at)
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+pub(crate) fn compare_reviews(left: &PullRequestReview, right: &PullRequestReview) -> Ordering {
+    left.submitted_at
+        .cmp(&right.submitted_at)
         .then_with(|| left.id.cmp(&right.id))
 }
 

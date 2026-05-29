@@ -209,6 +209,17 @@ fn check_references(
         for label_set in &queue.any_of {
             check_queue_labels(label_set.labels.iter(), &queue.id, declared, diagnostics);
         }
+        if let Some(condition) = &queue.condition {
+            check_condition(
+                spec,
+                declared,
+                condition,
+                ReferenceSite::QueueCondition {
+                    queue: queue.id.clone(),
+                },
+                diagnostics,
+            );
+        }
     }
 
     for transition in &spec.transitions {
@@ -255,7 +266,7 @@ fn check_references(
                     diagnostics,
                 );
             }
-            if let Some(role) = effect_role(effect) {
+            for role in effect_roles(effect) {
                 check_reference(
                     declared.roles,
                     role,
@@ -282,7 +293,15 @@ fn check_references(
             );
         }
         if let Some(condition) = &gate.condition {
-            check_gate_condition(spec, declared, &gate.id, condition, diagnostics);
+            check_condition(
+                spec,
+                declared,
+                condition,
+                ReferenceSite::GateCondition {
+                    gate: gate.id.clone(),
+                },
+                diagnostics,
+            );
         }
     }
 }
@@ -310,31 +329,23 @@ fn relation_site(kind: crate::relation::RelationKind, source: &str, target: &str
     format!("{kind} {source}->{target}")
 }
 
-fn check_gate_condition(
+fn check_condition(
     spec: &RawWorkflowSpec,
     declared: &Declared<'_>,
-    gate: &str,
     condition: &RawGateCondition,
+    site: ReferenceSite,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match condition {
-        RawGateCondition::LabelPresent { label } => check_reference(
-            declared.labels,
-            label,
-            SymbolKind::Label,
-            ReferenceSite::GateCondition {
-                gate: gate.to_string(),
-            },
-            diagnostics,
-        ),
+        RawGateCondition::LabelPresent { label } => {
+            check_reference(declared.labels, label, SymbolKind::Label, site, diagnostics)
+        }
         RawGateCondition::StateEquals { dimension, state } => {
             check_reference(
                 declared.state_dimensions,
                 dimension,
                 SymbolKind::StateDimension,
-                ReferenceSite::GateCondition {
-                    gate: gate.to_string(),
-                },
+                site.clone(),
                 diagnostics,
             );
             if spec
@@ -346,22 +357,14 @@ fn check_gate_condition(
                 diagnostics.push(Diagnostic::UndeclaredReference {
                     expected: SymbolKind::State,
                     id: state.clone(),
-                    site: ReferenceSite::GateCondition {
-                        gate: gate.to_string(),
-                    },
+                    site,
                 });
             }
         }
-        RawGateCondition::DependenciesResolved => {
-            // No id references to check: the condition reads `dependency`
-            // relations by kind, not by id, and the resolved targets are
-            // supplied by the runtime rather than declared in the spec.
-        }
-        RawGateCondition::CiPassed => {
-            // No id references to check: the condition reads the artifact's
-            // native CI, and whether CI passed is supplied by the runtime
-            // rather than declared in the spec.
-        }
+        RawGateCondition::DependenciesResolved
+        | RawGateCondition::CiPassed
+        | RawGateCondition::ReviewApproved
+        | RawGateCondition::ReviewChangesRequested => {}
     }
 }
 
@@ -404,19 +407,23 @@ fn effect_label(effect: &RawEffect) -> Option<&str> {
         | RawEffect::RemoveAssignee { .. }
         | RawEffect::CreateComment { .. }
         | RawEffect::CreatePullRequest { .. }
+        | RawEffect::RequestReviewers { .. }
+        | RawEffect::SubmitReview { .. }
         | RawEffect::MergePullRequest => None,
     }
 }
 
-/// Returns the role id referenced by a raw effect, if any.
-fn effect_role(effect: &RawEffect) -> Option<&str> {
+/// Returns role ids referenced by a raw effect.
+fn effect_roles(effect: &RawEffect) -> Vec<&str> {
     match effect {
-        RawEffect::SetAssignee { role } | RawEffect::RemoveAssignee { role } => Some(role),
+        RawEffect::SetAssignee { role } | RawEffect::RemoveAssignee { role } => vec![role],
+        RawEffect::RequestReviewers { roles } => roles.iter().map(String::as_str).collect(),
         RawEffect::AddLabel { .. }
         | RawEffect::RemoveLabel { .. }
         | RawEffect::CreateComment { .. }
         | RawEffect::CreatePullRequest { .. }
-        | RawEffect::MergePullRequest => None,
+        | RawEffect::SubmitReview { .. }
+        | RawEffect::MergePullRequest => Vec::new(),
     }
 }
 
@@ -484,6 +491,7 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
             max_age: queue
                 .max_age
                 .map(|seconds| Duration::seconds(i64::from(seconds))),
+            condition: queue.condition.as_ref().map(build_gate_condition),
         })
         .collect();
 
@@ -539,6 +547,8 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
         }
         RawGateCondition::DependenciesResolved => GateCondition::DependenciesResolved,
         RawGateCondition::CiPassed => GateCondition::CiPassed,
+        RawGateCondition::ReviewApproved => GateCondition::ReviewApproved,
+        RawGateCondition::ReviewChangesRequested => GateCondition::ReviewChangesRequested,
         RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {
             dimension: StateDimensionId::new(dimension),
             state: StateId::new(state),
@@ -556,6 +566,12 @@ fn build_effect(effect: &RawEffect) -> Effect {
         RawEffect::CreateComment { body } => Effect::CreateComment { body: body.clone() },
         RawEffect::CreatePullRequest { correlation_key } => Effect::CreatePullRequest {
             correlation_key: correlation_key.clone(),
+        },
+        RawEffect::RequestReviewers { roles } => Effect::RequestReviewers {
+            roles: roles.iter().map(RoleId::new).collect(),
+        },
+        RawEffect::SubmitReview { decision } => Effect::SubmitReview {
+            decision: *decision,
         },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
     }

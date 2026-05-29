@@ -1,22 +1,21 @@
 //! Runtime-supplied gate signals for the planner.
 //!
 //! Some gate conditions ask about facts the pure planner must not derive
-//! itself: whether prerequisite work has landed (`dependencies_resolved`) and
-//! whether native CI passed (`ci_passed`). Those facts are read fresh from the
-//! Forge by the runtime and supplied to the planner as a small signal bundle,
-//! exactly like [`DependencyStatus`] already does for dependency gates.
+//! itself: whether prerequisite work has landed (`dependencies_resolved`),
+//! whether native CI passed (`ci_passed`), and whether native reviews approve or
+//! request changes. Those facts are read fresh from the Forge by the runtime and
+//! supplied to the planner as a small signal bundle.
 //!
 //! [`GateSignals`] bundles every runtime signal a transition plan may consult.
-//! Bundling (rather than threading one parameter per gate) keeps adding a new
-//! signal — native reviews next, per the native-Forge-state roadmap — from
-//! re-threading every planner call site, and gives one obvious place to
+//! Bundling (rather than threading one parameter per gate) keeps adding signals
+//! from re-threading every planner call site, and gives one obvious place to
 //! construct "the facts the runtime read before planning". The [`Planner`] only
-//! reads the bundle; it never lists jobs or talks to a Forge.
+//! reads the bundle; it never lists jobs, reviews, or talks to a Forge.
 //!
 //! [`Planner`]: super::Planner
 
 use super::DependencyStatus;
-use harness_forge::{CiJob, CiJobConclusion, CiJobStatus};
+use harness_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
 use std::collections::HashMap;
 
 /// Runtime-supplied verdict on whether an artifact's native CI passed.
@@ -82,16 +81,44 @@ impl CiStatus {
     }
 }
 
+/// Runtime-supplied verdict for a pull request's native review state.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ReviewStatus {
+    approved: bool,
+    changes_requested: bool,
+}
+
+impl ReviewStatus {
+    /// Builds a review status from explicit aggregate booleans.
+    pub fn new(approved: bool, changes_requested: bool) -> Self {
+        Self {
+            approved,
+            changes_requested,
+        }
+    }
+
+    /// Builds a status from the Forge aggregate review model.
+    pub fn from_aggregate(status: &PullRequestReviewStatus) -> Self {
+        Self::new(status.is_approved(), status.has_changes_requested())
+    }
+
+    /// Returns whether the native review aggregate is approved.
+    pub fn is_approved(&self) -> bool {
+        self.approved
+    }
+
+    /// Returns whether a latest native review decision requests changes.
+    pub fn has_changes_requested(&self) -> bool {
+        self.changes_requested
+    }
+}
+
 /// The runtime signals a transition plan may consult.
-///
-/// Carries every fact the runtime reads fresh from the Forge before planning:
-/// dependency resolution and native CI. The planner reads the bundle to satisfy
-/// `dependencies_resolved` and `ci_passed` gate conditions; transitions that
-/// gate on neither are unaffected by the contents.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GateSignals {
     dependencies: DependencyStatus,
     ci: CiStatus,
+    review: ReviewStatus,
 }
 
 impl GateSignals {
@@ -112,6 +139,12 @@ impl GateSignals {
         self
     }
 
+    /// Sets the review status.
+    pub fn with_review(mut self, review: ReviewStatus) -> Self {
+        self.review = review;
+        self
+    }
+
     /// Returns the dependency status.
     pub fn dependencies(&self) -> &DependencyStatus {
         &self.dependencies
@@ -120,5 +153,10 @@ impl GateSignals {
     /// Returns the CI status.
     pub fn ci(&self) -> &CiStatus {
         &self.ci
+    }
+
+    /// Returns the review status.
+    pub fn review(&self) -> &ReviewStatus {
+        &self.review
     }
 }

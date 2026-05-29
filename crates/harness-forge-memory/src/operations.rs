@@ -20,15 +20,21 @@ use crate::lists::{
     sort_comments, sort_issues, sort_issues_by_number, sort_labels, sort_pull_requests,
     sort_pull_requests_by_number, sort_repositories, update_issue_state, update_pull_request_state,
 };
+use crate::util::{
+    check_expected_version, next_comment_number, next_item_number, validate_create_repository,
+    validate_upsert_label,
+};
 use async_trait::async_trait;
 use harness_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState,
-    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
-    PullRequestState, Repository, RepositoryId, RepositoryPath, RepositoryQuery, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, User, UserId, Version,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
+    IssueQuery, IssueState, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestId, PullRequestQuery, PullRequestReview, PullRequestState, Repository, RepositoryId,
+    RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel,
+    User, UserId, Version,
 };
 
+use crate::reviews::{list_reviews, request_reviewers, submit_review};
 use crate::MemoryForge;
 
 #[async_trait]
@@ -320,6 +326,7 @@ impl Forge for MemoryForge {
             base_sha: None,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            requested_reviewers: Vec::new(),
             dependencies: Vec::new(),
             merge: None,
             version: Version::INITIAL,
@@ -417,6 +424,29 @@ impl Forge for MemoryForge {
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
         remove_pull_request_dependency(&mut self.lock(), id, target)
+    }
+
+    async fn request_pull_request_reviewers(
+        &self,
+        id: &PullRequestId,
+        input: RequestReviewers,
+    ) -> ForgeResult<PullRequest> {
+        request_reviewers(self, id, input)
+    }
+
+    async fn list_pull_request_reviews(
+        &self,
+        id: &PullRequestId,
+    ) -> ForgeResult<Vec<PullRequestReview>> {
+        list_reviews(self, id)
+    }
+
+    async fn submit_pull_request_review(
+        &self,
+        id: &PullRequestId,
+        input: CreatePullRequestReview,
+    ) -> ForgeResult<PullRequestReview> {
+        submit_review(self, id, input)
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
@@ -521,66 +551,4 @@ impl Forge for MemoryForge {
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         Ok(self.lock().state.find_ci_job(id))
     }
-}
-
-/// Enforces an optimistic-concurrency precondition.
-///
-/// Returns [`ForgeError::Conflict`] when `expected` is `Some` and does not equal
-/// the stored `actual` version; a `None` precondition always passes (an
-/// unconditional update).
-fn check_expected_version(
-    kind: &str,
-    id: &impl std::fmt::Display,
-    expected: Option<Version>,
-    actual: Version,
-) -> ForgeResult<()> {
-    match expected {
-        Some(expected) if expected != actual => Err(ForgeError::Conflict(format!(
-            "{kind} {id} expected version {expected} but found {actual}"
-        ))),
-        _ => Ok(()),
-    }
-}
-
-fn validate_create_repository(input: &CreateRepository) -> ForgeResult<()> {
-    if input.owner.trim().is_empty() {
-        return Err(ForgeError::InvalidRequest(
-            "repository owner must not be empty".into(),
-        ));
-    }
-    if input.name.trim().is_empty() {
-        return Err(ForgeError::InvalidRequest(
-            "repository name must not be empty".into(),
-        ));
-    }
-    if input.default_branch.trim().is_empty() {
-        return Err(ForgeError::InvalidRequest(
-            "repository default branch must not be empty".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_upsert_label(input: &UpsertLabel) -> ForgeResult<()> {
-    if input.name.trim().is_empty() {
-        return Err(ForgeError::InvalidRequest(
-            "label name must not be empty".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn next_item_number(existing: impl Iterator<Item = ItemNumber>) -> ForgeResult<ItemNumber> {
-    let highest = existing.map(|number| number.get()).max().unwrap_or(0);
-    let next = highest
-        .checked_add(1)
-        .ok_or_else(|| ForgeError::Backend("item number counter overflowed".into()))?;
-    Ok(ItemNumber::new(next))
-}
-
-fn next_comment_number(count: usize) -> ForgeResult<u64> {
-    u64::try_from(count)
-        .ok()
-        .and_then(|count| count.checked_add(1))
-        .ok_or_else(|| ForgeError::Backend("comment number counter overflowed".into()))
 }

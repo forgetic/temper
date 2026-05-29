@@ -92,6 +92,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 any_of: Vec::new(),
                 min_depth: None,
                 max_age: None,
+                condition: None,
             },
             RawQueue {
                 id: "needs_review".to_string(),
@@ -100,6 +101,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 any_of: Vec::new(),
                 min_depth: None,
                 max_age: None,
+                condition: None,
             },
         ],
         transitions: vec![
@@ -482,6 +484,7 @@ fn multi_artifact_disjunctive_queue_validates() {
         ],
         min_depth: None,
         max_age: None,
+        condition: None,
     });
 
     let workflow = spec.validate().expect("multi-kind OR queue validates");

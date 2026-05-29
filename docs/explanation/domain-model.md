@@ -9,7 +9,7 @@ The model is intentionally small and portable:
 - It should represent common Forge concepts without binding workflows to one provider.
 - It should preserve stable identity for synchronization and auditing.
 - It should keep human-facing numbers and provider-specific opaque identifiers separate.
-- It should be rich enough to drive autonomous agents through issues, pull requests, comments, labels, merges, and CI.
+- It should be rich enough to drive autonomous agents through issues, pull requests, comments, reviews, labels, merges, and CI.
 
 ## Repositories
 
@@ -54,9 +54,15 @@ Dependency links are now native Forge state: issues and pull requests carry the 
 
 `parent` and `produced_pr` remain metadata-projected because they do not share a portable provider-native representation. The metadata `dependencies` field remains a fallback for older artifacts that have no native dependency links.
 
+## Pull-request reviews
+
+Reviews are native pull-request state, separate from ordinary PR comments. A pull request records requested reviewers and append-only review events. Each event has a reviewer, a portable decision (`approved`, `changes_requested`, `commented`, or `pending`), optional body, and submission time.
+
+The portable aggregate is intentionally small: the latest non-comment decision per reviewer wins; a PR is approved when every requested reviewer's latest decision approves and none request changes. Provider-specific policy such as CODEOWNERS, stale-review dismissal, branch protection, and review threads stays outside the portable model.
+
 ## Comments
 
-Comments are append-only discussion messages attached to issues or pull requests. The initial model does not distinguish regular comments from reviews or inline code comments. Those can be added later if the workflow needs them.
+Comments are append-only discussion messages attached to issues or pull requests. They are separate from native reviews and inline code-review threads.
 
 ## Labels
 

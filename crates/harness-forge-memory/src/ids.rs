@@ -5,7 +5,9 @@
 //! the schemes aligned lets tests move between backends without re-baking
 //! identifier expectations.
 
-use harness_forge::{CommentId, IssueId, ItemNumber, LabelId, PullRequestId, RepositoryId};
+use harness_forge::{
+    CommentId, IssueId, ItemNumber, LabelId, PullRequestId, RepositoryId, ReviewId,
+};
 
 /// Builds the deterministic repository id for a numeric counter value.
 pub(crate) fn repository_id(number: u64) -> RepositoryId {
@@ -38,6 +40,11 @@ pub(crate) fn pull_request_comment_id(pull_request_id: &PullRequestId, number: u
 
 fn comment_id(target_id: &str, number: u64) -> CommentId {
     CommentId::new(format!("comment-{target_id}-{number:016}"))
+}
+
+/// Builds the deterministic review id for a pull-request-scoped number.
+pub(crate) fn pull_request_review_id(pull_request_id: &PullRequestId, number: u64) -> ReviewId {
+    ReviewId::new(format!("review-{pull_request_id}-{number:016}"))
 }
 
 /// Builds the deterministic label id from a repository id and label name.

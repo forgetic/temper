@@ -115,6 +115,7 @@ pub struct QueueManifest {
     pub any_of: Vec<QueueLabelSet>,
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
+    pub condition: Option<GateCondition>,
     /// Roles that draw work from this queue, in role declaration order.
     pub subscribers: Vec<RoleId>,
 }
@@ -276,6 +277,7 @@ fn compile_queues(workflow: &ValidatedWorkflow) -> Vec<QueueManifest> {
             any_of: queue.any_of.clone(),
             min_depth: queue.min_depth,
             max_age: queue.max_age,
+            condition: queue.condition.clone(),
             subscribers: workflow
                 .roles()
                 .iter()
@@ -391,20 +393,25 @@ fn describe_queue(queue: &QueueManifest) -> String {
 
 fn describe_queue_filter(queue: &QueueManifest) -> String {
     let common = describe_labels(&queue.labels);
-    if queue.any_of.is_empty() {
-        return common;
-    }
-
-    let alternatives = queue
-        .any_of
-        .iter()
-        .map(|label_set| describe_labels(&label_set.labels))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    if queue.labels.is_empty() {
-        alternatives
+    let labels = if queue.any_of.is_empty() {
+        common
     } else {
-        format!("{common} AND ({alternatives})")
+        let alternatives = queue
+            .any_of
+            .iter()
+            .map(|label_set| describe_labels(&label_set.labels))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        if queue.labels.is_empty() {
+            alternatives
+        } else {
+            format!("{common} AND ({alternatives})")
+        }
+    };
+    if let Some(condition) = &queue.condition {
+        format!("{labels} AND {condition:?}")
+    } else {
+        labels
     }
 }
 
@@ -491,6 +498,16 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
                 );
             }
         }
+        if let Some(condition) = &queue.condition {
+            if let Some(label) = gate_condition_label(condition, workflow) {
+                record(
+                    label,
+                    LabelUsage::QueueFilter {
+                        queue: queue.id.clone(),
+                    },
+                );
+            }
+        }
     }
 
     for transition in workflow.transitions() {
@@ -562,6 +579,7 @@ fn gate_condition_label<'a>(
         // Reads native CI conclusions, not a label, so it tracks no label
         // usage (see ADR 0014).
         GateCondition::CiPassed => None,
+        GateCondition::ReviewApproved | GateCondition::ReviewChangesRequested => None,
     }
 }
 
@@ -572,6 +590,8 @@ fn effect_label(effect: &Effect) -> Option<&LabelId> {
         | Effect::RemoveAssignee(_)
         | Effect::CreateComment { .. }
         | Effect::CreatePullRequest { .. }
+        | Effect::RequestReviewers { .. }
+        | Effect::SubmitReview { .. }
         | Effect::MergePullRequest => None,
     }
 }

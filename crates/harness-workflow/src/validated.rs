@@ -12,6 +12,7 @@ use crate::ids::{
 };
 use crate::relation::RelationKind;
 use chrono::Duration;
+use harness_forge::ReviewDecision;
 
 /// A workflow that has passed static validation.
 ///
@@ -157,6 +158,7 @@ pub struct ValidatedQueue {
     pub any_of: Vec<QueueLabelSet>,
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
+    pub condition: Option<GateCondition>,
 }
 
 /// One AND-clause in a queue's disjunctive label filter.
@@ -174,6 +176,8 @@ pub enum Effect {
     RemoveAssignee(RoleId),
     CreateComment { body: String },
     CreatePullRequest { correlation_key: Option<String> },
+    RequestReviewers { roles: Vec<RoleId> },
+    SubmitReview { decision: ReviewDecision },
     MergePullRequest,
 }
 
@@ -218,4 +222,8 @@ pub enum GateCondition {
     /// Satisfied when the artifact's native CI passed, per the runtime-supplied
     /// CI signal computed from the Forge's `CiJob` conclusions (see ADR 0014).
     CiPassed,
+    /// Satisfied when the target pull request's native review aggregate is approved.
+    ReviewApproved,
+    /// Satisfied when a latest native review decision requests changes.
+    ReviewChangesRequested,
 }

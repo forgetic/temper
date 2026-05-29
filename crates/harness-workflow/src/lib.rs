@@ -67,7 +67,9 @@
 //! conditions. Phase 12a added first-class relation declarations and typed
 //! relation classification; ADR 0015 added native dependency links. Phase 13 added queue
 //! activation policies for depth- or age-gated servicing. Phase 14 added
-//! multi-kind queues and disjunctive queue label filters.
+//! multi-kind queues and disjunctive queue label filters. ADR 0016 added native
+//! pull-request reviews, review gate signals, and reviewer request/review
+//! submission effects.
 //!
 //! Lease acquisition is now a compare-and-swap built on the portable
 //! optimistic-concurrency primitive in `harness-forge` (the `Version` token and
@@ -123,8 +125,8 @@ pub use metadata::{
 };
 pub use plan::{
     matches_queue, queue_active, CiStatus, DependencyStatus, GateSignals, MechanicalPlan,
-    PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, TransitionPlan,
-    WorkflowEffect,
+    PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus,
+    TransitionPlan, WorkflowEffect,
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,

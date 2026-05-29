@@ -5,8 +5,9 @@
 //! filesystem, network, or async runtime involved. It is a sibling reference
 //! backend to `harness-forge-filesystem` and intentionally reproduces the same
 //! deterministic identifier scheme, logical clock, ordering, and query
-//! semantics, including native dependency links (see ADR 0008), so workflow
-//! tests can swap between the two without changing expectations.
+//! semantics, including native dependency links and pull-request reviews (see
+//! ADR 0008), so workflow tests can swap between the two without changing
+//! expectations.
 //!
 //! Because there is no durable store to corrupt, a small one-shot
 //! [`fault hook`](MemoryForge::fail_next) lets tests force a chosen operation to
@@ -20,7 +21,9 @@ mod fault;
 mod ids;
 mod lists;
 mod operations;
+mod reviews;
 mod state;
+mod util;
 
 use crate::fault::FaultStore;
 use crate::state::State;

@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–14 plus native Forge-state phases A/B have landed spec validation, artifact/metadata modeling, classification, first-class relation declarations, native dependency-link classification with metadata fallback, compilation to manifests, pure queue evaluation/activation and transition planning, external/runtime-signal gates (including native CI), runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–14 plus native Forge-state phases A/B/C have landed spec validation, artifact/metadata modeling, classification, first-class relation declarations, native dependency-link classification with metadata fallback, compilation to manifests, pure queue evaluation/activation and transition planning, external/runtime-signal gates (including native CI and reviews), runtime execution of labels, assignees, comments, PR creates, reviewer requests, review submissions, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -45,9 +45,9 @@ Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
 - `classify::Classifier` turns a `harness_forge::Issue` or `PullRequest` into a typed `ClassifiedArtifact`, or a `ClassificationError` carrying `ClassificationDiagnostic`s. See "Artifact classification".
 - `harness-workflow` now depends on `harness-forge` because classification consumes Forge domain types.
 
-Not yet modeled: `invariant` and spec-level `recovery_policy`. Effects cover label add/remove plus assignee, comment, pull-request create, and pull-request merge requests.
+Not yet modeled: `invariant` and spec-level `recovery_policy`. Effects cover label add/remove plus assignee, comment, pull-request create, reviewer request, review submission, and pull-request merge requests.
 
-Gate/transition wiring is modeled in both directions for role actions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions. A gate may also declare a portable condition over artifact labels/state or runtime-supplied signals such as dependency resolution and native CI.
+Gate/transition wiring is modeled in both directions for role actions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions. A gate may also declare a portable condition over artifact labels/state or runtime-supplied signals such as dependency resolution, native CI, and native reviews.
 
 Phase 4 added compilation:
 
@@ -91,9 +91,10 @@ Phase 10 added pull-request idempotent create:
 - `Executor::ensure_pull_request` mirrors `ensure_issue`: it searches pull requests for a metadata `correlation_key`, stamps that key into new PR bodies, and returns `EnsureOutcome::Existing` on retry.
 - `Executor::execute` applies `CreatePullRequest` through `ensure_pull_request` when the effect has a correlation key and `ExecutionContext` supplies the concrete `CreatePullRequest` input for that transition.
 
-Phase 11 added external-signal gates:
+Phase 11 added external-signal gates, later extended for native reviews:
 
-- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, `dependencies_resolved`, or `ci_passed`. `label_present`/`state_equals` are satisfied from classified labels/state; `dependencies_resolved` and `ci_passed` read runtime-supplied signals.
+- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, `dependencies_resolved`, `ci_passed`, `review_approved`, or `review_changes_requested`. `label_present`/`state_equals` are satisfied from classified labels/state; the others read runtime-supplied signals.
+- `RawQueue`/`ValidatedQueue` may also carry a condition so queues can key off native signals such as `review_changes_requested`.
 - Transition-satisfied gates continue to use `satisfied_by`; a required gate passes when either its condition holds or one of its satisfying transition outcomes is visible.
 
 Phase 12a added first-class relations:
@@ -108,6 +109,8 @@ Phase 12b plus native dependency links added the relation-driven `dependency_gat
 - "Has it landed" is a runtime signal, never derived in the pure planner. Runtime layers derive `plan::DependencyStatus` from fresh Forge state: issue targets count as landed when closed, pull-request targets when merged.
 - `Planner::dependency_unblocks(artifact, deps)` returns the mechanical (actor-less) `MechanicalPlan`s an artifact admits: transitions gated on a `dependencies_resolved` gate whose preconditions, gates, and resulting states all hold. It requires the artifact to declare at least one `dependency` relation, so a blocked artifact with no recorded dependency is never auto-unblocked.
 - The reconciler derives dependency status during `reconcile`, then turns each available unblock into a `DependenciesResolved` finding and an `Unblock { effects }` action (see "Reconciliation").
+
+Native reviews (ADR 0016) added `RequestReviewers` and `SubmitReview` effects. The executor resolves reviewer roles through `ExecutionContext`, asks the Forge to request those reviewers, submits native review decisions for workflow review transitions, and derives `ReviewStatus` from fresh requested reviewers plus native review events before planning gates.
 
 Phases 13–14 added queue primitive extensions:
 
@@ -136,14 +139,14 @@ A workflow spec contains these logical primitives.
 | `role` | Actor authority, queues, concurrency limits, and prose charter |
 | `artifact_kind` | Logical item with a Forge `target` (issue or PR) and `identifying_labels` |
 | `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
-| `queue` | Query that selects artifacts needing attention by artifact kind(s), label filters, and optional read-side activation policy |
-| `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, or request PR merge |
-| `gate` | Condition that unlocks another transition, either from sibling transition outcomes, a Forge-projected label/state condition, or a runtime-supplied signal such as native CI |
+| `queue` | Query that selects artifacts needing attention by artifact kind(s), label filters, optional native/projected condition, and optional read-side activation policy |
+| `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, request reviewers, submit reviews, or request PR merge |
+| `gate` | Condition that unlocks another transition, either from sibling transition outcomes, a Forge-projected label/state condition, or a runtime-supplied signal such as native CI or reviews |
 | `relation` | Typed link between artifacts, such as parent, dependency, or produced PR |
 | `invariant` | Condition that must hold during runtime scans |
 | `recovery_policy` | What to do with expired leases, partial transitions, and drift |
 
-Labels are a portable Forge projection of workflow state. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, and `merge_pull_request` has no payload. The workflow layer uses native Forge dependency links for `dependency`; metadata blocks still carry correlation keys plus `parent`/`produced_pr` links and fallback dependency numbers.
+Labels are a portable Forge projection of workflow-owned state; native CI, dependency links, and review decisions are observed from the Forge instead of mirrored as labels. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee and reviewer-request effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, `submit_review` carries a portable decision, and `merge_pull_request` has no payload. The workflow layer uses native Forge dependency links for `dependency`; metadata blocks still carry correlation keys plus `parent`/`produced_pr` links and fallback dependency numbers.
 
 The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects, external-signal gates, relation declarations, the relation-driven `dependency_gate`, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). Any remaining gaps are tracked in `docs/explanation/reference-workflow-gaps.md`.
 
@@ -213,7 +216,7 @@ Success yields a `ClassifiedArtifact` (kind, target, source, optional `updated_a
 
 The planner is the pure, deterministic state-machine layer over classified artifacts. It computes the read-side parts of the runtime guarantees below (authority, preconditions, postconditions) without loading fresh state or applying effects; a later executor phase does that against the `Forge` trait.
 
-Queue matching: a classified artifact matches a queue when its kind is one of the queue's artifact kinds, every common `labels` entry is present, and either `any_of` is empty or at least one `any_of` clause's labels are all present. The raw schema keeps the legacy `artifact: "code"` shorthand and also accepts `artifact: ["code", "implementation_pr"]`; `any_of` is an array of objects such as `{ "labels": ["review-changes-requested"] }`. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues. Matching does not consider activation policy.
+Queue matching: a classified artifact matches a queue when its kind is one of the queue's artifact kinds, every common `labels` entry is present, either `any_of` is empty or at least one `any_of` clause's labels are all present, and any queue `condition` is satisfied by classified state or runtime signals. The raw schema keeps the legacy `artifact: "code"` shorthand and also accepts `artifact: ["code", "implementation_pr"]`; `any_of` is an array of label-set objects. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues. Matching does not consider activation policy.
 
 Queue activation: a queue with no activation policy is active whenever it has at least one matched member. A queue with `min_depth` and/or `max_age` is active when it is non-empty and either its member count is at least `min_depth` or the oldest timestamped member is at least `max_age` old at `now`. `max_age` uses the classified artifact's Forge `updated_at` timestamp; snapshot-classified artifacts without timestamps cannot satisfy the age branch.
 
@@ -223,7 +226,7 @@ Transition planning checks, in order, and collects every problem:
 - the role is authorized for the transition (else `Unauthorized`)
 - the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
 - each label effect's precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`); non-label effects have no label precondition
-- every required gate is satisfied — a gate is satisfied when its condition holds (label/state, dependency, or CI signal) or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
+- every required gate is satisfied — a gate is satisfied when its condition holds (label/state, dependency, CI, or review signal) or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
 - applying the effects would not leave an exclusive dimension in several states (else `ImpossibleState`)
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
@@ -236,12 +239,12 @@ Every transition execution must:
 
 1. load fresh Forge state for the target artifact
 2. classify it according to the validated workflow
-3. compute runtime gate signals such as native dependencies and native CI
+3. compute runtime gate signals such as native dependencies, native CI, and native reviews
 4. check role authority, transition preconditions, and gates
 5. apply effects through an idempotent executor
 6. verify postconditions or emit diagnostics
 
-`Executor::execute` implements this loop today for labels, assignees, comments, pull-request creates, and pull-request merges. It never trusts a plan computed against stale state: it re-loads, computes gate signals (native dependency status from dependency target closed/merged state, plus native CI from `list_ci_jobs` for PRs), and re-plans against fresh state immediately before mutating. It refuses to mutate at all if planning fails, if a plan contains an unsupported effect, if an assignee role has no runtime user binding, if a create lacks a correlation key, or if no pull-request create input is bound. It posts idempotent comments first, ensures pull requests next, merges the target pull request next (skipping an already-merged target), then applies label and assignee changes together in one backend update. Because creates and merges precede the label commit point, retries can dedupe a landed create and finish post-create state, while post-merge labels become the marker that makes a retry refuse to re-run; already-merged targets are skipped, so the merge is at most once. Postconditions are verified by re-reading the artifact's labels and assignees after the update; a mismatch yields `PostconditionFailed`.
+`Executor::execute` implements this loop today for labels, assignees, comments, pull-request creates, reviewer requests, review submissions, and pull-request merges. It never trusts a plan computed against stale state: it re-loads, computes gate signals (native dependency status from dependency target closed/merged state, native CI from `list_ci_jobs`, and native review status from requested reviewers plus `list_pull_request_reviews` for PRs), and re-plans against fresh state immediately before mutating. It refuses to mutate at all if planning fails, if a plan contains an unsupported effect, if an assignee/reviewer role has no runtime user binding, if a create lacks a correlation key, or if no pull-request create input is bound. It posts idempotent comments first, ensures pull requests next, requests reviewers and submits idempotently marked reviews, merges the target pull request next (skipping an already-merged target), then applies label and assignee changes together in one backend update. Because creates and merges precede the label commit point, retries can dedupe a landed create and finish post-create state, while post-merge labels become the marker that makes a retry refuse to re-run; already-merged targets are skipped, so the merge is at most once. Postconditions are verified by re-reading the artifact's labels and assignees after the update; a mismatch yields `PostconditionFailed`.
 
 Idempotency: re-running a label transition that already applied fails as a `Precondition` error (the source label is gone and/or the target label is present), so a retry never double-applies. `SetAssignee` is cleanly idempotent when the resolved user is already assigned, and `RemoveAssignee` is cleanly idempotent when the resolved user is already absent. `CreateComment` is guarded by a hidden marker appended to the body (`<!-- harness:comment-key=<transition>:<comment-index> -->`); the executor lists comments on the same target and skips posting when the marker already exists, so a retry after a crash-before-state-flip cannot duplicate the comment. Comments have no postcondition; instead the marker check is the verified idempotency mechanism. Idempotent artifact create is handled by `Executor::ensure_issue` and `Executor::ensure_pull_request` through correlation keys.
 
@@ -249,13 +252,13 @@ Agents must not mutate Forge state directly when operating under workflow contro
 
 ## Effects
 
-Workflow effects are the closed `plan::WorkflowEffect` enum so executors and reconcilers must handle every variant. Variants cover label add/remove, assignee set/remove, comment creation, issue and PR creation requests, lease update/release, and PR merge requests.
+Workflow effects are the closed `plan::WorkflowEffect` enum so executors and reconcilers must handle every variant. Variants cover label add/remove, assignee set/remove, comment creation, issue and PR creation requests, reviewer requests, review submissions, lease update/release, and PR merge requests.
 
-Transition specs now emit `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest`. `SetAssignee`/`RemoveAssignee` carry a workflow role id, not a Forge user id; `execute::ExecutionContext` resolves the role to a concrete Forge user at runtime, and missing bindings fail with `ExecutionError::UnresolvedAssignee` before mutation. `CreateComment` carries a prose/template `body`. `CreatePullRequest` carries an optional correlation key only; branch, title, body, labels, and assignees come from `ExecutionContext`, and a missing key or input fails before mutation. `MergePullRequest` has no payload.
+Transition specs now emit `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, `RequestReviewers`, `SubmitReview`, and `MergePullRequest`. `SetAssignee`/`RemoveAssignee` and `RequestReviewers` carry workflow role ids, not Forge user ids; `execute::ExecutionContext` resolves each role to a concrete Forge user at runtime, and missing bindings fail before mutation. `CreateComment` carries a prose/template `body`. `CreatePullRequest` carries an optional correlation key only; branch, title, body, labels, and assignees come from `ExecutionContext`, and a missing key or input fails before mutation. `SubmitReview` carries `approved`, `changes_requested`, `commented`, or `pending`. `MergePullRequest` has no payload.
 
 Leases are not yet emitted as transition effects (`UpdateLease`/`ReleaseLease` remain placeholders). Lease changes go through `lease::LeaseManager` as standalone operations on the metadata block; see "Claims and leases".
 
-`Executor::execute` applies `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, and `MergePullRequest` through the `Forge` trait. `CreatePullRequest` runs before the label/assignee commit point through `Executor::ensure_pull_request`, using the effect's correlation key and the transition-bound runtime input. `MergePullRequest` merges through the Forge merge API at most once (an already-merged target is skipped) using a default merge-commit method; its transition's post-merge labels are projected as ordinary `add_label` effects in the same atomic update and act as the planner re-run guard. The executor still rejects `UpdateLease` and `ReleaseLease` with `ExecutionError::UnsupportedEffect` before any mutation.
+`Executor::execute` applies `AddLabel`, `RemoveLabel`, `SetAssignee`, `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, `RequestReviewers`, `SubmitReview`, and `MergePullRequest` through the `Forge` trait. `CreatePullRequest` runs before the label/assignee commit point through `Executor::ensure_pull_request`, using the effect's correlation key and the transition-bound runtime input. `RequestReviewers` calls the Forge's set-like reviewer request operation; `SubmitReview` appends a native review with an idempotency marker so retries do not duplicate workflow-submitted reviews. `MergePullRequest` merges through the Forge merge API at most once (an already-merged target is skipped) using a default merge-commit method; its transition's post-merge labels are projected as ordinary `add_label` effects in the same atomic update and act as the planner re-run guard. The executor still rejects `UpdateLease` and `ReleaseLease` with `ExecutionError::UnsupportedEffect` before any mutation.
 
 Create effects use correlation keys for idempotent retries: `CreateIssue` requires one, while `CreatePullRequest` must have one to execute. `Executor::ensure_issue` and `Executor::ensure_pull_request` stamp the key into artifact metadata and search existing artifacts before creating.
 

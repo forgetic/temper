@@ -10,9 +10,9 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{
     CiJob, CiJobQuery, CiJobSortField, Comment, ForgeError, ForgeResult, Issue, IssueQuery,
-    IssueState, ItemSortField, Label, PullRequest, PullRequestQuery, PullRequestState,
-    PullRequestUpdateState, Repository, RepositoryQuery, RepositorySortField, SortDirection,
-    UserId,
+    IssueState, ItemSortField, Label, PullRequest, PullRequestQuery, PullRequestReview,
+    PullRequestState, PullRequestUpdateState, Repository, RepositoryQuery, RepositorySortField,
+    SortDirection, UserId,
 };
 use std::cmp::Ordering;
 
@@ -46,6 +46,10 @@ pub(crate) fn sort_pull_requests_by_number(pull_requests: &mut [PullRequest]) {
 
 pub(crate) fn sort_comments(comments: &mut [Comment]) {
     comments.sort_by(compare_comments);
+}
+
+pub(crate) fn sort_reviews(reviews: &mut [PullRequestReview]) {
+    reviews.sort_by(compare_reviews);
 }
 
 pub(crate) fn sort_ci_jobs(ci_jobs: &mut [CiJob], query: &CiJobQuery) {
@@ -137,6 +141,12 @@ fn compare_pull_request_number(left: &PullRequest, right: &PullRequest) -> Order
 fn compare_comments(left: &Comment, right: &Comment) -> Ordering {
     left.created_at
         .cmp(&right.created_at)
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_reviews(left: &PullRequestReview, right: &PullRequestReview) -> Ordering {
+    left.submitted_at
+        .cmp(&right.submitted_at)
         .then_with(|| left.id.cmp(&right.id))
 }
 

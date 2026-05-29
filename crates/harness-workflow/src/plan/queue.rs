@@ -1,9 +1,10 @@
 //! Queue matching and activation predicates for the pure planner.
 
+use super::{conditions::gate_condition_satisfied, signals::GateSignals};
 use crate::classify::ClassifiedArtifact;
 use crate::compile::QueueManifest;
 use crate::ids::{ArtifactKindId, LabelId};
-use crate::validated::{QueueLabelSet, ValidatedQueue};
+use crate::validated::{GateCondition, QueueLabelSet, ValidatedQueue};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
 
@@ -27,6 +28,10 @@ pub trait QueueQuery {
     fn queue_max_age(&self) -> Option<Duration> {
         None
     }
+    /// Optional native/projected condition that must hold to match the queue.
+    fn queue_condition(&self) -> Option<&GateCondition> {
+        None
+    }
 }
 
 impl QueueQuery for ValidatedQueue {
@@ -45,6 +50,9 @@ impl QueueQuery for ValidatedQueue {
     fn queue_max_age(&self) -> Option<Duration> {
         self.max_age
     }
+    fn queue_condition(&self) -> Option<&GateCondition> {
+        self.condition.as_ref()
+    }
 }
 
 impl QueueQuery for QueueManifest {
@@ -62,6 +70,9 @@ impl QueueQuery for QueueManifest {
     }
     fn queue_max_age(&self) -> Option<Duration> {
         self.max_age
+    }
+    fn queue_condition(&self) -> Option<&GateCondition> {
+        self.condition.as_ref()
     }
 }
 
@@ -90,11 +101,20 @@ impl<T: QueueMember + ?Sized> QueueMember for &T {
 /// least one clause's labels are all present. Queue activation policy is
 /// deliberately separate from matching.
 pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) -> bool {
+    matches_queue_with(query, artifact, &GateSignals::default())
+}
+
+/// Returns `true` when a classified artifact matches a queue query and signals.
+pub fn matches_queue_with<Q: QueueQuery>(
+    query: &Q,
+    artifact: &ClassifiedArtifact,
+    signals: &GateSignals,
+) -> bool {
     if !query.queue_artifacts().contains(&artifact.kind) {
         return false;
     }
     let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
-    query
+    let label_match = query
         .queue_labels()
         .iter()
         .all(|label| labels.contains(label.as_str()))
@@ -104,7 +124,11 @@ pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) ->
                     .labels
                     .iter()
                     .all(|label| labels.contains(label.as_str()))
-            }))
+            }));
+    label_match
+        && query.queue_condition().map_or(true, |condition| {
+            gate_condition_satisfied(condition, artifact, &labels, signals)
+        })
 }
 
 /// Returns `true` when matched members make a queue eligible for servicing.

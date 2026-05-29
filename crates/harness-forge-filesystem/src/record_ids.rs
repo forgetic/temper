@@ -1,5 +1,6 @@
 use harness_forge::{
     CommentId, ForgeError, ForgeResult, IssueId, ItemNumber, LabelId, PullRequestId, RepositoryId,
+    ReviewId,
 };
 
 pub(crate) fn is_record_id(value: &str) -> bool {
@@ -37,6 +38,10 @@ fn comment_id(target_id: &str, number: u64) -> CommentId {
     CommentId::new(format!("comment-{target_id}-{number:016}"))
 }
 
+pub(crate) fn pull_request_review_id(pull_request_id: &PullRequestId, number: u64) -> ReviewId {
+    ReviewId::new(format!("review-{pull_request_id}-{number:016}"))
+}
+
 pub(crate) fn stored_issue_comment_number(
     issue_id: &IssueId,
     comment_id: &CommentId,
@@ -51,27 +56,49 @@ pub(crate) fn stored_pull_request_comment_number(
     stored_comment_number("pull request", pull_request_id.as_str(), comment_id)
 }
 
+pub(crate) fn stored_pull_request_review_number(
+    pull_request_id: &PullRequestId,
+    review_id: &ReviewId,
+) -> ForgeResult<u64> {
+    let prefix = format!("review-{pull_request_id}-");
+    stored_number(
+        "review",
+        pull_request_id.as_str(),
+        review_id.as_str(),
+        &prefix,
+    )
+}
+
 fn stored_comment_number(
     target_kind: &str,
     target_id: &str,
     comment_id: &CommentId,
 ) -> ForgeResult<u64> {
     let prefix = format!("comment-{target_id}-");
-    let suffix = comment_id.as_str().strip_prefix(&prefix).ok_or_else(|| {
+    stored_number(target_kind, target_id, comment_id.as_str(), &prefix)
+}
+
+fn stored_number(
+    target_kind: &str,
+    target_id: &str,
+    record_id: &str,
+    prefix: &str,
+) -> ForgeResult<u64> {
+    let suffix = record_id.strip_prefix(prefix).ok_or_else(|| {
         ForgeError::Backend(format!(
-            "comment {comment_id} on {target_kind} {target_id} does not have deterministic id prefix {prefix}"
+            "{target_kind} {record_id} on {target_id} does not have deterministic id prefix {prefix}"
         ))
     })?;
 
     if suffix.len() != 16 || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(ForgeError::Backend(format!(
-            "comment {comment_id} on {target_kind} {target_id} does not have a 16-digit deterministic number"
+            "{target_kind} {record_id} on {target_id} does not have a 16-digit deterministic number"
         )));
     }
 
     suffix.parse::<u64>().map_err(|error| {
         ForgeError::Backend(format!(
-            "parse deterministic comment number for {comment_id} on {target_kind} {target_id}: {error}"
+            "parse deterministic {target_kind} number for {record_id} on {target_id}: {error}"
         ))
     })
 }

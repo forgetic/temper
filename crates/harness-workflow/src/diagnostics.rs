@@ -71,6 +71,8 @@ pub enum ReferenceSite {
     QueueArtifact { queue: String },
     /// A queue's `labels` list referenced a label.
     QueueLabel { queue: String },
+    /// A queue's condition referenced a label or state.
+    QueueCondition { queue: String },
     /// An artifact kind's `labels` list referenced a label.
     ArtifactLabel { artifact: String },
     /// A state's `label` referenced a label.
@@ -102,8 +104,9 @@ impl fmt::Display for ReferenceSite {
             | ReferenceSite::TransitionEffectRole { transition } => {
                 write!(formatter, "an effect of transition `{transition}`")
             }
-            ReferenceSite::QueueArtifact { queue } => write!(formatter, "queue `{queue}`"),
-            ReferenceSite::QueueLabel { queue } => write!(formatter, "queue `{queue}`"),
+            ReferenceSite::QueueArtifact { queue }
+            | ReferenceSite::QueueLabel { queue }
+            | ReferenceSite::QueueCondition { queue } => write!(formatter, "queue `{queue}`"),
             ReferenceSite::ArtifactLabel { artifact } => {
                 write!(formatter, "artifact kind `{artifact}`")
             }

@@ -5,150 +5,497 @@
       "id": "architect",
       "charter": "Turn human requests into epics, design issues, and ready code issues. Escalate unclear long-term direction to the owner.",
       "concurrency": 1,
-      "queues": ["design_triage"]
+      "queues": [
+        "design_triage"
+      ]
     },
     {
       "id": "engineer",
       "charter": "Claim ready code issues, implement them, and open pull requests for review, testing, and CI.",
       "concurrency": 3,
-      "queues": ["code_ready"]
+      "queues": [
+        "code_ready",
+        "pr_changes_requested"
+      ]
     },
     {
       "id": "reviewer",
       "charter": "Review pull requests for correctness and clarity. Approve or request changes.",
       "concurrency": 2,
-      "queues": ["pr_needs_review"]
+      "queues": [
+        "pr_needs_review"
+      ]
     },
     {
       "id": "tester",
       "charter": "Exercise pull requests and record whether testing passed or failed.",
       "concurrency": 2,
-      "queues": ["pr_needs_testing"]
+      "queues": [
+        "pr_needs_testing"
+      ]
     },
     {
       "id": "owner",
       "charter": "Resolve items needing owner judgment and approve merges once gates pass.",
       "concurrency": 1,
-      "queues": ["needs_owner"]
+      "queues": [
+        "needs_owner"
+      ]
     }
   ],
   "labels": [
-    {"id": "epic", "description": "identifies an epic"},
-    {"id": "design", "description": "identifies a design issue"},
-    {"id": "code", "description": "identifies a code issue"},
-    {"id": "implementation", "description": "identifies an implementation pull request"},
-    {"id": "design-draft", "description": "design is still being shaped"},
-    {"id": "design-ready", "description": "design is ready to break into code issues"},
-    {"id": "ready", "description": "code issue is ready to claim"},
-    {"id": "blocked", "description": "code issue is blocked on a dependency"},
-    {"id": "in-progress", "description": "code issue is being implemented"},
-    {"id": "needs-review", "description": "pull request awaits review"},
-    {"id": "review-approved", "description": "review approved the pull request"},
-    {"id": "review-changes-requested", "description": "review requested changes"},
-    {"id": "needs-testing", "description": "pull request awaits testing"},
-    {"id": "testing-passed", "description": "testing passed"},
-    {"id": "testing-failed", "description": "testing failed"},
-    {"id": "landed", "description": "merged PR awaiting architect reconcile"},
-    {"id": "owner-pending", "description": "merged PR awaiting owner alignment"},
-    {"id": "needs-owner", "description": "requires owner judgment"}
+    {
+      "id": "epic",
+      "description": "identifies an epic"
+    },
+    {
+      "id": "design",
+      "description": "identifies a design issue"
+    },
+    {
+      "id": "code",
+      "description": "identifies a code issue"
+    },
+    {
+      "id": "implementation",
+      "description": "identifies an implementation pull request"
+    },
+    {
+      "id": "design-draft",
+      "description": "design is still being shaped"
+    },
+    {
+      "id": "design-ready",
+      "description": "design is ready to break into code issues"
+    },
+    {
+      "id": "ready",
+      "description": "code issue is ready to claim"
+    },
+    {
+      "id": "blocked",
+      "description": "code issue is blocked on a dependency"
+    },
+    {
+      "id": "in-progress",
+      "description": "code issue is being implemented"
+    },
+    {
+      "id": "needs-review",
+      "description": "pull request awaits review"
+    },
+    {
+      "id": "needs-testing",
+      "description": "pull request awaits testing"
+    },
+    {
+      "id": "testing-passed",
+      "description": "testing passed"
+    },
+    {
+      "id": "testing-failed",
+      "description": "testing failed"
+    },
+    {
+      "id": "landed",
+      "description": "merged PR awaiting architect reconcile"
+    },
+    {
+      "id": "owner-pending",
+      "description": "merged PR awaiting owner alignment"
+    },
+    {
+      "id": "needs-owner",
+      "description": "requires owner judgment"
+    }
   ],
   "artifact_kinds": [
-    {"id": "epic", "target": "issue", "identifying_labels": ["epic"]},
-    {"id": "design", "target": "issue", "identifying_labels": ["design"]},
-    {"id": "code", "target": "issue", "identifying_labels": ["code"]},
-    {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+    {
+      "id": "epic",
+      "target": "issue",
+      "identifying_labels": [
+        "epic"
+      ]
+    },
+    {
+      "id": "design",
+      "target": "issue",
+      "identifying_labels": [
+        "design"
+      ]
+    },
+    {
+      "id": "code",
+      "target": "issue",
+      "identifying_labels": [
+        "code"
+      ]
+    },
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": [
+        "implementation"
+      ]
+    }
   ],
   "relations": [
-    {"kind": "dependency", "source": "code", "target": "code"}
+    {
+      "kind": "dependency",
+      "source": "code",
+      "target": "code"
+    }
   ],
   "state_dimensions": [
-    {"id": "design_lifecycle", "exclusive": true, "states": [
-      {"id": "draft", "label": "design-draft"},
-      {"id": "ready", "label": "design-ready"}
-    ]},
-    {"id": "code_lifecycle", "exclusive": true, "states": [
-      {"id": "ready", "label": "ready"},
-      {"id": "blocked", "label": "blocked"},
-      {"id": "in_progress", "label": "in-progress"}
-    ]},
-    {"id": "review", "exclusive": true, "states": [
-      {"id": "needs_review", "label": "needs-review"},
-      {"id": "approved", "label": "review-approved"},
-      {"id": "changes_requested", "label": "review-changes-requested"}
-    ]},
-    {"id": "testing", "exclusive": true, "states": [
-      {"id": "needs_testing", "label": "needs-testing"},
-      {"id": "passed", "label": "testing-passed"},
-      {"id": "failed", "label": "testing-failed"}
-    ]},
-    {"id": "post_merge", "exclusive": false, "states": [
-      {"id": "landed", "label": "landed"},
-      {"id": "owner_pending", "label": "owner-pending"}
-    ]},
-    {"id": "owner_attention", "exclusive": false, "states": [
-      {"id": "needs_owner", "label": "needs-owner"}
-    ]}
+    {
+      "id": "design_lifecycle",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "draft",
+          "label": "design-draft"
+        },
+        {
+          "id": "ready",
+          "label": "design-ready"
+        }
+      ]
+    },
+    {
+      "id": "code_lifecycle",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "ready",
+          "label": "ready"
+        },
+        {
+          "id": "blocked",
+          "label": "blocked"
+        },
+        {
+          "id": "in_progress",
+          "label": "in-progress"
+        }
+      ]
+    },
+    {
+      "id": "testing",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "needs_testing",
+          "label": "needs-testing"
+        },
+        {
+          "id": "passed",
+          "label": "testing-passed"
+        },
+        {
+          "id": "failed",
+          "label": "testing-failed"
+        }
+      ]
+    },
+    {
+      "id": "post_merge",
+      "exclusive": false,
+      "states": [
+        {
+          "id": "landed",
+          "label": "landed"
+        },
+        {
+          "id": "owner_pending",
+          "label": "owner-pending"
+        }
+      ]
+    },
+    {
+      "id": "owner_attention",
+      "exclusive": false,
+      "states": [
+        {
+          "id": "needs_owner",
+          "label": "needs-owner"
+        }
+      ]
+    }
   ],
   "queues": [
-    {"id": "design_triage", "artifact": "design", "labels": ["design-draft"]},
-    {"id": "code_ready", "artifact": "code", "labels": ["ready"]},
-    {"id": "pr_needs_review", "artifact": "implementation_pr", "labels": ["needs-review"]},
-    {"id": "pr_needs_testing", "artifact": "implementation_pr", "labels": ["needs-testing"]},
-    {"id": "needs_owner", "artifact": "design", "labels": ["needs-owner"]}
+    {
+      "id": "design_triage",
+      "artifact": "design",
+      "labels": [
+        "design-draft"
+      ]
+    },
+    {
+      "id": "code_ready",
+      "artifact": "code",
+      "labels": [
+        "ready"
+      ]
+    },
+    {
+      "id": "pr_needs_review",
+      "artifact": "implementation_pr",
+      "labels": [
+        "needs-review"
+      ]
+    },
+    {
+      "id": "pr_changes_requested",
+      "artifact": "implementation_pr",
+      "condition": {
+        "kind": "review_changes_requested"
+      }
+    },
+    {
+      "id": "pr_needs_testing",
+      "artifact": "implementation_pr",
+      "labels": [
+        "needs-testing"
+      ]
+    },
+    {
+      "id": "needs_owner",
+      "artifact": "design",
+      "labels": [
+        "needs-owner"
+      ]
+    }
   ],
   "transitions": [
-    {"id": "refine_design", "artifact": "design", "roles": ["architect"], "effects": [
-      {"kind": "remove_label", "label": "design-draft"},
-      {"kind": "add_label", "label": "design-ready"}
-    ]},
-    {"id": "escalate_to_owner", "artifact": "design", "roles": ["architect"], "effects": [
-      {"kind": "add_label", "label": "needs-owner"}
-    ]},
-    {"id": "mark_code_ready", "artifact": "code", "roles": ["architect"],
-      "requires_gates": ["dependency_gate"], "effects": [
-      {"kind": "remove_label", "label": "blocked"},
-      {"kind": "add_label", "label": "ready"}
-    ]},
-    {"id": "claim_code", "artifact": "code", "roles": ["engineer"], "effects": [
-      {"kind": "remove_label", "label": "ready"},
-      {"kind": "add_label", "label": "in-progress"}
-    ]},
-    {"id": "request_review", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
-      {"kind": "add_label", "label": "needs-review"}
-    ]},
-    {"id": "address_review_changes", "artifact": "implementation_pr", "roles": ["engineer"], "effects": [
-      {"kind": "remove_label", "label": "review-changes-requested"},
-      {"kind": "add_label", "label": "needs-review"}
-    ]},
-    {"id": "approve_review", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
-      {"kind": "remove_label", "label": "needs-review"},
-      {"kind": "add_label", "label": "review-approved"}
-    ]},
-    {"id": "request_changes", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
-      {"kind": "remove_label", "label": "needs-review"},
-      {"kind": "add_label", "label": "review-changes-requested"}
-    ]},
-    {"id": "record_test_pass", "artifact": "implementation_pr", "roles": ["tester"], "effects": [
-      {"kind": "remove_label", "label": "needs-testing"},
-      {"kind": "add_label", "label": "testing-passed"}
-    ]},
-    {"id": "record_test_failure", "artifact": "implementation_pr", "roles": ["tester"], "effects": [
-      {"kind": "remove_label", "label": "needs-testing"},
-      {"kind": "add_label", "label": "testing-failed"}
-    ]},
-    {"id": "clear_owner_flag", "artifact": "design", "roles": ["owner"], "effects": [
-      {"kind": "remove_label", "label": "needs-owner"}
-    ]},
-    {"id": "approve_merge", "artifact": "implementation_pr", "roles": ["owner"],
-      "requires_gates": ["review_gate", "testing_gate"], "effects": [
-      {"kind": "merge_pull_request"},
-      {"kind": "add_label", "label": "landed"},
-      {"kind": "add_label", "label": "owner-pending"}
-    ]}
+    {
+      "id": "refine_design",
+      "artifact": "design",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "design-draft"
+        },
+        {
+          "kind": "add_label",
+          "label": "design-ready"
+        }
+      ]
+    },
+    {
+      "id": "escalate_to_owner",
+      "artifact": "design",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-owner"
+        }
+      ]
+    },
+    {
+      "id": "mark_code_ready",
+      "artifact": "code",
+      "roles": [
+        "architect"
+      ],
+      "requires_gates": [
+        "dependency_gate"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "blocked"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        }
+      ]
+    },
+    {
+      "id": "claim_code",
+      "artifact": "code",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "ready"
+        },
+        {
+          "kind": "add_label",
+          "label": "in-progress"
+        }
+      ]
+    },
+    {
+      "id": "request_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-review"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "address_review_changes",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-review"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "approve_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-review"
+        },
+        {
+          "kind": "submit_review",
+          "decision": "approved"
+        }
+      ]
+    },
+    {
+      "id": "request_changes",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-review"
+        },
+        {
+          "kind": "submit_review",
+          "decision": "changes_requested"
+        }
+      ]
+    },
+    {
+      "id": "record_test_pass",
+      "artifact": "implementation_pr",
+      "roles": [
+        "tester"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-testing"
+        },
+        {
+          "kind": "add_label",
+          "label": "testing-passed"
+        }
+      ]
+    },
+    {
+      "id": "record_test_failure",
+      "artifact": "implementation_pr",
+      "roles": [
+        "tester"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-testing"
+        },
+        {
+          "kind": "add_label",
+          "label": "testing-failed"
+        }
+      ]
+    },
+    {
+      "id": "clear_owner_flag",
+      "artifact": "design",
+      "roles": [
+        "owner"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-owner"
+        }
+      ]
+    },
+    {
+      "id": "approve_merge",
+      "artifact": "implementation_pr",
+      "roles": [
+        "owner"
+      ],
+      "requires_gates": [
+        "review_gate",
+        "testing_gate"
+      ],
+      "effects": [
+        {
+          "kind": "merge_pull_request"
+        },
+        {
+          "kind": "add_label",
+          "label": "landed"
+        },
+        {
+          "kind": "add_label",
+          "label": "owner-pending"
+        }
+      ]
+    }
   ],
   "gates": [
-    {"id": "review_gate", "satisfied_by": ["approve_review"]},
-    {"id": "testing_gate", "satisfied_by": ["record_test_pass"]},
-    {"id": "dependency_gate", "condition": {"kind": "dependencies_resolved"}}
+    {
+      "id": "review_gate",
+      "condition": {
+        "kind": "review_approved"
+      }
+    },
+    {
+      "id": "testing_gate",
+      "satisfied_by": [
+        "record_test_pass"
+      ]
+    },
+    {
+      "id": "dependency_gate",
+      "condition": {
+        "kind": "dependencies_resolved"
+      }
+    }
   ]
 }
