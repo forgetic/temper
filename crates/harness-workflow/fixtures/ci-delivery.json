@@ -1,5 +1,5 @@
 {
-  "name": "five-role-delivery",
+  "name": "ci-delivery",
   "roles": [
     {
       "id": "architect",
@@ -11,11 +11,12 @@
     },
     {
       "id": "engineer",
-      "charter": "Claim ready code issues, implement them, and open pull requests for review, testing, and CI.",
+      "charter": "Claim ready code issues, implement them, open pull requests, and address failed review or CI gates.",
       "concurrency": 3,
       "queues": [
         "code_ready",
-        "pr_changes_requested"
+        "pr_changes_requested",
+        "pr_ci_failed"
       ]
     },
     {
@@ -24,14 +25,6 @@
       "concurrency": 2,
       "queues": [
         "pr_needs_review"
-      ]
-    },
-    {
-      "id": "tester",
-      "charter": "Exercise pull requests and record whether testing passed or failed.",
-      "concurrency": 2,
-      "queues": [
-        "pr_needs_testing"
       ]
     },
     {
@@ -83,18 +76,6 @@
     {
       "id": "needs-review",
       "description": "pull request awaits review"
-    },
-    {
-      "id": "needs-testing",
-      "description": "pull request awaits testing"
-    },
-    {
-      "id": "testing-passed",
-      "description": "testing passed"
-    },
-    {
-      "id": "testing-failed",
-      "description": "testing failed"
     },
     {
       "id": "landed",
@@ -180,24 +161,6 @@
       ]
     },
     {
-      "id": "testing",
-      "exclusive": true,
-      "states": [
-        {
-          "id": "needs_testing",
-          "label": "needs-testing"
-        },
-        {
-          "id": "passed",
-          "label": "testing-passed"
-        },
-        {
-          "id": "failed",
-          "label": "testing-failed"
-        }
-      ]
-    },
-    {
       "id": "post_merge",
       "exclusive": false,
       "states": [
@@ -252,11 +215,11 @@
       }
     },
     {
-      "id": "pr_needs_testing",
+      "id": "pr_ci_failed",
       "artifact": "implementation_pr",
-      "labels": [
-        "needs-testing"
-      ]
+      "condition": {
+        "kind": "ci_failed"
+      }
     },
     {
       "id": "needs_owner",
@@ -373,6 +336,25 @@
       ]
     },
     {
+      "id": "address_ci_failure",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-review"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
       "id": "approve_review",
       "artifact": "implementation_pr",
       "roles": [
@@ -407,40 +389,6 @@
       ]
     },
     {
-      "id": "record_test_pass",
-      "artifact": "implementation_pr",
-      "roles": [
-        "tester"
-      ],
-      "effects": [
-        {
-          "kind": "remove_label",
-          "label": "needs-testing"
-        },
-        {
-          "kind": "add_label",
-          "label": "testing-passed"
-        }
-      ]
-    },
-    {
-      "id": "record_test_failure",
-      "artifact": "implementation_pr",
-      "roles": [
-        "tester"
-      ],
-      "effects": [
-        {
-          "kind": "remove_label",
-          "label": "needs-testing"
-        },
-        {
-          "kind": "add_label",
-          "label": "testing-failed"
-        }
-      ]
-    },
-    {
       "id": "clear_owner_flag",
       "artifact": "design",
       "roles": [
@@ -461,7 +409,7 @@
       ],
       "requires_gates": [
         "review_gate",
-        "testing_gate"
+        "ci_gate"
       ],
       "effects": [
         {
@@ -486,10 +434,10 @@
       }
     },
     {
-      "id": "testing_gate",
-      "satisfied_by": [
-        "record_test_pass"
-      ]
+      "id": "ci_gate",
+      "condition": {
+        "kind": "ci_passed"
+      }
     },
     {
       "id": "dependency_gate",

@@ -19,11 +19,11 @@ An artifact is a logical work item mapped to a Forge issue or pull request. Exam
 
 A state dimension is a named group of states, often projected as labels. For example, a code issue lifecycle may contain `ready`, `blocked`, and `in-progress`. Review outcomes are native Forge state instead of workflow-owned labels; a workflow can still use a `needs-reviewer` routing label while gates read native review decisions.
 
-A queue is a query over artifacts, such as `code + ready` issues or PRs labeled `needs-tester`.
+A queue is a query over artifacts, such as `code + ready` issues or PRs whose native CI status is failed.
 
 A transition is an authorized state change with preconditions and effects. Generated tools should map to transitions instead of exposing generic label mutation.
 
-A gate is a condition that unlocks a transition. For example, a PR may be mergeable only when CI, review, and testing gates all succeeded. A gate may be satisfied by a workflow transition, by Forge-projected labels/state, or by a native signal such as CI job conclusions or dependency target state.
+A gate is a condition that unlocks a transition. For example, a PR may be mergeable only when native CI and review gates both succeed. A gate may be satisfied by a workflow transition, by Forge-projected labels/state, or by a native signal such as CI job conclusions or dependency target state.
 
 A relation links artifacts, such as feature request to epic, epic to design issue, design issue to code issue, and code issue to PR.
 
@@ -39,9 +39,9 @@ The owner comments on issues requiring owner input and periodically reviews land
 
 Once a design is ready, the architect creates code issues. Some are labeled `ready`; others are `blocked` until dependencies land.
 
-Engineers claim `code + ready` issues, changing them to `in-progress`, implement the work, and open PRs labeled for CI, review, and testing.
+Engineers claim `code + ready` issues, changing them to `in-progress`, implement the work, and open PRs labeled for review; CI status is read from the Forge.
 
-CI, reviewer, and tester gates proceed independently. Reviewers are requested on the PR and submit native review decisions; the workflow reads that native aggregate. If all gates pass, the PR can merge. If any gate fails, the work returns to the engineer or escalates according to workflow policy.
+CI and review gates proceed independently. Reviewers are requested on the PR and submit native review decisions; the workflow reads that native aggregate and the current CI jobs. If all gates pass, the PR can merge. If either gate fails, the work returns to the engineer or escalates according to workflow policy.
 
 ## Robustness model
 

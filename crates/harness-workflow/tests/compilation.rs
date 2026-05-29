@@ -1,6 +1,6 @@
 //! Tests for workflow compilation (Phase 4).
 //!
-//! These exercise the checked-in five-role delivery fixture: it must validate,
+//! These exercise the checked-in CI delivery fixture: it must validate,
 //! produce a manifest for every role, scope each role to only its own tools and
 //! transition authority, surface every label a workflow site needs, and render
 //! deterministic prompts.
@@ -9,13 +9,13 @@ use harness_workflow::{
     compile, CompiledWorkflow, LabelUsage, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow,
 };
 
-/// The checked-in five-role delivery workflow fixture.
-const FIXTURE: &str = include_str!("../fixtures/five-role-delivery.json");
+/// The checked-in CI delivery workflow fixture.
+const FIXTURE: &str = include_str!("../fixtures/ci-delivery.json");
 
 fn fixture_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(FIXTURE).expect("fixture is valid JSON for RawWorkflowSpec");
-    spec.validate().expect("five-role fixture validates")
+    spec.validate().expect("CI delivery fixture validates")
 }
 
 fn role_ids(compiled: &CompiledWorkflow) -> Vec<String> {
@@ -37,12 +37,12 @@ fn tool_names(compiled: &CompiledWorkflow, role: &str) -> Vec<String> {
 }
 
 #[test]
-fn five_role_fixture_validates() {
+fn ci_delivery_fixture_validates() {
     let workflow = fixture_workflow();
-    assert_eq!(workflow.name(), "five-role-delivery");
-    assert_eq!(workflow.roles().len(), 5);
+    assert_eq!(workflow.name(), "ci-delivery");
+    assert_eq!(workflow.roles().len(), 4);
     assert_eq!(workflow.artifact_kinds().len(), 4);
-    // review_gate, testing_gate, and the dependency_gate that drives mechanical
+    // review_gate, ci_gate, and the dependency_gate that drives mechanical
     // unblocking of blocked code issues.
     assert_eq!(workflow.gates().len(), 3);
 }
@@ -52,10 +52,7 @@ fn every_role_gets_a_manifest() {
     let compiled = compile(&fixture_workflow());
     let mut ids = role_ids(&compiled);
     ids.sort();
-    assert_eq!(
-        ids,
-        vec!["architect", "engineer", "owner", "reviewer", "tester"]
-    );
+    assert_eq!(ids, vec!["architect", "engineer", "owner", "reviewer"]);
 
     // Concurrency hints and charters survive compilation.
     let engineer = compiled
@@ -79,7 +76,12 @@ fn each_role_sees_only_its_own_tools() {
     engineer_tools.sort();
     assert_eq!(
         engineer_tools,
-        vec!["address_review_changes", "claim_code", "request_review"]
+        vec![
+            "address_ci_failure",
+            "address_review_changes",
+            "claim_code",
+            "request_review",
+        ]
     );
 
     // The reviewer owns review verdicts; the engineer must not see them.
@@ -87,15 +89,6 @@ fn each_role_sees_only_its_own_tools() {
     assert!(reviewer_tools.contains(&"approve_review".to_string()));
     assert!(reviewer_tools.contains(&"request_changes".to_string()));
     assert!(!tool_names(&compiled, "engineer").contains(&"approve_review".to_string()));
-    assert!(!tool_names(&compiled, "tester").contains(&"approve_review".to_string()));
-
-    // The tester only records test outcomes.
-    let mut tester_tools = tool_names(&compiled, "tester");
-    tester_tools.sort();
-    assert_eq!(
-        tester_tools,
-        vec!["record_test_failure", "record_test_pass"]
-    );
 }
 
 #[test]
@@ -145,7 +138,7 @@ fn gated_tool_carries_its_required_gates() {
         .iter()
         .map(|gate| gate.to_string())
         .collect();
-    assert_eq!(gates, vec!["review_gate", "testing_gate"]);
+    assert_eq!(gates, vec!["review_gate", "ci_gate"]);
 }
 
 #[test]
@@ -209,8 +202,8 @@ fn label_manifest_covers_every_workflow_site() {
     )));
 
     // Every declared label appears exactly once in the manifest. The `ci-*`,
-    // `review-*`, and `merge-ready` labels were retired.
-    assert_eq!(labels.labels().len(), 16);
+    // `review-*`, `testing-*`, and `merge-ready` labels were retired.
+    assert_eq!(labels.labels().len(), 13);
 }
 
 #[test]

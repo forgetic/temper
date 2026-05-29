@@ -91,7 +91,7 @@ fn conditional_pull_request_update_rejects_a_stale_version() {
     let conflict = block_on(forge.update_pull_request(
         &created.id,
         UpdatePullRequest {
-            add_labels: vec!["needs-testing".into()],
+            add_labels: vec!["needs-qa".into()],
             expected_version: Some(created.version),
             ..UpdatePullRequest::default()
         },
@@ -103,5 +103,5 @@ fn conditional_pull_request_update_rejects_a_stale_version() {
         .unwrap()
         .unwrap();
     assert_eq!(current.version, updated.version);
-    assert!(!current.labels.contains(&"needs-testing".to_string()));
+    assert!(!current.labels.contains(&"needs-qa".to_string()));
 }

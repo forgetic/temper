@@ -23,7 +23,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-const FIXTURE: &str = include_str!("../../fixtures/five-role-delivery.json");
+const FIXTURE: &str = include_str!("../../fixtures/ci-delivery.json");
 
 /// Owns one in-memory backend store for a test.
 ///
@@ -69,11 +69,11 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-/// Loads and validates the checked-in five-role fixture.
+/// Loads and validates the checked-in CI delivery fixture.
 pub fn workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(FIXTURE).expect("fixture is valid RawWorkflowSpec JSON");
-    spec.validate().expect("five-role fixture validates")
+    spec.validate().expect("CI delivery fixture validates")
 }
 
 /// Parses an RFC 3339 timestamp for deterministic time control.

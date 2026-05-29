@@ -124,7 +124,7 @@ pub use metadata::{
     WorkflowMetadata, METADATA_BEGIN, METADATA_END,
 };
 pub use plan::{
-    matches_queue, queue_active, CiStatus, DependencyStatus, GateSignals, MechanicalPlan,
+    matches_queue, queue_active, CiState, CiStatus, DependencyStatus, GateSignals, MechanicalPlan,
     PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus,
     TransitionPlan, WorkflowEffect,
 };

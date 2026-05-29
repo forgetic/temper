@@ -20,3 +20,4 @@ Current ADRs:
 - [ADR 0014: Derive merge eligibility from gates and read native CI](0014-derive-merge-eligibility-and-native-ci-gate.md)
 - [ADR 0015: Promote dependency links to native Forge state](0015-native-artifact-dependency-links.md)
 - [ADR 0016: Model native pull-request reviews portably](0016-native-pull-request-reviews.md)
+- [ADR 0017: Retire testing labels in favor of native CI status](0017-retire-testing-labels-for-native-ci-status.md)

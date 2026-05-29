@@ -13,7 +13,7 @@ loop). This doc is the durable record of the plan and progress.
 
 - `reference-delivery.json` is the **evolving target** fixture. Extend it as new
   primitives land; its planning test is `tests/reference_delivery.rs`.
-- `five-role-delivery.json` is the **stable** executor/safety fixture. Only touch
+- `ci-delivery.json` is the **stable** executor/safety fixture. Only touch
   it when an execution capability it can exercise actually lands.
 - Primitive-extending phases write an ADR first (flagged below). These ADRs
   encode design decisions the human flagged during scoping; the roadmap's
@@ -63,7 +63,7 @@ Status legend: ☐ pending · ☑ done.
   cohorts. ADR 0012 covers all queue-primitive extensions (13 and 14).
 - ☑ **14 — Queue matching extensions.** Multi-artifact-kind queues and
   disjunctive (OR) label-sets, referencing ADR 0012. Collapsed the
-  fixture's split `pr_changes_requested`/`pr_testing_failed` workaround and bound
+  fixture's split `pr_changes_requested`/`pr_ci_failed` workaround and bound
   `needs_architect` to both issue and PR artifact kinds.
 
 ## Adjacent pre-existing limitations (not in this backlog)
@@ -77,7 +77,7 @@ the phases above but are out of scope for the reference-workflow backlog:
 ## Done definition for the whole backlog
 
 All phases ☑, `reference-delivery.json` carries no expression workarounds, the
-reference workflow's full loop (intake → triage → claim → PR → review/test/CI →
+reference workflow's full loop (intake → triage → claim → PR → review/CI →
 merge → post-merge reconcile/alignment) is expressible/plannable, and
 `reference-workflow-gaps.md` is updated to a "resolved" record.
 

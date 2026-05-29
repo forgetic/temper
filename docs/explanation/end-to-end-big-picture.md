@@ -110,10 +110,7 @@ remaining path to a live deployment, in dependency order:
 4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific
    receipt/verify/parse normalized into a hint the runner coalesces; stays off
    the `Forge` trait.
-5. **CI signal projection** — an interim adapter writing `ci-*` labels, or the
-   cleaner derived `ci_gate` from `list_ci_jobs` (native-forge-state Phase A in
-   [that roadmap](native-forge-state-roadmap.md)).
-6. **Deployment config** — `ExecutionContext` role→user bindings, per-worker
+5. **Deployment config** — `ExecutionContext` role→user bindings, per-worker
    credentials/identities, and the target repo.
 
 ## Open design seams

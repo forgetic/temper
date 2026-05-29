@@ -13,12 +13,12 @@
     },
     {
       "id": "engineer",
-      "charter": "Claim ready code issues, implement them, open PRs, and address failed review or testing gates.",
+      "charter": "Claim ready code issues, implement them, open PRs, and address failed review or CI gates.",
       "concurrency": 3,
       "queues": [
         "code_ready",
         "pr_changes_requested",
-        "pr_test_failed"
+        "pr_ci_failed"
       ]
     },
     {
@@ -27,14 +27,6 @@
       "concurrency": 2,
       "queues": [
         "pr_needs_review"
-      ]
-    },
-    {
-      "id": "tester",
-      "charter": "Exercise the change and record whether testing passed or failed.",
-      "concurrency": 2,
-      "queues": [
-        "pr_needs_testing"
       ]
     },
     {
@@ -95,18 +87,6 @@
     {
       "id": "needs-reviewer",
       "description": "pull request awaits reviewer action"
-    },
-    {
-      "id": "needs-tester",
-      "description": "pull request awaits tester action"
-    },
-    {
-      "id": "testing-passed",
-      "description": "testing passed"
-    },
-    {
-      "id": "testing-failed",
-      "description": "testing failed"
     },
     {
       "id": "needs-architect",
@@ -231,24 +211,6 @@
       ]
     },
     {
-      "id": "testing",
-      "exclusive": true,
-      "states": [
-        {
-          "id": "needs_tester",
-          "label": "needs-tester"
-        },
-        {
-          "id": "passed",
-          "label": "testing-passed"
-        },
-        {
-          "id": "failed",
-          "label": "testing-failed"
-        }
-      ]
-    },
-    {
       "id": "attention",
       "exclusive": false,
       "states": [
@@ -310,13 +272,6 @@
       ]
     },
     {
-      "id": "pr_needs_testing",
-      "artifact": "implementation_pr",
-      "labels": [
-        "needs-tester"
-      ]
-    },
-    {
       "id": "pr_changes_requested",
       "artifact": "implementation_pr",
       "condition": {
@@ -324,11 +279,11 @@
       }
     },
     {
-      "id": "pr_test_failed",
+      "id": "pr_ci_failed",
       "artifact": "implementation_pr",
-      "labels": [
-        "testing-failed"
-      ]
+      "condition": {
+        "kind": "ci_failed"
+      }
     },
     {
       "id": "needs_architect",
@@ -565,19 +520,21 @@
       ]
     },
     {
-      "id": "address_test_failure",
+      "id": "address_ci_failure",
       "artifact": "implementation_pr",
       "roles": [
         "engineer"
       ],
       "effects": [
         {
-          "kind": "remove_label",
-          "label": "testing-failed"
+          "kind": "add_label",
+          "label": "needs-reviewer"
         },
         {
-          "kind": "add_label",
-          "label": "needs-tester"
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
         }
       ]
     },
@@ -586,8 +543,7 @@
       "artifact": "implementation_pr",
       "roles": [
         "engineer",
-        "reviewer",
-        "tester"
+        "reviewer"
       ],
       "effects": [
         {
@@ -627,40 +583,6 @@
         {
           "kind": "submit_review",
           "decision": "changes_requested"
-        }
-      ]
-    },
-    {
-      "id": "record_test_pass",
-      "artifact": "implementation_pr",
-      "roles": [
-        "tester"
-      ],
-      "effects": [
-        {
-          "kind": "remove_label",
-          "label": "needs-tester"
-        },
-        {
-          "kind": "add_label",
-          "label": "testing-passed"
-        }
-      ]
-    },
-    {
-      "id": "record_test_failure",
-      "artifact": "implementation_pr",
-      "roles": [
-        "tester"
-      ],
-      "effects": [
-        {
-          "kind": "remove_label",
-          "label": "needs-tester"
-        },
-        {
-          "kind": "add_label",
-          "label": "testing-failed"
         }
       ]
     },
@@ -728,7 +650,6 @@
       ],
       "requires_gates": [
         "review_gate",
-        "testing_gate",
         "ci_gate"
       ],
       "effects": [
@@ -752,12 +673,6 @@
       "condition": {
         "kind": "review_approved"
       }
-    },
-    {
-      "id": "testing_gate",
-      "satisfied_by": [
-        "record_test_pass"
-      ]
     },
     {
       "id": "ci_gate",

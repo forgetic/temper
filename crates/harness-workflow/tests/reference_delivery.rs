@@ -5,8 +5,8 @@ use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullR
 use harness_workflow::{
     compile, render_metadata_block, ArtifactKindId, CiStatus, ClassifiedArtifact,
     ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals, LabelId,
-    LabelUsage, PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId,
-    TransitionId, ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
+    PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId,
+    ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/reference-delivery.json");
@@ -109,12 +109,12 @@ fn classify_pr_updated_at(
 fn reference_fixture_validates_with_expected_shape() {
     let workflow = fixture_workflow();
     assert_eq!(workflow.name(), "reference-delivery");
-    assert_eq!(workflow.roles().len(), 6);
+    assert_eq!(workflow.roles().len(), 5);
     assert_eq!(workflow.artifact_kinds().len(), 5);
-    assert_eq!(workflow.state_dimensions().len(), 4);
-    assert_eq!(workflow.queues().len(), 11);
-    assert_eq!(workflow.transitions().len(), 22);
-    assert_eq!(workflow.gates().len(), 4);
+    assert_eq!(workflow.state_dimensions().len(), 3);
+    assert_eq!(workflow.queues().len(), 10);
+    assert_eq!(workflow.transitions().len(), 20);
+    assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow
         .transitions()
@@ -171,14 +171,7 @@ fn reference_fixture_compiles_every_role() {
     ids.sort();
     assert_eq!(
         ids,
-        vec![
-            "architect",
-            "engineer",
-            "human",
-            "owner",
-            "reviewer",
-            "tester"
-        ]
+        vec!["architect", "engineer", "human", "owner", "reviewer"]
     );
 
     assert!(compiled.labels().get(&LabelId::new("ci-passed")).is_none());
@@ -199,14 +192,21 @@ fn reference_fixture_compiles_every_role() {
     assert_eq!(owner_alignment.min_depth, Some(5));
     assert_eq!(owner_alignment.max_age, Some(Duration::days(7)));
 
-    let testing_failed = compiled
+    assert!(compiled
+        .labels()
+        .get(&LabelId::new("testing-passed"))
+        .is_none());
+    assert!(compiled
         .labels()
         .get(&LabelId::new("testing-failed"))
-        .expect("testing-failed label is in the manifest");
-    assert!(testing_failed.usages.iter().any(|usage| matches!(
-        usage,
-        LabelUsage::QueueFilter { queue } if queue.as_str() == "pr_test_failed"
-    )));
+        .is_none());
+
+    let ci_failed = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "pr_ci_failed")
+        .expect("CI failure queue is compiled");
+    assert_eq!(ci_failed.condition.as_ref(), Some(&GateCondition::CiFailed));
 }
 
 #[test]
@@ -476,11 +476,11 @@ fn dependency_gate_requires_every_prerequisite() {
 }
 
 #[test]
-fn three_gate_merge_requires_review_testing_and_ci() {
+fn merge_requires_review_and_native_ci() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    let ready = classify_pr(&workflow, 10, &["implementation", "testing-passed"]);
+    let ready = classify_pr(&workflow, 10, &["implementation"]);
     let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
     let blocked = planner
         .plan_transition_with(
@@ -529,10 +529,11 @@ fn failed_gates_route_back_to_engineer_queues() {
         .matching_queues_with(&changes, &review_signal)
         .contains(&QueueId::new("pr_changes_requested")));
 
-    let failed = classify_pr(&workflow, 21, &["implementation", "testing-failed"]);
+    let ci_signal = GateSignals::new().with_ci(CiStatus::failed());
+    let failed = classify_pr(&workflow, 21, &["implementation"]);
     assert!(planner
-        .matching_queues(&failed)
-        .contains(&QueueId::new("pr_test_failed")));
+        .matching_queues_with(&failed, &ci_signal)
+        .contains(&QueueId::new("pr_ci_failed")));
 }
 
 #[test]

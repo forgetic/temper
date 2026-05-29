@@ -1,8 +1,8 @@
 //! Workflow safety-property tests (Phase 8).
 //!
 //! Each test asserts one of the safety properties listed in
-//! `docs/reference/robustness-guarantees.md` over the checked-in five-role
-//! fixture (and one three-gate fixture for the native CI gate). All time is
+//! `docs/reference/robustness-guarantees.md` over the checked-in CI delivery
+//! fixture (and one small native-gated merge fixture). All time is
 //! supplied through fixed timestamps and all faults fire on fixed call counts,
 //! so the suite is deterministic.
 
@@ -24,11 +24,11 @@ use support::{
     submit_review, ts, workflow, TestRoot,
 };
 
-/// A workflow whose merge gate requires native CI, review, and testing.
+/// A workflow whose merge gate requires native CI and review.
 ///
-/// CI is driven by seeded native jobs, not `ci-passed`; merge eligibility is
-/// derived from gates, with `landed` as the post-merge re-run guard.
-const THREE_GATE: &str = include_str!("../fixtures/three-gate-merge.json");
+/// CI is driven by seeded native jobs, not labels; merge eligibility is derived
+/// from gates, with `landed` as the post-merge re-run guard.
+const NATIVE_GATED_MERGE: &str = include_str!("../fixtures/native-gated-merge.json");
 
 fn code_issue_input() -> CreateIssue {
     CreateIssue {
@@ -226,17 +226,17 @@ fn two_no_lease_acquirers_cannot_both_win_the_same_claim() {
 }
 
 // Safety property 3a: a merge is not authorized — and the pull request is not
-// merged — until review and testing gates pass; once they do, the merge
+// merged — until review and native CI gates pass; once they do, the merge
 // executes and projects the post-merge `landed`/`owner-pending` labels.
 #[test]
-fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
+fn a_merge_is_not_authorized_until_review_and_ci_gates_pass() {
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
     let workflow = workflow();
     let executor = Executor::new(&workflow, &forge);
 
-    // Only native review approved; testing still pending.
+    // Only native review approved; CI still pending.
     let ungated = create_pr(&forge, &repo, &["implementation"], "");
     submit_review(&forge, &repo, ungated, ReviewDecision::Approved);
     let blocked = block_on(executor.execute(
@@ -245,15 +245,16 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
         &TransitionId::new("approve_merge"),
         &RoleId::new("owner"),
     ))
-    .expect_err("a merge cannot be authorized before testing passes");
+    .expect_err("a merge cannot be authorized before CI passes");
     assert!(matches!(blocked, ExecutionError::Precondition { .. }));
     // No premature merge or post-merge projection while a gate is unmet.
     assert!(!pr_labels(&forge, &repo, ungated).contains(&"landed".to_string()));
     assert_eq!(pr_state(&forge, &repo, ungated), PullRequestState::Open);
 
-    // Both gates met: native review approved and testing passed.
-    let gated = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    // Both gates met: native review approved and CI passed.
+    let gated = create_pr(&forge, &repo, &["implementation"], "");
     submit_review(&forge, &repo, gated, ReviewDecision::Approved);
+    seed_ci(&forge, &repo, gated, CiJobConclusion::Success);
     block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: gated },
@@ -278,8 +279,9 @@ fn a_merge_executes_at_most_once_under_retry() {
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
-    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    let number = create_pr(&forge, &repo, &["implementation"], "");
     submit_review(&forge, &repo, number, ReviewDecision::Approved);
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
     // The merge lands in the backend, then the call crashes before returning.
     let crash = CrashForge::new(forge, vec![Fault::after(ForgeOp::MergePullRequest, 1)]);
     let workflow = workflow();
@@ -320,23 +322,23 @@ fn a_merge_executes_at_most_once_under_retry() {
     assert!(labels.contains(&"owner-pending".to_string()));
 }
 
-// Safety property 3b: the gate mechanism blocks a merge until native CI,
-// review, and testing all pass. CI is read from `list_ci_jobs`, so it is driven
-// by seeded CI jobs rather than a projected label.
+// Safety property 3b: the gate mechanism blocks a merge until native CI and
+// review both pass. CI is read from `list_ci_jobs`, so it is driven by seeded CI
+// jobs rather than a projected label.
 #[test]
-fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
-    let spec: RawWorkflowSpec = serde_json::from_str(THREE_GATE).expect("three-gate json parses");
-    let workflow = spec.validate().expect("three-gate workflow validates");
+fn the_merge_gate_mechanism_requires_ci_and_review_together() {
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(NATIVE_GATED_MERGE).expect("native-gated merge json parses");
+    let workflow = spec.validate().expect("native-gated workflow validates");
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
     let executor = Executor::new(&workflow, &forge);
 
-    // Each case drops exactly one of the three gates.
-    let cases: [(&[&str], bool, bool); 3] = [
-        (&["implementation", "testing-passed"], false, true), // no CI
-        (&["implementation", "testing-passed"], true, false), // no review
-        (&["implementation"], true, true),                    // no testing
+    // Each case drops exactly one of the two gates.
+    let cases: [(&[&str], bool, bool); 2] = [
+        (&["implementation"], false, true), // no CI
+        (&["implementation"], true, false), // no review
     ];
     for (labels, ci, review) in cases {
         let number = create_pr(&forge, &repo, labels, "");
@@ -360,8 +362,8 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
         assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Open);
     }
 
-    // All three gates satisfied: native review, testing label, and passing CI.
-    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    // Both gates satisfied: native review and passing CI.
+    let number = create_pr(&forge, &repo, &["implementation"], "");
     submit_review(&forge, &repo, number, ReviewDecision::Approved);
     seed_ci(&forge, &repo, number, CiJobConclusion::Success);
     block_on(executor.execute(
@@ -370,30 +372,31 @@ fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
         &TransitionId::new("approve_merge"),
         &RoleId::new("owner"),
     ))
-    .expect("all three gates satisfied authorizes the merge");
+    .expect("both gates satisfied authorize the merge");
     assert_eq!(pr_state(&forge, &repo, number), PullRequestState::Merged);
     assert!(pr_labels(&forge, &repo, number).contains(&"landed".to_string()));
 }
 
 // Safety property 3d: the CI gate is derived from native `CiJob` conclusions
 // read through `list_ci_jobs`, not from a projected label. A failing CI job
-// blocks the merge even with review and testing satisfied; replacing it with a
-// passing job opens the gate.
+// blocks the merge even with review satisfied; replacing it with a passing job
+// opens the gate.
 #[test]
 fn ci_gate_reads_native_ci_job_conclusions() {
-    let spec: RawWorkflowSpec = serde_json::from_str(THREE_GATE).expect("three-gate json parses");
-    let workflow = spec.validate().expect("three-gate workflow validates");
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(NATIVE_GATED_MERGE).expect("native-gated merge json parses");
+    let workflow = spec.validate().expect("native-gated workflow validates");
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
     let executor = Executor::new(&workflow, &forge);
 
-    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    let number = create_pr(&forge, &repo, &["implementation"], "");
     submit_review(&forge, &repo, number, ReviewDecision::Approved);
     let pr = ArtifactSource::PullRequest { number };
 
-    // A failing native CI conclusion leaves the gate shut even though review and
-    // testing are satisfied.
+    // A failing native CI conclusion leaves the gate shut even though review is
+    // satisfied.
     seed_ci(&forge, &repo, number, CiJobConclusion::Failure);
     let blocked = block_on(executor.execute(
         &repo,

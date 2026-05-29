@@ -22,9 +22,9 @@ plans today**.
   `Executor::ensure_pull_request` with a correlation key and runtime create
   input.
 - **External-signal gates.** `ci_gate` now uses the `ci_passed` condition fed by
-  native Forge CI jobs, and `review_gate` uses `review_approved` fed by native
-  pull-request reviews; the old adapter-projected `ci = passed` and review
-  result labels/state are retired.
+  native Forge CI jobs, `pr_ci_failed` uses `ci_failed`, and `review_gate` uses
+  `review_approved` fed by native pull-request reviews; the old
+  adapter-projected CI/testing and review result labels/state are retired.
 - **Relation primitive.** The spec declares `parent`, `dependency`, and
   `produced_pr` relations; classifiers type native dependency links and metadata
   projections using those declarations.
@@ -49,8 +49,8 @@ plans today**.
   feedback handoff.
 - **Disjunctive queue label-sets and native queue conditions.** Queue `labels`
   remain an AND filter and `any_of` adds OR branches. The review return queue
-  now keys off native `review_changes_requested`; testing failure remains a
-  label-routed queue.
+  keys off native `review_changes_requested`; failed CI routing keys off native
+  `ci_failed` rather than a label.
 
 ADR 0012 covers the queue primitive extensions as one decision: Phase 13's
 activation policy plus Phase 14's multi-kind and disjunctive matching.

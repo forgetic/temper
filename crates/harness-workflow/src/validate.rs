@@ -363,6 +363,7 @@ fn check_condition(
         }
         RawGateCondition::DependenciesResolved
         | RawGateCondition::CiPassed
+        | RawGateCondition::CiFailed
         | RawGateCondition::ReviewApproved
         | RawGateCondition::ReviewChangesRequested => {}
     }
@@ -561,6 +562,7 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
         }
         RawGateCondition::DependenciesResolved => GateCondition::DependenciesResolved,
         RawGateCondition::CiPassed => GateCondition::CiPassed,
+        RawGateCondition::CiFailed => GateCondition::CiFailed,
         RawGateCondition::ReviewApproved => GateCondition::ReviewApproved,
         RawGateCondition::ReviewChangesRequested => GateCondition::ReviewChangesRequested,
         RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {

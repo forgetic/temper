@@ -1,12 +1,8 @@
 {
-  "name": "three-gate-merge",
+  "name": "native-gated-merge",
   "roles": [
     {
       "id": "reviewer",
-      "queues": []
-    },
-    {
-      "id": "tester",
       "queues": []
     },
     {
@@ -17,9 +13,6 @@
   "labels": [
     {
       "id": "implementation"
-    },
-    {
-      "id": "testing-passed"
     },
     {
       "id": "landed"
@@ -35,16 +28,6 @@
     }
   ],
   "state_dimensions": [
-    {
-      "id": "testing",
-      "exclusive": true,
-      "states": [
-        {
-          "id": "passed",
-          "label": "testing-passed"
-        }
-      ]
-    },
     {
       "id": "post_merge",
       "exclusive": false,
@@ -71,19 +54,6 @@
       ]
     },
     {
-      "id": "record_test_pass",
-      "artifact": "implementation_pr",
-      "roles": [
-        "tester"
-      ],
-      "effects": [
-        {
-          "kind": "add_label",
-          "label": "testing-passed"
-        }
-      ]
-    },
-    {
       "id": "approve_merge",
       "artifact": "implementation_pr",
       "roles": [
@@ -91,8 +61,7 @@
       ],
       "requires_gates": [
         "ci_gate",
-        "review_gate",
-        "testing_gate"
+        "review_gate"
       ],
       "effects": [
         {
@@ -117,12 +86,6 @@
       "condition": {
         "kind": "review_approved"
       }
-    },
-    {
-      "id": "testing_gate",
-      "satisfied_by": [
-        "record_test_pass"
-      ]
     }
   ]
 }

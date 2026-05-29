@@ -33,8 +33,8 @@ is supplied explicitly, so the suite is reproducible.
 | No duplicate issue or pull request is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
 | Two acquirers that both observe "no lease" cannot both win: lease acquisition is a compare-and-swap, so the loser observes a conflict | `two_no_lease_acquirers_cannot_both_win_the_same_claim`, `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue` |
-| A merge is not authorized, and the pull request is not merged, until native review approval and testing gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
-| The gate mechanism blocks a merge until native CI conclusions plus native review approval and testing gates all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together`, `ci_gate_reads_native_ci_job_conclusions` |
+| A merge is not authorized, and the pull request is not merged, until native review approval and CI gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
+| The gate mechanism blocks a merge until native CI conclusions plus native review approval both pass | `the_merge_gate_mechanism_requires_ci_and_review_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
@@ -110,15 +110,10 @@ window, but a wider window can no longer produce a lost-update lease race.
 These are real gaps the robustness tests exposed; they are documented here
 rather than hidden:
 
-- **The stable five-role fixture wires no CI gate.** It is kept focused on the
-  execution capabilities it exercises, so `approve_merge` there requires only
-  native `review_gate` and `testing_gate`. The evolving `reference-delivery`
-  fixture models native CI with `ci_passed`, and the CI gate property is proven
-  over a small three-gate fixture that drives `list_ci_jobs`.
-- **Testing failure has no modeled return path.** `record_test_failure` sets
-  `testing-failed`, but no transition clears it back to `needs-testing`. The
-  review path (`request_changes` → `address_review_changes`) is the modeled
-  failed-gate return path; the testing path would need an equivalent transition.
+- **Provider branch-protection policy is not modeled.** The portable gate reads
+  the latest CI jobs and requested-reviewer aggregate. Provider-specific rules
+  such as required-check configuration, CODEOWNERS, or stale-review dismissal on
+  push remain outside the workflow core.
 - **Escalation/diagnosis is record-only.** `recover::Applier` applies the
   mutating recovery actions, but `Escalate` and `Diagnose` are advisory: the
   applier records them in `ApplyOutcome::advisory` and performs no Forge

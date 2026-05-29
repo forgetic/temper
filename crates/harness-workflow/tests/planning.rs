@@ -2,20 +2,23 @@
 //!
 //! These exercise the state machine without any Forge side effects: classify a
 //! Forge artifact, then match queues and plan transitions over the validated
-//! workflow. The checked-in five-role fixture drives the realistic cases;
+//! workflow. The checked-in CI delivery fixture drives the realistic cases;
 //! small inline workflows drive the impossible-state edge case.
 
 use chrono::{DateTime, Utc};
-use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
+use harness_forge::{
+    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, Issue, IssueState, ItemNumber,
+    PullRequest, PullRequestState,
+};
 use harness_workflow::{
-    compile, matches_queue, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier,
+    compile, matches_queue, ArtifactKindId, CiState, CiStatus, ClassifiedArtifact, Classifier,
     DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId,
     RawWorkflowSpec, ReviewStatus, RoleId, StateDimensionId, StateId, TransitionId,
     ValidatedWorkflow, WorkflowEffect,
 };
 
-/// The checked-in five-role delivery workflow fixture.
-const FIXTURE: &str = include_str!("../fixtures/five-role-delivery.json");
+/// The checked-in CI delivery workflow fixture.
+const FIXTURE: &str = include_str!("../fixtures/ci-delivery.json");
 
 fn ts() -> DateTime<Utc> {
     "2026-05-29T00:00:00Z".parse().expect("valid timestamp")
@@ -24,7 +27,7 @@ fn ts() -> DateTime<Utc> {
 fn fixture_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(FIXTURE).expect("fixture is valid JSON for RawWorkflowSpec");
-    spec.validate().expect("five-role fixture validates")
+    spec.validate().expect("CI delivery fixture validates")
 }
 
 fn issue(number: u64, labels: &[&str]) -> Issue {
@@ -265,21 +268,34 @@ fn planned_effects_and_postconditions_are_deterministic() {
 fn required_gates_must_be_satisfied_before_planning_a_merge() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
-
-    // Both gates satisfied: native review approved and testing passed.
-    let ready = classify_pr(&workflow, 10, &["implementation", "testing-passed"]);
+    let ready = classify_pr(&workflow, 10, &["implementation"]);
     let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
-    let plan = planner
+
+    let error = planner
         .plan_transition_with(
             &TransitionId::new("approve_merge"),
             &RoleId::new("owner"),
             &ready,
             &review,
         )
+        .expect_err("CI must pass before a merge plans");
+    assert!(error
+        .diagnostics()
+        .contains(&PlanDiagnostic::GateNotSatisfied {
+            transition: TransitionId::new("approve_merge"),
+            gate: GateId::new("ci_gate"),
+        }));
+
+    let signals = review.with_ci(CiStatus::passed());
+    let plan = planner
+        .plan_transition_with(
+            &TransitionId::new("approve_merge"),
+            &RoleId::new("owner"),
+            &ready,
+            &signals,
+        )
         .expect("owner can approve a fully gated merge");
-    // Merge eligibility is derived from the gates, not a stored marker: the
-    // transition merges the pull request and projects the post-merge labels
-    // (the `landed` re-run guard) in declaration order.
+    // Merge eligibility is derived from the gates, not a stored marker.
     assert_eq!(
         plan.effects,
         vec![
@@ -288,23 +304,50 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
             WorkflowEffect::AddLabel(LabelId::new("owner-pending")),
         ]
     );
+}
 
-    // Testing gate unsatisfied: the merge cannot be planned.
-    let pending = classify_pr(&workflow, 11, &["implementation"]);
-    let error = planner
-        .plan_transition_with(
-            &TransitionId::new("approve_merge"),
-            &RoleId::new("owner"),
-            &pending,
-            &review,
-        )
-        .expect_err("an ungated merge must not plan");
-    assert!(error
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("approve_merge"),
-            gate: GateId::new("testing_gate"),
-        }));
+#[test]
+fn ci_status_distinguishes_pending_passed_and_failed_jobs() {
+    fn job(name: &str, status: CiJobStatus, conclusion: Option<CiJobConclusion>) -> CiJob {
+        CiJob {
+            id: CiJobId::new(format!("ci-{name}")),
+            repo_id: "repo-1".into(),
+            pull_request_id: None,
+            commit_sha: "sha".into(),
+            name: name.into(),
+            status,
+            conclusion,
+            url: None,
+            created_at: ts(),
+            started_at: None,
+            completed_at: None,
+            updated_at: ts(),
+        }
+    }
+
+    assert_eq!(CiStatus::from_jobs(&[]).state(), CiState::Pending);
+    assert_eq!(
+        CiStatus::from_jobs(&[job("ci", CiJobStatus::Running, None)]).state(),
+        CiState::Pending
+    );
+    assert_eq!(
+        CiStatus::from_jobs(&[job(
+            "ci",
+            CiJobStatus::Completed,
+            Some(CiJobConclusion::Success),
+        )])
+        .state(),
+        CiState::Passed
+    );
+    assert_eq!(
+        CiStatus::from_jobs(&[job(
+            "ci",
+            CiJobStatus::Completed,
+            Some(CiJobConclusion::Failure),
+        )])
+        .state(),
+        CiState::Failed
+    );
 }
 
 #[test]

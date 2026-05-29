@@ -1,6 +1,6 @@
 # Reference delivery workflow
 
-This page designs a clean six-role delivery workflow, using the production
+This page designs a clean five-role delivery workflow, using the production
 ekanayaka.io agent workflow as inspiration but removing its accidental
 complexity. It is the target the harness spec, compiler, planner, and executor
 should be able to express and run. The `reference-delivery.json`
@@ -57,9 +57,8 @@ These were decided during design and are not open:
 | Role | Charter (short) | Primary queues |
 | --- | --- | --- |
 | `architect` | Turn requests into epics/design/ready code issues; resolve `needs-architect`; reconcile landed PRs. | `design_triage`, `needs_architect`, `landed_inbox` |
-| `engineer` | Claim ready code issues, implement, open PRs, address failed gates. | `code_ready`, `pr_changes_requested` |
+| `engineer` | Claim ready code issues, implement, open PRs, address failed review or CI gates. | `code_ready`, `pr_changes_requested`, `pr_ci_failed` |
 | `reviewer` | Static review against the contract catalog; approve or request changes. | `pr_needs_review` |
-| `tester` | Exercise the change; record testing passed or failed. | `pr_needs_testing` |
 | `owner` | Resolve `needs-owner` design feedback; holistic alignment review of landed cohorts. | `needs_owner`, `owner_alignment` |
 | `human` | Resolve `needs-human` items that require non-agent judgment. | `needs_human` |
 
@@ -85,9 +84,9 @@ Exclusive unless noted; each state projects to one label.
 - Review results are not a workflow-owned state dimension; `needs-reviewer` is
   a routing label, while `approved` / `changes_requested` are native Forge
   review decisions read through review gate conditions.
-- `testing`: `needs_tester`, `passed`, `failed`.
-- CI is not a workflow-owned state dimension; merge eligibility reads native
-  CI job conclusions through the `ci_passed` gate.
+- CI/test status is not a workflow-owned state dimension; merge eligibility and
+  failed-CI routing read native CI job conclusions through `ci_passed` and
+  `ci_failed` conditions.
 - Merge readiness is derived from gates rather than stored as a state.
 - `attention` (non-exclusive): `needs_architect` (`needs-architect`),
   `needs_owner` (`needs-owner`), and `needs_human` (`needs-human`) route
@@ -98,15 +97,14 @@ Exclusive unless noted; each state projects to one label.
 ## Gates
 
 - `review_gate` — satisfied by the runtime's native review signal (`review_approved`) derived from requested reviewers and review events.
-- `testing_gate` — satisfied by the tester's pass transition.
 - `ci_gate` — satisfied by the runtime's native CI signal (`ci_passed`) derived
   from Forge CI job conclusions.
 - `dependency_gate` — satisfied when every prerequisite relation of a code issue
   is merged. Drives mechanical unblocking.
 
-The merge transition requires `review_gate`, `testing_gate`, and `ci_gate`. A
-failed review or testing gate returns the PR to the engineer (native
-`review_changes_requested` or `testing-failed` → engineer queues); work is never lost.
+The merge transition requires `review_gate` and `ci_gate`. A failed review or
+CI run returns the PR to the engineer (native `review_changes_requested` or
+`ci_failed` → engineer queues); work is never lost.
 
 ## Relations
 
@@ -119,7 +117,7 @@ failed review or testing gate returns the PR to the engineer (native
 ## Escalation and the human loop
 
 Role-attention labels are requests for another role to act, not verdicts. Any
-of engineer, reviewer, or tester may set `needs-architect` on a PR or issue;
+of engineer or reviewer may set `needs-architect` on a PR or issue;
 that routes it to the architect's `needs_architect` queue. The architect clears
 that flag after amending a spec, recording a decision, or returning work.
 
@@ -156,7 +154,7 @@ predicate); it does not touch the executor, leases, journal, or reconciler.
 
 The redesign must keep, and can be conformance-tested against
 `safety_properties.rs`: design/implementation separation; independent
-review + testing + CI gates all required to merge; failed gate returns work
+review + CI gates required to merge; failed gate returns work
 (never lost); human-in-the-loop checkpoints; an escalation path for judgment;
 at-most-once claiming; no duplicate creates; and no premature merge.
 
@@ -175,7 +173,8 @@ expected backlog was:
   Claim-time lease effects remain future work.
 - **External-signal gates** (`ci_gate`, `review_gate`) — implemented as gates
   satisfied by runtime signals from native Forge CI jobs and review events, not
-  only sibling transition labels.
+  sibling transition labels. `pr_ci_failed` likewise routes from native CI
+  status instead of a workflow-owned testing label.
 - **Relation-driven dependency handling** — the `relation` primitive declares
   parent/dependency/produced-PR links, native Forge dependency links feed the
   `dependencies_resolved` gate, and the reconciler mechanically produces and

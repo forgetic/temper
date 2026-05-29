@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Accepted. Updated by ADR 0017, which removes the separate workflow-owned
+`testing_gate` and uses native CI status for both pass and failure routing.
 
 ## Context
 
@@ -95,8 +96,9 @@ change — not smuggled in here.
 
 ## Consequences
 
-- The merge gate is a single source of truth: review AND testing AND CI, each
-  read fresh. There is no stored `merge-ready` to drift or to clean up.
+- The merge gate is a single source of truth: review and native CI are read
+  fresh. There is no stored `merge-ready` to drift or to clean up. ADR 0017
+  later retired the separate testing labels/gate.
 - CI is observed, not projected. The `record_ci_*` adapter transitions were
   already removed (ADR 0010); now the adapter labels and the `ci` dimension go
   too. An adapter that wrote `ci-passed` is no longer part of the contract; the

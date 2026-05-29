@@ -91,10 +91,10 @@ Phase 10 added pull-request idempotent create:
 - `Executor::ensure_pull_request` mirrors `ensure_issue`: it searches pull requests for a metadata `correlation_key`, stamps that key into new PR bodies, and returns `EnsureOutcome::Existing` on retry.
 - `Executor::execute` applies `CreatePullRequest` through `ensure_pull_request` when the effect has a correlation key and `ExecutionContext` supplies the concrete `CreatePullRequest` input for that transition.
 
-Phase 11 added external-signal gates, later extended for native reviews:
+Phase 11 added external-signal gates, later extended for native reviews and CI failure routing:
 
-- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, `dependencies_resolved`, `ci_passed`, `review_approved`, or `review_changes_requested`. `label_present`/`state_equals` are satisfied from classified labels/state; the others read runtime-supplied signals.
-- `RawQueue`/`ValidatedQueue` may also carry a condition so queues can key off native signals such as `review_changes_requested`.
+- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present`, `state_equals`, `dependencies_resolved`, `ci_passed`, `ci_failed`, `review_approved`, or `review_changes_requested`. `label_present`/`state_equals` are satisfied from classified labels/state; the others read runtime-supplied signals.
+- `RawQueue`/`ValidatedQueue` may also carry a condition so queues can key off native signals such as `review_changes_requested` or `ci_failed`.
 - Transition-satisfied gates continue to use `satisfied_by`; a required gate passes when either its condition holds or one of its satisfying transition outcomes is visible.
 
 Phase 12a added first-class relations:
@@ -126,7 +126,7 @@ Phase 8 added robustness and crash-injection tests (no new runtime types):
 
 - `tests/support/crash.rs` provides `CrashForge`, a `Forge` wrapper that injects a deterministic fault before or after a chosen operation's chosen call, so a backend mutation can fail either before it lands (state intact) or after it lands (state changed, caller sees failure).
 - `tests/crash_injection.rs` proves crash-before/after retry safety, a fault matrix showing label effects are applied at most once, journaled restart recovery (partial transition → repair, landed effect → reconciled), and at-most-once claiming under duplicated tool calls and interleaved workers.
-- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required gates pass (review/testing in the five-role fixture and native CI/review/testing in a three-gate fixture), a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review gate returns work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
+- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required native review and CI gates pass, a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review/CI gates return work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
 
 See `robustness-guarantees.md` for the full safety-property register and the limitations these tests surfaced. Lease acquisition is now a compare-and-swap: `LeaseManager` captures each artifact's `Version` at load time and writes the lease conditionally (ADR 0013), so two acquirers over the same "no lease" snapshot cannot both win.
 
@@ -146,9 +146,9 @@ A workflow spec contains these logical primitives.
 | `invariant` | Condition that must hold during runtime scans |
 | `recovery_policy` | What to do with expired leases, partial transitions, and drift |
 
-Labels are a portable Forge projection of workflow-owned state; native CI, dependency links, and review decisions are observed from the Forge instead of mirrored as labels. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee and reviewer-request effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, `submit_review` carries a portable decision, and `merge_pull_request` has no payload. The workflow layer uses native Forge dependency links for `dependency`; metadata blocks still carry correlation keys plus `parent`/`produced_pr` links and fallback dependency numbers.
+Labels are a portable Forge projection of workflow-owned state; native CI, dependency links, and review decisions are observed from the Forge instead of mirrored as labels. `ci_passed` and `ci_failed` are computed from fresh `CiJob` status/conclusion data, not from `testing-*` labels. A `relation` declares `{ kind, source, target }`, where `kind` is `parent`, `dependency`, or `produced_pr` and endpoints are artifact kinds. Non-label effect payloads stay portable: assignee and reviewer-request effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, `submit_review` carries a portable decision, and `merge_pull_request` has no payload. The workflow layer uses native Forge dependency links for `dependency`; metadata blocks still carry correlation keys plus `parent`/`produced_pr` links and fallback dependency numbers.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its orthogonal lifecycle labels plus artifact-scoped state legality, non-label effects, external-signal gates, relation declarations, the relation-driven `dependency_gate`, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). Any remaining gaps are tracked in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its orthogonal lifecycle labels plus artifact-scoped state legality, non-label effects, native CI/review gates and queues, relation declarations, the relation-driven `dependency_gate`, and queue activation/matching policy validate, compile, and plan (`tests/reference_delivery.rs`). Any remaining gaps are tracked in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
@@ -217,7 +217,7 @@ Success yields a `ClassifiedArtifact` (kind, target, source, optional `updated_a
 
 The planner is the pure, deterministic state-machine layer over classified artifacts. It computes the read-side parts of the runtime guarantees below (authority, preconditions, postconditions) without loading fresh state or applying effects; a later executor phase does that against the `Forge` trait.
 
-Queue matching: a classified artifact matches a queue when its kind is one of the queue's artifact kinds, every common `labels` entry is present, either `any_of` is empty or at least one `any_of` clause's labels are all present, and any queue `condition` is satisfied by classified state or runtime signals. The raw schema keeps the legacy `artifact: "code"` shorthand and also accepts `artifact: ["code", "implementation_pr"]`; `any_of` is an array of label-set objects. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues. Matching does not consider activation policy.
+Queue matching: a classified artifact matches a queue when its kind is one of the queue's artifact kinds, every common `labels` entry is present, either `any_of` is empty or at least one `any_of` clause's labels are all present, and any queue `condition` is satisfied by classified state or runtime signals such as `ci_failed` or `review_changes_requested`. The raw schema keeps the legacy `artifact: "code"` shorthand and also accepts `artifact: ["code", "implementation_pr"]`; `any_of` is an array of label-set objects. Because exclusive state dimensions project to mutually exclusive labels, a `code + ready` queue naturally excludes `blocked` and `in-progress` code issues. Matching does not consider activation policy.
 
 Queue activation: a queue with no activation policy is active whenever it has at least one matched member. A queue with `min_depth` and/or `max_age` is active when it is non-empty and either its member count is at least `min_depth` or the oldest timestamped member is at least `max_age` old at `now`. `max_age` uses the classified artifact's Forge `updated_at` timestamp; snapshot-classified artifacts without timestamps cannot satisfy the age branch.
 
@@ -227,7 +227,7 @@ Transition planning checks, in order, and collects every problem:
 - the role is authorized for the transition (else `Unauthorized`)
 - the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
 - each label effect's precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`); non-label effects have no label precondition
-- every required gate is satisfied — a gate is satisfied when its condition holds (label/state, dependency, CI, or review signal) or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
+- every required gate is satisfied — a gate is satisfied when its condition holds (label/state, dependency, CI pass/failure, or review signal) or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
 - applying the effects would not leave an exclusive dimension in several states or put the resulting artifact kind into an illegal state (else `ImpossibleState`)
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.
@@ -309,4 +309,4 @@ Every mutating action loads fresh state and applies at most once, so re-running 
 
 Still planned: optional generated Rust code for statically checked workflows, and generated tool bodies that enforce preconditions and apply effects.
 
-Generated tools expose intent-level operations such as `claim_code` or `record_test_failure`, not generic Forge mutation operations. Each `ToolManifest` is named after its transition and carries that transition's artifact, required gates, and effects.
+Generated tools expose intent-level operations such as `claim_code` or `address_ci_failure`, not generic Forge mutation operations. Each `ToolManifest` is named after its transition and carries that transition's artifact, required gates, and effects.

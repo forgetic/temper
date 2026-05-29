@@ -41,7 +41,7 @@ use std::fmt;
 
 pub use dependency::{DependencyStatus, MechanicalPlan};
 pub use queue::{matches_queue, matches_queue_with, queue_active, QueueMember, QueueQuery};
-pub use signals::{CiStatus, GateSignals, ReviewStatus};
+pub use signals::{CiState, CiStatus, GateSignals, ReviewStatus};
 pub use types::{Postcondition, TransitionPlan, WorkflowEffect};
 
 /// A single reason a transition cannot be planned.
@@ -267,9 +267,9 @@ impl<'a> Planner<'a> {
     /// Otherwise returns a [`PlanError`] collecting every problem.
     ///
     /// Gate signals are empty, so dependency gates are open only for artifacts
-    /// with no dependency relations and `ci_passed` gates stay closed. Use
+    /// with no dependency relations and CI gates stay closed. Use
     /// [`Planner::plan_transition_with`] when the runtime knows which
-    /// prerequisites have landed and whether CI passed.
+    /// prerequisites have landed and the current CI aggregate.
     pub fn plan_transition(
         &self,
         transition: &TransitionId,
@@ -400,7 +400,7 @@ impl<'a> Planner<'a> {
         }
         let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
         // Mechanical unblock is a dependency-gate concern, so CI is irrelevant
-        // here; bundle the dependency status with a default (not-passed) CI.
+        // here; bundle the dependency status with a default pending CI.
         let signals = GateSignals::new().with_dependencies(deps.clone());
         self.workflow
             .transitions()

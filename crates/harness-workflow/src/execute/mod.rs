@@ -53,10 +53,10 @@
 //!
 //! Before planning, the executor reads gate facts from fresh Forge state into
 //! [`GateSignals`]. Dependency gates are fed by native dependency targets
-//! (closed issues or merged pull requests), the `ci_passed` gate is fed by
+//! (closed issues or merged pull requests), CI gate/queue conditions are fed by
 //! native CI jobs from [`Forge::list_ci_jobs`](harness_forge::Forge::list_ci_jobs)
-//! (see [`CiStatus::from_jobs`] and ADR 0014), and review gates are fed by
-//! requested reviewers plus native review events (ADR 0016).
+//! (see [`CiStatus::from_jobs`], ADR 0014, and ADR 0017), and review gates are
+//! fed by requested reviewers plus native review events (ADR 0016).
 //!
 //! Reloading and re-planning before every mutation is deliberate: Forge state
 //! can be edited by humans or other workers between planning and execution, so

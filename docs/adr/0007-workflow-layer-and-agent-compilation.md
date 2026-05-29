@@ -7,7 +7,7 @@ Accepted
 ## Context
 
 Harness needs to support evolving agentic workflows instead of one hard-coded process.
-A starting workflow uses architect, engineer, reviewer, tester, and owner roles, but future workflows may add more roles, parallel workers, richer gates, or different escalation paths.
+A starting workflow uses roles such as architect, engineer, reviewer, and owner, but future workflows may add more roles, parallel workers, richer gates, or different escalation paths.
 
 The existing Forge layer is intentionally backend-agnostic and should remain focused on collaboration primitives. The crate scaffolded as `harness-core` had a name too vague for the next layer, whose purpose is workflow orchestration.
 

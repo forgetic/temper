@@ -2,9 +2,10 @@
 //!
 //! Some gate conditions ask about facts the pure planner must not derive
 //! itself: whether prerequisite work has landed (`dependencies_resolved`),
-//! whether native CI passed (`ci_passed`), and whether native reviews approve or
-//! request changes. Those facts are read fresh from the Forge by the runtime and
-//! supplied to the planner as a small signal bundle.
+//! whether native CI passed or failed (`ci_passed`/`ci_failed`), and whether
+//! native reviews approve or request changes. Those facts are read fresh from
+//! the Forge by the runtime and supplied to the planner as a small signal
+//! bundle.
 //!
 //! [`GateSignals`] bundles every runtime signal a transition plan may consult.
 //! Bundling (rather than threading one parameter per gate) keeps adding signals
@@ -18,48 +19,89 @@ use super::DependencyStatus;
 use harness_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
 use std::collections::HashMap;
 
-/// Runtime-supplied verdict on whether an artifact's native CI passed.
+/// Runtime-supplied aggregate state for an artifact's native CI.
 ///
-/// `ci_passed` asks whether the artifact's CI is green. Like the dependency
-/// signal, the verdict is decided by the runtime — never derived inside the
-/// pure planner — and supplied here as a thin boolean the planner only reads.
-/// Build it from fresh [`CiJob`]s with [`CiStatus::from_jobs`], which is the one
-/// documented place the pass rule lives.
+/// `ci_passed` asks whether the artifact's CI is green; `ci_failed` asks
+/// whether the current CI run settled red. Like the dependency signal, the
+/// verdict is decided by the runtime — never derived inside the pure planner —
+/// and supplied here as a small value the planner only reads. Build it from
+/// fresh [`CiJob`]s with [`CiStatus::from_jobs`], which is the documented place
+/// the aggregation rule lives.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CiStatus {
-    passed: bool,
+    state: CiState,
+}
+
+/// Portable aggregate state for the latest native CI jobs on an artifact.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CiState {
+    /// CI has not run yet, is still running, or has no terminal aggregate.
+    #[default]
+    Pending,
+    /// The latest job per name all completed successfully.
+    Passed,
+    /// The latest job per name all completed and at least one was non-success.
+    Failed,
 }
 
 impl CiStatus {
-    /// A status whose CI has not passed (the default, conservative verdict).
+    /// A status whose CI is pending/unknown (the default, conservative verdict).
     pub fn new() -> Self {
         Self::default()
     }
 
     /// A status whose CI has passed.
     pub fn passed() -> Self {
-        Self { passed: true }
+        Self {
+            state: CiState::Passed,
+        }
     }
 
-    /// Builds a status directly from a pass/fail verdict.
+    /// A status whose CI has failed.
+    pub fn failed() -> Self {
+        Self {
+            state: CiState::Failed,
+        }
+    }
+
+    /// Builds a status directly from a pass verdict.
     pub fn with_passed(passed: bool) -> Self {
-        Self { passed }
+        if passed {
+            Self::passed()
+        } else {
+            Self::new()
+        }
+    }
+
+    /// Builds a status directly from an aggregate CI state.
+    pub fn with_state(state: CiState) -> Self {
+        Self { state }
+    }
+
+    /// Returns the aggregate CI state.
+    pub fn state(&self) -> CiState {
+        self.state
     }
 
     /// Returns whether CI has passed.
     pub fn is_passed(&self) -> bool {
-        self.passed
+        self.state == CiState::Passed
     }
 
-    /// Computes the CI verdict from a set of CI jobs (the documented pass rule).
+    /// Returns whether CI has failed.
+    pub fn is_failed(&self) -> bool {
+        self.state == CiState::Failed
+    }
+
+    /// Computes the CI verdict from a set of CI jobs.
     ///
     /// The jobs are reduced to the latest job per name (by `created_at`). CI is
     /// *passed* when that set is non-empty and every latest-per-name job has
     /// status [`CiJobStatus::Completed`] with conclusion
-    /// [`CiJobConclusion::Success`]. Any latest job that is still
-    /// `Queued`/`Running`, or concluded anything other than `Success`, leaves CI
-    /// *not passed*. A pull request with no CI jobs is therefore *not passed*:
-    /// the merge gate does not open before CI has run. See ADR 0014.
+    /// [`CiJobConclusion::Success`]. CI is *failed* when that set is non-empty,
+    /// every latest-per-name job is completed, and at least one latest job has a
+    /// non-success conclusion. Otherwise CI is pending/unknown: no jobs, queued
+    /// jobs, or running jobs neither pass nor fail. See ADR 0014 and ADR 0017.
     pub fn from_jobs(jobs: &[CiJob]) -> Self {
         let mut latest: HashMap<&str, &CiJob> = HashMap::new();
         for job in jobs {
@@ -72,12 +114,21 @@ impl CiStatus {
                 })
                 .or_insert(job);
         }
-        let passed = !latest.is_empty()
-            && latest.values().all(|job| {
-                job.status == CiJobStatus::Completed
-                    && job.conclusion == Some(CiJobConclusion::Success)
-            });
-        Self { passed }
+        if latest.is_empty()
+            || latest
+                .values()
+                .any(|job| job.status != CiJobStatus::Completed)
+        {
+            return Self::new();
+        }
+        if latest
+            .values()
+            .all(|job| job.conclusion == Some(CiJobConclusion::Success))
+        {
+            Self::passed()
+        } else {
+            Self::failed()
+        }
     }
 }
 
@@ -122,7 +173,7 @@ pub struct GateSignals {
 }
 
 impl GateSignals {
-    /// An empty bundle: nothing landed and CI not passed.
+    /// An empty bundle: nothing landed and CI pending/unknown.
     pub fn new() -> Self {
         Self::default()
     }

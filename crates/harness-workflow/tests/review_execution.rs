@@ -1,10 +1,11 @@
 mod support;
 
 use harness_forge::{
-    CreatePullRequestReview, Forge, PullRequestState, RequestReviewers, ReviewDecision, UserId,
+    CiJobConclusion, CreatePullRequestReview, Forge, PullRequestState, RequestReviewers,
+    ReviewDecision, UserId,
 };
 use harness_workflow::{ArtifactSource, ExecutionError, RoleId, TransitionId};
-use support::{block_on, create_pr, new_repo, workflow, TestRoot};
+use support::{block_on, create_pr, new_repo, seed_ci, workflow, TestRoot};
 
 #[test]
 fn native_review_signal_controls_the_merge_gate() {
@@ -12,7 +13,8 @@ fn native_review_signal_controls_the_merge_gate() {
     let forge = root.forge();
     let workflow = workflow();
     let repo = new_repo(&forge);
-    let number = create_pr(&forge, &repo, &["implementation", "testing-passed"], "");
+    let number = create_pr(&forge, &repo, &["implementation"], "");
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
     let pull_request = block_on(forge.get_pull_request_by_number(&repo, number))
         .expect("lookup succeeds")
         .expect("pull request exists");

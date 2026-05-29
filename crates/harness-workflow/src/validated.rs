@@ -231,6 +231,8 @@ pub enum GateCondition {
     /// Satisfied when the artifact's native CI passed, per the runtime-supplied
     /// CI signal computed from the Forge's `CiJob` conclusions (see ADR 0014).
     CiPassed,
+    /// Satisfied when native CI completed with a non-success conclusion.
+    CiFailed,
     /// Satisfied when the target pull request's native review aggregate is approved.
     ReviewApproved,
     /// Satisfied when a latest native review decision requests changes.
