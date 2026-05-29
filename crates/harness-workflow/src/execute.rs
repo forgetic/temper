@@ -32,10 +32,8 @@
 
 use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, Classifier};
 use crate::ids::{RoleId, TransitionId};
-use crate::metadata::{
-    parse_metadata_block, render_metadata_block, WorkflowMetadata, METADATA_BEGIN, METADATA_END,
-};
-use crate::plan::{PlanDiagnostic, PlanError, Postcondition, WorkflowEffect};
+use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMetadata};
+use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
     CreateIssue, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequestId, RepositoryId,
@@ -268,6 +266,28 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         })
     }
 
+    /// Plans a transition against fresh state without applying anything.
+    ///
+    /// Loads and classifies the target, then re-checks authority, preconditions,
+    /// gates, and resulting states through the [`planner`](crate::plan::Planner).
+    /// Returns the [`TransitionPlan`] that [`execute`](Self::execute) would
+    /// apply, so callers can preview effects or journal a command's intent
+    /// before mutating. Like `execute`, it never trusts stale state: a plan is
+    /// only valid against the state it was loaded from.
+    pub async fn plan(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        transition: &TransitionId,
+        role: &RoleId,
+    ) -> Result<TransitionPlan, ExecutionError> {
+        let loaded = self.load(repo_id, target).await?;
+        self.workflow
+            .planner()
+            .plan_transition(transition, role, loaded.classified())
+            .map_err(classify_plan_error)
+    }
+
     /// Loads and classifies the target artifact from fresh Forge state.
     async fn load(
         &self,
@@ -470,41 +490,15 @@ fn label_change(effect: &WorkflowEffect) -> Option<(LabelChange, String)> {
 
 /// Returns `body` with `correlation_key` set in its metadata block.
 ///
-/// If the body already has a metadata block, the key is set in place; otherwise
-/// a fresh block is appended. The result round-trips through
-/// [`parse_metadata_block`], so a later search can find the artifact.
+/// Any existing metadata fields are preserved; only the correlation key is set.
+/// The result round-trips through [`parse_metadata_block`], so a later search
+/// can find the artifact.
 fn body_with_correlation_key(body: &str, correlation_key: &str) -> Result<String, String> {
-    match parse_metadata_block(body).map_err(|error| error.to_string())? {
-        Some(mut metadata) => {
-            metadata.correlation_key = Some(correlation_key.to_string());
-            let start = body
-                .find(METADATA_BEGIN)
-                .expect("metadata block was just parsed");
-            let after = &body[start + METADATA_BEGIN.len()..];
-            let end = after
-                .find(METADATA_END)
-                .expect("metadata block is terminated");
-            let block_end = start + METADATA_BEGIN.len() + end + METADATA_END.len();
-            Ok(format!(
-                "{}{}{}",
-                &body[..start],
-                render_metadata_block(&metadata),
-                &body[block_end..]
-            ))
-        }
-        None => {
-            let metadata = WorkflowMetadata {
-                correlation_key: Some(correlation_key.to_string()),
-                ..WorkflowMetadata::default()
-            };
-            let block = render_metadata_block(&metadata);
-            if body.is_empty() {
-                Ok(block)
-            } else {
-                Ok(format!("{body}\n\n{block}"))
-            }
-        }
-    }
+    let mut metadata = parse_metadata_block(body)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    metadata.correlation_key = Some(correlation_key.to_string());
+    replace_metadata_block(body, &metadata).map_err(|error| error.to_string())
 }
 
 impl ValidatedWorkflow {

@@ -47,6 +47,12 @@
 //! Forge state, re-plans a transition against it, applies the planned effects
 //! through the [`harness_forge::Forge`] trait, and verifies postconditions. It
 //! also offers idempotent create through correlation keys.
+//!
+//! Phase 7 added recovery: leases ([`lease`]) with a pure planner and a
+//! backend-applying manager, command journaling ([`journal`]) behind a trait
+//! with an in-memory implementation, and a reconciler ([`reconcile`]) that scans
+//! Forge artifacts and journal entries and decides repair or escalation actions
+//! through a [`RecoveryPolicy`].
 
 pub mod artifact;
 pub mod classify;
@@ -54,8 +60,11 @@ pub mod compile;
 pub mod diagnostics;
 pub mod execute;
 pub mod ids;
+pub mod journal;
+pub mod lease;
 pub mod metadata;
 pub mod plan;
+pub mod reconcile;
 pub mod spec;
 pub mod validate;
 pub mod validated;
@@ -73,13 +82,21 @@ pub use execute::{EnsureOutcome, ExecutionError, ExecutionReport, Executor};
 pub use ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
+pub use journal::{
+    CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
+};
+pub use lease::{LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy};
 pub use metadata::{
-    parse_metadata_block, render_metadata_block, Lease, MetadataError, WorkflowMetadata,
-    METADATA_BEGIN, METADATA_END,
+    parse_metadata_block, render_metadata_block, replace_metadata_block, Lease, MetadataError,
+    WorkflowMetadata, METADATA_BEGIN, METADATA_END,
 };
 pub use plan::{
     matches_queue, PlanDiagnostic, PlanError, Planner, Postcondition, QueueQuery, TransitionPlan,
     WorkflowEffect,
+};
+pub use reconcile::{
+    ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
+    Reconciler, RecoveryAction, RecoveryPolicy,
 };
 pub use spec::{
     RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole, RawState, RawStateDimension,

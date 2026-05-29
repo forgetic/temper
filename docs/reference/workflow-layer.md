@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–6 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, pure queue evaluation and transition planning, and runtime execution of label transitions through the `Forge` trait with idempotent issue creation; the rest of the contract below (leases, journaling, recovery) is still planned. See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–7 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, pure queue evaluation and transition planning, runtime execution of label transitions through the `Forge` trait with idempotent issue creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -74,7 +74,14 @@ Phase 6 added runtime execution of transitions through the `Forge` trait:
 - `ExecutionError` separates the failure classes a runtime must distinguish: `Validation` (undeclared transition, unauthorized role, artifact-kind mismatch), `Precondition` (stale/contradicted labels, unsatisfied gate, impossible state), `Backend` (any `ForgeError`), plus `Classification`, `TargetMissing`, `UnsupportedEffect`, and `PostconditionFailed`.
 - `Executor::ensure_issue` is idempotent create for issues: it searches existing issues for a metadata `correlation_key`, returns the existing issue if found, or stamps the key into the new issue's metadata block and creates it. `EnsureOutcome` reports whether the artifact was `Created` or `Existing`.
 
-Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge), leases and heartbeats, command journaling, and reconciliation.
+Phase 7 added recovery primitives — leases, command journaling, and reconciliation:
+
+- `lease::LeasePlanner` is the pure decision layer over a `LeasePolicy` (a heartbeat time-to-live). `acquire`, `heartbeat`, and `release` compute the next `metadata::Lease` (or a `LeaseConflict`) from the current lease, a worker identity, and `now`. It never touches a backend. `lease::LeaseManager` is generic over `F: Forge + ?Sized`; it applies those decisions by rewriting the target artifact's metadata block through a single body update, loading fresh state first.
+- `journal::CommandJournal` is an async trait so durable storage can be added later. A `CommandRecord` carries a caller-chosen `CommandId`, the target, the transition/role, the planned effects, a `CommandState`, a detail, and timestamps. `CommandState` is `Planned`, `Applying`, `Completed`, `Failed`, or `Reconciled`; `Planned`/`Applying` are *incomplete*, the rest terminal. `journal::InMemoryJournal` is a shared-store implementation whose clones share one append-ordered log, so a test can simulate a restart by attaching a fresh handle.
+- `execute::Executor::execute_journaled` records the lifecycle (`Planned` → `Applying` → `Completed`/`Failed`) around the existing execute loop; `Executor::plan` previews a transition's plan without mutating. Planning failures are returned unjournaled because no mutation was attempted.
+- `reconcile::Reconciler` scans `ArtifactSnapshot`s and `CommandRecord`s and decides repair/escalation actions through a `RecoveryPolicy`. See "Command journal", "Claims and leases", and "Reconciliation".
+
+Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge) inside `Executor::execute`, applying reconciler actions automatically, and durable journal/lease storage backends.
 
 ## Spec primitives
 
@@ -194,29 +201,33 @@ Workflow effects are the closed `plan::WorkflowEffect` enum so executors and rec
 
 Only `AddLabel` and `RemoveLabel` are produced today, because current transition specs model only label effects. The remaining variants are explicit placeholders: they round out the set an executor must handle so later phases can add assignee, comment, create, lease, and merge effects without breaking exhaustive matches. The planning tests document this by asserting that label effects are the only ones a plan currently emits.
 
+Leases are not yet emitted as transition effects (`UpdateLease`/`ReleaseLease` remain placeholders). Lease changes go through `lease::LeaseManager` as standalone operations on the metadata block; see "Claims and leases".
+
 `Executor::execute` applies `AddLabel` and `RemoveLabel` through `update_issue`/`update_pull_request`; any other effect variant in a plan is rejected with `ExecutionError::UnsupportedEffect` before any mutation, so the closed enum stays honest as later phases wire up the remaining variants.
 
 Create effects (`CreateIssue`, `CreatePullRequest`) carry correlation keys. Retrying a create effect with the same correlation key must return the existing artifact when it already exists. The current `Forge` interface has no native create-once primitive, so `Executor::ensure_issue` enforces this idempotency in the workflow layer: it stamps the correlation key into the new issue's metadata block and searches existing issues for that key before creating. Pull-request idempotent create follows the same pattern and is not implemented yet.
 
+## Command journal
+
+The command journal records the lifecycle of each runtime command so a crash between deciding to mutate and finishing the mutation is recoverable. `CommandJournal` is async with these operations: `append` (idempotent on `CommandId` — a repeated id is a no-op), `transition_state` (move to a new `CommandState` with detail and timestamp; `NotFound` for unknown ids), `get`, `list` (append order), and a defaulted `incomplete` that returns the `Planned`/`Applying` records a reconciler must investigate.
+
+`CommandRecord::planned` constructs the initial record. `execute::Executor::execute_journaled` records `Planned` (with the previewed effects) before any mutation, advances to `Applying` immediately before applying, and finishes at `Completed` or `Failed`. If the process stops between `Applying` and the terminal update, the entry stays incomplete and the reconciler can repair it after restart.
+
 ## Claims and leases
 
-A claim is a lease, not permanent ownership. Lease metadata should include role, worker or run ID, claim time, heartbeat time, and expiration time.
+A claim is a lease, not permanent ownership. `metadata::Lease` records role, worker or run ID, claim time, heartbeat time, and expiration time; `Lease::is_expired(now)` is true once `now >= expires_at`.
+
+`LeasePlanner` enforces the rules: `acquire` grants when there is no lease or the existing one has expired (reclaiming the expired holder), refreshes in place when the same worker already holds an unexpired lease (preserving `claimed_at`), and fails with `LeaseConflict::HeldByOther` when a different worker holds a live lease. `heartbeat` extends the holder's lease to `now + ttl` (failing `NotHeld`/`HeldByOther` otherwise). `release` is idempotent for the holder and for an already-empty lease, and fails `HeldByOther` for a peer — forcibly clearing another worker's lease is the reconciler's job, not a peer's. `LeaseManager` applies these decisions against a `Forge` by rewriting the metadata block in a single body update.
 
 Expired leases are handled by recovery policy. Common actions are requeue, extend, escalate, or mark for operator review.
 
 ## Reconciliation
 
-The reconciler periodically scans Forge artifacts and command journals. It must detect:
+The reconciler scans Forge artifacts and the command journal and decides what to repair or escalate; applying the decision is left to the executor and lease manager. `Reconciler::scan` is pure and deterministic: given `ArtifactSnapshot`s, `CommandRecord`s, and `now`, it returns a `ReconcileReport` whose parallel `findings` and `actions` follow a stable order (each snapshot's expired lease then its classification problems, in snapshot order, then incomplete journal commands in journal order). `Reconciler::reconcile` is the async convenience that loads snapshots and journal entries from a `Forge` and a `CommandJournal`, then calls `scan`.
 
-- impossible label combinations
-- expired leases
-- partial transitions
-- duplicated artifacts with the same correlation key
-- missing required relations
-- merged PRs whose linked code issue remains open
-- validation failure labels on merged PRs
+Findings (`ReconcileFinding`) cover: `ExpiredLease`, `ImpossibleState` (an exclusive dimension with several active states), `ClassificationDrift` (other classification failures), `PartialTransition` (a journaled command whose label effects are not all realized), and `StaleCommand` (an incomplete command whose effects already landed or whose target is gone). Each finding gets exactly one `RecoveryAction`: `RequeueLease`, `Escalate`, `Repair { effects }`, `MarkReconciled`, or `Diagnose`.
 
-Repairs should be deterministic when safe. Ambiguous drift should be routed to an owner or operator queue with a diagnostic comment.
+`RecoveryPolicy` is the hook layer: one defaulted method per finding class, so a workflow overrides only what it needs. `DefaultRecoveryPolicy` requeues expired leases, escalates impossible states and drift, repairs partial transitions with their pending effects, and marks stale commands reconciled. Still planned for the reconciler: duplicated correlation keys, missing required relations, merged PRs whose linked code issue stays open, and validation-failure labels on merged PRs.
 
 ## Compilation outputs
 

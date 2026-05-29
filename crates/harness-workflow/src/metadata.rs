@@ -145,12 +145,14 @@ pub fn render_metadata_block(metadata: &WorkflowMetadata) -> String {
     format!("{METADATA_BEGIN}\n{json}\n{METADATA_END}")
 }
 
-/// Parses the first workflow metadata block found in an artifact body.
+/// Locates the byte span of the first metadata block in a body.
 ///
-/// Returns `Ok(None)` when the body contains no block at all, `Ok(Some(_))`
-/// when a block parses, and `Err(_)` when a block is present but malformed.
-/// Surrounding prose is ignored, so a block can be embedded among human text.
-pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, MetadataError> {
+/// Returns `Ok(Some((start, end)))` with the inclusive-start, exclusive-end
+/// byte offsets of the whole `<!-- ... -->` block when one is present and
+/// terminated, `Ok(None)` when no block opens, and `Err(Unterminated)` when a
+/// block opens but never closes. Shared by [`parse_metadata_block`] and
+/// [`replace_metadata_block`] so both agree on where a block starts and ends.
+fn block_span(body: &str) -> Result<Option<(usize, usize)>, MetadataError> {
     let Some(start) = body.find(METADATA_BEGIN) else {
         return Ok(None);
     };
@@ -158,8 +160,43 @@ pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, Meta
     let Some(end) = after.find(METADATA_END) else {
         return Err(MetadataError::Unterminated);
     };
-    let json = after[..end].trim();
+    let block_end = start + METADATA_BEGIN.len() + end + METADATA_END.len();
+    Ok(Some((start, block_end)))
+}
+
+/// Parses the first workflow metadata block found in an artifact body.
+///
+/// Returns `Ok(None)` when the body contains no block at all, `Ok(Some(_))`
+/// when a block parses, and `Err(_)` when a block is present but malformed.
+/// Surrounding prose is ignored, so a block can be embedded among human text.
+pub fn parse_metadata_block(body: &str) -> Result<Option<WorkflowMetadata>, MetadataError> {
+    let Some((start, block_end)) = block_span(body)? else {
+        return Ok(None);
+    };
+    let json = body[start + METADATA_BEGIN.len()..block_end - METADATA_END.len()].trim();
     let metadata =
         serde_json::from_str(json).map_err(|err| MetadataError::InvalidJson(err.to_string()))?;
     Ok(Some(metadata))
+}
+
+/// Returns `body` with its workflow metadata block set to `metadata`.
+///
+/// If the body already contains a block, it is replaced in place so surrounding
+/// prose is preserved; otherwise a fresh block is appended (separated by a blank
+/// line when the body is non-empty). The result round-trips through
+/// [`parse_metadata_block`]. An unterminated existing block is an error rather
+/// than being silently overwritten, so malformed bodies are surfaced, not
+/// clobbered.
+pub fn replace_metadata_block(
+    body: &str,
+    metadata: &WorkflowMetadata,
+) -> Result<String, MetadataError> {
+    let block = render_metadata_block(metadata);
+    match block_span(body)? {
+        Some((start, block_end)) => {
+            Ok(format!("{}{}{}", &body[..start], block, &body[block_end..]))
+        }
+        None if body.is_empty() => Ok(block),
+        None => Ok(format!("{body}\n\n{block}")),
+    }
 }

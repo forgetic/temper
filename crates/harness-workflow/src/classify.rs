@@ -206,6 +206,26 @@ impl<'a> Classifier<'a> {
         )
     }
 
+    /// Classifies an artifact from its source, labels, and body.
+    ///
+    /// The Forge target is inferred from `source`. This is the entry point a
+    /// reconciler uses when it already holds a snapshot of an artifact rather
+    /// than a full [`Issue`] or [`PullRequest`], and it returns the same
+    /// [`ClassificationError`] for impossible or incomplete state so the
+    /// reconciler can act on it.
+    pub fn classify_snapshot(
+        &self,
+        source: ArtifactSource,
+        labels: &[String],
+        body: &str,
+    ) -> Result<ClassifiedArtifact, ClassificationError> {
+        let target = match source {
+            ArtifactSource::Issue { .. } => ArtifactTarget::Issue,
+            ArtifactSource::PullRequest { .. } => ArtifactTarget::PullRequest,
+        };
+        self.classify(target, source, labels, body)
+    }
+
     fn classify(
         &self,
         target: ArtifactTarget,

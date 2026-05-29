@@ -123,6 +123,7 @@ dependencies = [
 name = "harness-workflow"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "harness-forge",
  "harness-fs",

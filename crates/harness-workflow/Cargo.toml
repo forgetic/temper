@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Workflow and orchestration logic for Harness."
 
 [dependencies]
+async-trait.workspace = true
 chrono.workspace = true
 harness-forge = { path = "../harness-forge" }
 serde.workspace = true
