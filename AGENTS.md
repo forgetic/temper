@@ -15,10 +15,10 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 
 - `harness-forge` defines the backend-agnostic Forge domain model and async interface.
 - `harness-core` is reserved for workflow and orchestration logic to be defined later.
-- `harness-fs` is the local filesystem backend scaffold; it does not yet implement `Forge`.
+- `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, and pull requests; remaining Forge operations intentionally return portable unsupported-operation errors.
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
-- The next likely work is refining the Forge interface and then implementing the filesystem backend.
+- The next likely work is extending the filesystem backend with pull-request comments or merge support, refining the interface only as backend constraints appear.
 
 ## Ground rules
 
@@ -27,6 +27,7 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 - Every public Forge API change must update `docs/reference/forge-interface.md`.
 - Every domain-model change must update `docs/explanation/domain-model.md` when it changes the conceptual model.
 - Add or update tests with behavior changes.
+- Keep Rust source and test files at or below 600 lines; split focused modules or shared test support before exceeding that budget.
 - Run `cargo fmt --all` and `cargo dev-check` before handing off.
 
 ## Documentation expectations

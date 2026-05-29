@@ -43,14 +43,17 @@ If the session involved a human correction, failed assumption, repeated mistake,
 
 Use `docs/how-to/record-agent-lesson.md`.
 
-## 5. Check document size
+## 5. Check file size budgets
 
 Keep hand-written documents focused. Aim for about 150 lines or fewer and split before about 350 lines. If a file is getting large, create a short index and move details into smaller pages.
 
-Useful check:
+Keep Rust source and test files at or below 600 lines. If a file is getting larger, split it into focused modules or shared test support.
+
+Useful checks:
 
 ```sh
 wc -l README.md AGENTS.md docs/**/*.md
+find crates -type f -name '*.rs' -print0 | xargs -0 wc -l | sort -n
 ```
 
 ## 6. Leave an explicit handoff

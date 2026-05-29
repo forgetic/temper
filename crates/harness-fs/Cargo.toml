@@ -7,7 +7,11 @@ rust-version.workspace = true
 description = "Filesystem-backed Forge implementation for harness development and tests."
 
 [dependencies]
+async-trait.workspace = true
+chrono.workspace = true
 harness-forge = { path = "../harness-forge" }
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

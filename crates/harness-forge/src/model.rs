@@ -13,6 +13,26 @@ pub struct User {
     pub email: Option<String>,
 }
 
+/// Human-facing owner/name repository lookup key.
+///
+/// A repository path is convenient for user input and provider URLs, but it is
+/// not stable identity. Store `RepositoryId` for durable synchronization.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RepositoryPath {
+    pub owner: String,
+    pub name: String,
+}
+
+impl RepositoryPath {
+    /// Creates a repository path from owner and repository name values.
+    pub fn new(owner: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            owner: owner.into(),
+            name: name.into(),
+        }
+    }
+}
+
 /// Repository containing source code and collaboration artifacts.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Repository {
@@ -109,6 +129,8 @@ pub struct UpdateIssue {
     pub body: Option<String>,
     pub state: Option<IssueState>,
     pub set_labels: Option<Vec<String>>,
+    pub add_labels: Vec<String>,
+    pub remove_labels: Vec<String>,
     pub add_assignees: Vec<UserId>,
     pub remove_assignees: Vec<UserId>,
 }
@@ -127,6 +149,26 @@ pub enum PullRequestState {
     Open,
     Closed,
     Merged,
+}
+
+/// State transition requested through a pull-request update.
+///
+/// `Merged` is intentionally absent. Use `Forge::merge_pull_request` to merge
+/// a pull request so the backend can also produce a `MergeRecord`.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestUpdateState {
+    Open,
+    Closed,
+}
+
+impl From<PullRequestUpdateState> for PullRequestState {
+    fn from(state: PullRequestUpdateState) -> Self {
+        match state {
+            PullRequestUpdateState::Open => Self::Open,
+            PullRequestUpdateState::Closed => Self::Closed,
+        }
+    }
 }
 
 /// Method used to merge a pull request.
@@ -185,8 +227,10 @@ pub struct CreatePullRequest {
 pub struct UpdatePullRequest {
     pub title: Option<String>,
     pub body: Option<String>,
-    pub state: Option<PullRequestState>,
+    pub state: Option<PullRequestUpdateState>,
     pub set_labels: Option<Vec<String>>,
+    pub add_labels: Vec<String>,
+    pub remove_labels: Vec<String>,
     pub add_assignees: Vec<UserId>,
     pub remove_assignees: Vec<UserId>,
 }

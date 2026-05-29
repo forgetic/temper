@@ -6,7 +6,7 @@ Rust definition: `crates/harness-forge/src/forge.rs`.
 
 ## Contract summary
 
-A backend implementing `harness_forge::Forge` must provide operations for:
+The `harness_forge::Forge` trait exposes operations for:
 
 - current user identity
 - repositories
@@ -33,7 +33,10 @@ Every durable resource has a typed stable identifier:
 
 Identifiers are backend-provided opaque strings wrapped in Rust newtypes. Workflow code must not parse them unless a backend-specific adapter explicitly owns that logic.
 
-Issues and pull requests also have `ItemNumber`, a human-facing repository-scoped number. These numbers are for display and lookup convenience, not for global identity.
+Repositories also have a human-facing `RepositoryPath` made of owner and name.
+Issues and pull requests have `ItemNumber`, a human-facing repository-scoped number.
+Use these values for display and lookup convenience, not as stable identity.
+Do not assume issue and pull-request numbers are cross-type unique on every backend.
 
 ## Lookup semantics
 
@@ -45,6 +48,12 @@ Read lookups return `ForgeResult<Option<T>>`:
 
 Mutations return `ForgeResult<T>` and should use `ForgeError::NotFound` when the target resource is missing.
 
+## Sorting semantics
+
+List methods return all visible resources matching the query; the current interface has no pagination contract.
+List queries may include one optional sort. Backends must apply the requested primary sort and use deterministic tie-breaks such as item number or stable ID.
+If sort is absent, backends should still return deterministic results.
+
 ## Error categories
 
 Backends map provider-specific failures into `ForgeError`:
@@ -55,6 +64,8 @@ Backends map provider-specific failures into `ForgeError`:
 - `Conflict`: request is valid but cannot be applied because of current state.
 - `Backend`: transport, persistence, authentication, authorization, or unexpected provider failure.
 
+Backends with a documented unsupported operation should return `InvalidRequest` instead of panicking or silently returning incomplete data.
+
 ## Repository operations
 
 Required methods:
@@ -62,8 +73,10 @@ Required methods:
 - `list_repositories`
 - `create_repository`
 - `get_repository`
+- `get_repository_by_path`
 
 Repositories expose owner, name, default branch, optional description, and timestamps.
+`RepositoryQuery` supports sorting by path, creation time, or update time.
 
 ## Label operations
 
@@ -74,6 +87,8 @@ Required methods:
 
 Labels are repository-scoped. Issues and pull requests store label names to keep common workflow filters simple and portable.
 
+Label assignment updates are set-like and idempotent. `set_labels` replaces the full label set when present; `add_labels` adds missing labels; `remove_labels` removes present labels. When combined, apply `set_labels`, then removals, then additions.
+
 ## Issue operations
 
 Required methods:
@@ -81,13 +96,20 @@ Required methods:
 - `list_issues`
 - `create_issue`
 - `get_issue`
+- `get_issue_by_number`
 - `update_issue`
 - `list_issue_comments`
 - `add_issue_comment`
 
 Issue state is `open` or `closed`.
 
-`IssueQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive: every requested label must be present.
+`IssueQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive: every requested label must be present. Issues can be sorted by number, creation time, or update time.
+
+`UpdateIssue` may change title, body, state, labels, and assignees. Closing an open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions.
+
+## Comment operations
+
+Comments are append-only in the current interface. `add_issue_comment` and `add_pull_request_comment` create comments authored by the backend client's current or provider-authenticated user. Comment list methods must return deterministic results, preferably chronological with stable ID tie-breaks. Supported comment operations return `ForgeError::NotFound` when the target issue or pull request is missing.
 
 ## Pull-request operations
 
@@ -96,14 +118,17 @@ Required methods:
 - `list_pull_requests`
 - `create_pull_request`
 - `get_pull_request`
+- `get_pull_request_by_number`
 - `update_pull_request`
 - `list_pull_request_comments`
 - `add_pull_request_comment`
 - `merge_pull_request`
 
-Pull-request state is `open`, `closed`, or `merged`.
+Pull-request state is `open`, `closed`, or `merged`. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions.
 
-`PullRequestQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive.
+Merging must go through `merge_pull_request` so the backend can record merge metadata and produce the `merged` state.
+
+`PullRequestQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive. Pull requests can be sorted by number, creation time, or update time.
 
 ## Merge operations
 
@@ -124,6 +149,8 @@ Required methods:
 - `get_ci_job`
 
 CI jobs are associated with a repository, a commit SHA, and optionally a pull request. Status is one of `queued`, `running`, or `completed`. Completed jobs may include a conclusion such as `success`, `failure`, or `cancelled`.
+
+`CiJobQuery` supports filtering by pull request, commit SHA, and status. CI jobs can be sorted by name, creation time, or update time.
 
 ## Compatibility notes
 

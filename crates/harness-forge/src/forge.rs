@@ -1,8 +1,8 @@
-use crate::ids::{CiJobId, IssueId, PullRequestId, RepositoryId, UserId};
+use crate::ids::{CiJobId, IssueId, ItemNumber, PullRequestId, RepositoryId, UserId};
 use crate::model::{
     CiJob, CiJobStatus, Comment, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
     Issue, IssueState, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestState,
-    Repository, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
+    Repository, RepositoryPath, UpdateIssue, UpdatePullRequest, UpsertLabel, User,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -30,30 +30,95 @@ pub enum ForgeError {
     Backend(String),
 }
 
-/// Issue listing filter.
+/// Sort direction for list operations.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+/// Repository field used for sorting repository lists.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepositorySortField {
+    Path,
+    CreatedAt,
+    UpdatedAt,
+}
+
+/// Sort order for repository lists.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RepositorySort {
+    pub field: RepositorySortField,
+    pub direction: SortDirection,
+}
+
+/// Repository listing query.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RepositoryQuery {
+    pub sort: Option<RepositorySort>,
+}
+
+/// Issue or pull-request field used for sorting item lists.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemSortField {
+    Number,
+    CreatedAt,
+    UpdatedAt,
+}
+
+/// Sort order for issue and pull-request lists.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ItemSort {
+    pub field: ItemSortField,
+    pub direction: SortDirection,
+}
+
+/// Issue listing query.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IssueQuery {
     pub state: Option<IssueState>,
     pub labels: Vec<String>,
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
+    pub sort: Option<ItemSort>,
 }
 
-/// Pull-request listing filter.
+/// Pull-request listing query.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PullRequestQuery {
     pub state: Option<PullRequestState>,
     pub labels: Vec<String>,
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
+    pub sort: Option<ItemSort>,
 }
 
-/// CI job listing filter.
+/// CI job field used for sorting CI job lists.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiJobSortField {
+    Name,
+    CreatedAt,
+    UpdatedAt,
+}
+
+/// Sort order for CI job lists.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CiJobSort {
+    pub field: CiJobSortField,
+    pub direction: SortDirection,
+}
+
+/// CI job listing query.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CiJobQuery {
     pub pull_request_id: Option<PullRequestId>,
     pub commit_sha: Option<String>,
     pub status: Option<CiJobStatus>,
+    pub sort: Option<CiJobSort>,
 }
 
 /// Backend-agnostic interface for Forge-like collaboration systems.
@@ -71,13 +136,19 @@ pub trait Forge: Send + Sync {
     async fn get_user(&self, id: &UserId) -> ForgeResult<Option<User>>;
 
     /// Lists repositories visible to the backend client.
-    async fn list_repositories(&self) -> ForgeResult<Vec<Repository>>;
+    async fn list_repositories(&self, query: RepositoryQuery) -> ForgeResult<Vec<Repository>>;
 
     /// Creates a repository.
     async fn create_repository(&self, input: CreateRepository) -> ForgeResult<Repository>;
 
     /// Looks up a repository by stable backend identifier.
     async fn get_repository(&self, id: &RepositoryId) -> ForgeResult<Option<Repository>>;
+
+    /// Looks up a repository by human-facing owner/name path.
+    async fn get_repository_by_path(
+        &self,
+        path: &RepositoryPath,
+    ) -> ForgeResult<Option<Repository>>;
 
     /// Lists labels in a repository.
     async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>>;
@@ -97,6 +168,13 @@ pub trait Forge: Send + Sync {
 
     /// Looks up an issue by stable backend identifier.
     async fn get_issue(&self, id: &IssueId) -> ForgeResult<Option<Issue>>;
+
+    /// Looks up an issue by its repository-scoped human-facing number.
+    async fn get_issue_by_number(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+    ) -> ForgeResult<Option<Issue>>;
 
     /// Updates an issue.
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue>;
@@ -123,6 +201,13 @@ pub trait Forge: Send + Sync {
 
     /// Looks up a pull request by stable backend identifier.
     async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>>;
+
+    /// Looks up a pull request by its repository-scoped human-facing number.
+    async fn get_pull_request_by_number(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+    ) -> ForgeResult<Option<PullRequest>>;
 
     /// Updates a pull request.
     async fn update_pull_request(

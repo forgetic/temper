@@ -7,6 +7,10 @@ pub mod forge;
 pub mod ids;
 pub mod model;
 
-pub use forge::{CiJobQuery, Forge, ForgeError, ForgeResult, IssueQuery, PullRequestQuery};
+pub use forge::{
+    CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueQuery, ItemSort,
+    ItemSortField, PullRequestQuery, RepositoryQuery, RepositorySort, RepositorySortField,
+    SortDirection,
+};
 pub use ids::*;
 pub use model::*;

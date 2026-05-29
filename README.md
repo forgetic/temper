@@ -12,8 +12,8 @@ Current state:
 
 - `harness-forge` contains the provider-neutral Forge domain model and async interface.
 - `harness-core` is intentionally minimal and reserved for workflow/orchestration logic.
-- `harness-fs` contains only the first filesystem backend scaffold; it does not yet implement the Forge trait.
-- The next likely design task is to refine the Forge interface before implementing the filesystem backend.
+- `harness-fs` implements filesystem backend support for users, repositories, repository labels, issues, issue comments, and pull requests; pull-request comments, merges, and CI jobs intentionally return portable unsupported-operation errors.
+- The next likely implementation task is to extend the filesystem backend with pull-request comments or merge support.
 
 ## Workspace layout
 
