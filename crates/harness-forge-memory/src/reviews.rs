@@ -68,7 +68,7 @@ pub(crate) fn submit_review(
         .find_pull_request(id)
         .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
     let now = inner.state.next_timestamp()?;
-    let reviewer_id = inner.state.current_user.id.clone();
+    let reviewer_id = forge.effective_user(&inner).id;
     let reviews = inner.state.pull_request_reviews_mut(id);
     let number = next_comment_number(reviews.len())?;
     let review = PullRequestReview {

@@ -14,7 +14,9 @@
 //! return [`ForgeError::Backend`](harness_forge::ForgeError::Backend) so backend
 //! error paths stay exercisable. CI jobs have no create operation in the Forge
 //! interface, so [`MemoryForge::seed_ci_jobs`] seeds them directly, mirroring how
-//! the filesystem backend seeds its `ci_jobs.json` fixture.
+//! the filesystem backend seeds its `ci_jobs.json` fixture. [`MemoryForge::as_user`]
+//! creates another handle over the same store with a different current-user
+//! identity, matching the per-process identity seam used by runner tests.
 
 mod dependencies;
 mod fault;
@@ -46,6 +48,7 @@ pub(crate) struct Inner {
 #[derive(Clone)]
 pub struct MemoryForge {
     inner: Arc<Mutex<Inner>>,
+    current_user: Option<User>,
 }
 
 impl MemoryForge {
@@ -61,6 +64,20 @@ impl MemoryForge {
                 state: State::new(user),
                 faults: FaultStore::default(),
             })),
+            current_user: None,
+        }
+    }
+
+    /// Returns a handle over the same store that acts as `user`.
+    ///
+    /// The identity override lives on the handle, outside the shared store, so
+    /// clones of the returned handle preserve the override while other handles
+    /// can act as different users. This is a memory-only testing hook for the
+    /// runner identity seam; it does not create or persist users.
+    pub fn as_user(&self, user: User) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            current_user: Some(user),
         }
     }
 
@@ -90,6 +107,12 @@ impl MemoryForge {
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("memory forge mutex is poisoned")
+    }
+
+    pub(crate) fn effective_user(&self, inner: &Inner) -> User {
+        self.current_user
+            .clone()
+            .unwrap_or_else(|| inner.state.current_user.clone())
     }
 }
 

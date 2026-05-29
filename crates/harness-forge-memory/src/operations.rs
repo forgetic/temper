@@ -40,11 +40,13 @@ use crate::MemoryForge;
 #[async_trait]
 impl Forge for MemoryForge {
     async fn current_user(&self) -> ForgeResult<User> {
-        Ok(self.lock().state.current_user.clone())
+        let inner = self.lock();
+        Ok(self.effective_user(&inner))
     }
 
     async fn get_user(&self, id: &UserId) -> ForgeResult<Option<User>> {
-        let user = self.lock().state.current_user.clone();
+        let inner = self.lock();
+        let user = self.effective_user(&inner);
         Ok((&user.id == id).then_some(user))
     }
 
@@ -150,7 +152,7 @@ impl Forge for MemoryForge {
         inner.faults.take(FaultOp::CreateIssue)?;
         inner.state.require_repository(repo_id)?;
         let now = inner.state.next_timestamp()?;
-        let author_id = inner.state.current_user.id.clone();
+        let author_id = self.effective_user(&inner).id;
         let issues = inner.state.issues_mut(repo_id);
         let number = next_item_number(issues.iter().map(|issue| issue.number))?;
         let issue = Issue {
@@ -267,7 +269,7 @@ impl Forge for MemoryForge {
             .find_issue(id)
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
         let now = inner.state.next_timestamp()?;
-        let author_id = inner.state.current_user.id.clone();
+        let author_id = self.effective_user(&inner).id;
         let comments = inner.state.issue_comments_mut(id);
         let number = next_comment_number(comments.len())?;
         let comment = Comment {
@@ -309,7 +311,7 @@ impl Forge for MemoryForge {
         inner.faults.take(FaultOp::CreatePullRequest)?;
         inner.state.require_repository(repo_id)?;
         let now = inner.state.next_timestamp()?;
-        let author_id = inner.state.current_user.id.clone();
+        let author_id = self.effective_user(&inner).id;
         let pull_requests = inner.state.pull_requests_mut(repo_id);
         let number = next_item_number(pull_requests.iter().map(|pr| pr.number))?;
         let pull_request = PullRequest {
@@ -471,7 +473,7 @@ impl Forge for MemoryForge {
             .find_pull_request(id)
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
         let now = inner.state.next_timestamp()?;
-        let author_id = inner.state.current_user.id.clone();
+        let author_id = self.effective_user(&inner).id;
         let comments = inner.state.pull_request_comments_mut(id);
         let number = next_comment_number(comments.len())?;
         let comment = Comment {
@@ -499,7 +501,7 @@ impl Forge for MemoryForge {
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
         let now = inner.state.next_timestamp()?;
         let clock_tick = inner.state.clock_tick();
-        let merged_by = inner.state.current_user.id.clone();
+        let merged_by = self.effective_user(&inner).id;
         let pull_requests = inner.state.pull_requests_mut(&repo_id);
         let pull_request = pull_requests
             .iter_mut()

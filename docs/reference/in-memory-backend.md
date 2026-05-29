@@ -27,7 +27,8 @@ user creation or listing.
 There is no durable store. State lives in memory for the lifetime of the backend
 instance:
 
-- `current_user`: the bootstrapped Forge `User` (default `user-1` / `local`).
+- store `current_user`: the bootstrapped Forge `User` (default `user-1` /
+  `local`) used by handles without an `as_user` override.
 - a logical `clock_tick` starting at `0`.
 - a repository-id counter starting at `1`.
 - in-memory collections of repositories, labels, issues, pull requests, issue
@@ -57,6 +58,20 @@ returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
 `MemoryForge` is `Clone`. A clone shares the same underlying store through an
 `Arc`, so a clone observes and mutates the same records. This lets a test hand
 the backend to several helpers while keeping one logical store.
+
+## Per-handle identity
+
+`MemoryForge::as_user(user)` returns another handle over the same shared store
+but with a handle-local `current_user` override. Clones of that handle preserve
+the override, while other handles can report and act as different users. This is
+a memory testing hook for runner identity: one in-process test can give each
+role worker the user identity that separate processes or authenticated provider
+clients get naturally. Operations attributed to the current user — issue/PR
+creation, comments, reviews, and merges — use the handle-local override.
+
+`as_user` does not create a durable user directory. `get_user` still only
+resolves the handle's effective current user, matching the in-memory backend's
+minimal user model.
 
 ## Seeding CI jobs
 

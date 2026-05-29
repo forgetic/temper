@@ -15,8 +15,15 @@
 //! 3. **Layered testing.** Narrow pure/backend tests should exercise reusable
 //!    primitives before broader end-to-end scenarios reuse the same code.
 //!
+//! The fake/real boundary is explicit: this crate owns composition, drivers,
+//! role-scoped tools, and worker scheduling; tests may plug in fake agents,
+//! fake outside-world producers, or memory identity handles, while production
+//! plugs in real agents, authenticated Forge handles, and poll/webhook drivers.
+//!
 //! The crate now provides:
 //!
+//! - [`RunnerConfig`], which keeps repository, identity, PR-create, lease, and
+//!   polling settings independent of process topology.
 //! - [`scan`], which reads fresh Forge state and turns active queue members into
 //!   role-addressed [`WorkItem`]s without mutating anything.
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
@@ -25,6 +32,9 @@
 //! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
 //!   judgment queues and delegate to agents, while the mechanical worker runs
 //!   reconcile → apply once per tick without spawning agents.
+//! - [`FixpointDriver`] and [`Stage`]/[`InProcessStage`], which compose workers
+//!   into a deterministic in-process world for layered scenarios while keeping
+//!   per-role Forge identity a handle-construction concern.
 //!
 //! The runner owns recovery coordination state. In a single-process composition
 //! the command journal value and lease manager live with the worker set. In a
@@ -34,9 +44,19 @@
 //! journal surviving a restart.
 
 pub mod agent;
+pub mod config;
+pub mod driver;
 pub mod scan;
+pub mod stage;
 pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
+pub use config::{PullRequestCreateBinding, RoleBinding, RunnerConfig};
+pub use driver::{DriveError, FixpointDriver, ManualClock, RunReport, WorkerRunReport};
 pub use scan::{scan, scan_role, ScanError, WorkItem};
+pub use stage::{
+    run_scenario, run_scenario_with_budget, BoxError, InProcessStage, InProcessWorkerContext,
+    InProcessWorkerFactory, Scenario, ScenarioError, ScenarioFuture, ScenarioStep, Stage,
+    StageError, DEFAULT_SCENARIO_BUDGET,
+};
 pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};

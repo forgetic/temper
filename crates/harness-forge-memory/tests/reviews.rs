@@ -1,6 +1,6 @@
 use harness_forge::{
     BranchRef, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeError,
-    PullRequestReviewStatus, RepositoryId, RequestReviewers, ReviewDecision, UserId,
+    PullRequestReviewStatus, RepositoryId, RequestReviewers, ReviewDecision, User, UserId,
 };
 use harness_forge_memory::MemoryForge;
 use std::future::Future;
@@ -31,6 +31,15 @@ fn new_repo(forge: &MemoryForge) -> RepositoryId {
     }))
     .expect("repository created")
     .id
+}
+
+fn user(id: &str, handle: &str) -> User {
+    User {
+        id: UserId::new(id),
+        handle: handle.into(),
+        display_name: None,
+        email: None,
+    }
 }
 
 fn pr_input(repo: &RepositoryId) -> CreatePullRequest {
@@ -126,6 +135,43 @@ fn reviews_are_requested_recorded_ordered_and_aggregated() {
         !status.is_approved(),
         "all requested reviewers must approve"
     );
+}
+
+#[test]
+fn handles_over_one_store_can_act_as_different_users() {
+    let base = MemoryForge::new();
+    let alice = user("user-alice", "alice");
+    let bob = user("user-bob", "bob");
+    let alice_forge = base.as_user(alice.clone());
+    let bob_forge = base.as_user(bob.clone());
+    let bob_clone = bob_forge.clone();
+
+    assert_eq!(block_on(alice_forge.current_user()).unwrap(), alice);
+    assert_eq!(block_on(bob_forge.current_user()).unwrap(), bob);
+    assert_eq!(block_on(bob_clone.current_user()).unwrap(), bob);
+
+    let repo = new_repo(&alice_forge);
+    let pr = block_on(alice_forge.create_pull_request(&repo, pr_input(&repo))).unwrap();
+    block_on(alice_forge.request_pull_request_reviewers(
+        &pr.id,
+        RequestReviewers {
+            reviewers: vec![bob.id.clone()],
+        },
+    ))
+    .unwrap();
+
+    let review = block_on(bob_forge.submit_pull_request_review(
+        &pr.id,
+        CreatePullRequestReview {
+            decision: ReviewDecision::Approved,
+            body: None,
+        },
+    ))
+    .unwrap();
+    assert_eq!(review.reviewer_id, bob.id);
+
+    let reviews = block_on(alice_forge.list_pull_request_reviews(&pr.id)).unwrap();
+    assert_eq!(reviews, vec![review]);
 }
 
 #[test]
