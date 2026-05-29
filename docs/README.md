@@ -31,7 +31,7 @@ See `reference/`.
 
 Conceptual material, rationale, and trade-offs. Use these to explain why the system is shaped the way it is.
 
-See `explanation/`.
+See `explanation/`, including the [runner process split bridge](explanation/runner-process-split.md).
 
 ## Document size budget
 

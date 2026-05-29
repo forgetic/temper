@@ -39,11 +39,12 @@
 //! - [`CiSink`] and [`CiWorker`], the test-only outside-world CI producer seam
 //!   used to seed native CI jobs for layered scenarios; real deployments rely on
 //!   provider CI and only use the engine's read side.
-//! - [`FixpointDriver`] and [`Stage`]/[`InProcessStage`], which compose workers
-//!   into deterministic in-process memory and filesystem worlds for layered
-//!   scenarios while keeping per-role Forge identity a handle-construction
-//!   concern. Integration-test support supplies deterministic fake
-//!   reference-delivery agents behind [`Agent`]; they contain behavior only and
+//! - [`FixpointDriver`], [`PollLoop`], and [`Stage`]/[`InProcessStage`]/
+//!   [`MultiProcessStage`], which compose workers into deterministic memory,
+//!   filesystem, and process-split rehearsal worlds while keeping per-worker
+//!   Forge identity a handle-construction concern. Integration-test support
+//!   supplies deterministic fake reference-delivery agents behind [`Agent`];
+//!   they contain behavior only and
 //!   perform workflow mutations solely through [`RoleTools`].
 //!
 //! The runner owns recovery coordination state. In a single-process composition
@@ -63,12 +64,12 @@ pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use config::{PullRequestCreateBinding, RoleBinding, RunnerConfig};
-pub use driver::{DriveError, FixpointDriver, ManualClock, RunReport, WorkerRunReport};
+pub use driver::{DriveError, FixpointDriver, ManualClock, PollLoop, RunReport, WorkerRunReport};
 pub use scan::{scan, scan_role, ScanError, WorkItem};
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{
     run_scenario, run_scenario_with_budget, BoxError, InProcessStage, InProcessWorkerContext,
-    InProcessWorkerFactory, Scenario, ScenarioError, ScenarioFuture, ScenarioStep, Stage,
-    StageError, DEFAULT_SCENARIO_BUDGET,
+    InProcessWorkerFactory, MultiProcessStage, Scenario, ScenarioError, ScenarioFuture,
+    ScenarioStep, Stage, StageError, WorkerProcess, DEFAULT_SCENARIO_BUDGET,
 };
 pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};

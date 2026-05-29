@@ -1,9 +1,10 @@
-//! Single-process worker driver.
+//! Worker drivers.
 //!
 //! [`FixpointDriver`] is the deterministic scheduler used by in-process stages
 //! and tests. It ticks every worker round-robin until one full pass makes no
-//! progress. Later production topologies use a poll loop per process, but the
-//! unit of work remains the same [`Worker`](crate::Worker) trait.
+//! progress. [`PollLoop`] is the per-process cadence driver: it ticks one
+//! worker, waits one poll interval, and repeats until a caller-supplied stop
+//! signal fires. Both drivers use the same [`Worker`](crate::Worker) trait.
 
 use crate::{Worker, WorkerError};
 use chrono::{DateTime, Duration, Utc};
@@ -222,4 +223,130 @@ impl<'a> FixpointDriver<'a> {
             }
         }
     }
+}
+
+#[derive(Clone, Debug)]
+enum PollClock {
+    System,
+    Manual(ManualClock),
+}
+
+impl PollClock {
+    fn now(&self) -> DateTime<Utc> {
+        match self {
+            Self::System => Utc::now(),
+            Self::Manual(clock) => clock.now(),
+        }
+    }
+
+    fn after_interval(&self, interval: Duration) {
+        if let Self::Manual(clock) = self {
+            clock.advance(interval);
+        }
+    }
+}
+
+/// Per-process cadence driver for one worker.
+///
+/// The loop is deliberately trigger-source agnostic: the only trigger today is
+/// the poll interval, and a future `ChangeSource` can replace or shorten the
+/// wait without changing worker logic. The default constructor uses wall-clock
+/// time for `Worker::tick`; tests can inject a [`ManualClock`] with
+/// [`with_clock`](Self::with_clock).
+pub struct PollLoop<'a> {
+    worker: &'a dyn Worker,
+    poll_interval: Duration,
+    clock: PollClock,
+}
+
+impl<'a> PollLoop<'a> {
+    /// Creates a poll loop using wall-clock timestamps.
+    pub fn new(worker: &'a dyn Worker, poll_interval: Duration) -> Self {
+        Self {
+            worker,
+            poll_interval,
+            clock: PollClock::System,
+        }
+    }
+
+    /// Creates a poll loop using a deterministic manual clock.
+    pub fn with_clock(worker: &'a dyn Worker, poll_interval: Duration, clock: ManualClock) -> Self {
+        Self {
+            worker,
+            poll_interval,
+            clock: PollClock::Manual(clock),
+        }
+    }
+
+    /// Runs until `stop_signal` returns `true`.
+    ///
+    /// The stop signal is checked before each tick and again before sleeping,
+    /// so shutdown after a successful tick does not wait for another interval.
+    pub async fn run_until<S>(&self, mut stop_signal: S) -> Result<RunReport, DriveError>
+    where
+        S: FnMut() -> bool,
+    {
+        let mut report = self.empty_report();
+        while !stop_signal() {
+            self.tick_once(&mut report).await?;
+            if stop_signal() {
+                break;
+            }
+            std::thread::sleep(poll_sleep_duration(self.poll_interval));
+            self.clock.after_interval(self.poll_interval);
+        }
+        Ok(report)
+    }
+
+    /// Ticks the worker `count` times without sleeping.
+    ///
+    /// This deterministic helper is intended for tests and stage sketches. With
+    /// a manual clock it still advances the clock by the poll interval between
+    /// ticks, preserving cadence semantics without wall-clock delay.
+    pub async fn run_bounded(&self, count: u64) -> Result<RunReport, DriveError> {
+        let mut report = self.empty_report();
+        for index in 0..count {
+            self.tick_once(&mut report).await?;
+            if index + 1 < count {
+                self.clock.after_interval(self.poll_interval);
+            }
+        }
+        Ok(report)
+    }
+
+    /// Returns the poll interval configured for this loop.
+    pub fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
+
+    fn empty_report(&self) -> RunReport {
+        RunReport {
+            ticks: 0,
+            workers: vec![WorkerRunReport {
+                name: self.worker.name().to_string(),
+                ticks: 0,
+                actions: 0,
+            }],
+        }
+    }
+
+    async fn tick_once(&self, report: &mut RunReport) -> Result<(), DriveError> {
+        let progress =
+            self.worker
+                .tick(self.clock.now())
+                .await
+                .map_err(|source| DriveError::Worker {
+                    worker: self.worker.name().to_string(),
+                    source,
+                })?;
+        report.ticks = report.ticks.saturating_add(1);
+        let worker = &mut report.workers[0];
+        worker.ticks = worker.ticks.saturating_add(1);
+        worker.actions = worker.actions.saturating_add(u64::from(progress.actions));
+        Ok(())
+    }
+}
+
+fn poll_sleep_duration(interval: Duration) -> std::time::Duration {
+    interval.to_std().unwrap_or_default()
 }

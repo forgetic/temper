@@ -16,8 +16,8 @@ use support::scenarios::{
     happy_path,
 };
 use support::world::{
-    full_reference_filesystem_stage, full_reference_filesystem_stage_with, full_reference_stage,
-    full_reference_stage_with,
+    full_reference_filesystem_stage, full_reference_filesystem_stage_with,
+    full_reference_multiprocess_stage, full_reference_stage, full_reference_stage_with,
 };
 
 const HAPPY_PATH_BUDGET: u64 = 32;
@@ -39,6 +39,15 @@ fn end_to_end_reference_delivery_happy_path_converges() {
         HAPPY_PATH_BUDGET,
         || block_on(full_reference_stage(runner_config())),
         || block_on(full_reference_filesystem_stage(runner_config())),
+    );
+
+    let multiprocess_stage = block_on(full_reference_multiprocess_stage(runner_config()))
+        .expect("multi-process stage builds");
+    assert_scenario_converges(
+        "filesystem-multiprocess-sketch",
+        &multiprocess_stage,
+        &scenario,
+        HAPPY_PATH_BUDGET,
     );
 }
 

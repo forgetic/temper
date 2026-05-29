@@ -99,24 +99,27 @@ proven safety properties), runnable against the reference backends, plus the
 initial `harness-runner` worker-plane primitives: read-only scans that turn fresh
 Forge state into active-queue work items, `Agent`/`RoleTools`, tickable
 `Worker`/`RoleWorker` units for judgment work, `MechanicalWorker` for the
-controller-plane reconcile → apply loop, and in-process stages for memory and
-filesystem scenario runs. The reference-delivery happy path and failure /
-dependency variants now run to merged, reconciled PRs on both reference backends
-with fake agents and fake CI; see
-[Run the reference delivery end-to-end scenarios](../how-to/run-reference-delivery-end-to-end.md).
-The remaining path to a live deployment, in dependency order:
+controller-plane reconcile → apply loop, `PollLoop` for one-worker cadence, and
+stages for memory, filesystem, and distinct-handle filesystem rehearsals. The
+reference-delivery happy path and failure / dependency variants now run to
+merged, reconciled PRs on both reference backends with fake agents and fake CI;
+the happy path also runs through the `MultiProcessStage` process-split sketch.
+See [Run the reference delivery end-to-end scenarios](../how-to/run-reference-delivery-end-to-end.md)
+and [Runner process split bridge](runner-process-split.md). The remaining path
+to a live deployment, in dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
    API, including the `Version`/`expected_version` CAS primitive
    ([ADR 0013](../adr/0013-portable-optimistic-concurrency.md)) and
    `list_ci_jobs` over Forgejo Actions, keeping observable-contract parity with
    the reference backends ([ADR 0008](../adr/0008-in-memory-backend-and-backend-naming.md)).
-2. **The runner/controller** — partially started in `harness-runner`: `scan`
+2. **The runner/controller** — the reusable primitives are in place: `scan`
    reconstructs active judgment work, `RoleWorker` can tick one role,
-   `MechanicalWorker` can tick the controller's reconcile → apply loop, and the
-   in-process `FixpointDriver`/`Stage` composition runs the same scenarios on
-   memory and filesystem backends. The production poll/webhook loop and
-   multi-process filesystem topology still need to be built.
+   `MechanicalWorker` can tick the controller's reconcile → apply loop,
+   `FixpointDriver` composes deterministic tests, `PollLoop` drives one worker
+   on a cadence, and `MultiProcessStage` rehearses distinct filesystem handles.
+   The next additive step is thin per-worker filesystem binaries; webhook wakeups
+   remain a later latency optimization over the poll backstop.
 3. **Agent-provider adapter** — wire a compiled `PromptManifest` to a model and
    map model tool calls onto the production `RoleTools` facade.
 4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific

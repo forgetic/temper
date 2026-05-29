@@ -1,8 +1,9 @@
 # Run the reference delivery end-to-end scenarios
 
-This guide runs the reference-delivery scenario suite at two in-process layers:
-L2 on `MemoryForge` and L3 on `FilesystemForge`. The same scenario definitions
-seed and assert both backends.
+This guide runs the reference-delivery scenario suite at the current layered
+boundaries: L2 on `MemoryForge`, L3 on `FilesystemForge`, and the happy path on
+the L4 `MultiProcessStage` sketch with distinct filesystem handles. The same
+scenario definitions seed and assert each backend/topology.
 
 ## Command
 
@@ -17,10 +18,13 @@ scenarios from runner test support on:
   `CiWorker<MemoryCiSink>`
 - `InProcessStage<FilesystemForge>` rooted in a unique temp dir, with per-role
   `as_user` handles and `CiWorker<FilesystemCiSink>` seeding `ci_jobs.json`
+- `MultiProcessStage<FilesystemForge>` for the happy path, creating a fresh
+  filesystem handle per worker over the same repo directory
 - fake architect, engineer, reviewer, owner, and human agents behind the normal
   `Agent`/`RoleTools` boundary
 - `MechanicalWorker` for reconcile → apply
-- `FixpointDriver` with small fixed tick budgets
+- `FixpointDriver` with small fixed tick budgets; `PollLoop::run_bounded` is
+  covered separately as the no-sleep one-worker cadence primitive
 
 ## Scenarios
 

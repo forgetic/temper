@@ -6,7 +6,8 @@ use harness_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, Repository
 use harness_forge_memory::MemoryForge;
 use harness_runner::{
     run_scenario, Agent, AgentError, AgentRegistry, BoxError, FixpointDriver, InProcessStage,
-    MechanicalWorker, Progress, RoleTools, RunnerConfig, Scenario, WorkItem, Worker,
+    ManualClock, MechanicalWorker, PollLoop, Progress, RoleTools, RoleWorker, RunnerConfig,
+    Scenario, WorkItem, Worker,
 };
 use harness_workflow::{
     ArtifactKindId, InMemoryJournal, LeasePolicy, QueueId, RawWorkflowSpec, RoleId, TransitionId,
@@ -121,6 +122,49 @@ fn fixpoint_driver_over_empty_repo_converges_in_one_tick() {
             }],
         }
     );
+}
+
+#[test]
+fn poll_loop_run_bounded_ticks_single_role_worker() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    block_on(forge.create_issue(
+        &repo,
+        CreateIssue {
+            title: "implement feature".into(),
+            body: String::new(),
+            labels: vec!["code".into(), "ready".into()],
+            assignees: Vec::new(),
+        },
+    ))
+    .expect("issue is created");
+    let role = RoleId::new("engineer");
+    let engineer_forge = forge.as_user(user("user-engineer", "engineer"));
+    let worker = RoleWorker::new(
+        &workflow,
+        &compiled,
+        &engineer_forge,
+        &repo,
+        role.clone(),
+        Arc::new(ClaimOnlyAgent),
+        runner_config().execution_context(&role),
+    );
+    let poll_loop = PollLoop::with_clock(
+        &worker as &dyn Worker,
+        Duration::seconds(1),
+        ManualClock::default(),
+    );
+
+    let report = block_on(poll_loop.run_bounded(1)).expect("poll loop ticks once");
+
+    assert_eq!(report.action_count("role:engineer"), Some(1));
+    let issues = block_on(forge.list_issues(&repo, IssueQuery::default())).expect("list succeeds");
+    let issue = &issues[0];
+    assert!(issue.labels.iter().any(|label| label == "in-progress"));
+    assert!(!issue.labels.iter().any(|label| label == "ready"));
+    assert!(issue.assignees.contains(&UserId::new("user-engineer")));
 }
 
 #[test]
