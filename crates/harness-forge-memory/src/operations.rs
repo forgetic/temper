@@ -22,7 +22,7 @@ use harness_forge::{
     CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState,
     ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
     PullRequestState, Repository, RepositoryId, RepositoryPath, RepositoryQuery, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, User, UserId,
+    UpdatePullRequest, UpsertLabel, User, UserId, Version,
 };
 
 use crate::MemoryForge;
@@ -153,6 +153,7 @@ impl Forge for MemoryForge {
             author_id,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            version: Version::INITIAL,
             created_at: now,
             updated_at: now,
             closed_at: None,
@@ -186,10 +187,11 @@ impl Forge for MemoryForge {
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
         let mut inner = self.lock();
         inner.faults.take(FaultOp::UpdateIssue)?;
-        let (repo_id, _) = inner
+        let (repo_id, existing) = inner
             .state
             .find_issue(id)
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
+        check_expected_version("issue", id, input.expected_version, existing.version)?;
         let now = inner.state.next_timestamp()?;
         let issues = inner.state.issues_mut(&repo_id);
         let issue = issues
@@ -217,6 +219,7 @@ impl Forge for MemoryForge {
             input.remove_assignees,
             input.add_assignees,
         );
+        issue.version = issue.version.next();
         issue.updated_at = now;
         let updated = issue.clone();
         sort_issues_by_number(issues);
@@ -301,6 +304,7 @@ impl Forge for MemoryForge {
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
             merge: None,
+            version: Version::INITIAL,
             created_at: now,
             updated_at: now,
             closed_at: None,
@@ -342,10 +346,11 @@ impl Forge for MemoryForge {
     ) -> ForgeResult<PullRequest> {
         let mut inner = self.lock();
         inner.faults.take(FaultOp::UpdatePullRequest)?;
-        let (repo_id, _) = inner
+        let (repo_id, existing) = inner
             .state
             .find_pull_request(id)
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+        check_expected_version("pull request", id, input.expected_version, existing.version)?;
         let now = inner.state.next_timestamp()?;
         let pull_requests = inner.state.pull_requests_mut(&repo_id);
         let pull_request = pull_requests
@@ -373,6 +378,7 @@ impl Forge for MemoryForge {
             input.remove_assignees,
             input.add_assignees,
         );
+        pull_request.version = pull_request.version.next();
         pull_request.updated_at = now;
         let updated = pull_request.clone();
         sort_pull_requests_by_number(pull_requests);
@@ -454,6 +460,7 @@ impl Forge for MemoryForge {
         };
         pull_request.state = PullRequestState::Merged;
         pull_request.merge = Some(merge.clone());
+        pull_request.version = pull_request.version.next();
         pull_request.updated_at = now;
         pull_request.closed_at = Some(now);
         sort_pull_requests_by_number(pull_requests);
@@ -479,6 +486,25 @@ impl Forge for MemoryForge {
 
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         Ok(self.lock().state.find_ci_job(id))
+    }
+}
+
+/// Enforces an optimistic-concurrency precondition.
+///
+/// Returns [`ForgeError::Conflict`] when `expected` is `Some` and does not equal
+/// the stored `actual` version; a `None` precondition always passes (an
+/// unconditional update).
+fn check_expected_version(
+    kind: &str,
+    id: &impl std::fmt::Display,
+    expected: Option<Version>,
+    actual: Version,
+) -> ForgeResult<()> {
+    match expected {
+        Some(expected) if expected != actual => Err(ForgeError::Conflict(format!(
+            "{kind} {id} expected version {expected} but found {actual}"
+        ))),
+        _ => Ok(()),
     }
 }
 

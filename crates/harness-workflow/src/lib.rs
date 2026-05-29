@@ -65,6 +65,14 @@
 //! classification of metadata-projected relations. Phase 13 added queue
 //! activation policies for depth- or age-gated servicing. Phase 14 added
 //! multi-kind queues and disjunctive queue label filters.
+//!
+//! Lease acquisition is now a compare-and-swap built on the portable
+//! optimistic-concurrency primitive in `harness-forge` (the `Version` token and
+//! `expected_version` precondition; see ADR 0013). [`LeaseManager`] captures the
+//! artifact version at load and writes leases conditionally
+//! ([`LeaseManager::prepare_acquire`] + [`LeaseManager::commit`]), so two
+//! acquirers over the same "no lease" snapshot cannot both win; the loser
+//! observes [`LeaseError::Contended`].
 
 pub mod artifact;
 pub mod classify;
@@ -101,7 +109,9 @@ pub use ids::{
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
 };
-pub use lease::{LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy};
+pub use lease::{
+    LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy, PreparedAcquire,
+};
 pub use metadata::{
     parse_metadata_block, render_metadata_block, replace_metadata_block, Lease, MetadataError,
     WorkflowMetadata, METADATA_BEGIN, METADATA_END,

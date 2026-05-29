@@ -19,8 +19,28 @@ use harness_forge::{
     CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState,
     ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
     PullRequestState, Repository, RepositoryId, RepositoryPath, RepositoryQuery, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, User, UserId,
+    UpdatePullRequest, UpsertLabel, User, UserId, Version,
 };
+
+/// Enforces an optimistic-concurrency precondition.
+///
+/// Returns [`ForgeError::Conflict`] when `expected` is `Some` and does not equal
+/// the stored `actual` version; a `None` precondition always passes (an
+/// unconditional update). Checked before the logical clock advances or any file
+/// is written, so a rejected conditional update leaves the store untouched.
+fn check_expected_version(
+    kind: &str,
+    id: &impl std::fmt::Display,
+    expected: Option<Version>,
+    actual: Version,
+) -> ForgeResult<()> {
+    match expected {
+        Some(expected) if expected != actual => Err(ForgeError::Conflict(format!(
+            "{kind} {id} expected version {expected} but found {actual}"
+        ))),
+        _ => Ok(()),
+    }
+}
 
 #[async_trait]
 impl Forge for FilesystemForge {
@@ -148,6 +168,7 @@ impl Forge for FilesystemForge {
             author_id: metadata.current_user.id.clone(),
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            version: Version::INITIAL,
             created_at: now,
             updated_at: now,
             closed_at: None,
@@ -190,6 +211,7 @@ impl Forge for FilesystemForge {
             .iter_mut()
             .find(|issue| &issue.id == id)
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
+        check_expected_version("issue", id, input.expected_version, issue.version)?;
 
         let mut metadata = self.read_metadata()?;
         let now = next_timestamp(&mut metadata)?;
@@ -214,6 +236,7 @@ impl Forge for FilesystemForge {
             input.remove_assignees,
             input.add_assignees,
         );
+        issue.version = issue.version.next();
         issue.updated_at = now;
 
         let updated = issue.clone();
@@ -299,6 +322,7 @@ impl Forge for FilesystemForge {
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
             merge: None,
+            version: Version::INITIAL,
             created_at: now,
             updated_at: now,
             closed_at: None,
@@ -345,6 +369,12 @@ impl Forge for FilesystemForge {
             .iter_mut()
             .find(|pull_request| &pull_request.id == id)
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
+        check_expected_version(
+            "pull request",
+            id,
+            input.expected_version,
+            pull_request.version,
+        )?;
 
         let mut metadata = self.read_metadata()?;
         let now = next_timestamp(&mut metadata)?;
@@ -369,6 +399,7 @@ impl Forge for FilesystemForge {
             input.remove_assignees,
             input.add_assignees,
         );
+        pull_request.version = pull_request.version.next();
         pull_request.updated_at = now;
 
         let updated = pull_request.clone();
@@ -453,6 +484,7 @@ impl Forge for FilesystemForge {
 
         pull_request.state = PullRequestState::Merged;
         pull_request.merge = Some(merge.clone());
+        pull_request.version = pull_request.version.next();
         pull_request.updated_at = now;
         pull_request.closed_at = Some(now);
 

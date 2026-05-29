@@ -75,13 +75,13 @@ Repository labels are stored in `repositories/<repo-id>/labels.json` as serializ
 
 Repository issues are stored in `repositories/<repo-id>/issues.json` as serialized Forge `Issue` records. Issue numbers are repository-scoped, start at `1`, and use the next value above the highest stored issue number. Issue IDs are deterministic strings of the form `issue-<repo-id>-<16-digit-number>`. New issues use the current user as `author_id`; labels and assignees are stored as sorted, de-duplicated sets.
 
-Issue timestamps use the same logical clock as repositories. Creating or updating an issue advances `clock_tick` by one second. Closing an issue sets `closed_at` to the update timestamp; reopening clears `closed_at`.
+Issue timestamps use the same logical clock as repositories. Creating or updating an issue advances `clock_tick` by one second. Closing an issue sets `closed_at` to the update timestamp; reopening clears `closed_at`. New issues start at `Version::INITIAL`, and every successful `update_issue` advances the stored `version` (see [Optimistic concurrency](#optimistic-concurrency)).
 
 Issue comments are stored in `repositories/<repo-id>/issues/<issue-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<issue-id>-<16-digit-number>`. Comment numbers are issue-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored issue record.
 
 Repository pull requests are stored in `repositories/<repo-id>/pull_requests.json` as serialized Forge `PullRequest` records. Pull-request numbers are repository-scoped within pull requests, start at `1`, and use the next value above the highest stored pull-request number. Pull-request IDs are deterministic strings of the form `pull-request-<repo-id>-<16-digit-number>`. New pull requests use the current user as `author_id`; labels and assignees are stored as sorted, de-duplicated sets. Source and target branch references are stored from the create input. `head_sha`, `base_sha`, and `merge` start as `None`.
 
-Pull-request timestamps use the same logical clock as repositories and issues. Creating or updating a pull request advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. Merging a pull request advances `clock_tick`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits.
+Pull-request timestamps use the same logical clock as repositories and issues. Creating or updating a pull request advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. New pull requests start at `Version::INITIAL`, and every successful `update_pull_request` advances the stored `version`. Merging a pull request advances `clock_tick` and the `version`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits.
 
 Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<pull-request-id>-<16-digit-number>`. Comment numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored pull-request record.
 
@@ -120,6 +120,10 @@ The requested field and direction are applied first. Ties are broken by owner/na
 ## Unsupported operations
 
 All current Forge trait methods are implemented. The filesystem backend does not expose operations outside the Forge interface, such as creating CI job records; seed `ci_jobs.json` directly for deterministic local scenarios.
+
+## Optimistic concurrency
+
+`update_issue` and `update_pull_request` honour the shared `expected_version` precondition (see ADR 0013 and the [Forge interface reference](forge-interface.md#optimistic-concurrency)). When `expected_version` is `Some` and does not equal the stored `version`, the call returns `ForgeError::Conflict` before advancing the logical clock or writing any file, so a rejected compare-and-swap leaves the store untouched. When it is `None`, the update is unconditional. Stored records carry a `version` field; a record written before versioning existed deserializes as `Version::INITIAL`. The in-memory backend uses the same logic and messages.
 
 ## Consistency guarantees
 

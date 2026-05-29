@@ -28,12 +28,40 @@ is supplied explicitly, so the suite is reproducible.
 | --- | --- |
 | No duplicate issue or pull request is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
+| Two acquirers that both observe "no lease" cannot both win: lease acquisition is a compare-and-swap, so the loser observes a conflict | `two_no_lease_acquirers_cannot_both_win_the_same_claim`, `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue` |
 | A merge is not authorized, and the pull request is not merged, until review and testing gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
 | The gate mechanism blocks a merge until an external CI condition plus review and testing gates all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
+
+## Lease acquisition is compare-and-swap
+
+Lease acquisition closes its lost-update window with the portable
+optimistic-concurrency primitive (ADR 0013, `docs/reference/forge-interface.md`).
+`LeaseManager` captures the artifact's `Version` at load time and writes the
+lease conditionally on it (`expected_version`), so the read-then-write gap is no
+longer a lost update:
+
+- A live lease still cannot be taken by a peer (the planner refuses it).
+- Two workers that both load "no lease" before either writes can no longer both
+  win. The first conditional write advances the version; the second write, made
+  against the now-stale captured version, fails its compare-and-swap and the
+  loser observes `LeaseError::Contended`. `acquire`, `heartbeat`, and `release`
+  are all conditional.
+- This is proven deterministically by capturing the load-time token — not by
+  hand-ordering the writes: `prepare_acquire` loads and plans, `commit` performs
+  the conditional write, and the tests interleave two acquirers (A-load, B-load,
+  A-write, B-write) so the second commit must lose. See
+  `two_no_lease_acquirers_cannot_both_win_the_same_claim`
+  (`tests/safety_properties.rs`) and
+  `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue`
+  (`tests/leases.rs`), with backend-level conditional-write conflict tests in
+  both reference backends.
+
+The webhook-accelerated triggering model (ADR 0009) widens the concurrency
+window, but a wider window can no longer produce a lost-update lease race.
 
 ## Crash, retry, and restart behavior
 
@@ -65,17 +93,6 @@ is supplied explicitly, so the suite is reproducible.
 These are real gaps the robustness tests exposed; they are documented here
 rather than hidden:
 
-- **Lease acquisition is not compare-and-swap.** `LeaseManager` loads fresh
-  state, plans, then writes. A live lease cannot be taken by a peer (tested), and
-  the metadata holds a single lease, so two *recorded* leases are structurally
-  impossible. But two workers that both load "no lease" before either writes can
-  still produce a lost update (last write wins). Closing that window needs an
-  atomic compare-and-swap or conditional update primitive that the portable
-  `Forge` interface does not yet expose. The deterministic tests serialize
-  backend calls and assert the single-holder outcome for the tested
-  interleavings. The webhook-accelerated triggering model (ADR 0009) widens this
-  concurrency window, so closing it with a compare-and-swap primitive is a
-  prioritized follow-up.
 - **The stable five-role fixture wires no CI gate.** It declares
   `ci-passed`/`ci-failed` labels and a `ci` state dimension, but `approve_merge`
   requires only `review_gate` and `testing_gate`. The evolving

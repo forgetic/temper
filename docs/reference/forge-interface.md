@@ -105,7 +105,7 @@ Issue state is `open` or `closed`.
 
 `IssueQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive: every requested label must be present. Issues can be sorted by number, creation time, or update time.
 
-`UpdateIssue` may change title, body, state, labels, and assignees. Closing an open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions.
+`UpdateIssue` may change title, body, state, labels, and assignees. Closing an open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdateIssue` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
 
 ## Comment operations
 
@@ -124,7 +124,7 @@ Required methods:
 - `add_pull_request_comment`
 - `merge_pull_request`
 
-Pull-request state is `open`, `closed`, or `merged`. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions.
+Pull-request state is `open`, `closed`, or `merged`. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdatePullRequest` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
 
 Merging must go through `merge_pull_request` so the backend can record merge metadata and produce the `merged` state.
 
@@ -151,6 +151,36 @@ Required methods:
 CI jobs are associated with a repository, a commit SHA, and optionally a pull request. Status is one of `queued`, `running`, or `completed`. Completed jobs may include a conclusion such as `success`, `failure`, or `cancelled`.
 
 `CiJobQuery` supports filtering by pull request, commit SHA, and status. CI jobs can be sorted by name, creation time, or update time.
+
+## Optimistic concurrency
+
+Issues and pull requests carry a `Version`: a portable, opaque, monotonic
+concurrency token (see ADR 0013). A backend assigns `Version::INITIAL` when the
+artifact is created and advances it on every successful mutation of the artifact
+record — `update_issue`, `update_pull_request`, and `merge_pull_request`. Adding
+a comment does not modify the artifact record, so it does not change the version.
+
+`UpdateIssue` and `UpdatePullRequest` carry an optional `expected_version`
+precondition that turns an update into a compare-and-swap:
+
+- `expected_version: None` (the default) — the update is **unconditional**, the
+  historical behaviour. The version still advances on success.
+- `expected_version: Some(v)` — the update applies **only if** the stored version
+  equals `v`. On a match it applies and advances the version; on a mismatch it
+  returns `ForgeError::Conflict` and **mutates nothing**. A stale token means the
+  artifact changed since the caller read it, so the caller should re-read and
+  retry against fresh state.
+
+The token is a dedicated counter, not `updated_at`: reusing a timestamp would
+collide whenever two mutations share a clock value and silently admit a lost
+update. A real forge can satisfy the precondition with an `ETag`/`If-Match` pair
+(the version is the artifact's ETag) or another single atomic claim; the trait
+exposes only `Version` and `ForgeError::Conflict`, never provider specifics.
+
+This is the primitive `harness-workflow`'s `LeaseManager` uses to close the
+lease-acquisition lost-update window: it captures the version at load and writes
+the lease conditionally, so two acquirers over the same "no lease" snapshot
+cannot both win. See `docs/reference/robustness-guarantees.md`.
 
 ## Idempotency
 

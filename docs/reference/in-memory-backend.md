@@ -38,6 +38,11 @@ IDs use the same deterministic schemes; each mutating operation that needs a
 timestamp advances `clock_tick` by one second from the Unix epoch; merge commit
 SHAs are the clock tick formatted as 40 lowercase hexadecimal digits.
 
+Version tokens also match the filesystem backend: a created issue or pull request
+starts at `Version::INITIAL`, and `update_issue`, `update_pull_request`, and
+`merge_pull_request` each advance the artifact's version. Adding a comment does
+not change the artifact record, so it leaves the version untouched.
+
 `create_repository` validates non-empty owner, name, and default branch, and
 returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
 `upsert_label` rejects empty label names.
@@ -83,3 +88,14 @@ Validation failures map to `ForgeError::InvalidRequest`, missing resources to
 `ForgeError::NotFound`, duplicate repository paths to `ForgeError::AlreadyExists`,
 illegal state transitions (such as merging a closed or merged pull request) to
 `ForgeError::Conflict`, and armed faults to `ForgeError::Backend`.
+
+## Optimistic concurrency
+
+`update_issue` and `update_pull_request` honour the shared `expected_version`
+precondition (see ADR 0013 and the [Forge interface reference](forge-interface.md#optimistic-concurrency)).
+When `expected_version` is `Some` and does not equal the stored version, the call
+returns `ForgeError::Conflict` before advancing the logical clock or mutating any
+state, so a rejected compare-and-swap leaves the store untouched. When it is
+`None`, the update is unconditional. The check uses the same logic and messages
+as the filesystem backend. No new `FaultOp` is involved: the conditional path is
+the existing `UpdateIssue`/`UpdatePullRequest` operation.

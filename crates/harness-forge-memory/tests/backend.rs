@@ -9,7 +9,7 @@ use harness_forge::{
     BranchRef, CiJob, CiJobQuery, CiJobStatus, CreateComment, CreateIssue, CreatePullRequest,
     CreateRepository, Forge, ForgeError, IssueQuery, IssueState, ItemNumber, MergeMethod,
     MergePullRequest, PullRequestState, RepositoryId, RepositoryPath, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, UserId,
+    UpdatePullRequest, UpsertLabel, UserId, Version,
 };
 use harness_forge_memory::{FaultOp, MemoryForge};
 use std::future::Future;
@@ -244,6 +244,93 @@ fn issue_comments_are_numbered_and_ordered() {
         block_on(forge.list_issue_comments(&harness_forge::IssueId::new("issue-missing"))),
         Err(ForgeError::NotFound(_))
     ));
+}
+
+#[test]
+fn conditional_update_rejects_a_stale_version() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = block_on(forge.create_issue(&repo, issue_input(&["code"]))).unwrap();
+    // A freshly created artifact starts at the initial version.
+    assert_eq!(issue.version, Version::INITIAL);
+
+    // A compare-and-swap against the captured version succeeds and advances it.
+    let updated = block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            add_labels: vec!["in-progress".into()],
+            expected_version: Some(issue.version),
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(updated.version, issue.version.next());
+
+    // A second update against the now-stale captured version is rejected as a
+    // conflict without mutating anything.
+    let conflict = block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            add_labels: vec!["ready".into()],
+            expected_version: Some(issue.version),
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap_err();
+    assert!(matches!(conflict, ForgeError::Conflict(_)));
+
+    let current = block_on(forge.get_issue_by_number(&repo, issue.number))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current.version, updated.version,
+        "a rejected CAS leaves the version untouched"
+    );
+    assert!(
+        !current.labels.contains(&"ready".to_string()),
+        "a rejected CAS applies no labels"
+    );
+
+    // An unconditional update (no precondition) still applies and advances the version.
+    let unconditional = block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            add_labels: vec!["ready".into()],
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(unconditional.version, updated.version.next());
+    assert!(unconditional.labels.contains(&"ready".to_string()));
+
+    // Conditional updates work on pull requests too, and merging advances the version.
+    let pr = block_on(forge.create_pull_request(&repo, pr_input(&repo, &["impl"]))).unwrap();
+    assert_eq!(pr.version, Version::INITIAL);
+    let pr_conflict = block_on(forge.update_pull_request(
+        &pr.id,
+        UpdatePullRequest {
+            add_labels: vec!["needs-review".into()],
+            expected_version: Some(Version::new(99)),
+            ..UpdatePullRequest::default()
+        },
+    ))
+    .unwrap_err();
+    assert!(matches!(pr_conflict, ForgeError::Conflict(_)));
+    let merged = block_on(forge.merge_pull_request(
+        &pr.id,
+        MergePullRequest {
+            method: MergeMethod::Squash,
+            commit_title: None,
+            commit_body: None,
+        },
+    ));
+    assert!(merged.is_ok());
+    let after_merge = block_on(forge.get_pull_request(&pr.id)).unwrap().unwrap();
+    assert_eq!(
+        after_merge.version,
+        pr.version.next(),
+        "a merge advances the version"
+    );
 }
 
 #[test]

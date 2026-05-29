@@ -177,6 +177,13 @@ pub trait Forge: Send + Sync {
     ) -> ForgeResult<Option<Issue>>;
 
     /// Updates an issue.
+    ///
+    /// When `input.expected_version` is `Some`, the update is a compare-and-swap:
+    /// it applies only if the stored [`Issue::version`](crate::Issue::version)
+    /// equals the supplied token, and otherwise returns
+    /// [`ForgeError::Conflict`] without mutating anything. When it is `None`, the
+    /// update is unconditional. Either way, a successful update advances the
+    /// stored version.
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue>;
 
     /// Lists comments on an issue.
@@ -210,6 +217,13 @@ pub trait Forge: Send + Sync {
     ) -> ForgeResult<Option<PullRequest>>;
 
     /// Updates a pull request.
+    ///
+    /// When `input.expected_version` is `Some`, the update is a compare-and-swap:
+    /// it applies only if the stored
+    /// [`PullRequest::version`](crate::PullRequest::version) equals the supplied
+    /// token, and otherwise returns [`ForgeError::Conflict`] without mutating
+    /// anything. When it is `None`, the update is unconditional. Either way, a
+    /// successful update advances the stored version.
     async fn update_pull_request(
         &self,
         id: &PullRequestId,

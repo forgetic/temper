@@ -211,6 +211,57 @@ fn an_exclusive_claim_never_has_two_active_leases() {
     assert_eq!(lease.worker, "run-a", "the original holder keeps the claim");
 }
 
+// Safety property 2b: two acquirers that both observe "no lease" cannot both
+// win. This exercises the lost-update interleaving the old read-then-write
+// `acquire` could not survive: A and B each capture the load-time version before
+// either writes, A's conditional write wins, and B's write against its stale
+// token is refused by the backend compare-and-swap (see ADR 0013). The outcome
+// is proven by capturing the load-time token, not by hand-ordering the writes.
+#[test]
+fn two_no_lease_acquirers_cannot_both_win_the_same_claim() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "in-progress"], "Implement login.");
+    let target = ArtifactSource::Issue { number };
+    let manager = LeaseManager::new(&forge, LeasePolicy::new(Duration::minutes(30)));
+
+    // Both acquirers load the same unclaimed snapshot and plan a grant before
+    // either commits.
+    let a = block_on(manager.prepare_acquire(
+        &repo,
+        target,
+        RoleId::new("engineer"),
+        "run-a",
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .expect("A plans a grant");
+    let b = block_on(manager.prepare_acquire(
+        &repo,
+        target,
+        RoleId::new("engineer"),
+        "run-b",
+        ts("2026-05-29T00:00:01Z"),
+    ))
+    .expect("B plans a grant against the same snapshot");
+    assert_eq!(
+        a.version(),
+        b.version(),
+        "both captured the same load-time version"
+    );
+
+    // A commits and wins; B's stale-token commit is refused.
+    block_on(manager.commit(a)).expect("A wins");
+    let lost = block_on(manager.commit(b)).expect_err("B's stale write loses");
+    assert!(matches!(lost, LeaseError::Contended { target: t } if t == target));
+
+    // Exactly one lease is recorded, held by A.
+    let metadata = parse_metadata_block(&issue_body(&forge, &repo, number))
+        .expect("metadata parses")
+        .expect("metadata present");
+    assert_eq!(metadata.lease.expect("one lease").worker, "run-a");
+}
+
 // Safety property 3a: a merge is not authorized — and the pull request is not
 // merged — until review and testing gates pass; once they do, the merge
 // executes and projects the post-merge `landed`/`owner-pending` labels.

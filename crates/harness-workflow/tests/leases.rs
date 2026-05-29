@@ -262,6 +262,63 @@ fn manager_rejects_a_conflicting_acquire() {
 }
 
 #[test]
+fn interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "in-progress"], "Implement login.");
+    let target = ArtifactSource::Issue { number };
+    let manager = LeaseManager::new(&forge, policy());
+
+    // A and B both load the same "no lease" snapshot and plan a grant *before*
+    // either writes, each capturing the artifact's load-time version. This is
+    // the lost-update interleaving: A-load, B-load, A-write, B-write.
+    let a = block_on(manager.prepare_acquire(
+        &repo,
+        target,
+        RoleId::new("engineer"),
+        "run-a",
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .expect("A plans a grant on the unclaimed issue");
+    let b = block_on(manager.prepare_acquire(
+        &repo,
+        target,
+        RoleId::new("engineer"),
+        "run-b",
+        ts("2026-05-29T00:00:01Z"),
+    ))
+    .expect("B plans a grant against the same unclaimed snapshot");
+    assert_eq!(
+        a.version(),
+        b.version(),
+        "both acquirers captured the same load-time version"
+    );
+
+    // A commits first and wins; the conditional write advances the version.
+    let granted = block_on(manager.commit(a)).expect("A wins the compare-and-swap");
+    assert_eq!(granted.worker, "run-a");
+
+    // B commits against its now-stale captured version and loses the
+    // compare-and-swap — without any hand-serialized re-read.
+    let lost = block_on(manager.commit(b)).expect_err("B's stale write is refused");
+    assert!(
+        matches!(lost, LeaseError::Contended { target: t } if t == target),
+        "the loser observes a contention conflict: {lost:?}"
+    );
+
+    // Exactly one lease is recorded, held by A.
+    let metadata = parse_metadata_block(&issue_body(&forge, &repo, number))
+        .expect("metadata parses")
+        .expect("metadata present");
+    assert_eq!(
+        metadata.lease.expect("one lease recorded").worker,
+        "run-a",
+        "the first committer keeps the claim"
+    );
+}
+
+#[test]
 fn manager_reports_a_missing_target() {
     let root = TestRoot::new();
     let forge = root.forge();

@@ -99,5 +99,8 @@ runner exists and the need is concrete.
 
 - Implement the `ChangeHint` abstraction (concern 2 above) when the runner layer
   is built; consider the optional `ChangeSource` companion trait alongside it.
-- Solve the compare-and-swap / conditional-update lease problem so faster
-  triggering cannot produce lost-update lease races.
+- ~~Solve the compare-and-swap / conditional-update lease problem so faster
+  triggering cannot produce lost-update lease races.~~ Done in ADR 0013: the
+  portable optimistic-concurrency `Version`/`expected_version` primitive makes
+  lease acquisition a compare-and-swap, so a wider trigger window can no longer
+  produce a lost-update lease race.
