@@ -1,11 +1,11 @@
 # Reference delivery workflow
 
-This page designs a clean five-role delivery workflow, using the production
+This page designs a clean six-role delivery workflow, using the production
 ekanayaka.io agent workflow as inspiration but removing its accidental
 complexity. It is the target the harness spec, compiler, planner, and executor
-should be able to express and run. A later `RawWorkflowSpec` fixture will
-transcribe it; the gap between this design and what the runtime can execute
-becomes the prioritized implementation backlog.
+should be able to express and run. The `reference-delivery.json`
+`RawWorkflowSpec` fixture transcribes it; any gap between this design and what
+the runtime can execute becomes implementation backlog.
 
 This is an explanation page: it defines the conceptual model and the rationale.
 The exact spec is the fixture; the exact runtime contract is
@@ -39,9 +39,10 @@ These were decided during design and are not open:
   queue or review-result labels; CI readiness is `ci_gate`, and review approval
   is `review_gate` from the Forge review aggregate.
 - **`blocked` is dependency-only.** Dependency blocking is a modeled relation +
-  gate (`blocked`, cleared mechanically). Judgment escalation is a separate
-  `escalated` flag routed to the architect. Human input is `needs_human` routed
-  to the owner.
+  gate (`blocked`, cleared mechanically). Agent escalation is a separate
+  `needs-architect` flag routed to the architect. Design feedback uses
+  `needs-owner`; the owner may switch it to `needs-human` for explicit human
+  judgment.
 - **Claims are explicit leases.** The engineer's claim is a `metadata::Lease`
   with a TTL; the reconciler handles expiry. The original prose stale-claim
   recovery procedure is dropped.
@@ -55,11 +56,12 @@ These were decided during design and are not open:
 
 | Role | Charter (short) | Primary queues |
 | --- | --- | --- |
-| `architect` | Turn requests into epics/design/ready code issues; resolve escalations; reconcile landed PRs. | `design_triage`, `escalations`, `landed_inbox` |
+| `architect` | Turn requests into epics/design/ready code issues; resolve `needs-architect`; reconcile landed PRs. | `design_triage`, `needs_architect`, `landed_inbox` |
 | `engineer` | Claim ready code issues, implement, open PRs, address failed gates. | `code_ready`, `pr_changes_requested` |
 | `reviewer` | Static review against the contract catalog; approve or request changes. | `pr_needs_review` |
 | `tester` | Exercise the change; record testing passed or failed. | `pr_needs_testing` |
-| `owner` | Resolve `needs_human` items; holistic alignment review of landed cohorts. | `needs_human`, `owner_alignment` |
+| `owner` | Resolve `needs-owner` design feedback; holistic alignment review of landed cohorts. | `needs_owner`, `owner_alignment` |
+| `human` | Resolve `needs-human` items that require non-agent judgment. | `needs_human` |
 
 ## Artifact kinds
 
@@ -80,15 +82,16 @@ Exclusive unless noted; each state projects to one label.
   `design` and `code`), `in_progress` (legal for `epic` and `code`), and
   `blocked` (legal for `code`). The generic labels keep stable meanings; the
   artifact-specific legality matrix prevents combinations such as `code + draft`.
-- Review results are not a workflow-owned state dimension; `needs_review` is a
-  routing label, while `approved` / `changes_requested` are native Forge review
-  decisions read through review gate conditions.
-- `testing`: `needs_testing`, `passed`, `failed`.
+- Review results are not a workflow-owned state dimension; `needs-reviewer` is
+  a routing label, while `approved` / `changes_requested` are native Forge
+  review decisions read through review gate conditions.
+- `testing`: `needs_tester`, `passed`, `failed`.
 - CI is not a workflow-owned state dimension; merge eligibility reads native
   CI job conclusions through the `ci_passed` gate.
 - Merge readiness is derived from gates rather than stored as a state.
-- `escalation` (non-exclusive): `escalated` — judgment escalation flag.
-- `human` (non-exclusive): `needs_human` — owner-input flag.
+- `attention` (non-exclusive): `needs_architect` (`needs-architect`),
+  `needs_owner` (`needs-owner`), and `needs_human` (`needs-human`) route
+  explicit feedback requests to the named role.
 - `post_merge` (non-exclusive): `landed` (awaiting architect reconcile),
   `owner_pending` (awaiting owner alignment).
 
@@ -115,13 +118,15 @@ failed review or testing gate returns the PR to the engineer (native
 
 ## Escalation and the human loop
 
-Escalation is for judgment beyond the contract catalog. Any of engineer,
-reviewer, or tester may set `escalated` on a PR or issue; that routes it to the
-architect's `escalations` queue. The architect resolves by amending a spec,
-recording a decision, returning work to the engineer, or — when human input is
-required — setting `needs_human`, which routes to the owner. The owner's response
-clears `needs_human` (an explicit signal, not a "latest comment isn't mine"
-predicate).
+Role-attention labels are requests for another role to act, not verdicts. Any
+of engineer, reviewer, or tester may set `needs-architect` on a PR or issue;
+that routes it to the architect's `needs_architect` queue. The architect clears
+that flag after amending a spec, recording a decision, or returning work.
+
+When the architect needs owner feedback on a design issue, they set
+`needs-owner`. The owner either clears that flag after responding or switches it
+to `needs-human` when non-agent human judgment is required. The explicit
+`human` role clears `needs-human` after responding.
 
 ## Post-merge handling
 

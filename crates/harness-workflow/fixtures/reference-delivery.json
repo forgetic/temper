@@ -3,11 +3,11 @@
   "roles": [
     {
       "id": "architect",
-      "charter": "Turn requests into epics, design issues, and ready code issues; resolve escalations; reconcile landed PRs.",
+      "charter": "Turn requests into epics, design issues, and ready code issues; resolve needs-architect items; reconcile landed PRs.",
       "concurrency": 1,
       "queues": [
         "design_triage",
-        "escalations",
+        "needs_architect",
         "landed_inbox"
       ]
     },
@@ -39,11 +39,19 @@
     },
     {
       "id": "owner",
-      "charter": "Resolve needs-human items and run holistic alignment review of landed cohorts.",
+      "charter": "Resolve needs-owner items and run holistic alignment review of landed cohorts; escalate to humans when needed.",
       "concurrency": 1,
       "queues": [
-        "needs_human",
+        "needs_owner",
         "owner_alignment"
+      ]
+    },
+    {
+      "id": "human",
+      "charter": "Resolve needs-human items that require non-agent judgment.",
+      "concurrency": 1,
+      "queues": [
+        "needs_human"
       ]
     }
   ],
@@ -85,12 +93,12 @@
       "description": "work item is blocked by unmet dependencies"
     },
     {
-      "id": "needs-review",
-      "description": "pull request awaits review"
+      "id": "needs-reviewer",
+      "description": "pull request awaits reviewer action"
     },
     {
-      "id": "needs-testing",
-      "description": "pull request awaits testing"
+      "id": "needs-tester",
+      "description": "pull request awaits tester action"
     },
     {
       "id": "testing-passed",
@@ -101,12 +109,16 @@
       "description": "testing failed"
     },
     {
-      "id": "escalated",
-      "description": "judgment escalation flag routed to the architect"
+      "id": "needs-architect",
+      "description": "agent escalation flag routed to the architect"
+    },
+    {
+      "id": "needs-owner",
+      "description": "owner-input flag routed to the owner"
     },
     {
       "id": "needs-human",
-      "description": "owner-input flag routed to the owner"
+      "description": "human-input flag routed to the human"
     },
     {
       "id": "landed",
@@ -223,8 +235,8 @@
       "exclusive": true,
       "states": [
         {
-          "id": "needs_testing",
-          "label": "needs-testing"
+          "id": "needs_tester",
+          "label": "needs-tester"
         },
         {
           "id": "passed",
@@ -237,22 +249,26 @@
       ]
     },
     {
-      "id": "escalation",
+      "id": "attention",
       "exclusive": false,
       "states": [
         {
-          "id": "escalated",
-          "label": "escalated"
-        }
-      ]
-    },
-    {
-      "id": "human",
-      "exclusive": false,
-      "states": [
+          "id": "needs_architect",
+          "label": "needs-architect"
+        },
+        {
+          "id": "needs_owner",
+          "label": "needs-owner",
+          "artifacts": [
+            "design"
+          ]
+        },
         {
           "id": "needs_human",
-          "label": "needs-human"
+          "label": "needs-human",
+          "artifacts": [
+            "design"
+          ]
         }
       ]
     },
@@ -290,14 +306,14 @@
       "id": "pr_needs_review",
       "artifact": "implementation_pr",
       "labels": [
-        "needs-review"
+        "needs-reviewer"
       ]
     },
     {
       "id": "pr_needs_testing",
       "artifact": "implementation_pr",
       "labels": [
-        "needs-testing"
+        "needs-tester"
       ]
     },
     {
@@ -315,7 +331,7 @@
       ]
     },
     {
-      "id": "escalations",
+      "id": "needs_architect",
       "artifact": [
         "intake",
         "epic",
@@ -324,18 +340,19 @@
         "implementation_pr"
       ],
       "labels": [
-        "escalated"
+        "needs-architect"
+      ]
+    },
+    {
+      "id": "needs_owner",
+      "artifact": "design",
+      "labels": [
+        "needs-owner"
       ]
     },
     {
       "id": "needs_human",
-      "artifact": [
-        "intake",
-        "epic",
-        "design",
-        "code",
-        "implementation_pr"
-      ],
+      "artifact": "design",
       "labels": [
         "needs-human"
       ]
@@ -451,7 +468,7 @@
       ]
     },
     {
-      "id": "resolve_escalation",
+      "id": "resolve_architect_request",
       "artifact": "implementation_pr",
       "roles": [
         "architect"
@@ -459,20 +476,20 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "escalated"
+          "label": "needs-architect"
         }
       ]
     },
     {
-      "id": "request_human_input",
-      "artifact": "implementation_pr",
+      "id": "request_owner_input",
+      "artifact": "design",
       "roles": [
         "architect"
       ],
       "effects": [
         {
           "kind": "add_label",
-          "label": "needs-human"
+          "label": "needs-owner"
         }
       ]
     },
@@ -518,7 +535,7 @@
       "effects": [
         {
           "kind": "add_label",
-          "label": "needs-review"
+          "label": "needs-reviewer"
         },
         {
           "kind": "request_reviewers",
@@ -537,7 +554,7 @@
       "effects": [
         {
           "kind": "add_label",
-          "label": "needs-review"
+          "label": "needs-reviewer"
         },
         {
           "kind": "request_reviewers",
@@ -560,12 +577,12 @@
         },
         {
           "kind": "add_label",
-          "label": "needs-testing"
+          "label": "needs-tester"
         }
       ]
     },
     {
-      "id": "escalate_pr",
+      "id": "request_architect_input",
       "artifact": "implementation_pr",
       "roles": [
         "engineer",
@@ -575,7 +592,7 @@
       "effects": [
         {
           "kind": "add_label",
-          "label": "escalated"
+          "label": "needs-architect"
         }
       ]
     },
@@ -588,7 +605,7 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "needs-review"
+          "label": "needs-reviewer"
         },
         {
           "kind": "submit_review",
@@ -605,7 +622,7 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "needs-review"
+          "label": "needs-reviewer"
         },
         {
           "kind": "submit_review",
@@ -622,7 +639,7 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "needs-testing"
+          "label": "needs-tester"
         },
         {
           "kind": "add_label",
@@ -639,7 +656,7 @@
       "effects": [
         {
           "kind": "remove_label",
-          "label": "needs-testing"
+          "label": "needs-tester"
         },
         {
           "kind": "add_label",
@@ -648,10 +665,40 @@
       ]
     },
     {
-      "id": "clear_human_flag",
-      "artifact": "implementation_pr",
+      "id": "clear_owner_flag",
+      "artifact": "design",
       "roles": [
         "owner"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-owner"
+        }
+      ]
+    },
+    {
+      "id": "request_human_input",
+      "artifact": "design",
+      "roles": [
+        "owner"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-owner"
+        },
+        {
+          "kind": "add_label",
+          "label": "needs-human"
+        }
+      ]
+    },
+    {
+      "id": "clear_human_flag",
+      "artifact": "design",
+      "roles": [
+        "human"
       ],
       "effects": [
         {

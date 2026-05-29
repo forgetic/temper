@@ -44,8 +44,9 @@ plans today**.
   `min_depth`/`max_age`; `owner_alignment` uses the planner's pure activation
   predicate for cohorts.
 - **Multi-artifact-kind queues.** A queue can now select several artifact kinds.
-  `escalations` and `needs_human` cover issue artifact kinds and
-  `implementation_pr` without duplicate per-kind queues.
+  `needs_architect` covers issue artifact kinds and `implementation_pr` without
+  duplicate per-kind queues; `needs_owner`/`needs_human` cover the design-issue
+  feedback handoff.
 - **Disjunctive queue label-sets and native queue conditions.** Queue `labels`
   remain an AND filter and `any_of` adds OR branches. The review return queue
   now keys off native `review_changes_requested`; testing failure remains a

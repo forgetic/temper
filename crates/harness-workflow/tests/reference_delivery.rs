@@ -1,10 +1,4 @@
 //! Confirmation tests for the reference delivery workflow fixture.
-//!
-//! These prove the label-state-machine core of the reference delivery design
-//! (see `docs/explanation/reference-workflow.md`) validates, compiles, and
-//! plans through the current `harness-workflow` primitives. Remaining execution
-//! and modeling gaps are recorded in `docs/explanation/reference-workflow-gaps.md`,
-//! not here.
 
 use chrono::{DateTime, Duration, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
@@ -15,7 +9,6 @@ use harness_workflow::{
     TransitionId, ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
 };
 
-/// The checked-in reference delivery workflow fixture.
 const FIXTURE: &str = include_str!("../fixtures/reference-delivery.json");
 
 fn ts() -> DateTime<Utc> {
@@ -116,13 +109,11 @@ fn classify_pr_updated_at(
 fn reference_fixture_validates_with_expected_shape() {
     let workflow = fixture_workflow();
     assert_eq!(workflow.name(), "reference-delivery");
-    assert_eq!(workflow.roles().len(), 5);
+    assert_eq!(workflow.roles().len(), 6);
     assert_eq!(workflow.artifact_kinds().len(), 5);
-    // The `ci` and `merge` dimensions are retired: CI is a native gate signal
-    // and merge eligibility is derived, not stored (ADR 0014).
-    assert_eq!(workflow.state_dimensions().len(), 5);
-    assert_eq!(workflow.queues().len(), 10);
-    assert_eq!(workflow.transitions().len(), 20);
+    assert_eq!(workflow.state_dimensions().len(), 4);
+    assert_eq!(workflow.queues().len(), 11);
+    assert_eq!(workflow.transitions().len(), 22);
     assert_eq!(workflow.gates().len(), 4);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow
@@ -141,8 +132,6 @@ fn reference_fixture_validates_with_expected_shape() {
         .iter()
         .find(|gate| gate.id.as_str() == "ci_gate")
         .expect("ci_gate is declared");
-    // The CI gate now reads native CI conclusions, not an adapter-projected
-    // label/state.
     assert_eq!(ci_gate.condition.as_ref(), Some(&GateCondition::CiPassed));
 
     let owner_alignment = workflow
@@ -162,18 +151,15 @@ fn reference_fixture_validates_with_expected_shape() {
         return_queue.condition.as_ref(),
         Some(&GateCondition::ReviewChangesRequested)
     );
-    assert!(workflow
+    let architect_queue = workflow
         .queues()
         .iter()
-        .any(|queue| queue.id.as_str() == "pr_test_failed"));
-
-    let escalations = workflow
-        .queues()
-        .iter()
-        .find(|queue| queue.id.as_str() == "escalations")
-        .expect("escalations queue is declared");
-    assert!(escalations.artifacts.contains(&ArtifactKindId::new("code")));
-    assert!(escalations
+        .find(|queue| queue.id.as_str() == "needs_architect")
+        .expect("needs_architect queue is declared");
+    assert!(architect_queue
+        .artifacts
+        .contains(&ArtifactKindId::new("code")));
+    assert!(architect_queue
         .artifacts
         .contains(&ArtifactKindId::new("implementation_pr")));
 }
@@ -185,10 +171,16 @@ fn reference_fixture_compiles_every_role() {
     ids.sort();
     assert_eq!(
         ids,
-        vec!["architect", "engineer", "owner", "reviewer", "tester"]
+        vec![
+            "architect",
+            "engineer",
+            "human",
+            "owner",
+            "reviewer",
+            "tester"
+        ]
     );
 
-    // The retired adapter labels and the derived merge marker are gone.
     assert!(compiled.labels().get(&LabelId::new("ci-passed")).is_none());
     assert!(compiled
         .labels()
@@ -207,16 +199,6 @@ fn reference_fixture_compiles_every_role() {
     assert_eq!(owner_alignment.min_depth, Some(5));
     assert_eq!(owner_alignment.max_age, Some(Duration::days(7)));
 
-    let return_queue = compiled
-        .queues()
-        .iter()
-        .find(|queue| queue.id.as_str() == "pr_changes_requested")
-        .expect("work-return queue is compiled");
-    assert_eq!(
-        return_queue.condition,
-        Some(GateCondition::ReviewChangesRequested)
-    );
-
     let testing_failed = compiled
         .labels()
         .get(&LabelId::new("testing-failed"))
@@ -229,7 +211,6 @@ fn reference_fixture_compiles_every_role() {
 
 #[test]
 fn intake_triage_is_a_normal_queue_match() {
-    // Human-filed issues enter as `untriaged` and the architect triages them.
     let workflow = fixture_workflow();
     let planner = workflow.planner();
     let intake = classify_issue(&workflow, 1, &["untriaged"]);
@@ -417,7 +398,6 @@ fn engineer_open_pr_expresses_pr_creation() {
     assert!(plan.postconditions.is_empty());
 }
 
-/// Classifies a blocked code issue whose native links record dependencies.
 fn classify_blocked_code(
     workflow: &ValidatedWorkflow,
     number: u64,
@@ -438,8 +418,6 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
     let planner = workflow.planner();
     let blocked = classify_blocked_code(&workflow, 50, &[51]);
 
-    // Prerequisite #51 has not landed: no mechanical unblock is available, and
-    // the architect-driven `mark_code_ready` is gated shut.
     assert!(planner
         .dependency_unblocks(&blocked, &DependencyStatus::default())
         .is_empty());
@@ -457,8 +435,6 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
             gate: GateId::new("dependency_gate"),
         }));
 
-    // Once #51 lands, the gate opens: one mechanical unblock clears the blocked
-    // label and marks the issue ready.
     let landed = DependencyStatus::landed([ItemNumber::new(51)]);
     let unblocks = planner.dependency_unblocks(&blocked, &landed);
     assert_eq!(unblocks.len(), 1);
@@ -471,7 +447,6 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
         ]
     );
 
-    // The same dependency status lets the architect plan the flip directly.
     let signals = GateSignals::new().with_dependencies(landed.clone());
     let plan = planner
         .plan_transition_with(
@@ -490,14 +465,12 @@ fn dependency_gate_requires_every_prerequisite() {
     let planner = workflow.planner();
     let blocked = classify_blocked_code(&workflow, 60, &[61, 62]);
 
-    // Only one of two prerequisites landed: the gate stays shut.
     let partial = DependencyStatus::landed([ItemNumber::new(61)]);
     assert!(
         planner.dependency_unblocks(&blocked, &partial).is_empty(),
         "every prerequisite must land before the unblock"
     );
 
-    // Both landed: the mechanical unblock becomes available.
     let both = DependencyStatus::landed([ItemNumber::new(61), ItemNumber::new(62)]);
     assert_eq!(planner.dependency_unblocks(&blocked, &both).len(), 1);
 }
@@ -507,8 +480,6 @@ fn three_gate_merge_requires_review_testing_and_ci() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    // Native review and testing passed, but the runtime CI signal has not
-    // reported passed: the derived merge gate stays shut.
     let ready = classify_pr(&workflow, 10, &["implementation", "testing-passed"]);
     let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
     let blocked = planner
@@ -526,8 +497,6 @@ fn three_gate_merge_requires_review_testing_and_ci() {
             gate: GateId::new("ci_gate"),
         }));
 
-    // Once the runtime supplies a passed CI signal, all three gates are met and
-    // the merge plans: it merges and projects the post-merge re-run guard.
     let signals = GateSignals::new()
         .with_ci(CiStatus::passed())
         .with_review(ReviewStatus::new(true, false));
@@ -567,23 +536,63 @@ fn failed_gates_route_back_to_engineer_queues() {
 }
 
 #[test]
-fn escalation_and_human_queues_cover_issues_and_pull_requests() {
+fn attention_queues_route_architect_owner_and_human_work() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
+    let architect = RoleId::new("architect");
+    let owner = RoleId::new("owner");
+    let human = RoleId::new("human");
+    let needs_architect = QueueId::new("needs_architect");
+    let needs_owner_queue = QueueId::new("needs_owner");
+    let needs_human_queue = QueueId::new("needs_human");
+    let needs_owner = LabelId::new("needs-owner");
+    let needs_human = LabelId::new("needs-human");
 
-    let escalated_issue = classify_issue(&workflow, 30, &["code", "escalated"]);
-    let escalated_pr = classify_pr(&workflow, 31, &["implementation", "escalated"]);
-    let escalations = QueueId::new("escalations");
+    let architect_issue = classify_issue(&workflow, 30, &["code", "needs-architect"]);
+    let architect_pr = classify_pr(&workflow, 31, &["implementation", "needs-architect"]);
     assert!(planner
-        .matching_queues(&escalated_issue)
-        .contains(&escalations));
+        .matching_queues(&architect_issue)
+        .contains(&needs_architect));
     assert!(planner
-        .matching_queues(&escalated_pr)
-        .contains(&escalations));
+        .matching_queues(&architect_pr)
+        .contains(&needs_architect));
 
-    let human_issue = classify_issue(&workflow, 32, &["code", "needs-human"]);
-    let human_pr = classify_pr(&workflow, 33, &["implementation", "needs-human"]);
-    let needs_human = QueueId::new("needs_human");
-    assert!(planner.matching_queues(&human_issue).contains(&needs_human));
-    assert!(planner.matching_queues(&human_pr).contains(&needs_human));
+    let design = classify_issue(&workflow, 32, &["design", "draft"]);
+    let request_owner = TransitionId::new("request_owner_input");
+    let request = planner
+        .plan_transition(&request_owner, &architect, &design)
+        .unwrap();
+    assert_eq!(
+        request.effects,
+        vec![WorkflowEffect::AddLabel(needs_owner.clone())]
+    );
+
+    let owner_design = classify_issue(&workflow, 33, &["design", "needs-owner"]);
+    assert!(planner
+        .matching_queues(&owner_design)
+        .contains(&needs_owner_queue));
+    let request_human = TransitionId::new("request_human_input");
+    let handoff = planner
+        .plan_transition(&request_human, &owner, &owner_design)
+        .unwrap();
+    assert_eq!(
+        handoff.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(needs_owner),
+            WorkflowEffect::AddLabel(needs_human.clone()),
+        ]
+    );
+
+    let human_design = classify_issue(&workflow, 34, &["design", "needs-human"]);
+    assert!(planner
+        .matching_queues(&human_design)
+        .contains(&needs_human_queue));
+    let clear_human = TransitionId::new("clear_human_flag");
+    let clear = planner
+        .plan_transition(&clear_human, &human, &human_design)
+        .unwrap();
+    assert_eq!(
+        clear.effects,
+        vec![WorkflowEffect::RemoveLabel(needs_human)]
+    );
 }

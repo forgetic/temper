@@ -64,7 +64,7 @@ Status legend: ☐ pending · ☑ done.
 - ☑ **14 — Queue matching extensions.** Multi-artifact-kind queues and
   disjunctive (OR) label-sets, referencing ADR 0012. Collapsed the
   fixture's split `pr_changes_requested`/`pr_testing_failed` workaround and bound
-  `escalations`/`needs_human` to both issue and PR artifact kinds.
+  `needs_architect` to both issue and PR artifact kinds.
 
 ## Adjacent pre-existing limitations (not in this backlog)
 

@@ -17,9 +17,9 @@ This separation keeps provider details out of workflow policy and keeps agent pr
 
 An artifact is a logical work item mapped to a Forge issue or pull request. Examples are `epic`, `design`, `code`, and `implementation_pr`.
 
-A state dimension is a named group of states, often projected as labels. For example, a code issue lifecycle may contain `ready`, `blocked`, and `in-progress`. Review outcomes are native Forge state instead of workflow-owned labels; a workflow can still use a `needs-review` routing label while gates read native review decisions.
+A state dimension is a named group of states, often projected as labels. For example, a code issue lifecycle may contain `ready`, `blocked`, and `in-progress`. Review outcomes are native Forge state instead of workflow-owned labels; a workflow can still use a `needs-reviewer` routing label while gates read native review decisions.
 
-A queue is a query over artifacts, such as `code + ready` issues or PRs labeled `needs-testing`.
+A queue is a query over artifacts, such as `code + ready` issues or PRs labeled `needs-tester`.
 
 A transition is an authorized state change with preconditions and effects. Generated tools should map to transitions instead of exposing generic label mutation.
 
@@ -27,7 +27,7 @@ A gate is a condition that unlocks a transition. For example, a PR may be mergea
 
 A relation links artifacts, such as feature request to epic, epic to design issue, design issue to code issue, and code issue to PR.
 
-## Example five-role workflow
+## Example delivery workflow
 
 A worked, cleaned-up version of this example — the target the spec, planner, and
 executor should express and run — is in
@@ -35,7 +35,7 @@ executor should express and run — is in
 
 A human files a high-level request. The architect turns it into one or more epics and design issues. If long-term direction is unclear, the architect labels the design issue `needs-owner`.
 
-The owner comments on issues requiring owner input and periodically reviews landed PRs for alignment with project values.
+The owner comments on issues requiring owner input and periodically reviews landed PRs for alignment with project values. If owner judgment is insufficient, the owner switches the design issue to `needs-human` for the explicit human role.
 
 Once a design is ready, the architect creates code issues. Some are labeled `ready`; others are `blocked` until dependencies land.
 
