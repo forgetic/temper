@@ -49,9 +49,10 @@ made operational.
 Because truth lives only in the Forge, the runner is effectively stateless: it
 can be killed and restarted, or run as several instances, and the
 level-triggered poll reconstructs everything. Leases are durable (they live in
-metadata blocks), and the reconciler re-derives partial transitions from fresh
-Forge state, so a durable command journal is a fast-recovery optimization, not a
-correctness requirement.
+metadata blocks). The command journal is runner-owned fast-recovery state: in a
+single process it can live with the worker set, while in a multi-process layout
+it is per-process and may be reconstructed from Forge state rather than treated
+as shared durable truth.
 
 ## Where each piece runs
 
@@ -96,9 +97,10 @@ What exists today is the whole decision core (spec → validate → compile →
 classify → plan → execute → reconcile → apply, with leases, journaling, and
 proven safety properties), runnable against the reference backends, plus the
 initial `harness-runner` worker-plane primitives: read-only scans that turn fresh
-Forge state into active-queue work items, `Agent`/`RoleTools`, and tickable
-`Worker`/`RoleWorker` units. The remaining path to a live deployment, in
-dependency order:
+Forge state into active-queue work items, `Agent`/`RoleTools`, tickable
+`Worker`/`RoleWorker` units for judgment work, and `MechanicalWorker` for the
+controller-plane reconcile → apply loop. The remaining path to a live
+deployment, in dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
    API, including the `Version`/`expected_version` CAS primitive
@@ -106,10 +108,9 @@ dependency order:
    `list_ci_jobs` over Forgejo Actions, keeping observable-contract parity with
    the reference backends ([ADR 0008](../adr/0008-in-memory-backend-and-backend-naming.md)).
 2. **The runner/controller** — partially started in `harness-runner`: `scan`
-   now reconstructs active judgment work and `RoleWorker` can tick one role, but
-   the trigger loop and mechanical-vs-judgment dispatch still need to be built.
-   Nothing composes all workers in a loop today; tests drive one worker or the
-   workflow `Executor`/`Reconciler` directly.
+   reconstructs active judgment work, `RoleWorker` can tick one role, and
+   `MechanicalWorker` can tick the controller's reconcile → apply loop. The
+   trigger loop and composition across all workers still need to be built.
 3. **Agent-provider adapter** — wire a compiled `PromptManifest` to a model and
    map model tool calls onto the production `RoleTools` facade.
 4. **Webhook adapter + `ChangeHint`** — the ADR 0009 follow-up: Forgejo-specific

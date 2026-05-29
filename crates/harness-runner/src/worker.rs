@@ -3,6 +3,10 @@
 //! A [`Worker`] is the unit a driver ticks. [`RoleWorker`] is the per-role
 //! production worker: every tick scans fresh Forge state for that role and lets
 //! the role's [`Agent`] service each active [`WorkItem`] through [`RoleTools`].
+//! [`MechanicalWorker`] is the controller-plane worker: every tick runs the
+//! workflow reconciler and recovery applier so expired leases, interrupted
+//! commands, dependency unblocks, and stale journal entries converge without
+//! spawning an agent.
 
 use crate::agent::{Agent, AgentError, RoleTools};
 use crate::scan::{scan_role, ScanError};
@@ -10,10 +14,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use harness_forge::{Forge, ForgeError, RepositoryId};
 use harness_workflow::{
-    CompiledWorkflow, ExecutionContext, ExecutionError, RoleId, ValidatedWorkflow,
+    Applier, ApplyError, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext, ExecutionError,
+    Executor, LeaseManager, LeasePolicy, ReconcileError, RecoveryPolicy, RoleId, ValidatedWorkflow,
 };
 use std::error::Error;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Progress made by one worker tick.
@@ -21,7 +27,7 @@ use std::sync::Arc;
 pub struct Progress {
     /// Whether the tick changed workflow state.
     pub changed: bool,
-    /// Number of serviced work items that reported a workflow-state change.
+    /// Number of workflow-state changes this tick carried through.
     pub actions: u32,
 }
 
@@ -49,6 +55,10 @@ pub enum WorkerError {
     Execution(ExecutionError),
     /// A direct Forge operation failed outside an agent boundary.
     Forge(ForgeError),
+    /// Reconciliation could not load Forge or journal state.
+    Reconcile(ReconcileError),
+    /// Applying a reconciliation report failed.
+    Apply(ApplyError),
     /// The worker's agent failed while servicing work.
     Agent(AgentError),
 }
@@ -61,6 +71,8 @@ impl fmt::Display for WorkerError {
             WorkerError::Forge(error) => {
                 write!(formatter, "worker forge operation failed: {error}")
             }
+            WorkerError::Reconcile(error) => write!(formatter, "worker reconcile failed: {error}"),
+            WorkerError::Apply(error) => write!(formatter, "worker recovery apply failed: {error}"),
             WorkerError::Agent(error) => write!(formatter, "worker agent failed: {error}"),
         }
     }
@@ -72,6 +84,8 @@ impl Error for WorkerError {
             WorkerError::Scan(error) => Some(error),
             WorkerError::Execution(error) => Some(error),
             WorkerError::Forge(error) => Some(error),
+            WorkerError::Reconcile(error) => Some(error),
+            WorkerError::Apply(error) => Some(error),
             WorkerError::Agent(error) => Some(error),
         }
     }
@@ -92,6 +106,18 @@ impl From<ExecutionError> for WorkerError {
 impl From<ForgeError> for WorkerError {
     fn from(error: ForgeError) -> Self {
         Self::Forge(error)
+    }
+}
+
+impl From<ReconcileError> for WorkerError {
+    fn from(error: ReconcileError) -> Self {
+        Self::Reconcile(error)
+    }
+}
+
+impl From<ApplyError> for WorkerError {
+    fn from(error: ApplyError) -> Self {
+        Self::Apply(error)
     }
 }
 
@@ -177,4 +203,135 @@ impl<F: Forge + ?Sized> Worker for RoleWorker<'_, F> {
     fn name(&self) -> &str {
         &self.name
     }
+}
+
+/// Controller-plane worker that runs mechanical recovery once per tick.
+///
+/// The worker owns the reusable runtime components for the process — an
+/// [`Executor`] and [`LeaseManager`] bound to `forge` — and borrows the process's
+/// [`CommandJournal`](harness_workflow::CommandJournal). `Escalate` and
+/// `Diagnose` actions are not mutations; they are counted by
+/// [`advisory_actions`](Self::advisory_actions) so operators or tests can
+/// observe them separately from workflow-state changes.
+pub struct MechanicalWorker<
+    'a,
+    F: Forge + ?Sized,
+    J: harness_workflow::CommandJournal,
+    P: RecoveryPolicy + Send + Sync = DefaultRecoveryPolicy,
+> {
+    name: String,
+    workflow: &'a ValidatedWorkflow,
+    forge: &'a F,
+    repo: &'a RepositoryId,
+    executor: Executor<'a, F>,
+    lease_manager: LeaseManager<'a, F>,
+    journal: &'a J,
+    policy: P,
+    advisory_actions: AtomicU64,
+}
+
+impl<'a, F, J> MechanicalWorker<'a, F, J, DefaultRecoveryPolicy>
+where
+    F: Forge + ?Sized,
+    J: harness_workflow::CommandJournal,
+{
+    /// Creates a mechanical worker using [`DefaultRecoveryPolicy`].
+    pub fn new(
+        workflow: &'a ValidatedWorkflow,
+        forge: &'a F,
+        repo: &'a RepositoryId,
+        journal: &'a J,
+        lease_policy: LeasePolicy,
+    ) -> Self {
+        Self::with_policy(
+            workflow,
+            forge,
+            repo,
+            journal,
+            lease_policy,
+            DefaultRecoveryPolicy,
+        )
+    }
+}
+
+impl<'a, F, J, P> MechanicalWorker<'a, F, J, P>
+where
+    F: Forge + ?Sized,
+    J: harness_workflow::CommandJournal,
+    P: RecoveryPolicy + Send + Sync,
+{
+    /// Creates a mechanical worker with an injectable recovery policy.
+    pub fn with_policy(
+        workflow: &'a ValidatedWorkflow,
+        forge: &'a F,
+        repo: &'a RepositoryId,
+        journal: &'a J,
+        lease_policy: LeasePolicy,
+        policy: P,
+    ) -> Self {
+        Self {
+            name: "mechanical".to_string(),
+            workflow,
+            forge,
+            repo,
+            executor: Executor::new(workflow, forge),
+            lease_manager: LeaseManager::new(forge, lease_policy),
+            journal,
+            policy,
+            advisory_actions: AtomicU64::new(0),
+        }
+    }
+
+    /// Number of advisory recovery actions observed across ticks.
+    pub fn advisory_actions(&self) -> u64 {
+        self.advisory_actions.load(Ordering::Relaxed)
+    }
+
+    /// Command journal this worker reconciles and updates.
+    pub fn journal(&self) -> &J {
+        self.journal
+    }
+}
+
+#[async_trait]
+impl<F, J, P> Worker for MechanicalWorker<'_, F, J, P>
+where
+    F: Forge + ?Sized,
+    J: harness_workflow::CommandJournal,
+    P: RecoveryPolicy + Send + Sync,
+{
+    async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+        let reconciler = self.workflow.reconciler(&self.policy);
+        let report = reconciler
+            .reconcile(self.forge, self.repo, self.journal, now)
+            .await?;
+        if report.is_clean() {
+            return Ok(Progress::unchanged());
+        }
+
+        let outcome = Applier::new(&self.executor, &self.lease_manager, self.journal)
+            .apply_report(self.repo, &report, now)
+            .await?;
+        if !outcome.advisory.is_empty() {
+            self.advisory_actions
+                .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
+        }
+
+        Ok(Progress {
+            changed: !outcome.applied.is_empty(),
+            actions: saturating_u32(outcome.applied.len()),
+        })
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+fn saturating_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }

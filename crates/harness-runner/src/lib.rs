@@ -22,8 +22,16 @@
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
 //!   agents mutate workflow state only by running authorized transitions or the
 //!   idempotent pull-request creation seam through role-scoped tools.
-//! - [`Worker`] and [`RoleWorker`], the tickable per-role unit that re-scans on
-//!   each tick and delegates behavior to an agent.
+//! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
+//!   judgment queues and delegate to agents, while the mechanical worker runs
+//!   reconcile → apply once per tick without spawning agents.
+//!
+//! The runner owns recovery coordination state. In a single-process composition
+//! the command journal value and lease manager live with the worker set. In a
+//! multi-process composition the journal is per-process fast-recovery state,
+//! while leases remain durable in Forge metadata; a mechanical process can
+//! reconstruct from Forge state, so correctness does not depend on an in-memory
+//! journal surviving a restart.
 
 pub mod agent;
 pub mod scan;
@@ -31,4 +39,4 @@ pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use scan::{scan, scan_role, ScanError, WorkItem};
-pub use worker::{Progress, RoleWorker, Worker, WorkerError};
+pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
