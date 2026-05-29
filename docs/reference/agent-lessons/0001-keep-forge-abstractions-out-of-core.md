@@ -1,4 +1,4 @@
-# Lesson 0001: Keep Forge abstractions out of `harness-core`
+# Lesson 0001: Keep Forge abstractions out of the workflow crate
 
 ## Tags
 
@@ -14,13 +14,14 @@ The crate name `core` was treated as a general home for foundational abstraction
 
 ## Steering for future agents
 
-Put provider-neutral Forge types and traits in `harness-forge`. Backend crates such as `harness-fs` should depend on `harness-forge`, not `harness-core`.
+Put provider-neutral Forge types and traits in `harness-forge`. Backend crates such as `harness-fs` should depend on `harness-forge`, not the workflow crate.
 
-Only add dependencies from `harness-core` to `harness-forge` when implementing actual workflow/orchestration logic that needs Forge operations.
+Only add dependencies from `harness-workflow` to `harness-forge` when implementing actual workflow/orchestration logic that needs Forge operations. The original placeholder crate was named `harness-core`; ADR 0007 plans the rename to `harness-workflow`.
 
 ## Where this is now documented
 
 - `README.md`
 - `AGENTS.md`
 - `docs/adr/0003-separate-forge-and-core-crates.md`
+- `docs/adr/0007-workflow-layer-and-agent-compilation.md`
 - `docs/reference/forge-interface.md`

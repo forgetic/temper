@@ -12,7 +12,7 @@ Harness workflows should run against Forgejo, GitHub, local files, and future Fo
 
 Define the collaboration contract in `harness-forge` as a provider-neutral async Rust trait named `Forge`. Concrete backends implement this trait and translate provider-specific behavior into portable domain types and error categories.
 
-Reserve `harness-core` for workflow and orchestration logic built on top of Forge abstractions.
+Reserve a separate workflow crate for workflow and orchestration logic built on top of Forge abstractions. ADR 0007 names that crate `harness-workflow`.
 
 The first concrete backend is a filesystem backend for deterministic local development and tests.
 

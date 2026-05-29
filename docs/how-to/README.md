@@ -7,6 +7,7 @@ Current guides:
 - [Iterate quickly during local development](fast-local-iteration.md)
 - [End a development session cleanly](end-a-development-session.md)
 - [Record an agent lesson](record-agent-lesson.md)
+- [Implement the workflow layer in phases](implement-workflow-layer-in-phases.md)
 
 Planned guides:
 

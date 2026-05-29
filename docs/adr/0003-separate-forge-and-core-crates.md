@@ -1,4 +1,4 @@
-# ADR 0003: Separate Forge abstractions from workflow core
+# ADR 0003: Separate Forge abstractions from the workflow crate
 
 ## Status
 
@@ -12,8 +12,8 @@ Harness needs both provider-neutral Forge abstractions and higher-level workflow
 
 Place Forge domain types and the backend interface in `harness-forge`.
 
-Reserve `harness-core` for workflow and orchestration logic that will be defined later. `harness-core` may depend on `harness-forge` when workflow logic needs Forge operations, but `harness-forge` must not depend on `harness-core` or concrete backends.
+Reserve a separate workflow crate for workflow and orchestration logic that will be defined later. The placeholder was originally named `harness-core`; ADR 0007 renames this planned layer to `harness-workflow` before functionality is added. `harness-workflow` may depend on `harness-forge` when workflow logic needs Forge operations, but `harness-forge` must not depend on `harness-workflow` or concrete backends.
 
 ## Consequences
 
-Backend implementations such as `harness-fs` depend on `harness-forge`, not `harness-core`. Workflow code can evolve independently from the provider abstraction.
+Backend implementations such as `harness-fs` depend on `harness-forge`, not the workflow crate. Workflow code can evolve independently from the provider abstraction.

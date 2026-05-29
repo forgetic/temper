@@ -14,11 +14,11 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 ## Current repository state
 
 - `harness-forge` defines the backend-agnostic Forge domain model and async interface.
-- `harness-core` is reserved for workflow and orchestration logic to be defined later.
+- `harness-core` is a minimal placeholder; ADR 0007 plans to rename it to `harness-workflow` before adding workflow/orchestration logic.
 - `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
-- The next likely work is building workflow/orchestration logic in `harness-core` or adding another concrete Forge backend, refining the interface only as backend constraints appear.
+- The next likely work is implementing `harness-workflow` in phases, starting with the crate rename, or adding another concrete Forge backend.
 
 ## Ground rules
 
@@ -49,7 +49,7 @@ Do not mix tutorial prose into reference pages. Do not hide contracts in explana
 ## Rust conventions
 
 - Keep `harness-forge` free of concrete backend dependencies.
-- Keep `harness-core` focused on workflow and orchestration logic.
+- Rename `harness-core` to `harness-workflow` before adding workflow functionality; keep that crate focused on workflow and orchestration logic.
 - Use typed identifiers instead of raw strings in public APIs.
 - Prefer explicit state enums over stringly-typed statuses.
 - Keep async boundaries at the backend interface; concrete backends may use sync internals if appropriate.

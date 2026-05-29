@@ -29,5 +29,6 @@ Use `template.md`. Keep each entry short and specific.
 
 | ID | Title | Tags |
 | --- | --- | --- |
-| [0001](0001-keep-forge-abstractions-out-of-core.md) | Keep Forge abstractions out of `harness-core` | architecture, crates, forge |
+| [0001](0001-keep-forge-abstractions-out-of-core.md) | Keep Forge abstractions out of the workflow crate | architecture, crates, forge |
 | [0002](0002-keep-source-files-under-600-lines.md) | Keep source files under 600 lines | workflow, rust, maintainability |
+| [0003](0003-use-harness-workflow-for-workflow-layer.md) | Use `harness-workflow` for the workflow layer | architecture, crates, workflow |
