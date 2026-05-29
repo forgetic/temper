@@ -93,17 +93,20 @@ state* only through generated transition tools. See the runtime guarantees in
 
 What exists today is the whole decision core (spec → validate → compile →
 classify → plan → execute → reconcile → apply, with leases, journaling, and
-proven safety properties), runnable against the reference backends. The
-remaining path to a live deployment, in dependency order:
+proven safety properties), runnable against the reference backends, plus the
+first `harness-runner` primitive: a read-only scan that turns fresh Forge state
+into active-queue work items for subscriber roles. The remaining path to a live
+deployment, in dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
    API, including the `Version`/`expected_version` CAS primitive
    ([ADR 0013](../adr/0013-portable-optimistic-concurrency.md)) and
    `list_ci_jobs` over Forgejo Actions, keeping observable-contract parity with
    the reference backends ([ADR 0008](../adr/0008-in-memory-backend-and-backend-naming.md)).
-2. **The runner/controller** — net-new: the trigger loop plus the
-   mechanical-vs-judgment dispatch above. Nothing loops today; tests drive
-   `Executor`/`Reconciler` directly.
+2. **The runner/controller** — partially started in `harness-runner`: `scan`
+   now reconstructs active judgment work, but the trigger loop, workers, and
+   mechanical-vs-judgment dispatch still need to be built. Nothing loops today;
+   tests drive `Executor`/`Reconciler` directly.
 3. **Agent-provider + tool boundary** — net-new: wire a compiled
    `PromptManifest` to a model and expose that role's `ToolManifest` as the only
    state-mutating tools.

@@ -1,9 +1,24 @@
 use super::{ExecutionError, Executor, Loaded};
+use crate::classify::ArtifactSource;
 use crate::dependency_state;
 use crate::plan::{CiStatus, GateSignals, ReviewStatus};
 use harness_forge::{CiJobQuery, Forge, PullRequestReviewStatus, RepositoryId};
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
+    /// Reads runtime gate signals for a target from fresh Forge state.
+    ///
+    /// Loads and classifies the artifact, then derives the same dependency, CI,
+    /// and review signal bundle that `execute` and `plan` use before planning.
+    /// It performs no mutation.
+    pub async fn read_gate_signals(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+    ) -> Result<GateSignals, ExecutionError> {
+        let loaded = self.load(repo_id, target).await?;
+        self.gate_signals(repo_id, &loaded).await
+    }
+
     /// Reads runtime gate signals for the loaded artifact from fresh Forge state.
     pub(super) async fn gate_signals(
         &self,

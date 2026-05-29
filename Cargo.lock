@@ -129,6 +129,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-runner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "harness-forge",
+ "harness-forge-memory",
+ "harness-workflow",
+ "serde_json",
+]
+
+[[package]]
 name = "harness-workflow"
 version = "0.1.0"
 dependencies = [
