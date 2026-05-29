@@ -1,8 +1,8 @@
 //! Dependency-gate inputs and outputs for the planner.
 //!
 //! `dependency_gate` evaluation needs to know which prerequisites have landed.
-//! That signal is supplied by the runtime, so it lives in a small data type
-//! ([`DependencyStatus`]) rather than being derived inside the pure planner.
+//! Runtime layers derive that signal from Forge state, so it lives in a small
+//! data type ([`DependencyStatus`]) rather than being derived inside the pure planner.
 //! [`MechanicalPlan`] is the actor-less plan the reconciler applies to unblock
 //! dependency-gated work.
 
@@ -15,11 +15,10 @@ use std::collections::HashSet;
 /// Runtime-supplied resolution status of dependency relation targets.
 ///
 /// `dependency_gate` asks whether an artifact's prerequisite work has landed.
-/// Like the CI signal behind `ci_gate`, "has it landed" is decided by the
-/// runtime/adapter — never derived inside the pure planner — and supplied here
-/// as the set of item numbers whose work has landed (for example, their
-/// produced pull request merged). The planner stays pure: it only checks set
-/// membership against the artifact's typed `dependency` relations.
+/// Like the CI signal behind `ci_gate`, "has it landed" is decided by runtime
+/// Forge reads — never inside the pure planner — and supplied here as the set of
+/// item numbers whose work has landed. The planner stays pure: it only checks
+/// set membership against the artifact's typed `dependency` relations.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DependencyStatus {
     landed: HashSet<ItemNumber>,

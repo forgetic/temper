@@ -42,7 +42,7 @@
     {"id": "design-ready", "description": "design is ready to break into code issues"},
     {"id": "code-ready", "description": "code issue is ready to claim"},
     {"id": "in-progress", "description": "code issue is being implemented"},
-    {"id": "blocked-on-dependency", "description": "code issue is blocked on a prerequisite"},
+    {"id": "blocked-on-dependency", "description": "code issue is blocked on a native dependency link"},
     {"id": "needs-review", "description": "pull request awaits review"},
     {"id": "review-approved", "description": "review approved the pull request"},
     {"id": "review-changes-requested", "description": "review requested changes"},

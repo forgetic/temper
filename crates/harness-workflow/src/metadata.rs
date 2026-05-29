@@ -1,9 +1,9 @@
 //! Workflow metadata blocks embedded in Forge artifact bodies.
 //!
 //! Labels are the public Forge projection of workflow state, but some workflow
-//! information has no portable Forge field: the artifact's workflow kind, typed
-//! relations to other artifacts, idempotency correlation keys, and claim
-//! leases. The workflow layer stores that information in a machine-readable
+//! information has no portable Forge field: the artifact's workflow kind,
+//! parent/produced-PR links, fallback dependency links, idempotency correlation
+//! keys, and claim leases. The workflow layer stores that information in a machine-readable
 //! metadata block embedded in an issue or pull-request body.
 //!
 //! # Format choice
@@ -33,9 +33,9 @@
 //! The block ends at the first `-->`, so metadata values must not contain that
 //! sequence. The current fields cannot, so this limitation is acceptable.
 //!
-//! Relations ([`WorkflowMetadata::parents`] and
+//! Metadata relations ([`WorkflowMetadata::parents`] and fallback
 //! [`WorkflowMetadata::dependencies`]) are stored as Forge item numbers in the
-//! same repository, matching the shared issue/pull-request number namespace.
+//! same repository.
 
 use crate::ids::{ArtifactKindId, RoleId};
 use chrono::{DateTime, Utc};
@@ -63,7 +63,7 @@ pub struct WorkflowMetadata {
     /// Parent artifacts, as Forge item numbers in the same repository.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parents: Vec<ItemNumber>,
-    /// Dependency artifacts that must land first, as Forge item numbers.
+    /// Fallback dependency artifacts that must land first, as Forge item numbers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<ItemNumber>,
     /// Idempotency key used to avoid creating duplicate artifacts.

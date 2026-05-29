@@ -8,9 +8,10 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
-    compile, matches_queue, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier, GateId,
-    GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId, RawWorkflowSpec, RoleId,
-    StateDimensionId, StateId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    compile, matches_queue, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier,
+    DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId,
+    RawWorkflowSpec, RoleId, StateDimensionId, StateId, TransitionId, ValidatedWorkflow,
+    WorkflowEffect,
 };
 
 /// The checked-in five-role delivery workflow fixture.
@@ -27,6 +28,10 @@ fn fixture_workflow() -> ValidatedWorkflow {
 }
 
 fn issue(number: u64, labels: &[&str]) -> Issue {
+    issue_with_dependencies(number, labels, &[])
+}
+
+fn issue_with_dependencies(number: u64, labels: &[&str], dependencies: &[u64]) -> Issue {
     Issue {
         id: "issue-1".into(),
         repo_id: "repo-1".into(),
@@ -37,6 +42,7 @@ fn issue(number: u64, labels: &[&str]) -> Issue {
         author_id: "user-1".into(),
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        dependencies: dependencies.iter().copied().map(ItemNumber::new).collect(),
         version: Default::default(),
         created_at: ts(),
         updated_at: ts(),
@@ -65,6 +71,7 @@ fn pull_request(number: u64, labels: &[&str]) -> PullRequest {
         base_sha: None,
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        dependencies: Vec::new(),
         merge: None,
         version: Default::default(),
         created_at: ts(),
@@ -80,6 +87,17 @@ fn classify_issue(
 ) -> ClassifiedArtifact {
     Classifier::new(workflow)
         .classify_issue(&issue(number, labels))
+        .expect("issue classifies")
+}
+
+fn classify_issue_with_dependencies(
+    workflow: &ValidatedWorkflow,
+    number: u64,
+    labels: &[&str],
+    dependencies: &[u64],
+) -> ClassifiedArtifact {
+    Classifier::new(workflow)
+        .classify_issue(&issue_with_dependencies(number, labels, dependencies))
         .expect("issue classifies")
 }
 
@@ -340,6 +358,34 @@ fn ci_gate_requires_runtime_ci_signal_before_merge_plans() {
         vec![
             WorkflowEffect::MergePullRequest,
             WorkflowEffect::AddLabel(LabelId::new("landed")),
+        ]
+    );
+}
+
+#[test]
+fn dependency_gate_uses_native_dependency_relations() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let blocked = classify_issue_with_dependencies(&workflow, 40, &["code", "blocked"], &[41]);
+
+    assert!(planner
+        .dependency_unblocks(&blocked, &DependencyStatus::default())
+        .is_empty());
+
+    let landed = DependencyStatus::landed([ItemNumber::new(41)]);
+    let plan = planner
+        .plan_transition_with(
+            &TransitionId::new("mark_code_ready"),
+            &RoleId::new("architect"),
+            &blocked,
+            &GateSignals::new().with_dependencies(landed),
+        )
+        .expect("native dependency link opens the gate once landed");
+    assert_eq!(
+        plan.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("blocked")),
+            WorkflowEffect::AddLabel(LabelId::new("ready")),
         ]
     );
 }

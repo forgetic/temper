@@ -8,15 +8,10 @@
 //!
 //! # Decide, then apply
 //!
-//! Reconciliation is split so its judgement is deterministic and testable:
-//!
-//! - [`Reconciler::scan`] is pure. Given artifact [`ArtifactSnapshot`]s, journal
-//!   [`CommandRecord`](crate::journal::CommandRecord)s, and the current time, it
-//!   produces a [`ReconcileReport`] of [`ReconcileFinding`]s paired with the
-//!   [`RecoveryAction`]s a [`RecoveryPolicy`] chose. It touches no backend.
-//! - [`Reconciler::reconcile`] is the async convenience that loads snapshots and
-//!   journal entries from a [`Forge`] and a [`CommandJournal`], then calls
-//!   `scan`.
+//! [`Reconciler::scan`] is pure and deterministic over snapshots, journal
+//! records, dependency status, and time. [`Reconciler::reconcile`] is the async
+//! convenience that loads fresh Forge state and journal entries, derives native
+//! dependency status, then calls `scan`.
 //!
 //! Applying the chosen actions is the job of
 //! [`recover::Applier`](crate::recover::Applier), which routes each action
@@ -38,13 +33,14 @@
 use crate::classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
 };
+use crate::dependency_state;
 use crate::ids::{StateDimensionId, StateId, TransitionId};
 use crate::journal::{CommandId, CommandJournal, CommandRecord, CommandState, JournalError};
 use crate::metadata::{parse_metadata_block, Lease};
 use crate::plan::{DependencyStatus, Planner, Postcondition, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
-    Forge, ForgeError, Issue, IssueQuery, PullRequest, PullRequestQuery, RepositoryId,
+    Forge, ForgeError, Issue, IssueQuery, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -62,6 +58,8 @@ pub struct ArtifactSnapshot {
     pub labels: Vec<String>,
     /// The artifact body, which may carry a workflow metadata block.
     pub body: String,
+    /// Native dependency links read from the Forge artifact record.
+    pub dependencies: Vec<ItemNumber>,
 }
 
 impl ArtifactSnapshot {
@@ -73,6 +71,7 @@ impl ArtifactSnapshot {
             },
             labels: issue.labels.clone(),
             body: issue.body.clone(),
+            dependencies: issue.dependencies.clone(),
         }
     }
 
@@ -84,6 +83,7 @@ impl ArtifactSnapshot {
             },
             labels: pull_request.labels.clone(),
             body: pull_request.body.clone(),
+            dependencies: pull_request.dependencies.clone(),
         }
     }
 }
@@ -337,7 +337,12 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
 
         for snapshot in snapshots {
             self.scan_lease(snapshot, now, &mut report);
-            match classifier.classify_snapshot(snapshot.source, &snapshot.labels, &snapshot.body) {
+            match classifier.classify_snapshot_with_dependencies(
+                snapshot.source,
+                &snapshot.labels,
+                &snapshot.body,
+                &snapshot.dependencies,
+            ) {
                 Ok(artifact) => self.scan_dependency_unblocks(&artifact, deps, &mut report),
                 Err(error) => self.scan_classification(snapshot.source, &error, &mut report),
             }
@@ -494,17 +499,13 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         }
     }
 
-    /// Loads snapshots and journal entries from a backend, then scans them.
-    ///
-    /// `deps` is supplied by the caller (the runtime/adapter that knows which
-    /// prerequisites have landed), following the same runtime-supplied signal
-    /// pattern as native CI; it is threaded straight into [`Reconciler::scan`].
+    /// Loads snapshots and journal entries from a backend, derives native
+    /// dependency status from fresh Forge state, then scans them.
     pub async fn reconcile<F, J>(
         &self,
         forge: &F,
         repo_id: &RepositoryId,
         journal: &J,
-        deps: &DependencyStatus,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<ReconcileReport, ReconcileError>
     where
@@ -524,7 +525,31 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         );
 
         let entries = journal.list().await?;
-        Ok(self.scan(&snapshots, &entries, deps, now))
+        let deps = self.dependency_status(&snapshots, &issues, &pull_requests);
+        Ok(self.scan(&snapshots, &entries, &deps, now))
+    }
+
+    fn dependency_status(
+        &self,
+        snapshots: &[ArtifactSnapshot],
+        issues: &[Issue],
+        pull_requests: &[PullRequest],
+    ) -> DependencyStatus {
+        let classifier = Classifier::new(self.workflow);
+        let artifacts = snapshots
+            .iter()
+            .filter_map(|snapshot| {
+                classifier
+                    .classify_snapshot_with_dependencies(
+                        snapshot.source,
+                        &snapshot.labels,
+                        &snapshot.body,
+                        &snapshot.dependencies,
+                    )
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        dependency_state::status_from_records(&artifacts, issues, pull_requests)
     }
 }
 

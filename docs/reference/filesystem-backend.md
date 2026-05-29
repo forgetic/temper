@@ -21,6 +21,8 @@ The current implementation supports:
 - `get_issue`
 - `get_issue_by_number`
 - `update_issue`
+- `add_issue_dependency`
+- `remove_issue_dependency`
 - `list_issue_comments`
 - `add_issue_comment`
 - `list_pull_requests`
@@ -28,6 +30,8 @@ The current implementation supports:
 - `get_pull_request`
 - `get_pull_request_by_number`
 - `update_pull_request`
+- `add_pull_request_dependency`
+- `remove_pull_request_dependency`
 - `list_pull_request_comments`
 - `add_pull_request_comment`
 - `merge_pull_request`
@@ -73,15 +77,15 @@ Repository owner/name paths are exact and case-sensitive. `create_repository` re
 
 Repository labels are stored in `repositories/<repo-id>/labels.json` as serialized Forge `Label` records. Label IDs are deterministic strings derived from the repository ID and hex-encoded label name. Label names are exact and case-sensitive.
 
-Repository issues are stored in `repositories/<repo-id>/issues.json` as serialized Forge `Issue` records. Issue numbers are repository-scoped, start at `1`, and use the next value above the highest stored issue number. Issue IDs are deterministic strings of the form `issue-<repo-id>-<16-digit-number>`. New issues use the current user as `author_id`; labels and assignees are stored as sorted, de-duplicated sets.
+Repository issues are stored in `repositories/<repo-id>/issues.json` as serialized Forge `Issue` records. Issue numbers are repository-scoped, start at `1`, and use the next value above the highest stored issue number. Issue IDs are deterministic strings of the form `issue-<repo-id>-<16-digit-number>`. New issues use the current user as `author_id`; labels, assignees, and dependency item numbers are stored as sorted, de-duplicated sets.
 
-Issue timestamps use the same logical clock as repositories. Creating or updating an issue advances `clock_tick` by one second. Closing an issue sets `closed_at` to the update timestamp; reopening clears `closed_at`. New issues start at `Version::INITIAL`, and every successful `update_issue` advances the stored `version` (see [Optimistic concurrency](#optimistic-concurrency)).
+Issue timestamps use the same logical clock as repositories. Creating, updating, or changing an issue dependency advances `clock_tick` by one second. Closing an issue sets `closed_at` to the update timestamp; reopening clears `closed_at`. New issues start at `Version::INITIAL`, and every successful `update_issue` or dependency-link change advances the stored `version` (see [Optimistic concurrency](#optimistic-concurrency)). Idempotent dependency no-ops leave the timestamp and version unchanged.
 
 Issue comments are stored in `repositories/<repo-id>/issues/<issue-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<issue-id>-<16-digit-number>`. Comment numbers are issue-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored issue record.
 
-Repository pull requests are stored in `repositories/<repo-id>/pull_requests.json` as serialized Forge `PullRequest` records. Pull-request numbers are repository-scoped within pull requests, start at `1`, and use the next value above the highest stored pull-request number. Pull-request IDs are deterministic strings of the form `pull-request-<repo-id>-<16-digit-number>`. New pull requests use the current user as `author_id`; labels and assignees are stored as sorted, de-duplicated sets. Source and target branch references are stored from the create input. `head_sha`, `base_sha`, and `merge` start as `None`.
+Repository pull requests are stored in `repositories/<repo-id>/pull_requests.json` as serialized Forge `PullRequest` records. Pull-request numbers are repository-scoped within pull requests, start at `1`, and use the next value above the highest stored pull-request number. Pull-request IDs are deterministic strings of the form `pull-request-<repo-id>-<16-digit-number>`. New pull requests use the current user as `author_id`; labels, assignees, and dependency item numbers are stored as sorted, de-duplicated sets. Source and target branch references are stored from the create input. `head_sha`, `base_sha`, and `merge` start as `None`.
 
-Pull-request timestamps use the same logical clock as repositories and issues. Creating or updating a pull request advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. New pull requests start at `Version::INITIAL`, and every successful `update_pull_request` advances the stored `version`. Merging a pull request advances `clock_tick` and the `version`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits.
+Pull-request timestamps use the same logical clock as repositories and issues. Creating, updating, or changing a pull-request dependency advances `clock_tick` by one second. Closing a pull request sets `closed_at` to the update timestamp; reopening clears `closed_at`. New pull requests start at `Version::INITIAL`, and every successful `update_pull_request` or dependency-link change advances the stored `version`. Merging a pull request advances `clock_tick` and the `version`, records a `MergeRecord`, sets state to `merged`, and sets `updated_at` and `closed_at` to the merge timestamp. Merge commit SHAs are deterministic pseudo-SHAs: the logical clock tick formatted as 40 lowercase hexadecimal digits. Idempotent dependency no-ops leave the timestamp and version unchanged.
 
 Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<pull-request-id>-<16-digit-number>`. Comment numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored pull-request record.
 
@@ -103,13 +107,13 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 `list_issues` supports `IssueQuery` filters for state, conjunctive labels, author ID, and assignee ID. Without a requested sort, issues are sorted by number ascending, then issue ID. `ItemSort` supports number, creation time, and update time with the requested direction; ties use number ascending, then issue ID.
 
-`create_issue` and `list_issues` return `ForgeError::NotFound` when the target repository is missing. `get_issue` returns `Ok(None)` when the issue is not found; `get_issue_by_number` returns `Ok(None)` when the repository or number is not found. `update_issue` returns `ForgeError::NotFound` when the issue is missing. Issue label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations.
+`create_issue` and `list_issues` return `ForgeError::NotFound` when the target repository is missing. `get_issue` returns `Ok(None)` when the issue is not found; `get_issue_by_number` returns `Ok(None)` when the repository or number is not found. `update_issue` and issue dependency updates return `ForgeError::NotFound` when the issue is missing. Adding a dependency also returns `NotFound` when no issue or pull request with the target item number exists in the source repository; removing an absent dependency is a no-op. Issue label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations.
 
 `list_issue_comments` returns comments sorted by creation time ascending, then comment ID. `list_issue_comments` and `add_issue_comment` return `ForgeError::NotFound` when the target issue is missing.
 
 `list_pull_requests` supports `PullRequestQuery` filters for state, conjunctive labels, author ID, and assignee ID. Without a requested sort, pull requests are sorted by number ascending, then pull-request ID. `ItemSort` supports number, creation time, and update time with the requested direction; ties use number ascending, then pull-request ID.
 
-`create_pull_request` and `list_pull_requests` return `ForgeError::NotFound` when the target repository is missing. `get_pull_request` returns `Ok(None)` when the pull request is not found; `get_pull_request_by_number` returns `Ok(None)` when the repository or number is not found. `update_pull_request` returns `ForgeError::NotFound` when the pull request is missing. Pull-request label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations. `UpdatePullRequest` can close and reopen pull requests, but cannot represent merges.
+`create_pull_request` and `list_pull_requests` return `ForgeError::NotFound` when the target repository is missing. `get_pull_request` returns `Ok(None)` when the pull request is not found; `get_pull_request_by_number` returns `Ok(None)` when the repository or number is not found. `update_pull_request` and pull-request dependency updates return `ForgeError::NotFound` when the pull request is missing. Adding a dependency also returns `NotFound` when no issue or pull request with the target item number exists in the source repository; removing an absent dependency is a no-op. Pull-request label updates apply `set_labels`, then removals, then additions. Assignee removals are applied before additions; both are idempotent set operations. `UpdatePullRequest` can close and reopen pull requests, but cannot represent merges.
 
 `list_pull_request_comments` returns comments sorted by creation time ascending, then comment ID. `list_pull_request_comments` and `add_pull_request_comment` return `ForgeError::NotFound` when the target pull request is missing.
 

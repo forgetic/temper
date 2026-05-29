@@ -46,18 +46,18 @@ pub struct ClassifiedArtifact {
     pub states: BTreeMap<StateDimensionId, Vec<StateId>>,
     /// Parsed workflow metadata, defaulted when the body has no block.
     pub metadata: WorkflowMetadata,
-    /// Typed relations projected from metadata through relation declarations.
+    /// Typed relations read from native links or metadata through declarations.
     pub relations: Vec<ClassifiedRelation>,
     /// Raw Forge labels present on the artifact.
     pub labels: Vec<String>,
 }
 
-/// A metadata-projected relation from one classified artifact to another item.
+/// A classified relation from one artifact to another repository item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClassifiedRelation {
     /// Relation meaning declared by the workflow.
     pub kind: RelationKind,
-    /// Current artifact kind carrying the metadata projection.
+    /// Current artifact kind carrying the relation source.
     pub source: ArtifactKindId,
     /// The linked Forge item number in the same repository.
     pub target: ItemNumber,
@@ -207,6 +207,7 @@ impl<'a> Classifier<'a> {
             },
             &issue.labels,
             &issue.body,
+            &issue.dependencies,
             Some(issue.updated_at),
         )
     }
@@ -223,6 +224,7 @@ impl<'a> Classifier<'a> {
             },
             &pull_request.labels,
             &pull_request.body,
+            &pull_request.dependencies,
             Some(pull_request.updated_at),
         )
     }
@@ -244,7 +246,22 @@ impl<'a> Classifier<'a> {
             ArtifactSource::Issue { .. } => ArtifactTarget::Issue,
             ArtifactSource::PullRequest { .. } => ArtifactTarget::PullRequest,
         };
-        self.classify(target, source, labels, body, None)
+        self.classify(target, source, labels, body, &[], None)
+    }
+
+    /// Classifies an artifact snapshot with native dependency links.
+    pub fn classify_snapshot_with_dependencies(
+        &self,
+        source: ArtifactSource,
+        labels: &[String],
+        body: &str,
+        dependencies: &[ItemNumber],
+    ) -> Result<ClassifiedArtifact, ClassificationError> {
+        let target = match source {
+            ArtifactSource::Issue { .. } => ArtifactTarget::Issue,
+            ArtifactSource::PullRequest { .. } => ArtifactTarget::PullRequest,
+        };
+        self.classify(target, source, labels, body, dependencies, None)
     }
 
     fn classify(
@@ -253,6 +270,7 @@ impl<'a> Classifier<'a> {
         source: ArtifactSource,
         labels: &[String],
         body: &str,
+        dependencies: &[ItemNumber],
         updated_at: Option<DateTime<Utc>>,
     ) -> Result<ClassifiedArtifact, ClassificationError> {
         let mut diagnostics = Vec::new();
@@ -274,7 +292,7 @@ impl<'a> Classifier<'a> {
 
         match kind {
             Some(kind) if diagnostics.is_empty() => {
-                let relations = self.resolve_relations(&kind, &metadata);
+                let relations = self.resolve_relations(&kind, &metadata, dependencies);
                 Ok(ClassifiedArtifact {
                     kind,
                     target,
@@ -382,6 +400,7 @@ impl<'a> Classifier<'a> {
         &self,
         source: &ArtifactKindId,
         metadata: &WorkflowMetadata,
+        dependencies: &[ItemNumber],
     ) -> Vec<ClassifiedRelation> {
         let mut relations = Vec::new();
         self.push_metadata_relations(
@@ -396,10 +415,15 @@ impl<'a> Classifier<'a> {
             &metadata.parents,
             &mut relations,
         );
+        let dependency_targets: &[ItemNumber] = if dependencies.is_empty() {
+            &metadata.dependencies
+        } else {
+            dependencies
+        };
         self.push_metadata_relations(
             source,
             RelationKind::Dependency,
-            &metadata.dependencies,
+            dependency_targets,
             &mut relations,
         );
         relations

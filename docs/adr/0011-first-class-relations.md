@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Accepted; superseded in part by ADR 0015 for native `dependency` links. The
+`parent` and `produced_pr` relation kinds remain metadata-projected under this
+ADR.
 
 ## Context
 
@@ -48,21 +50,24 @@ artifact's kind.
 - Workflows can declare and validate relation contracts before runtime.
 - The reference fixture can express parent, dependency, and produced-PR links
   without changing `harness-forge`.
-- Existing metadata blocks remain compatible; no provider-specific relation API
-  is added.
+- Existing metadata blocks remain compatible. ADR 0015 later promotes the
+  portable `dependency` subset to the Forge interface while preserving metadata
+  `dependencies` as a fallback.
 - `dependency_gate` landed as Phase 12b: the `dependencies_resolved` gate
-  condition evaluates the declared `dependency` relations against a
-  runtime-supplied `DependencyStatus`, and the reconciler mechanically unblocks
-  `blocked-on-dependency` work once every prerequisite lands.
+  condition evaluates the declared `dependency` relations against
+  `DependencyStatus`, and the reconciler mechanically unblocks
+  `blocked-on-dependency` work once every prerequisite lands. ADR 0015 later
+  made runtime layers derive that status from native Forge dependency links.
 
 ## Alternatives considered
 
 Keep metadata-only relations. Rejected because the spec would still have no
 validated relation contract.
 
-Add provider-level relations to `harness-forge`. Rejected because relation
-semantics are workflow policy, while Forge backends only need to preserve item
-numbers and bodies portably.
+Add provider-level relations to `harness-forge`. Rejected for this phase because
+relation semantics were workflow policy. ADR 0015 later accepts the narrower
+portable dependency-link subset; GitHub sub-issues / parent-child hierarchy stay
+out of scope because Forgejo has no native equivalent.
 
 Add a new typed metadata relation array. Deferred because `parents` and
 `dependencies` already exist in artifacts and are sufficient for Phase 12a; a

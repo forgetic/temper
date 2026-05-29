@@ -8,8 +8,8 @@ The label-state-machine core — roles, type/state labels, exclusive and
 non-exclusive dimensions, queues with activation and richer matching,
 role-authorized label transitions, transition-satisfied gates, external-signal
 gates, relation declarations, the relation-driven `dependency_gate`, non-label
-effects for assignees/comments/PR create/merge, and metadata-projected
-relations — **validates, compiles, and plans today**.
+effects for assignees/comments/PR create/merge, and native dependency links with
+metadata fallback — **validates, compiles, and plans today**.
 
 ## Resolved expression gaps
 
@@ -23,13 +23,14 @@ relations — **validates, compiles, and plans today**.
   native Forge CI jobs; the old adapter-projected `ci = passed` labels/state are
   retired.
 - **Relation primitive.** The spec declares `parent`, `dependency`, and
-  `produced_pr` relations; classifiers type metadata projections using those
-  declarations.
+  `produced_pr` relations; classifiers type native dependency links and metadata
+  projections using those declarations.
 - **Relation-driven dependency unblocking.** The `dependencies_resolved` gate
   condition powers a `dependency_gate`; `Planner::dependency_unblocks` and a
   reconciler `DependenciesResolved` finding / `Unblock` action clear
   `blocked-on-dependency` mechanically once every prerequisite has landed. The
-  runtime supplies landed status via `DependencyStatus`, like the CI signal.
+  runtime derives landed status from native Forge dependency targets (closed
+  issues or merged pull requests), like the CI signal.
 - **Applying reconciler actions.** `recover::Applier` applies a
   `ReconcileReport` through the existing runtime components: lease clears go
   through `LeaseManager::clear`, label repairs and the mechanical unblock reuse

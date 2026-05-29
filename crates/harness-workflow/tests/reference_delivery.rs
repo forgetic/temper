@@ -30,6 +30,10 @@ fn fixture_workflow() -> ValidatedWorkflow {
 }
 
 fn issue(number: u64, labels: &[&str]) -> Issue {
+    issue_with_dependencies(number, labels, &[])
+}
+
+fn issue_with_dependencies(number: u64, labels: &[&str], dependencies: &[u64]) -> Issue {
     Issue {
         id: "issue-1".into(),
         repo_id: "repo-1".into(),
@@ -40,6 +44,7 @@ fn issue(number: u64, labels: &[&str]) -> Issue {
         author_id: "user-1".into(),
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        dependencies: dependencies.iter().copied().map(ItemNumber::new).collect(),
         version: Default::default(),
         created_at: ts(),
         updated_at: ts(),
@@ -68,6 +73,7 @@ fn pull_request(number: u64, labels: &[&str]) -> PullRequest {
         base_sha: None,
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        dependencies: Vec::new(),
         merge: None,
         version: Default::default(),
         created_at: ts(),
@@ -398,22 +404,18 @@ fn engineer_open_pr_expresses_pr_creation() {
     assert!(plan.postconditions.is_empty());
 }
 
-/// Classifies a blocked code issue whose metadata records `dependencies`.
+/// Classifies a blocked code issue whose native links record dependencies.
 fn classify_blocked_code(
     workflow: &ValidatedWorkflow,
     number: u64,
     dependencies: &[u64],
 ) -> ClassifiedArtifact {
-    let body = render_metadata_block(&WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("code")),
-        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
-        ..WorkflowMetadata::default()
-    });
     Classifier::new(workflow)
-        .classify_issue(&Issue {
-            body,
-            ..issue(number, &["code", "blocked-on-dependency"])
-        })
+        .classify_issue(&issue_with_dependencies(
+            number,
+            &["code", "blocked-on-dependency"],
+            dependencies,
+        ))
         .expect("blocked code issue classifies")
 }
 

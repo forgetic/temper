@@ -143,6 +143,8 @@ pub(crate) fn validate_stored_issues(repo_id: &RepositoryId, issues: &[Issue]) -
                 issue.number
             )));
         }
+
+        validate_dependency_set("issue", issue.id.as_str(), &issue.dependencies)?;
     }
 
     Ok(())
@@ -195,6 +197,12 @@ pub(crate) fn validate_stored_pull_requests(
             )));
         }
 
+        validate_dependency_set(
+            "pull request",
+            pull_request.id.as_str(),
+            &pull_request.dependencies,
+        )?;
+
         match (pull_request.state, &pull_request.merge) {
             (PullRequestState::Merged, Some(merge)) if merge.commit_sha.trim().is_empty() => {
                 return Err(ForgeError::Backend(format!(
@@ -245,6 +253,26 @@ pub(crate) fn validate_stored_pull_request_comments(
         |comment| stored_pull_request_comment_number(pull_request_id, &comment.id),
         |number| pull_request_comment_id(pull_request_id, number),
     )
+}
+
+fn validate_dependency_set(
+    target_kind: &str,
+    target_id: &str,
+    dependencies: &[harness_forge::ItemNumber],
+) -> ForgeResult<()> {
+    for (index, dependency) in dependencies.iter().enumerate() {
+        if dependency.get() == 0 {
+            return Err(ForgeError::Backend(format!(
+                "{target_kind} {target_id} has dependency item number 0"
+            )));
+        }
+        if index > 0 && dependencies[index - 1] >= *dependency {
+            return Err(ForgeError::Backend(format!(
+                "{target_kind} {target_id} has unsorted or duplicate dependency {dependency}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_stored_comments(

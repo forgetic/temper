@@ -48,9 +48,11 @@ Issues and pull requests carry a `Version`: an opaque, monotonic optimistic-conc
 
 ## Workflow relations
 
-Relations are workflow-level links between artifact kinds, not provider-owned Forge objects. A workflow declares allowed relation kinds such as `parent`, `dependency`, and `produced_pr` between artifact kinds.
+Relations are workflow-level links between artifact kinds. A workflow declares allowed relation kinds such as `parent`, `dependency`, and `produced_pr` between artifact kinds.
 
-Concrete links are projected in artifact metadata as Forge item numbers in the repository's shared issue/PR namespace. The classifier combines those numbers with the relation declarations to produce typed relations for planning and reconciliation.
+Dependency links are now native Forge state: issues and pull requests carry the repository item numbers they depend on, and Forge operations add or remove those links idempotently. The workflow classifier combines native dependency numbers with relation declarations to produce typed `dependency` relations.
+
+`parent` and `produced_pr` remain metadata-projected because they do not share a portable provider-native representation. The metadata `dependencies` field remains a fallback for older artifacts that have no native dependency links.
 
 ## Comments
 

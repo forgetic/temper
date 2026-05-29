@@ -1,3 +1,7 @@
+use crate::dependencies::{
+    add_issue_dependency, add_pull_request_dependency, remove_issue_dependency,
+    remove_pull_request_dependency,
+};
 use crate::lists::{
     apply_assignee_update, apply_label_update, ci_job_matches_query, issue_matches_query,
     next_issue_comment_number, next_issue_number, next_pull_request_comment_number,
@@ -168,6 +172,7 @@ impl Forge for FilesystemForge {
             author_id: metadata.current_user.id.clone(),
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            dependencies: Vec::new(),
             version: Version::INITIAL,
             created_at: now,
             updated_at: now,
@@ -247,6 +252,18 @@ impl Forge for FilesystemForge {
         Ok(updated)
     }
 
+    async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
+        add_issue_dependency(self, id, target)
+    }
+
+    async fn remove_issue_dependency(
+        &self,
+        id: &IssueId,
+        target: ItemNumber,
+    ) -> ForgeResult<Issue> {
+        remove_issue_dependency(self, id, target)
+    }
+
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
         let repo_id = self
             .find_issue_repository_by_id(id)?
@@ -321,6 +338,7 @@ impl Forge for FilesystemForge {
             base_sha: None,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            dependencies: Vec::new(),
             merge: None,
             version: Version::INITIAL,
             created_at: now,
@@ -408,6 +426,22 @@ impl Forge for FilesystemForge {
         self.write_metadata(&metadata)?;
 
         Ok(updated)
+    }
+
+    async fn add_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest> {
+        add_pull_request_dependency(self, id, target)
+    }
+
+    async fn remove_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest> {
+        remove_pull_request_dependency(self, id, target)
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {

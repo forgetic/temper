@@ -18,8 +18,8 @@ here unless stated otherwise.
 ## Supported operations
 
 Every `Forge` trait method is implemented, matching the filesystem backend's
-supported set. `get_user` only resolves the current user, because the Forge
-interface has no user creation or listing.
+supported set, including native dependency links. `get_user` only resolves the
+current user, because the Forge interface has no user creation or listing.
 
 ## Persistence model
 
@@ -30,7 +30,8 @@ instance:
 - a logical `clock_tick` starting at `0`.
 - a repository-id counter starting at `1`.
 - in-memory collections of repositories, labels, issues, pull requests, issue
-  comments, pull-request comments, and CI jobs.
+  comments, pull-request comments, and CI jobs; dependency item numbers live on
+  the issue and pull-request records.
 
 Identifiers and timestamps match the filesystem backend exactly: repository IDs
 are `repo-` plus a zero-padded counter; issue, pull-request, comment, and label
@@ -39,9 +40,10 @@ timestamp advances `clock_tick` by one second from the Unix epoch; merge commit
 SHAs are the clock tick formatted as 40 lowercase hexadecimal digits.
 
 Version tokens also match the filesystem backend: a created issue or pull request
-starts at `Version::INITIAL`, and `update_issue`, `update_pull_request`, and
-`merge_pull_request` each advance the artifact's version. Adding a comment does
-not change the artifact record, so it leaves the version untouched.
+starts at `Version::INITIAL`, and `update_issue`, `update_pull_request`,
+dependency-link changes, and `merge_pull_request` each advance the artifact's
+version. Adding a comment and idempotent dependency no-ops do not change the
+artifact record, so they leave the version untouched.
 
 `create_repository` validates non-empty owner, name, and default branch, and
 returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
@@ -87,7 +89,9 @@ tests and local development.
 Validation failures map to `ForgeError::InvalidRequest`, missing resources to
 `ForgeError::NotFound`, duplicate repository paths to `ForgeError::AlreadyExists`,
 illegal state transitions (such as merging a closed or merged pull request) to
-`ForgeError::Conflict`, and armed faults to `ForgeError::Backend`.
+`ForgeError::Conflict`, and armed faults to `ForgeError::Backend`. Dependency
+adds require the target item number to exist as an issue or pull request in the
+source repository; removals of absent links are no-ops.
 
 ## Optimistic concurrency
 

@@ -186,6 +186,13 @@ pub trait Forge: Send + Sync {
     /// stored version.
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue>;
 
+    /// Adds a dependency link from an issue to another repository item number.
+    async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue>;
+
+    /// Removes a dependency link from an issue to another repository item number.
+    async fn remove_issue_dependency(&self, id: &IssueId, target: ItemNumber)
+        -> ForgeResult<Issue>;
+
     /// Lists comments on an issue.
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>>;
 
@@ -228,6 +235,20 @@ pub trait Forge: Send + Sync {
         &self,
         id: &PullRequestId,
         input: UpdatePullRequest,
+    ) -> ForgeResult<PullRequest>;
+
+    /// Adds a dependency link from a pull request to another repository item number.
+    async fn add_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest>;
+
+    /// Removes a dependency link from a pull request to another repository item number.
+    async fn remove_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
     ) -> ForgeResult<PullRequest>;
 
     /// Lists comments on a pull request.

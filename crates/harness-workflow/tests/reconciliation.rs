@@ -15,7 +15,9 @@ use harness_workflow::{
     InMemoryJournal, Lease, Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy,
     RoleId, StateDimensionId, StateId, TransitionId, WorkflowEffect, WorkflowMetadata,
 };
-use support::{block_on, create_issue, new_repo, ts, workflow, TestRoot};
+use support::{
+    add_issue_dependency, block_on, close_issue, create_issue, new_repo, ts, workflow, TestRoot,
+};
 
 fn issue_source(number: u64) -> ArtifactSource {
     ArtifactSource::Issue {
@@ -51,6 +53,7 @@ fn expired_lease_is_requeued_by_default_policy() {
         source: issue_source(1),
         labels: vec!["code".into(), "in-progress".into()],
         body: leased_body("run-1", "2026-05-29T00:30:00Z"),
+        dependencies: Vec::new(),
     };
 
     let report = workflow.reconciler(&policy).scan(
@@ -95,6 +98,7 @@ fn expired_lease_action_follows_the_policy_hook() {
         source: issue_source(7),
         labels: vec!["code".into(), "in-progress".into()],
         body: leased_body("run-9", "2026-05-29T00:30:00Z"),
+        dependencies: Vec::new(),
     };
 
     let report = workflow.reconciler(&policy).scan(
@@ -122,6 +126,7 @@ fn live_lease_is_not_reconciled() {
         source: issue_source(1),
         labels: vec!["code".into(), "in-progress".into()],
         body: leased_body("run-1", "2026-05-29T02:00:00Z"),
+        dependencies: Vec::new(),
     };
 
     let report = workflow
@@ -145,6 +150,7 @@ fn impossible_label_combination_is_detected_deterministically() {
         source: issue_source(2),
         labels: vec!["code".into(), "ready".into(), "in-progress".into()],
         body: String::new(),
+        dependencies: Vec::new(),
     };
 
     let report = workflow.reconciler(&policy).scan(
@@ -178,6 +184,7 @@ fn partial_transition_emits_repair_effects() {
         source: issue_source(3),
         labels: vec!["code".into(), "ready".into()],
         body: String::new(),
+        dependencies: Vec::new(),
     };
     let mut record = CommandRecord::planned(
         CommandId::new("claim-3"),
@@ -232,6 +239,7 @@ fn already_applied_command_is_marked_reconciled() {
         source: issue_source(4),
         labels: vec!["code".into(), "in-progress".into()],
         body: String::new(),
+        dependencies: Vec::new(),
     };
     let mut record = CommandRecord::planned(
         CommandId::new("claim-4"),
@@ -277,6 +285,7 @@ fn terminal_commands_are_ignored() {
         source: issue_source(5),
         labels: vec!["code".into(), "ready".into()],
         body: String::new(),
+        dependencies: Vec::new(),
     };
     let mut record = CommandRecord::planned(
         CommandId::new("claim-5"),
@@ -338,7 +347,6 @@ fn reconcile_loads_backend_state_and_finds_interrupted_work() {
         &forge,
         &repo,
         &restarted_journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile loads state");
@@ -368,23 +376,45 @@ fn reconcile_loads_backend_state_and_finds_interrupted_work() {
     );
 }
 
-/// Body for a `code` issue that depends on the given prerequisite item numbers.
-fn dependent_body(dependencies: &[u64]) -> String {
-    render_metadata_block(&WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("code")),
-        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
-        ..WorkflowMetadata::default()
-    })
+#[test]
+fn reconcile_derives_dependency_status_from_native_links() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = workflow();
+    let repo = new_repo(&forge);
+    let dependency = create_issue(&forge, &repo, &["code", "ready"], "");
+    close_issue(&forge, &repo, dependency);
+    let blocked = create_issue(&forge, &repo, &["code", "blocked"], "");
+    add_issue_dependency(&forge, &repo, blocked, dependency);
+    let policy = DefaultRecoveryPolicy;
+    let journal = InMemoryJournal::new();
+
+    let report = block_on(workflow.reconciler(&policy).reconcile(
+        &forge,
+        &repo,
+        &journal,
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .expect("reconcile derives native dependency status");
+
+    assert_eq!(
+        report.findings,
+        vec![ReconcileFinding::DependenciesResolved {
+            target: ArtifactSource::Issue { number: blocked },
+            transition: TransitionId::new("mark_code_ready"),
+        }]
+    );
 }
 
 #[test]
-fn blocked_code_issue_unblocks_only_after_dependencies_land() {
+fn blocked_code_issue_unblocks_only_after_native_dependencies_land() {
     let workflow = workflow();
     let policy = DefaultRecoveryPolicy;
     let snapshot = ArtifactSnapshot {
         source: issue_source(8),
         labels: vec!["code".into(), "blocked".into()],
-        body: dependent_body(&[9]),
+        body: String::new(),
+        dependencies: vec![ItemNumber::new(9)],
     };
 
     // Prerequisite #9 has not landed: the reconciler leaves the block in place.

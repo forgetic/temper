@@ -242,9 +242,9 @@ pub enum RawEffect {
 pub struct RawRelation {
     /// The workflow meaning of the link.
     pub kind: RelationKind,
-    /// Artifact kind that carries the metadata projection.
+    /// Artifact kind that carries the relation source.
     pub source: String,
-    /// Artifact kind that the metadata item number points at.
+    /// Artifact kind that the linked item number points at.
     pub target: String,
 }
 

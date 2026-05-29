@@ -65,7 +65,7 @@
 //! `CreatePullRequest` execution with runtime inputs from [`ExecutionContext`].
 //! Phase 11 added external-signal gates over Forge-projected label/state
 //! conditions. Phase 12a added first-class relation declarations and typed
-//! classification of metadata-projected relations. Phase 13 added queue
+//! relation classification; ADR 0015 added native dependency links. Phase 13 added queue
 //! activation policies for depth- or age-gated servicing. Phase 14 added
 //! multi-kind queues and disjunctive queue label filters.
 //!
@@ -81,6 +81,7 @@ pub mod artifact;
 pub mod classify;
 pub mod compile;
 pub mod context;
+mod dependency_state;
 pub mod diagnostics;
 pub mod execute;
 pub mod ids;

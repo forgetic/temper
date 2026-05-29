@@ -13,6 +13,7 @@ The `harness_forge::Forge` trait exposes operations for:
 - repository labels
 - issues
 - pull requests
+- native dependency links between repository items
 - comments
 - pull-request merges
 - CI jobs
@@ -98,6 +99,8 @@ Required methods:
 - `get_issue`
 - `get_issue_by_number`
 - `update_issue`
+- `add_issue_dependency`
+- `remove_issue_dependency`
 - `list_issue_comments`
 - `add_issue_comment`
 
@@ -105,7 +108,22 @@ Issue state is `open` or `closed`.
 
 `IssueQuery` supports filtering by state, labels, author, and assignee. Label filtering is conjunctive: every requested label must be present. Issues can be sorted by number, creation time, or update time.
 
-`UpdateIssue` may change title, body, state, labels, and assignees. Closing an open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdateIssue` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
+`Issue::dependencies` lists repository item numbers the issue depends on, sorted deterministically. New issues start with no dependencies. `UpdateIssue` may change title, body, state, labels, and assignees. Closing an open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdateIssue` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
+
+## Dependency-link operations
+
+Required methods:
+
+- `add_issue_dependency`
+- `remove_issue_dependency`
+- `add_pull_request_dependency`
+- `remove_pull_request_dependency`
+
+A dependency link means the source issue or pull request is blocked by a target `ItemNumber` in the same repository. Multiple target item numbers are allowed. Links are directed: adding A→B does not add B→A.
+
+Adds require the source to exist and the target item number to resolve to an issue or pull request in the same repository. Missing sources return `ForgeError::NotFound`; add operations also return `NotFound` for missing targets. Removing a missing link is a successful no-op once the source exists, and does not require the target to exist. Dependency lists are set-like, sorted by item number, and contain no duplicates.
+
+A link add/remove that changes the set advances the source artifact's `Version` and `updated_at`. An idempotent no-op returns the current artifact unchanged. Backends whose issue and pull-request numbers are not cross-type unique should treat the target number as existing when either an issue or pull request with that number exists.
 
 ## Comment operations
 
@@ -120,11 +138,13 @@ Required methods:
 - `get_pull_request`
 - `get_pull_request_by_number`
 - `update_pull_request`
+- `add_pull_request_dependency`
+- `remove_pull_request_dependency`
 - `list_pull_request_comments`
 - `add_pull_request_comment`
 - `merge_pull_request`
 
-Pull-request state is `open`, `closed`, or `merged`. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdatePullRequest` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
+Pull-request state is `open`, `closed`, or `merged`. `PullRequest::dependencies` lists repository item numbers the pull request depends on, sorted deterministically. New pull requests start with no dependencies. `UpdatePullRequest` may change title, body, state, labels, and assignees, but may only request `open` or `closed` state changes. Closing an open pull request sets `closed_at`; reopening a closed pull request clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdatePullRequest` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
 
 Merging must go through `merge_pull_request` so the backend can record merge metadata and produce the `merged` state.
 
@@ -157,7 +177,8 @@ CI jobs are associated with a repository, a commit SHA, and optionally a pull re
 Issues and pull requests carry a `Version`: a portable, opaque, monotonic
 concurrency token (see ADR 0013). A backend assigns `Version::INITIAL` when the
 artifact is created and advances it on every successful mutation of the artifact
-record — `update_issue`, `update_pull_request`, and `merge_pull_request`. Adding
+record — `update_issue`, `update_pull_request`, dependency-link changes, and
+`merge_pull_request`. Adding
 a comment does not modify the artifact record, so it does not change the version.
 
 `UpdateIssue` and `UpdatePullRequest` carry an optional `expected_version`

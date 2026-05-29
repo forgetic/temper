@@ -10,29 +10,21 @@
 mod support;
 
 use chrono::Duration;
-use harness_forge::ItemNumber;
 use harness_workflow::{
-    parse_metadata_block, render_metadata_block, Applier, ArtifactKindId, ArtifactSource,
-    CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
-    DependencyStatus, Executor, InMemoryJournal, LeaseManager, LeasePolicy, RecoveryAction, RoleId,
-    TransitionId, WorkflowEffect, WorkflowMetadata,
+    parse_metadata_block, Applier, ArtifactSource, CommandId, CommandJournal, CommandRecord,
+    CommandState, DefaultRecoveryPolicy, Executor, InMemoryJournal, LeaseManager, LeasePolicy,
+    RecoveryAction, RoleId, TransitionId, WorkflowEffect,
 };
 use support::crash::{CrashForge, ForgeOp};
-use support::{block_on, create_issue, issue_labels, new_repo, ts, workflow, TestRoot};
+use support::{
+    add_issue_dependency, block_on, close_issue, create_issue, issue_labels, new_repo, ts,
+    workflow, TestRoot,
+};
 
 const ENGINEER: &str = "engineer";
 
 fn ttl_policy() -> LeasePolicy {
     LeasePolicy::new(Duration::minutes(30))
-}
-
-/// Body for a `code` issue depending on the given prerequisite item numbers.
-fn dependent_body(dependencies: &[u64]) -> String {
-    render_metadata_block(&WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("code")),
-        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
-        ..WorkflowMetadata::default()
-    })
 }
 
 /// Reads a command's current journal state.
@@ -70,7 +62,6 @@ fn requeue_lease_clears_the_lease_through_the_manager() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T01:00:00Z"),
     ))
     .expect("reconcile after expiry");
@@ -97,7 +88,6 @@ fn requeue_lease_clears_the_lease_through_the_manager() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T01:05:00Z"),
     ))
     .expect("reconcile again");
@@ -142,7 +132,6 @@ fn repair_realizes_pending_labels_and_reconciles_the_command() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile");
@@ -161,7 +150,6 @@ fn repair_realizes_pending_labels_and_reconciles_the_command() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:06:00Z"),
     ))
     .expect("reconcile again");
@@ -173,19 +161,20 @@ fn unblock_realizes_labels_and_journals_a_completed_command() {
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
-    let number = create_issue(&forge, &repo, &["code", "blocked"], &dependent_body(&[9]));
+    let dependency = create_issue(&forge, &repo, &["code", "ready"], "");
+    close_issue(&forge, &repo, dependency);
+    let number = create_issue(&forge, &repo, &["code", "blocked"], "");
+    add_issue_dependency(&forge, &repo, number, dependency);
     let workflow = workflow();
     let policy = DefaultRecoveryPolicy;
     let manager = LeaseManager::new(&forge, ttl_policy());
     let executor = Executor::new(&workflow, &forge);
     let journal = InMemoryJournal::new();
-    let landed = DependencyStatus::landed([ItemNumber::new(9)]);
 
     let report = block_on(workflow.reconciler(&policy).reconcile(
         &forge,
         &repo,
         &journal,
-        &landed,
         ts("2026-05-29T00:00:00Z"),
     ))
     .expect("reconcile");
@@ -214,7 +203,6 @@ fn unblock_realizes_labels_and_journals_a_completed_command() {
         &forge,
         &repo,
         &journal,
-        &landed,
         ts("2026-05-29T00:01:00Z"),
     ))
     .expect("reconcile again");
@@ -259,7 +247,6 @@ fn mark_reconciled_flips_a_stale_command_state() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile");
@@ -293,7 +280,6 @@ fn escalate_is_recorded_advisory_and_never_mutates_state() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:00:00Z"),
     ))
     .expect("reconcile");
@@ -360,7 +346,6 @@ fn re_applying_a_report_is_a_no_op() {
         &crash,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile");
@@ -395,7 +380,6 @@ fn the_scan_apply_loop_converges_to_a_clean_state() {
     let manager = LeaseManager::new(&forge, ttl_policy());
     let executor = Executor::new(&workflow, &forge);
     let journal = InMemoryJournal::new();
-    let landed = DependencyStatus::landed([ItemNumber::new(99)]);
 
     // Three independent problems in one repository: an expired lease, an
     // interrupted claim whose labels never landed, and a blocked issue whose
@@ -431,7 +415,10 @@ fn the_scan_apply_loop_converges_to_a_clean_state() {
     ))
     .expect("applying");
 
-    create_issue(&forge, &repo, &["code", "blocked"], &dependent_body(&[99]));
+    let dependency = create_issue(&forge, &repo, &["code", "ready"], "");
+    close_issue(&forge, &repo, dependency);
+    let blocked = create_issue(&forge, &repo, &["code", "blocked"], "");
+    add_issue_dependency(&forge, &repo, blocked, dependency);
 
     let applier = Applier::new(&executor, &manager, &journal);
     let mut iterations = 0;
@@ -440,7 +427,6 @@ fn the_scan_apply_loop_converges_to_a_clean_state() {
             &forge,
             &repo,
             &journal,
-            &landed,
             ts("2026-05-29T01:00:00Z"),
         ))
         .expect("reconcile");

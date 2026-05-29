@@ -18,15 +18,16 @@
 mod support;
 
 use chrono::Duration;
-use harness_forge::ItemNumber;
 use harness_workflow::{
-    render_metadata_block, Applier, ApplyError, ArtifactKindId, ArtifactSource, CommandId,
-    CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus,
-    ExecutionError, Executor, InMemoryJournal, LeaseManager, LeasePolicy, Postcondition,
-    ReconcileFinding, RecoveryAction, RoleId, TransitionId, WorkflowEffect, WorkflowMetadata,
+    Applier, ApplyError, ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState,
+    DefaultRecoveryPolicy, ExecutionError, Executor, InMemoryJournal, LeaseManager, LeasePolicy,
+    Postcondition, ReconcileFinding, RecoveryAction, RoleId, TransitionId, WorkflowEffect,
 };
 use support::crash::{CrashForge, Fault, FaultPoint, ForgeOp};
-use support::{block_on, create_issue, issue_labels, new_repo, ts, workflow, TestRoot};
+use support::{
+    add_issue_dependency, block_on, close_issue, create_issue, issue_labels, new_repo, ts,
+    workflow, TestRoot,
+};
 
 const CLAIM: &str = "claim_code";
 const ENGINEER: &str = "engineer";
@@ -231,7 +232,6 @@ fn a_journaled_claim_that_crashes_before_the_write_is_repaired_after_restart() {
         crash.inner(),
         &repo,
         &restarted,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile loads state");
@@ -313,7 +313,6 @@ fn a_journaled_claim_that_lands_before_a_crash_is_marked_reconciled_after_restar
         crash.inner(),
         &repo,
         &restarted,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:05:00Z"),
     ))
     .expect("reconcile loads state");
@@ -375,15 +374,6 @@ fn duplicated_tool_calls_and_interleaved_workers_claim_an_item_at_most_once() {
     assert_eq!(issue_labels(&forge, &repo, number), claimed());
 }
 
-/// Body for a `code` issue depending on the given prerequisite item numbers.
-fn dependent_body(dependencies: &[u64]) -> String {
-    render_metadata_block(&WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("code")),
-        dependencies: dependencies.iter().map(|n| ItemNumber::new(*n)).collect(),
-        ..WorkflowMetadata::default()
-    })
-}
-
 fn command_state(journal: &InMemoryJournal, id: &str) -> CommandState {
     block_on(journal.get(&CommandId::new(id)))
         .expect("journal get")
@@ -442,7 +432,6 @@ fn applying_a_repair_is_retry_safe_under_a_crash() {
             &crash,
             &repo,
             &journal,
-            &DependencyStatus::default(),
             ts("2026-05-29T00:05:00Z"),
         ))
         .expect("reconcile");
@@ -481,7 +470,10 @@ fn applying_an_unblock_is_retry_safe_under_a_crash() {
         let root = TestRoot::new();
         let forge = root.forge();
         let repo = new_repo(&forge);
-        let number = create_issue(&forge, &repo, &["code", "blocked"], &dependent_body(&[9]));
+        let dependency = create_issue(&forge, &repo, &["code", "ready"], "");
+        close_issue(&forge, &repo, dependency);
+        let number = create_issue(&forge, &repo, &["code", "blocked"], "");
+        add_issue_dependency(&forge, &repo, number, dependency);
         let crash = CrashForge::new(
             forge,
             vec![Fault {
@@ -494,13 +486,11 @@ fn applying_an_unblock_is_retry_safe_under_a_crash() {
         let executor = Executor::new(&workflow, &crash);
         let manager = LeaseManager::new(&crash, LeasePolicy::new(Duration::minutes(30)));
         let journal = InMemoryJournal::new();
-        let landed = DependencyStatus::landed([ItemNumber::new(9)]);
 
         let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
             &crash,
             &repo,
             &journal,
-            &landed,
             ts("2026-05-29T00:00:00Z"),
         ))
         .expect("reconcile");

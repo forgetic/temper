@@ -14,9 +14,9 @@ use harness_forge::{
     PullRequestQuery, PullRequestState, RepositoryId, UserId,
 };
 use harness_workflow::{
-    parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, DependencyStatus, ExecutionError,
-    Executor, InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy,
-    RawWorkflowSpec, ReconcileFinding, RecoveryAction, RoleId, TransitionId,
+    parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, ExecutionError, Executor,
+    InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy, RawWorkflowSpec,
+    ReconcileFinding, RecoveryAction, RoleId, TransitionId,
 };
 use support::crash::{CrashForge, Fault, ForgeOp};
 use support::{
@@ -513,7 +513,6 @@ fn expired_in_progress_work_becomes_visible_for_recovery() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:20:00Z"),
     ))
     .expect("reconcile before expiry");
@@ -524,7 +523,6 @@ fn expired_in_progress_work_becomes_visible_for_recovery() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T01:00:00Z"),
     ))
     .expect("reconcile after expiry");
@@ -567,7 +565,6 @@ fn impossible_label_combinations_are_detected_not_silently_ignored() {
         &forge,
         &repo,
         &journal,
-        &DependencyStatus::default(),
         ts("2026-05-29T00:00:00Z"),
     ))
     .expect("reconcile");

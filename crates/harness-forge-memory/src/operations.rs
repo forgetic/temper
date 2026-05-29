@@ -5,6 +5,10 @@
 //! [`State`](crate::state::State). The behaviour mirrors the filesystem backend
 //! contract documented in `docs/reference/in-memory-backend.md`.
 
+use crate::dependencies::{
+    add_issue_dependency, add_pull_request_dependency, remove_issue_dependency,
+    remove_pull_request_dependency,
+};
 use crate::fault::FaultOp;
 use crate::ids::{
     issue_comment_id, issue_id, label_id, merge_commit_sha, pull_request_comment_id,
@@ -153,6 +157,7 @@ impl Forge for MemoryForge {
             author_id,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            dependencies: Vec::new(),
             version: Version::INITIAL,
             created_at: now,
             updated_at: now,
@@ -224,6 +229,18 @@ impl Forge for MemoryForge {
         let updated = issue.clone();
         sort_issues_by_number(issues);
         Ok(updated)
+    }
+
+    async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
+        add_issue_dependency(&mut self.lock(), id, target)
+    }
+
+    async fn remove_issue_dependency(
+        &self,
+        id: &IssueId,
+        target: ItemNumber,
+    ) -> ForgeResult<Issue> {
+        remove_issue_dependency(&mut self.lock(), id, target)
     }
 
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
@@ -303,6 +320,7 @@ impl Forge for MemoryForge {
             base_sha: None,
             labels: normalize_string_set(input.labels),
             assignees: normalize_user_set(input.assignees),
+            dependencies: Vec::new(),
             merge: None,
             version: Version::INITIAL,
             created_at: now,
@@ -383,6 +401,22 @@ impl Forge for MemoryForge {
         let updated = pull_request.clone();
         sort_pull_requests_by_number(pull_requests);
         Ok(updated)
+    }
+
+    async fn add_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest> {
+        add_pull_request_dependency(&mut self.lock(), id, target)
+    }
+
+    async fn remove_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest> {
+        remove_pull_request_dependency(&mut self.lock(), id, target)
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {

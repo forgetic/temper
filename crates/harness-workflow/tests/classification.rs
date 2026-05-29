@@ -49,6 +49,15 @@ fn workflow() -> ValidatedWorkflow {
 }
 
 fn issue(number: u64, labels: &[&str], body: &str) -> Issue {
+    issue_with_dependencies(number, labels, body, &[])
+}
+
+fn issue_with_dependencies(
+    number: u64,
+    labels: &[&str],
+    body: &str,
+    dependencies: &[u64],
+) -> Issue {
     Issue {
         id: "issue-1".into(),
         repo_id: "repo-1".into(),
@@ -59,6 +68,7 @@ fn issue(number: u64, labels: &[&str], body: &str) -> Issue {
         author_id: "user-1".into(),
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        dependencies: dependencies.iter().copied().map(ItemNumber::new).collect(),
         version: Default::default(),
         created_at: ts(),
         updated_at: ts(),
@@ -87,6 +97,7 @@ fn pull_request(number: u64, labels: &[&str], body: &str) -> PullRequest {
         base_sha: None,
         labels: labels.iter().map(|s| s.to_string()).collect(),
         assignees: Vec::new(),
+        dependencies: Vec::new(),
         merge: None,
         version: Default::default(),
         created_at: ts(),
@@ -261,6 +272,35 @@ fn metadata_parents_and_dependencies_surface_typed_relations() {
                 target_kinds: vec![ArtifactKindId::new("code")],
             },
         ]
+    );
+}
+
+#[test]
+fn native_dependencies_override_metadata_dependency_fallback() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        dependencies: vec![ItemNumber::new(34)],
+        ..WorkflowMetadata::default()
+    });
+
+    let artifact = classifier
+        .classify_issue(&issue_with_dependencies(1, &["code"], &body, &[56]))
+        .expect("code issue with native dependency classifies");
+
+    assert_eq!(
+        artifact
+            .relations
+            .iter()
+            .filter(|relation| relation.kind == RelationKind::Dependency)
+            .collect::<Vec<_>>(),
+        vec![&ClassifiedRelation {
+            kind: RelationKind::Dependency,
+            source: ArtifactKindId::new("code"),
+            target: ItemNumber::new(56),
+            target_kinds: vec![ArtifactKindId::new("code")],
+        }]
     );
 }
 

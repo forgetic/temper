@@ -218,6 +218,18 @@ impl<F: Forge> Forge for CrashForge<F> {
         Ok(result)
     }
 
+    async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
+        self.inner.add_issue_dependency(id, target).await
+    }
+
+    async fn remove_issue_dependency(
+        &self,
+        id: &IssueId,
+        target: ItemNumber,
+    ) -> ForgeResult<Issue> {
+        self.inner.remove_issue_dependency(id, target).await
+    }
+
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
         self.inner.list_issue_comments(id).await
     }
@@ -279,6 +291,22 @@ impl<F: Forge> Forge for CrashForge<F> {
         let result = self.inner.update_pull_request(id, input).await?;
         self.guard(ForgeOp::UpdatePullRequest, n, FaultPoint::After)?;
         Ok(result)
+    }
+
+    async fn add_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest> {
+        self.inner.add_pull_request_dependency(id, target).await
+    }
+
+    async fn remove_pull_request_dependency(
+        &self,
+        id: &PullRequestId,
+        target: ItemNumber,
+    ) -> ForgeResult<PullRequest> {
+        self.inner.remove_pull_request_dependency(id, target).await
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {

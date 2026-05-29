@@ -55,9 +55,9 @@ Status legend: ☐ pending · ☑ done.
   `dependencies_resolved` gate condition and a relation-driven `dependency_gate`
   (gating `mark_code_ready`). `Planner::dependency_unblocks` plus a reconciler
   `DependenciesResolved` finding / `Unblock` action clear `blocked-on-dependency`
-  mechanically once every prerequisite lands; landed status is a runtime-supplied
-  `DependencyStatus`, like the CI signal. No new ADR (extends existing relation
-  and gate primitives).
+  mechanically once every prerequisite lands; ADR 0015 later made landed status
+  derive from native Forge dependency targets. No new ADR here (extends existing
+  relation and gate primitives).
 - ☑ **13 — Queue activation policy (ADR).** Added `min_depth`/`max_age` to the
   queue primitive and a pure planner predicate so `owner_alignment` services
   cohorts. ADR 0012 covers all queue-primitive extensions (13 and 14).

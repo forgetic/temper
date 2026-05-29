@@ -1,9 +1,8 @@
 //! Workflow relation types shared by specs and classified artifacts.
 //!
-//! Relation declarations describe allowed links between artifact kinds. Forge
-//! artifacts still project concrete links through metadata item numbers; the
-//! classifier combines those projections with declarations to surface typed
-//! relations for planning and reconciliation.
+//! Relation declarations describe allowed links between artifact kinds. The
+//! classifier combines native dependency links and metadata projections with
+//! declarations to surface typed relations for planning and reconciliation.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

@@ -162,6 +162,9 @@ pub struct Issue {
     pub author_id: UserId,
     pub labels: Vec<String>,
     pub assignees: Vec<UserId>,
+    /// Repository item numbers this issue depends on.
+    #[serde(default)]
+    pub dependencies: Vec<ItemNumber>,
     /// Optimistic-concurrency token, advanced on every successful mutation.
     #[serde(default)]
     pub version: Version,
@@ -268,6 +271,9 @@ pub struct PullRequest {
     pub base_sha: Option<String>,
     pub labels: Vec<String>,
     pub assignees: Vec<UserId>,
+    /// Repository item numbers this pull request depends on.
+    #[serde(default)]
+    pub dependencies: Vec<ItemNumber>,
     pub merge: Option<MergeRecord>,
     /// Optimistic-concurrency token, advanced on every successful mutation.
     #[serde(default)]

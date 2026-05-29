@@ -40,9 +40,9 @@ Ordered smallest-blast-radius first:
   and adds backend conformance tests in **both** reference backends (ADR 0008
   observable-contract parity).
 - Keep the pure `Planner` pure: gate conditions are evaluated against the
-  classified artifact plus a small **runtime-supplied signal**, exactly like
-  `plan::DependencyStatus` today. The executor computes signals from fresh Forge
-  state and threads them into `plan_transition_with`.
+  classified artifact plus small runtime signals such as `DependencyStatus` and
+  `CiStatus`. Runtime layers compute signals from fresh Forge state and thread
+  them into `plan_transition_with`.
 - `reference-delivery.json` is the evolving planning fixture; `five-role-delivery.json`
   is the stable executor/safety fixture. Extend the stable one only when an
   execution capability it exercises actually lands.
@@ -62,11 +62,11 @@ Status legend: ☐ pending · ☑ done.
   retiring the `ci` state dimension and its `ci-passed`/`ci-failed`/`ci-pending`
   adapter labels. Prompt: `native-forge-state-phase-A-merge-gate.md`.
 
-- ☐ **B — Native dependency links (ADR 0015).** Add a portable
+- ☑ **B — Native dependency links (ADR 0015).** Added a portable
   `depends_on` artifact-link concept to `harness-forge` (multiple links, the
   intersection both Forgejo and GitHub support). Classification reads native
   links; `DependencyStatus` is derived from the Forge instead of runtime-supplied
-  metadata. The metadata `dependencies` field becomes a compatibility fallback.
+  metadata. The metadata `dependencies` field is a compatibility fallback.
   `parent` and `produced_pr` stay metadata-projected because Forgejo has no
   native parent/child (GitHub sub-issues are a richer, non-portable superset —
   out of scope, noted in the ADR). Prompt:

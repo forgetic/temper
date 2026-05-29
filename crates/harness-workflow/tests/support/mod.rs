@@ -14,7 +14,7 @@ pub mod crash;
 use chrono::{DateTime, Utc};
 use harness_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest, Forge,
-    ItemNumber, PullRequestState, RepositoryId, UserId,
+    IssueState, ItemNumber, PullRequestState, RepositoryId, UpdateIssue, UserId,
 };
 use harness_forge_memory::MemoryForge;
 use harness_workflow::{RawWorkflowSpec, ValidatedWorkflow};
@@ -138,6 +138,34 @@ pub fn create_pr(
     ))
     .expect("pull request is created")
     .number
+}
+
+/// Closes an issue so native dependency resolution treats it as landed.
+pub fn close_issue<F: Forge + ?Sized>(forge: &F, repo: &RepositoryId, number: ItemNumber) {
+    let issue = block_on(forge.get_issue_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("issue exists");
+    block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            state: Some(IssueState::Closed),
+            ..UpdateIssue::default()
+        },
+    ))
+    .expect("issue closes");
+}
+
+/// Adds a native dependency link from one issue to another item number.
+pub fn add_issue_dependency<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    source: ItemNumber,
+    target: ItemNumber,
+) {
+    let issue = block_on(forge.get_issue_by_number(repo, source))
+        .expect("lookup succeeds")
+        .expect("issue exists");
+    block_on(forge.add_issue_dependency(&issue.id, target)).expect("dependency link added");
 }
 
 /// Reads an issue's current body from the backend.
