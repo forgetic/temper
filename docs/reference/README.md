@@ -8,5 +8,6 @@ Current reference pages:
 - [Forge interface](forge-interface.md)
 - [Filesystem backend](filesystem-backend.md)
 - [In-memory backend](in-memory-backend.md)
+- [Forgejo backend](forgejo-backend.md)
 - [Workflow layer](workflow-layer.md)
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)

@@ -4,6 +4,7 @@ members = [
     "crates/harness-forge",
     "crates/harness-forge-filesystem",
     "crates/harness-forge-memory",
+    "crates/harness-forge-forgejo",
     "crates/harness-runner",
 ]
 resolver = "2"
@@ -16,6 +17,7 @@ rust-version = "1.76"
 [workspace.dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
