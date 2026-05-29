@@ -4,27 +4,33 @@ use chrono::{DateTime, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactSource, ArtifactTarget,
-    ClassificationDiagnostic, Classifier, LabelId, RawWorkflowSpec, StateDimensionId, StateId,
-    ValidatedWorkflow, WorkflowMetadata,
+    ClassificationDiagnostic, ClassifiedRelation, Classifier, LabelId, RawWorkflowSpec,
+    RelationKind, StateDimensionId, StateId, ValidatedWorkflow, WorkflowMetadata,
 };
 
 fn ts() -> DateTime<Utc> {
     "2026-05-29T00:00:00Z".parse().expect("valid timestamp")
 }
 
-/// A two-artifact workflow: a `code` issue and an `implementation_pr` pull
-/// request, each with an identifying label and exclusive state dimensions.
+/// A small workflow with an `epic` issue, a `code` issue, and an
+/// `implementation_pr` pull request, plus relation declarations.
 fn workflow() -> ValidatedWorkflow {
     let json = r#"{
         "name": "five-role",
         "labels": [
-            {"id": "code"}, {"id": "implementation"},
+            {"id": "epic"}, {"id": "code"}, {"id": "implementation"},
             {"id": "ready"}, {"id": "in-progress"}, {"id": "blocked"},
             {"id": "needs-review"}, {"id": "review-approved"}
         ],
         "artifact_kinds": [
+            {"id": "epic", "target": "issue", "identifying_labels": ["epic"]},
             {"id": "code", "target": "issue", "identifying_labels": ["code"]},
             {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+        ],
+        "relations": [
+            {"kind": "parent", "source": "code", "target": "epic"},
+            {"kind": "dependency", "source": "code", "target": "code"},
+            {"kind": "produced_pr", "source": "implementation_pr", "target": "code"}
         ],
         "state_dimensions": [
             {"id": "code_lifecycle", "exclusive": true, "states": [
@@ -220,6 +226,65 @@ fn metadata_kind_drift_reports_missing_identifying_label() {
             kind: ArtifactKindId::new("code"),
             label: LabelId::new("code"),
         }));
+}
+
+#[test]
+fn metadata_parents_and_dependencies_surface_typed_relations() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        parents: vec![ItemNumber::new(12)],
+        dependencies: vec![ItemNumber::new(34)],
+        ..WorkflowMetadata::default()
+    });
+
+    let artifact = classifier
+        .classify_issue(&issue(1, &["code"], &body))
+        .expect("code issue with relations classifies");
+
+    assert_eq!(
+        artifact.relations,
+        vec![
+            ClassifiedRelation {
+                kind: RelationKind::Parent,
+                source: ArtifactKindId::new("code"),
+                target: ItemNumber::new(12),
+                target_kinds: vec![ArtifactKindId::new("epic")],
+            },
+            ClassifiedRelation {
+                kind: RelationKind::Dependency,
+                source: ArtifactKindId::new("code"),
+                target: ItemNumber::new(34),
+                target_kinds: vec![ArtifactKindId::new("code")],
+            },
+        ]
+    );
+}
+
+#[test]
+fn metadata_parent_projection_can_surface_produced_pr_relation() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        parents: vec![ItemNumber::new(42)],
+        ..WorkflowMetadata::default()
+    });
+
+    let artifact = classifier
+        .classify_pull_request(&pull_request(7, &["implementation"], &body))
+        .expect("PR with produced relation classifies");
+
+    assert_eq!(
+        artifact.relations,
+        vec![ClassifiedRelation {
+            kind: RelationKind::ProducedPr,
+            source: ArtifactKindId::new("implementation_pr"),
+            target: ItemNumber::new(42),
+            target_kinds: vec![ArtifactKindId::new("code")],
+        }]
+    );
 }
 
 #[test]

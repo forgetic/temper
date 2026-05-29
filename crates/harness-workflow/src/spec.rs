@@ -10,6 +10,7 @@
 //! than re-checking an arbitrary document.
 
 use crate::artifact::ArtifactTarget;
+use crate::relation::RelationKind;
 use crate::validate::validate;
 use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
@@ -35,6 +36,8 @@ pub struct RawWorkflowSpec {
     pub transitions: Vec<RawTransition>,
     #[serde(default)]
     pub gates: Vec<RawGate>,
+    #[serde(default)]
+    pub relations: Vec<RawRelation>,
 }
 
 impl RawWorkflowSpec {
@@ -139,6 +142,12 @@ pub struct RawQueue {
     /// references a label id.
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Optional depth threshold before the queue should be serviced.
+    #[serde(default)]
+    pub min_depth: Option<u32>,
+    /// Optional age threshold in seconds for the oldest matched member.
+    #[serde(default)]
+    pub max_age: Option<u32>,
 }
 
 /// Transition declaration: a guarded, role-authorized state change.
@@ -192,6 +201,18 @@ pub enum RawEffect {
     },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
+}
+
+/// Relation declaration: an allowed typed link between artifact kinds.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawRelation {
+    /// The workflow meaning of the link.
+    pub kind: RelationKind,
+    /// Artifact kind that carries the metadata projection.
+    pub source: String,
+    /// Artifact kind that the metadata item number points at.
+    pub target: String,
 }
 
 /// Gate declaration: a condition that unlocks transitions.

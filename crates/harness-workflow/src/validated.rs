@@ -10,6 +10,8 @@ use crate::artifact::ArtifactTarget;
 use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
+use crate::relation::RelationKind;
+use chrono::Duration;
 
 /// A workflow that has passed static validation.
 ///
@@ -26,6 +28,7 @@ pub struct ValidatedWorkflow {
     queues: Vec<ValidatedQueue>,
     transitions: Vec<ValidatedTransition>,
     gates: Vec<ValidatedGate>,
+    relations: Vec<ValidatedRelation>,
 }
 
 impl ValidatedWorkflow {
@@ -41,6 +44,7 @@ impl ValidatedWorkflow {
         queues: Vec<ValidatedQueue>,
         transitions: Vec<ValidatedTransition>,
         gates: Vec<ValidatedGate>,
+        relations: Vec<ValidatedRelation>,
     ) -> Self {
         Self {
             name,
@@ -51,6 +55,7 @@ impl ValidatedWorkflow {
             queues,
             transitions,
             gates,
+            relations,
         }
     }
 
@@ -98,6 +103,11 @@ impl ValidatedWorkflow {
     pub fn gates(&self) -> &[ValidatedGate] {
         &self.gates
     }
+
+    /// Returns the validated relation declarations.
+    pub fn relations(&self) -> &[ValidatedRelation] {
+        &self.relations
+    }
 }
 
 /// A validated role with typed queue references.
@@ -138,12 +148,14 @@ pub struct ValidatedStateDimension {
     pub states: Vec<ValidatedState>,
 }
 
-/// A validated queue with typed artifact and label references.
+/// A validated queue with typed artifact, label, and activation references.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedQueue {
     pub id: QueueId,
     pub artifact: ArtifactKindId,
     pub labels: Vec<LabelId>,
+    pub min_depth: Option<u32>,
+    pub max_age: Option<Duration>,
 }
 
 /// A validated transition effect with typed references.
@@ -166,6 +178,14 @@ pub struct ValidatedTransition {
     pub roles: Vec<RoleId>,
     pub requires_gates: Vec<GateId>,
     pub effects: Vec<Effect>,
+}
+
+/// A validated relation declaration with typed artifact-kind endpoints.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedRelation {
+    pub kind: RelationKind,
+    pub source: ArtifactKindId,
+    pub target: ArtifactKindId,
 }
 
 /// A validated gate with typed transition references and optional condition.

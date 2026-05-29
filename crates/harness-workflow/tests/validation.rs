@@ -2,18 +2,22 @@
 
 use harness_workflow::{
     ArtifactTarget, Diagnostic, RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel,
-    RawQueue, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec, ReferenceSite,
-    Severity, SymbolKind, ValidatedWorkflow,
+    RawQueue, RawRelation, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
+    ReferenceSite, RelationKind, Severity, SymbolKind, ValidatedWorkflow,
 };
 
 /// Builds a small but complete workflow that exercises every reference kind:
 /// role -> queue, queue -> artifact, queue -> label, artifact -> label,
-/// state -> label, transition -> artifact/role/gate/effect-label, and
-/// gate -> transition/condition.
+/// relation -> artifact endpoints, state -> label,
+/// transition -> artifact/role/gate/effect-label, and gate -> transition/condition.
 fn valid_spec() -> RawWorkflowSpec {
     RawWorkflowSpec {
         name: "code-review".to_string(),
         labels: vec![
+            RawLabel {
+                id: "epic".to_string(),
+                description: Some("identifies an epic artifact".to_string()),
+            },
             RawLabel {
                 id: "code".to_string(),
                 description: Some("identifies a code artifact".to_string()),
@@ -49,10 +53,22 @@ fn valid_spec() -> RawWorkflowSpec {
                 queues: vec!["needs_review".to_string()],
             },
         ],
-        artifact_kinds: vec![RawArtifactKind {
-            id: "code".to_string(),
-            target: ArtifactTarget::Issue,
-            identifying_labels: vec!["code".to_string()],
+        artifact_kinds: vec![
+            RawArtifactKind {
+                id: "epic".to_string(),
+                target: ArtifactTarget::Issue,
+                identifying_labels: vec!["epic".to_string()],
+            },
+            RawArtifactKind {
+                id: "code".to_string(),
+                target: ArtifactTarget::Issue,
+                identifying_labels: vec!["code".to_string()],
+            },
+        ],
+        relations: vec![RawRelation {
+            kind: RelationKind::Parent,
+            source: "code".to_string(),
+            target: "epic".to_string(),
         }],
         state_dimensions: vec![RawStateDimension {
             id: "code_lifecycle".to_string(),
@@ -73,11 +89,15 @@ fn valid_spec() -> RawWorkflowSpec {
                 id: "code_ready".to_string(),
                 artifact: "code".to_string(),
                 labels: vec!["ready".to_string()],
+                min_depth: None,
+                max_age: None,
             },
             RawQueue {
                 id: "needs_review".to_string(),
                 artifact: "code".to_string(),
                 labels: vec!["needs-review".to_string()],
+                min_depth: None,
+                max_age: None,
             },
         ],
         transitions: vec![
@@ -120,8 +140,9 @@ fn minimal_valid_workflow_validates() {
 
     assert_eq!(workflow.name(), "code-review");
     assert_eq!(workflow.roles().len(), 2);
-    assert_eq!(workflow.labels().len(), 5);
-    assert_eq!(workflow.artifact_kinds().len(), 1);
+    assert_eq!(workflow.labels().len(), 6);
+    assert_eq!(workflow.artifact_kinds().len(), 2);
+    assert_eq!(workflow.relations().len(), 1);
     assert_eq!(workflow.state_dimensions().len(), 1);
     assert_eq!(workflow.queues().len(), 2);
     assert_eq!(workflow.transitions().len(), 2);
@@ -227,6 +248,36 @@ fn missing_assignee_effect_role_reference_is_diagnosed() {
 }
 
 #[test]
+fn missing_relation_endpoint_references_are_diagnosed() {
+    let mut spec = valid_spec();
+    spec.relations.push(RawRelation {
+        kind: RelationKind::Dependency,
+        source: "ghost_source".to_string(),
+        target: "ghost_target".to_string(),
+    });
+
+    let errors = spec
+        .validate()
+        .expect_err("missing relation endpoints fail");
+    let diagnostics = errors.diagnostics();
+
+    assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
+        expected: SymbolKind::ArtifactKind,
+        id: "ghost_source".to_string(),
+        site: ReferenceSite::RelationSource {
+            relation: "dependency ghost_source->ghost_target".to_string(),
+        },
+    }));
+    assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
+        expected: SymbolKind::ArtifactKind,
+        id: "ghost_target".to_string(),
+        site: ReferenceSite::RelationTarget {
+            relation: "dependency ghost_source->ghost_target".to_string(),
+        },
+    }));
+}
+
+#[test]
 fn missing_queue_artifact_reference_is_diagnosed() {
     let mut spec = valid_spec();
     spec.queues[0].artifact = "nonexistent".to_string();
@@ -246,7 +297,7 @@ fn missing_queue_artifact_reference_is_diagnosed() {
 #[test]
 fn missing_label_references_are_diagnosed_across_sites() {
     let mut spec = valid_spec();
-    spec.artifact_kinds[0]
+    spec.artifact_kinds[1]
         .identifying_labels
         .push("a-missing".to_string());
     spec.queues[0].labels.push("q-missing".to_string());

@@ -65,6 +65,13 @@
     {"id": "code", "target": "issue", "identifying_labels": ["code"]},
     {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
   ],
+  "relations": [
+    {"kind": "parent", "source": "design", "target": "epic"},
+    {"kind": "parent", "source": "code", "target": "design"},
+    {"kind": "parent", "source": "code", "target": "epic"},
+    {"kind": "dependency", "source": "code", "target": "code"},
+    {"kind": "produced_pr", "source": "implementation_pr", "target": "code"}
+  ],
   "state_dimensions": [
     {"id": "design_lifecycle", "exclusive": true, "states": [
       {"id": "draft", "label": "design-draft"},
@@ -114,7 +121,7 @@
     {"id": "escalations", "artifact": "implementation_pr", "labels": ["escalated"]},
     {"id": "needs_human", "artifact": "implementation_pr", "labels": ["needs-human"]},
     {"id": "landed_inbox", "artifact": "implementation_pr", "labels": ["landed"]},
-    {"id": "owner_alignment", "artifact": "implementation_pr", "labels": ["owner-pending"]}
+    {"id": "owner_alignment", "artifact": "implementation_pr", "labels": ["owner-pending"], "min_depth": 5, "max_age": 604800}
   ],
   "transitions": [
     {"id": "triage_to_code", "artifact": "intake", "roles": ["architect"], "effects": [

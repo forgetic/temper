@@ -14,3 +14,5 @@ Current ADRs:
 - [ADR 0008: Add an in-memory Forge backend and name backends by provider](0008-in-memory-backend-and-backend-naming.md)
 - [ADR 0009: Webhook-accelerated, poll-backstopped triggering off the Forge trait](0009-triggering-model-webhook-accelerated-poll-backstopped.md)
 - [ADR 0010: Model external-signal gates as Forge-projected conditions](0010-external-signal-gates.md)
+- [ADR 0011: Promote workflow relations to first-class spec declarations](0011-first-class-relations.md)
+- [ADR 0012: Extend queues with activation and richer matching](0012-queue-primitive-extensions.md)

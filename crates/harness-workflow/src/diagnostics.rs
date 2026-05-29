@@ -77,6 +77,10 @@ pub enum ReferenceSite {
     StateLabel { dimension: String, state: String },
     /// A gate's `satisfied_by` list referenced a transition.
     GateTransition { gate: String },
+    /// A relation's source endpoint referenced an artifact kind.
+    RelationSource { relation: String },
+    /// A relation's target endpoint referenced an artifact kind.
+    RelationTarget { relation: String },
     /// A gate's external condition referenced a label or state.
     GateCondition { gate: String },
 }
@@ -105,6 +109,12 @@ impl fmt::Display for ReferenceSite {
             }
             ReferenceSite::StateLabel { dimension, state } => {
                 write!(formatter, "state `{state}` in dimension `{dimension}`")
+            }
+            ReferenceSite::RelationSource { relation } => {
+                write!(formatter, "source of relation `{relation}`")
+            }
+            ReferenceSite::RelationTarget { relation } => {
+                write!(formatter, "target of relation `{relation}`")
             }
             ReferenceSite::GateTransition { gate } | ReferenceSite::GateCondition { gate } => {
                 write!(formatter, "gate `{gate}`")

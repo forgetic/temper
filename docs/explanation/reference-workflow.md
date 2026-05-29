@@ -163,9 +163,11 @@ backlog was:
   Claim-time lease effects remain future work.
 - **External-signal gates** (`ci_gate`) — implemented as gates satisfied by a
   Forge-projected label/state condition, not only a sibling transition's labels.
-- **First-class relations** (`relation` primitive) plus a relation-driven
-  `dependency_gate` and reconcile action for mechanical unblocking.
-- **Queue activation policy** (`min_depth`/`max_age`) for batched roles.
+- **Relation-driven dependency handling** — the `relation` primitive now
+  declares parent/dependency/produced-PR links; `dependency_gate` and the
+  reconcile action for mechanical unblocking remain future work.
+- **Queue activation policy** (`min_depth`/`max_age`) for batched roles — now
+  implemented as a read-side planner predicate.
 
 The contract catalog and the layered prompt system stay as prose the runner
 injects; they are not modeled as harness machinery in this design.

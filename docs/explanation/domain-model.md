@@ -42,6 +42,12 @@ Portable workflows can look pull requests up by repository plus `ItemNumber`, bu
 Only the merge operation can produce the `merged` state.
 Regular pull-request updates may open or close a pull request but cannot mark it merged without a merge record.
 
+## Workflow relations
+
+Relations are workflow-level links between artifact kinds, not provider-owned Forge objects. A workflow declares allowed relation kinds such as `parent`, `dependency`, and `produced_pr` between artifact kinds.
+
+Concrete links are projected in artifact metadata as Forge item numbers in the repository's shared issue/PR namespace. The classifier combines those numbers with the relation declarations to produce typed relations for planning and reconciliation.
+
 ## Comments
 
 Comments are append-only discussion messages attached to issues or pull requests. The initial model does not distinguish regular comments from reviews or inline code comments. Those can be added later if the workflow needs them.

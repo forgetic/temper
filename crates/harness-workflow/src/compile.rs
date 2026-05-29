@@ -23,6 +23,7 @@ use crate::ids::{
 use crate::validated::{
     Effect, GateCondition, ValidatedRole, ValidatedTransition, ValidatedWorkflow,
 };
+use chrono::Duration;
 
 /// A validated workflow projected into manifests for agents and runtime setup.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,12 +106,14 @@ pub struct ToolManifest {
     pub effects: Vec<Effect>,
 }
 
-/// A queue projected for runtime evaluation, with the roles that subscribe.
+/// A queue projected for runtime evaluation, with subscribers and activation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueManifest {
     pub id: QueueId,
     pub artifact: ArtifactKindId,
     pub labels: Vec<LabelId>,
+    pub min_depth: Option<u32>,
+    pub max_age: Option<Duration>,
     /// Roles that draw work from this queue, in role declaration order.
     pub subscribers: Vec<RoleId>,
 }
@@ -269,6 +272,8 @@ fn compile_queues(workflow: &ValidatedWorkflow) -> Vec<QueueManifest> {
             id: queue.id.clone(),
             artifact: queue.artifact.clone(),
             labels: queue.labels.clone(),
+            min_depth: queue.min_depth,
+            max_age: queue.max_age,
             subscribers: workflow
                 .roles()
                 .iter()

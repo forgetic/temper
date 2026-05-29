@@ -8,10 +8,10 @@ running it through validate / compile / plan
 (`crates/harness-workflow/tests/reference_delivery.rs`).
 
 The label-state-machine core — roles, type/state labels, exclusive and
-non-exclusive dimensions, queues, role-authorized label transitions,
-transition-satisfied gates, and external-signal gates — **validates, compiles,
-and plans today**. The gaps below are everything the design still needs beyond
-that core.
+non-exclusive dimensions, queues with activation policy, role-authorized label
+transitions, transition-satisfied gates, external-signal gates, and relation
+declarations — **validates, compiles, and plans today**. The gaps below are
+everything the design still needs beyond that core.
 
 ## What the fixture had to work around
 
@@ -29,6 +29,12 @@ workaround, which is itself a gap:
   `state_equals` external condition over `ci = passed`, with CI projected into
   labels/state by an adapter outside `harness-forge`. The zero-role
   `record_ci_pass`/`record_ci_failure` workaround was removed from the fixture.
+- **Relation primitive (resolved in Phase 12a).** The spec now declares
+  `parent`, `dependency`, and `produced_pr` relations between artifact kinds;
+  classifiers type metadata `parents`/`dependencies` using those declarations.
+- **Queue activation policy (resolved in Phase 13).** `RawQueue`/`ValidatedQueue`
+  now carry optional `min_depth`/`max_age`; `owner_alignment` uses the planner's
+  read-side activation predicate for cohorts.
 
 ## Prioritized backlog
 
@@ -43,25 +49,20 @@ workaround, which is itself a gap:
 
 ### P1 — modeled behavior is unsafe or under-gated without these
 
-2. **First-class relations + `dependency_gate`.** Relations exist only in
-   metadata (`parents`/`dependencies`), not as a spec primitive. The code→code
-   dependency could not be expressed, so `dependency_gate` was omitted and
-   `mark_code_ready` is a bare architect label flip with no prerequisite check.
-   Needs the `relation` primitive, a relation-driven `dependency_gate`, and a
-   reconcile action for mechanical unblocking.
+2. **`dependency_gate` over declared relations.** The relation primitive is now
+   present, but the code→code dependency is not yet used as a gate. The
+   `dependency_gate` remains omitted and `mark_code_ready` is a bare architect
+   label flip with no prerequisite check. Needs a relation-driven
+   `dependency_gate` and a reconcile action for mechanical unblocking.
 
 ### P2 — fidelity/efficiency; expressible workarounds exist
 
-3. **Queue activation policy (`min_depth`/`max_age`).** `RawQueue` has no
-   activation fields, so `owner_alignment` is a plain per-item queue instead of
-   a batched cohort. A read-side spec field plus a pure planner predicate.
-   *Workaround in fixture:* plain queue.
-4. **Multi-artifact-kind queues.** A queue matches exactly one `artifact_kind`,
+3. **Multi-artifact-kind queues.** A queue matches exactly one `artifact_kind`,
    but `escalated`/`needs-human` can sit on issues *or* PRs. *Workaround in
    fixture:* bound `escalations`/`needs_human` to `implementation_pr` only;
    issue-level routing would need duplicate per-kind queues. **Not in the
    design's anticipated list.**
-5. **Disjunctive (OR) queue label-sets.** Queue matching is AND-only, but the
+4. **Disjunctive (OR) queue label-sets.** Queue matching is AND-only, but the
    single conceptual "return to engineer" queue is changes-requested **or**
    testing-failed. *Workaround in fixture:* two queues
    (`pr_changes_requested`, `pr_testing_failed`), engineer subscribed to both.
@@ -70,18 +71,12 @@ workaround, which is itself a gap:
 ## Corrections to the design's anticipated list
 
 The design's "Anticipated harness additions" listed the P0/P1 items above plus
-queue activation. External-signal gates and pull-request create/idempotency are
-now resolved. Two further gaps were hit that the list did not mention: items 4
-(multi-artifact-kind queues) and 5 (disjunctive queue label-sets). Both extend
-the queue primitive.
+queue activation. External-signal gates, pull-request create/idempotency, the
+relation primitive, and queue activation are now resolved. Two further gaps were
+hit that the list did not mention: multi-artifact-kind queues and disjunctive
+queue label-sets. Both extend the queue primitive.
 
-## Decisions to flag (no ADR written yet)
+## Decisions recorded
 
-Several backlog items extend the spec primitives and may each warrant an ADR.
-These are surfaced for a human decision, not decided here:
-
-- **Queue activation policy (item 3)** — new queue fields; extends the queue
-  primitive.
-- **Queue matching extensions (items 4–5)** — multi-kind and disjunctive
-  matching also extend the queue primitive; open question whether they fold
-  into the activation-policy ADR or stand alone.
+ADR 0012 covers the queue primitive extensions as one decision: Phase 13's
+activation policy plus Phase 14's multi-kind and disjunctive matching.

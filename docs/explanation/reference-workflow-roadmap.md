@@ -48,17 +48,17 @@ Status legend: ☐ pending · ☑ done.
   Forge-projected condition (e.g. `ci = passed`), not only sibling transitions.
   Removed the zero-role `record_ci_pass`/`record_ci_failure` adapter workaround
   from `reference-delivery`.
-- ☐ **12a — First-class relations (ADR).** A `relation` spec primitive
+- ☑ **12a — First-class relations (ADR).** A `relation` spec primitive
   (parent/dependency/produced-PR) in spec/validated/validation/classification,
   superseding metadata-only relations for the spec.
 - ☐ **12b — `dependency_gate` + reconcile unblock.** A relation-driven
   `dependency_gate` that clears `blocked-on-dependency` when prerequisites land,
   plus a reconcile action that applies it mechanically.
-- ☐ **13 — Queue activation policy (ADR).** Add `min_depth`/`max_age` to the
+- ☑ **13 — Queue activation policy (ADR).** Added `min_depth`/`max_age` to the
   queue primitive and a pure planner predicate so `owner_alignment` services
-  cohorts. The ADR covers all queue-primitive extensions (13 and 14).
+  cohorts. ADR 0012 covers all queue-primitive extensions (13 and 14).
 - ☐ **14 — Queue matching extensions.** Multi-artifact-kind queues and
-  disjunctive (OR) label-sets, referencing the Phase 13 ADR. Collapse the
+  disjunctive (OR) label-sets, referencing ADR 0012. Collapse the
   fixture's split `pr_changes_requested`/`pr_testing_failed` workaround and bind
   `escalations`/`needs_human` to both issues and PRs.
 

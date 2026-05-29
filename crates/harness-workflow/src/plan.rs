@@ -1,9 +1,10 @@
 //! Pure queue evaluation and transition planning (Phase 5).
 //!
 //! This module is the deterministic, side-effect-free state-machine layer. It
-//! answers two questions over already-[classified](crate::classify) artifacts:
+//! answers three questions over already-[classified](crate::classify) artifacts:
 //!
 //! - **Queue matching**: does an artifact belong to a queue?
+//! - **Queue activation**: should a matched queue be serviced now?
 //! - **Transition planning**: may a role apply a transition to an artifact, and
 //!   if so, what typed effects would it produce?
 //!
@@ -14,68 +15,25 @@
 //! every [`PlanDiagnostic`]. Applying the plan against a Forge backend is a
 //! later phase (see `docs/how-to/implement-workflow-layer-in-phases.md`).
 //!
-//! Queue matching also works against the compiled [`QueueManifest`] through the
-//! [`QueueQuery`] trait, so the same logic serves the validated model and a
-//! compiled runtime table.
+//! Queue matching and activation also work against the compiled
+//! [`QueueManifest`](crate::compile::QueueManifest) through the [`QueueQuery`]
+//! trait, so the same logic serves the validated model and a compiled runtime
+//! table.
+
+mod queue;
 
 use crate::classify::{ArtifactSource, ClassifiedArtifact};
-use crate::compile::QueueManifest;
 use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
 use crate::metadata::Lease;
-use crate::validated::{
-    Effect, GateCondition, ValidatedQueue, ValidatedTransition, ValidatedWorkflow,
-};
+use crate::validated::{Effect, GateCondition, ValidatedTransition, ValidatedWorkflow};
+use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
-/// A queue query: an artifact kind plus the labels an artifact must carry.
-///
-/// Implemented by both [`ValidatedQueue`] and the compiled [`QueueManifest`] so
-/// [`matches_queue`] works from the validated model or a compiled manifest.
-pub trait QueueQuery {
-    /// Artifact kind the queue selects.
-    fn queue_artifact(&self) -> &ArtifactKindId;
-    /// Labels that must all be present for an artifact to match.
-    fn queue_labels(&self) -> &[LabelId];
-}
-
-impl QueueQuery for ValidatedQueue {
-    fn queue_artifact(&self) -> &ArtifactKindId {
-        &self.artifact
-    }
-    fn queue_labels(&self) -> &[LabelId] {
-        &self.labels
-    }
-}
-
-impl QueueQuery for QueueManifest {
-    fn queue_artifact(&self) -> &ArtifactKindId {
-        &self.artifact
-    }
-    fn queue_labels(&self) -> &[LabelId] {
-        &self.labels
-    }
-}
-
-/// Returns `true` when a classified artifact matches a queue query.
-///
-/// An artifact matches when its kind equals the queue's artifact kind and every
-/// label the queue requires is present on the artifact. Because exclusive state
-/// dimensions project to mutually exclusive labels, a `code + ready` queue
-/// naturally excludes `blocked` or `in-progress` code issues.
-pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) -> bool {
-    if query.queue_artifact() != &artifact.kind {
-        return false;
-    }
-    let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
-    query
-        .queue_labels()
-        .iter()
-        .all(|label| labels.contains(label.as_str()))
-}
+pub use queue::{matches_queue, queue_active, QueueMember, QueueQuery};
 
 /// A typed side effect a transition plan would apply.
 ///
@@ -328,6 +286,27 @@ impl<'a> Planner<'a> {
             .iter()
             .filter(|artifact| matches_queue(query, artifact))
             .collect()
+    }
+
+    /// Returns whether a queue's current matched members make it active.
+    ///
+    /// Matching remains separate: this method first selects members with the
+    /// unchanged queue matcher, then applies the queue's optional activation
+    /// policy. An unknown queue id is inactive.
+    pub fn queue_active(
+        &self,
+        queue: &QueueId,
+        artifacts: &[ClassifiedArtifact],
+        now: DateTime<Utc>,
+    ) -> bool {
+        let Some(query) = self.workflow.queues().iter().find(|q| &q.id == queue) else {
+            return false;
+        };
+        let members: Vec<&ClassifiedArtifact> = artifacts
+            .iter()
+            .filter(|artifact| matches_queue(query, artifact))
+            .collect();
+        queue::queue_active(query, &members, now)
     }
 
     /// Plans a transition for a role against a classified artifact.

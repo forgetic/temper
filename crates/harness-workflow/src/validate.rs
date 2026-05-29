@@ -11,10 +11,11 @@ use crate::ids::{
 };
 use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
 use crate::validated::{
-    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRole,
-    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
+    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
 use crate::ValidationErrors;
+use chrono::Duration;
 use std::collections::HashSet;
 
 /// Validates a raw workflow spec, collecting all diagnostics.
@@ -166,6 +167,26 @@ fn check_references(
         }
     }
 
+    for relation in &spec.relations {
+        let site = relation_site(relation.kind, &relation.source, &relation.target);
+        check_reference(
+            declared.artifacts,
+            &relation.source,
+            SymbolKind::ArtifactKind,
+            ReferenceSite::RelationSource {
+                relation: site.clone(),
+            },
+            diagnostics,
+        );
+        check_reference(
+            declared.artifacts,
+            &relation.target,
+            SymbolKind::ArtifactKind,
+            ReferenceSite::RelationTarget { relation: site },
+            diagnostics,
+        );
+    }
+
     for queue in &spec.queues {
         check_reference(
             declared.artifacts,
@@ -263,6 +284,10 @@ fn check_references(
             check_gate_condition(spec, declared, &gate.id, condition, diagnostics);
         }
     }
+}
+
+fn relation_site(kind: crate::relation::RelationKind, source: &str, target: &str) -> String {
+    format!("{kind} {source}->{target}")
 }
 
 fn check_gate_condition(
@@ -418,6 +443,10 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
             id: QueueId::new(&queue.id),
             artifact: ArtifactKindId::new(&queue.artifact),
             labels: queue.labels.iter().map(LabelId::new).collect(),
+            min_depth: queue.min_depth,
+            max_age: queue
+                .max_age
+                .map(|seconds| Duration::seconds(i64::from(seconds))),
         })
         .collect();
 
@@ -443,6 +472,16 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         })
         .collect();
 
+    let relations = spec
+        .relations
+        .iter()
+        .map(|relation| ValidatedRelation {
+            kind: relation.kind,
+            source: ArtifactKindId::new(&relation.source),
+            target: ArtifactKindId::new(&relation.target),
+        })
+        .collect();
+
     ValidatedWorkflow::new(
         spec.name.clone(),
         roles,
@@ -452,6 +491,7 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         queues,
         transitions,
         gates,
+        relations,
     )
 }
 

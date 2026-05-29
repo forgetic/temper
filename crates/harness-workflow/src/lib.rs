@@ -61,7 +61,9 @@
 //! pull-request creation through [`Executor::ensure_pull_request`] and
 //! `CreatePullRequest` execution with runtime inputs from [`ExecutionContext`].
 //! Phase 11 added external-signal gates over Forge-projected label/state
-//! conditions.
+//! conditions. Phase 12a added first-class relation declarations and typed
+//! classification of metadata-projected relations. Phase 13 added queue
+//! activation policies for depth- or age-gated servicing.
 
 pub mod artifact;
 pub mod classify;
@@ -75,13 +77,15 @@ pub mod lease;
 pub mod metadata;
 pub mod plan;
 pub mod reconcile;
+pub mod relation;
 pub mod spec;
 pub mod validate;
 pub mod validated;
 
 pub use artifact::ArtifactTarget;
 pub use classify::{
-    ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
+    ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact,
+    ClassifiedRelation, Classifier,
 };
 pub use compile::{
     compile, CompiledWorkflow, LabelManifest, LabelSpec, LabelUsage, PromptManifest, PromptSection,
@@ -102,19 +106,20 @@ pub use metadata::{
     WorkflowMetadata, METADATA_BEGIN, METADATA_END,
 };
 pub use plan::{
-    matches_queue, PlanDiagnostic, PlanError, Planner, Postcondition, QueueQuery, TransitionPlan,
-    WorkflowEffect,
+    matches_queue, queue_active, PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember,
+    QueueQuery, TransitionPlan, WorkflowEffect,
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
     Reconciler, RecoveryAction, RecoveryPolicy,
 };
+pub use relation::RelationKind;
 pub use spec::{
-    RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawRole, RawState,
-    RawStateDimension, RawTransition, RawWorkflowSpec,
+    RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawRelation,
+    RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRole,
-    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
+    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };

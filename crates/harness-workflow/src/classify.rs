@@ -12,7 +12,9 @@
 use crate::artifact::ArtifactTarget;
 use crate::ids::{ArtifactKindId, LabelId, StateDimensionId, StateId};
 use crate::metadata::{parse_metadata_block, WorkflowMetadata};
+use crate::relation::RelationKind;
 use crate::validated::{ValidatedArtifactKind, ValidatedWorkflow};
+use chrono::{DateTime, Utc};
 use harness_forge::{Issue, ItemNumber, PullRequest};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
@@ -36,14 +38,31 @@ pub struct ClassifiedArtifact {
     pub target: ArtifactTarget,
     /// Where the artifact came from.
     pub source: ArtifactSource,
+    /// Last Forge update timestamp, when available from the classified source.
+    pub updated_at: Option<DateTime<Utc>>,
     /// Active states per dimension, derived from the artifact's labels. An
     /// exclusive dimension has at most one entry; a non-exclusive dimension may
     /// list several.
     pub states: BTreeMap<StateDimensionId, Vec<StateId>>,
     /// Parsed workflow metadata, defaulted when the body has no block.
     pub metadata: WorkflowMetadata,
+    /// Typed relations projected from metadata through relation declarations.
+    pub relations: Vec<ClassifiedRelation>,
     /// Raw Forge labels present on the artifact.
     pub labels: Vec<String>,
+}
+
+/// A metadata-projected relation from one classified artifact to another item.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClassifiedRelation {
+    /// Relation meaning declared by the workflow.
+    pub kind: RelationKind,
+    /// Current artifact kind carrying the metadata projection.
+    pub source: ArtifactKindId,
+    /// The linked Forge item number in the same repository.
+    pub target: ItemNumber,
+    /// Declared artifact kinds this target item may have for this relation.
+    pub target_kinds: Vec<ArtifactKindId>,
 }
 
 /// A single problem found while classifying a Forge artifact.
@@ -188,6 +207,7 @@ impl<'a> Classifier<'a> {
             },
             &issue.labels,
             &issue.body,
+            Some(issue.updated_at),
         )
     }
 
@@ -203,6 +223,7 @@ impl<'a> Classifier<'a> {
             },
             &pull_request.labels,
             &pull_request.body,
+            Some(pull_request.updated_at),
         )
     }
 
@@ -223,7 +244,7 @@ impl<'a> Classifier<'a> {
             ArtifactSource::Issue { .. } => ArtifactTarget::Issue,
             ArtifactSource::PullRequest { .. } => ArtifactTarget::PullRequest,
         };
-        self.classify(target, source, labels, body)
+        self.classify(target, source, labels, body, None)
     }
 
     fn classify(
@@ -232,6 +253,7 @@ impl<'a> Classifier<'a> {
         source: ArtifactSource,
         labels: &[String],
         body: &str,
+        updated_at: Option<DateTime<Utc>>,
     ) -> Result<ClassifiedArtifact, ClassificationError> {
         let mut diagnostics = Vec::new();
 
@@ -251,14 +273,19 @@ impl<'a> Classifier<'a> {
         let states = self.resolve_states(&label_set, &mut diagnostics);
 
         match kind {
-            Some(kind) if diagnostics.is_empty() => Ok(ClassifiedArtifact {
-                kind,
-                target,
-                source,
-                states,
-                metadata,
-                labels: labels.to_vec(),
-            }),
+            Some(kind) if diagnostics.is_empty() => {
+                let relations = self.resolve_relations(&kind, &metadata);
+                Ok(ClassifiedArtifact {
+                    kind,
+                    target,
+                    source,
+                    updated_at,
+                    states,
+                    metadata,
+                    relations,
+                    labels: labels.to_vec(),
+                })
+            }
             _ => Err(ClassificationError { diagnostics }),
         }
     }
@@ -348,6 +375,63 @@ impl<'a> Classifier<'a> {
                 candidates: top.iter().map(|k| k.id.clone()).collect(),
             });
             None
+        }
+    }
+
+    fn resolve_relations(
+        &self,
+        source: &ArtifactKindId,
+        metadata: &WorkflowMetadata,
+    ) -> Vec<ClassifiedRelation> {
+        let mut relations = Vec::new();
+        self.push_metadata_relations(
+            source,
+            RelationKind::Parent,
+            &metadata.parents,
+            &mut relations,
+        );
+        self.push_metadata_relations(
+            source,
+            RelationKind::ProducedPr,
+            &metadata.parents,
+            &mut relations,
+        );
+        self.push_metadata_relations(
+            source,
+            RelationKind::Dependency,
+            &metadata.dependencies,
+            &mut relations,
+        );
+        relations
+    }
+
+    fn push_metadata_relations(
+        &self,
+        source: &ArtifactKindId,
+        kind: RelationKind,
+        targets: &[ItemNumber],
+        relations: &mut Vec<ClassifiedRelation>,
+    ) {
+        if targets.is_empty() {
+            return;
+        }
+        let target_kinds: Vec<ArtifactKindId> = self
+            .workflow
+            .relations()
+            .iter()
+            .filter(|relation| relation.kind == kind && &relation.source == source)
+            .map(|relation| relation.target.clone())
+            .collect();
+        if target_kinds.is_empty() {
+            return;
+        }
+        for target in targets {
+            relations.push(ClassifiedRelation {
+                kind,
+                source: source.clone(),
+                target: *target,
+                target_kinds: target_kinds.clone(),
+            });
         }
     }
 
