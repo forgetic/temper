@@ -14,7 +14,7 @@ The existing name suggested a generic foundation crate instead of the specific l
 
 ## Steering for future agents
 
-Rename `harness-core` to `harness-workflow` before adding workflow functionality. Keep Forge abstractions in `harness-forge`; put workflow policy and orchestration in `harness-workflow`; keep agent-provider execution outside both layers until it is deliberately designed.
+The placeholder `harness-core` was renamed to `harness-workflow` before adding any workflow functionality. Keep Forge abstractions in `harness-forge`; put workflow policy and orchestration in `harness-workflow`; keep agent-provider execution outside both layers until it is deliberately designed.
 
 ## Where this is now documented
 

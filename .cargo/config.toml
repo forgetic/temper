@@ -6,5 +6,6 @@
 
 [alias]
 dev-check = "check --workspace --all-targets"
+dev-clippy = "clippy --workspace --all-targets"
 dev-test = "test --workspace --all-targets"
 dev-doc = "doc --workspace --no-deps"

@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the planned `harness-workflow` crate. The current placeholder crate may still be named `harness-core` until the rename phase is completed.
+This page defines the intended contract for the `harness-workflow` crate. Phase 2 has landed the spec and validation foundations; the rest of the contract below (compilation, runtime, recovery) is still planned. See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -28,6 +28,19 @@ Recommended phases:
 
 Validation errors should be diagnostic collections so users can fix multiple spec issues at once.
 
+## Implementation status
+
+Phase 2 implements the first two phases and their supporting types:
+
+- `spec::RawWorkflowSpec` and its raw child structs (`RawRole`, `RawLabel`, `RawArtifactKind`, `RawStateDimension`, `RawState`, `RawQueue`, `RawTransition`, `RawEffect`, `RawGate`) load from serde input.
+- `validated::ValidatedWorkflow` is the normalized model. It has no public constructor; the only way to build one is `RawWorkflowSpec::validate` / `validate::validate`, so compiler and runtime APIs added later can require it by type.
+- `ids` provides typed ids: `RoleId`, `LabelId`, `ArtifactKindId`, `StateDimensionId`, `StateId`, `QueueId`, `TransitionId`, `GateId`.
+- `diagnostics` provides `Diagnostic`, `Severity`, `SymbolKind`, `ReferenceSite`, and the `ValidationErrors` collection.
+
+Not yet modeled: `relation`, `invariant`, `recovery_policy`, concurrency limits, compilation outputs, and runtime execution. Effects in Phase 2 cover only label add/remove.
+
+Gate/transition wiring is modeled in both directions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions.
+
 ## Spec primitives
 
 A workflow spec contains these logical primitives.
@@ -50,14 +63,16 @@ Labels are a portable Forge projection of workflow state. The workflow layer may
 
 Validation must reject or diagnose:
 
-- duplicate role, queue, artifact, transition, gate, or state IDs
-- references to undeclared roles, queues, labels, artifacts, or states
-- transitions whose effects contradict declared mutually exclusive dimensions
-- gates that cannot be satisfied by any declared transition
-- role tool declarations that exceed the role's transition authority
-- artifact mappings that cannot be represented by the Forge interface
+- duplicate role, label, artifact, state-dimension, queue, transition, or gate IDs (implemented; state ids are checked for uniqueness within each dimension)
+- references to undeclared roles, labels, artifact kinds, queues, transitions, or gates (implemented)
+- transitions whose effects contradict declared mutually exclusive dimensions (planned)
+- gates that cannot be satisfied by any declared transition (planned)
+- role tool declarations that exceed the role's transition authority (planned)
+- artifact mappings that cannot be represented by the Forge interface (planned)
 
-Validation should also warn about unreachable queues, terminal states with no explanation, and labels that are declared but unused.
+Validation should also warn about unreachable queues, terminal states with no explanation, and labels that are declared but unused (planned).
+
+In the Phase 2 model, labels are the only cross-referenced projection of state: artifact mappings, queues, state declarations, and transition effects all reference label ids. States are not referenced by id outside their dimension, so undeclared-state references are not a current diagnostic.
 
 ## Runtime guarantees
 

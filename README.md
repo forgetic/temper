@@ -2,7 +2,7 @@
 
 Harness is a Rust workspace for building agentic workflows on top of Forge-like collaboration platforms.
 
-The project is intentionally backend-agnostic. The `harness-forge` crate defines the Forge domain model and abstract interface for repositories, users, issues, pull requests, comments, labels, merges, and CI jobs. Concrete backends can adapt that interface to local files, Forgejo, GitHub, or other systems. The placeholder `harness-core` crate is planned to be renamed to `harness-workflow` before workflow/orchestration logic is added.
+The project is intentionally backend-agnostic. The `harness-forge` crate defines the Forge domain model and abstract interface for repositories, users, issues, pull requests, comments, labels, merges, and CI jobs. Concrete backends can adapt that interface to local files, Forgejo, GitHub, or other systems. The `harness-workflow` crate is the workflow/orchestration layer; it now contains the typed workflow spec and static validation foundations (Phase 2).
 
 ## Status
 
@@ -11,17 +11,17 @@ This repository is at the design-first scaffold stage. Expect the public interfa
 Current state:
 
 - `harness-forge` contains the provider-neutral Forge domain model and async interface.
-- `harness-core` is intentionally minimal; ADR 0007 plans to rename it to `harness-workflow` before adding workflow/orchestration logic.
+- `harness-workflow` implements the workflow spec types (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2). Later phases (artifact/label modeling, compilation, runtime, recovery) are still planned; see ADR 0007.
 - `harness-fs` implements filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
-- The next likely implementation task is to implement `harness-workflow` in phases, starting with the crate rename, or to add another concrete Forge backend.
+- The next likely implementation task is to continue `harness-workflow` in phases (Phase 3: model artifacts, labels, and metadata), or to add another concrete Forge backend.
 
 ## Workspace layout
 
 ```text
 crates/
-  harness-forge/  Domain types and the backend-agnostic Forge interface.
-  harness-core/   Current placeholder for planned harness-workflow crate.
-  harness-fs/     Local filesystem backend used for fast development and tests.
+  harness-forge/    Domain types and the backend-agnostic Forge interface.
+  harness-workflow/ Workflow/orchestration crate (spec + validation foundations).
+  harness-fs/       Local filesystem backend used for fast development and tests.
 docs/
   tutorials/      Learning-oriented walkthroughs.
   how-to/         Task-oriented recipes.

@@ -12,7 +12,7 @@ Harness needs both provider-neutral Forge abstractions and higher-level workflow
 
 Place Forge domain types and the backend interface in `harness-forge`.
 
-Reserve a separate workflow crate for workflow and orchestration logic that will be defined later. The placeholder was originally named `harness-core`; ADR 0007 renames this planned layer to `harness-workflow` before functionality is added. `harness-workflow` may depend on `harness-forge` when workflow logic needs Forge operations, but `harness-forge` must not depend on `harness-workflow` or concrete backends.
+Reserve a separate workflow crate for workflow and orchestration logic that will be defined later. That crate is `harness-workflow` (scaffolded as `harness-core` and renamed per ADR 0007 before functionality was added). `harness-workflow` may depend on `harness-forge` when workflow logic needs Forge operations, but `harness-forge` must not depend on `harness-workflow` or concrete backends.
 
 ## Consequences
 

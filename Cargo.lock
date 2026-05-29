@@ -99,10 +99,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-core"
-version = "0.1.0"
-
-[[package]]
 name = "harness-forge"
 version = "0.1.0"
 dependencies = [
@@ -119,6 +115,14 @@ dependencies = [
  "async-trait",
  "chrono",
  "harness-forge",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "harness-workflow"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
 ]

@@ -14,11 +14,11 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 ## Current repository state
 
 - `harness-forge` defines the backend-agnostic Forge domain model and async interface.
-- `harness-core` is a minimal placeholder; ADR 0007 plans to rename it to `harness-workflow` before adding workflow/orchestration logic.
+- `harness-workflow` is the workflow/orchestration crate; it now provides the typed workflow spec (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2). Compilation, runtime, and recovery are still planned (see ADR 0007).
 - `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
-- The next likely work is implementing `harness-workflow` in phases, starting with the crate rename, or adding another concrete Forge backend.
+- The next likely work is continuing `harness-workflow` in phases (Phase 3: model artifacts, labels, and metadata), or adding another concrete Forge backend.
 
 ## Ground rules
 
@@ -28,7 +28,7 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 - Every domain-model change must update `docs/explanation/domain-model.md` when it changes the conceptual model.
 - Add or update tests with behavior changes.
 - Keep Rust source and test files at or below 600 lines; split focused modules or shared test support before exceeding that budget.
-- Run `cargo fmt --all` and `cargo dev-check` before handing off.
+- Run `cargo fmt --all`, `cargo dev-clippy`, and `cargo dev-check` before handing off.
 
 ## Documentation expectations
 
@@ -49,7 +49,7 @@ Do not mix tutorial prose into reference pages. Do not hide contracts in explana
 ## Rust conventions
 
 - Keep `harness-forge` free of concrete backend dependencies.
-- Rename `harness-core` to `harness-workflow` before adding workflow functionality; keep that crate focused on workflow and orchestration logic.
+- Keep `harness-workflow` focused on workflow and orchestration logic; it is the renamed workflow crate (formerly `harness-core`).
 - Use typed identifiers instead of raw strings in public APIs.
 - Prefer explicit state enums over stringly-typed statuses.
 - Keep async boundaries at the backend interface; concrete backends may use sync internals if appropriate.
@@ -58,6 +58,7 @@ Do not mix tutorial prose into reference pages. Do not hide contracts in explana
 ## Fast local iteration
 
 - Use `cargo dev-check` for the default validation loop; it checks the whole workspace and all targets without producing binaries.
+- Clippy is installed: use `cargo dev-clippy` (`cargo clippy --workspace --all-targets`) and keep its output clean before handoff.
 - Cargo uses all available logical CPU cores by default. Do not set a fixed `build.jobs` value unless the task explicitly requires it.
 - Development and test profiles are tuned for fast local compilation in `Cargo.toml`; production profiles can be designed later.
 

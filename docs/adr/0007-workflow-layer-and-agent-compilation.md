@@ -9,13 +9,13 @@ Accepted
 Harness needs to support evolving agentic workflows instead of one hard-coded process.
 A starting workflow uses architect, engineer, reviewer, tester, and owner roles, but future workflows may add more roles, parallel workers, richer gates, or different escalation paths.
 
-The existing Forge layer is intentionally backend-agnostic and should remain focused on collaboration primitives. The current `harness-core` crate name is too vague for the next layer, whose purpose is workflow orchestration.
+The existing Forge layer is intentionally backend-agnostic and should remain focused on collaboration primitives. The crate scaffolded as `harness-core` had a name too vague for the next layer, whose purpose is workflow orchestration.
 
 Workflows must also be robust when agents crash, repeat tool calls, or resume after partial side effects.
 
 ## Decision
 
-Rename `harness-core` to `harness-workflow` when implementation begins.
+Rename `harness-core` to `harness-workflow` when implementation begins. This rename has been carried out; the crate is now `harness-workflow`, still a minimal placeholder with no workflow functionality yet.
 
 Define the workflow layer as a deterministic state-machine and compilation layer on top of `harness-forge`. It owns:
 

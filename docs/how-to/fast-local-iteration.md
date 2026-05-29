@@ -18,6 +18,16 @@ cargo check --workspace --all-targets
 
 `cargo check` validates types and borrow checking without producing final binaries, so it should be the default command while designing APIs and editing library code.
 
+## Linting
+
+Clippy is installed in this environment. Run it before handoff:
+
+```sh
+cargo dev-clippy
+```
+
+This expands to `cargo clippy --workspace --all-targets`. Keep the lint output clean.
+
 ## Formatting
 
 Run formatting before handoff:

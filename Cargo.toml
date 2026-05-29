@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/harness-core",
+    "crates/harness-workflow",
     "crates/harness-forge",
     "crates/harness-fs",
 ]

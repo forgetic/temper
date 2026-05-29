@@ -8,13 +8,13 @@ Read first:
 - `docs/explanation/agentic-workflows.md`
 - `docs/reference/workflow-layer.md`
 
-## Phase 1: Rename the crate
+## Phase 1: Rename the crate (done)
 
-Rename `crates/harness-core` to `crates/harness-workflow` and update Cargo metadata, README files, ADR cross-references, docs indexes, and crate-level docs. Do not add workflow functionality yet.
+Renamed `crates/harness-core` to `crates/harness-workflow` and updated Cargo metadata, README files, AGENTS, ADR cross-references, docs indexes, and crate-level docs. No workflow functionality was added in this phase.
 
-## Phase 2: Add spec and validation foundations
+## Phase 2: Add spec and validation foundations (done)
 
-Create focused modules for raw workflow specs, typed IDs, validation diagnostics, and `ValidatedWorkflow`. Implement static checks for duplicate IDs and missing references. Add unit tests for success and failure cases.
+Added focused modules in `crates/harness-workflow/src`: `ids` (typed ids), `spec` (`RawWorkflowSpec` and raw children), `diagnostics` (`Diagnostic`, `Severity`, `SymbolKind`, `ReferenceSite`, `ValidationErrors`), `validated` (`ValidatedWorkflow` with a crate-private constructor), and `validate` (diagnostic-collecting static validation). Implemented checks for duplicate ids and undeclared references (roles, labels, artifact kinds, queues, transitions, gates). Integration tests in `tests/validation.rs` cover valid workflows, duplicate ids, missing references across every site, serde loading, and the `ValidatedWorkflow`-only API shape.
 
 ## Phase 3: Model artifacts, labels, and metadata
 

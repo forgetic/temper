@@ -15,10 +15,11 @@ Use `git diff` for any file you edited. Confirm there are no accidental generate
 
 ```sh
 cargo fmt --all
+cargo dev-clippy
 cargo dev-check
 ```
 
-Add task-specific tests when behavior changed. Run those tests before handoff.
+Clippy is installed in this environment; keep its output clean. Add task-specific tests when behavior changed. Run those tests before handoff.
 
 ## 3. Review documentation from the top
 
