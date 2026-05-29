@@ -12,5 +12,8 @@ harness-forge = { path = "../harness-forge" }
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+harness-fs = { path = "../harness-fs" }
+
 [lints]
 workspace = true

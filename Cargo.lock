@@ -125,6 +125,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "harness-forge",
+ "harness-fs",
  "serde",
  "serde_json",
 ]

@@ -152,6 +152,10 @@ CI jobs are associated with a repository, a commit SHA, and optionally a pull re
 
 `CiJobQuery` supports filtering by pull request, commit SHA, and status. CI jobs can be sorted by name, creation time, or update time.
 
+## Idempotency
+
+Create operations (`create_issue`, `create_pull_request`, `add_*_comment`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue`; see `docs/reference/workflow-layer.md`. A future revision may add a portable correlation-key contract if it proves broadly useful.
+
 ## Compatibility notes
 
 Concrete backends may expose richer provider-specific features, but portable workflow logic should depend only on this interface. If a provider feature becomes broadly useful, add it to the Forge model with documentation and backend conformance tests.

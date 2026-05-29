@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–5 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, and pure queue evaluation and transition planning; the rest of the contract below (runtime execution, recovery) is still planned. See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–6 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, pure queue evaluation and transition planning, and runtime execution of label transitions through the `Forge` trait with idempotent issue creation; the rest of the contract below (leases, journaling, recovery) is still planned. See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -67,7 +67,14 @@ Phase 5 added pure queue evaluation and transition planning:
 - `plan::WorkflowEffect` is the closed planning-effect enum. `plan::Postcondition` carries the conditions that must hold after a plan applies. `plan::TransitionPlan` bundles transition, role, artifact kind, target, effects, and postconditions.
 - `plan::PlanError` collects `plan::PlanDiagnostic`s (unauthorized role, artifact-kind mismatch, stale/contradicted label preconditions, unsatisfied gates, and impossible resulting states).
 
-Not yet implemented: executing plans against a backend, idempotent create behavior, leases, journaling, and reconciliation.
+Phase 6 added runtime execution of transitions through the `Forge` trait:
+
+- `execute::Executor` (also `ValidatedWorkflow::executor`) is generic over `F: Forge + ?Sized`, so it runs against a concrete backend or a `&dyn Forge`. It owns no durable state, so one executor is reusable across executions.
+- `Executor::execute` runs the full transition loop against fresh state: load the target by item number, classify it, re-plan the transition (re-checking authority, preconditions, gates, and resulting states), apply the planned label effects as one backend update, and verify the postconditions. It returns an `ExecutionReport` or a typed `ExecutionError`.
+- `ExecutionError` separates the failure classes a runtime must distinguish: `Validation` (undeclared transition, unauthorized role, artifact-kind mismatch), `Precondition` (stale/contradicted labels, unsatisfied gate, impossible state), `Backend` (any `ForgeError`), plus `Classification`, `TargetMissing`, `UnsupportedEffect`, and `PostconditionFailed`.
+- `Executor::ensure_issue` is idempotent create for issues: it searches existing issues for a metadata `correlation_key`, returns the existing issue if found, or stamps the key into the new issue's metadata block and creates it. `EnsureOutcome` reports whether the artifact was `Created` or `Existing`.
+
+Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge), leases and heartbeats, command journaling, and reconciliation.
 
 ## Spec primitives
 
@@ -175,6 +182,10 @@ Every transition execution must:
 4. apply effects through an idempotent executor
 5. verify postconditions or emit diagnostics
 
+`Executor::execute` implements this loop today for label transitions. It never trusts a plan computed against stale state: it re-loads and re-plans against fresh state immediately before mutating, and it refuses to mutate at all if planning fails or if a plan contains an effect it cannot apply, so a transition can never partially apply. Postconditions are verified by re-reading the artifact's labels after the update; a mismatch yields `PostconditionFailed`.
+
+Idempotency: re-running a label transition that already applied fails as a `Precondition` error (the source label is gone and/or the target label is present), so a retry never double-applies. Idempotent create is handled separately by `Executor::ensure_issue` through correlation keys.
+
 Agents must not mutate Forge state directly when operating under workflow control. Generated tools are the transition boundary.
 
 ## Effects
@@ -183,7 +194,9 @@ Workflow effects are the closed `plan::WorkflowEffect` enum so executors and rec
 
 Only `AddLabel` and `RemoveLabel` are produced today, because current transition specs model only label effects. The remaining variants are explicit placeholders: they round out the set an executor must handle so later phases can add assignee, comment, create, lease, and merge effects without breaking exhaustive matches. The planning tests document this by asserting that label effects are the only ones a plan currently emits.
 
-Create effects (`CreateIssue`, `CreatePullRequest`) carry correlation keys. Retrying a create effect with the same correlation key must return the existing artifact when it already exists; that idempotency is enforced by the executor phase, not the planner.
+`Executor::execute` applies `AddLabel` and `RemoveLabel` through `update_issue`/`update_pull_request`; any other effect variant in a plan is rejected with `ExecutionError::UnsupportedEffect` before any mutation, so the closed enum stays honest as later phases wire up the remaining variants.
+
+Create effects (`CreateIssue`, `CreatePullRequest`) carry correlation keys. Retrying a create effect with the same correlation key must return the existing artifact when it already exists. The current `Forge` interface has no native create-once primitive, so `Executor::ensure_issue` enforces this idempotency in the workflow layer: it stamps the correlation key into the new issue's metadata block and searches existing issues for that key before creating. Pull-request idempotent create follows the same pattern and is not implemented yet.
 
 ## Claims and leases
 

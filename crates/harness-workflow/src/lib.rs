@@ -42,11 +42,17 @@
 //! [`Planner`] matches classified artifacts against queues and plans transitions
 //! into typed [`WorkflowEffect`]s and postconditions without touching a Forge
 //! backend.
+//!
+//! Phase 6 added runtime execution ([`execute`]): an [`Executor`] loads fresh
+//! Forge state, re-plans a transition against it, applies the planned effects
+//! through the [`harness_forge::Forge`] trait, and verifies postconditions. It
+//! also offers idempotent create through correlation keys.
 
 pub mod artifact;
 pub mod classify;
 pub mod compile;
 pub mod diagnostics;
+pub mod execute;
 pub mod ids;
 pub mod metadata;
 pub mod plan;
@@ -63,6 +69,7 @@ pub use compile::{
     QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
 };
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
+pub use execute::{EnsureOutcome, ExecutionError, ExecutionReport, Executor};
 pub use ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
