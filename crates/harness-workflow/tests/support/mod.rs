@@ -4,7 +4,12 @@
 //! runtime: the filesystem forge never parks, so a hand-rolled `block_on` is
 //! enough. Each test binary that needs a backend includes this module with
 //! `mod support;`.
+//!
+//! The [`crash`] submodule adds a fault-injecting [`harness_forge::Forge`]
+//! wrapper used by the Phase 8 robustness tests.
 #![allow(dead_code)]
+
+pub mod crash;
 
 use chrono::{DateTime, Utc};
 use harness_forge::{
@@ -161,6 +166,16 @@ pub fn issue_labels(
     let mut labels = block_on(forge.get_issue_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("issue exists")
+        .labels;
+    labels.sort();
+    labels
+}
+
+/// Reads a pull request's sorted labels from the backend.
+pub fn pr_labels(forge: &FilesystemForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
+    let mut labels = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists")
         .labels;
     labels.sort();
     labels

@@ -1,0 +1,319 @@
+//! A crash-injecting [`Forge`] wrapper for deterministic robustness tests.
+//!
+//! `CrashForge` wraps any [`Forge`] backend and can fail a chosen operation on a
+//! chosen call. Faults are deterministic — they fire on a specific 1-based
+//! occurrence of an operation — so a test never depends on timing or sleeps.
+//!
+//! Each fault has a [`FaultPoint`]:
+//!
+//! - [`FaultPoint::Before`] fails *before* delegating, so the backend is never
+//!   touched. This models a crash on the way into a side effect: state is intact
+//!   and a retry can complete cleanly.
+//! - [`FaultPoint::After`] delegates first and *then* returns an error, so the
+//!   backend mutation lands but the caller observes a failure. This is the
+//!   dangerous "crashed right after the side effect" case the runtime must
+//!   tolerate without double-applying on retry.
+//!
+//! Only the mutating and load operations the runtime exercises are fault-aware;
+//! every other [`Forge`] method delegates straight through.
+#![allow(dead_code)]
+
+use async_trait::async_trait;
+use harness_forge::{
+    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
+    CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, ItemNumber,
+    Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery, Repository,
+    RepositoryId, RepositoryPath, RepositoryQuery, UpdateIssue, UpdatePullRequest, UpsertLabel,
+    User, UserId,
+};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// The fault-aware Forge operations.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ForgeOp {
+    CreateIssue,
+    UpdateIssue,
+    GetIssueByNumber,
+    ListIssues,
+    CreatePullRequest,
+    UpdatePullRequest,
+    GetPullRequestByNumber,
+    ListPullRequests,
+    MergePullRequest,
+}
+
+/// Where in an operation a fault fires.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FaultPoint {
+    /// Fail before delegating: the backend is never touched.
+    Before,
+    /// Fail after delegating: the mutation lands, then the call returns an error.
+    After,
+}
+
+/// A single deterministic fault: fail `op` on its `occurrence`-th call.
+#[derive(Clone, Copy, Debug)]
+pub struct Fault {
+    pub op: ForgeOp,
+    /// 1-based call index at which to fire.
+    pub occurrence: usize,
+    pub point: FaultPoint,
+}
+
+impl Fault {
+    /// A fault that fails before the backend is touched.
+    pub fn before(op: ForgeOp, occurrence: usize) -> Self {
+        Self {
+            op,
+            occurrence,
+            point: FaultPoint::Before,
+        }
+    }
+
+    /// A fault that fails after the backend mutation has landed.
+    pub fn after(op: ForgeOp, occurrence: usize) -> Self {
+        Self {
+            op,
+            occurrence,
+            point: FaultPoint::After,
+        }
+    }
+}
+
+/// A [`Forge`] wrapper that injects deterministic faults.
+pub struct CrashForge<F: Forge> {
+    inner: F,
+    faults: Vec<Fault>,
+    counts: Mutex<HashMap<ForgeOp, usize>>,
+}
+
+impl<F: Forge> CrashForge<F> {
+    /// Wraps `inner`, arming the given faults.
+    pub fn new(inner: F, faults: Vec<Fault>) -> Self {
+        Self {
+            inner,
+            faults,
+            counts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Borrows the wrapped backend for fault-free state inspection.
+    pub fn inner(&self) -> &F {
+        &self.inner
+    }
+
+    /// Returns how many times `op` has been called.
+    pub fn count(&self, op: ForgeOp) -> usize {
+        *self
+            .counts
+            .lock()
+            .expect("counts mutex")
+            .get(&op)
+            .unwrap_or(&0)
+    }
+
+    /// Records a call to `op` and returns its 1-based occurrence.
+    fn tick(&self, op: ForgeOp) -> usize {
+        let mut counts = self.counts.lock().expect("counts mutex");
+        let entry = counts.entry(op).or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    /// Fails when a fault is armed for `op` at this `occurrence` and `point`.
+    fn guard(&self, op: ForgeOp, occurrence: usize, point: FaultPoint) -> ForgeResult<()> {
+        let armed = self
+            .faults
+            .iter()
+            .any(|fault| fault.op == op && fault.occurrence == occurrence && fault.point == point);
+        if armed {
+            Err(ForgeError::Backend(format!(
+                "injected fault: {op:?} {point:?} on call #{occurrence}"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait]
+impl<F: Forge> Forge for CrashForge<F> {
+    async fn current_user(&self) -> ForgeResult<User> {
+        self.inner.current_user().await
+    }
+
+    async fn get_user(&self, id: &UserId) -> ForgeResult<Option<User>> {
+        self.inner.get_user(id).await
+    }
+
+    async fn list_repositories(&self, query: RepositoryQuery) -> ForgeResult<Vec<Repository>> {
+        self.inner.list_repositories(query).await
+    }
+
+    async fn create_repository(&self, input: CreateRepository) -> ForgeResult<Repository> {
+        self.inner.create_repository(input).await
+    }
+
+    async fn get_repository(&self, id: &RepositoryId) -> ForgeResult<Option<Repository>> {
+        self.inner.get_repository(id).await
+    }
+
+    async fn get_repository_by_path(
+        &self,
+        path: &RepositoryPath,
+    ) -> ForgeResult<Option<Repository>> {
+        self.inner.get_repository_by_path(path).await
+    }
+
+    async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>> {
+        self.inner.list_labels(repo_id).await
+    }
+
+    async fn upsert_label(&self, repo_id: &RepositoryId, input: UpsertLabel) -> ForgeResult<Label> {
+        self.inner.upsert_label(repo_id, input).await
+    }
+
+    async fn list_issues(
+        &self,
+        repo_id: &RepositoryId,
+        query: IssueQuery,
+    ) -> ForgeResult<Vec<Issue>> {
+        let n = self.tick(ForgeOp::ListIssues);
+        self.guard(ForgeOp::ListIssues, n, FaultPoint::Before)?;
+        let result = self.inner.list_issues(repo_id, query).await?;
+        self.guard(ForgeOp::ListIssues, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
+        let n = self.tick(ForgeOp::CreateIssue);
+        self.guard(ForgeOp::CreateIssue, n, FaultPoint::Before)?;
+        let result = self.inner.create_issue(repo_id, input).await?;
+        self.guard(ForgeOp::CreateIssue, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn get_issue(&self, id: &IssueId) -> ForgeResult<Option<Issue>> {
+        self.inner.get_issue(id).await
+    }
+
+    async fn get_issue_by_number(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+    ) -> ForgeResult<Option<Issue>> {
+        let n = self.tick(ForgeOp::GetIssueByNumber);
+        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::Before)?;
+        let result = self.inner.get_issue_by_number(repo_id, number).await?;
+        self.guard(ForgeOp::GetIssueByNumber, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
+        let n = self.tick(ForgeOp::UpdateIssue);
+        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::Before)?;
+        let result = self.inner.update_issue(id, input).await?;
+        self.guard(ForgeOp::UpdateIssue, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
+        self.inner.list_issue_comments(id).await
+    }
+
+    async fn add_issue_comment(&self, id: &IssueId, input: CreateComment) -> ForgeResult<Comment> {
+        self.inner.add_issue_comment(id, input).await
+    }
+
+    async fn list_pull_requests(
+        &self,
+        repo_id: &RepositoryId,
+        query: PullRequestQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        let n = self.tick(ForgeOp::ListPullRequests);
+        self.guard(ForgeOp::ListPullRequests, n, FaultPoint::Before)?;
+        let result = self.inner.list_pull_requests(repo_id, query).await?;
+        self.guard(ForgeOp::ListPullRequests, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn create_pull_request(
+        &self,
+        repo_id: &RepositoryId,
+        input: CreatePullRequest,
+    ) -> ForgeResult<PullRequest> {
+        let n = self.tick(ForgeOp::CreatePullRequest);
+        self.guard(ForgeOp::CreatePullRequest, n, FaultPoint::Before)?;
+        let result = self.inner.create_pull_request(repo_id, input).await?;
+        self.guard(ForgeOp::CreatePullRequest, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
+        self.inner.get_pull_request(id).await
+    }
+
+    async fn get_pull_request_by_number(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+    ) -> ForgeResult<Option<PullRequest>> {
+        let n = self.tick(ForgeOp::GetPullRequestByNumber);
+        self.guard(ForgeOp::GetPullRequestByNumber, n, FaultPoint::Before)?;
+        let result = self
+            .inner
+            .get_pull_request_by_number(repo_id, number)
+            .await?;
+        self.guard(ForgeOp::GetPullRequestByNumber, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn update_pull_request(
+        &self,
+        id: &PullRequestId,
+        input: UpdatePullRequest,
+    ) -> ForgeResult<PullRequest> {
+        let n = self.tick(ForgeOp::UpdatePullRequest);
+        self.guard(ForgeOp::UpdatePullRequest, n, FaultPoint::Before)?;
+        let result = self.inner.update_pull_request(id, input).await?;
+        self.guard(ForgeOp::UpdatePullRequest, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
+        self.inner.list_pull_request_comments(id).await
+    }
+
+    async fn add_pull_request_comment(
+        &self,
+        id: &PullRequestId,
+        input: CreateComment,
+    ) -> ForgeResult<Comment> {
+        self.inner.add_pull_request_comment(id, input).await
+    }
+
+    async fn merge_pull_request(
+        &self,
+        id: &PullRequestId,
+        input: MergePullRequest,
+    ) -> ForgeResult<MergeRecord> {
+        let n = self.tick(ForgeOp::MergePullRequest);
+        self.guard(ForgeOp::MergePullRequest, n, FaultPoint::Before)?;
+        let result = self.inner.merge_pull_request(id, input).await?;
+        self.guard(ForgeOp::MergePullRequest, n, FaultPoint::After)?;
+        Ok(result)
+    }
+
+    async fn list_ci_jobs(
+        &self,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
+    ) -> ForgeResult<Vec<CiJob>> {
+        self.inner.list_ci_jobs(repo_id, query).await
+    }
+
+    async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
+        self.inner.get_ci_job(id).await
+    }
+}

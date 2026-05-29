@@ -83,6 +83,14 @@ Phase 7 added recovery primitives — leases, command journaling, and reconcilia
 
 Not yet implemented: executing non-label effects (assignee, comment, create-PR, lease, merge) inside `Executor::execute`, applying reconciler actions automatically, and durable journal/lease storage backends.
 
+Phase 8 added robustness and crash-injection tests (no new runtime types):
+
+- `tests/support/crash.rs` provides `CrashForge`, a `Forge` wrapper that injects a deterministic fault before or after a chosen operation's chosen call, so a backend mutation can fail either before it lands (state intact) or after it lands (state changed, caller sees failure).
+- `tests/crash_injection.rs` proves crash-before/after retry safety, a fault matrix showing label effects are applied at most once, journaled restart recovery (partial transition → repair, landed effect → reconciled), and at-most-once claiming under duplicated tool calls and interleaved workers.
+- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate create per correlation key under crash, no two active leases per exclusive claim, no merge before required gates pass (review/testing in the five-role fixture and CI/review/testing in an inline three-gate workflow), failed review gate returns work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
+
+See `robustness-guarantees.md` for the full safety-property register and the limitations these tests surfaced (notably that lease acquisition is not yet a compare-and-swap and that pull-request idempotent create is not implemented).
+
 ## Spec primitives
 
 A workflow spec contains these logical primitives.
