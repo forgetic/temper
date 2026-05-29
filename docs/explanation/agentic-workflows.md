@@ -11,7 +11,7 @@ The intended stack is:
 2. `harness-workflow`: workflow specifications, validation, compilation, runtime transitions, and recovery.
 3. agent runners: LLM or human workers using generated prompts and tools.
 
-This separation keeps provider details out of workflow policy and keeps agent prompts focused on the authority each role actually has.
+This separation keeps provider details out of workflow policy and keeps agent prompts focused on the authority each role actually has. For where these layers run as processes once a real backend exists, see [End-to-end big picture](end-to-end-big-picture.md).
 
 ## Workflow concepts
 
