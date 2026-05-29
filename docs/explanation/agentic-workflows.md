@@ -29,6 +29,10 @@ A relation links artifacts, such as feature request to epic, epic to design issu
 
 ## Example five-role workflow
 
+A worked, cleaned-up version of this example — the target the spec, planner, and
+executor should express and run — is in
+[Reference delivery workflow](reference-workflow.md).
+
 A human files a high-level request. The architect turns it into one or more epics and design issues. If long-term direction is unclear, the architect labels the design issue `needs-owner`.
 
 The owner comments on issues requiring owner input and periodically reviews landed PRs for alignment with project values.
