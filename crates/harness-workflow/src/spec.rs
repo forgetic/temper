@@ -203,4 +203,18 @@ pub struct RawGate {
     /// a transition id.
     #[serde(default)]
     pub satisfied_by: Vec<String>,
+    /// Portable Forge-projected condition that can satisfy this gate, such as
+    /// `ci = passed` after a backend adapter projects CI into labels/state.
+    #[serde(default)]
+    pub condition: Option<RawGateCondition>,
+}
+
+/// A portable condition that can satisfy a gate without a workflow transition.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RawGateCondition {
+    /// The artifact must carry this label.
+    LabelPresent { label: String },
+    /// The artifact must occupy `state` within `dimension`.
+    StateEquals { dimension: String, state: String },
 }

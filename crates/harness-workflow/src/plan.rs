@@ -24,7 +24,9 @@ use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
 use crate::metadata::Lease;
-use crate::validated::{Effect, ValidatedQueue, ValidatedTransition, ValidatedWorkflow};
+use crate::validated::{
+    Effect, GateCondition, ValidatedQueue, ValidatedTransition, ValidatedWorkflow,
+};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -368,7 +370,7 @@ impl<'a> Planner<'a> {
         if declared.artifact == artifact.kind {
             let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
             self.check_preconditions(declared, &labels, &mut diagnostics);
-            self.check_gates(declared, &labels, &mut diagnostics);
+            self.check_gates(declared, artifact, &labels, &mut diagnostics);
             self.check_resulting_states(declared, &labels, &mut diagnostics);
         } else {
             diagnostics.push(PlanDiagnostic::ArtifactKindMismatch {
@@ -426,11 +428,12 @@ impl<'a> Planner<'a> {
     fn check_gates(
         &self,
         transition: &ValidatedTransition,
+        artifact: &ClassifiedArtifact,
         labels: &HashSet<&str>,
         diagnostics: &mut Vec<PlanDiagnostic>,
     ) {
         for gate in &transition.requires_gates {
-            if !self.gate_satisfied(gate, labels) {
+            if !self.gate_satisfied(gate, artifact, labels) {
                 diagnostics.push(PlanDiagnostic::GateNotSatisfied {
                     transition: transition.id.clone(),
                     gate: gate.clone(),
@@ -439,37 +442,46 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// A gate is satisfied when some satisfying transition's added labels are
-    /// all present, i.e. that transition's outcome is visible on the artifact.
-    fn gate_satisfied(&self, gate: &GateId, labels: &HashSet<&str>) -> bool {
+    /// A gate is satisfied when its external condition holds or some
+    /// satisfying transition's added labels are all present.
+    fn gate_satisfied(
+        &self,
+        gate: &GateId,
+        artifact: &ClassifiedArtifact,
+        labels: &HashSet<&str>,
+    ) -> bool {
         let Some(declared) = self.workflow.gates().iter().find(|g| &g.id == gate) else {
             return false;
         };
-        declared.satisfied_by.iter().any(|transition_id| {
-            let Some(transition) = self
-                .workflow
-                .transitions()
-                .iter()
-                .find(|t| &t.id == transition_id)
-            else {
-                return false;
-            };
-            let mut produced = transition.effects.iter().filter_map(|effect| match effect {
-                Effect::AddLabel(label) => Some(label),
-                Effect::RemoveLabel(_)
-                | Effect::SetAssignee(_)
-                | Effect::RemoveAssignee(_)
-                | Effect::CreateComment { .. }
-                | Effect::CreatePullRequest { .. }
-                | Effect::MergePullRequest => None,
-            });
-            let mut any = false;
-            let all_present = produced.all(|label| {
-                any = true;
-                labels.contains(label.as_str())
-            });
-            any && all_present
-        })
+        declared
+            .condition
+            .as_ref()
+            .is_some_and(|condition| gate_condition_satisfied(condition, artifact, labels))
+            || declared.satisfied_by.iter().any(|transition_id| {
+                let Some(transition) = self
+                    .workflow
+                    .transitions()
+                    .iter()
+                    .find(|t| &t.id == transition_id)
+                else {
+                    return false;
+                };
+                let mut produced = transition.effects.iter().filter_map(|effect| match effect {
+                    Effect::AddLabel(label) => Some(label),
+                    Effect::RemoveLabel(_)
+                    | Effect::SetAssignee(_)
+                    | Effect::RemoveAssignee(_)
+                    | Effect::CreateComment { .. }
+                    | Effect::CreatePullRequest { .. }
+                    | Effect::MergePullRequest => None,
+                });
+                let mut any = false;
+                let all_present = produced.all(|label| {
+                    any = true;
+                    labels.contains(label.as_str())
+                });
+                any && all_present
+            })
     }
 
     /// Diagnoses exclusive dimensions that would hold several states after the
@@ -520,6 +532,20 @@ impl<'a> Planner<'a> {
                 });
             }
         }
+    }
+}
+
+fn gate_condition_satisfied(
+    condition: &GateCondition,
+    artifact: &ClassifiedArtifact,
+    labels: &HashSet<&str>,
+) -> bool {
+    match condition {
+        GateCondition::LabelPresent(label) => labels.contains(label.as_str()),
+        GateCondition::StateEquals { dimension, state } => artifact
+            .states
+            .get(dimension)
+            .is_some_and(|states| states.contains(state)),
     }
 }
 

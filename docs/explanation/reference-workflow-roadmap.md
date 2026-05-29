@@ -44,9 +44,9 @@ Status legend: ☐ pending · ☑ done.
   `ensure_issue`; `Executor::execute` runs `CreatePullRequest` through that path
   with a correlation key and runtime create input. Closes the prior
   PR-create limitation in `robustness-guarantees.md`.
-- ☐ **11 — External-signal gates (ADR).** New gate class satisfied by a
+- ☑ **11 — External-signal gates (ADR).** New gate class satisfied by a
   Forge-projected condition (e.g. `ci = passed`), not only sibling transitions.
-  Remove the zero-role `record_ci_pass`/`record_ci_failure` adapter workaround
+  Removed the zero-role `record_ci_pass`/`record_ci_failure` adapter workaround
   from `reference-delivery`.
 - ☐ **12a — First-class relations (ADR).** A `relation` spec primitive
   (parent/dependency/produced-PR) in spec/validated/validation/classification,

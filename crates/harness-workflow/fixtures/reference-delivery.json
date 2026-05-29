@@ -179,14 +179,6 @@
       {"kind": "remove_label", "label": "needs-testing"},
       {"kind": "add_label", "label": "testing-failed"}
     ]},
-    {"id": "record_ci_pass", "artifact": "implementation_pr", "roles": [], "effects": [
-      {"kind": "remove_label", "label": "ci-pending"},
-      {"kind": "add_label", "label": "ci-passed"}
-    ]},
-    {"id": "record_ci_failure", "artifact": "implementation_pr", "roles": [], "effects": [
-      {"kind": "remove_label", "label": "ci-pending"},
-      {"kind": "add_label", "label": "ci-failed"}
-    ]},
     {"id": "clear_human_flag", "artifact": "implementation_pr", "roles": ["owner"], "effects": [
       {"kind": "remove_label", "label": "needs-human"}
     ]},
@@ -202,6 +194,6 @@
   "gates": [
     {"id": "review_gate", "satisfied_by": ["approve_review"]},
     {"id": "testing_gate", "satisfied_by": ["record_test_pass"]},
-    {"id": "ci_gate", "satisfied_by": ["record_ci_pass"]}
+    {"id": "ci_gate", "condition": {"kind": "state_equals", "dimension": "ci", "state": "passed"}}
   ]
 }

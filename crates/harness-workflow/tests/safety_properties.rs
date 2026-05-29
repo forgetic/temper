@@ -2,7 +2,7 @@
 //!
 //! Each test asserts one of the safety properties listed in
 //! `docs/reference/robustness-guarantees.md` over the checked-in five-role
-//! fixture (and one inline three-gate workflow for the CI gate). All time is
+//! fixture (and one inline three-gate workflow for the external CI gate). All time is
 //! supplied through fixed timestamps and all faults fire on fixed call counts,
 //! so the suite is deterministic.
 
@@ -24,11 +24,10 @@ use support::{
     TestRoot,
 };
 
-/// An inline workflow whose merge gate requires CI, review, and testing together.
+/// An inline workflow whose merge gate requires external CI, review, and testing.
 const THREE_GATE: &str = r#"{
     "name": "three-gate-merge",
     "roles": [
-        {"id": "ci", "queues": []},
         {"id": "reviewer", "queues": []},
         {"id": "tester", "queues": []},
         {"id": "owner", "queues": []}
@@ -50,9 +49,6 @@ const THREE_GATE: &str = r#"{
         {"id": "merge", "exclusive": true, "states": [{"id": "ready", "label": "merge-ready"}]}
     ],
     "transitions": [
-        {"id": "record_ci_pass", "artifact": "implementation_pr", "roles": ["ci"], "effects": [
-            {"kind": "add_label", "label": "ci-passed"}
-        ]},
         {"id": "approve_review", "artifact": "implementation_pr", "roles": ["reviewer"], "effects": [
             {"kind": "add_label", "label": "review-approved"}
         ]},
@@ -65,7 +61,7 @@ const THREE_GATE: &str = r#"{
         ]}
     ],
     "gates": [
-        {"id": "ci_gate", "satisfied_by": ["record_ci_pass"]},
+        {"id": "ci_gate", "condition": {"kind": "state_equals", "dimension": "ci", "state": "passed"}},
         {"id": "review_gate", "satisfied_by": ["approve_review"]},
         {"id": "testing_gate", "satisfied_by": ["record_test_pass"]}
     ]
@@ -322,8 +318,8 @@ fn a_merge_executes_at_most_once_under_retry() {
     assert!(labels.contains(&"owner-pending".to_string()));
 }
 
-// Safety property 3b: the same gate mechanism blocks a merge until CI, review,
-// and testing all pass.
+// Safety property 3b: the gate mechanism blocks a merge until external CI,
+// review, and testing all pass.
 #[test]
 fn the_merge_gate_mechanism_requires_ci_review_and_testing_together() {
     let spec: RawWorkflowSpec = serde_json::from_str(THREE_GATE).expect("three-gate json parses");

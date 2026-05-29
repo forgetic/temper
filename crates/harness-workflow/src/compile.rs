@@ -20,7 +20,9 @@
 use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
-use crate::validated::{Effect, ValidatedRole, ValidatedTransition, ValidatedWorkflow};
+use crate::validated::{
+    Effect, GateCondition, ValidatedRole, ValidatedTransition, ValidatedWorkflow,
+};
 
 /// A validated workflow projected into manifests for agents and runtime setup.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -170,6 +172,8 @@ pub enum LabelUsage {
     TransitionEffect { transition: TransitionId },
     /// The label is produced by a transition that satisfies a gate.
     GateOutcome { gate: GateId },
+    /// The label is a Forge-projected condition for an external gate.
+    GateCondition { gate: GateId },
 }
 
 /// Deterministic prompt sections for one role.
@@ -458,6 +462,16 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
     }
 
     for gate in workflow.gates() {
+        if let Some(condition) = &gate.condition {
+            if let Some(label) = gate_condition_label(condition, workflow) {
+                record(
+                    label,
+                    LabelUsage::GateCondition {
+                        gate: gate.id.clone(),
+                    },
+                );
+            }
+        }
         for transition_id in &gate.satisfied_by {
             let Some(transition) = workflow
                 .transitions()
@@ -480,6 +494,24 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
     }
 
     LabelManifest { labels: specs }
+}
+
+fn gate_condition_label<'a>(
+    condition: &'a GateCondition,
+    workflow: &'a ValidatedWorkflow,
+) -> Option<&'a LabelId> {
+    match condition {
+        GateCondition::LabelPresent(label) => Some(label),
+        GateCondition::StateEquals { dimension, state } => workflow
+            .state_dimensions()
+            .iter()
+            .find(|candidate| &candidate.id == dimension)?
+            .states
+            .iter()
+            .find(|candidate| &candidate.id == state)?
+            .label
+            .as_ref(),
+    }
 }
 
 fn effect_label(effect: &Effect) -> Option<&LabelId> {

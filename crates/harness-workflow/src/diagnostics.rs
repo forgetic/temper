@@ -77,6 +77,8 @@ pub enum ReferenceSite {
     StateLabel { dimension: String, state: String },
     /// A gate's `satisfied_by` list referenced a transition.
     GateTransition { gate: String },
+    /// A gate's external condition referenced a label or state.
+    GateCondition { gate: String },
 }
 
 impl fmt::Display for ReferenceSite {
@@ -104,7 +106,9 @@ impl fmt::Display for ReferenceSite {
             ReferenceSite::StateLabel { dimension, state } => {
                 write!(formatter, "state `{state}` in dimension `{dimension}`")
             }
-            ReferenceSite::GateTransition { gate } => write!(formatter, "gate `{gate}`"),
+            ReferenceSite::GateTransition { gate } | ReferenceSite::GateCondition { gate } => {
+                write!(formatter, "gate `{gate}`")
+            }
         }
     }
 }

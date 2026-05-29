@@ -88,9 +88,8 @@ Exclusive unless noted; each state projects to one label.
 
 - `review_gate` — satisfied by the reviewer's approve transition.
 - `testing_gate` — satisfied by the tester's pass transition.
-- `ci_gate` — satisfied by the external CI signal (`ci = passed`). This is the
-  new external-signal gate class; the existing gate model only knows gates
-  satisfied by sibling transitions.
+- `ci_gate` — satisfied by the external CI signal (`ci = passed`) using the
+  external-signal gate class.
 - `dependency_gate` — satisfied when every prerequisite relation of a code issue
   is merged. Drives mechanical unblocking.
 
@@ -162,8 +161,8 @@ backlog was:
   executor (`CreatePullRequest` via idempotent `ensure_pull_request`; merge is
   at-most-once and projects the post-merge `landed`/`owner-pending` labels).
   Claim-time lease effects remain future work.
-- **External-signal gates** (`ci_gate`) — gates satisfied by a Forge condition,
-  not only a sibling transition's labels.
+- **External-signal gates** (`ci_gate`) — implemented as gates satisfied by a
+  Forge-projected label/state condition, not only a sibling transition's labels.
 - **First-class relations** (`relation` primitive) plus a relation-driven
   `dependency_gate` and reconcile action for mechanical unblocking.
 - **Queue activation policy** (`min_depth`/`max_age`) for batched roles.

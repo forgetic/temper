@@ -23,7 +23,7 @@ A queue is a query over artifacts, such as `code + ready` issues or PRs labeled 
 
 A transition is an authorized state change with preconditions and effects. Generated tools should map to transitions instead of exposing generic label mutation.
 
-A gate is a condition that unlocks a transition. For example, a PR may be mergeable only when CI, review, and testing gates all succeeded.
+A gate is a condition that unlocks a transition. For example, a PR may be mergeable only when CI, review, and testing gates all succeeded. A gate may be satisfied by a workflow transition or by portable Forge-projected state, such as an adapter writing `ci = passed`.
 
 A relation links artifacts, such as feature request to epic, epic to design issue, design issue to code issue, and code issue to PR.
 

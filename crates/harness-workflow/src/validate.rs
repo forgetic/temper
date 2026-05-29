@@ -9,10 +9,10 @@ use crate::diagnostics::{Diagnostic, ReferenceSite, SymbolKind};
 use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
-use crate::spec::{RawEffect, RawWorkflowSpec};
+use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
 use crate::validated::{
-    Effect, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRole, ValidatedState,
-    ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRole,
+    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
 use crate::ValidationErrors;
 use std::collections::HashSet;
@@ -40,9 +40,9 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
         SymbolKind::ArtifactKind,
         &mut diagnostics,
     );
-    // State dimension ids are only used for duplicate detection; nothing
-    // references a dimension by id, so the returned set is discarded.
-    collect_declared(
+    // State dimension ids are duplicate-checked and referenced by external
+    // gate conditions.
+    let state_dimensions = collect_declared(
         spec.state_dimensions.iter().map(|d| &d.id),
         SymbolKind::StateDimension,
         &mut diagnostics,
@@ -69,6 +69,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
             roles: &roles,
             labels: &labels,
             artifacts: &artifacts,
+            state_dimensions: &state_dimensions,
             queues: &queues,
             transitions: &transitions,
             gates: &gates,
@@ -90,6 +91,7 @@ struct Declared<'a> {
     roles: &'a HashSet<String>,
     labels: &'a HashSet<String>,
     artifacts: &'a HashSet<String>,
+    state_dimensions: &'a HashSet<String>,
     queues: &'a HashSet<String>,
     transitions: &'a HashSet<String>,
     gates: &'a HashSet<String>,
@@ -257,6 +259,54 @@ fn check_references(
                 diagnostics,
             );
         }
+        if let Some(condition) = &gate.condition {
+            check_gate_condition(spec, declared, &gate.id, condition, diagnostics);
+        }
+    }
+}
+
+fn check_gate_condition(
+    spec: &RawWorkflowSpec,
+    declared: &Declared<'_>,
+    gate: &str,
+    condition: &RawGateCondition,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match condition {
+        RawGateCondition::LabelPresent { label } => check_reference(
+            declared.labels,
+            label,
+            SymbolKind::Label,
+            ReferenceSite::GateCondition {
+                gate: gate.to_string(),
+            },
+            diagnostics,
+        ),
+        RawGateCondition::StateEquals { dimension, state } => {
+            check_reference(
+                declared.state_dimensions,
+                dimension,
+                SymbolKind::StateDimension,
+                ReferenceSite::GateCondition {
+                    gate: gate.to_string(),
+                },
+                diagnostics,
+            );
+            if spec
+                .state_dimensions
+                .iter()
+                .find(|candidate| &candidate.id == dimension)
+                .is_some_and(|declared| declared.states.iter().all(|s| &s.id != state))
+            {
+                diagnostics.push(Diagnostic::UndeclaredReference {
+                    expected: SymbolKind::State,
+                    id: state.clone(),
+                    site: ReferenceSite::GateCondition {
+                        gate: gate.to_string(),
+                    },
+                });
+            }
+        }
     }
 }
 
@@ -389,6 +439,7 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         .map(|gate| ValidatedGate {
             id: GateId::new(&gate.id),
             satisfied_by: gate.satisfied_by.iter().map(TransitionId::new).collect(),
+            condition: gate.condition.as_ref().map(build_gate_condition),
         })
         .collect();
 
@@ -402,6 +453,18 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         transitions,
         gates,
     )
+}
+
+fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
+    match condition {
+        RawGateCondition::LabelPresent { label } => {
+            GateCondition::LabelPresent(LabelId::new(label))
+        }
+        RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {
+            dimension: StateDimensionId::new(dimension),
+            state: StateId::new(state),
+        },
+    }
 }
 
 /// Converts a raw effect into a typed effect.

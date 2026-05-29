@@ -1,6 +1,6 @@
 # Workflow layer reference
 
-This page defines the intended contract for the `harness-workflow` crate. Phases 2–10 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, pure queue evaluation and transition planning, runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
+This page defines the intended contract for the `harness-workflow` crate. Phases 2–11 have landed spec validation, artifact/metadata modeling, classification, compilation to manifests, pure queue evaluation and transition planning, external-signal gates, runtime execution of labels, assignees, comments, PR creates, and PR merges through the `Forge` trait, idempotent issue/PR creation, and recovery primitives (leases, command journaling, and reconciliation). See "Implementation status" for what exists today.
 
 ## Scope
 
@@ -32,7 +32,7 @@ Validation errors should be diagnostic collections so users can fix multiple spe
 
 Phase 2 implemented the spec and validation foundations:
 
-- `spec::RawWorkflowSpec` and its raw child structs (`RawRole`, `RawLabel`, `RawArtifactKind`, `RawStateDimension`, `RawState`, `RawQueue`, `RawTransition`, `RawEffect`, `RawGate`) load from serde input.
+- `spec::RawWorkflowSpec` and its raw child structs (`RawRole`, `RawLabel`, `RawArtifactKind`, `RawStateDimension`, `RawState`, `RawQueue`, `RawTransition`, `RawEffect`, `RawGate`, `RawGateCondition`) load from serde input.
 - `validated::ValidatedWorkflow` is the normalized model. It has no public constructor; the only way to build one is `RawWorkflowSpec::validate` / `validate::validate`, so compiler and runtime APIs added later can require it by type.
 - `ids` provides typed ids: `RoleId`, `LabelId`, `ArtifactKindId`, `StateDimensionId`, `StateId`, `QueueId`, `TransitionId`, `GateId`.
 - `diagnostics` provides `Diagnostic`, `Severity`, `SymbolKind`, `ReferenceSite`, and the `ValidationErrors` collection.
@@ -47,7 +47,7 @@ Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
 
 Not yet modeled: `relation` as a first-class spec primitive (only metadata relations exist), `invariant`, `recovery_policy`, and full runtime execution. Effects cover label add/remove plus assignee, comment, pull-request create, and pull-request merge requests.
 
-Gate/transition wiring is modeled in both directions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions.
+Gate/transition wiring is modeled in both directions for role actions: a transition lists `requires_gates`, and a gate lists `satisfied_by` transitions. A gate may also declare a portable external condition over artifact labels/state.
 
 Phase 4 added compilation:
 
@@ -65,7 +65,7 @@ Phase 5 added pure queue evaluation and transition planning:
 - `plan::Planner` (also `ValidatedWorkflow::planner`) borrows a `ValidatedWorkflow` and never touches a Forge backend. It matches classified artifacts against queues and plans transitions into typed effects.
 - `plan::matches_queue` matches a `ClassifiedArtifact` against any `QueueQuery`. `QueueQuery` is implemented by both `ValidatedQueue` and the compiled `QueueManifest`, so the same matcher serves the validated model and a compiled runtime table.
 - `plan::WorkflowEffect` is the closed planning-effect enum. `plan::Postcondition` carries the label and assignee conditions that must hold after a plan applies. `plan::TransitionPlan` bundles transition, role, artifact kind, target, effects, and postconditions.
-- `plan::PlanError` collects `plan::PlanDiagnostic`s (unauthorized role, artifact-kind mismatch, stale/contradicted label preconditions, unsatisfied gates, and impossible resulting states).
+- `plan::PlanError` collects `plan::PlanDiagnostic`s (unauthorized role, artifact-kind mismatch, stale/contradicted label preconditions, unsatisfied transition/external gates, and impossible resulting states).
 
 Phase 6 added runtime execution of transitions through the `Forge` trait:
 
@@ -91,13 +91,18 @@ Phase 10 added pull-request idempotent create:
 - `Executor::ensure_pull_request` mirrors `ensure_issue`: it searches pull requests for a metadata `correlation_key`, stamps that key into new PR bodies, and returns `EnsureOutcome::Existing` on retry.
 - `Executor::execute` applies `CreatePullRequest` through `ensure_pull_request` when the effect has a correlation key and `ExecutionContext` supplies the concrete `CreatePullRequest` input for that transition.
 
+Phase 11 added external-signal gates:
+
+- `RawGate`/`ValidatedGate` may declare one `condition`: `label_present` or `state_equals`. The condition is satisfied from the classified artifact's current Forge-projected labels/state.
+- Transition-satisfied gates continue to use `satisfied_by`; a required gate passes when either its external condition holds or one of its satisfying transition outcomes is visible.
+
 Not yet implemented: lease effects inside `Executor::execute`, expressing lease effects in transition specs, applying reconciler actions automatically, and durable journal/lease storage backends.
 
 Phase 8 added robustness and crash-injection tests (no new runtime types):
 
 - `tests/support/crash.rs` provides `CrashForge`, a `Forge` wrapper that injects a deterministic fault before or after a chosen operation's chosen call, so a backend mutation can fail either before it lands (state intact) or after it lands (state changed, caller sees failure).
 - `tests/crash_injection.rs` proves crash-before/after retry safety, a fault matrix showing label effects are applied at most once, journaled restart recovery (partial transition → repair, landed effect → reconciled), and at-most-once claiming under duplicated tool calls and interleaved workers.
-- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required gates pass (review/testing in the five-role fixture and CI/review/testing in an inline three-gate workflow), a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review gate returns work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
+- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required gates pass (review/testing in the five-role fixture and external CI/review/testing in an inline three-gate workflow), a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review gate returns work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
 
 See `robustness-guarantees.md` for the full safety-property register and the limitations these tests surfaced (notably that lease acquisition is not yet a compare-and-swap).
 
@@ -112,23 +117,23 @@ A workflow spec contains these logical primitives.
 | `state_dimension` | Named state group with an `exclusive` flag, projected as labels |
 | `queue` | Query that selects artifacts needing attention |
 | `transition` | Guarded action authorized for one or more roles; its effects may update labels, set/remove role-resolved assignees, create comments, request pull-request creation, or request PR merge |
-| `gate` | Condition that unlocks another transition, such as merge readiness |
+| `gate` | Condition that unlocks another transition, either from sibling transition outcomes or a Forge-projected label/state condition |
 | `relation` | Typed link between artifacts, such as parent, dependency, or produced PR |
 | `invariant` | Condition that must hold during runtime scans |
 | `recovery_policy` | What to do with expired leases, partial transitions, and drift |
 
 Labels are a portable Forge projection of workflow state. Non-label effect payloads stay portable: assignee effects reference declared role ids (the runtime resolves a role to a concrete worker/user), comments carry a prose/template `body`, `create_pull_request` carries only an optional `correlation_key` while branch, title, body, labels, and assignees come from runtime context, and `merge_pull_request` has no payload. The workflow layer may use metadata blocks in bodies or comments for information that is not represented by the current Forge interface, such as correlation keys and typed relations.
 
-The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effect expression validate, compile, and plan (`tests/reference_delivery.rs`). The capabilities that design still needs — external-signal gates, first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
+The `reference-delivery.json` fixture transcribes the reference delivery design (`docs/explanation/reference-workflow.md`) into these primitives; its label-state-machine core plus non-label effects and external-signal gates validate, compile, and plan (`tests/reference_delivery.rs`). The remaining capabilities that design still needs — first-class relations plus `dependency_gate`, queue activation policy, and multi-kind/disjunctive queue matching — are the prioritized backlog in `docs/explanation/reference-workflow-gaps.md`.
 
 ## Static validation
 
 Validation must reject or diagnose:
 
 - duplicate role, label, artifact, state-dimension, queue, transition, or gate IDs (implemented; state ids are checked for uniqueness within each dimension)
-- references to undeclared roles, labels, artifact kinds, queues, transitions, or gates (implemented)
+- references to undeclared roles, labels, artifact kinds, queues, transitions, gates, or gate-condition labels/states (implemented)
 - transitions whose effects contradict declared mutually exclusive dimensions (planned)
-- gates that cannot be satisfied by any declared transition (planned)
+- gates that cannot be satisfied by any declared transition or external condition (planned)
 - role tool declarations that exceed the role's transition authority (planned)
 - artifact mappings that cannot be represented by the Forge interface (planned)
 
@@ -192,7 +197,7 @@ Transition planning checks, in order, and collects every problem:
 - the role is authorized for the transition (else `Unauthorized`)
 - the artifact's kind matches the transition's artifact kind (else `ArtifactKindMismatch`; the label/gate/state checks are skipped when the kind is wrong)
 - each label effect's precondition holds: a `remove_label` target must be present (else `StalePrecondition`) and an `add_label` target must be absent (else `ContradictedPrecondition`); non-label effects have no label precondition
-- every required gate is satisfied — a gate is satisfied when some satisfying transition's added labels are all present (else `GateNotSatisfied`)
+- every required gate is satisfied — a gate is satisfied when its external label/state condition holds or some satisfying transition's added labels are all present (else `GateNotSatisfied`)
 - applying the effects would not leave an exclusive dimension in several states (else `ImpossibleState`)
 
 The impossible-state check is the plan-time complement to the planned static check on contradictory effects: even before static validation rejects such a transition, the planner refuses to plan one against a concrete artifact.

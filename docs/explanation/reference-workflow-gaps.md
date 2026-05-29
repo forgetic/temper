@@ -8,24 +8,27 @@ running it through validate / compile / plan
 (`crates/harness-workflow/tests/reference_delivery.rs`).
 
 The label-state-machine core — roles, type/state labels, exclusive and
-non-exclusive dimensions, queues, role-authorized label transitions, and
-transition-satisfied gates — **validates, compiles, and plans today**. The gaps
-below are everything the design needs beyond that core.
+non-exclusive dimensions, queues, role-authorized label transitions,
+transition-satisfied gates, and external-signal gates — **validates, compiles,
+and plans today**. The gaps below are everything the design still needs beyond
+that core.
 
 ## What the fixture had to work around
 
-Two design decisions could not be transcribed faithfully and were encoded as
-workarounds, which are themselves gaps:
+One design decision still cannot be transcribed faithfully and is encoded as a
+workaround, which is itself a gap:
 
-- **CI as a gate.** `ci_gate` is modeled with two zero-role "adapter"
-  transitions (`record_ci_pass`/`record_ci_failure`) so the gate has a
-  `satisfied_by`. They validate and let the three-gate merge plan, but no role
-  can perform them and nothing distinguishes an external/adapter transition from
-  a misconfigured zero-role one.
 - **Work-return and flag queues split by hand.** The design's single
   `pr_changes_requested` queue (changes-requested **or** testing-failed) became
   two queues; `escalated`/`needs-human` were bound to `implementation_pr` only.
   See P2 items below.
+
+## Resolved gaps
+
+- **External-signal gates (resolved in Phase 11).** `ci_gate` is now a
+  `state_equals` external condition over `ci = passed`, with CI projected into
+  labels/state by an adapter outside `harness-forge`. The zero-role
+  `record_ci_pass`/`record_ci_failure` workaround was removed from the fixture.
 
 ## Prioritized backlog
 
@@ -40,10 +43,7 @@ workarounds, which are themselves gaps:
 
 ### P1 — modeled behavior is unsafe or under-gated without these
 
-2. **External-signal gates.** A gate class satisfied by a Forge condition
-   (`ci = passed`), not only by a sibling transition's labels. Removes the
-   zero-role adapter-transition workaround and lets CI be a real gate.
-3. **First-class relations + `dependency_gate`.** Relations exist only in
+2. **First-class relations + `dependency_gate`.** Relations exist only in
    metadata (`parents`/`dependencies`), not as a spec primitive. The code→code
    dependency could not be expressed, so `dependency_gate` was omitted and
    `mark_code_ready` is a bare architect label flip with no prerequisite check.
@@ -52,16 +52,16 @@ workarounds, which are themselves gaps:
 
 ### P2 — fidelity/efficiency; expressible workarounds exist
 
-4. **Queue activation policy (`min_depth`/`max_age`).** `RawQueue` has no
+3. **Queue activation policy (`min_depth`/`max_age`).** `RawQueue` has no
    activation fields, so `owner_alignment` is a plain per-item queue instead of
    a batched cohort. A read-side spec field plus a pure planner predicate.
    *Workaround in fixture:* plain queue.
-5. **Multi-artifact-kind queues.** A queue matches exactly one `artifact_kind`,
+4. **Multi-artifact-kind queues.** A queue matches exactly one `artifact_kind`,
    but `escalated`/`needs-human` can sit on issues *or* PRs. *Workaround in
    fixture:* bound `escalations`/`needs_human` to `implementation_pr` only;
    issue-level routing would need duplicate per-kind queues. **Not in the
    design's anticipated list.**
-6. **Disjunctive (OR) queue label-sets.** Queue matching is AND-only, but the
+5. **Disjunctive (OR) queue label-sets.** Queue matching is AND-only, but the
    single conceptual "return to engineer" queue is changes-requested **or**
    testing-failed. *Workaround in fixture:* two queues
    (`pr_changes_requested`, `pr_testing_failed`), engineer subscribed to both.
@@ -70,9 +70,9 @@ workarounds, which are themselves gaps:
 ## Corrections to the design's anticipated list
 
 The design's "Anticipated harness additions" listed the P0/P1 items above plus
-queue activation. All remain confirmed, with pull-request create/idempotency now
-resolved. Two further gaps were hit that the list did not mention: items 5
-(multi-artifact-kind queues) and 6 (disjunctive queue label-sets). Both extend
+queue activation. External-signal gates and pull-request create/idempotency are
+now resolved. Two further gaps were hit that the list did not mention: items 4
+(multi-artifact-kind queues) and 5 (disjunctive queue label-sets). Both extend
 the queue primitive.
 
 ## Decisions to flag (no ADR written yet)
@@ -80,10 +80,8 @@ the queue primitive.
 Several backlog items extend the spec primitives and may each warrant an ADR.
 These are surfaced for a human decision, not decided here:
 
-- **External-signal gate (item 2)** — new gate class; extends the gate
+- **Queue activation policy (item 3)** — new queue fields; extends the queue
   primitive.
-- **Queue activation policy (item 4)** — new queue fields; extends the queue
-  primitive.
-- **Queue matching extensions (items 5–6)** — multi-kind and disjunctive
+- **Queue matching extensions (items 4–5)** — multi-kind and disjunctive
   matching also extend the queue primitive; open question whether they fold
   into the activation-policy ADR or stand alone.

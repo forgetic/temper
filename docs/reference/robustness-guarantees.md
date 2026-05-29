@@ -29,7 +29,7 @@ is supplied explicitly, so the suite is reproducible.
 | No duplicate issue or pull request is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
 | A merge is not authorized, and the pull request is not merged, until review and testing gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
-| The gate mechanism blocks a merge until CI, review, and testing all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together` |
+| The gate mechanism blocks a merge until an external CI condition plus review and testing gates all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
@@ -76,11 +76,12 @@ rather than hidden:
   interleavings. The webhook-accelerated triggering model (ADR 0009) widens this
   concurrency window, so closing it with a compare-and-swap primitive is a
   prioritized follow-up.
-- **The five-role fixture wires no CI gate.** It declares `ci-passed`/`ci-failed`
-  labels and a `ci` state dimension, but `approve_merge` requires only
-  `review_gate` and `testing_gate`. CI is modeled as external state with no
-  gating transition. The CI gate property is proven instead over an inline
-  three-gate workflow that shows the mechanism is identical.
+- **The stable five-role fixture wires no CI gate.** It declares
+  `ci-passed`/`ci-failed` labels and a `ci` state dimension, but `approve_merge`
+  requires only `review_gate` and `testing_gate`. The evolving
+  `reference-delivery` fixture now models CI as an external gate, and the CI
+  gate property is proven over an inline three-gate workflow with the same
+  external condition.
 - **Testing failure has no modeled return path.** `record_test_failure` sets
   `testing-failed`, but no transition clears it back to `needs-testing`. The
   review path (`request_changes` → `address_review_changes`) is the modeled

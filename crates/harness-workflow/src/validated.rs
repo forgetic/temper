@@ -168,9 +168,20 @@ pub struct ValidatedTransition {
     pub effects: Vec<Effect>,
 }
 
-/// A validated gate with typed transition references.
+/// A validated gate with typed transition references and optional condition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedGate {
     pub id: GateId,
     pub satisfied_by: Vec<TransitionId>,
+    pub condition: Option<GateCondition>,
+}
+
+/// A typed portable condition that can satisfy a gate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GateCondition {
+    LabelPresent(LabelId),
+    StateEquals {
+        dimension: StateDimensionId,
+        state: StateId,
+    },
 }

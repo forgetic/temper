@@ -9,8 +9,9 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
-    compile, ClassifiedArtifact, Classifier, GateId, LabelId, PlanDiagnostic, RawWorkflowSpec,
-    RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    compile, ClassifiedArtifact, Classifier, GateCondition, GateId, LabelId, LabelUsage,
+    PlanDiagnostic, RawWorkflowSpec, RoleId, StateDimensionId, StateId, TransitionId,
+    ValidatedWorkflow, WorkflowEffect,
 };
 
 /// The checked-in reference delivery workflow fixture.
@@ -96,8 +97,25 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 9);
     assert_eq!(workflow.queues().len(), 10);
-    assert_eq!(workflow.transitions().len(), 21);
+    assert_eq!(workflow.transitions().len(), 19);
     assert_eq!(workflow.gates().len(), 3);
+    assert!(workflow
+        .transitions()
+        .iter()
+        .all(|transition| !transition.id.as_str().starts_with("record_ci_")));
+
+    let ci_gate = workflow
+        .gates()
+        .iter()
+        .find(|gate| gate.id.as_str() == "ci_gate")
+        .expect("ci_gate is declared");
+    assert_eq!(
+        ci_gate.condition.as_ref(),
+        Some(&GateCondition::StateEquals {
+            dimension: StateDimensionId::new("ci"),
+            state: StateId::new("passed"),
+        })
+    );
 }
 
 #[test]
@@ -109,6 +127,15 @@ fn reference_fixture_compiles_every_role() {
         ids,
         vec!["architect", "engineer", "owner", "reviewer", "tester"]
     );
+
+    let ci_passed = compiled
+        .labels()
+        .get(&LabelId::new("ci-passed"))
+        .expect("ci-passed label is in the manifest");
+    assert!(ci_passed.usages.iter().any(|usage| matches!(
+        usage,
+        LabelUsage::GateCondition { gate } if gate.as_str() == "ci_gate"
+    )));
 }
 
 #[test]

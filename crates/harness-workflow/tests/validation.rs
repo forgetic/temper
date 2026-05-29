@@ -1,15 +1,15 @@
 //! Validation tests for `harness-workflow` Phase 2 (spec + validation).
 
 use harness_workflow::{
-    ArtifactTarget, Diagnostic, RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole,
-    RawState, RawStateDimension, RawTransition, RawWorkflowSpec, ReferenceSite, Severity,
-    SymbolKind, ValidatedWorkflow,
+    ArtifactTarget, Diagnostic, RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel,
+    RawQueue, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec, ReferenceSite,
+    Severity, SymbolKind, ValidatedWorkflow,
 };
 
 /// Builds a small but complete workflow that exercises every reference kind:
 /// role -> queue, queue -> artifact, queue -> label, artifact -> label,
 /// state -> label, transition -> artifact/role/gate/effect-label, and
-/// gate -> transition.
+/// gate -> transition/condition.
 fn valid_spec() -> RawWorkflowSpec {
     RawWorkflowSpec {
         name: "code-review".to_string(),
@@ -108,6 +108,7 @@ fn valid_spec() -> RawWorkflowSpec {
         gates: vec![RawGate {
             id: "review_gate".to_string(),
             satisfied_by: vec!["approve_review".to_string()],
+            condition: None,
         }],
     }
 }
@@ -253,6 +254,13 @@ fn missing_label_references_are_diagnosed_across_sites() {
     spec.transitions[0].effects.push(RawEffect::AddLabel {
         label: "e-missing".to_string(),
     });
+    spec.gates.push(RawGate {
+        id: "label_gate".to_string(),
+        satisfied_by: Vec::new(),
+        condition: Some(RawGateCondition::LabelPresent {
+            label: "g-missing".to_string(),
+        }),
+    });
 
     let errors = spec.validate().expect_err("missing labels must fail");
     let diagnostics = errors.diagnostics();
@@ -284,6 +292,13 @@ fn missing_label_references_are_diagnosed_across_sites() {
         id: "e-missing".to_string(),
         site: ReferenceSite::TransitionEffectLabel {
             transition: "claim_code".to_string(),
+        },
+    }));
+    assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
+        expected: SymbolKind::Label,
+        id: "g-missing".to_string(),
+        site: ReferenceSite::GateCondition {
+            gate: "label_gate".to_string(),
         },
     }));
 }
@@ -322,6 +337,47 @@ fn missing_gate_and_transition_references_are_diagnosed() {
         id: "absent_queue".to_string(),
         site: ReferenceSite::RoleQueue {
             role: "engineer".to_string(),
+        },
+    }));
+}
+
+#[test]
+fn missing_gate_state_condition_references_are_diagnosed() {
+    let mut spec = valid_spec();
+    spec.gates.push(RawGate {
+        id: "state_gate".to_string(),
+        satisfied_by: Vec::new(),
+        condition: Some(RawGateCondition::StateEquals {
+            dimension: "code_lifecycle".to_string(),
+            state: "absent_state".to_string(),
+        }),
+    });
+    spec.gates.push(RawGate {
+        id: "dimension_gate".to_string(),
+        satisfied_by: Vec::new(),
+        condition: Some(RawGateCondition::StateEquals {
+            dimension: "absent_dimension".to_string(),
+            state: "ready".to_string(),
+        }),
+    });
+
+    let errors = spec
+        .validate()
+        .expect_err("missing condition refs must fail");
+    let diagnostics = errors.diagnostics();
+
+    assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
+        expected: SymbolKind::State,
+        id: "absent_state".to_string(),
+        site: ReferenceSite::GateCondition {
+            gate: "state_gate".to_string(),
+        },
+    }));
+    assert!(diagnostics.contains(&Diagnostic::UndeclaredReference {
+        expected: SymbolKind::StateDimension,
+        id: "absent_dimension".to_string(),
+        site: ReferenceSite::GateCondition {
+            gate: "dimension_gate".to_string(),
         },
     }));
 }

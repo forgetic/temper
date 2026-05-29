@@ -60,6 +60,8 @@
 //! with post-merge label projection (9c). Phase 10 added idempotent
 //! pull-request creation through [`Executor::ensure_pull_request`] and
 //! `CreatePullRequest` execution with runtime inputs from [`ExecutionContext`].
+//! Phase 11 added external-signal gates over Forge-projected label/state
+//! conditions.
 
 pub mod artifact;
 pub mod classify;
@@ -108,11 +110,11 @@ pub use reconcile::{
     Reconciler, RecoveryAction, RecoveryPolicy,
 };
 pub use spec::{
-    RawArtifactKind, RawEffect, RawGate, RawLabel, RawQueue, RawRole, RawState, RawStateDimension,
-    RawTransition, RawWorkflowSpec,
+    RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawRole, RawState,
+    RawStateDimension, RawTransition, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRole, ValidatedState,
-    ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRole,
+    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
