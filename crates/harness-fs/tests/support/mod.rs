@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use chrono::{DateTime, Utc};
 use harness_forge::{
-    BranchRef, CreateComment, CreateIssue, CreatePullRequest, CreateRepository, RepositoryId,
-    UserId,
+    BranchRef, CiJob, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
+    RepositoryId, UserId,
 };
 use harness_fs::FilesystemForge;
 use std::future::Future;
@@ -111,6 +112,24 @@ pub fn pull_request_with(
 
 pub fn comment(body: &str) -> CreateComment {
     CreateComment { body: body.into() }
+}
+
+pub fn timestamp(seconds: i64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(seconds, 0).expect("valid test timestamp")
+}
+
+pub fn write_ci_jobs(forge: &FilesystemForge, repo_id: &RepositoryId, ci_jobs: &[CiJob]) {
+    let path = forge
+        .root()
+        .join("repositories")
+        .join(repo_id.as_str())
+        .join("ci_jobs.json");
+    std::fs::create_dir_all(path.parent().expect("CI jobs path has parent"))
+        .expect("create CI jobs fixture directory");
+
+    let mut content = serde_json::to_string_pretty(ci_jobs).expect("serialize CI jobs fixture");
+    content.push('\n');
+    std::fs::write(path, content).expect("write CI jobs fixture");
 }
 
 pub fn user_ids(ids: &[&str]) -> Vec<UserId> {

@@ -1,9 +1,9 @@
 mod support;
 
 use harness_forge::{
-    CiJobId, CiJobQuery, Forge, ForgeError, ItemNumber, ItemSort, ItemSortField, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId,
-    SortDirection, UpdatePullRequest, UserId,
+    Forge, ForgeError, ItemNumber, ItemSort, ItemSortField, PullRequest, PullRequestId,
+    PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId, SortDirection,
+    UpdatePullRequest, UserId,
 };
 use support::{block_on, branch, pull_request, pull_request_with, repository, user_ids, TestRoot};
 
@@ -496,25 +496,4 @@ fn pull_request_close_and_reopen_updates_closed_at_deterministically() {
     .unwrap();
     assert_eq!(closed_again.closed_at, Some(closed_again.updated_at));
     assert!(closed_again.updated_at > reopened.updated_at);
-}
-
-#[test]
-fn ci_jobs_remain_unsupported() {
-    let root = TestRoot::new("pull-requests");
-    let forge = root.forge();
-    let repository = block_on(forge.create_repository(repository("alice", "project"))).unwrap();
-    let list_ci_error =
-        block_on(forge.list_ci_jobs(&repository.id, CiJobQuery::default())).unwrap_err();
-    assert!(matches!(
-        list_ci_error,
-        ForgeError::InvalidRequest(message)
-            if message == "filesystem backend does not support list_ci_jobs yet"
-    ));
-
-    let get_ci_error = block_on(forge.get_ci_job(&CiJobId::new("ci-job-1"))).unwrap_err();
-    assert!(matches!(
-        get_ci_error,
-        ForgeError::InvalidRequest(message)
-            if message == "filesystem backend does not support get_ci_job yet"
-    ));
 }

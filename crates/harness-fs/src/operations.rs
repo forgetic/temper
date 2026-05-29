@@ -1,10 +1,10 @@
-use crate::errors::unsupported;
 use crate::lists::{
-    apply_assignee_update, apply_label_update, issue_matches_query, next_issue_comment_number,
-    next_issue_number, next_pull_request_comment_number, next_pull_request_number,
-    normalize_string_set, normalize_user_set, pull_request_matches_query, sort_comments,
-    sort_issues, sort_issues_by_number, sort_labels, sort_pull_requests,
-    sort_pull_requests_by_number, sort_repositories, update_issue_state, update_pull_request_state,
+    apply_assignee_update, apply_label_update, ci_job_matches_query, issue_matches_query,
+    next_issue_comment_number, next_issue_number, next_pull_request_comment_number,
+    next_pull_request_number, normalize_string_set, normalize_user_set, pull_request_matches_query,
+    sort_ci_jobs, sort_comments, sort_issues, sort_issues_by_number, sort_labels,
+    sort_pull_requests, sort_pull_requests_by_number, sort_repositories, update_issue_state,
+    update_pull_request_state,
 };
 use crate::metadata::next_timestamp;
 use crate::record_ids::{
@@ -465,13 +465,21 @@ impl Forge for FilesystemForge {
 
     async fn list_ci_jobs(
         &self,
-        _repo_id: &RepositoryId,
-        _query: CiJobQuery,
+        repo_id: &RepositoryId,
+        query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
-        unsupported("list_ci_jobs")
+        self.require_repository(repo_id)?;
+
+        let mut ci_jobs = self
+            .read_ci_jobs_for_existing_repository(repo_id)?
+            .into_iter()
+            .filter(|ci_job| ci_job_matches_query(ci_job, &query))
+            .collect::<Vec<_>>();
+        sort_ci_jobs(&mut ci_jobs, &query);
+        Ok(ci_jobs)
     }
 
-    async fn get_ci_job(&self, _id: &CiJobId) -> ForgeResult<Option<CiJob>> {
-        unsupported("get_ci_job")
+    async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
+        self.find_ci_job_by_id(id)
     }
 }

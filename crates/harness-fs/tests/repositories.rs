@@ -1,8 +1,8 @@
 mod support;
 
 use harness_forge::{
-    CiJobId, Forge, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort,
-    RepositorySortField, SortDirection, UserId,
+    Forge, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort, RepositorySortField,
+    SortDirection, UserId,
 };
 use support::{block_on, repository, TestRoot};
 
@@ -141,18 +141,4 @@ fn repository_lists_support_updated_at_sorting() {
         repository_names(&repositories),
         vec!["alpha/first", "beta/second"]
     );
-}
-
-#[test]
-fn unsupported_operations_return_documented_portable_error() {
-    let root = TestRoot::new("repositories");
-    let forge = root.forge();
-
-    let error = block_on(forge.get_ci_job(&CiJobId::new("ci-job-1"))).unwrap_err();
-
-    assert!(matches!(
-        error,
-        ForgeError::InvalidRequest(message)
-            if message == "filesystem backend does not support get_ci_job yet"
-    ));
 }

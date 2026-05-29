@@ -1,10 +1,10 @@
 use crate::record_ids::{stored_issue_comment_number, stored_pull_request_comment_number};
 use chrono::{DateTime, Utc};
 use harness_forge::{
-    Comment, CommentId, ForgeError, ForgeResult, Issue, IssueId, IssueQuery, IssueState,
-    ItemNumber, ItemSortField, Label, PullRequest, PullRequestId, PullRequestQuery,
-    PullRequestState, PullRequestUpdateState, Repository, RepositoryId, RepositoryQuery,
-    RepositorySortField, SortDirection, UserId,
+    CiJob, CiJobQuery, CiJobSortField, Comment, CommentId, ForgeError, ForgeResult, Issue, IssueId,
+    IssueQuery, IssueState, ItemNumber, ItemSortField, Label, PullRequest, PullRequestId,
+    PullRequestQuery, PullRequestState, PullRequestUpdateState, Repository, RepositoryId,
+    RepositoryQuery, RepositorySortField, SortDirection, UserId,
 };
 use std::cmp::Ordering;
 
@@ -91,6 +91,16 @@ pub(crate) fn sort_repositories(repositories: &mut [Repository], query: Reposito
     repositories.sort_by(|left, right| compare_repositories(left, right, &query));
 }
 
+pub(crate) fn sort_ci_jobs(ci_jobs: &mut [CiJob], query: &CiJobQuery) {
+    ci_jobs.sort_by(|left, right| compare_ci_jobs(left, right, query));
+}
+
+pub(crate) fn sort_ci_jobs_by_name(ci_jobs: &mut [CiJob]) {
+    ci_jobs.sort_by(|left, right| {
+        compare_ci_job_name(left, right).then_with(|| left.id.cmp(&right.id))
+    });
+}
+
 pub(crate) fn sort_labels(labels: &mut [Label]) {
     labels.sort_by(compare_labels);
 }
@@ -117,6 +127,29 @@ pub(crate) fn sort_pull_requests_by_number(pull_requests: &mut [PullRequest]) {
 
 pub(crate) fn sort_comments(comments: &mut [Comment]) {
     comments.sort_by(compare_comments);
+}
+
+pub(crate) fn compare_ci_jobs(left: &CiJob, right: &CiJob, query: &CiJobQuery) -> Ordering {
+    let primary = query
+        .sort
+        .map(|sort| {
+            let comparison = match sort.field {
+                CiJobSortField::Name => compare_ci_job_name(left, right),
+                CiJobSortField::CreatedAt => left.created_at.cmp(&right.created_at),
+                CiJobSortField::UpdatedAt => left.updated_at.cmp(&right.updated_at),
+            };
+
+            apply_direction(comparison, sort.direction)
+        })
+        .unwrap_or_else(|| compare_ci_job_name(left, right));
+
+    primary
+        .then_with(|| compare_ci_job_name(left, right))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+pub(crate) fn compare_ci_job_name(left: &CiJob, right: &CiJob) -> Ordering {
+    left.name.cmp(&right.name)
 }
 
 pub(crate) fn compare_labels(left: &Label, right: &Label) -> Ordering {
@@ -208,6 +241,28 @@ pub(crate) fn compare_repository_path(left: &Repository, right: &Repository) -> 
     left.owner
         .cmp(&right.owner)
         .then_with(|| left.name.cmp(&right.name))
+}
+
+pub(crate) fn ci_job_matches_query(ci_job: &CiJob, query: &CiJobQuery) -> bool {
+    if let Some(pull_request_id) = &query.pull_request_id {
+        if ci_job.pull_request_id.as_ref() != Some(pull_request_id) {
+            return false;
+        }
+    }
+
+    if let Some(commit_sha) = &query.commit_sha {
+        if &ci_job.commit_sha != commit_sha {
+            return false;
+        }
+    }
+
+    if let Some(status) = query.status {
+        if ci_job.status != status {
+            return false;
+        }
+    }
+
+    true
 }
 
 pub(crate) fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {

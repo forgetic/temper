@@ -3,10 +3,9 @@
 //! This crate provides the reference local backend used for deterministic
 //! development and tests. The implemented slices support the current user,
 //! repositories, repository labels, issues, issue comments, pull requests,
-//! pull-request comments, and pull-request merges; remaining Forge operations
-//! return a portable unsupported-operation error until their storage model is
-//! added.
+//! pull-request comments, pull-request merges, and CI job listing/lookup.
 
+mod ci_jobs;
 mod errors;
 mod lists;
 mod metadata;

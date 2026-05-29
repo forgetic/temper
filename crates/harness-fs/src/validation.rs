@@ -3,7 +3,7 @@ use crate::record_ids::{
     stored_issue_comment_number, stored_pull_request_comment_number,
 };
 use harness_forge::{
-    Comment, CommentId, CreateRepository, ForgeError, ForgeResult, Issue, IssueId, Label,
+    CiJob, Comment, CommentId, CreateRepository, ForgeError, ForgeResult, Issue, IssueId, Label,
     PullRequest, PullRequestId, PullRequestState, RepositoryId, UpsertLabel,
 };
 
@@ -32,6 +32,46 @@ pub(crate) fn validate_upsert_label(input: &UpsertLabel) -> ForgeResult<()> {
         return Err(ForgeError::InvalidRequest(
             "label name must not be empty".into(),
         ));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_stored_ci_jobs(
+    repo_id: &RepositoryId,
+    ci_jobs: &[CiJob],
+) -> ForgeResult<()> {
+    for (index, ci_job) in ci_jobs.iter().enumerate() {
+        if &ci_job.repo_id != repo_id {
+            return Err(ForgeError::Backend(format!(
+                "CI job {} belongs to repository {}, expected {repo_id}",
+                ci_job.id, ci_job.repo_id
+            )));
+        }
+
+        if ci_job.name.trim().is_empty() {
+            return Err(ForgeError::Backend(format!(
+                "CI job {} in repository {repo_id} has empty name",
+                ci_job.id
+            )));
+        }
+
+        if ci_job.commit_sha.trim().is_empty() {
+            return Err(ForgeError::Backend(format!(
+                "CI job {} in repository {repo_id} has empty commit SHA",
+                ci_job.id
+            )));
+        }
+
+        if ci_jobs[..index]
+            .iter()
+            .any(|previous| previous.id == ci_job.id)
+        {
+            return Err(ForgeError::Backend(format!(
+                "filesystem storage contains duplicate CI job id {} in repository {repo_id}",
+                ci_job.id
+            )));
+        }
     }
 
     Ok(())

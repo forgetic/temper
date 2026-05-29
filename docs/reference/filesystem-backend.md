@@ -31,6 +31,8 @@ The current implementation supports:
 - `list_pull_request_comments`
 - `add_pull_request_comment`
 - `merge_pull_request`
+- `list_ci_jobs`
+- `get_ci_job`
 
 `get_user` only resolves the current user because the Forge interface does not yet include user creation or listing.
 
@@ -46,6 +48,7 @@ repositories/
     labels.json
     issues.json
     pull_requests.json
+    ci_jobs.json
     issues/
       issue-repo-0000000000000001-0000000000000001/
         comments.json
@@ -82,6 +85,8 @@ Pull-request timestamps use the same logical clock as repositories and issues. C
 
 Pull-request comments are stored in `repositories/<repo-id>/pull_requests/<pull-request-id>/comments.json` as serialized Forge `Comment` records. Comment IDs are deterministic strings of the form `comment-<pull-request-id>-<16-digit-number>`. Comment numbers are pull-request-scoped, start at `1`, and use the next value above the highest stored comment number. New comments use the current user as `author_id`; `created_at` and `updated_at` are the same logical-clock timestamp. Adding a comment advances `clock_tick` by one second and does not modify the stored pull-request record.
 
+CI jobs are stored in `repositories/<repo-id>/ci_jobs.json` as serialized Forge `CiJob` records. The Forge interface has no CI job creation operation, so tests and local scenarios seed this file directly with deterministic fixture records. CI job IDs are fixture-provided opaque IDs. Stored CI jobs must belong to the repository, have non-empty names and commit SHAs, and not duplicate IDs within the repository. CI job timestamps come from the fixture record.
+
 ## Listing and sorting
 
 `list_repositories` returns deterministic results. Without an explicit sort, repositories are sorted by owner/name path ascending, then stable ID.
@@ -110,17 +115,11 @@ The requested field and direction are applied first. Ties are broken by owner/na
 
 `merge_pull_request` returns `ForgeError::NotFound` when the target pull request is missing. It supports all current `MergeMethod` values, records the current user as `merged_by`, and stores the requested method. It returns `ForgeError::Conflict` when the pull request is closed or already merged. `commit_title` and `commit_body` are accepted but not persisted because `MergeRecord` has no portable fields for them.
 
+`list_ci_jobs` supports `CiJobQuery` filters for pull-request ID, commit SHA, and status. Without a requested sort, CI jobs are sorted by name ascending, then CI job ID. `CiJobSort` supports name, creation time, and update time with the requested direction; ties use name ascending, then CI job ID. `list_ci_jobs` returns `ForgeError::NotFound` when the target repository is missing. `get_ci_job` returns `Ok(None)` when the job is not found and `ForgeError::Backend` when duplicate CI job IDs exist across stored repositories.
+
 ## Unsupported operations
 
-The following Forge area is not implemented yet:
-
-- CI jobs
-
-Methods in that area return `ForgeError::InvalidRequest` with a message of the form:
-
-```text
-filesystem backend does not support <operation> yet
-```
+All current Forge trait methods are implemented. The filesystem backend does not expose operations outside the Forge interface, such as creating CI job records; seed `ci_jobs.json` directly for deterministic local scenarios.
 
 ## Consistency guarantees
 
