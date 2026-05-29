@@ -10,6 +10,7 @@
 
 use crate::agent::{Agent, AgentError, RoleTools};
 use crate::scan::{scan_role, ScanError};
+use crate::signal::CiError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use harness_forge::{Forge, ForgeError, RepositoryId};
@@ -61,6 +62,8 @@ pub enum WorkerError {
     Apply(ApplyError),
     /// The worker's agent failed while servicing work.
     Agent(AgentError),
+    /// A fake outside-world CI producer failed.
+    Ci(CiError),
 }
 
 impl fmt::Display for WorkerError {
@@ -74,6 +77,7 @@ impl fmt::Display for WorkerError {
             WorkerError::Reconcile(error) => write!(formatter, "worker reconcile failed: {error}"),
             WorkerError::Apply(error) => write!(formatter, "worker recovery apply failed: {error}"),
             WorkerError::Agent(error) => write!(formatter, "worker agent failed: {error}"),
+            WorkerError::Ci(error) => write!(formatter, "worker CI producer failed: {error}"),
         }
     }
 }
@@ -87,6 +91,7 @@ impl Error for WorkerError {
             WorkerError::Reconcile(error) => Some(error),
             WorkerError::Apply(error) => Some(error),
             WorkerError::Agent(error) => Some(error),
+            WorkerError::Ci(error) => Some(error),
         }
     }
 }
@@ -124,6 +129,12 @@ impl From<ApplyError> for WorkerError {
 impl From<AgentError> for WorkerError {
     fn from(error: AgentError) -> Self {
         Self::Agent(error)
+    }
+}
+
+impl From<CiError> for WorkerError {
+    fn from(error: CiError) -> Self {
+        Self::Ci(error)
     }
 }
 

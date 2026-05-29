@@ -19,6 +19,10 @@
 //! role-scoped tools, and worker scheduling; tests may plug in fake agents,
 //! fake outside-world producers, or memory identity handles, while production
 //! plugs in real agents, authenticated Forge handles, and poll/webhook drivers.
+//! CI is deliberately asymmetric: the workflow engine reads native CI jobs from
+//! the Forge, while tests can add a fake producer through [`CiSink`] and
+//! [`CiWorker`]; production has no `CiSink` because the provider's CI system is
+//! the producer.
 //!
 //! The crate now provides:
 //!
@@ -32,9 +36,15 @@
 //! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
 //!   judgment queues and delegate to agents, while the mechanical worker runs
 //!   reconcile → apply once per tick without spawning agents.
+//! - [`CiSink`] and [`CiWorker`], the test-only outside-world CI producer seam
+//!   used to seed native CI jobs for layered scenarios; real deployments rely on
+//!   provider CI and only use the engine's read side.
 //! - [`FixpointDriver`] and [`Stage`]/[`InProcessStage`], which compose workers
 //!   into a deterministic in-process world for layered scenarios while keeping
-//!   per-role Forge identity a handle-construction concern.
+//!   per-role Forge identity a handle-construction concern. Integration-test
+//!   support supplies deterministic fake reference-delivery agents behind
+//!   [`Agent`]; they contain behavior only and perform workflow mutations solely
+//!   through [`RoleTools`].
 //!
 //! The runner owns recovery coordination state. In a single-process composition
 //! the command journal value and lease manager live with the worker set. In a
@@ -47,6 +57,7 @@ pub mod agent;
 pub mod config;
 pub mod driver;
 pub mod scan;
+pub mod signal;
 pub mod stage;
 pub mod worker;
 
@@ -54,6 +65,7 @@ pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use config::{PullRequestCreateBinding, RoleBinding, RunnerConfig};
 pub use driver::{DriveError, FixpointDriver, ManualClock, RunReport, WorkerRunReport};
 pub use scan::{scan, scan_role, ScanError, WorkItem};
+pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{
     run_scenario, run_scenario_with_budget, BoxError, InProcessStage, InProcessWorkerContext,
     InProcessWorkerFactory, Scenario, ScenarioError, ScenarioFuture, ScenarioStep, Stage,
