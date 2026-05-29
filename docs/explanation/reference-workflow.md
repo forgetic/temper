@@ -115,8 +115,10 @@ mutating. A failed review or CI run returns the PR to the engineer (native
 - `code → code` (dependency): a code issue is `blocked` until its prerequisite's
   PR lands, then `dependency_gate` clears it to `ready` mechanically.
 - `implementation_pr → code` (implements): the PR is produced for a code issue.
-  Closing that issue on merge is intended, but the current runner happy path
-  accepts it staying open while post-merge PR handling runs.
+  Closing that issue on merge is intended, but not automatic in the engine. The
+  happy path accepts it staying open; the dependency scenario uses an explicit
+  architect-side issue close during `reconcile_landed` so dependency gates can
+  observe the native closed state.
 
 ## Escalation and the human loop
 

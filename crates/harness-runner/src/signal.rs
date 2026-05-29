@@ -11,7 +11,7 @@ use crate::{Progress, Worker, WorkerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use harness_forge::{
-    CiJobConclusion, CiJobQuery, CiJobStatus, Forge, ForgeError, ItemNumber, PullRequest,
+    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, Forge, ForgeError, ItemNumber, PullRequest,
     PullRequestQuery, PullRequestState, RepositoryId,
 };
 use std::collections::BTreeMap;
@@ -79,6 +79,13 @@ pub trait CiSink: Send + Sync {
 
 /// Policy deciding which CI conclusion a fake producer should record.
 pub trait CiPolicy: Send + Sync {
+    /// Returns whether the fake producer should record a new verdict for this
+    /// pull request given the completed jobs already present for its current
+    /// head. The default records exactly one verdict per head.
+    fn should_record(&self, _pull_request: &PullRequest, jobs: &[CiJob]) -> bool {
+        jobs.is_empty()
+    }
+
     /// Returns the conclusion to record for `pull_request` on this producer
     /// visit. `visit` is one-based and increments only when the worker is about
     /// to record a job for the pull request.
@@ -106,11 +113,11 @@ impl CiPolicy for PassCiPolicy {
 
 /// Worker that produces fake CI verdicts for implementation pull requests.
 ///
-/// Each tick lists open PRs labeled `implementation`, skips any PR whose current
-/// head already has a completed CI job, and asks the injected [`CiSink`] to
-/// record one conclusion chosen by the injected [`CiPolicy`]. The worker is a
-/// test producer only; merge gates continue to read CI through the engine's
-/// native `list_ci_jobs` signal path.
+/// Each tick lists open PRs labeled `implementation`, asks the injected
+/// [`CiPolicy`] whether another verdict is needed for the current head, and asks
+/// the injected [`CiSink`] to record the chosen conclusion. The worker is a test
+/// producer only; merge gates continue to read CI through the engine's native
+/// `list_ci_jobs` signal path.
 pub struct CiWorker<'a, F: Forge + ?Sized, S, P = PassCiPolicy> {
     name: String,
     forge: &'a F,
@@ -149,8 +156,8 @@ where
         }
     }
 
-    async fn needs_verdict(&self, pull_request: &PullRequest) -> Result<bool, WorkerError> {
-        let jobs = self
+    async fn completed_jobs(&self, pull_request: &PullRequest) -> Result<Vec<CiJob>, WorkerError> {
+        Ok(self
             .forge
             .list_ci_jobs(
                 self.repo,
@@ -161,8 +168,7 @@ where
                     ..CiJobQuery::default()
                 },
             )
-            .await?;
-        Ok(jobs.is_empty())
+            .await?)
     }
 
     fn next_visit(&self, number: ItemNumber) -> u64 {
@@ -198,7 +204,8 @@ where
 
         let mut progress = Progress::unchanged();
         for pull_request in pull_requests {
-            if !self.needs_verdict(&pull_request).await? {
+            let jobs = self.completed_jobs(&pull_request).await?;
+            if !self.policy.should_record(&pull_request, &jobs) {
                 continue;
             }
             let visit = self.next_visit(pull_request.number);

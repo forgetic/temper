@@ -100,9 +100,9 @@ initial `harness-runner` worker-plane primitives: read-only scans that turn fres
 Forge state into active-queue work items, `Agent`/`RoleTools`, tickable
 `Worker`/`RoleWorker` units for judgment work, `MechanicalWorker` for the
 controller-plane reconcile → apply loop, and `InProcessStage<MemoryForge>` for
-memory-backed scenario runs. The reference-delivery happy path now runs to a
-merged, reconciled PR with fake agents and fake CI; see
-[Run the reference delivery end-to-end scenario](../how-to/run-reference-delivery-end-to-end.md).
+memory-backed scenario runs. The reference-delivery happy path and failure /
+dependency variants now run to merged, reconciled PRs with fake agents and fake
+CI; see [Run the reference delivery end-to-end scenarios](../how-to/run-reference-delivery-end-to-end.md).
 The remaining path to a live deployment, in dependency order:
 
 1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's

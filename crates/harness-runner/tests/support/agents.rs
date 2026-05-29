@@ -8,10 +8,11 @@ use async_trait::async_trait;
 use harness_forge::{Forge, ItemNumber};
 use harness_runner::{Agent, AgentError, AgentRegistry, RoleTools, WorkItem};
 use harness_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactSource, ExecutionError, RoleId, TransitionId,
-    WorkflowMetadata,
+    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactSource, ExecutionError,
+    RoleId, TransitionId, WorkflowMetadata,
 };
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use super::pull_request_input;
 
@@ -22,7 +23,35 @@ pub struct FakeArchitect;
 pub struct FakeEngineer;
 
 #[derive(Clone, Debug, Default)]
+pub struct ClosingArchitect;
+
+#[derive(Clone, Debug, Default)]
 pub struct FakeReviewer;
+
+#[derive(Debug, Default)]
+pub struct RequestChangesThenApproveReviewer {
+    visits: Mutex<BTreeMap<ItemNumber, u64>>,
+}
+
+impl RequestChangesThenApproveReviewer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn next_transition(&self, number: ItemNumber) -> &'static str {
+        let mut visits = self
+            .visits
+            .lock()
+            .expect("reviewer visit mutex is poisoned");
+        let visit = visits.entry(number).or_insert(0);
+        *visit = visit.saturating_add(1);
+        if *visit == 1 {
+            "request_changes"
+        } else {
+            "approve_review"
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct FakeOwner;
@@ -34,25 +63,35 @@ pub fn fake_registry<F>() -> AgentRegistry<F>
 where
     F: Forge + ?Sized + 'static,
 {
+    fake_registry_with(FakeArchitect, FakeReviewer)
+}
+
+pub fn fake_registry_with<F, A, R>(architect: A, reviewer: R) -> AgentRegistry<F>
+where
+    F: Forge + ?Sized + 'static,
+    A: Agent<F> + 'static,
+    R: Agent<F> + 'static,
+{
     let mut registry = AgentRegistry::new();
-    registry.insert(RoleId::new("architect"), Arc::new(FakeArchitect));
-    registry.insert(RoleId::new("engineer"), Arc::new(FakeEngineer));
-    registry.insert(RoleId::new("reviewer"), Arc::new(FakeReviewer));
-    registry.insert(RoleId::new("owner"), Arc::new(FakeOwner));
-    registry.insert(RoleId::new("human"), Arc::new(FakeHuman));
+    registry.register(RoleId::new("architect"), architect);
+    registry.register(RoleId::new("engineer"), FakeEngineer);
+    registry.register(RoleId::new("reviewer"), reviewer);
+    registry.register(RoleId::new("owner"), FakeOwner);
+    registry.register(RoleId::new("human"), FakeHuman);
     registry
 }
 
 #[async_trait]
 impl<F: Forge + ?Sized> Agent<F> for FakeArchitect {
     async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
-        if item.queue.as_str() == "design_triage" && item.kind.as_str() == "intake" {
-            return run_or_ignore_stale(tools, item.target, "triage_to_code").await;
-        }
-        if item.queue.as_str() == "landed_inbox" && item.kind.as_str() == "implementation_pr" {
-            return run_or_ignore_stale(tools, item.target, "reconcile_landed").await;
-        }
-        Ok(false)
+        service_architect(item, tools, false).await
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Agent<F> for ClosingArchitect {
+    async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
+        service_architect(item, tools, true).await
     }
 }
 
@@ -83,6 +122,19 @@ impl<F: Forge + ?Sized> Agent<F> for FakeReviewer {
 }
 
 #[async_trait]
+impl<F: Forge + ?Sized> Agent<F> for RequestChangesThenApproveReviewer {
+    async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
+        if item.queue.as_str() != "pr_needs_review" || item.kind.as_str() != "implementation_pr" {
+            return Ok(false);
+        }
+        let ArtifactSource::PullRequest { number } = item.target else {
+            return Ok(false);
+        };
+        run_or_ignore_stale(tools, item.target, self.next_transition(number)).await
+    }
+}
+
+#[async_trait]
 impl<F: Forge + ?Sized> Agent<F> for FakeOwner {
     async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
         if item.kind.as_str() == "implementation_pr" && item.queue.as_str() == "owner_alignment" {
@@ -106,6 +158,47 @@ impl<F: Forge + ?Sized> Agent<F> for FakeHuman {
         }
         Ok(false)
     }
+}
+
+async fn service_architect<F: Forge + ?Sized>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+    close_parent_issues: bool,
+) -> Result<bool, AgentError> {
+    if item.queue.as_str() == "design_triage" && item.kind.as_str() == "intake" {
+        return run_or_ignore_stale(tools, item.target, "triage_to_code").await;
+    }
+    if item.queue.as_str() == "landed_inbox" && item.kind.as_str() == "implementation_pr" {
+        let reconciled = run_or_ignore_stale(tools, item.target, "reconcile_landed").await?;
+        if reconciled && close_parent_issues {
+            close_produced_parent_issues(item, tools).await?;
+        }
+        return Ok(reconciled);
+    }
+    Ok(false)
+}
+
+async fn close_produced_parent_issues<F: Forge + ?Sized>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+) -> Result<bool, AgentError> {
+    let ArtifactSource::PullRequest { number } = item.target else {
+        return Ok(false);
+    };
+    let Some(pull_request) = tools.get_pull_request(number).await? else {
+        return Ok(false);
+    };
+    let Some(metadata) = parse_metadata_block(&pull_request.body)
+        .map_err(|error| AgentError::message(format!("invalid PR workflow metadata: {error}")))?
+    else {
+        return Ok(false);
+    };
+
+    let mut closed = false;
+    for parent in metadata.parents {
+        closed |= tools.close_issue(parent).await?;
+    }
+    Ok(closed)
 }
 
 async fn service_ready_code<F: Forge + ?Sized>(

@@ -5,6 +5,7 @@ use harness_forge::{
 };
 use harness_forge_memory::MemoryForge;
 use harness_runner::{CiError, CiPolicy, CiSink};
+use harness_workflow::CiStatus;
 
 use super::ts;
 
@@ -62,6 +63,23 @@ impl FixedCiPolicy {
 impl CiPolicy for FixedCiPolicy {
     fn conclusion(&self, _pull_request: &PullRequest, _visit: u64) -> CiJobConclusion {
         self.conclusion
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FailThenPassCiPolicy;
+
+impl CiPolicy for FailThenPassCiPolicy {
+    fn should_record(&self, _pull_request: &PullRequest, jobs: &[CiJob]) -> bool {
+        jobs.is_empty() || CiStatus::from_jobs(jobs).is_failed()
+    }
+
+    fn conclusion(&self, _pull_request: &PullRequest, visit: u64) -> CiJobConclusion {
+        if visit == 1 {
+            CiJobConclusion::Failure
+        } else {
+            CiJobConclusion::Success
+        }
     }
 }
 

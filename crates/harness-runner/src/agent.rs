@@ -9,8 +9,8 @@
 use crate::WorkItem;
 use async_trait::async_trait;
 use harness_forge::{
-    CreatePullRequest, Forge, ForgeError, Issue, ItemNumber, PullRequest, PullRequestQuery,
-    RepositoryId,
+    CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest,
+    PullRequestQuery, RepositoryId, UpdateIssue,
 };
 use harness_workflow::{
     parse_metadata_block, ArtifactSource, EnsureOutcome, ExecutionContext, ExecutionError,
@@ -75,8 +75,9 @@ impl From<ForgeError> for AgentError {
 ///
 /// The facade is intentionally narrower than [`Forge`]: agents can run
 /// workflow transitions, use the documented idempotent pull-request creation
-/// seam, and perform read-only lookups. They do not receive raw Forge mutation
-/// APIs.
+/// seam, perform read-only lookups, and close an issue when a workflow-specific
+/// adapter needs to project a native lifecycle fact that is not modeled as a
+/// workflow label transition.
 pub struct RoleTools<'a, F: Forge + ?Sized> {
     repo: &'a RepositoryId,
     role: RoleId,
@@ -154,6 +155,32 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         self.forge
             .get_pull_request_by_number(self.repo, number)
             .await
+    }
+
+    /// Closes an issue by repository-scoped number.
+    ///
+    /// This is a narrow native lifecycle tool rather than a workflow-label
+    /// transition. The reference-delivery fake architect uses it to document the
+    /// current engine gap that merging a produced PR does not automatically
+    /// close its parent code issue; dependency gates observe the resulting
+    /// native closed state.
+    pub async fn close_issue(&self, number: ItemNumber) -> Result<bool, ForgeError> {
+        let Some(issue) = self.get_issue(number).await? else {
+            return Ok(false);
+        };
+        if issue.state == IssueState::Closed {
+            return Ok(false);
+        }
+        self.forge
+            .update_issue(
+                &issue.id,
+                UpdateIssue {
+                    state: Some(IssueState::Closed),
+                    ..UpdateIssue::default()
+                },
+            )
+            .await?;
+        Ok(true)
     }
 
     /// Finds a pull request whose workflow metadata carries `correlation_key`.
