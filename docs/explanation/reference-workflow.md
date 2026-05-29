@@ -92,7 +92,7 @@ Exclusive unless noted; each state projects to one label.
   `needs_owner` (`needs-owner`), and `needs_human` (`needs-human`) route
   explicit feedback requests to the named role.
 - `post_merge` (non-exclusive): `landed` (awaiting architect reconcile),
-  `owner_pending` (awaiting owner alignment).
+  `alignment` (awaiting owner alignment).
 
 ## Gates
 
@@ -135,7 +135,7 @@ Merging an `implementation_pr` fires two independent consumers:
   follow-ups, then clear `landed`. Latency matters because a merge may satisfy a
   `dependency_gate`. The dependency unblock itself is mechanical (reconcile/plan
   re-evaluates dependents); the architect handles only the judgment residue.
-- **Owner, batched and holistic.** A merged PR also carries `owner_pending`. The
+- **Owner, batched and holistic.** A merged PR also carries `alignment`. The
   owner reviews the cohort and clears the flags; misalignment becomes a normal
   new issue. Clearing the flag is the watermark, so we get auditability (every
   PR was seen) and the cohort window for free.
@@ -169,7 +169,7 @@ expected backlog was:
 - **Execute remaining non-label effects** — `CreateComment`, assignee,
   `CreatePullRequest`, and `MergePullRequest` effects now apply through the
   executor (`CreatePullRequest` via idempotent `ensure_pull_request`; merge is
-  at-most-once and projects the post-merge `landed`/`owner-pending` labels).
+  at-most-once and projects the post-merge `landed`/`alignment` labels).
   Claim-time lease effects remain future work.
 - **External-signal gates** (`ci_gate`, `review_gate`) — implemented as gates
   satisfied by runtime signals from native Forge CI jobs and review events, not

@@ -84,7 +84,7 @@ Phase 7 added recovery primitives — leases, command journaling, and reconcilia
 Phase 9c added merge execution and post-merge projection:
 
 - `Executor::execute` applies `MergePullRequest` through the `Forge` merge API. The merge runs *before* the label/assignee commit point and is skipped when the freshly loaded pull request is already merged, so a merge is applied at most once even when a crash lands the merge but loses the response.
-- The post-merge `landed` and `owner-pending` labels are modeled as ordinary `add_label` effects on the merge transition (preferring modeling over executor special-casing), so they are projected by the same atomic label update and survive on the now-closed pull request. `landed`/`owner-pending` now double as the "already done" marker that makes a retry's planner refuse to re-run a completed merge; merge eligibility itself is derived from gates, not a stored `merge-ready` label.
+- The post-merge `landed` and `alignment` labels are modeled as ordinary `add_label` effects on the merge transition (preferring modeling over executor special-casing), so they are projected by the same atomic label update and survive on the now-closed pull request. `landed`/`alignment` now double as the "already done" marker that makes a retry's planner refuse to re-run a completed merge; merge eligibility itself is derived from gates, not a stored `merge-ready` label.
 
 Phase 10 added pull-request idempotent create:
 
@@ -126,7 +126,7 @@ Phase 8 added robustness and crash-injection tests (no new runtime types):
 
 - `tests/support/crash.rs` provides `CrashForge`, a `Forge` wrapper that injects a deterministic fault before or after a chosen operation's chosen call, so a backend mutation can fail either before it lands (state intact) or after it lands (state changed, caller sees failure).
 - `tests/crash_injection.rs` proves crash-before/after retry safety, a fault matrix showing label effects are applied at most once, journaled restart recovery (partial transition → repair, landed effect → reconciled), and at-most-once claiming under duplicated tool calls and interleaved workers.
-- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required native review and CI gates pass, a gated merge executes at most once and projects the post-merge `landed`/`owner-pending` labels, failed review/CI gates return work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
+- `tests/safety_properties.rs` proves the safety assertions registered in `robustness-guarantees.md`: no duplicate issue/PR create per correlation key under crash, no two active leases per exclusive claim, no merge before required native review and CI gates pass, a gated merge executes at most once and projects the post-merge `landed`/`alignment` labels, failed review/CI gates return work to the engineer, expired in-progress work becomes visible for recovery, and impossible label combinations are detected by both the executor and the reconciler.
 
 See `robustness-guarantees.md` for the full safety-property register and the limitations these tests surfaced. Lease acquisition is now a compare-and-swap: `LeaseManager` captures each artifact's `Version` at load time and writes the lease conditionally (ADR 0013), so two acquirers over the same "no lease" snapshot cannot both win.
 

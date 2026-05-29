@@ -227,7 +227,7 @@ fn two_no_lease_acquirers_cannot_both_win_the_same_claim() {
 
 // Safety property 3a: a merge is not authorized — and the pull request is not
 // merged — until review and native CI gates pass; once they do, the merge
-// executes and projects the post-merge `landed`/`owner-pending` labels.
+// executes and projects the post-merge `landed`/`alignment` labels.
 #[test]
 fn a_merge_is_not_authorized_until_review_and_ci_gates_pass() {
     let root = TestRoot::new();
@@ -267,7 +267,7 @@ fn a_merge_is_not_authorized_until_review_and_ci_gates_pass() {
     assert_eq!(pr_state(&forge, &repo, gated), PullRequestState::Merged);
     let labels = pr_labels(&forge, &repo, gated);
     assert!(labels.contains(&"landed".to_string()));
-    assert!(labels.contains(&"owner-pending".to_string()));
+    assert!(labels.contains(&"alignment".to_string()));
 }
 
 // Safety property 3c: the merge executes at most once. A crash that lands the
@@ -319,7 +319,7 @@ fn a_merge_executes_at_most_once_under_retry() {
     );
     let labels = pr_labels(crash.inner(), &repo, number);
     assert!(labels.contains(&"landed".to_string()));
-    assert!(labels.contains(&"owner-pending".to_string()));
+    assert!(labels.contains(&"alignment".to_string()));
 }
 
 // Safety property 3b: the gate mechanism blocks a merge until native CI and

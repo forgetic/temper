@@ -11,7 +11,7 @@ the `harness-forge` interface.
 "Projection" is currently overloaded. This backlog distinguishes:
 
 - **Projected / owned state** — the workflow writes it onto the Forge (lifecycle
-  labels, post-merge `landed`/`owner-pending`).
+  labels, post-merge `landed`/`alignment`).
 - **Observed / native state** — the Forge owns it; the workflow reads it as a
   gate condition (CI conclusions, review decisions, dependency links, the PR's
   `merged` state).

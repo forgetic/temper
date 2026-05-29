@@ -301,7 +301,7 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
         vec![
             WorkflowEffect::MergePullRequest,
             WorkflowEffect::AddLabel(LabelId::new("landed")),
-            WorkflowEffect::AddLabel(LabelId::new("owner-pending")),
+            WorkflowEffect::AddLabel(LabelId::new("alignment")),
         ]
     );
 }

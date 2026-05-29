@@ -43,7 +43,7 @@ from fresh Forge state, and the planner only reads it. CI fits the same shape.
 3. **Merge at-most-once relies on native `merged` state plus the post-merge
    `landed` projection.** The executor already merges before the label commit
    point and skips an already-`merged` pull request, so the merge itself is
-   at-most-once regardless of any label. The post-merge `landed`/`owner-pending`
+   at-most-once regardless of any label. The post-merge `landed`/`alignment`
    labels (ordinary `add_label` effects on `approve_merge`) remain the planner's
    re-run guard: once `landed` is present, re-planning `approve_merge` fails its
    `add_label landed` precondition, so a completed merge is never re-run. This

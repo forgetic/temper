@@ -82,7 +82,7 @@
       "description": "merged PR awaiting architect reconcile"
     },
     {
-      "id": "owner-pending",
+      "id": "alignment",
       "description": "merged PR awaiting owner alignment"
     },
     {
@@ -169,8 +169,8 @@
           "label": "landed"
         },
         {
-          "id": "owner_pending",
-          "label": "owner-pending"
+          "id": "alignment",
+          "label": "alignment"
         }
       ]
     },
@@ -421,7 +421,7 @@
         },
         {
           "kind": "add_label",
-          "label": "owner-pending"
+          "label": "alignment"
         }
       ]
     }

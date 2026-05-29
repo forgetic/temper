@@ -43,7 +43,7 @@
 //! *before* the label/assignee commit point and is guarded by the freshly
 //! loaded pull-request state: a pull request that is already merged is skipped,
 //! so the merge is at most once even when a crash lands the merge but loses the
-//! response. The transition's post-merge labels (`landed`, `owner-pending`) are
+//! response. The transition's post-merge labels (`landed`, `alignment`) are
 //! modeled as ordinary `add_label` effects, so they are projected by the same
 //! atomic update and survive on the now-closed pull request — there is no
 //! executor-special-cased post-merge labeling. Lease effects remain unsupported

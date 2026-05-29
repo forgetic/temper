@@ -247,12 +247,7 @@ fn owner_alignment_queue_activates_by_depth_or_age() {
 
     let under_depth: Vec<ClassifiedArtifact> = (1..=4)
         .map(|number| {
-            classify_pr_updated_at(
-                &workflow,
-                number,
-                &["implementation", "owner-pending"],
-                fresh,
-            )
+            classify_pr_updated_at(&workflow, number, &["implementation", "alignment"], fresh)
         })
         .collect();
     assert!(planner.matching_queues(&under_depth[0]).contains(&queue));
@@ -260,12 +255,7 @@ fn owner_alignment_queue_activates_by_depth_or_age() {
 
     let at_depth: Vec<ClassifiedArtifact> = (1..=5)
         .map(|number| {
-            classify_pr_updated_at(
-                &workflow,
-                number,
-                &["implementation", "owner-pending"],
-                fresh,
-            )
+            classify_pr_updated_at(&workflow, number, &["implementation", "alignment"], fresh)
         })
         .collect();
     assert!(planner.queue_active(&queue, &at_depth, now));
@@ -273,7 +263,7 @@ fn owner_alignment_queue_activates_by_depth_or_age() {
     let old_enough = vec![classify_pr_updated_at(
         &workflow,
         42,
-        &["implementation", "owner-pending"],
+        &["implementation", "alignment"],
         old,
     )];
     assert!(planner.queue_active(&queue, &old_enough, now));
@@ -513,7 +503,7 @@ fn merge_requires_review_and_native_ci() {
         vec![
             WorkflowEffect::MergePullRequest,
             WorkflowEffect::AddLabel(LabelId::new("landed")),
-            WorkflowEffect::AddLabel(LabelId::new("owner-pending")),
+            WorkflowEffect::AddLabel(LabelId::new("alignment")),
         ]
     );
 }

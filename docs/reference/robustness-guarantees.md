@@ -33,7 +33,7 @@ is supplied explicitly, so the suite is reproducible.
 | No duplicate issue or pull request is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
 | Two acquirers that both observe "no lease" cannot both win: lease acquisition is a compare-and-swap, so the loser observes a conflict | `two_no_lease_acquirers_cannot_both_win_the_same_claim`, `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue` |
-| A merge is not authorized, and the pull request is not merged, until native review approval and CI gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
+| A merge is not authorized, and the pull request is not merged, until native review approval and CI gates pass; once gated, it merges and projects `landed`/`alignment` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
 | The gate mechanism blocks a merge until native CI conclusions plus native review approval both pass | `the_merge_gate_mechanism_requires_ci_and_review_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
@@ -92,7 +92,7 @@ window, but a wider window can no longer produce a lost-update lease race.
   and is skipped when the freshly loaded pull request is already merged. A crash
   that lands the merge but loses the response leaves the post-merge labels
   unapplied; the retry observes the merged state, skips the merge, and finishes
-  the `landed`/`owner-pending` projection. Those labels are also the planner
+  the `landed`/`alignment` projection. Those labels are also the planner
   re-run guard, so the merge happens exactly once and the post-merge projection
   survives on the closed pull request.
 - **Applied reconciler actions.** `recover::Applier` applies a `ReconcileReport`

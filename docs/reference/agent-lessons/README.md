@@ -33,3 +33,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0002](0002-keep-source-files-under-600-lines.md) | Keep source files under 600 lines | workflow, rust, maintainability |
 | [0003](0003-use-harness-workflow-for-workflow-layer.md) | Use `harness-workflow` for the workflow layer | architecture, crates, workflow |
 | [0004](0004-prefer-native-forge-state-over-mirror-labels.md) | Prefer native Forge state over mirror labels | architecture, forge, workflow, ci |
+| [0005](0005-avoid-redundant-pending-in-queue-labels.md) | Avoid redundant pending in queue labels | workflow, naming, labels |

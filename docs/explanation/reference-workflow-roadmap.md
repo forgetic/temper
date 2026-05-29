@@ -37,7 +37,7 @@ Status legend: ☐ pending · ☑ done.
 - ☑ **9c — Execute merge + post-merge labels.** `Executor::execute` applies
   `MergePullRequest` through the Forge merge API at most once (an already-merged
   target is skipped) before the label commit point, and projects the post-merge
-  `landed`/`owner-pending` labels as ordinary `add_label` effects on the merge
+  `landed`/`alignment` labels as ordinary `add_label` effects on the merge
   transition. `safety_properties` proves no premature merge, at-most-once merge
   under crash/retry, and the post-merge projection.
 - ☑ **10 — PR idempotent create.** `Executor::ensure_pull_request` mirrors
