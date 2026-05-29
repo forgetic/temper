@@ -5,8 +5,8 @@
 //! backend state, idempotency, and the typed failure classes.
 
 use harness_forge::{
-    BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, ItemNumber, RepositoryId,
-    UserId,
+    BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, ItemNumber, PullRequestState,
+    RepositoryId, UserId,
 };
 use harness_forge_memory::{FaultOp, MemoryForge};
 use harness_workflow::{
@@ -356,13 +356,14 @@ fn unresolved_assignee_refuses_before_comment_or_label_mutation() {
 }
 
 #[test]
-fn unsupported_pr_create_and_merge_effects_are_rejected_before_mutation() {
+fn pr_create_is_unsupported_but_merge_executes() {
     let root = TestRoot::new();
     let forge = root.forge();
     let workflow = non_label_workflow();
     let repo = new_repo(&forge);
     let executor = workflow.executor(&forge);
 
+    // Pull-request create is still unsupported (lands in Phase 10).
     let number = create_issue(&forge, &repo, &["code", "in-progress"]);
     let error = block_on(executor.execute(
         &repo,
@@ -384,20 +385,22 @@ fn unsupported_pr_create_and_merge_effects_are_rejected_before_mutation() {
         vec!["code".to_string(), "in-progress".to_string()]
     );
 
+    // Merge now executes through the Forge merge API.
     let pr = create_pr(&forge, &repo, &["implementation"]);
-    let error = block_on(executor.execute(
+    let report = block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: pr },
         &TransitionId::new("merge_pr"),
         &RoleId::new("owner"),
     ))
-    .expect_err("PR merge remains unsupported in this phase");
-    assert_eq!(
-        error,
-        ExecutionError::UnsupportedEffect {
-            effect: WorkflowEffect::MergePullRequest,
-        }
-    );
+    .expect("the owner merges the implementation pull request");
+    assert_eq!(report.applied, vec![WorkflowEffect::MergePullRequest]);
+
+    let merged = block_on(forge.get_pull_request_by_number(&repo, pr))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    assert_eq!(merged.state, PullRequestState::Merged);
+    assert!(merged.merge.is_some(), "a merge record is recorded");
 }
 
 #[test]

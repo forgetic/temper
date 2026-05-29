@@ -210,7 +210,7 @@ fn label_manifest_covers_every_workflow_site() {
         .any(|usage| matches!(usage, LabelUsage::TransitionEffect { .. })));
 
     // Every declared label appears exactly once in the manifest.
-    assert_eq!(labels.labels().len(), 20);
+    assert_eq!(labels.labels().len(), 22);
 }
 
 #[test]

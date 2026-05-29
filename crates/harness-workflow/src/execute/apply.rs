@@ -8,14 +8,17 @@
 //!
 //! The application discipline is "validate everything, then mutate": every
 //! effect is checked (unsupported effects and unbound assignee roles fail here)
-//! before any backend call, idempotent comments are posted, and finally labels
-//! and assignees are folded into one update — the commit point. See the parent
-//! module docs for why comments precede the label flip.
+//! before any backend call, idempotent comments are posted, the merge (if any)
+//! is applied, and finally labels and assignees are folded into one update — the
+//! commit point. See the parent module docs for why comments and the merge
+//! precede the label flip, and why the merge is at most once.
 
 use super::{ExecutionError, Executor, Loaded};
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
-use harness_forge::{CreateComment, Forge, UpdateIssue, UpdatePullRequest, UserId};
+use harness_forge::{
+    CreateComment, Forge, MergeMethod, MergePullRequest, UpdateIssue, UpdatePullRequest, UserId,
+};
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Applies a plan's effects, refusing partial application of the state flip.
@@ -32,6 +35,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         let prepared = self.prepare_effects(&plan.effects)?;
         self.apply_comments(loaded, &plan.transition, &prepared.comments)
             .await?;
+        self.apply_merge(loaded, prepared.merge).await?;
         self.apply_update(loaded, prepared).await
     }
 
@@ -94,6 +98,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 WorkflowEffect::CreateComment { body } => {
                     prepared.comments.push(body.clone());
                 }
+                WorkflowEffect::MergePullRequest => {
+                    prepared.merge = true;
+                }
                 other => {
                     return Err(ExecutionError::UnsupportedEffect {
                         effect: other.clone(),
@@ -110,6 +117,38 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .resolve_assignee(role)
             .cloned()
             .ok_or_else(|| ExecutionError::UnresolvedAssignee { role: role.clone() })
+    }
+
+    /// Merges the target pull request at most once.
+    ///
+    /// Runs before the label commit point so that the post-merge labels (which
+    /// the transition declares as ordinary `add_label` effects) double as the
+    /// "already done" marker: once they land, a retry's planner sees them
+    /// present and refuses to re-run. A pull request that is already merged
+    /// (observed in the freshly loaded state) is skipped, so a crash that lands
+    /// the merge but loses the response never merges twice on retry. A merge
+    /// effect targeting an issue is impossible under a validated workflow (the
+    /// transition's artifact kind maps to a pull-request target); it is rejected
+    /// defensively as unsupported rather than silently ignored.
+    async fn apply_merge(&self, loaded: &Loaded, merge: bool) -> Result<(), ExecutionError> {
+        if !merge {
+            return Ok(());
+        }
+        let Loaded::PullRequest { id, merged, .. } = loaded else {
+            return Err(ExecutionError::UnsupportedEffect {
+                effect: WorkflowEffect::MergePullRequest,
+            });
+        };
+        if *merged {
+            return Ok(());
+        }
+        let input = MergePullRequest {
+            method: MergeMethod::MergeCommit,
+            commit_title: None,
+            commit_body: None,
+        };
+        self.forge.merge_pull_request(id, input).await?;
+        Ok(())
     }
 
     /// Posts each planned comment at most once, guarded by a deterministic
@@ -229,6 +268,8 @@ struct PreparedEffects {
     add_assignees: Vec<UserId>,
     remove_assignees: Vec<UserId>,
     comments: Vec<String>,
+    /// Whether the plan requests merging the target pull request.
+    merge: bool,
 }
 
 impl PreparedEffects {

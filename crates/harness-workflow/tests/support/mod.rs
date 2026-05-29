@@ -13,7 +13,8 @@ pub mod crash;
 
 use chrono::{DateTime, Utc};
 use harness_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, Forge, ItemNumber, RepositoryId, UserId,
+    BranchRef, CreateIssue, CreatePullRequest, Forge, ItemNumber, PullRequestState, RepositoryId,
+    UserId,
 };
 use harness_forge_memory::MemoryForge;
 use harness_workflow::{RawWorkflowSpec, ValidatedWorkflow};
@@ -165,4 +166,12 @@ pub fn pr_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -
         .labels;
     labels.sort();
     labels
+}
+
+/// Reads a pull request's current state from the backend.
+pub fn pr_state(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> PullRequestState {
+    block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists")
+        .state
 }

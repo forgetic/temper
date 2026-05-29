@@ -28,8 +28,9 @@ is supplied explicitly, so the suite is reproducible.
 | --- | --- |
 | No duplicate artifact is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
-| A merge is not authorized until review and testing gates pass | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
+| A merge is not authorized, and the pull request is not merged, until review and testing gates pass; once gated, it merges and projects `landed`/`owner-pending` | `a_merge_is_not_authorized_until_review_and_testing_gates_pass` |
 | The gate mechanism blocks a merge until CI, review, and testing all pass | `the_merge_gate_mechanism_requires_ci_review_and_testing_together` |
+| A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
@@ -51,6 +52,12 @@ is supplied explicitly, so the suite is reproducible.
 - **Idempotent create.** `Executor::ensure_issue` stamps the correlation key into
   the new body before creating, so a create that crashes after it lands is found
   by the retry instead of being duplicated.
+- **At-most-once merge.** `MergePullRequest` runs before the label commit point
+  and is skipped when the freshly loaded pull request is already merged. A crash
+  that lands the merge but loses the response leaves the post-merge labels
+  unapplied; the retry observes the merged state, skips the merge, and finishes
+  the `landed`/`owner-pending` projection, so the merge happens exactly once and
+  the post-merge labels survive on the closed pull request.
 
 ## Limitations discovered by the tests
 

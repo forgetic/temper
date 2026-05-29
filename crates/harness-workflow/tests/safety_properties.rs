@@ -9,7 +9,7 @@
 mod support;
 
 use chrono::Duration;
-use harness_forge::{CreateIssue, Forge, IssueQuery, UserId};
+use harness_forge::{CreateIssue, Forge, IssueQuery, PullRequestState, UserId};
 use harness_workflow::{
     parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, ExecutionError, Executor,
     InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy, RawWorkflowSpec,
@@ -17,7 +17,8 @@ use harness_workflow::{
 };
 use support::crash::{CrashForge, Fault, ForgeOp};
 use support::{
-    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, ts, workflow, TestRoot,
+    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state, ts, workflow,
+    TestRoot,
 };
 
 /// An inline workflow whose merge gate requires CI, review, and testing together.
@@ -163,8 +164,9 @@ fn an_exclusive_claim_never_has_two_active_leases() {
     assert_eq!(lease.worker, "run-a", "the original holder keeps the claim");
 }
 
-// Safety property 3a: a merge is not authorized until review and testing gates
-// pass (the five-role fixture's two declared merge gates).
+// Safety property 3a: a merge is not authorized — and the pull request is not
+// merged — until review and testing gates pass; once they do, the merge
+// executes and projects the post-merge `landed`/`owner-pending` labels.
 #[test]
 fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
     let root = TestRoot::new();
@@ -187,6 +189,8 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
         !pr_labels(&forge, &repo, ungated).contains(&"merge-ready".to_string()),
         "no merge-ready label is set while a gate is unmet"
     );
+    // No premature merge: the pull request is untouched.
+    assert_eq!(pr_state(&forge, &repo, ungated), PullRequestState::Open);
 
     // Both gates met: review approved and testing passed.
     let gated = create_pr(
@@ -202,7 +206,69 @@ fn a_merge_is_not_authorized_until_review_and_testing_gates_pass() {
         &RoleId::new("owner"),
     ))
     .expect("a fully gated merge is authorized");
-    assert!(pr_labels(&forge, &repo, gated).contains(&"merge-ready".to_string()));
+    // The pull request is merged and carries the post-merge projection, which
+    // survives on the now-closed pull request.
+    assert_eq!(pr_state(&forge, &repo, gated), PullRequestState::Merged);
+    let labels = pr_labels(&forge, &repo, gated);
+    assert!(labels.contains(&"merge-ready".to_string()));
+    assert!(labels.contains(&"landed".to_string()));
+    assert!(labels.contains(&"owner-pending".to_string()));
+}
+
+// Safety property 3c: the merge executes at most once. A crash that lands the
+// merge but loses the response leaves post-merge labels unapplied; the retry
+// detects the already-merged pull request, skips the merge, and finishes the
+// projection without merging a second time.
+#[test]
+fn a_merge_executes_at_most_once_under_retry() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_pr(
+        &forge,
+        &repo,
+        &["implementation", "review-approved", "testing-passed"],
+        "",
+    );
+    // The merge lands in the backend, then the call crashes before returning.
+    let crash = CrashForge::new(forge, vec![Fault::after(ForgeOp::MergePullRequest, 1)]);
+    let workflow = workflow();
+    let executor = Executor::new(&workflow, &crash);
+    let pr = ArtifactSource::PullRequest { number };
+
+    let crashed = block_on(executor.execute(
+        &repo,
+        pr,
+        &TransitionId::new("approve_merge"),
+        &RoleId::new("owner"),
+    ))
+    .expect_err("the merge crashes after it lands");
+    assert!(matches!(crashed, ExecutionError::Backend { .. }));
+
+    // The merge landed, but the post-merge labels did not yet.
+    let after_crash = block_on(crash.inner().get_pull_request_by_number(&repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    assert_eq!(after_crash.state, PullRequestState::Merged);
+    assert!(!after_crash.labels.contains(&"merge-ready".to_string()));
+
+    // The retry skips the already-merged target and finishes the projection.
+    block_on(executor.execute(
+        &repo,
+        pr,
+        &TransitionId::new("approve_merge"),
+        &RoleId::new("owner"),
+    ))
+    .expect("the retry completes the post-merge projection");
+    assert_eq!(
+        crash.count(ForgeOp::MergePullRequest),
+        1,
+        "the pull request is merged at most once"
+    );
+    let labels = pr_labels(crash.inner(), &repo, number);
+    assert!(labels.contains(&"merge-ready".to_string()));
+    assert!(labels.contains(&"landed".to_string()));
+    assert!(labels.contains(&"owner-pending".to_string()));
 }
 
 // Safety property 3b: the same gate mechanism blocks a merge until CI, review,

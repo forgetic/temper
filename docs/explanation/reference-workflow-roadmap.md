@@ -34,9 +34,12 @@ Status legend: ☐ pending · ☑ done.
   `SetAssignee`/`RemoveAssignee`/`CreateComment` through the `Forge` trait, with
   role-to-user resolution, comment idempotency markers, and assignee/label
   postconditions. Exercised by a dedicated execution test.
-- ☐ **9c — Execute merge + post-merge labels.** `Executor` applies
-  `MergePullRequest` and the post-merge `landed`/`owner-pending` projection.
-  Preserve "no merge before required gates" (safety_properties).
+- ☑ **9c — Execute merge + post-merge labels.** `Executor::execute` applies
+  `MergePullRequest` through the Forge merge API at most once (an already-merged
+  target is skipped) before the label commit point, and projects the post-merge
+  `landed`/`owner-pending` labels as ordinary `add_label` effects on the merge
+  transition. `safety_properties` proves no premature merge, at-most-once merge
+  under crash/retry, and the post-merge projection.
 - ☐ **10 — PR idempotent create.** `Executor::ensure_pull_request` mirroring
   `ensure_issue`; execute `CreatePullRequest` with a correlation key. Closes a
   limitation in `robustness-guarantees.md`.

@@ -258,9 +258,16 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
             &ready,
         )
         .expect("owner can approve a fully gated merge");
+    // The merge transition adds the merge-ready marker, merges the pull request,
+    // and projects the post-merge labels in declaration order.
     assert_eq!(
         plan.effects,
-        vec![WorkflowEffect::AddLabel(LabelId::new("merge-ready"))]
+        vec![
+            WorkflowEffect::AddLabel(LabelId::new("merge-ready")),
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::AddLabel(LabelId::new("landed")),
+            WorkflowEffect::AddLabel(LabelId::new("owner-pending")),
+        ]
     );
 
     // Testing gate unsatisfied: the merge cannot be planned.

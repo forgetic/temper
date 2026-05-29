@@ -15,7 +15,8 @@
 //! # Non-label effects
 //!
 //! Besides label add/remove, the executor applies `SetAssignee`,
-//! `RemoveAssignee`, and `CreateComment` (Phase 9b). Assignee effects name a
+//! `RemoveAssignee`, `CreateComment` (Phase 9b), and `MergePullRequest`
+//! (Phase 9c). Assignee effects name a
 //! workflow *role*; the [`ExecutionContext`] supplies the role→Forge-user
 //! binding, and an unbound role fails with
 //! [`ExecutionError::UnresolvedAssignee`] before any mutation. Assignee changes
@@ -29,8 +30,19 @@
 //! the commit point: a crash before it leaves preconditions intact (a retry
 //! re-plans, the marker dedupes the comment, the flip commits), and a crash
 //! after it leaves the transition fully applied (a retry sees stale
-//! preconditions and is correctly refused). `CreatePullRequest`,
-//! `MergePullRequest`, and lease effects remain unsupported until later phases.
+//! preconditions and is correctly refused).
+//!
+//! # Merge and post-merge projection
+//!
+//! `MergePullRequest` is applied through the [`Forge`] merge API. It runs
+//! *before* the label/assignee commit point and is guarded by the freshly
+//! loaded pull-request state: a pull request that is already merged is skipped,
+//! so the merge is at most once even when a crash lands the merge but loses the
+//! response. The transition's post-merge labels (`landed`, `owner-pending`) are
+//! modeled as ordinary `add_label` effects, so they are projected by the same
+//! atomic update and survive on the now-closed pull request — there is no
+//! executor-special-cased post-merge labeling. `CreatePullRequest` and lease
+//! effects remain unsupported until later phases.
 //!
 //! Reloading and re-planning before every mutation is deliberate: Forge state
 //! can be edited by humans or other workers between planning and execution, so
@@ -59,7 +71,8 @@ use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMeta
 use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
-    CreateIssue, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequestId, RepositoryId,
+    CreateIssue, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequestId, PullRequestState,
+    RepositoryId,
 };
 
 /// Outcome of an idempotent ensure-create operation.
@@ -233,6 +246,9 @@ enum Loaded {
     },
     PullRequest {
         id: PullRequestId,
+        /// Whether the freshly loaded pull request is already merged. Lets the
+        /// merge effect be at-most-once: an already-merged target is skipped.
+        merged: bool,
         classified: ClassifiedArtifact,
     },
 }
@@ -367,11 +383,13 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .get_pull_request_by_number(repo_id, number)
                     .await?
                     .ok_or(ExecutionError::TargetMissing { target })?;
+                let merged = matches!(pull_request.state, PullRequestState::Merged);
                 let classified = classifier
                     .classify_pull_request(&pull_request)
                     .map_err(ExecutionError::Classification)?;
                 Ok(Loaded::PullRequest {
                     id: pull_request.id,
+                    merged,
                     classified,
                 })
             }

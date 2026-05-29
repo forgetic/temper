@@ -157,9 +157,10 @@ The fixture exercise has now confirmed and prioritized the exact backlog in
 missed: multi-artifact-kind and disjunctive queue matching). The expected
 backlog was:
 
-- **Execute remaining non-label effects** — `CreateComment` and assignee
-  effects now apply through the executor; `CreatePullRequest` and
-  `MergePullRequest` still need execution.
+- **Execute remaining non-label effects** — `CreateComment`, assignee, and
+  `MergePullRequest` effects now apply through the executor (the latter
+  at-most-once, projecting the post-merge `landed`/`owner-pending` labels);
+  `CreatePullRequest` still needs execution.
 - **PR idempotent create** mirroring `Executor::ensure_issue`.
 - **External-signal gates** (`ci_gate`) — gates satisfied by a Forge condition,
   not only a sibling transition's labels.

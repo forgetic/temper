@@ -33,10 +33,11 @@ workarounds, which are themselves gaps:
 
 1. **Remaining non-label effects (execution).** The spec can express assignee,
    comment, pull-request create, and pull-request merge effects, and the
-   planner emits them in order. `Executor::execute` now applies assignee and
-   comment effects; it still rejects `CreatePullRequest` and `MergePullRequest`
-   with `UnsupportedEffect`. Claim-time lease effects are also not yet emitted.
-   Without merge execution the loop never closes.
+   planner emits them in order. `Executor::execute` now applies assignee,
+   comment, and `MergePullRequest` effects (the merge at-most-once, with the
+   post-merge `landed`/`owner-pending` projection modeled as `add_label`
+   effects); it still rejects `CreatePullRequest` with `UnsupportedEffect`.
+   Claim-time lease effects are also not yet emitted.
 2. **Pull-request idempotent create.** `open_pr` needs the
    `Executor::ensure_issue` correlation-key pattern for PRs so a retry never
    double-creates. Tied to the `CreatePullRequest` effect above.
