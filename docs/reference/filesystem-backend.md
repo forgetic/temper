@@ -1,8 +1,8 @@
 # Filesystem backend reference
 
-The `harness-fs` crate implements `harness_forge::Forge` using a local directory tree. It is the deterministic development and test backend, not a production forge.
+The `harness-forge-filesystem` crate implements `harness_forge::Forge` using a local directory tree. It is a deterministic development and test backend, not a production forge. For a faster in-process alternative with the same observable contract, see [the in-memory backend](in-memory-backend.md).
 
-Rust type: `harness_fs::FilesystemForge`.
+Rust type: `harness_forge_filesystem::FilesystemForge`.
 
 ## Supported operations
 

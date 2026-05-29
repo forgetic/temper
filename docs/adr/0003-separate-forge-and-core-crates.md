@@ -16,4 +16,4 @@ Reserve a separate workflow crate for workflow and orchestration logic that will
 
 ## Consequences
 
-Backend implementations such as `harness-fs` depend on `harness-forge`, not the workflow crate. Workflow code can evolve independently from the provider abstraction.
+Backend implementations such as `harness-forge-filesystem` and `harness-forge-memory` depend on `harness-forge`, not the workflow crate. Workflow code can evolve independently from the provider abstraction.

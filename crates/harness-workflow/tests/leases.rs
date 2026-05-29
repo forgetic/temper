@@ -2,7 +2,7 @@
 //!
 //! The pure [`LeasePlanner`] tests assert the decision rules directly; the
 //! [`LeaseManager`] tests drive those decisions through the deterministic
-//! `harness-fs` backend and confirm the lease is written into the artifact's
+//! in-memory backend and confirm the lease is written into the artifact's
 //! metadata block.
 
 mod support;

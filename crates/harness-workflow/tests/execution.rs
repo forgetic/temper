@@ -1,49 +1,37 @@
 //! Tests for runtime transition execution through a Forge backend (Phase 6).
 //!
-//! These drive the [`Executor`] against the deterministic `harness-fs` backend:
+//! These drive the [`Executor`] against the deterministic in-memory backend:
 //! create a repository and artifacts, then execute transitions and assert the
 //! backend state, idempotency, and the typed failure classes.
 
 use harness_forge::{
     BranchRef, CreateIssue, CreatePullRequest, Forge, ItemNumber, RepositoryId, UserId,
 };
-use harness_fs::FilesystemForge;
+use harness_forge_memory::{FaultOp, MemoryForge};
 use harness_workflow::{
     parse_metadata_block, ArtifactSource, ExecutionError, Executor, PlanDiagnostic,
     RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
 };
 use std::future::Future;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 const FIXTURE: &str = include_str!("../fixtures/five-role-delivery.json");
 
-static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
-
-/// A temporary backend root cleaned up on drop.
+/// Owns one in-memory backend store for a test.
 struct TestRoot {
-    path: PathBuf,
+    forge: MemoryForge,
 }
 
 impl TestRoot {
     fn new() -> Self {
-        let id = NEXT_TEMP_ROOT.fetch_add(1, Ordering::SeqCst);
-        let path =
-            std::env::temp_dir().join(format!("harness-workflow-exec-{}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        Self { path }
+        Self {
+            forge: MemoryForge::new(),
+        }
     }
 
-    fn forge(&self) -> FilesystemForge {
-        FilesystemForge::new(&self.path)
-    }
-}
-
-impl Drop for TestRoot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+    fn forge(&self) -> MemoryForge {
+        self.forge.clone()
     }
 }
 
@@ -53,14 +41,14 @@ impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
 }
 
-/// Drives a Forge future to completion; the filesystem backend never parks.
+/// Drives a Forge future to completion; the in-memory backend never parks.
 fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(NoopWake));
     let mut context = Context::from_waker(&waker);
     let mut future = Box::pin(future);
     match Future::poll(future.as_mut(), &mut context) {
         Poll::Ready(value) => value,
-        Poll::Pending => panic!("filesystem forge futures should not park in tests"),
+        Poll::Pending => panic!("in-memory forge futures should not park in tests"),
     }
 }
 
@@ -70,7 +58,7 @@ fn workflow() -> ValidatedWorkflow {
     spec.validate().expect("five-role fixture validates")
 }
 
-fn new_repo(forge: &FilesystemForge) -> RepositoryId {
+fn new_repo(forge: &MemoryForge) -> RepositoryId {
     let repo = block_on(forge.create_repository(harness_forge::CreateRepository {
         owner: "acme".into(),
         name: "service".into(),
@@ -81,7 +69,7 @@ fn new_repo(forge: &FilesystemForge) -> RepositoryId {
     repo.id
 }
 
-fn create_issue(forge: &FilesystemForge, repo: &RepositoryId, labels: &[&str]) -> ItemNumber {
+fn create_issue(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str]) -> ItemNumber {
     block_on(forge.create_issue(
         repo,
         CreateIssue {
@@ -95,7 +83,7 @@ fn create_issue(forge: &FilesystemForge, repo: &RepositoryId, labels: &[&str]) -
     .number
 }
 
-fn create_pr(forge: &FilesystemForge, repo: &RepositoryId, labels: &[&str]) -> ItemNumber {
+fn create_pr(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str]) -> ItemNumber {
     block_on(forge.create_pull_request(
         repo,
         CreatePullRequest {
@@ -117,7 +105,7 @@ fn create_pr(forge: &FilesystemForge, repo: &RepositoryId, labels: &[&str]) -> I
     .number
 }
 
-fn issue_labels(forge: &FilesystemForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
+fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
     let mut labels = block_on(forge.get_issue_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("issue exists")
@@ -309,13 +297,11 @@ fn execution_diagnostics_distinguish_failure_classes() {
     .expect_err("an ungated merge fails preconditions");
     assert!(matches!(precondition, ExecutionError::Precondition { .. }));
 
-    // Backend failure: corrupt the stored issues so the load cannot parse.
-    let issues_path = forge
-        .root()
-        .join("repositories")
-        .join(repo.as_str())
-        .join("issues.json");
-    std::fs::write(&issues_path, "not valid json {").expect("corrupt issues store");
+    // Backend failure: arm a one-shot fault so the executor's load fails.
+    forge.fail_next(
+        FaultOp::GetIssueByNumber,
+        "simulated unreachable backend store",
+    );
     let backend = block_on(executor.execute(
         &repo,
         ArtifactSource::Issue { number: ready },

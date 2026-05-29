@@ -1,9 +1,9 @@
 //! Shared test support for the Phase 7 runtime tests.
 //!
-//! These helpers drive the deterministic `harness-fs` backend without an async
-//! runtime: the filesystem forge never parks, so a hand-rolled `block_on` is
-//! enough. Each test binary that needs a backend includes this module with
-//! `mod support;`.
+//! These helpers drive the deterministic in-memory `harness-forge-memory`
+//! backend without an async runtime: the in-memory forge never parks, so a
+//! hand-rolled `block_on` is enough. Each test binary that needs a backend
+//! includes this module with `mod support;`.
 //!
 //! The [`crash`] submodule adds a fault-injecting [`harness_forge::Forge`]
 //! wrapper used by the Phase 8 robustness tests.
@@ -15,36 +15,32 @@ use chrono::{DateTime, Utc};
 use harness_forge::{
     BranchRef, CreateIssue, CreatePullRequest, Forge, ItemNumber, RepositoryId, UserId,
 };
-use harness_fs::FilesystemForge;
+use harness_forge_memory::MemoryForge;
 use harness_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 use std::future::Future;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 const FIXTURE: &str = include_str!("../../fixtures/five-role-delivery.json");
 
-static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
-
-/// A temporary backend root cleaned up on drop.
+/// Owns one in-memory backend store for a test.
+///
+/// Kept as a thin wrapper so existing tests can continue to write
+/// `let root = TestRoot::new(); let forge = root.forge();`. Each `forge()`
+/// returns a clone that shares the same underlying store.
 pub struct TestRoot {
-    path: PathBuf,
+    forge: MemoryForge,
 }
 
 impl TestRoot {
     pub fn new() -> Self {
-        let id = NEXT_TEMP_ROOT.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!(
-            "harness-workflow-phase7-{}-{id}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        Self { path }
+        Self {
+            forge: MemoryForge::new(),
+        }
     }
 
-    pub fn forge(&self) -> FilesystemForge {
-        FilesystemForge::new(&self.path)
+    pub fn forge(&self) -> MemoryForge {
+        self.forge.clone()
     }
 }
 
@@ -54,26 +50,20 @@ impl Default for TestRoot {
     }
 }
 
-impl Drop for TestRoot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
 struct NoopWake;
 
 impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
 }
 
-/// Drives a Forge future to completion; the filesystem backend never parks.
+/// Drives a Forge future to completion; the in-memory backend never parks.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(NoopWake));
     let mut context = Context::from_waker(&waker);
     let mut future = Box::pin(future);
     match Future::poll(future.as_mut(), &mut context) {
         Poll::Ready(value) => value,
-        Poll::Pending => panic!("filesystem forge futures should not park in tests"),
+        Poll::Pending => panic!("in-memory forge futures should not park in tests"),
     }
 }
 
@@ -90,7 +80,7 @@ pub fn ts(value: &str) -> DateTime<Utc> {
 }
 
 /// Creates a fresh repository in the backend.
-pub fn new_repo(forge: &FilesystemForge) -> RepositoryId {
+pub fn new_repo(forge: &MemoryForge) -> RepositoryId {
     block_on(forge.create_repository(harness_forge::CreateRepository {
         owner: "acme".into(),
         name: "service".into(),
@@ -103,7 +93,7 @@ pub fn new_repo(forge: &FilesystemForge) -> RepositoryId {
 
 /// Creates an issue with the given labels and body.
 pub fn create_issue(
-    forge: &FilesystemForge,
+    forge: &MemoryForge,
     repo: &RepositoryId,
     labels: &[&str],
     body: &str,
@@ -123,7 +113,7 @@ pub fn create_issue(
 
 /// Creates a pull request with the given labels and body.
 pub fn create_pr(
-    forge: &FilesystemForge,
+    forge: &MemoryForge,
     repo: &RepositoryId,
     labels: &[&str],
     body: &str,
@@ -150,7 +140,7 @@ pub fn create_pr(
 }
 
 /// Reads an issue's current body from the backend.
-pub fn issue_body(forge: &FilesystemForge, repo: &RepositoryId, number: ItemNumber) -> String {
+pub fn issue_body(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> String {
     block_on(forge.get_issue_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("issue exists")
@@ -158,11 +148,7 @@ pub fn issue_body(forge: &FilesystemForge, repo: &RepositoryId, number: ItemNumb
 }
 
 /// Reads an issue's sorted labels from the backend.
-pub fn issue_labels(
-    forge: &FilesystemForge,
-    repo: &RepositoryId,
-    number: ItemNumber,
-) -> Vec<String> {
+pub fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
     let mut labels = block_on(forge.get_issue_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("issue exists")
@@ -172,7 +158,7 @@ pub fn issue_labels(
 }
 
 /// Reads a pull request's sorted labels from the backend.
-pub fn pr_labels(forge: &FilesystemForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
+pub fn pr_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
     let mut labels = block_on(forge.get_pull_request_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("pull request exists")

@@ -1,0 +1,85 @@
+# In-memory backend reference
+
+The `harness-forge-memory` crate implements `harness_forge::Forge` entirely in
+process. All records live in ordinary collections behind a single mutex, with no
+filesystem, network, or async runtime involved. It is a reference development and
+test backend, not a production forge.
+
+Rust type: `harness_forge_memory::MemoryForge`.
+
+It is a sibling to the filesystem backend (see ADR 0008) and intentionally
+reproduces the same observable contract so tests can swap between them. The
+contract below records only what is specific to the in-memory backend; the
+shared semantics (operations, identifiers, logical clock, ordering, query
+filters, error mapping) are defined in
+[the filesystem backend reference](filesystem-backend.md) and apply identically
+here unless stated otherwise.
+
+## Supported operations
+
+Every `Forge` trait method is implemented, matching the filesystem backend's
+supported set. `get_user` only resolves the current user, because the Forge
+interface has no user creation or listing.
+
+## Persistence model
+
+There is no durable store. State lives in memory for the lifetime of the backend
+instance:
+
+- `current_user`: the bootstrapped Forge `User` (default `user-1` / `local`).
+- a logical `clock_tick` starting at `0`.
+- a repository-id counter starting at `1`.
+- in-memory collections of repositories, labels, issues, pull requests, issue
+  comments, pull-request comments, and CI jobs.
+
+Identifiers and timestamps match the filesystem backend exactly: repository IDs
+are `repo-` plus a zero-padded counter; issue, pull-request, comment, and label
+IDs use the same deterministic schemes; each mutating operation that needs a
+timestamp advances `clock_tick` by one second from the Unix epoch; merge commit
+SHAs are the clock tick formatted as 40 lowercase hexadecimal digits.
+
+`create_repository` validates non-empty owner, name, and default branch, and
+returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
+`upsert_label` rejects empty label names.
+
+## Cloning shares one store
+
+`MemoryForge` is `Clone`. A clone shares the same underlying store through an
+`Arc`, so a clone observes and mutates the same records. This lets a test hand
+the backend to several helpers while keeping one logical store.
+
+## Seeding CI jobs
+
+The Forge interface has no CI-job creation operation. Seed jobs directly with
+`MemoryForge::seed_ci_jobs(repo_id, jobs)`, which replaces any previously seeded
+jobs for that repository. This mirrors how the filesystem backend seeds its
+`ci_jobs.json` fixture.
+
+## Fault-injection hook
+
+Because there is no durable store to corrupt, the backend exposes a small,
+deterministic fault hook so backend error paths stay testable:
+
+- `MemoryForge::fail_next(op, message)` arms a one-shot fault. The next call to
+  `op` returns `ForgeError::Backend(message)` *before* touching state; later
+  calls proceed normally. Arming the same op again queues another fault.
+- `MemoryForge::clear_faults()` discards every armed fault.
+
+`op` is a `FaultOp` value. The fault-aware operations are the mutating and load
+operations the workflow runtime exercises: `ListIssues`, `CreateIssue`,
+`GetIssueByNumber`, `UpdateIssue`, `ListPullRequests`, `CreatePullRequest`,
+`GetPullRequestByNumber`, `UpdatePullRequest`, and `MergePullRequest`. Other
+`Forge` methods ignore the hook. Faults fire before any state mutation, so an
+armed fault never leaves a partial change behind.
+
+## Consistency guarantees
+
+Each operation takes the single interior mutex for its whole duration, so
+operations are atomic and serialized with respect to each other. There are no
+cross-operation transactions. Use it as a single-store deterministic backend for
+tests and local development.
+
+Validation failures map to `ForgeError::InvalidRequest`, missing resources to
+`ForgeError::NotFound`, duplicate repository paths to `ForgeError::AlreadyExists`,
+illegal state transitions (such as merging a closed or merged pull request) to
+`ForgeError::Conflict`, and armed faults to `ForgeError::Backend`.

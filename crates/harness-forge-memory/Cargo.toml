@@ -1,17 +1,15 @@
 [package]
-name = "harness-fs"
+name = "harness-forge-memory"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Filesystem-backed Forge implementation for harness development and tests."
+description = "In-memory Forge implementation for harness development and tests."
 
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
 harness-forge = { path = "../harness-forge" }
-serde.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true

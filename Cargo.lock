@@ -109,7 +109,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-fs"
+name = "harness-forge-filesystem"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -120,13 +120,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-forge-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "harness-forge",
+]
+
+[[package]]
 name = "harness-workflow"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
  "harness-forge",
- "harness-fs",
+ "harness-forge-memory",
  "serde",
  "serde_json",
 ]

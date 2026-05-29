@@ -3,7 +3,7 @@
 //! The pure-scan tests assert the deterministic findings and policy-chosen
 //! actions for expired leases, impossible states, partial transitions, and
 //! stale commands. The end-to-end test exercises [`Reconciler::reconcile`]
-//! against the `harness-fs` backend and an in-memory journal, which is how a
+//! against the in-memory backend and an in-memory journal, which is how a
 //! restarted runtime rediscovers interrupted work.
 
 mod support;

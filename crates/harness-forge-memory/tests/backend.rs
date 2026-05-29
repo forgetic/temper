@@ -1,0 +1,375 @@
+//! Behaviour tests for the in-memory Forge backend.
+//!
+//! These exercise the operations the workflow runtime relies on and assert the
+//! deterministic ids, logical-clock timestamps, ordering, and the one-shot
+//! fault hook. The in-memory futures never park, so a hand-rolled `block_on`
+//! drives them to completion without an async runtime.
+
+use harness_forge::{
+    BranchRef, CiJob, CiJobQuery, CiJobStatus, CreateComment, CreateIssue, CreatePullRequest,
+    CreateRepository, Forge, ForgeError, IssueQuery, IssueState, ItemNumber, MergeMethod,
+    MergePullRequest, PullRequestState, RepositoryId, RepositoryPath, UpdateIssue,
+    UpdatePullRequest, UpsertLabel, UserId,
+};
+use harness_forge_memory::{FaultOp, MemoryForge};
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+
+struct NoopWake;
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    match Future::poll(future.as_mut(), &mut context) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("in-memory forge futures should not park"),
+    }
+}
+
+fn repo_input(owner: &str, name: &str) -> CreateRepository {
+    CreateRepository {
+        owner: owner.into(),
+        name: name.into(),
+        default_branch: "main".into(),
+        description: None,
+    }
+}
+
+fn new_repo(forge: &MemoryForge) -> RepositoryId {
+    block_on(forge.create_repository(repo_input("acme", "service")))
+        .expect("repository created")
+        .id
+}
+
+fn issue_input(labels: &[&str]) -> CreateIssue {
+    CreateIssue {
+        title: "code work".into(),
+        body: String::new(),
+        labels: labels.iter().map(|l| (*l).to_string()).collect(),
+        assignees: Vec::<UserId>::new(),
+    }
+}
+
+fn pr_input(repo: &RepositoryId, labels: &[&str]) -> CreatePullRequest {
+    CreatePullRequest {
+        title: "implementation".into(),
+        body: String::new(),
+        source: BranchRef {
+            repository_id: repo.clone(),
+            branch: "feature".into(),
+        },
+        target: BranchRef {
+            repository_id: repo.clone(),
+            branch: "main".into(),
+        },
+        labels: labels.iter().map(|l| (*l).to_string()).collect(),
+        assignees: Vec::<UserId>::new(),
+    }
+}
+
+#[test]
+fn current_user_is_bootstrapped() {
+    let forge = MemoryForge::new();
+    let user = block_on(forge.current_user()).expect("current user");
+    assert_eq!(user.id, UserId::new("user-1"));
+    assert_eq!(user.handle, "local");
+    assert_eq!(block_on(forge.get_user(&user.id)).unwrap(), Some(user));
+    assert_eq!(
+        block_on(forge.get_user(&UserId::new("missing"))).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn repositories_use_deterministic_ids_and_reject_duplicate_paths() {
+    let forge = MemoryForge::new();
+    let first = block_on(forge.create_repository(repo_input("alice", "project"))).unwrap();
+    assert_eq!(first.id.as_str(), "repo-0000000000000001");
+    assert_eq!(first.created_at, first.updated_at);
+
+    let second = block_on(forge.create_repository(repo_input("alice", "other"))).unwrap();
+    assert_eq!(second.id.as_str(), "repo-0000000000000002");
+
+    let duplicate = block_on(forge.create_repository(repo_input("alice", "project")));
+    assert!(matches!(duplicate, Err(ForgeError::AlreadyExists(_))));
+
+    assert_eq!(
+        block_on(forge.get_repository(&first.id)).unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        block_on(forge.get_repository_by_path(&RepositoryPath::new("alice", "project"))).unwrap(),
+        Some(first)
+    );
+}
+
+#[test]
+fn empty_repository_fields_are_rejected() {
+    let forge = MemoryForge::new();
+    assert!(matches!(
+        block_on(forge.create_repository(repo_input("", "name"))),
+        Err(ForgeError::InvalidRequest(_))
+    ));
+}
+
+#[test]
+fn labels_upsert_and_sort_by_name() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+
+    block_on(forge.upsert_label(
+        &repo,
+        UpsertLabel {
+            name: "ready".into(),
+            color: Some("#fff".into()),
+            description: None,
+        },
+    ))
+    .unwrap();
+    let updated = block_on(forge.upsert_label(
+        &repo,
+        UpsertLabel {
+            name: "ready".into(),
+            color: Some("#000".into()),
+            description: Some("ready to work".into()),
+        },
+    ))
+    .unwrap();
+    assert_eq!(updated.color.as_deref(), Some("#000"));
+
+    block_on(forge.upsert_label(
+        &repo,
+        UpsertLabel {
+            name: "code".into(),
+            color: None,
+            description: None,
+        },
+    ))
+    .unwrap();
+
+    let names: Vec<String> = block_on(forge.list_labels(&repo))
+        .unwrap()
+        .into_iter()
+        .map(|label| label.name)
+        .collect();
+    assert_eq!(names, vec!["code".to_string(), "ready".to_string()]);
+
+    assert!(matches!(
+        block_on(forge.list_labels(&RepositoryId::new("repo-missing"))),
+        Err(ForgeError::NotFound(_))
+    ));
+}
+
+#[test]
+fn issues_create_list_and_update_labels() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+
+    let first = block_on(forge.create_issue(&repo, issue_input(&["code", "ready"]))).unwrap();
+    assert_eq!(first.number, ItemNumber::new(1));
+    assert_eq!(
+        first.id.as_str(),
+        "issue-repo-0000000000000001-0000000000000001"
+    );
+    assert_eq!(first.state, IssueState::Open);
+    assert_eq!(first.labels, vec!["code".to_string(), "ready".to_string()]);
+
+    let second = block_on(forge.create_issue(&repo, issue_input(&["docs"]))).unwrap();
+    assert_eq!(second.number, ItemNumber::new(2));
+
+    let updated = block_on(forge.update_issue(
+        &first.id,
+        UpdateIssue {
+            add_labels: vec!["in-progress".into()],
+            remove_labels: vec!["ready".into()],
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        updated.labels,
+        vec!["code".to_string(), "in-progress".to_string()]
+    );
+    assert!(updated.updated_at > first.updated_at);
+
+    let open = block_on(forge.list_issues(
+        &repo,
+        IssueQuery {
+            labels: vec!["code".into()],
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].id, first.id);
+
+    let closed = block_on(forge.update_issue(
+        &first.id,
+        UpdateIssue {
+            state: Some(IssueState::Closed),
+            ..UpdateIssue::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(closed.state, IssueState::Closed);
+    assert!(closed.closed_at.is_some());
+}
+
+#[test]
+fn issue_comments_are_numbered_and_ordered() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = block_on(forge.create_issue(&repo, issue_input(&[]))).unwrap();
+
+    let first =
+        block_on(forge.add_issue_comment(&issue.id, CreateComment { body: "one".into() })).unwrap();
+    let second =
+        block_on(forge.add_issue_comment(&issue.id, CreateComment { body: "two".into() })).unwrap();
+    assert_eq!(
+        first.id.as_str(),
+        "comment-issue-repo-0000000000000001-0000000000000001-0000000000000001"
+    );
+    assert_ne!(first.id, second.id);
+
+    let comments = block_on(forge.list_issue_comments(&issue.id)).unwrap();
+    assert_eq!(comments.len(), 2);
+    assert!(comments[0].created_at <= comments[1].created_at);
+
+    assert!(matches!(
+        block_on(forge.list_issue_comments(&harness_forge::IssueId::new("issue-missing"))),
+        Err(ForgeError::NotFound(_))
+    ));
+}
+
+#[test]
+fn pull_requests_create_update_and_merge() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let pr = block_on(forge.create_pull_request(&repo, pr_input(&repo, &["impl"]))).unwrap();
+    assert_eq!(pr.state, PullRequestState::Open);
+    assert_eq!(
+        pr.id.as_str(),
+        "pull-request-repo-0000000000000001-0000000000000001"
+    );
+
+    block_on(forge.update_pull_request(
+        &pr.id,
+        UpdatePullRequest {
+            add_labels: vec!["needs-review".into()],
+            ..UpdatePullRequest::default()
+        },
+    ))
+    .unwrap();
+
+    let merge = block_on(forge.merge_pull_request(
+        &pr.id,
+        MergePullRequest {
+            method: MergeMethod::Squash,
+            commit_title: None,
+            commit_body: None,
+        },
+    ))
+    .unwrap();
+    assert_eq!(merge.method, MergeMethod::Squash);
+    assert_eq!(merge.commit_sha.len(), 40);
+
+    let merged = block_on(forge.get_pull_request(&pr.id)).unwrap().unwrap();
+    assert_eq!(merged.state, PullRequestState::Merged);
+    assert!(merged.merge.is_some());
+
+    // Re-merging a merged pull request conflicts.
+    assert!(matches!(
+        block_on(forge.merge_pull_request(
+            &pr.id,
+            MergePullRequest {
+                method: MergeMethod::MergeCommit,
+                commit_title: None,
+                commit_body: None,
+            },
+        )),
+        Err(ForgeError::Conflict(_))
+    ));
+}
+
+#[test]
+fn ci_jobs_can_be_seeded_filtered_and_looked_up() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp(10, 0).unwrap();
+    let job = CiJob {
+        id: harness_forge::CiJobId::new("ci-1"),
+        repo_id: repo.clone(),
+        pull_request_id: None,
+        commit_sha: "abc123".into(),
+        name: "build".into(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(harness_forge::CiJobConclusion::Success),
+        url: None,
+        created_at: now,
+        started_at: Some(now),
+        completed_at: Some(now),
+        updated_at: now,
+    };
+    forge.seed_ci_jobs(&repo, vec![job.clone()]);
+
+    let matching = block_on(forge.list_ci_jobs(
+        &repo,
+        CiJobQuery {
+            status: Some(CiJobStatus::Completed),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(matching.len(), 1);
+
+    let none = block_on(forge.list_ci_jobs(
+        &repo,
+        CiJobQuery {
+            status: Some(CiJobStatus::Running),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(none.is_empty());
+
+    assert_eq!(
+        block_on(forge.get_ci_job(&harness_forge::CiJobId::new("ci-1"))).unwrap(),
+        Some(job)
+    );
+}
+
+#[test]
+fn fault_hook_forces_one_shot_backend_errors() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = block_on(forge.create_issue(&repo, issue_input(&["code"]))).unwrap();
+
+    forge.fail_next(FaultOp::GetIssueByNumber, "simulated unreachable backend");
+    let failed = block_on(forge.get_issue_by_number(&repo, issue.number));
+    assert!(matches!(failed, Err(ForgeError::Backend(message)) if message.contains("unreachable")));
+
+    // The fault is one-shot: the next call succeeds.
+    let recovered = block_on(forge.get_issue_by_number(&repo, issue.number))
+        .unwrap()
+        .expect("issue still exists");
+    assert_eq!(recovered.id, issue.id);
+
+    // Cleared faults do not fire.
+    forge.fail_next(FaultOp::ListIssues, "boom");
+    forge.clear_faults();
+    assert!(block_on(forge.list_issues(&repo, IssueQuery::default())).is_ok());
+}
+
+#[test]
+fn cloned_handles_share_one_store() {
+    let forge = MemoryForge::new();
+    let clone = forge.clone();
+    let repo = new_repo(&forge);
+    // The clone observes the repository created through the original handle.
+    assert!(block_on(clone.get_repository(&repo)).unwrap().is_some());
+}

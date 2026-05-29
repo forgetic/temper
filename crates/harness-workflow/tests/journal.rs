@@ -2,7 +2,7 @@
 //!
 //! These cover the in-memory journal contract, the simulated-restart behaviour
 //! that makes interrupted commands recoverable, and the executor's journaled
-//! lifecycle against the deterministic `harness-fs` backend.
+//! lifecycle against the deterministic in-memory backend.
 
 mod support;
 

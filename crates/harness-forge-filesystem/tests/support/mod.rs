@@ -5,7 +5,7 @@ use harness_forge::{
     BranchRef, CiJob, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
     RepositoryId, UserId,
 };
-use harness_fs::FilesystemForge;
+use harness_forge_filesystem::FilesystemForge;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +22,7 @@ impl TestRoot {
     pub fn new(suite: &str) -> Self {
         let id = NEXT_TEMP_ROOT.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
-            "harness-fs-{suite}-test-{}-{id}",
+            "harness-forge-filesystem-{suite}-test-{}-{id}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&path);

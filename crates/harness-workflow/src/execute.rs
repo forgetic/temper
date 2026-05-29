@@ -18,8 +18,8 @@
 //! re-plans against the freshly loaded artifact.
 //!
 //! The executor is generic over `F: Forge + ?Sized`, so it works with a
-//! concrete backend such as `harness_fs::FilesystemForge` or with a
-//! `&dyn Forge` trait object.
+//! concrete backend such as `harness_forge_filesystem::FilesystemForge`,
+//! `harness_forge_memory::MemoryForge`, or a `&dyn Forge` trait object.
 //!
 //! # Idempotent create
 //!

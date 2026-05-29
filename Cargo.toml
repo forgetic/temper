@@ -2,7 +2,8 @@
 members = [
     "crates/harness-workflow",
     "crates/harness-forge",
-    "crates/harness-fs",
+    "crates/harness-forge-filesystem",
+    "crates/harness-forge-memory",
 ]
 resolver = "2"
 

@@ -85,4 +85,4 @@ than hidden:
 ## Out of scope
 
 No real LLM or agent-provider integration is exercised. Tests drive the
-deterministic `harness-fs` backend through the workflow runtime only.
+deterministic in-memory backend through the workflow runtime only.

@@ -15,10 +15,11 @@ This repository is designed to be evolved by autonomous coding agents. Treat thi
 
 - `harness-forge` defines the backend-agnostic Forge domain model and async interface.
 - `harness-workflow` is the workflow/orchestration crate; it provides the typed workflow spec (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2), plus artifact/Forge target mapping, workflow metadata blocks, and a classifier for Forge issues and pull requests (Phase 3), plus compilation of a validated workflow into role/prompt/tool/queue/label manifests and a runtime transition table (Phase 4), plus a pure planner (`plan::Planner`) for queue matching and transition planning into typed `WorkflowEffect`s and postconditions (Phase 5), plus a runtime executor (`execute::Executor`) that loads fresh Forge state, re-plans, applies label transitions through `harness-forge`, verifies postconditions, and supports idempotent issue creation via correlation keys (Phase 6), plus recovery primitives — leases (`lease::LeasePlanner`/`LeaseManager`), command journaling (`journal::CommandJournal`/`InMemoryJournal` and `Executor::execute_journaled`), and a reconciler (`reconcile::Reconciler`/`RecoveryPolicy`) for expired leases, partial transitions, and impossible states (Phase 7), plus deterministic robustness and crash-injection tests — a `CrashForge` fault-injecting `Forge` test wrapper (`tests/support/crash.rs`) plus `tests/crash_injection.rs` and `tests/safety_properties.rs` — that prove the runtime's safety properties (Phase 8). It depends on `harness-forge` (see ADR 0007); see `docs/reference/robustness-guarantees.md` for the proven properties and known limitations.
-- `harness-fs` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
+- `harness-forge-filesystem` implements local filesystem backend support for users, repositories, repository labels, issues, issue comments, pull requests, pull-request comments, pull-request merges, and CI job listing/lookup.
+- `harness-forge-memory` implements the same Forge contract in memory (`MemoryForge`), reproducing the filesystem backend's deterministic identifiers, logical clock, ordering, and query semantics; it adds a one-shot fault hook (`MemoryForge::fail_next`) for testing backend error paths and is the backend the workflow-layer tests run against. Concrete backends follow the `harness-forge-<provider>` naming convention (see ADR 0008).
 - Documentation follows Diátaxis and is part of the product, not an afterthought.
 - Agent lessons live in `docs/reference/agent-lessons/` so corrections survive across sessions.
-- The next likely work is addressing the limitations the robustness tests surfaced (compare-and-swap lease acquisition, pull-request idempotent create, applying reconciler actions automatically, non-label transition effects), or adding another concrete Forge backend.
+- The next likely work is addressing the limitations the robustness tests surfaced (compare-and-swap lease acquisition, pull-request idempotent create, applying reconciler actions automatically, non-label transition effects), or adding another concrete Forge backend (the `harness-forge-<provider>` convention and two reference backends are now in place).
 
 ## Ground rules
 
@@ -71,7 +72,7 @@ Each backend should document:
 - Consistency guarantees.
 - Unsupported Forge features and how they fail.
 
-The filesystem backend is the reference backend for deterministic tests and fast iteration, not a production forge.
+The filesystem and in-memory backends are the reference backends for deterministic tests and fast iteration, not production forges. They must keep the same observable contract (see ADR 0008); a behaviour change to one usually needs the same change in the other, and in both `docs/reference/filesystem-backend.md` and `docs/reference/in-memory-backend.md`.
 
 ## Session closeout
 
