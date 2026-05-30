@@ -196,3 +196,62 @@ Residual races: read-modify-write is not atomic, and `updated_at` has
 one-second granularity. Until live validation confirms provider-supported
 conditional requests, lease-race safety on this backend is best-effort and
 mode-dependent.
+
+## Continuous integration (Actions)
+
+The backend adapts Forgejo Actions **runs** and **tasks** to the portable
+`CiJob` model through two inherent methods on `ForgejoForge`:
+
+- `list_ci_jobs(repo, query)` lists runs (`GET /repos/{repo}/actions/runs?limit=200`),
+  matches them to the `CiJobQuery` target, expands matched runs to tasks
+  (`GET /repos/{repo}/actions/tasks?limit=200`), groups tasks into attempts, and
+  maps the latest attempt's tasks to jobs.
+- `get_ci_job(repo, id)` decodes the job id, finds the run, expands its latest
+  attempt, and returns the matching job (or `None`).
+
+### Run matching
+
+A `CiJobQuery { pull_request_id, commit_sha, status, sort }` resolves to a match
+target. When `pull_request_id` is set, the backend first fetches the pull request
+(`GET /repos/{repo}/pulls/{number}`) to learn its head SHA and head ref. A run
+matches when any of the following hold (checked in order):
+
+1. **PR ref**: `prettyref` or `head_branch` equals `#<pr>`.
+2. **Head SHA**: the run head/commit SHA matches the query commit or PR head SHA
+   (full equality or a shared prefix of at least 7 characters).
+3. **Event payload number**: the parsed `event_payload` pull-request number
+   matches.
+4. **Event payload head SHA**: the parsed `event_payload` PR head SHA matches.
+5. **PR head branch**: the run `head_branch` equals the PR head ref — only for
+   pull-request events (`event` starting with `pull_request`).
+
+Matched runs are sorted newest first by creation time, then update time, then
+repo-stable run index (`index_in_repo`, then `run_number`, then `id`).
+
+### Attempts and jobs
+
+A run's tasks are filtered by `run_number`, sorted by monotonic task id, and
+grouped into attempts: a repeated task name starts a new attempt. Only the latest
+attempt's tasks become jobs, enumerated by index. Each `CiJob` carries an encoded
+id (`run/<run_index>/task/<task_id>/job/<job_index>`), the resolved pull request
+(from the query or derived from the run), a commit SHA (task/run SHA, then PR
+head SHA, then query commit), the job UI URL when constructible, and timestamps
+from provider fields (`*_at` then bare fields) with run-level fallbacks.
+
+Status mapping: `success`/`failure`/`cancelled`/`skipped`/`timeout` map to
+`Completed` with the matching conclusion; `running`/`in_progress` map to
+`Running`; `waiting`/`queued`/`blocked`/`pending` (and anything unknown) map to
+`Queued`.
+
+### Errors and limits
+
+If the Actions endpoints are unavailable (`403`/`404`), the backend returns a
+`ForgeError::Backend` rather than silently reporting CI as passed or failed, so
+the runner's merge gate stays closed when CI cannot be read. Job results are
+sorted by the requested `CiJobSort` (name, created-desc, updated-desc) or by job
+id when unspecified.
+
+**CI log fetching remains outside the portable backend.** `Forge::list_ci_jobs`
+needs only structured run/task status; fetching build logs (which the TypeScript
+tooling does via UI/cookie auth) is intentionally not part of the `Forge`
+interface.
