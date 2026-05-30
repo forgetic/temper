@@ -10,6 +10,9 @@
 //! configuration, the HTTP seam, error mapping, backend-owned id encoding, and
 //! provider DTO scaffolding.
 
+mod ci;
+mod ci_match;
+mod ci_time;
 mod client;
 mod config;
 mod dependencies;

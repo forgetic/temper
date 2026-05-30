@@ -35,8 +35,9 @@ opaque and never parse them.
 
 ## Implemented operations
 
-This crate implements the pull-request surface and native dependency links.
-Repository, label, issue, and CI operations are added in their own phases.
+This crate implements the pull-request surface, native dependency links, and CI
+(Actions) job listing/lookup. Repository, label, and issue operations are added in
+their own phases.
 
 - `list_pull_requests`, `get_pull_request`, `get_pull_request_by_number`
 - `create_pull_request`, `update_pull_request`
@@ -46,6 +47,7 @@ Repository, label, issue, and CI operations are added in their own phases.
 - `merge_pull_request`
 - `add_issue_dependency`, `remove_issue_dependency`
 - `add_pull_request_dependency`, `remove_pull_request_dependency`
+- `list_ci_jobs`, `get_ci_job`
 
 ## Pull requests
 
@@ -202,12 +204,19 @@ mode-dependent.
 The backend adapts Forgejo Actions **runs** and **tasks** to the portable
 `CiJob` model through two inherent methods on `ForgejoForge`:
 
-- `list_ci_jobs(repo, query)` lists runs (`GET /repos/{repo}/actions/runs?limit=200`),
+- `list_ci_jobs(repo_id, query)` lists runs (`GET /repos/{repo}/actions/runs?limit=200`),
   matches them to the `CiJobQuery` target, expands matched runs to tasks
   (`GET /repos/{repo}/actions/tasks?limit=200`), groups tasks into attempts, and
   maps the latest attempt's tasks to jobs.
-- `get_ci_job(repo, id)` decodes the job id, finds the run, expands its latest
-  attempt, and returns the matching job (or `None`).
+- `get_ci_job(id)` takes no repository parameter: it decodes the repository
+  coordinate out of the `CiJobId`, finds the run, expands its latest attempt, and
+  returns the matching job (or `None`).
+
+Both Actions endpoints return their array wrapped in a `workflow_runs` field; the
+backend tolerantly decodes that wrapper (and a bare array or `null`). Timestamps
+may arrive as RFC3339 strings (`*_at`) or unix-epoch integers (`created`/
+`updated`), so they decode through a flexible serde helper into
+`chrono::DateTime<Utc>`.
 
 ### Run matching
 
@@ -230,26 +239,30 @@ repo-stable run index (`index_in_repo`, then `run_number`, then `id`).
 
 ### Attempts and jobs
 
-A run's tasks are filtered by `run_number`, sorted by monotonic task id, and
-grouped into attempts: a repeated task name starts a new attempt. Only the latest
-attempt's tasks become jobs, enumerated by index. Each `CiJob` carries an encoded
-id (`run/<run_index>/task/<task_id>/job/<job_index>`), the resolved pull request
-(from the query or derived from the run), a commit SHA (task/run SHA, then PR
-head SHA, then query commit), the job UI URL when constructible, and timestamps
-from provider fields (`*_at` then bare fields) with run-level fallbacks.
+A run's tasks are filtered by `run_number` (matched against the run's repo-stable
+index), sorted by monotonic task id, and grouped into attempts: a repeated task
+name starts a new attempt. Only the latest attempt's tasks become jobs, enumerated
+by index. Each `CiJob` carries the backend-owned encoded id
+(`forgejo:{owner}/{repo}:actions:{run}:{job_index}:{task_id}`, see the Identifier
+encoding table), the owning `repo_id`, the resolved pull request (from the query
+or derived from the run), a commit SHA (task/run SHA, then PR head SHA, then query
+commit), the job UI URL when constructible, and timestamps from provider fields
+(`*_at` then bare fields) with run-level fallbacks; `created_at` falls back to the
+unix epoch and `completed_at` is set when the job is `Completed`.
 
-Status mapping: `success`/`failure`/`cancelled`/`skipped`/`timeout` map to
-`Completed` with the matching conclusion; `running`/`in_progress` map to
-`Running`; `waiting`/`queued`/`blocked`/`pending` (and anything unknown) map to
-`Queued`.
+Status mapping: `success`/`failure`/`cancelled`/`skipped`/`timeout` (and
+`neutral`) map to `Completed` with the matching conclusion; `running`/
+`in_progress` map to `Running`; `waiting`/`queued`/`requested`/`blocked`/`pending`
+(and anything unknown) map to `Queued`.
 
 ### Errors and limits
 
 If the Actions endpoints are unavailable (`403`/`404`), the backend returns a
 `ForgeError::Backend` rather than silently reporting CI as passed or failed, so
 the runner's merge gate stays closed when CI cannot be read. Job results are
-sorted by the requested `CiJobSort` (name, created-desc, updated-desc) or by job
-id when unspecified.
+sorted by the requested `CiJobSort` (a `field` of name/created-at/updated-at with
+an asc/desc `direction`), falling back to name then job id, mirroring the
+reference backends.
 
 **CI log fetching remains outside the portable backend.** `Forge::list_ci_jobs`
 needs only structured run/task status; fetching build logs (which the TypeScript

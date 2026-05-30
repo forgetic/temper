@@ -6,11 +6,11 @@
 //! sorting of the reference TypeScript tooling: PR-ref match, head-SHA match,
 //! event-payload PR number / head SHA match, and PR head-branch match (only for
 //! pull-request events).
-use harness_forge::{PullRequestId, Timestamp};
-use serde_json::Value;
 
-use crate::ci_time::opt_timestamp;
-use crate::dto::ForgejoActionRun;
+use crate::types::ActionRunDto;
+use chrono::{DateTime, Utc};
+use harness_forge::PullRequestId;
+use serde_json::Value;
 
 /// Why a run was considered a match for a query target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub(crate) enum MatchReason {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Target {
     pub pr_id: Option<PullRequestId>,
-    pub pr_number: Option<i64>,
+    pub pr_number: Option<u64>,
     pub pr_head_sha: Option<String>,
     pub pr_head_ref: Option<String>,
     pub commit_sha: Option<String>,
@@ -61,7 +61,7 @@ impl Target {
 }
 
 /// A run's repo-stable index: `index_in_repo`, then `run_number`, then `id`.
-pub(crate) fn run_index(run: &ForgejoActionRun) -> i64 {
+pub(crate) fn run_index(run: &ActionRunDto) -> u64 {
     if run.index_in_repo > 0 {
         run.index_in_repo
     } else if run.run_number > 0 {
@@ -71,8 +71,8 @@ pub(crate) fn run_index(run: &ForgejoActionRun) -> i64 {
     }
 }
 
-/// Decide whether a run matches a query target, returning the first reason.
-pub(crate) fn match_run(run: &ForgejoActionRun, target: &Target) -> Option<MatchReason> {
+/// Decides whether a run matches a query target, returning the first reason.
+pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReason> {
     if let Some(number) = target.pr_number {
         let tag = format!("#{number}");
         if run.prettyref == tag || run.head_branch == tag {
@@ -97,15 +97,16 @@ pub(crate) fn match_run(run: &ForgejoActionRun, target: &Target) -> Option<Match
         }
     }
     if let Some(head_ref) = target.pr_head_ref.as_deref() {
-        if !head_ref.is_empty() && is_pull_request_event(&run.event) && run.head_branch == head_ref {
+        if !head_ref.is_empty() && is_pull_request_event(&run.event) && run.head_branch == head_ref
+        {
             return Some(MatchReason::HeadBranch);
         }
     }
     None
 }
 
-/// Derive a PR number from a run via ref or event payload.
-pub(crate) fn run_pr_number(run: &ForgejoActionRun) -> Option<i64> {
+/// Derives a PR number from a run via ref or event payload.
+pub(crate) fn run_pr_number(run: &ActionRunDto) -> Option<u64> {
     if let Some(number) = parse_hash_ref(&run.prettyref) {
         return Some(number);
     }
@@ -115,7 +116,7 @@ pub(crate) fn run_pr_number(run: &ForgejoActionRun) -> Option<i64> {
     payload_pr_number(run)
 }
 
-fn parse_hash_ref(value: &str) -> Option<i64> {
+fn parse_hash_ref(value: &str) -> Option<u64> {
     value.strip_prefix('#').and_then(|rest| rest.parse().ok())
 }
 
@@ -123,22 +124,22 @@ fn is_pull_request_event(event: &str) -> bool {
     event.starts_with("pull_request")
 }
 
-fn event_payload(run: &ForgejoActionRun) -> Option<Value> {
+fn event_payload(run: &ActionRunDto) -> Option<Value> {
     if run.event_payload.trim().is_empty() {
         return None;
     }
     serde_json::from_str(&run.event_payload).ok()
 }
 
-fn payload_pr_number(run: &ForgejoActionRun) -> Option<i64> {
+fn payload_pr_number(run: &ActionRunDto) -> Option<u64> {
     let payload = event_payload(run)?;
     if let Some(number) = payload.get("pull_request").and_then(|pr| pr.get("number")) {
-        return number.as_i64();
+        return number.as_u64();
     }
-    payload.get("number").and_then(Value::as_i64)
+    payload.get("number").and_then(Value::as_u64)
 }
 
-fn payload_pr_head_sha(run: &ForgejoActionRun) -> Option<String> {
+fn payload_pr_head_sha(run: &ActionRunDto) -> Option<String> {
     let payload = event_payload(run)?;
     payload
         .get("pull_request")
@@ -148,7 +149,7 @@ fn payload_pr_head_sha(run: &ForgejoActionRun) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Compare two SHAs, allowing short/long prefix matches (min 7 chars).
+/// Compares two SHAs, allowing short/long prefix matches (min 7 chars).
 fn sha_match(left: &str, right: &str) -> bool {
     if left.is_empty() || right.is_empty() {
         return false;
@@ -165,8 +166,8 @@ fn sha_match(left: &str, right: &str) -> bool {
     left[..min] == right[..min]
 }
 
-/// Sort runs newest first: created desc, then updated desc, then index desc.
-pub(crate) fn sort_runs(runs: &mut [ForgejoActionRun]) {
+/// Sorts runs newest first: created desc, then updated desc, then index desc.
+pub(crate) fn sort_runs(runs: &mut [ActionRunDto]) {
     runs.sort_by(|a, b| {
         run_created(b)
             .cmp(&run_created(a))
@@ -175,20 +176,20 @@ pub(crate) fn sort_runs(runs: &mut [ForgejoActionRun]) {
     });
 }
 
-pub(crate) fn run_created(run: &ForgejoActionRun) -> Option<Timestamp> {
-    opt_timestamp(&run.created_at).or_else(|| opt_timestamp(&run.created))
+pub(crate) fn run_created(run: &ActionRunDto) -> Option<DateTime<Utc>> {
+    run.created_at.or(run.created)
 }
 
-pub(crate) fn run_updated(run: &ForgejoActionRun) -> Option<Timestamp> {
-    opt_timestamp(&run.updated_at).or_else(|| opt_timestamp(&run.updated))
+pub(crate) fn run_updated(run: &ActionRunDto) -> Option<DateTime<Utc>> {
+    run.updated_at.or(run.updated)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn run(prettyref: &str, head_branch: &str, head_sha: &str, event: &str) -> ForgejoActionRun {
-        ForgejoActionRun {
+    fn run(prettyref: &str, head_branch: &str, head_sha: &str, event: &str) -> ActionRunDto {
+        ActionRunDto {
             index_in_repo: 5,
             run_number: 5,
             status: "success".to_string(),
@@ -198,6 +199,18 @@ mod tests {
             head_sha: head_sha.to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn run_index_prefers_index_in_repo() {
+        let mut run = run("#7", "feature", "abc", "push");
+        assert_eq!(run_index(&run), 5);
+        run.index_in_repo = 0;
+        run.run_number = 9;
+        assert_eq!(run_index(&run), 9);
+        run.run_number = 0;
+        run.id = 13;
+        assert_eq!(run_index(&run), 13);
     }
 
     #[test]
@@ -255,5 +268,26 @@ mod tests {
         assert_eq!(match_run(&pr_event, &target), Some(MatchReason::HeadBranch));
         let push_event = run("main", "feature", "abc", "push");
         assert_eq!(match_run(&push_event, &target), None);
+    }
+
+    #[test]
+    fn empty_target_has_no_filter() {
+        assert!(!Target::default().has_filter());
+        assert!(Target {
+            pr_number: Some(1),
+            ..Default::default()
+        }
+        .has_filter());
+    }
+
+    #[test]
+    fn derives_pr_number_from_ref_then_payload() {
+        let by_ref = run("#7", "feature", "abc", "push");
+        assert_eq!(run_pr_number(&by_ref), Some(7));
+        let mut by_payload = run("main", "main", "abc", "push");
+        by_payload.event_payload = "{\"number\":99}".to_string();
+        assert_eq!(run_pr_number(&by_payload), Some(99));
+        let none = run("main", "main", "abc", "push");
+        assert_eq!(run_pr_number(&none), None);
     }
 }
