@@ -250,8 +250,11 @@ impl<C: HttpClient> ForgejoForge<C> {
         ))
     }
 
-    /// Lists native review events in chronological order, skipping dismissed,
-    /// stale, and non-verdict (review-request) events.
+    /// Lists native review verdicts in chronological order, skipping only
+    /// non-verdict (review-request/pending) events. Dismissed and stale verdicts
+    /// are **kept** so history (e.g. a changes-requested review later auto-
+    /// dismissed by an approval) matches the reference backends; see
+    /// [`map_review`](crate::map::map_review).
     pub async fn list_pull_request_reviews(
         &self,
         id: &PullRequestId,

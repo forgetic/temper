@@ -173,6 +173,7 @@ fn run_variant(variant: &Variant) {
 fn provision(root: &Path, owner: &str, name: &str) {
     let args = WorkerArgs {
         kind: WorkerKind::Provision,
+        backend: worker_bin::Backend::Filesystem,
         root: root.to_path_buf(),
         owner: owner.to_string(),
         name: name.to_string(),

@@ -9,8 +9,10 @@
 //! These are inherent methods on [`ForgejoForge`] mirroring the
 //! [`harness_forge::Forge`] dependency-link surface; the trait implementation is
 //! assembled once every phase's methods exist. The endpoint shapes (the
-//! `{ "index": <number> }` add/remove payload and the dependency-list response)
-//! are best-effort and isolated here so live refinement only edits this module.
+//! `{ "index": <number>, "owner": …, "repo": … }` add/remove payload — Forgejo
+//! resolves the target by `(owner, repo, index)`, not `index` alone — and the
+//! dependency-list response) are best-effort and isolated here so live refinement
+//! only edits this module.
 
 use crate::ids::{parse_issue_id, parse_pull_request_id, RepoCoord};
 use crate::pulls::response_validator;
@@ -202,7 +204,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         target: ItemNumber,
     ) -> ForgeResult<()> {
         let path = dependencies_path(repo, number);
-        let payload = serde_json::json!({ "index": target.get() }).to_string();
+        let payload = dependency_payload(repo, target);
         let response = self
             .send(HttpMethod::Post, &path, Vec::new(), Some(payload))
             .await?;
@@ -220,7 +222,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         target: ItemNumber,
     ) -> ForgeResult<()> {
         let path = dependencies_path(repo, number);
-        let payload = serde_json::json!({ "index": target.get() }).to_string();
+        let payload = dependency_payload(repo, target);
         let response = self
             .send(HttpMethod::Delete, &path, Vec::new(), Some(payload))
             .await?;
@@ -253,4 +255,19 @@ fn dependencies_path(repo: &RepoCoord, number: ItemNumber) -> String {
         repo.path_segment(),
         number.get()
     )
+}
+
+/// The add/remove dependency payload.
+///
+/// Forgejo (Gitea) resolves the dependency target by `(owner, repo, index)`, not
+/// by `index` alone: omitting `owner`/`repo` makes the server resolve against an
+/// empty repository and return `404 IsErrRepoNotExist` (verified live on 7.0.12).
+/// The target shares the source's repository here, so both come from `repo`.
+fn dependency_payload(repo: &RepoCoord, target: ItemNumber) -> String {
+    serde_json::json!({
+        "index": target.get(),
+        "owner": repo.owner,
+        "repo": repo.name,
+    })
+    .to_string()
 }

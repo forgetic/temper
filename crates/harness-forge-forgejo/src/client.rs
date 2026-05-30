@@ -132,8 +132,18 @@ pub struct ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     /// Builds a client targeting `base_url`, stripping any trailing slashes.
+    ///
+    /// Redirects are **not** auto-followed. The REST API returns terminal
+    /// `2xx`/`4xx` directly, while the web-UI CI read path ([`crate::ci_ui`])
+    /// follows redirects itself and must observe the raw `3xx` — in particular a
+    /// successful login is a `303` to `/`, which reqwest's default policy would
+    /// silently chase to a `200` homepage and make the login look failed.
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self::with_client(base_url, reqwest::Client::new())
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default();
+        Self::with_client(base_url, client)
     }
 
     /// Builds a client from an existing `reqwest::Client`.

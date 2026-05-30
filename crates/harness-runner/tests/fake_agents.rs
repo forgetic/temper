@@ -82,7 +82,7 @@ fn engineer_fake_claims_code_opens_pr_and_requests_review() {
         .expect("lookup succeeds")
         .expect("issue exists");
     assert_eq!(labels(issue.labels), vec!["code", "in-progress"]);
-    assert_eq!(issue.assignees, vec![UserId::new("user-engineer")]);
+    assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
 
     let pull_requests =
         block_on(forge.list_pull_requests(&repo, Default::default())).expect("list succeeds");
@@ -92,7 +92,7 @@ fn engineer_fake_claims_code_opens_pr_and_requests_review() {
         labels(pr.labels.clone()),
         vec!["implementation", "needs-merge", "needs-reviewer"]
     );
-    assert_eq!(pr.requested_reviewers, vec![UserId::new("user-reviewer")]);
+    assert_eq!(pr.requested_reviewers, vec![UserId::new("reviewer")]);
     assert!(pr.body.contains("pr-for-code-"));
     assert!(pr.body.contains("\"parents\": ["));
 }
@@ -136,7 +136,7 @@ fn reviewer_fake_approves_as_requested_reviewer() {
     assert_eq!(labels(pr.labels), vec!["implementation"]);
     let reviews = block_on(forge.list_pull_request_reviews(&pr.id)).expect("reviews list");
     assert_eq!(reviews.len(), 1);
-    assert_eq!(reviews[0].reviewer_id, UserId::new("user-reviewer"));
+    assert_eq!(reviews[0].reviewer_id, UserId::new("reviewer"));
     assert_eq!(reviews[0].decision, ReviewDecision::Approved);
 }
 
@@ -278,7 +278,7 @@ fn request_reviewer(forge: &MemoryForge, repo: &harness_forge::RepositoryId, num
     block_on(forge.request_pull_request_reviewers(
         &pr.id,
         RequestReviewers {
-            reviewers: vec![UserId::new("user-reviewer")],
+            reviewers: vec![UserId::new("reviewer")],
         },
     ))
     .expect("reviewer requested");

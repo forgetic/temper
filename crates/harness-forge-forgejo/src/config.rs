@@ -21,6 +21,31 @@ pub enum CasMode {
     BestEffort,
 }
 
+/// Optional password-authenticated web-UI credentials.
+///
+/// Forgejo 7.0.x does not serve Actions runs/tasks over REST, so CI status is
+/// read through the password-authenticated web UI (ADR 0019). Only the CI read
+/// path needs these; every REST operation needs only the token. The credentials
+/// never appear in `Debug` output or in error messages.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct WebUiCredentials {
+    /// Web-UI login user name.
+    pub username: String,
+    /// Web-UI login password.
+    pub password: String,
+}
+
+impl std::fmt::Debug for WebUiCredentials {
+    /// Redacts the password (and user name) so credentials never leak via logs.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WebUiCredentials")
+            .field("username", &"<redacted>")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Configuration for the Forgejo backend.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForgejoConfig {
@@ -36,6 +61,8 @@ pub struct ForgejoConfig {
     pub page_limit: u32,
     /// Conditional-write strategy.
     pub cas_mode: CasMode,
+    /// Optional web-UI credentials used only for the CI read fallback (ADR 0019).
+    pub web_ui: Option<WebUiCredentials>,
 }
 
 /// Failure parsing configuration from the environment.
@@ -60,6 +87,7 @@ impl ForgejoConfig {
             default_name: None,
             page_limit: DEFAULT_PAGE_LIMIT,
             cas_mode: CasMode::default(),
+            web_ui: None,
         }
     }
 
@@ -79,6 +107,25 @@ impl ForgejoConfig {
     /// Sets the conditional-write strategy.
     pub fn with_cas_mode(mut self, cas_mode: CasMode) -> Self {
         self.cas_mode = cas_mode;
+        self
+    }
+
+    /// Sets the web-UI credentials used for the CI read fallback (ADR 0019).
+    ///
+    /// Only the CI read path uses these; every REST operation needs only the
+    /// token. Blank user name or password is treated as "no credentials".
+    pub fn with_web_ui_credentials(
+        mut self,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        let username = username.into();
+        let password = password.into();
+        self.web_ui = if username.trim().is_empty() || password.trim().is_empty() {
+            None
+        } else {
+            Some(WebUiCredentials { username, password })
+        };
         self
     }
 
@@ -109,6 +156,16 @@ impl ForgejoConfig {
                 });
             }
             config = config.with_default_repo(owner, name);
+        }
+
+        // Optional web-UI credentials for the CI read fallback (ADR 0019). Both
+        // must be present and non-blank to take effect; otherwise CI reads on a
+        // REST-less server surface a hard backend error rather than a verdict.
+        if let (Some(username), Some(password)) = (
+            non_empty(lookup("FORGEJO_USERNAME")),
+            non_empty(lookup("FORGEJO_PASSWORD")),
+        ) {
+            config = config.with_web_ui_credentials(username, password);
         }
 
         Ok(config)
@@ -197,6 +254,67 @@ mod tests {
             ])),
             Err(ConfigError::MissingEnv("FORGEJO_URL"))
         );
+    }
+
+    #[test]
+    fn web_ui_credentials_are_optional_and_blank_safe() {
+        let none = ForgejoConfig::new("https://git.example.com", "tok");
+        assert_eq!(none.web_ui, None);
+
+        let set = none.clone().with_web_ui_credentials("ci-reader", "s3cret");
+        assert_eq!(
+            set.web_ui,
+            Some(WebUiCredentials {
+                username: "ci-reader".to_string(),
+                password: "s3cret".to_string(),
+            })
+        );
+
+        // A blank user name or password yields no credentials.
+        assert_eq!(
+            none.clone().with_web_ui_credentials("", "s3cret").web_ui,
+            None
+        );
+        assert_eq!(none.with_web_ui_credentials("ci-reader", "  ").web_ui, None);
+    }
+
+    #[test]
+    fn web_ui_credentials_redact_in_debug() {
+        let creds = WebUiCredentials {
+            username: "ci-reader".to_string(),
+            password: "super-secret".to_string(),
+        };
+        let rendered = format!("{creds:?}");
+        assert!(!rendered.contains("super-secret"));
+        assert!(!rendered.contains("ci-reader"));
+        assert!(rendered.contains("redacted"));
+    }
+
+    #[test]
+    fn from_env_reads_web_ui_credentials() {
+        let config = ForgejoConfig::from_lookup(lookup(&[
+            ("FORGEJO_URL", "https://git.example.com"),
+            ("FORGEJO_ACCESS_TOKEN", "secret"),
+            ("FORGEJO_USERNAME", "ci-reader"),
+            ("FORGEJO_PASSWORD", "pw"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            config.web_ui,
+            Some(WebUiCredentials {
+                username: "ci-reader".to_string(),
+                password: "pw".to_string(),
+            })
+        );
+
+        // Username without password (or vice versa) does not set credentials.
+        let partial = ForgejoConfig::from_lookup(lookup(&[
+            ("FORGEJO_URL", "https://git.example.com"),
+            ("FORGEJO_ACCESS_TOKEN", "secret"),
+            ("FORGEJO_USERNAME", "ci-reader"),
+        ]))
+        .unwrap();
+        assert_eq!(partial.web_ui, None);
     }
 
     #[test]

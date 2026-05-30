@@ -1,10 +1,28 @@
 //! Worker construction and the per-process run loop.
 //!
-//! Each invocation builds one [`FilesystemForge`] handle over the shared store,
-//! resolves the repository by its owner/name path, constructs the matching
-//! runner worker, and drives it with a [`PollLoop`] until a stop signal fires.
-//! The worker set and labels are derived from the compiled reference workflow
-//! and [`RunnerConfig`]; nothing here hardcodes role, queue, or label names.
+//! Each invocation builds one Forge handle, resolves the repository by its
+//! owner/name path, constructs the matching runner worker, and drives it with a
+//! [`PollLoop`] until a stop signal fires. The worker set and labels are derived
+//! from the compiled reference workflow and [`RunnerConfig`]; nothing here
+//! hardcodes role, queue, or label names.
+//!
+//! # Backend seam
+//!
+//! The backend is selected by `--backend` (see [`Backend`]). Everything above
+//! `dyn Forge` is identical for both backends: the same registry, workers, and
+//! poll loop run against either handle. Only the *handle construction* and the
+//! *executor that drives the futures* differ, and both are isolated here:
+//!
+//! - `--backend filesystem` builds a [`FilesystemForge`], derives identity with
+//!   [`FilesystemForge::as_user`], and drives the (synchronous) futures with the
+//!   crate's no-op [`block_on`](crate::block_on). This is the default, so the
+//!   existing multiprocess test is untouched, and it keeps the fake `--kind ci`
+//!   producer.
+//! - `--backend forgejo` builds a [`ForgejoForge`](harness_forge_forgejo::ForgejoForge)
+//!   whose identity is the per-role token (no `as_user`), and drives the
+//!   network-IO futures on a Tokio runtime (see [`super::forgejo`]). CI is
+//!   produced by the real `forgejo-runner` and read via the Phase 3b path, so
+//!   `--kind ci` is rejected for this backend at parse time.
 
 use chrono::{DateTime, Duration, Utc};
 use harness_forge::{Forge, ForgeError, RepositoryId, RepositoryPath, UpsertLabel, User};
@@ -24,7 +42,8 @@ use crate::agents::{
 };
 use crate::ci::{FailThenPassCiPolicy, FilesystemCiSink, FixedCiPolicy};
 use crate::worker_bin::args::{
-    ArchitectKind, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
+    ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior, WorkerArgs,
+    WorkerKind,
 };
 use crate::{block_on, runner_config, workflow};
 use harness_runner::AgentRegistry;
@@ -40,6 +59,10 @@ pub enum RunError {
     UnknownRole { role: String },
     /// The poll loop or a worker tick failed.
     Drive(Box<dyn Error + Send + Sync + 'static>),
+    /// A backend-construction step failed (e.g. invalid Forgejo configuration).
+    ///
+    /// The message must never contain a token or password.
+    Backend(String),
 }
 
 impl fmt::Display for RunError {
@@ -53,6 +76,7 @@ impl fmt::Display for RunError {
                 write!(formatter, "no fake agent registered for role '{role}'")
             }
             RunError::Drive(error) => write!(formatter, "worker run failed: {error}"),
+            RunError::Backend(message) => write!(formatter, "backend setup failed: {message}"),
         }
     }
 }
@@ -62,7 +86,9 @@ impl Error for RunError {
         match self {
             RunError::Forge(error) => Some(error),
             RunError::Drive(error) => Some(error.as_ref()),
-            RunError::RepositoryMissing { .. } | RunError::UnknownRole { .. } => None,
+            RunError::RepositoryMissing { .. }
+            | RunError::UnknownRole { .. }
+            | RunError::Backend(_) => None,
         }
     }
 }
@@ -75,9 +101,18 @@ impl From<ForgeError> for RunError {
 
 /// Runs the worker described by `args` to completion, blocking on async work.
 ///
-/// `provision` is one-shot; every other kind drives a [`PollLoop`] until its
-/// stop signal fires (sentinel file present or `--run-secs` deadline passed).
+/// Dispatches on the selected [`Backend`]: the filesystem path drives the
+/// synchronous reference backend with [`block_on`], while the Forgejo path
+/// drives real network IO on a Tokio runtime (see [`super::forgejo`]).
 pub fn run(args: &WorkerArgs) -> Result<RunReport, RunError> {
+    match &args.backend {
+        Backend::Filesystem => run_filesystem(args),
+        Backend::Forgejo(forgejo) => super::forgejo::run(args, forgejo),
+    }
+}
+
+/// Drives the worker against the filesystem reference backend.
+fn run_filesystem(args: &WorkerArgs) -> Result<RunReport, RunError> {
     match &args.kind {
         WorkerKind::Provision => {
             block_on(provision(args))?;
@@ -116,8 +151,11 @@ async fn ensure_repository(
     Ok(repo.id)
 }
 
-async fn upsert_labels(
-    forge: &FilesystemForge,
+/// Upserts every workflow label against `repo`.
+///
+/// Generic over the Forge so both backends share one label-provisioning path.
+pub(super) async fn upsert_labels<F: Forge + ?Sized>(
+    forge: &F,
     repo: &RepositoryId,
     compiled: &CompiledWorkflow,
 ) -> Result<(), RunError> {
@@ -164,7 +202,7 @@ fn run_role(
     let worker = RoleWorker::new(
         &workflow,
         &compiled,
-        &forge,
+        &forge as &dyn Forge,
         &repo,
         role_id.clone(),
         agent,
@@ -175,11 +213,12 @@ fn run_role(
 
 /// Builds the fake registry whose architect and reviewer match `behavior`.
 ///
-/// `fake_registry_with` is generic over the two variant types, so the runtime
-/// choice resolves into one of the four concrete combinations here. This mirrors
-/// the in-process scenario wiring in `harness-runner/tests/end_to_end.rs`, so the
-/// same scenarios converge across both topologies.
-fn registry_for(behavior: RoleBehavior) -> AgentRegistry<FilesystemForge> {
+/// The registry is over `dyn Forge` so the same agents drive either backend
+/// behind the object-safe Forge trait; the fakes already implement
+/// `Agent<F>` for every `F: Forge + ?Sized`. This mirrors the in-process
+/// scenario wiring in `harness-runner/tests/end_to_end.rs`, so the same
+/// scenarios converge across both topologies.
+pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
     match (behavior.architect, behavior.reviewer) {
         (ArchitectKind::Default, ReviewerKind::Default) => {
             fake_registry_with(FakeArchitect, FakeReviewer)
@@ -196,7 +235,11 @@ fn registry_for(behavior: RoleBehavior) -> AgentRegistry<FilesystemForge> {
     }
 }
 
-fn resolve_role_user(config: &RunnerConfig, role: &RoleId, fallback_handle: &str) -> User {
+pub(super) fn resolve_role_user(
+    config: &RunnerConfig,
+    role: &RoleId,
+    fallback_handle: &str,
+) -> User {
     config
         .role_binding(role)
         .map(|binding| binding.user.clone())
@@ -216,7 +259,7 @@ fn run_mechanical(args: &WorkerArgs) -> Result<RunReport, RunError> {
     let journal = InMemoryJournal::new();
     let worker = MechanicalWorker::new(
         &workflow,
-        &forge,
+        &forge as &dyn Forge,
         &repo,
         &journal,
         LeasePolicy::new(config.lease_ttl),
@@ -244,8 +287,9 @@ fn run_ci(args: &WorkerArgs, policy: CiPolicyKind) -> Result<RunReport, RunError
     }
 }
 
-async fn resolve_repository(
-    forge: &FilesystemForge,
+/// Resolves the repository id by owner/name, generic over the Forge backend.
+pub(super) async fn resolve_repository<F: Forge + ?Sized>(
+    forge: &F,
     owner: &str,
     name: &str,
 ) -> Result<RepositoryId, RunError> {
@@ -259,7 +303,11 @@ async fn resolve_repository(
         })
 }
 
-/// Drives `worker` with a poll loop until the stop signal fires.
+/// Drives `worker` with a poll loop until the stop signal fires, on [`block_on`].
+///
+/// This is the *filesystem* executor: the reference backend's futures resolve
+/// synchronously, so the crate's no-op waker is sufficient. The Forgejo path
+/// uses [`super::forgejo::drive_async`] on a real reactor instead.
 fn drive<W: harness_runner::Worker>(args: &WorkerArgs, worker: &W) -> Result<RunReport, RunError> {
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
     let report = match args.clock {
@@ -285,25 +333,25 @@ fn drive<W: harness_runner::Worker>(args: &WorkerArgs, worker: &W) -> Result<Run
     report.map_err(|error| RunError::Drive(Box::new(error)))
 }
 
-fn epoch() -> DateTime<Utc> {
+pub(super) fn epoch() -> DateTime<Utc> {
     DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch is valid")
 }
 
 /// Stop predicate: fire when the sentinel file exists or the deadline passes.
-struct StopSignal {
+pub(super) struct StopSignal {
     stop_file: Option<PathBuf>,
     deadline: Option<Instant>,
 }
 
 impl StopSignal {
-    fn new(stop_file: Option<PathBuf>, run_secs: Option<u64>) -> Self {
+    pub(super) fn new(stop_file: Option<PathBuf>, run_secs: Option<u64>) -> Self {
         Self {
             stop_file,
             deadline: run_secs.map(|secs| Instant::now() + std::time::Duration::from_secs(secs)),
         }
     }
 
-    fn should_stop(&self) -> bool {
+    pub(super) fn should_stop(&self) -> bool {
         if let Some(path) = &self.stop_file {
             if sentinel_exists(path) {
                 return true;
@@ -340,6 +388,7 @@ mod tests {
     fn base_args(root: PathBuf, kind: WorkerKind) -> WorkerArgs {
         WorkerArgs {
             kind,
+            backend: Backend::Filesystem,
             root,
             owner: "acme".into(),
             name: "service".into(),
@@ -376,7 +425,7 @@ mod tests {
             let worker = RoleWorker::new(
                 &workflow,
                 &compiled,
-                &forge,
+                &forge as &dyn Forge,
                 &repo,
                 role.id.clone(),
                 agent,
@@ -394,7 +443,7 @@ mod tests {
             let journal = InMemoryJournal::new();
             let worker = MechanicalWorker::new(
                 &workflow,
-                &forge,
+                &forge as &dyn Forge,
                 &repo,
                 &journal,
                 LeasePolicy::new(config.lease_ttl),

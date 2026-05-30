@@ -1,10 +1,15 @@
-//! Hand-rolled argument parsing for the `harness-testing-worker` binary.
+//! Parsed argument *types* for the `harness-testing-worker` binary.
+//!
+//! This module owns the public value types ([`WorkerArgs`], [`WorkerKind`],
+//! [`Backend`], the behavior enums, the secret env-var names) and re-exports the
+//! parsing entry points ([`parse`], [`parse_with_env`]) from the sibling
+//! [`super::args_parse`] module, which holds the hand-rolled, table-free flag
+//! walker. The split keeps each file within the line budget.
 //!
 //! A heavyweight CLI framework would be the only reason to add a new dependency
-//! to this crate, so the parser here is deliberately small and table-free: it
-//! walks `--flag value` pairs and validates them into a [`WorkerArgs`] value.
-//! Keep it dependency-light; if the surface grows past a handful of flags,
-//! reconsider a small lockfile crate rather than hand-rolling more.
+//! to this crate, so the parser stays deliberately small. Keep it
+//! dependency-light; if the surface grows past a handful of flags, reconsider a
+//! small lockfile crate rather than hand-rolling more.
 
 use chrono::Duration;
 use std::fmt;
@@ -65,18 +70,42 @@ pub enum ReviewerKind {
     RequestChangesThenApprove,
 }
 
+/// Whether the Forgejo engineer seeds the CI sentinel (`ci-ok`) at PR-open time
+/// or withholds it until the fix commit (`--ci-sentinel`).
+///
+/// Forgejo-only: the filesystem path never reads this (it has no real CI). The
+/// committed workflow gates the `build` job on `test -f ci-ok`, so a head with
+/// the sentinel passes and one without fails.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum CiSentinelKind {
+    /// Seed `ci-ok` on the head when the PR is opened, so its single CI run
+    /// passes immediately (the default; happy path and its review/dependency
+    /// variants).
+    #[default]
+    Present,
+    /// Do **not** seed `ci-ok` at PR-open: the first head fails CI, and the
+    /// engineer's `address_ci_failure` fix commit adds the sentinel to produce a
+    /// second, passing head SHA (`ci_fails_then_passes`).
+    Deferred,
+}
+
 /// The fake agent variants that populate a `role` worker's registry.
 ///
 /// Only the architect and reviewer have behavior variants; every other role
 /// uses its single fake. These map one-to-one onto the in-process scenario
 /// wiring in `harness-runner/tests/end_to_end.rs` so the same scenarios converge
 /// across both topologies (see `docs/how-to/run-multiprocess-e2e.md`).
+///
+/// `ci_sentinel` is Forgejo-only and only the engineer reads it; it does not
+/// affect the filesystem topology.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub struct RoleBehavior {
     /// Architect variant.
     pub architect: ArchitectKind,
     /// Reviewer variant.
     pub reviewer: ReviewerKind,
+    /// Forgejo engineer CI-sentinel policy (`--ci-sentinel`).
+    pub ci_sentinel: CiSentinelKind,
 }
 
 /// Which clock a poll-loop worker drives its ticks from.
@@ -90,12 +119,121 @@ pub enum ClockKind {
     Wall,
 }
 
+/// Environment variable carrying the per-role Forgejo access token.
+///
+/// Secrets never travel on argv (other processes can read a command line); the
+/// Phase 4 spawner sets this per child. Read only for `--backend forgejo`.
+pub const FORGEJO_TOKEN_ENV: &str = "HARNESS_FORGEJO_TOKEN";
+
+/// Environment variable carrying the web-UI login username for CI reads.
+///
+/// Optional: only the CI-reading role(s) need it (the Phase 3b password/web-UI
+/// CI read path logs in with username + password). Other roles act through the
+/// token alone.
+pub const FORGEJO_USERNAME_ENV: &str = "HARNESS_FORGEJO_USERNAME";
+
+/// Environment variable carrying the web-UI login password for CI reads.
+///
+/// Optional, paired with [`FORGEJO_USERNAME_ENV`]; same rationale as the token —
+/// passed via env, never argv.
+pub const FORGEJO_PASSWORD_ENV: &str = "HARNESS_FORGEJO_PASSWORD";
+
+/// Which Forge backend a worker process builds its handle against (`--backend`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum BackendKind {
+    /// The local [`FilesystemForge`](harness_forge_filesystem::FilesystemForge)
+    /// store shared across processes by path (the default, so the existing
+    /// multiprocess test is untouched).
+    #[default]
+    Filesystem,
+    /// A real Forgejo server reached over HTTP via
+    /// [`ForgejoForge`](harness_forge_forgejo::ForgejoForge).
+    Forgejo,
+}
+
+impl BackendKind {
+    /// Human-readable flag value, for error messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BackendKind::Filesystem => "filesystem",
+            BackendKind::Forgejo => "forgejo",
+        }
+    }
+}
+
+/// Forgejo connection details for `--backend forgejo`.
+///
+/// The base URL is the only piece that arrives on argv; every credential is read
+/// from the environment ([`FORGEJO_TOKEN_ENV`], [`FORGEJO_USERNAME_ENV`],
+/// [`FORGEJO_PASSWORD_ENV`]) so it never appears in a process command line. The
+/// [`std::fmt::Debug`] impl redacts the secrets.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ForgejoArgs {
+    /// Forgejo base URL, e.g. `http://127.0.0.1:3000`.
+    pub base_url: String,
+    /// Per-role access token (from [`FORGEJO_TOKEN_ENV`]); REST identity.
+    pub token: String,
+    /// Optional web-UI login username (from [`FORGEJO_USERNAME_ENV`]) for the
+    /// Phase 3b CI read path; `None` for roles that do not read CI.
+    pub username: Option<String>,
+    /// Optional web-UI login password (from [`FORGEJO_PASSWORD_ENV`]); paired
+    /// with [`Self::username`].
+    pub password: Option<String>,
+}
+
+impl fmt::Debug for ForgejoArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ForgejoArgs")
+            .field("base_url", &self.base_url)
+            .field("token", &Redacted(self.token.is_empty()))
+            .field("username", &self.username)
+            .field("password", &Redacted(self.password.is_none()))
+            .finish()
+    }
+}
+
+/// Debug helper that never prints a secret, only whether one is present.
+struct Redacted(bool);
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 {
+            formatter.write_str("<unset>")
+        } else {
+            formatter.write_str("<redacted>")
+        }
+    }
+}
+
+/// Which backend a worker builds its handle against, plus backend-specific data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Backend {
+    /// Filesystem store under [`WorkerArgs::root`].
+    Filesystem,
+    /// Forgejo server with connection + credentials.
+    Forgejo(ForgejoArgs),
+}
+
+impl Backend {
+    /// The flag value this backend corresponds to.
+    pub fn kind(&self) -> BackendKind {
+        match self {
+            Backend::Filesystem => BackendKind::Filesystem,
+            Backend::Forgejo(_) => BackendKind::Forgejo,
+        }
+    }
+}
+
 /// Fully parsed and validated worker invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerArgs {
     /// Which worker to run.
     pub kind: WorkerKind,
-    /// Filesystem store root shared by every worker process.
+    /// Which Forge backend to build a handle against.
+    pub backend: Backend,
+    /// Filesystem store root shared by every worker process. Used by
+    /// `--backend filesystem`; ignored by `--backend forgejo`.
     pub root: PathBuf,
     /// Repository owner.
     pub owner: String,
@@ -117,7 +255,7 @@ pub struct WorkerArgs {
 pub struct ArgsError(String);
 
 impl ArgsError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }
@@ -130,409 +268,7 @@ impl fmt::Display for ArgsError {
 
 impl std::error::Error for ArgsError {}
 
-/// Outcome of parsing the raw argument vector.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ParseOutcome {
-    /// A fully validated worker invocation.
-    Run(Box<WorkerArgs>),
-    /// `--help` was requested; the caller should print usage and exit zero.
-    Help,
-}
-
-/// One-line usage string for `--help` and error context.
-pub const USAGE: &str = concat!(
-    "harness-testing-worker --kind <provision|role|mechanical|ci> --root <path> ",
-    "--repo <owner/name> [--role <id> --user <handle>] ",
-    "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
-    "[--ci <pass|fail-then-pass|fixed-fail>] ",
-    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>]",
-);
-
-/// Parses the process argument vector (excluding the program name).
-pub fn parse<I>(args: I) -> Result<ParseOutcome, ArgsError>
-where
-    I: IntoIterator<Item = String>,
-{
-    let raw = RawArgs::collect(args)?;
-    if raw.help {
-        return Ok(ParseOutcome::Help);
-    }
-    raw.into_worker_args()
-        .map(|args| ParseOutcome::Run(Box::new(args)))
-}
-
-/// Raw, loosely typed flag values before cross-field validation.
-struct RawArgs {
-    help: bool,
-    kind: Option<String>,
-    root: Option<String>,
-    repo: Option<String>,
-    role: Option<String>,
-    user: Option<String>,
-    architect: Option<String>,
-    reviewer: Option<String>,
-    ci: Option<String>,
-    poll_ms: Option<String>,
-    stop_file: Option<String>,
-    run_secs: Option<String>,
-    clock: Option<String>,
-}
-
-impl RawArgs {
-    fn collect<I>(args: I) -> Result<Self, ArgsError>
-    where
-        I: IntoIterator<Item = String>,
-    {
-        let mut raw = RawArgs {
-            help: false,
-            kind: None,
-            root: None,
-            repo: None,
-            role: None,
-            user: None,
-            architect: None,
-            reviewer: None,
-            ci: None,
-            poll_ms: None,
-            stop_file: None,
-            run_secs: None,
-            clock: None,
-        };
-        let mut iter = args.into_iter();
-        while let Some(flag) = iter.next() {
-            match flag.as_str() {
-                "--help" | "-h" => raw.help = true,
-                "--kind" => raw.kind = Some(value_for(&flag, &mut iter)?),
-                "--root" => raw.root = Some(value_for(&flag, &mut iter)?),
-                "--repo" => raw.repo = Some(value_for(&flag, &mut iter)?),
-                "--role" => raw.role = Some(value_for(&flag, &mut iter)?),
-                "--user" => raw.user = Some(value_for(&flag, &mut iter)?),
-                "--architect" => raw.architect = Some(value_for(&flag, &mut iter)?),
-                "--reviewer" => raw.reviewer = Some(value_for(&flag, &mut iter)?),
-                "--ci" => raw.ci = Some(value_for(&flag, &mut iter)?),
-                "--poll-ms" => raw.poll_ms = Some(value_for(&flag, &mut iter)?),
-                "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
-                "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
-                "--clock" => raw.clock = Some(value_for(&flag, &mut iter)?),
-                other => {
-                    return Err(ArgsError::new(format!(
-                        "unrecognized argument '{other}'\nusage: {USAGE}"
-                    )))
-                }
-            }
-        }
-        Ok(raw)
-    }
-
-    fn into_worker_args(self) -> Result<WorkerArgs, ArgsError> {
-        let kind = self.parse_kind()?;
-        let root = PathBuf::from(require(self.root, "--root")?);
-        let (owner, name) = parse_repo(&require(self.repo, "--repo")?)?;
-        let poll_interval = match self.poll_ms {
-            Some(raw) => Duration::milliseconds(parse_i64(&raw, "--poll-ms")?),
-            None => Duration::milliseconds(50),
-        };
-        let stop_file = self.stop_file.map(PathBuf::from);
-        let run_secs = self
-            .run_secs
-            .map(|raw| parse_u64(&raw, "--run-secs"))
-            .transpose()?;
-        let clock = parse_clock(self.clock.as_deref())?;
-        Ok(WorkerArgs {
-            kind,
-            root,
-            owner,
-            name,
-            poll_interval,
-            stop_file,
-            run_secs,
-            clock,
-        })
-    }
-
-    fn parse_kind(&self) -> Result<WorkerKind, ArgsError> {
-        let kind = self
-            .kind
-            .as_deref()
-            .ok_or_else(|| ArgsError::new(format!("missing required --kind\nusage: {USAGE}")))?;
-        match kind {
-            "provision" => Ok(WorkerKind::Provision),
-            "mechanical" => Ok(WorkerKind::Mechanical),
-            "ci" => Ok(WorkerKind::Ci {
-                policy: parse_ci(self.ci.as_deref())?,
-            }),
-            "role" => {
-                let role = require_ref(self.role.as_deref(), "--role (required for --kind role)")?;
-                let user = require_ref(self.user.as_deref(), "--user (required for --kind role)")?;
-                let behavior = RoleBehavior {
-                    architect: parse_architect(self.architect.as_deref())?,
-                    reviewer: parse_reviewer(self.reviewer.as_deref())?,
-                };
-                Ok(WorkerKind::Role {
-                    role,
-                    user,
-                    behavior,
-                })
-            }
-            other => Err(ArgsError::new(format!(
-                "unknown --kind '{other}'; expected provision|role|mechanical|ci"
-            ))),
-        }
-    }
-}
-
-fn value_for<I>(flag: &str, iter: &mut I) -> Result<String, ArgsError>
-where
-    I: Iterator<Item = String>,
-{
-    iter.next()
-        .ok_or_else(|| ArgsError::new(format!("flag '{flag}' expects a value")))
-}
-
-fn require(value: Option<String>, flag: &str) -> Result<String, ArgsError> {
-    value.ok_or_else(|| ArgsError::new(format!("missing required {flag}\nusage: {USAGE}")))
-}
-
-fn require_ref(value: Option<&str>, flag: &str) -> Result<String, ArgsError> {
-    value
-        .map(str::to_string)
-        .ok_or_else(|| ArgsError::new(format!("missing required {flag}\nusage: {USAGE}")))
-}
-
-fn parse_repo(repo: &str) -> Result<(String, String), ArgsError> {
-    let (owner, name) = repo
-        .split_once('/')
-        .ok_or_else(|| ArgsError::new(format!("--repo must be owner/name, got '{repo}'")))?;
-    if owner.is_empty() || name.is_empty() {
-        return Err(ArgsError::new(format!(
-            "--repo must be owner/name with non-empty parts, got '{repo}'"
-        )));
-    }
-    Ok((owner.to_string(), name.to_string()))
-}
-
-fn parse_ci(ci: Option<&str>) -> Result<CiPolicyKind, ArgsError> {
-    match ci {
-        None | Some("pass") => Ok(CiPolicyKind::Pass),
-        Some("fail-then-pass") => Ok(CiPolicyKind::FailThenPass),
-        Some("fixed-fail") => Ok(CiPolicyKind::FixedFail),
-        Some(other) => Err(ArgsError::new(format!(
-            "unknown --ci '{other}'; expected pass|fail-then-pass|fixed-fail"
-        ))),
-    }
-}
-
-fn parse_architect(architect: Option<&str>) -> Result<ArchitectKind, ArgsError> {
-    match architect {
-        None | Some("default") => Ok(ArchitectKind::Default),
-        Some("closing") => Ok(ArchitectKind::Closing),
-        Some(other) => Err(ArgsError::new(format!(
-            "unknown --architect '{other}'; expected default|closing"
-        ))),
-    }
-}
-
-fn parse_reviewer(reviewer: Option<&str>) -> Result<ReviewerKind, ArgsError> {
-    match reviewer {
-        None | Some("default") => Ok(ReviewerKind::Default),
-        Some("request-changes-then-approve") => Ok(ReviewerKind::RequestChangesThenApprove),
-        Some(other) => Err(ArgsError::new(format!(
-            "unknown --reviewer '{other}'; expected default|request-changes-then-approve"
-        ))),
-    }
-}
-
-fn parse_clock(clock: Option<&str>) -> Result<ClockKind, ArgsError> {
-    match clock {
-        None | Some("deterministic") => Ok(ClockKind::Deterministic),
-        Some("wall") => Ok(ClockKind::Wall),
-        Some(other) => Err(ArgsError::new(format!(
-            "unknown --clock '{other}'; expected deterministic|wall"
-        ))),
-    }
-}
-
-fn parse_i64(raw: &str, flag: &str) -> Result<i64, ArgsError> {
-    raw.parse::<i64>()
-        .map_err(|_| ArgsError::new(format!("{flag} must be an integer, got '{raw}'")))
-}
-
-fn parse_u64(raw: &str, flag: &str) -> Result<u64, ArgsError> {
-    raw.parse::<u64>().map_err(|_| {
-        ArgsError::new(format!(
-            "{flag} must be a non-negative integer, got '{raw}'"
-        ))
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv(parts: &[&str]) -> Vec<String> {
-        parts.iter().map(|part| (*part).to_string()).collect()
-    }
-
-    fn run(parts: &[&str]) -> WorkerArgs {
-        match parse(argv(parts)).expect("args parse") {
-            ParseOutcome::Run(args) => *args,
-            ParseOutcome::Help => panic!("unexpected help outcome"),
-        }
-    }
-
-    #[test]
-    fn parses_provision() {
-        let args = run(&[
-            "--kind",
-            "provision",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ]);
-        assert_eq!(args.kind, WorkerKind::Provision);
-        assert_eq!(args.owner, "acme");
-        assert_eq!(args.name, "service");
-        assert_eq!(args.clock, ClockKind::Deterministic);
-    }
-
-    #[test]
-    fn parses_role_with_identity() {
-        let args = run(&[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-            "--poll-ms",
-            "10",
-            "--clock",
-            "wall",
-        ]);
-        assert_eq!(
-            args.kind,
-            WorkerKind::Role {
-                role: "engineer".into(),
-                user: "engineer".into(),
-                behavior: RoleBehavior::default(),
-            }
-        );
-        assert_eq!(args.poll_interval, Duration::milliseconds(10));
-        assert_eq!(args.clock, ClockKind::Wall);
-    }
-
-    #[test]
-    fn parses_role_behavior_variants() {
-        let args = run(&[
-            "--kind",
-            "role",
-            "--role",
-            "reviewer",
-            "--user",
-            "reviewer",
-            "--reviewer",
-            "request-changes-then-approve",
-            "--architect",
-            "closing",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ]);
-        assert_eq!(
-            args.kind,
-            WorkerKind::Role {
-                role: "reviewer".into(),
-                user: "reviewer".into(),
-                behavior: RoleBehavior {
-                    architect: ArchitectKind::Closing,
-                    reviewer: ReviewerKind::RequestChangesThenApprove,
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn parses_ci_policy() {
-        let args = run(&[
-            "--kind",
-            "ci",
-            "--ci",
-            "fail-then-pass",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ]);
-        assert_eq!(
-            args.kind,
-            WorkerKind::Ci {
-                policy: CiPolicyKind::FailThenPass
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_bad_reviewer() {
-        let error = parse(argv(&[
-            "--kind",
-            "role",
-            "--role",
-            "reviewer",
-            "--user",
-            "reviewer",
-            "--reviewer",
-            "bogus",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ]))
-        .unwrap_err();
-        assert!(error.to_string().contains("--reviewer"));
-    }
-
-    #[test]
-    fn help_short_circuits() {
-        assert_eq!(parse(argv(&["--help"])), Ok(ParseOutcome::Help));
-    }
-
-    #[test]
-    fn role_requires_identity() {
-        let error = parse(argv(&[
-            "--kind",
-            "role",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ]))
-        .unwrap_err();
-        assert!(error.to_string().contains("--role"));
-    }
-
-    #[test]
-    fn rejects_bad_repo() {
-        let error = parse(argv(&[
-            "--kind",
-            "provision",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "no-slash",
-        ]))
-        .unwrap_err();
-        assert!(error.to_string().contains("owner/name"));
-    }
-
-    #[test]
-    fn rejects_unknown_flag() {
-        let error = parse(argv(&["--kind", "provision", "--bogus", "x"])).unwrap_err();
-        assert!(error.to_string().contains("unrecognized argument"));
-    }
-}
+// The parsing logic lives in the sibling `args_parse` module (split out to keep
+// each file within the line budget); re-export its surface so callers continue
+// to use `args::{parse, parse_with_env, ParseOutcome, USAGE}`.
+pub use super::args_parse::{parse, parse_with_env, ParseOutcome, USAGE};

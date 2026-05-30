@@ -11,8 +11,13 @@
 //! provisioning helpers are layered on in later phases.
 
 pub mod download;
+pub mod pr_prep;
+pub mod provision;
+mod provision_rest;
 pub mod runner;
 
+pub use pr_prep::{commit_ci_sentinel, prepare_pull_request_head};
+pub use provision::{provision, ProvisionError, Provisioned, RoleIdentity};
 pub use runner::{ForgejoRunner, RunnerError};
 
 use std::net::TcpListener;
@@ -115,6 +120,12 @@ impl ForgejoServer {
     /// The active config file path (used by `forgejo` admin subcommands).
     pub fn config_path(&self) -> &Path {
         &self.config_path
+    }
+
+    /// The instance data directory (holds `web.log`, the SQLite db, repos).
+    /// Exposed for diagnostics in the env-gated e2e tests.
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
     /// The resolved server binary path.

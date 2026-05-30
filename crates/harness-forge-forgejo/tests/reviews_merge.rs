@@ -111,7 +111,7 @@ fn request_reviewers_missing_pull_request_is_not_found() {
 }
 
 #[test]
-fn list_reviews_filters_dismissed_and_requests_and_sorts() {
+fn list_reviews_keeps_dismissed_filters_requests_and_sorts() {
     let client = MockHttpClient::new();
     client.push_response(
         200,
@@ -125,11 +125,15 @@ fn list_reviews_filters_dismissed_and_requests_and_sorts() {
     let forge = forge(client.clone());
 
     let reviews = block_on(forge.list_pull_request_reviews(&pull_id(42))).unwrap();
-    // Dismissed (#2) and the review-request event (#1) are excluded; the rest
-    // sort by submission time.
-    assert_eq!(reviews.len(), 2);
+    // The review-request event (#1) is excluded, but the dismissed verdict (#2)
+    // is **kept** (Forgejo auto-dismisses prior reviews; history must survive).
+    // The rest sort by submission time.
+    assert_eq!(reviews.len(), 3);
     assert_eq!(reviews[0].decision, ReviewDecision::Commented);
     assert_eq!(reviews[1].decision, ReviewDecision::Approved);
+    assert_eq!(reviews[1].reviewer_id, UserId::new("dave"));
+    assert_eq!(reviews[2].decision, ReviewDecision::Approved);
+    assert_eq!(reviews[2].reviewer_id, UserId::new("carol"));
     assert_eq!(
         client.last_request().unwrap().path,
         format!("/api/v1/repos/{OWNER}/{REPO}/pulls/42/reviews")

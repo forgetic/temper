@@ -13,6 +13,8 @@
 mod ci;
 mod ci_match;
 mod ci_time;
+mod ci_ui;
+mod ci_ui_parse;
 mod client;
 mod config;
 mod dependencies;
@@ -27,7 +29,7 @@ mod repos;
 mod types;
 
 pub use client::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse, ReqwestHttpClient};
-pub use config::{CasMode, ConfigError, ForgejoConfig, DEFAULT_PAGE_LIMIT};
+pub use config::{CasMode, ConfigError, ForgejoConfig, WebUiCredentials, DEFAULT_PAGE_LIMIT};
 
 use harness_forge::{ForgeError, ForgeResult, Version};
 use serde::de::DeserializeOwned;
@@ -39,6 +41,19 @@ use std::sync::{Arc, Mutex};
 /// A safety bound so a misbehaving provider that never returns a short page
 /// cannot loop forever. The default page size (50) makes this a generous cap.
 const MAX_LIST_PAGES: u32 = 1000;
+
+/// How many times a transient (`5xx`) checked request is retried before the
+/// error is surfaced. Small: SQLite write contention clears almost immediately,
+/// and a persistent `5xx` should fail fast rather than spin.
+const TRANSIENT_RETRY_LIMIT: u32 = 4;
+
+/// Whether an HTTP status is a transient server error worth retrying.
+///
+/// Only `5xx` qualifies: `4xx` (including `409`/`422`) are client/precondition
+/// outcomes the workflow must observe, not retry.
+fn is_transient(status: u16) -> bool {
+    (500..600).contains(&status)
+}
 
 /// Forgejo Forge backend.
 ///
@@ -77,6 +92,15 @@ impl<C: HttpClient> ForgejoForge<C> {
         }
     }
 
+    /// Returns the underlying HTTP client.
+    ///
+    /// The CI web-UI read path ([`crate::ci_ui`]) builds raw [`HttpRequest`]s
+    /// (no `/api/v1` prefix, cookie auth, form bodies) that bypass
+    /// [`client::build_request`], so it issues them through this seam directly.
+    pub(crate) fn http_client(&self) -> &C {
+        &self.client
+    }
+
     /// Sends a prepared Forgejo API request and returns the raw response.
     ///
     /// The path is relative to the host and excludes the `/api/v1` prefix, which
@@ -98,6 +122,17 @@ impl<C: HttpClient> ForgejoForge<C> {
     }
 
     /// Sends a request, mapping any non-success status to a [`ForgeError`].
+    ///
+    /// Transient server errors (HTTP `5xx`) are retried a bounded number of times
+    /// before being surfaced. A real Forgejo under concurrent load (several worker
+    /// processes editing artifacts at once) intermittently returns `500` from
+    /// SQLite contention on a write; without a retry, a single such blip can
+    /// partially apply a multi-call transition (e.g. labels succeed, the assignee
+    /// PATCH `500`s) and strand the artifact. The body is re-sent unchanged, so
+    /// this is safe for the idempotent label/assignee/state writes the workflow
+    /// performs; a `5xx` is treated as "the write did not commit". Non-`5xx`
+    /// statuses (including `4xx`) are returned on the first response. Offline
+    /// contract tests never return `5xx`, so their request counts are unchanged.
     pub(crate) async fn request_checked(
         &self,
         context: &str,
@@ -106,11 +141,19 @@ impl<C: HttpClient> ForgejoForge<C> {
         query: Vec<(String, String)>,
         body: Option<String>,
     ) -> ForgeResult<HttpResponse> {
-        let response = self.send(method, path, query, body).await?;
-        if response.is_success() {
-            Ok(response)
-        } else {
-            Err(error::map_status_error(context, &response))
+        let path = path.as_ref();
+        let mut attempt = 0u32;
+        loop {
+            let response = self.send(method, path, query.clone(), body.clone()).await?;
+            if response.is_success() {
+                return Ok(response);
+            }
+            // Retry only transient server errors, a bounded number of times.
+            if is_transient(response.status) && attempt < TRANSIENT_RETRY_LIMIT {
+                attempt += 1;
+                continue;
+            }
+            return Err(error::map_status_error(context, &response));
         }
     }
 

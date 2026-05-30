@@ -194,17 +194,24 @@ pub(crate) fn map_pull_request(repo: &RepoCoord, dto: PullRequestDto) -> PullReq
 
 /// Maps a Forgejo review DTO into a portable [`PullRequestReview`].
 ///
-/// Returns `None` for dismissed/stale reviews, for review-request events
-/// (`REQUEST_REVIEW`), and for any state without a portable decision so the
-/// portable aggregate does not count them (see `docs/reference/forge-interface.md`).
+/// Returns `None` only for review-request events (`REQUEST_REVIEW`) and any state
+/// without a portable decision (`PENDING`, comment-only on some versions).
+///
+/// **Dismissed and stale reviews are kept.** The reference (filesystem/memory)
+/// backends have no dismissal concept and return every verdict event, and the
+/// portable review aggregate ([`PullRequestReviewStatus::from_reviews`]) already
+/// resolves superseding by taking the **latest review per reviewer**. Forgejo,
+/// however, auto-dismisses a reviewer's prior review when they submit a new one
+/// (e.g. an approval after a changes-requested review), so dropping dismissed
+/// reviews here would erase the changes-requested event from history and diverge
+/// from the reference contract — breaking history-sensitive consumers while not
+/// affecting the gate (the approval is still the latest). Keeping them aligns the
+/// backends; see `docs/reference/forge-interface.md`.
 pub(crate) fn map_review(
     repo: &RepoCoord,
     pull_request_id: &PullRequestId,
     dto: ReviewDto,
 ) -> Option<PullRequestReview> {
-    if dto.dismissed || dto.stale {
-        return None;
-    }
     let decision = map_review_decision(&dto.state)?;
     let submitted_at = dto.submitted_at.or(dto.updated_at).or(dto.created_at)?;
     Some(PullRequestReview {
@@ -457,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_review_decisions_and_filters_dismissed_and_requests() {
+    fn maps_review_decisions_keeps_dismissed_and_filters_requests() {
         let pr_id = format_pull_request_id(&repo(), ItemNumber::new(7));
         let approved: ReviewDto = serde_json::from_str(
             r#"{"id": 1, "user": {"login": "carol"}, "state": "APPROVED", "submitted_at": "2024-03-03T00:00:00Z"}"#,
@@ -467,12 +474,18 @@ mod tests {
         assert_eq!(review.decision, ReviewDecision::Approved);
         assert_eq!(review.reviewer_id, UserId::new("carol"));
 
+        // A dismissed/stale verdict is **kept**: Forgejo auto-dismisses a prior
+        // review when the same reviewer resubmits, and dropping it would erase the
+        // changes-requested event from history. The reference backends keep every
+        // verdict, and the portable aggregate resolves superseding by latest.
         let dismissed: ReviewDto = serde_json::from_str(
-            r#"{"id": 2, "user": {"login": "carol"}, "state": "APPROVED", "submitted_at": "2024-03-03T00:00:00Z", "dismissed": true}"#,
+            r#"{"id": 2, "user": {"login": "carol"}, "state": "REQUEST_CHANGES", "submitted_at": "2024-03-03T00:00:00Z", "dismissed": true, "stale": true}"#,
         )
         .unwrap();
-        assert!(map_review(&repo(), &pr_id, dismissed).is_none());
+        let kept = map_review(&repo(), &pr_id, dismissed).expect("dismissed review is kept");
+        assert_eq!(kept.decision, ReviewDecision::ChangesRequested);
 
+        // Non-verdict events (review requests) are still dropped.
         let request: ReviewDto = serde_json::from_str(
             r#"{"id": 3, "user": {"login": "carol"}, "state": "REQUEST_REVIEW", "created_at": "2024-03-03T00:00:00Z"}"#,
         )

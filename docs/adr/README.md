@@ -22,3 +22,4 @@ Current ADRs:
 - [ADR 0016: Model native pull-request reviews portably](0016-native-pull-request-reviews.md)
 - [ADR 0017: Retire testing labels in favor of native CI status](0017-retire-testing-labels-for-native-ci-status.md)
 - [ADR 0018: Filesystem backend cross-process concurrency via advisory locking](0018-filesystem-cross-process-concurrency.md)
+- [ADR 0019: Read Forgejo CI status through the password-authenticated web UI](0019-forgejo-ci-read-via-web-ui.md)

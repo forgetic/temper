@@ -69,7 +69,8 @@ fn add_issue_dependency_adds_to_existing_target() {
     assert_eq!(issue.dependencies, vec![ItemNumber::new(2)]);
 
     let requests = client.recorded();
-    // The dependency add posts `{ "index": <target> }` to the issue endpoint.
+    // The dependency add posts `{ "index", "owner", "repo" }` to the issue
+    // endpoint; Forgejo resolves the target by `(owner, repo, index)`.
     let post = requests
         .iter()
         .find(|request| request.method == HttpMethod::Post)
@@ -78,7 +79,10 @@ fn add_issue_dependency_adds_to_existing_target() {
         post.path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/1/dependencies")
     );
-    assert_eq!(body_json(post)["index"], 2);
+    let body = body_json(post);
+    assert_eq!(body["index"], 2);
+    assert_eq!(body["owner"], OWNER);
+    assert_eq!(body["repo"], REPO);
 }
 
 #[test]

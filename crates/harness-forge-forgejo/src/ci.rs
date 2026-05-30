@@ -61,9 +61,21 @@ impl<C: HttpClient> ForgejoForge<C> {
             }
         }
 
-        let runs: Vec<ActionRunDto> = self
-            .fetch_actions_array("list Forgejo Actions runs", &runs_path(&repo))
-            .await?;
+        // Prefer the REST Actions endpoint (richer, used by newer servers). On a
+        // server that does not serve it (Forgejo 7.0.x → 404), or when REST is
+        // available but lists no matching run, fall back to the password/web-UI
+        // read path when credentials are configured (ADR 0019).
+        let runs: Vec<ActionRunDto> = match self
+            .try_fetch_actions_array("list Forgejo Actions runs", &runs_path(&repo))
+            .await?
+        {
+            Some(runs) => runs,
+            None => {
+                return self
+                    .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
+                    .await
+            }
+        };
         let mut matched: Vec<ActionRunDto> = if target.has_filter() {
             runs.into_iter()
                 .filter(|run| match_run(run, &target).is_some())
@@ -72,7 +84,11 @@ impl<C: HttpClient> ForgejoForge<C> {
             runs
         };
         if matched.is_empty() {
-            return Ok(Vec::new());
+            // REST works but found no run for this target; a real run may still
+            // exist that REST does not surface — try the web UI before giving up.
+            return self
+                .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
+                .await;
         }
         sort_runs(&mut matched);
 
@@ -103,6 +119,49 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(jobs)
     }
 
+    /// Reads CI jobs through the web UI, applying the query's status/sort.
+    ///
+    /// When no web-UI credentials are configured this keeps the existing hard
+    /// `Backend` error rather than fabricating a verdict (matching the REST path
+    /// when Actions is unavailable).
+    async fn list_ci_jobs_via_web_ui(
+        &self,
+        repo_id: &RepositoryId,
+        repo: &RepoCoord,
+        target: &Target,
+        query: &CiJobQuery,
+    ) -> ForgeResult<Vec<CiJob>> {
+        let Some(credentials) = self.config().web_ui.as_ref() else {
+            return Err(ForgeError::Backend(
+                "list Forgejo Actions runs: Forgejo Actions unavailable over REST and no \
+                 web-UI credentials configured for the CI read fallback"
+                    .to_string(),
+            ));
+        };
+        let mut jobs = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
+        if let Some(status) = query.status {
+            jobs.retain(|job| job.status == status);
+        }
+        sort_jobs(&mut jobs, query);
+        Ok(jobs)
+    }
+
+    /// Looks up a single CI job through the web-UI read path (REST fallback).
+    async fn get_ci_job_via_web_ui(
+        &self,
+        coord: &CiJobCoord,
+        repo_id: &RepositoryId,
+    ) -> ForgeResult<Option<CiJob>> {
+        let Some(credentials) = self.config().web_ui.as_ref() else {
+            return Err(ForgeError::Backend(
+                "list Forgejo Actions runs: Forgejo Actions unavailable over REST and no \
+                 web-UI credentials configured for the CI read fallback"
+                    .to_string(),
+            ));
+        };
+        crate::ci_ui::read_ci_job(self, credentials, coord, repo_id).await
+    }
+
     /// Looks up a single CI job by its encoded id.
     ///
     /// The repository coordinate is parsed out of the id (there is no repo
@@ -111,9 +170,13 @@ impl<C: HttpClient> ForgejoForge<C> {
         let coord = parse_ci_job_id(id)?;
         let repo_id = format_repository_id(&coord.repo);
 
-        let runs: Vec<ActionRunDto> = self
-            .fetch_actions_array("list Forgejo Actions runs", &runs_path(&coord.repo))
-            .await?;
+        let runs: Vec<ActionRunDto> = match self
+            .try_fetch_actions_array("list Forgejo Actions runs", &runs_path(&coord.repo))
+            .await?
+        {
+            Some(runs) => runs,
+            None => return self.get_ci_job_via_web_ui(&coord, &repo_id).await,
+        };
         let Some(run) = runs.into_iter().find(|run| run_index(run) == coord.run) else {
             return Ok(None);
         };
@@ -192,16 +255,31 @@ impl<C: HttpClient> ForgejoForge<C> {
         context: &str,
         path: &str,
     ) -> ForgeResult<Vec<T>> {
+        self.try_fetch_actions_array(context, path)
+            .await?
+            .ok_or_else(|| {
+                ForgeError::Backend(format!("{context}: Forgejo Actions unavailable over REST"))
+            })
+    }
+
+    /// Like [`Self::fetch_actions_array`] but reports REST unavailability as
+    /// `Ok(None)` so the caller can fall back to the web-UI read path.
+    ///
+    /// A `403`/`404` (the endpoint is absent, as on Forgejo 7.0.x) yields
+    /// `Ok(None)`; any other non-2xx status is still a hard [`ForgeError`].
+    async fn try_fetch_actions_array<T: DeserializeOwned>(
+        &self,
+        context: &str,
+        path: &str,
+    ) -> ForgeResult<Option<Vec<T>>> {
         let query = vec![("limit".to_string(), ACTIONS_LIMIT.to_string())];
         let response = self.send(HttpMethod::Get, path, query, None).await?;
         match response.status {
             200..=299 => {
                 extract_array(context, &response.body, &["workflow_runs", "runs", "tasks"])
+                    .map(Some)
             }
-            403 | 404 => Err(ForgeError::Backend(format!(
-                "{context}: Forgejo Actions unavailable (status {})",
-                response.status
-            ))),
+            403 | 404 => Ok(None),
             other => Err(ForgeError::Backend(format!(
                 "{context}: unexpected status {other}"
             ))),
@@ -251,7 +329,10 @@ fn group_attempts(mut tasks: Vec<ActionTaskDto>) -> Vec<Vec<ActionTaskDto>> {
 }
 
 /// Maps a Forgejo status string to a portable status/conclusion pair.
-fn map_status(status: &str) -> (CiJobStatus, Option<CiJobConclusion>) {
+///
+/// Shared with the web-UI CI read path ([`crate::ci_ui`]) so both surfaces map
+/// the same provider status vocabulary identically.
+pub(crate) fn map_status(status: &str) -> (CiJobStatus, Option<CiJobConclusion>) {
     match status.trim().to_ascii_lowercase().as_str() {
         "success" => (CiJobStatus::Completed, Some(CiJobConclusion::Success)),
         "failure" => (CiJobStatus::Completed, Some(CiJobConclusion::Failure)),

@@ -28,6 +28,7 @@ short page (bounded by an internal page cap of `MAX_LIST_PAGES`).
 | `default_owner` / `default_name` | `with_default_repo` | `None` | optional default repository |
 | `page_limit` | `with_page_limit` | `DEFAULT_PAGE_LIMIT` (50) | page size for list requests |
 | `cas_mode` | `with_cas_mode` | `CasMode::BestEffort` | conditional-write strategy |
+| `web_ui` | `with_web_ui_credentials` | `None` | optional web-UI username+password for the CI read fallback (ADR 0019); redacted in `Debug`, never logged |
 
 ### Environment variables
 
@@ -39,10 +40,15 @@ integration:
 | `FORGEJO_URL` | yes | base URL, e.g. `https://git.example.com` |
 | `FORGEJO_ACCESS_TOKEN` | yes | personal access token |
 | `FORGEJO_DEFAULT_REPO` | no | default repository as `owner/repo` |
+| `FORGEJO_USERNAME` | no | web-UI login user for the CI read fallback (ADR 0019) |
+| `FORGEJO_PASSWORD` | no | web-UI login password for the CI read fallback (ADR 0019) |
 
 Blank required values are treated as missing (`ConfigError::MissingEnv`); a
 `FORGEJO_DEFAULT_REPO` that is not exactly `owner/repo` is
-`ConfigError::Invalid`.
+`ConfigError::Invalid`. `FORGEJO_USERNAME` and `FORGEJO_PASSWORD` take effect
+only when **both** are present and non-blank; either alone is ignored. The
+token authenticates every REST operation; the web-UI password is needed only for
+CI reads on a server that does not serve the Actions REST endpoints.
 
 The optional live smoke tests (`tests/live.rs`) read three more gates so a plain
 `cargo test` never touches the network: `HARNESS_FORGEJO_LIVE=1` enables them
@@ -113,7 +119,7 @@ The **Support** column reads:
 | Reviews | `submit_pull_request_review` | Partial — `Pending` rejected with `InvalidRequest` (see [Reviews](#reviews)) |
 | Merge | `merge_pull_request` | Best-effort payload shape (see [Merge](#merge)) |
 | Dependencies | `add_issue_dependency`, `remove_issue_dependency`, `add_pull_request_dependency`, `remove_pull_request_dependency` | Best-effort endpoint shape (see [Dependency links](#dependency-links)) |
-| CI | `list_ci_jobs`, `get_ci_job` | Full (log fetching out of scope; see [Continuous integration](#continuous-integration-actions)) |
+| CI | `list_ci_jobs`, `get_ci_job` | Full over REST; **web-UI fallback** when REST is absent (Forgejo 7.0.x), best-effort and credential-gated (see [Continuous integration](#continuous-integration-actions)) |
 
 ## Identity
 
@@ -267,10 +273,15 @@ maps to `NotFound`.
 provider states to portable decisions, accepting both submit-event and stored
 state spellings: `APPROVED`/`approve → Approved`,
 `REQUEST_CHANGES`/`changes_requested → ChangesRequested`,
-`COMMENT`/`commented → Commented`, `PENDING → Pending`. Dismissed and stale
-reviews, review-request events (`REQUEST_REVIEW`), and unknown states are
-excluded from the portable list so they cannot affect the portable review
-aggregate (`PullRequestReviewStatus`). Reviews sort by submission time, then id.
+`COMMENT`/`commented → Commented`, `PENDING → Pending`. Only review-request
+events (`REQUEST_REVIEW`) and unknown states are excluded. **Dismissed and stale
+verdicts are kept**: Forgejo auto-dismisses a reviewer's prior verdict when they
+resubmit (e.g. an approval after a changes-requested review), and dropping it
+would erase that changes-requested event from history and diverge from the
+reference backends, which have no dismissal concept and return every verdict. The
+portable aggregate (`PullRequestReviewStatus`) already resolves superseding by
+taking the latest verdict per reviewer, so keeping dismissed/stale verdicts does
+not affect the gate. Reviews sort by submission time, then id.
 
 `submit_pull_request_review` submits in **one call**:
 `POST /pulls/{number}/reviews` with `{ event, body }` where `event` is
@@ -311,12 +322,13 @@ provider-specific adaptation. The endpoint shapes are isolated in
   list — a safe, documented behavior. List enrichment is an N+1 read against
   the dependencies endpoint per matching item; this is accepted for a
   first best-effort backend and the helper is isolated for later batching.
-- add: `POST /issues/{number}/dependencies` with a best-effort
-  `{ "index": <target-number> }` body (Gitea's `IssueMeta`; `owner`/`name` are
-  omitted for same-repository links). The body field name is not verified
-  against a live instance and may need refinement.
-- remove: `DELETE /issues/{number}/dependencies` with the same
-  `{ "index": <target-number> }` body.
+- add: `POST /issues/{number}/dependencies` with a
+  `{ "index": <target-number>, "owner": <owner>, "repo": <name> }` body (Gitea's
+  `IssueMeta`). Forgejo 7.0.12 resolves the target by `(owner, repo, index)`, not
+  `index` alone: omitting `owner`/`repo` resolves against an empty repository and
+  returns `404 IsErrRepoNotExist` (verified live). The target shares the source's
+  repository, so both come from the source coordinates.
+- remove: `DELETE /issues/{number}/dependencies` with the same body shape.
 
 Semantics match the portable contract:
 
@@ -418,19 +430,69 @@ Status mapping: `success`/`failure`/`cancelled`/`skipped`/`timeout` (and
 `in_progress` map to `Running`; `waiting`/`queued`/`requested`/`blocked`/`pending`
 (and anything unknown) map to `Queued`.
 
+### Web-UI read fallback (ADR 0019)
+
+Forgejo 7.0.x does **not** serve the Actions runs/tasks REST endpoints (they
+404). When the REST runs endpoint is absent — or returns successfully but lists
+no matching run for the target — and **web-UI credentials are configured**
+(`ForgejoConfig::web_ui`, see Configuration), the backend reads CI status through
+the **password-authenticated web UI**, mirroring the production `forgejo-tools.ts`
+pattern. This path lives in `src/ci_ui.rs` (+ `src/ci_ui_parse.rs`), the only
+modules that know the web-UI shapes.
+
+The fallback:
+
+1. **Logs in** via CSRF: `GET /user/login` to capture the `_csrf` hidden input
+   and initial cookies, then a form-encoded `POST /user/login`
+   (`user_name`/`password`/`remember=on`/`_csrf`). Success is a redirect off
+   `/user/login`; a `200`, a redirect back to `/user/login`, or a `401`/`403`
+   means the session failed/expired, and the client re-logs in once on a bounce.
+2. **Discovers runs** by scraping `…/actions/runs/{id}` links from
+   `GET /{owner}/{repo}/actions` (cookie auth).
+3. **Reads status** from the live-view JSON
+   `POST /{owner}/{repo}/actions/runs/{run}/jobs/{job}` with the cookie jar, an
+   `X-Csrf-Token: <_csrf cookie>` header, and a `{"logCursors":[]}` body. The
+   response's `state.run.jobs[].status` map to `CiJob` through the **same** status
+   mapper the REST path uses. A run is kept when its commit short-SHA matches the
+   target head SHA **or** its commit branch equals the target head ref (or
+   unconditionally when the target carries no filter). The **branch** match is
+   load-bearing for a fail→pass pull request: the failing and fixed verdicts live
+   on different SHAs of the same head branch, so a SHA-only filter would drop the
+   failing verdict. **Cancelled** runs (superseded by a newer push) are dropped —
+   they carry no verdict — so the kept stream matches the reference CI producer's
+   clean pass/fail shape.
+
+These requests bypass the API helper: **no `/api/v1` prefix, cookie auth instead
+of the token, and form-encoded bodies**, issued through the raw `HttpClient`
+seam. The reqwest client used by the backend disables auto-redirect following
+(`redirect::Policy::none()`) so this path observes the raw `3xx`: a successful
+login is a `303` to `/`, which a redirect-following client would silently chase
+to a `200` homepage and read as a failed login. The path is **best-effort and
+version-sensitive**: it tolerates missing fields (unknown/absent status →
+`Queued`), derives each job's `created_at`/`updated_at` from the run id (the UI
+exposes no per-job timestamp; run ids are monotonic, so this gives a stable
+older-run-before-newer ordering that `CiStatus::from_jobs` and the
+`ci_fails_then_passes` ordering rely on), and reuses the run id as the encoded
+`task_id` (the UI has no stable task id). The credentials are redacted in `Debug`
+and never appear in errors or logs.
+
+Without web-UI credentials and with no REST endpoint, the backend keeps the hard
+`ForgeError::Backend` below — a missing verdict is never fabricated as pass/fail.
+
 ### Errors and limits
 
-If the Actions endpoints are unavailable (`403`/`404`), the backend returns a
-`ForgeError::Backend` rather than silently reporting CI as passed or failed, so
-the runner's merge gate stays closed when CI cannot be read. Job results are
-sorted by the requested `CiJobSort` (a `field` of name/created-at/updated-at with
-an asc/desc `direction`), falling back to name then job id, mirroring the
-reference backends.
+If the Actions endpoints are unavailable (`403`/`404`) and the web-UI fallback is
+not usable (no credentials), the backend returns a `ForgeError::Backend` rather
+than silently reporting CI as passed or failed, so the runner's merge gate stays
+closed when CI cannot be read. Job results are sorted by the requested
+`CiJobSort` (a `field` of name/created-at/updated-at with an asc/desc
+`direction`), falling back to name then job id, mirroring the reference backends.
+The same sort and the query's status filter apply to web-UI-read jobs too.
 
 **CI log fetching remains outside the portable backend.** `Forge::list_ci_jobs`
 needs only structured run/task status; fetching build logs (which the TypeScript
-tooling does via UI/cookie auth) is intentionally not part of the `Forge`
-interface.
+tooling and the web-UI live view also expose) is intentionally not part of the
+`Forge` interface.
 
 ## Error mapping
 

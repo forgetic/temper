@@ -313,7 +313,8 @@ fn assert_pr_merged_and_reconciled(pull_request: &PullRequest) -> Result<(), Box
 async fn assert_quiescent(forge: &dyn Forge, repo: &RepositoryId) -> Result<(), BoxError> {
     let workflow = workflow();
     let compiled = workflow.compile();
-    let work_items = scan(forge, repo, &workflow, &compiled, scenario_now()).await?;
+    let now = quiescence_now(forge, repo).await?;
+    let work_items = scan(forge, repo, &workflow, &compiled, now).await?;
     let owner_alignment = QueueId::new("owner_alignment");
     if work_items.iter().any(|item| item.queue == owner_alignment) {
         return Err(boxed_error(
@@ -341,8 +342,35 @@ fn parent_numbers(pull_request: &PullRequest) -> Result<Vec<ItemNumber>, BoxErro
     Ok(metadata.parents)
 }
 
-fn scenario_now() -> DateTime<Utc> {
-    DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch is valid")
+/// A backend-neutral "now" for the quiescence scan.
+///
+/// `owner_alignment` activates on `min_depth >= 5` **or** an oldest member older
+/// than `max_age` (7 days). The quiescence assert checks that a small, *fresh*
+/// cohort does **not** activate it, which is a `min_depth` fact — so `now` must be
+/// recent relative to the artifacts' timestamps on whichever backend is under
+/// test, or `max_age` mis-fires and the assert wrongly sees activation.
+///
+/// A fixed epoch constant only worked because the filesystem/memory backends date
+/// artifacts near the epoch too; on real Forgejo (wall-clock ~2026) an epoch `now`
+/// makes ages negative, and a wall-clock `now` against epoch-dated filesystem
+/// artifacts makes ages ~decades — both inconsistent. Deriving `now` from the
+/// artifacts themselves (the latest `updated_at` observed, which `queue_active`
+/// ages against) keeps every member's age ≈ 0 on **either** backend, so the assert
+/// always exercises the intended `min_depth` behavior. Falls back to the Unix
+/// epoch when the repository has no timestamped artifacts (an empty scan is
+/// trivially quiescent regardless of `now`).
+async fn quiescence_now(forge: &dyn Forge, repo: &RepositoryId) -> Result<DateTime<Utc>, BoxError> {
+    let mut latest = DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch is valid");
+    for issue in forge.list_issues(repo, IssueQuery::default()).await? {
+        latest = latest.max(issue.updated_at);
+    }
+    for pull_request in forge
+        .list_pull_requests(repo, PullRequestQuery::default())
+        .await?
+    {
+        latest = latest.max(pull_request.updated_at);
+    }
+    Ok(latest)
 }
 
 fn has_label(labels: &[String], needle: &str) -> bool {

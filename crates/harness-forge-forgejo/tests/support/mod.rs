@@ -29,6 +29,13 @@ pub fn forge_with(client: MockHttpClient, cas_mode: CasMode) -> ForgejoForge<Moc
     ForgejoForge::with_client(config, client)
 }
 
+/// Builds a backend with web-UI credentials for the CI read fallback (ADR 0019).
+pub fn forge_with_web_ui(client: MockHttpClient) -> ForgejoForge<MockHttpClient> {
+    let config = ForgejoConfig::new("https://forge.example.com", "test-token")
+        .with_web_ui_credentials("ci-reader", "s3cret");
+    ForgejoForge::with_client(config, client)
+}
+
 /// Returns the backend repository id for the shared `acme/widgets` repository.
 pub fn repo_id() -> RepositoryId {
     RepositoryId::new(format!("forgejo:{OWNER}/{REPO}"))
