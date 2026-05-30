@@ -35,14 +35,17 @@ opaque and never parse them.
 
 ## Implemented operations
 
-This crate implements identity, repository, and label lookups; the pull-request
-surface; native dependency links; and CI (Actions) job listing/lookup. Issue
-operations are added in a later phase.
+This crate implements identity, repository, and label lookups; the issue and
+pull-request surfaces; issue and pull-request comments; native dependency links;
+and CI (Actions) job listing/lookup.
 
 - `current_user`, `get_user`
 - `get_repository`, `get_repository_by_path`, `list_repositories`,
   `create_repository`
 - `list_labels`, `upsert_label`
+- `list_issues`, `get_issue`, `get_issue_by_number`
+- `create_issue`, `update_issue`
+- `list_issue_comments`, `add_issue_comment`
 - `list_pull_requests`, `get_pull_request`, `get_pull_request_by_number`
 - `create_pull_request`, `update_pull_request`
 - `list_pull_request_comments`, `add_pull_request_comment`
@@ -103,6 +106,43 @@ label with the input name exists it sends `PATCH
 /repos/{owner}/{repo}/labels`. The request body carries `name`, and
 `color`/`description` when present. The provider's returned label is mapped
 and returned directly (no re-fetch).
+
+## Issues
+
+Forgejo serves issues and pull requests through the **same** issue endpoints, so
+every issue read path excludes pull requests: a row carrying a non-null
+`pull_request` marker is never returned as an `Issue`.
+
+`list_issues` calls `GET /repos/{owner}/{repo}/issues?state=...&type=issues`,
+adding `labels=<comma-separated>` when the query carries labels. The portable
+state filter maps `Open → open`, `Closed → closed`, `None → all`. Belt and
+suspenders against the provider ignoring `type=issues`, PR-as-issue rows are also
+dropped client-side. Author and assignee are filtered client-side after mapping
+(state and labels are filtered by the provider). Matching issues are enriched
+with their dependency links (an N+1 read, shared with pull requests), then sorted
+by the requested sort field, then by number, then by id for determinism.
+
+`get_issue`/`get_issue_by_number` call `GET /issues/{number}`; a `404` **or** a
+PR-as-issue row maps to `Ok(None)`. The match is enriched with dependency links.
+
+`create_issue` posts `{ title, body, assignees }` to `POST /issues`, then applies
+labels through the shared issue label helper (skipped when empty), and re-fetches
+the issue so the returned value reflects the applied metadata.
+
+`update_issue` re-reads the current issue (a PR-as-issue row maps to `NotFound`),
+performs the optional conditional-write check (see Optimistic concurrency),
+patches `title`/`body`/`state` through `PATCH /issues/{number}` when any is set,
+applies label/assignee changes through the shared helpers (preserving the
+`set_labels` → removals → additions order), and re-fetches. A missing issue maps
+to `NotFound`. Label and assignee sequencing is identical to pull requests (see
+below), since both run on the issue endpoints.
+
+## Issue comments
+
+`list_issue_comments` and `add_issue_comment` use `GET`/`POST
+/issues/{number}/comments` through the shared item-comment helpers, the same code
+path pull-request comments use. Comments map and sort identically (by creation
+time, then id).
 
 ## Pull requests
 
@@ -242,12 +282,15 @@ timestamp — captured on every read through a shared `VersionCache`. A
 write that consumes it go through the same backend instance, which is how the
 workflow layer's `LeaseManager` uses it.
 
-When `update_pull_request` is called with `expected_version`, the backend
-re-reads the artifact and re-resolves its validator before mutating; a changed
-validator returns `Conflict` and writes nothing. When no validator is
-available, `CasMode::Strict` refuses the conditional write
-(`InvalidRequest`) while `CasMode::BestEffort` proceeds with a documented weak
-read-before-write.
+When `update_issue` or `update_pull_request` is called with `expected_version`,
+the backend re-reads the artifact and re-resolves its validator before mutating;
+a changed validator returns `Conflict` and writes nothing (the read happens, but
+no PATCH/PUT/DELETE/POST is emitted). When no validator is available,
+`CasMode::Strict` refuses the conditional write (`InvalidRequest`) while
+`CasMode::BestEffort` proceeds with a documented weak read-before-write. A
+successful write re-fetches the artifact and re-observes its validator, so the
+returned `Version` reflects the post-write state. Both updates use one stable
+cache key per artifact (the formatted issue/pull-request id).
 
 Residual races: read-modify-write is not atomic, and `updated_at` has
 one-second granularity. Until live validation confirms provider-supported

@@ -85,6 +85,28 @@ pub(crate) struct IssueDto {
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
     pub closed_at: Option<DateTime<Utc>>,
+    /// Present (a non-null object) when this row is actually a pull request.
+    ///
+    /// Forgejo serves pull requests through the issue endpoints, tagging each
+    /// PR-as-issue row with a `pull_request` object (issues serialize it as
+    /// JSON `null`). The backend only needs the marker's presence to exclude
+    /// pull requests from issue results, so the contents are ignored.
+    #[serde(default)]
+    pub pull_request: Option<PullRequestMarkerDto>,
+}
+
+/// Marker object Forgejo attaches to a PR-as-issue row's `pull_request` field.
+///
+/// Its presence (a non-null object) is the only signal the backend needs to
+/// distinguish a pull request from a genuine issue, so all fields are ignored.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+pub(crate) struct PullRequestMarkerDto {}
+
+impl IssueDto {
+    /// Reports whether this row is a pull request masquerading as an issue.
+    pub(crate) fn is_pull_request(&self) -> bool {
+        self.pull_request.is_some()
+    }
 }
 
 /// Minimal reference to an issue or pull request returned by the dependencies
@@ -339,6 +361,33 @@ mod tests {
         assert_eq!(comment.id, 91);
         assert_eq!(comment.user.login, "reviewer");
         assert_eq!(comment.body, "looks good");
+    }
+
+    #[test]
+    fn issue_pull_request_marker_distinguishes_rows() {
+        let issue: IssueDto = serde_json::from_str(
+            r#"{
+                "number": 7,
+                "user": {"login": "author"},
+                "created_at": "2024-03-01T00:00:00Z",
+                "updated_at": "2024-03-02T00:00:00Z",
+                "pull_request": null
+            }"#,
+        )
+        .unwrap();
+        assert!(!issue.is_pull_request());
+
+        let pull_as_issue: IssueDto = serde_json::from_str(
+            r#"{
+                "number": 8,
+                "user": {"login": "author"},
+                "created_at": "2024-03-01T00:00:00Z",
+                "updated_at": "2024-03-02T00:00:00Z",
+                "pull_request": {"merged": false, "url": "http://example/pulls/8"}
+            }"#,
+        )
+        .unwrap();
+        assert!(pull_as_issue.is_pull_request());
     }
 
     #[test]

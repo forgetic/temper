@@ -13,7 +13,6 @@
 //! are best-effort and isolated here so live refinement only edits this module.
 
 use crate::ids::{parse_issue_id, parse_pull_request_id, RepoCoord};
-use crate::map::map_issue;
 use crate::pulls::response_validator;
 use crate::types::{DependencyRefDto, IssueDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
@@ -122,9 +121,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         };
         let validator = response_validator(&response);
         let dto: IssueDto = Self::decode("get issue", &response)?;
-        let mut issue = map_issue(repo, dto);
-        let validator = validator.unwrap_or_else(|| issue.updated_at.to_rfc3339());
-        issue.version = self.versions.observe(issue.id.as_str(), Some(&validator));
+        let mut issue = self.materialize_issue(repo, dto, validator.as_deref());
         issue.dependencies = self.load_item_dependencies(repo, number).await?;
         Ok(Some(issue))
     }

@@ -18,6 +18,7 @@ mod config;
 mod dependencies;
 mod error;
 mod ids;
+mod issues;
 mod items;
 mod map;
 mod pulls;
