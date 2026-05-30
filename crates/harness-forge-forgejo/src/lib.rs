@@ -21,6 +21,7 @@ mod ids;
 mod items;
 mod map;
 mod pulls;
+mod repos;
 mod types;
 
 pub use client::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse, ReqwestHttpClient};

@@ -12,15 +12,65 @@
 #![allow(dead_code)]
 
 use crate::ids::{
-    format_comment_id, format_issue_id, format_pull_request_id, format_repository_id,
-    format_review_id, format_user_id, RepoCoord,
+    format_comment_id, format_issue_id, format_label_id, format_pull_request_id,
+    format_repository_id, format_review_id, format_user_id, RepoCoord,
 };
-use crate::types::{CommentDto, IssueDto, PrBranchDto, PrRepoDto, PullRequestDto, ReviewDto};
+use crate::types::{
+    CommentDto, IssueDto, LabelDto, PrBranchDto, PrRepoDto, PullRequestDto, RepositoryDto,
+    ReviewDto, UserDto,
+};
 use harness_forge::{
-    BranchRef, Comment, ForgeError, ForgeResult, Issue, IssueState, ItemNumber, MergeMethod,
-    MergeRecord, PullRequest, PullRequestId, PullRequestReview, PullRequestState, ReviewDecision,
-    UserId, Version,
+    BranchRef, Comment, ForgeError, ForgeResult, Issue, IssueState, ItemNumber, Label, MergeMethod,
+    MergeRecord, PullRequest, PullRequestId, PullRequestReview, PullRequestState, Repository,
+    ReviewDecision, User, UserId, Version,
 };
+
+/// Maps a Forgejo user DTO into a portable [`User`].
+///
+/// The Forgejo login is both the portable [`UserId`] and the human-facing
+/// handle. Empty `full_name`/`email` strings (Forgejo's "unset" form) map to
+/// `None`, matching the reference backends' optional fields.
+pub(crate) fn map_user(dto: UserDto) -> User {
+    User {
+        id: format_user_id(&dto.login),
+        handle: dto.login,
+        display_name: non_empty(dto.full_name),
+        email: non_empty(dto.email),
+    }
+}
+
+/// Maps a Forgejo repository DTO into a portable [`Repository`].
+pub(crate) fn map_repository(dto: RepositoryDto) -> Repository {
+    let repo = RepoCoord::new(dto.owner.login, dto.name);
+    Repository {
+        id: format_repository_id(&repo),
+        owner: repo.owner,
+        name: repo.name,
+        default_branch: dto.default_branch,
+        description: non_empty(dto.description),
+        created_at: dto.created_at,
+        updated_at: dto.updated_at,
+    }
+}
+
+/// Maps a Forgejo label DTO into a portable [`Label`] scoped to `repo`.
+///
+/// The numeric provider id becomes the prefixed opaque [`LabelId`]; empty
+/// color/description strings map to `None`.
+pub(crate) fn map_label(repo: &RepoCoord, dto: LabelDto) -> Label {
+    Label {
+        id: format_label_id(repo, dto.id),
+        repo_id: format_repository_id(repo),
+        name: dto.name,
+        color: non_empty(dto.color),
+        description: non_empty(dto.description),
+    }
+}
+
+/// Returns `None` for a missing or empty string, else the value unchanged.
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.is_empty())
+}
 
 /// Maps a Forgejo comment DTO into a portable [`Comment`].
 pub(crate) fn map_comment(repo: &RepoCoord, dto: CommentDto) -> Comment {

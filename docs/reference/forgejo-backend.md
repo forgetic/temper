@@ -35,10 +35,14 @@ opaque and never parse them.
 
 ## Implemented operations
 
-This crate implements the pull-request surface, native dependency links, and CI
-(Actions) job listing/lookup. Repository, label, and issue operations are added in
-their own phases.
+This crate implements identity, repository, and label lookups; the pull-request
+surface; native dependency links; and CI (Actions) job listing/lookup. Issue
+operations are added in a later phase.
 
+- `current_user`, `get_user`
+- `get_repository`, `get_repository_by_path`, `list_repositories`,
+  `create_repository`
+- `list_labels`, `upsert_label`
 - `list_pull_requests`, `get_pull_request`, `get_pull_request_by_number`
 - `create_pull_request`, `update_pull_request`
 - `list_pull_request_comments`, `add_pull_request_comment`
@@ -48,6 +52,57 @@ their own phases.
 - `add_issue_dependency`, `remove_issue_dependency`
 - `add_pull_request_dependency`, `remove_pull_request_dependency`
 - `list_ci_jobs`, `get_ci_job`
+
+## Identity
+
+`current_user` calls `GET /user` and maps the response to a portable `User`.
+The Forgejo `login` is both the portable `UserId` and the human-facing
+`handle`, so reviewer-request logins map directly. Empty `full_name`/`email`
+strings (Forgejo's "unset" form) become `None`.
+
+`get_user` calls `GET /users/{login}` and maps `404` to `Ok(None)` via the
+shared optional-read helper.
+
+## Repositories
+
+`get_repository_by_path` calls `GET /repos/{owner}/{name}`; `404` maps to
+`None`. `get_repository` parses the opaque `RepositoryId` into an
+owner/name pair and delegates to the path lookup, so the two paths share one
+mapper.
+
+`list_repositories` calls `GET /user/repos` through the shared pagination
+helper. Forgejo's listing order is not contractual, so the requested
+`RepositorySortField` (`Path`, `CreatedAt`, `UpdatedAt`) is applied
+client-side after mapping, with an owner-then-name then id tie-break for
+determinism; the default (no sort) is owner-then-name.
+
+`create_repository` chooses the endpoint by owner: `POST /user/repos` when
+the input owner equals the client's own handle (read once via
+`current_user`), else `POST /org/{owner}/repos`. The request body carries
+`name`, `default_branch`, and `description` (omitted when empty). A `409`
+maps to `AlreadyExists`; `422` maps to `InvalidRequest` through the shared
+status mapper. The created record is re-fetched by path so the returned
+value goes through the read mapping (the create response is otherwise
+sparse and not guaranteed to match the read shape); a missing read maps to
+`Backend`.
+
+**Limitations.** Repository creation under an arbitrary owner assumes the
+caller has rights to that org's `POST /org/{owner}/repos`; the backend does
+not introspect or pre-validate org membership. Forgejo's permissions errors
+flow through the shared status mapper unchanged.
+
+## Labels
+
+`list_labels` calls `GET /repos/{owner}/{repo}/labels` through the shared
+pagination helper and sorts by name then id, exposing each as a prefixed
+opaque `LabelId` (`forgejo:{owner}/{repo}:label:{id}`).
+
+`upsert_label` matches by name: it lists the repository's labels, and if a
+label with the input name exists it sends `PATCH
+/repos/{owner}/{repo}/labels/{id}`; otherwise it sends `POST
+/repos/{owner}/{repo}/labels`. The request body carries `name`, and
+`color`/`description` when present. The provider's returned label is mapped
+and returned directly (no re-fetch).
 
 ## Pull requests
 
