@@ -17,6 +17,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 harness-workflow = { path = "../harness-workflow" }
+# Only the optional, env-gated live smoke tests (`tests/live.rs`) need a real
+# async runtime to drive `reqwest`; the offline tests use a hand-rolled poller.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

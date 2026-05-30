@@ -17,7 +17,38 @@ built by prefixing the path with `/api/v1` and always sending
 `Authorization: token <token>`, `Accept: application/json`, and
 `Content-Type: application/json`, mirroring the reference TypeScript
 integration. List endpoints paginate with `limit`/`page` and stop on the first
-short page (bounded by an internal page cap).
+short page (bounded by an internal page cap of `MAX_LIST_PAGES`).
+
+`ForgejoConfig` fields and their builders:
+
+| Field | Builder | Default | Meaning |
+| --- | --- | --- | --- |
+| `base_url` | `new` | — | Forgejo host, trailing slashes stripped |
+| `token` | `new` | — | personal access token; sent as `token <token>`, never logged |
+| `default_owner` / `default_name` | `with_default_repo` | `None` | optional default repository |
+| `page_limit` | `with_page_limit` | `DEFAULT_PAGE_LIMIT` (50) | page size for list requests |
+| `cas_mode` | `with_cas_mode` | `CasMode::BestEffort` | conditional-write strategy |
+
+### Environment variables
+
+`ForgejoConfig::from_env` reads the same names as the reference TypeScript
+integration:
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `FORGEJO_URL` | yes | base URL, e.g. `https://git.example.com` |
+| `FORGEJO_ACCESS_TOKEN` | yes | personal access token |
+| `FORGEJO_DEFAULT_REPO` | no | default repository as `owner/repo` |
+
+Blank required values are treated as missing (`ConfigError::MissingEnv`); a
+`FORGEJO_DEFAULT_REPO` that is not exactly `owner/repo` is
+`ConfigError::Invalid`.
+
+The optional live smoke tests (`tests/live.rs`) read three more gates so a plain
+`cargo test` never touches the network: `HARNESS_FORGEJO_LIVE=1` enables them
+(alongside the three variables above), and the single mutating test additionally
+requires `HARNESS_FORGEJO_LIVE_MUTATE=1`. Every live test is also `#[ignore]`d,
+so it runs only under `cargo test -- --ignored`.
 
 ## Identifier scheme
 
@@ -49,28 +80,40 @@ through the trait — conditional writes use the per-process version cache rathe
 than a provider-enforced precondition, and merge/dependency payload shapes are
 unverified against a live instance.
 
-## Implemented operations
+## Supported operations
 
-This crate implements identity, repository, and label lookups; the issue and
-pull-request surfaces; issue and pull-request comments; native dependency links;
-and CI (Actions) job listing/lookup — the complete `Forge` trait surface.
+`ForgejoForge<C>` implements **every** `Forge` method — there is no `todo!`,
+`unimplemented!`, or silent stub in any of them. Each method either maps a real
+Forgejo endpoint or, where the provider contract is unverified, returns a
+**portable** `ForgeError` category and is documented as best-effort below.
 
-- `current_user`, `get_user`
-- `get_repository`, `get_repository_by_path`, `list_repositories`,
-  `create_repository`
-- `list_labels`, `upsert_label`
-- `list_issues`, `get_issue`, `get_issue_by_number`
-- `create_issue`, `update_issue`
-- `list_issue_comments`, `add_issue_comment`
-- `list_pull_requests`, `get_pull_request`, `get_pull_request_by_number`
-- `create_pull_request`, `update_pull_request`
-- `list_pull_request_comments`, `add_pull_request_comment`
-- `request_pull_request_reviewers`
-- `list_pull_request_reviews`, `submit_pull_request_review`
-- `merge_pull_request`
-- `add_issue_dependency`, `remove_issue_dependency`
-- `add_pull_request_dependency`, `remove_pull_request_dependency`
-- `list_ci_jobs`, `get_ci_job`
+The **Support** column reads:
+
+- **Full** — backed by a Forgejo endpoint with no unverified assumptions.
+- **Best-effort** — works against a real instance, but relies on a payload
+  shape or semantic that is not yet confirmed live; the failure mode is a
+  portable `ForgeError`, never a silently wrong result. See the linked section.
+- **Partial** — a portable sub-case is deliberately rejected with a portable
+  error (documented), while the rest is full.
+
+| Domain | Operations | Support |
+| --- | --- | --- |
+| Identity | `current_user`, `get_user` | Full |
+| Repositories | `get_repository`, `get_repository_by_path`, `list_repositories` | Full |
+| Repositories | `create_repository` | Best-effort for non-self owners (see [Repositories](#repositories)) |
+| Labels | `list_labels`, `upsert_label` | Full |
+| Issues | `list_issues`, `get_issue`, `get_issue_by_number`, `create_issue` | Full |
+| Issues | `update_issue` | Full; conditional updates best-effort (see [Optimistic concurrency](#optimistic-concurrency-best-effort)) |
+| Issue comments | `list_issue_comments`, `add_issue_comment` | Full |
+| Pull requests | `list_pull_requests`, `get_pull_request`, `get_pull_request_by_number`, `create_pull_request` | Full |
+| Pull requests | `update_pull_request` | Full; conditional updates best-effort (see [Optimistic concurrency](#optimistic-concurrency-best-effort)) |
+| PR comments | `list_pull_request_comments`, `add_pull_request_comment` | Full |
+| Reviewers | `request_pull_request_reviewers` | Full |
+| Reviews | `list_pull_request_reviews` | Full |
+| Reviews | `submit_pull_request_review` | Partial — `Pending` rejected with `InvalidRequest` (see [Reviews](#reviews)) |
+| Merge | `merge_pull_request` | Best-effort payload shape (see [Merge](#merge)) |
+| Dependencies | `add_issue_dependency`, `remove_issue_dependency`, `add_pull_request_dependency`, `remove_pull_request_dependency` | Best-effort endpoint shape (see [Dependency links](#dependency-links)) |
+| CI | `list_ci_jobs`, `get_ci_job` | Full (log fetching out of scope; see [Continuous integration](#continuous-integration-actions)) |
 
 ## Identity
 
@@ -382,3 +425,47 @@ reference backends.
 needs only structured run/task status; fetching build logs (which the TypeScript
 tooling does via UI/cookie auth) is intentionally not part of the `Forge`
 interface.
+
+## Error mapping
+
+Transport failures (DNS, TLS, connection resets) become `ForgeError::Backend`.
+Non-success HTTP statuses are classified centrally (`src/error.rs`):
+
+| Status | `ForgeError` |
+| --- | --- |
+| `404` | `NotFound` (lookups that tolerate absence convert it to `Ok(None)` first) |
+| `409`, `412` | `Conflict` (already-exists / failed precondition / stale conditional write) |
+| `400`, `422` | `InvalidRequest` |
+| `401`, `403`, `5xx`, other | `Backend` |
+
+A handful of operations override the default before delegating to the shared
+mapper: `create_repository` maps `409 → AlreadyExists`; `merge_pull_request`
+maps `405`/`409`/`412`/`422 → Conflict`; dependency add/remove map a post-verify
+`404 → InvalidRequest`. Error messages append a trimmed response-body snippet
+(capped at 200 characters) for diagnosis. **The access token is never included
+in an error message or log** — only the bearer header carries it, and that is
+built per request and never formatted into errors.
+
+## Unsupported and provider-specific behavior
+
+- **Pending reviews.** `submit_pull_request_review` has no safe one-call pending
+  submit (the historical two-step flow drops the body for an `APPROVED` event),
+  so `ReviewDecision::Pending` returns `InvalidRequest`. This mirrors the
+  reference TypeScript tooling, which rejects the same case.
+- **Pull requests are issues.** Forgejo serves issues and pull requests through
+  the same endpoints. Comments, labels, assignees, and dependency links for a
+  pull request all use the `/issues/{number}` namespace; the issue read paths
+  exclude PR-as-issue rows so a pull request is never returned as an `Issue`.
+- **Dependency endpoint shared by both kinds.** Pull-request dependency links
+  reuse the issue dependency endpoint with the pull-request number as the
+  source, since the two share a number namespace.
+- **Merge method is not echoed.** Forgejo's pull-request JSON does not expose the
+  method used to merge, so a merged pull request read back maps its
+  `MergeRecord::method` to `MergeCommit` as a documented default;
+  `merge_pull_request` reports the method that was actually requested.
+- **No provider-specific surface.** The backend exposes only the portable
+  `Forge` trait; Forgejo-only concepts (teams, branch protection, review
+  policy, raw build logs) are intentionally not surfaced.
+- **Version cache is per-process.** Optimistic-concurrency `Version`s are only
+  comparable within one backend instance (see below); they are not durable or
+  shared across processes.
