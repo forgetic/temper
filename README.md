@@ -30,6 +30,7 @@ crates/
   harness-forge-forgejo/    First real-world provider backend: Forgejo HTTP API adapter implementing the full Forge trait (offline-tested; best-effort optional live smoke tests).
   harness-runner/           Backend-agnostic runner primitives: scanning, workers, CI test seam, drivers, stages.
   harness-testing/          Reusable non-production testing machinery (fake agents, CI policies/sinks, scenarios, config/fixture helpers), the harness-testing-worker binary, and the #[ignore]d multi-process rehearsal; dev-dependency only.
+  harness-agents/           Real, in-process LLM role agents (DeepSeek via pi_agent_rust). The only crate that depends on the LLM SDK; agents decide via the model but mutate workflow state only through RoleTools.
 docs/
   tutorials/      Learning-oriented walkthroughs.
   how-to/         Task-oriented recipes.
