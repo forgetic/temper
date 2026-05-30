@@ -177,7 +177,10 @@ fn get_pull_request_by_number_maps_fields() {
     assert_eq!(pull.base_sha.as_deref(), Some("base42"));
     assert_eq!(pull.labels, vec!["ready".to_string()]);
     // Dependency item numbers are sorted and deduplicated.
-    assert_eq!(pull.dependencies, vec![ItemNumber::new(3), ItemNumber::new(7)]);
+    assert_eq!(
+        pull.dependencies,
+        vec![ItemNumber::new(3), ItemNumber::new(7)]
+    );
 
     let requests = client.recorded();
     assert_eq!(requests[0].method, HttpMethod::Get);

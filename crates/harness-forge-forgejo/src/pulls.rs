@@ -63,7 +63,8 @@ impl<C: HttpClient> ForgejoForge<C> {
     /// Looks up a pull request by stable backend identifier.
     pub async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
         let (repo, number) = parse_pull_request_id(id)?;
-        self.fetch_pull_request_with_dependencies(&repo, number).await
+        self.fetch_pull_request_with_dependencies(&repo, number)
+            .await
     }
 
     /// Looks up a pull request by its repository-scoped number.
@@ -73,7 +74,8 @@ impl<C: HttpClient> ForgejoForge<C> {
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
         let repo = parse_repository_id(repo_id)?;
-        self.fetch_pull_request_with_dependencies(&repo, number).await
+        self.fetch_pull_request_with_dependencies(&repo, number)
+            .await
     }
 
     /// Creates a pull request, then applies labels/assignees via issue endpoints.
