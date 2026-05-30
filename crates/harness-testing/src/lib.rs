@@ -15,6 +15,7 @@
 
 pub mod agents;
 pub mod ci;
+pub mod forgejo_server;
 pub mod scenarios;
 pub mod worker_bin;
 pub mod world;

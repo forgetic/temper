@@ -19,6 +19,13 @@ harness-forge-filesystem = { path = "../harness-forge-filesystem" }
 harness-forge-memory = { path = "../harness-forge-memory" }
 harness-runner = { path = "../harness-runner" }
 harness-workflow = { path = "../harness-workflow" }
+# Forgejo end-to-end harness (env-gated, #[ignore]d): a blocking HTTP client to
+# download the pinned server binary, verify its checksum, and poll readiness.
+# `reqwest` is already in the workspace tree via `harness-forge-forgejo`; the
+# `blocking` feature adds the sync API this one-shot, test-only harness uses.
+# (The async `harness-forge-forgejo` backend itself is wired in a later phase.)
+reqwest = { workspace = true, features = ["blocking"] }
+sha2 = "0.10"
 
 [lints]
 workspace = true
