@@ -6,8 +6,6 @@
 //! lenient: unknown fields are ignored and optional fields default, so the
 //! backend tolerates provider version drift.
 
-#![allow(dead_code)]
-
 use crate::ci_time::deserialize_flexible_opt_datetime;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -222,7 +220,10 @@ pub(crate) struct ActionRunDto {
     pub index_in_repo: u64,
     #[serde(default)]
     pub run_number: u64,
+    // Decoded for provider-shape fidelity; CI status is derived from per-task
+    // attempts (see `crate::ci`), so the run-level status is not read directly.
     #[serde(default)]
+    #[allow(dead_code)]
     pub status: String,
     #[serde(default)]
     pub event: String,

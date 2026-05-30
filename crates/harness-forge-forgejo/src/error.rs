@@ -4,8 +4,6 @@
 //! the status before calling [`map_status_error`]; everything else converts a
 //! non-success response into the category below.
 
-#![allow(dead_code)]
-
 use crate::client::{HttpError, HttpResponse};
 use harness_forge::ForgeError;
 

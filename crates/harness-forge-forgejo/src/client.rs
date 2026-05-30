@@ -100,7 +100,6 @@ pub trait HttpClient: Send + Sync {
 ///
 /// It prefixes the path with `/api/v1` and always sets the `Authorization`,
 /// `Content-Type`, and `Accept` headers, matching the reference integration.
-#[allow(dead_code)]
 pub(crate) fn build_request(
     token: &str,
     method: HttpMethod,

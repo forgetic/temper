@@ -18,8 +18,6 @@
 //! Owner and repository names cannot contain `:` or `/` on Forgejo, so splitting
 //! on those characters is unambiguous.
 
-#![allow(dead_code)]
-
 use harness_forge::{
     CiJobId, CommentId, ForgeError, ForgeResult, IssueId, ItemNumber, LabelId, PullRequestId,
     RepositoryId, ReviewId, UserId,
@@ -134,6 +132,10 @@ pub(crate) fn format_comment_id(repo: &RepoCoord, provider_id: u64) -> CommentId
     ))
 }
 
+// The comment/review/label id parsers complete the symmetric encode/parse API
+// and are covered by the round-trip unit tests below, but the `Forge` trait
+// exposes no get-by-id for these artifacts, so production never calls them.
+#[allow(dead_code)]
 pub(crate) fn parse_comment_id(id: &CommentId) -> ForgeResult<(RepoCoord, u64)> {
     parse_numbered("comment", "comment", id.as_str())
 }
@@ -145,6 +147,7 @@ pub(crate) fn format_review_id(repo: &RepoCoord, provider_id: u64) -> ReviewId {
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_review_id(id: &ReviewId) -> ForgeResult<(RepoCoord, u64)> {
     parse_numbered("review", "review", id.as_str())
 }
@@ -156,6 +159,7 @@ pub(crate) fn format_label_id(repo: &RepoCoord, provider_id: u64) -> LabelId {
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_label_id(id: &LabelId) -> ForgeResult<(RepoCoord, u64)> {
     parse_numbered("label", "label", id.as_str())
 }

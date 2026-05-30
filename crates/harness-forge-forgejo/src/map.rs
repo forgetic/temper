@@ -9,8 +9,6 @@
 //! deduplicated so two reads of the same artifact produce identical vectors,
 //! matching the reference backends' contract (see ADR 0008).
 
-#![allow(dead_code)]
-
 use crate::ids::{
     format_comment_id, format_issue_id, format_label_id, format_pull_request_id,
     format_repository_id, format_review_id, format_user_id, RepoCoord,

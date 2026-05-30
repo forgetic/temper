@@ -33,11 +33,27 @@ opaque and never parse them.
 - CI job: `forgejo:{owner}/{repo}:actions:{run}:{job_index}:{task_id}`
 - user: the Forgejo login, unprefixed (so reviewer-request logins map directly)
 
+## Trait implementation
+
+`ForgejoForge<C>` implements the **full** `harness_forge::Forge` trait (see
+`src/forge_impl.rs`), so it is a drop-in backend for the workflow runner:
+`harness_workflow::Executor::new(&workflow, &forge)` accepts it in both the
+concrete `ForgejoForge<C>` and the erased `&dyn Forge` forms. The trait impl is
+a thin one-line delegation to the inherent method of the same name and
+signature; the inherent methods remain the single source of truth and the
+offline contract tests exercise them directly. `C: HttpClient` carries the
+`Send + Sync` the trait requires.
+
+The best-effort caveats documented below still apply when the backend is driven
+through the trait — conditional writes use the per-process version cache rather
+than a provider-enforced precondition, and merge/dependency payload shapes are
+unverified against a live instance.
+
 ## Implemented operations
 
 This crate implements identity, repository, and label lookups; the issue and
 pull-request surfaces; issue and pull-request comments; native dependency links;
-and CI (Actions) job listing/lookup.
+and CI (Actions) job listing/lookup — the complete `Forge` trait surface.
 
 - `current_user`, `get_user`
 - `get_repository`, `get_repository_by_path`, `list_repositories`,

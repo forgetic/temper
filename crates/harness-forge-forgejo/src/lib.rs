@@ -17,6 +17,7 @@ mod client;
 mod config;
 mod dependencies;
 mod error;
+mod forge_impl;
 mod ids;
 mod issues;
 mod items;
