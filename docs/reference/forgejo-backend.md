@@ -231,10 +231,16 @@ Pull requests are issues on Forgejo, so label and assignee updates use the
 issue endpoints and the same helper issues use, keeping one sequencing
 implementation:
 
-- labels: `set_labels` replaces the full set with `PUT
-  /issues/{number}/labels`; removals are deleted by their numeric label id with
-  `DELETE /issues/{number}/labels/{id}` (a missing label is a no-op); additions
-  are appended with `POST /issues/{number}/labels`.
+- labels: Forgejo's issue-label endpoints key on the **numeric label id**, not
+  the name — a name array is rejected with `422 cannot unmarshal … into int64`.
+  When any of set/add/remove is non-empty the backend issues **one**
+  `GET /repos/{owner}/{repo}/labels` read to resolve names to ids, then:
+  `set_labels` replaces the full set with `PUT /issues/{number}/labels` carrying
+  ids; removals are deleted by id with `DELETE /issues/{number}/labels/{id}` (a
+  missing label is a no-op); additions are appended by id with `POST
+  /issues/{number}/labels`. A name with no matching repository label is skipped
+  (the workflow upserts its labels before applying them), so the empty-input case
+  issues no label read at all.
 - assignees: the new set is computed as `current − remove + add` (sorted,
   deduplicated) and written with `PATCH /issues/{number}`; a no-op update skips
   the request.

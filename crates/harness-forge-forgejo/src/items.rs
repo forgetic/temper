@@ -8,8 +8,9 @@
 //! Sequencing follows the portable contract (see
 //! `docs/reference/forge-interface.md`): label updates apply `set_labels`, then
 //! removals, then additions; assignee changes are a set computed as
-//! `current − remove + add`. Removals go through the numeric-label-id delete
-//! endpoint, so this module resolves label names to ids on demand.
+//! `current − remove + add`. Forgejo's issue-label endpoints key on the numeric
+//! label id (a name array is rejected), so every label path resolves names to
+//! ids through one `repo_label_ids` read.
 
 use crate::ids::RepoCoord;
 use crate::map::map_comment;
@@ -83,8 +84,16 @@ impl<C: HttpClient> ForgejoForge<C> {
     /// Applies a label update through Forgejo's issue label endpoints.
     ///
     /// `set_labels` replaces the full set (`PUT`), then `remove_labels` are
-    /// deleted by numeric id (`DELETE`, tolerating a missing label), then
-    /// `add_labels` are appended (`POST`).
+    /// deleted (`DELETE`, tolerating a missing label), then `add_labels` are
+    /// appended (`POST`).
+    ///
+    /// Forgejo's issue label endpoints key on the **numeric label id**, not the
+    /// name (`PUT`/`POST` reject a name array with `422 cannot unmarshal … into
+    /// int64`). So every path resolves names to ids through a single
+    /// [`Self::repo_label_ids`] read (issued only when there is work to do) and
+    /// sends ids. A name with no matching repository label is skipped: the
+    /// workflow upserts its labels before applying them, so an unresolved name
+    /// is a caller error rather than something to invent an id for.
     pub(crate) async fn apply_item_label_update(
         &self,
         repo: &RepoCoord,
@@ -99,8 +108,19 @@ impl<C: HttpClient> ForgejoForge<C> {
             number.get()
         );
 
+        let set_labels = set_labels.map(sorted_dedup);
+        let add_labels = sorted_dedup(add_labels);
+        let remove_labels = sorted_dedup(remove_labels);
+
+        // Nothing to do means no label-id read at all.
+        if set_labels.is_none() && add_labels.is_empty() && remove_labels.is_empty() {
+            return Ok(());
+        }
+        let ids = self.repo_label_ids(repo).await?;
+
         if let Some(set_labels) = set_labels {
-            let payload = serde_json::json!({ "labels": sorted_dedup(set_labels) }).to_string();
+            let set_ids = resolve_label_ids(&ids, &set_labels);
+            let payload = serde_json::json!({ "labels": set_ids }).to_string();
             self.request_checked(
                 "set labels",
                 HttpMethod::Put,
@@ -111,28 +131,18 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await?;
         }
 
-        let remove_labels = sorted_dedup(remove_labels);
-        if !remove_labels.is_empty() {
-            let ids = self.repo_label_ids(repo).await?;
-            for name in &remove_labels {
-                if let Some(id) = ids.get(name) {
-                    let path = format!("{base}/{id}");
-                    // A label that is not attached returns 404; that is a no-op.
-                    self.request_optional(
-                        "remove label",
-                        HttpMethod::Delete,
-                        &path,
-                        Vec::new(),
-                        None,
-                    )
+        for name in &remove_labels {
+            if let Some(id) = ids.get(name) {
+                let path = format!("{base}/{id}");
+                // A label that is not attached returns 404; that is a no-op.
+                self.request_optional("remove label", HttpMethod::Delete, &path, Vec::new(), None)
                     .await?;
-                }
             }
         }
 
-        let add_labels = sorted_dedup(add_labels);
         if !add_labels.is_empty() {
-            let payload = serde_json::json!({ "labels": add_labels }).to_string();
+            let add_ids = resolve_label_ids(&ids, &add_labels);
+            let payload = serde_json::json!({ "labels": add_ids }).to_string();
             self.request_checked(
                 "add labels",
                 HttpMethod::Post,
@@ -192,6 +202,19 @@ fn sorted_dedup(mut values: Vec<String>) -> Vec<String> {
     values.sort();
     values.dedup();
     values
+}
+
+/// Maps label names to their numeric provider ids, dropping unknown names.
+///
+/// Forgejo's `PUT`/`POST` issue-label endpoints take an `int64` id array, so a
+/// name with no matching repository label cannot be expressed and is skipped
+/// (the workflow upserts labels before applying them). `names` is expected to
+/// already be sorted and deduplicated, so the returned ids preserve that order.
+fn resolve_label_ids(ids: &HashMap<String, u64>, names: &[String]) -> Vec<u64> {
+    names
+        .iter()
+        .filter_map(|name| ids.get(name).copied())
+        .collect()
 }
 
 fn sorted_dedup_users(mut values: Vec<UserId>) -> Vec<UserId> {

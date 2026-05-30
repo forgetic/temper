@@ -208,7 +208,8 @@ fn get_pull_request_missing_is_none() {
 fn create_pull_request_posts_then_applies_labels_and_assignees() {
     let client = MockHttpClient::new();
     client.push_response(201, pr_json(42, "open", "[]", "")); // POST create
-    client.push_response(200, "[]"); // PUT labels
+    client.push_response(200, r#"[{"id":1,"name":"ready"}]"#); // GET labels (resolve ids)
+    client.push_response(200, "[]"); // PUT labels (by id)
     client.push_response(200, "{}"); // PATCH assignees
     client.push_response(
         200,
@@ -240,7 +241,7 @@ fn create_pull_request_posts_then_applies_labels_and_assignees() {
     assert_eq!(pull.assignees, vec![UserId::new("bob")]);
 
     let requests = client.recorded();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
 
     assert_eq!(requests[0].method, HttpMethod::Post);
     assert_eq!(
@@ -253,29 +254,33 @@ fn create_pull_request_posts_then_applies_labels_and_assignees() {
     assert_eq!(create_body["base"], "main");
     assert_eq!(create_body["body"], "details");
 
-    assert_eq!(requests[1].method, HttpMethod::Put);
+    // Label names are resolved to numeric ids (Forgejo rejects a name array).
+    assert_eq!(requests[1].method, HttpMethod::Get);
     assert_eq!(
         requests[1].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues/42/labels")
-    );
-    assert_eq!(
-        body_json(&requests[1])["labels"],
-        serde_json::json!(["ready"])
+        format!("/api/v1/repos/{OWNER}/{REPO}/labels")
     );
 
-    assert_eq!(requests[2].method, HttpMethod::Patch);
+    assert_eq!(requests[2].method, HttpMethod::Put);
     assert_eq!(
         requests[2].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/42/labels")
+    );
+    assert_eq!(body_json(&requests[2])["labels"], serde_json::json!([1]));
+
+    assert_eq!(requests[3].method, HttpMethod::Patch);
+    assert_eq!(
+        requests[3].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/42")
     );
     assert_eq!(
-        body_json(&requests[2])["assignees"],
+        body_json(&requests[3])["assignees"],
         serde_json::json!(["bob"])
     );
 
-    assert_eq!(requests[3].method, HttpMethod::Get);
+    assert_eq!(requests[4].method, HttpMethod::Get);
     assert_eq!(
-        requests[3].path,
+        requests[4].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/pulls/42")
     );
 }
@@ -314,7 +319,8 @@ fn update_pull_request_patches_fields_then_labels_and_assignees() {
     let client = MockHttpClient::new();
     client.push_response(200, pr_json(42, "open", "[]", "")); // GET current
     client.push_response(200, "{}"); // PATCH pull (title/state)
-    client.push_response(200, "[]"); // PUT labels
+    client.push_response(200, r#"[{"id":9,"name":"done"}]"#); // GET labels (resolve ids)
+    client.push_response(200, "[]"); // PUT labels (by id)
     client.push_response(200, "{}"); // PATCH issue (assignees)
     client.push_response(
         200,
@@ -338,7 +344,7 @@ fn update_pull_request_patches_fields_then_labels_and_assignees() {
     assert_eq!(pull.state, PullRequestState::Closed);
 
     let requests = client.recorded();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 6);
 
     assert_eq!(requests[0].method, HttpMethod::Get);
 
@@ -351,27 +357,31 @@ fn update_pull_request_patches_fields_then_labels_and_assignees() {
     assert_eq!(edit["title"], "Renamed");
     assert_eq!(edit["state"], "closed");
 
-    assert_eq!(requests[2].method, HttpMethod::Put);
+    // A single label-id read precedes the label write, which sends numeric ids.
+    assert_eq!(requests[2].method, HttpMethod::Get);
     assert_eq!(
         requests[2].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues/42/labels")
-    );
-    assert_eq!(
-        body_json(&requests[2])["labels"],
-        serde_json::json!(["done"])
+        format!("/api/v1/repos/{OWNER}/{REPO}/labels")
     );
 
-    assert_eq!(requests[3].method, HttpMethod::Patch);
+    assert_eq!(requests[3].method, HttpMethod::Put);
     assert_eq!(
         requests[3].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/42/labels")
+    );
+    assert_eq!(body_json(&requests[3])["labels"], serde_json::json!([9]));
+
+    assert_eq!(requests[4].method, HttpMethod::Patch);
+    assert_eq!(
+        requests[4].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/42")
     );
     assert_eq!(
-        body_json(&requests[3])["assignees"],
+        body_json(&requests[4])["assignees"],
         serde_json::json!(["bob"])
     );
 
-    assert_eq!(requests[4].method, HttpMethod::Get);
+    assert_eq!(requests[5].method, HttpMethod::Get);
 }
 
 #[test]
