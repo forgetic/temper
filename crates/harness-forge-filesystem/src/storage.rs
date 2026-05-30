@@ -18,6 +18,20 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Builds a per-process-unique temporary file extension.
+///
+/// Combining the process id with a monotonic counter keeps two writers — even in
+/// different OS processes sharing one store — from colliding on the same temp
+/// path before the atomic rename (see ADR 0018). The extension is not `json`, so
+/// listing code that filters on the `json` extension ignores it.
+fn unique_temp_extension() -> String {
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("tmp-{}-{counter}", std::process::id())
+}
 
 impl FilesystemForge {
     /// Creates the backend directory layout if needed.
@@ -547,7 +561,7 @@ impl FilesystemForge {
             .map_err(|error| backend_error(format!("serialize {}", path.display()), error))?;
         content.push('\n');
 
-        let temporary_path = path.with_extension("tmp");
+        let temporary_path = path.with_extension(unique_temp_extension());
         fs::write(&temporary_path, content)
             .map_err(|error| backend_error(format!("write {}", temporary_path.display()), error))?;
         fs::rename(&temporary_path, path).map_err(|error| {

@@ -1,21 +1,19 @@
 //! L2/L3 end-to-end scenarios over in-process memory and filesystem stages.
 
-mod support;
-
 use harness_runner::{run_scenario_with_budget, Scenario, Stage, StageError};
 
-use support::agents::{
+use harness_testing::agents::{
     fake_registry, fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
     RequestChangesThenApproveReviewer,
 };
-use support::block_on;
-use support::ci::{FailThenPassCiPolicy, FixedCiPolicy};
-use support::runner_config;
-use support::scenarios::{
+use harness_testing::block_on;
+use harness_testing::ci::{FailThenPassCiPolicy, FixedCiPolicy};
+use harness_testing::runner_config;
+use harness_testing::scenarios::{
     changes_requested_then_approved, ci_fails_then_passes, dependency_chain_mechanically_unblocked,
     happy_path,
 };
-use support::world::{
+use harness_testing::world::{
     full_reference_filesystem_stage, full_reference_filesystem_stage_with,
     full_reference_multiprocess_stage, full_reference_stage, full_reference_stage_with,
 };

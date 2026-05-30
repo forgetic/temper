@@ -12,6 +12,7 @@ impl FilesystemForge {
     /// `ci_jobs.json` fixture file that
     /// [`list_ci_jobs`](harness_forge::Forge::list_ci_jobs) reads.
     pub fn seed_ci_jobs(&self, repo_id: &RepositoryId, ci_jobs: Vec<CiJob>) -> ForgeResult<()> {
+        let _guard = self.write_lock()?;
         self.require_repository(repo_id)?;
         validate_stored_ci_jobs(repo_id, &ci_jobs)?;
         let Some(path) = self.ci_jobs_file(repo_id) else {

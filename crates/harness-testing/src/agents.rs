@@ -14,7 +14,7 @@ use harness_workflow::{
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use super::pull_request_input;
+use crate::pull_request_input;
 
 #[derive(Clone, Debug, Default)]
 pub struct FakeArchitect;

@@ -1,14 +1,12 @@
 //! Tests for the fake CI producer seam.
 
-mod support;
-
 use harness_forge::{CiJobConclusion, CiJobQuery, Forge};
 use harness_forge_memory::MemoryForge;
 use harness_runner::{CiWorker, Progress, Worker};
 use harness_workflow::ArtifactSource;
 
-use support::ci::{FixedCiPolicy, MemoryCiSink};
-use support::{block_on, create_pr, new_repo, ts};
+use harness_testing::ci::{FixedCiPolicy, MemoryCiSink};
+use harness_testing::{block_on, create_pr, new_repo, ts};
 
 #[test]
 fn ci_worker_default_policy_records_passing_native_job() {
@@ -66,7 +64,7 @@ fn ci_signals(
     repo: &harness_forge::RepositoryId,
     number: harness_forge::ItemNumber,
 ) -> harness_workflow::GateSignals {
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     block_on(
         workflow
             .executor(forge)

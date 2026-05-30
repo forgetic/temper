@@ -47,3 +47,10 @@ scenarios from runner test support on:
   should not activate.
 - CI production is test-only. The workflow still reads native CI through the
   Forge API; the fake CI policy only decides which test verdicts to seed.
+
+## Related
+
+For the **true one-process-per-part** rehearsal — the same four scenarios run
+across real OS processes that coordinate only through a shared `FilesystemForge`
+store, plus the explicit "swap fakes for real" list — see
+[run-multiprocess-e2e.md](run-multiprocess-e2e.md).

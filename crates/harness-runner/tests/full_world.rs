@@ -1,12 +1,10 @@
 //! Composition smoke tests for the full in-process reference-delivery world.
 
-mod support;
-
 use harness_runner::Stage;
 
-use support::block_on;
-use support::runner_config;
-use support::world::full_reference_stage;
+use harness_testing::block_on;
+use harness_testing::runner_config;
+use harness_testing::world::full_reference_stage;
 
 #[test]
 fn fully_wired_memory_stage_quiesces_on_empty_repo() {

@@ -1,8 +1,22 @@
-#![allow(dead_code)]
+//! Reusable, non-production testing machinery shared across Harness crates.
+//!
+//! This crate is the home for the deterministic reference-delivery fakes that
+//! were originally grown inside `harness-runner`'s integration-test support
+//! module: behavior-only fake agents, the fake CI producer policies and sinks,
+//! the backend-neutral `Scenario` seed/assert definitions, and the
+//! `RunnerConfig`/repo/user helpers plus the bundled reference-delivery fixture
+//! loader.
+//!
+//! It is **never** a normal (non-dev) dependency of a production crate; it is a
+//! dev-dependency of `harness-runner` (and a dependency of other test crates).
+//! Crate-specific helpers that only one crate uses stay local to that crate
+//! (for example `CrashForge` in `harness-workflow` tests and the Forgejo mock
+//! HTTP seam in `harness-forge-forgejo`).
 
 pub mod agents;
 pub mod ci;
 pub mod scenarios;
+pub mod worker_bin;
 pub mod world;
 
 use chrono::{DateTime, Duration, Utc};
@@ -17,7 +31,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-const FIXTURE: &str = include_str!("../../../harness-workflow/fixtures/reference-delivery.json");
+const FIXTURE: &str = include_str!("../../harness-workflow/fixtures/reference-delivery.json");
 
 struct NoopWake;
 

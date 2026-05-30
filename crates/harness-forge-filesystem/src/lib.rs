@@ -11,6 +11,7 @@ mod dependencies;
 mod errors;
 mod handle;
 mod lists;
+mod locking;
 mod metadata;
 mod operations;
 mod record_ids;

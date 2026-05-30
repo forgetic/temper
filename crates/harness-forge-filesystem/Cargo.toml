@@ -9,6 +9,7 @@ description = "Filesystem-backed Forge implementation for harness development an
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+fs2.workspace = true
 harness-forge = { path = "../harness-forge" }
 serde.workspace = true
 serde_json.workspace = true

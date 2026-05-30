@@ -105,6 +105,13 @@ operations are atomic and serialized with respect to each other. There are no
 cross-operation transactions. Use it as a single-store deterministic backend for
 tests and local development.
 
+Cross-process concurrency safety (the filesystem backend's store-level advisory
+lock from ADR 0018) is **not applicable** here: a `MemoryForge` store lives in
+one process's memory and cannot be shared across OS processes, and the interior
+mutex already serializes every operation. The locking is a filesystem-specific
+durability concern, not an observable behaviour difference, so this keeps the
+ADR 0008 observable-contract parity with the filesystem backend honest.
+
 Validation failures map to `ForgeError::InvalidRequest`, missing resources to
 `ForgeError::NotFound`, duplicate repository paths to `ForgeError::AlreadyExists`,
 illegal state transitions (such as merging a closed or merged pull request) to

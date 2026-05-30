@@ -67,6 +67,7 @@ impl Forge for FilesystemForge {
     }
 
     async fn create_repository(&self, input: CreateRepository) -> ForgeResult<Repository> {
+        let _guard = self.write_lock()?;
         validate_create_repository(&input)?;
 
         let path = RepositoryPath::new(input.owner.clone(), input.name.clone());
@@ -115,6 +116,7 @@ impl Forge for FilesystemForge {
     }
 
     async fn upsert_label(&self, repo_id: &RepositoryId, input: UpsertLabel) -> ForgeResult<Label> {
+        let _guard = self.write_lock()?;
         self.require_repository(repo_id)?;
         validate_upsert_label(&input)?;
 
@@ -159,6 +161,7 @@ impl Forge for FilesystemForge {
     }
 
     async fn create_issue(&self, repo_id: &RepositoryId, input: CreateIssue) -> ForgeResult<Issue> {
+        let _guard = self.write_lock()?;
         self.require_repository(repo_id)?;
 
         let mut metadata = self.read_metadata()?;
@@ -211,6 +214,7 @@ impl Forge for FilesystemForge {
     }
 
     async fn update_issue(&self, id: &IssueId, input: UpdateIssue) -> ForgeResult<Issue> {
+        let _guard = self.write_lock()?;
         let repo_id = self
             .find_issue_repository_by_id(id)?
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
@@ -257,6 +261,7 @@ impl Forge for FilesystemForge {
     }
 
     async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
+        let _guard = self.write_lock()?;
         add_issue_dependency(self, id, target)
     }
 
@@ -265,6 +270,7 @@ impl Forge for FilesystemForge {
         id: &IssueId,
         target: ItemNumber,
     ) -> ForgeResult<Issue> {
+        let _guard = self.write_lock()?;
         remove_issue_dependency(self, id, target)
     }
 
@@ -277,6 +283,7 @@ impl Forge for FilesystemForge {
     }
 
     async fn add_issue_comment(&self, id: &IssueId, input: CreateComment) -> ForgeResult<Comment> {
+        let _guard = self.write_lock()?;
         let repo_id = self
             .find_issue_repository_by_id(id)?
             .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
@@ -323,6 +330,7 @@ impl Forge for FilesystemForge {
         repo_id: &RepositoryId,
         input: CreatePullRequest,
     ) -> ForgeResult<PullRequest> {
+        let _guard = self.write_lock()?;
         self.require_repository(repo_id)?;
 
         let mut metadata = self.read_metadata()?;
@@ -385,6 +393,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         input: UpdatePullRequest,
     ) -> ForgeResult<PullRequest> {
+        let _guard = self.write_lock()?;
         let repo_id = self
             .find_pull_request_repository_by_id(id)?
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
@@ -440,6 +449,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
+        let _guard = self.write_lock()?;
         add_pull_request_dependency(self, id, target)
     }
 
@@ -448,6 +458,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
+        let _guard = self.write_lock()?;
         remove_pull_request_dependency(self, id, target)
     }
 
@@ -456,6 +467,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         input: RequestReviewers,
     ) -> ForgeResult<PullRequest> {
+        let _guard = self.write_lock()?;
         request_reviewers(self, id, input)
     }
 
@@ -471,6 +483,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         input: CreatePullRequestReview,
     ) -> ForgeResult<PullRequestReview> {
+        let _guard = self.write_lock()?;
         submit_review(self, id, input)
     }
 
@@ -487,6 +500,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         input: CreateComment,
     ) -> ForgeResult<Comment> {
+        let _guard = self.write_lock()?;
         let repo_id = self
             .find_pull_request_repository_by_id(id)?
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
@@ -518,6 +532,7 @@ impl Forge for FilesystemForge {
         id: &PullRequestId,
         input: MergePullRequest,
     ) -> ForgeResult<MergeRecord> {
+        let _guard = self.write_lock()?;
         let repo_id = self
             .find_pull_request_repository_by_id(id)?
             .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;

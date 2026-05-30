@@ -147,6 +147,10 @@ All current Forge trait methods are implemented. The filesystem backend does not
 
 ## Consistency guarantees
 
-The backend creates its directory layout lazily. It performs single-record writes through a temporary file followed by rename, but it does not use file locks or cross-file transactions. Use it as a single-writer deterministic store for tests and local development.
+The backend creates its directory layout lazily and writes each file through a uniquely named temporary file (process id plus an atomic counter) followed by an atomic rename, so a reader always sees a complete old-or-new snapshot, never a half-written file.
+
+Mutations are safe across OS processes. Every mutating read-modify-write-persist holds a store-level exclusive advisory lock (`<root>/.lock`, via the `fs2` crate) for its whole critical section, so concurrent processes and threads sharing one store serialize onto a single resource. This is what extends ADR 0013's compare-and-swap guarantee across process boundaries: two writers can no longer both pass their `expected_version` check and have one silently overwrite the other, and concurrent creates cannot allocate duplicate item numbers. See [ADR 0018](../adr/0018-filesystem-cross-process-concurrency.md).
+
+Reads stay lockless: the atomic rename already yields a complete snapshot, and the runtime re-reads fresh state under the lock before every mutation. The store still has no cross-file transactions, so a multi-file read (for example resolving an artifact id across repositories) can observe records from different points in time; mutations that must stay consistent touch one artifact file plus the shared `metadata.json` clock under the lock.
 
 Malformed JSON, unsupported schema versions, and invalid metadata are reported as `ForgeError::Backend`.

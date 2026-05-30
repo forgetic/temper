@@ -1,7 +1,5 @@
 //! Behavior tests for the deterministic reference-delivery fake agents.
 
-mod support;
-
 use harness_forge::{
     CreatePullRequestReview, Forge, ItemNumber, PullRequestState, RequestReviewers, ReviewDecision,
     UserId,
@@ -11,9 +9,11 @@ use harness_runner::{Agent, CiSink, Progress, RoleTools, RoleWorker, WorkItem, W
 use harness_workflow::{ArtifactKindId, ArtifactSource, QueueId, RoleId};
 use std::sync::Arc;
 
-use support::agents::{FakeArchitect, FakeEngineer, FakeHuman, FakeOwner, FakeReviewer};
-use support::ci::MemoryCiSink;
-use support::{actor_user, block_on, create_issue, create_pr, labels, new_repo, runner_config, ts};
+use harness_testing::agents::{FakeArchitect, FakeEngineer, FakeHuman, FakeOwner, FakeReviewer};
+use harness_testing::ci::MemoryCiSink;
+use harness_testing::{
+    actor_user, block_on, create_issue, create_pr, labels, new_repo, runner_config, ts,
+};
 
 #[test]
 fn architect_fake_triages_intake_and_reconciles_landed_pr() {
@@ -21,7 +21,7 @@ fn architect_fake_triages_intake_and_reconciles_landed_pr() {
     let repo = new_repo(&forge);
     let intake = create_issue(&forge, &repo, &["untriaged"], "new request", "");
     let landed = create_pr(&forge, &repo, &["implementation", "landed"], "impl", "");
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     let compiled = workflow.compile();
     let architect_forge = forge.as_user(actor_user("architect"));
     let worker = RoleWorker::new(
@@ -57,7 +57,7 @@ fn engineer_fake_claims_code_opens_pr_and_requests_review() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let code = create_issue(&forge, &repo, &["code", "ready"], "build thing", "");
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     let compiled = workflow.compile();
     let engineer_forge = forge.as_user(actor_user("engineer"));
     let worker = RoleWorker::new(
@@ -109,7 +109,7 @@ fn reviewer_fake_approves_as_requested_reviewer() {
         "",
     );
     request_reviewer(&forge, &repo, number);
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     let compiled = workflow.compile();
     let reviewer_forge = forge.as_user(actor_user("reviewer"));
     let worker = RoleWorker::new(
@@ -156,7 +156,7 @@ fn owner_fake_handles_owner_and_alignment_queues() {
             )
         })
         .collect();
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     let compiled = workflow.compile();
     let owner_forge = forge.as_user(actor_user("owner"));
     let worker = RoleWorker::new(
@@ -194,7 +194,7 @@ fn human_fake_clears_human_flag() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let design = create_issue(&forge, &repo, &["design", "needs-human"], "design", "");
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     let compiled = workflow.compile();
     let human_forge = forge.as_user(actor_user("human"));
     let worker = RoleWorker::new(
@@ -239,7 +239,7 @@ fn owner_fake_merges_fully_gated_pr_when_serviced() {
         harness_forge::CiJobConclusion::Success,
     ))
     .expect("CI recorded");
-    let workflow = support::workflow();
+    let workflow = harness_testing::workflow();
     let owner_forge = forge.as_user(actor_user("owner"));
     let tools = RoleTools::new(
         &workflow,

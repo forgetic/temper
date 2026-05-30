@@ -8,7 +8,7 @@ use harness_forge_memory::MemoryForge;
 use harness_runner::{CiError, CiPolicy, CiSink};
 use harness_workflow::CiStatus;
 
-use super::ts;
+use crate::ts;
 
 #[derive(Clone)]
 pub struct MemoryCiSink {

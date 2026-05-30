@@ -9,6 +9,7 @@ Current guides:
 - [Record an agent lesson](record-agent-lesson.md)
 - [Implement the workflow layer in phases](implement-workflow-layer-in-phases.md)
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
+- [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)
 
 Planned guides:
 

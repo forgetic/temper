@@ -10,9 +10,9 @@ use harness_runner::{
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::agents::fake_registry;
-use super::ci::{FilesystemCiSink, MemoryCiSink};
-use super::workflow;
+use crate::agents::fake_registry;
+use crate::ci::{FilesystemCiSink, MemoryCiSink};
+use crate::workflow;
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 

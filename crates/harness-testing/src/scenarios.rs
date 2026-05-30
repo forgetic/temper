@@ -8,7 +8,7 @@ use harness_forge::{
 use harness_runner::{scan, BoxError, Scenario};
 use harness_workflow::{parse_metadata_block, CiStatus, QueueId};
 
-use super::workflow;
+use crate::workflow;
 
 const DEPENDENCY_A_TITLE: &str = "Implement prerequisite A";
 const DEPENDENCY_B_TITLE: &str = "Implement dependent B";
