@@ -1,18 +1,34 @@
 # Run the Forgejo end-to-end harness
 
-> **Status: the multi-process test is live (Phase 4).** This page is built up
-> across the Forgejo e2e phases (`plans/forgejo-e2e/`): Phase 1 the throwaway
-> server, Phase 1b a real host-mode `forgejo-runner`, Phase 2 provisioning +
-> per-role identity, Phase 2b the PR-prep step, Phase 3/3b the worker backend
-> seam and web-UI CI read, and **Phase 4 the full four-scenario multi-process
-> test** (below). The remaining work (Set B) swaps the fake agents for real LLM
-> agents.
+> **Status: complete.** The full four-scenario multi-process test runs against a
+> real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
+> CI**. This is the **same** rehearsal as the filesystem
+> [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
+> swapped to real** — only the fake agents and webhook triggering remain on that
+> guide's "swap to real" list. The design rationale (topology, real CI, per-token
+> identity) lives in
+> [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
+> [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md). The next effort (Set B)
+> swaps the fake agents for real LLM agents.
 
 This harness runs a **real Forgejo** server locally so the reference-delivery
 workflow can be exercised against the `harness-forge-forgejo` backend instead of
 the in-memory/filesystem backends. Like the `harness-forge-forgejo` live tests,
 everything here is `#[ignore]`d **and** gated behind an environment variable, so
 a plain `cargo test` never downloads a binary or opens a socket.
+
+## One-line command (the full test)
+
+```sh
+HARNESS_FORGEJO_E2E=1 \
+  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+```
+
+This boots a Forgejo server **and** a host-mode `forgejo-runner`, provisions, and
+converges all four reference-delivery scenarios across real OS processes. It
+spawns real processes and executes CI **on this host**, so run it only where that
+is acceptable. Budget several minutes. The per-phase smoke tests below build up
+to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
 
 ## Smoke test (Phase 1)
 
@@ -162,6 +178,39 @@ seed/assert closures are reused verbatim, so both topologies are checked against
 the same end state. CI is gated on a **commit-message marker** (`[ci-pass]`) the
 engineer's commit carries — not a checked-out file — because the host-mode runner
 has no `actions/checkout` offline.
+
+## Running it in CI
+
+This repository has **no in-repo CI config**, so there is no committed job to
+edit; instead, configure your CI system with a **dedicated job**, separate from
+the default hermetic suite (which must keep running without this gate). The
+default job runs plain `cargo test` (the Forgejo test is `#[ignore]`d **and**
+env-gated, so it never fires there). The dedicated job:
+
+1. **Provides the two pinned binaries.** Either let the first run download +
+   checksum them into `.cache/forgejo/` (needs network to Codeberg /
+   code.forgejo.org), or pre-stage them and point
+   `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY` at the absolute
+   paths (the offline/sandboxed path — see [Environment knobs](#environment-knobs)).
+   Cache `.cache/forgejo/` across runs to avoid re-downloading.
+2. **Runs on a host that allows host-mode jobs.** The `forgejo-runner` registers
+   with `--labels host:host` and executes workflow steps **directly on the CI
+   host** (no containers), so the job must run on a runner that permits spawning
+   child processes and binding an ephemeral localhost port — not a locked-down
+   container-only executor.
+3. **Invokes exactly:**
+
+   ```sh
+   HARNESS_FORGEJO_E2E=1 \
+     cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+   ```
+
+   `--test-threads=1` keeps the four per-scenario servers from running at once.
+
+The job should not block the default pipeline gate (it is slower and
+host-dependent); treat it as a periodic / on-demand real-backend check. The
+runner smoke test (`--test forgejo_runner`) is a cheaper pre-flight that confirms
+the host can boot a server + runner before the full suite.
 
 ## The pinned binaries
 

@@ -86,26 +86,41 @@ remain the default coverage for the workflow logic; this test covers the
 
 This rehearsal deliberately stays on fakes so that going live is **wiring, not
 redesign**. Everything above the handle factory is `dyn Forge`, and agents only
-mutate state through the `Agent`/`RoleTools` boundary, so the swap is local:
+mutate state through the `Agent`/`RoleTools` boundary, so each swap is local.
 
-- **Backend handle factory.** Replace `FilesystemForge::new(--root)` in
-  `worker_bin::run` with a `ForgejoForge` constructed from a base URL plus a
-  per-role API token. Nothing above changes because it is all `dyn Forge`.
+The Forgejo multi-process e2e (`plans/forgejo-e2e/`) executed the **backend** and
+**CI** swaps against a real Forgejo server + real host-mode `forgejo-runner` — see
+[run-forgejo-multiprocess-e2e.md](run-forgejo-multiprocess-e2e.md) and
+[forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md). What it ran
+(`tests/forgejo_multiprocess.rs`) is the **same** rehearsal as this one, reusing
+the **exact** scenario seed/assert closures, with these two pieces made real:
+
+- **Backend handle factory — ✅ done.** The `harness-testing-worker`
+  `--backend forgejo` path builds a `ForgejoForge` from `--base-url` plus a
+  per-role token (env `HARNESS_FORGEJO_TOKEN`) instead of `FilesystemForge`.
+  Nothing above changed because it is all `dyn Forge`. (`worker_bin/forgejo.rs`.)
+- **CI — ✅ done.** A real host-mode `forgejo-runner` is the CI producer; the
+  `--kind ci` fake worker is **dropped** on Forgejo. The engine reads real
+  verdicts through `list_ci_jobs`, which falls back to a **password/web-UI client**
+  on Forgejo 7.0.x (`HARNESS_FORGEJO_USERNAME`/`PASSWORD`; ADR 0019).
+- **Clock — ✅ done (for that test).** Forgejo workers run `--clock wall`; the
+  deterministic `ManualClock` seam (which keeps `owner_alignment`'s `max_age`
+  from mis-firing against epoch-based logical timestamps) is filesystem-only.
+- **Identity — ✅ done (for that test).** Provisioning mints a real user + token
+  per role and feeds each worker its own, so `current_user` matches the
+  role-to-user map the executor authorizes against.
+
+**Still on fakes — pending:**
+
 - **Agents.** Replace the fake `AgentRegistry` entries (`registry_for`) with real
   LLM agents implementing the same `Agent<F>` trait. They keep mutating workflow
   state only through `RoleTools` — the authorized transition path is unchanged.
-- **CI.** Drop the `--kind ci` worker entirely. Provider CI (Forgejo Actions) is
-  the real producer, and the engine already reads it through `list_ci_jobs`; the
-  fake CI producer exists only because the filesystem backend has no Actions.
-- **Clock.** Pass `--clock wall`. A real provider writes wall-clock timestamps,
-  so the deterministic `ManualClock` seam (which keeps `owner_alignment`'s
-  `max_age` from mis-firing against epoch-based logical timestamps) goes away.
+  This is the next effort (`plans/forgejo-e2e/` "Phase set B": `pi_agent_rust` +
+  DeepSeek).
 - **Triggering.** Add the ADR 0009 webhook/`ChangeHint` accelerator **alongside**
   `PollLoop`, feeding the same pull→classify→plan→execute→reconcile reaction
-  path. Polling stays as the level-triggered liveness backstop; webhooks only
-  lower latency (see ADR 0009 and `docs/explanation/agentic-workflows.md`).
-- **Identity.** Supply real `RunnerConfig` role→user bindings and the matching
-  per-role tokens, so each worker's `current_user` matches the role-to-user map
-  the executor authorizes against.
+  path. Both topologies are still `PollLoop`-only; polling stays as the
+  level-triggered liveness backstop and webhooks only lower latency (see ADR 0009
+  and `docs/explanation/agentic-workflows.md`).
 
 No workflow semantics, scenario, queue, label, or transition definitions change.
