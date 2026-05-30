@@ -11,6 +11,9 @@
 //! provisioning helpers are layered on in later phases.
 
 pub mod download;
+pub mod runner;
+
+pub use runner::{ForgejoRunner, RunnerError};
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -276,7 +279,10 @@ fn app_ini(data_dir: &Path, port: u16, base_url: &str) -> String {
          REQUIRE_SIGNIN_VIEW = false\n\
          \n\
          [mailer]\n\
-         ENABLED = false\n"
+         ENABLED = false\n\
+         \n\
+         [actions]\n\
+         ENABLED = true\n"
     )
 }
 
@@ -298,5 +304,8 @@ mod tests {
         assert!(ini.contains("HTTP_PORT = 4321"));
         assert!(ini.contains("DB_TYPE = sqlite3"));
         assert!(ini.contains("INSTALL_LOCK = true"));
+        // Actions must be enabled so a host-mode forgejo-runner has work to run.
+        assert!(ini.contains("[actions]"));
+        assert!(ini.contains("ENABLED = true"));
     }
 }

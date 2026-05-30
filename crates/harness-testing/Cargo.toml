@@ -27,5 +27,10 @@ harness-workflow = { path = "../harness-workflow" }
 reqwest = { workspace = true, features = ["blocking"] }
 sha2 = "0.10"
 
+[dev-dependencies]
+# Test-only: the Forgejo contents API accepts base64-encoded file bodies, used
+# by the env-gated runner smoke test to commit a workflow file over REST.
+base64 = "0.22"
+
 [lints]
 workspace = true

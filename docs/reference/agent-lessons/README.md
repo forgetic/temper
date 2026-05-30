@@ -35,3 +35,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0004](0004-prefer-native-forge-state-over-mirror-labels.md) | Prefer native Forge state over mirror labels | architecture, forge, workflow, ci |
 | [0005](0005-avoid-redundant-pending-in-queue-labels.md) | Avoid redundant pending in queue labels | workflow, naming, labels |
 | [0006](0006-wire-modules-and-run-tests-not-just-build.md) | Wire new modules into the crate and run tests, not just build | rust, tooling, forgejo, process |
+| [0007](0007-forgejo-cli-token-and-runner-gotchas.md) | Forgejo 7.0.x CLI token + runner registration gotchas | forgejo, ci, testing, tooling |

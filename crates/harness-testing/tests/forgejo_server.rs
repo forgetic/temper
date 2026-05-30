@@ -60,10 +60,7 @@ fn server_boots_serves_version_and_tears_down() {
         .expect("version endpoint responds")
         .text()
         .expect("version body reads");
-    assert!(
-        body.contains("version"),
-        "unexpected /version body: {body}"
-    );
+    assert!(body.contains("version"), "unexpected /version body: {body}");
 
     // Dropping the server kills the process and removes the data dir; the port
     // should stop answering shortly after.
@@ -76,5 +73,8 @@ fn server_boots_serves_version_and_tears_down() {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    assert!(!still_up, "server still answered after drop; teardown failed");
+    assert!(
+        !still_up,
+        "server still answered after drop; teardown failed"
+    );
 }

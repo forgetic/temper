@@ -7,13 +7,15 @@
 //! known SHA-256 after download, so a corrupted or substituted download fails
 //! loudly instead of running.
 //!
-//! Env overrides (for CI, offline machines, or a version bump):
-//! - `HARNESS_FORGEJO_BINARY` — absolute path to a pre-downloaded binary; used
-//!   as-is, no download and no checksum (the operator vouches for it).
-//! - `HARNESS_FORGEJO_URL` — override the download URL (paired with
-//!   `HARNESS_FORGEJO_SHA256` to check it; without a sha, the check is skipped).
-//! - `HARNESS_FORGEJO_VERSION` — override the pinned version in the default URL.
-//! - `HARNESS_FORGEJO_SHA256` — override the expected checksum.
+//! Env overrides (for CI, offline machines, or a version bump). The server
+//! binary uses the `HARNESS_FORGEJO_*` namespace; the runner mirrors it under
+//! `HARNESS_FORGEJO_RUNNER_*`:
+//! - `*_BINARY` — absolute path to a pre-downloaded binary; used as-is, no
+//!   download and no checksum (the operator vouches for it).
+//! - `*_URL` — override the download URL (paired with `*_SHA256` to check it;
+//!   without a sha, the check is skipped).
+//! - `*_VERSION` — override the pinned version in the default URL.
+//! - `*_SHA256` — override the expected checksum.
 
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -25,6 +27,13 @@ pub const FORGEJO_VERSION: &str = "7.0.12";
 
 /// SHA-256 of the pinned `forgejo-7.0.12-linux-amd64` release asset.
 pub const FORGEJO_SHA256: &str = "ecd25535250aeb8073fdef1a0c9e92f288de1c0cdde24c95a3b61ead6bc9cf7c";
+
+/// Pinned `forgejo-runner` version. Proven by the Phase 0b CI spike (host mode).
+pub const FORGEJO_RUNNER_VERSION: &str = "3.5.1";
+
+/// SHA-256 of the pinned `forgejo-runner-3.5.1-linux-amd64` release asset.
+pub const FORGEJO_RUNNER_SHA256: &str =
+    "e2f36aa8149a0e883b5713398aa185c88a827fc0527d5cd2e2b05b88c9ba0b36";
 
 /// How long the one-shot download is allowed to take.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
@@ -73,13 +82,71 @@ impl From<std::io::Error> for DownloadError {
     }
 }
 
-/// Ensures the pinned Forgejo binary exists locally and returns its path.
+/// One pinned, env-overridable binary: its env namespace, default pin, and a
+/// function turning a (possibly overridden) version into a download URL and
+/// cache filename. The `Forgejo` and the `Runner` instances differ only in
+/// these fields, so the resolve logic below is shared.
+struct Pin {
+    /// Env prefix, e.g. `HARNESS_FORGEJO` or `HARNESS_FORGEJO_RUNNER`.
+    env_prefix: &'static str,
+    /// Default pinned version when `<prefix>_VERSION` is unset.
+    default_version: &'static str,
+    /// Default expected SHA-256 when `<prefix>_SHA256` is unset.
+    default_sha256: &'static str,
+    /// Builds the default download URL for a version.
+    url: fn(&str) -> String,
+    /// Builds the cache filename for a version.
+    file_name: fn(&str) -> String,
+}
+
+const FORGEJO_PIN: Pin = Pin {
+    env_prefix: "HARNESS_FORGEJO",
+    default_version: FORGEJO_VERSION,
+    default_sha256: FORGEJO_SHA256,
+    url: |version| {
+        format!(
+            "https://codeberg.org/forgejo/forgejo/releases/download/v{version}/forgejo-{version}-linux-amd64"
+        )
+    },
+    file_name: |version| format!("forgejo-{version}-linux-amd64"),
+};
+
+const FORGEJO_RUNNER_PIN: Pin = Pin {
+    env_prefix: "HARNESS_FORGEJO_RUNNER",
+    default_version: FORGEJO_RUNNER_VERSION,
+    default_sha256: FORGEJO_RUNNER_SHA256,
+    url: |version| {
+        format!(
+            "https://code.forgejo.org/forgejo/runner/releases/download/v{version}/forgejo-runner-{version}-linux-amd64"
+        )
+    },
+    file_name: |version| format!("forgejo-runner-{version}-linux-amd64"),
+};
+
+/// Ensures the pinned Forgejo **server** binary exists locally and returns its
+/// path.
 ///
 /// Resolution order: `HARNESS_FORGEJO_BINARY` override → cached file (verified
 /// present) → download to `.cache/forgejo/` and checksum-verify. The returned
 /// path is executable.
 pub fn ensure_binary() -> Result<PathBuf, DownloadError> {
-    if let Some(path) = env_var("HARNESS_FORGEJO_BINARY") {
+    ensure_pinned(&FORGEJO_PIN)
+}
+
+/// Ensures the pinned `forgejo-runner` binary exists locally and returns its
+/// path.
+///
+/// Mirrors [`ensure_binary`] under the `HARNESS_FORGEJO_RUNNER_*` env namespace
+/// and shares the same cache dir (`.cache/forgejo/`), download/verify/atomic
+/// write logic. Used by the host-mode CI runner fixture (Phase 1b).
+pub fn ensure_runner_binary() -> Result<PathBuf, DownloadError> {
+    ensure_pinned(&FORGEJO_RUNNER_PIN)
+}
+
+/// Shared resolver for a [`Pin`]: env override path → cached file → verified
+/// download.
+fn ensure_pinned(pin: &Pin) -> Result<PathBuf, DownloadError> {
+    if let Some(path) = env_var(&format!("{}_BINARY", pin.env_prefix)) {
         let path = PathBuf::from(path);
         if !path.exists() {
             return Err(DownloadError::MissingOverride(path));
@@ -87,12 +154,14 @@ pub fn ensure_binary() -> Result<PathBuf, DownloadError> {
         return Ok(path);
     }
 
-    let version = env_var("HARNESS_FORGEJO_VERSION").unwrap_or_else(|| FORGEJO_VERSION.to_string());
-    let expected_sha = env_var("HARNESS_FORGEJO_SHA256");
-    let url = env_var("HARNESS_FORGEJO_URL").unwrap_or_else(|| default_url(&version));
+    let version = env_var(&format!("{}_VERSION", pin.env_prefix))
+        .unwrap_or_else(|| pin.default_version.to_string());
+    let expected_sha = env_var(&format!("{}_SHA256", pin.env_prefix));
+    let url_override = env_var(&format!("{}_URL", pin.env_prefix));
+    let url = url_override.clone().unwrap_or_else(|| (pin.url)(&version));
 
     let cache_dir = workspace_root()?.join(".cache").join("forgejo");
-    let target = cache_dir.join(format!("forgejo-{version}-linux-amd64"));
+    let target = cache_dir.join((pin.file_name)(&version));
 
     // A present binary is trusted: it was checksum-verified when first written
     // (or supplied via an override URL the operator chose).
@@ -104,11 +173,11 @@ pub fn ensure_binary() -> Result<PathBuf, DownloadError> {
     let bytes = http_get(&url)?;
 
     // Verify before publishing the file. Default pin always checks; an override
-    // URL checks only when paired with HARNESS_FORGEJO_SHA256.
-    let expected = if env_var("HARNESS_FORGEJO_URL").is_some() {
+    // URL checks only when paired with `<prefix>_SHA256`.
+    let expected = if url_override.is_some() {
         expected_sha
     } else {
-        Some(expected_sha.unwrap_or_else(|| FORGEJO_SHA256.to_string()))
+        Some(expected_sha.unwrap_or_else(|| pin.default_sha256.to_string()))
     };
     if let Some(expected) = expected {
         verify_checksum(&bytes, &expected)?;
@@ -116,12 +185,6 @@ pub fn ensure_binary() -> Result<PathBuf, DownloadError> {
 
     write_executable(&target, &bytes)?;
     Ok(target)
-}
-
-fn default_url(version: &str) -> String {
-    format!(
-        "https://codeberg.org/forgejo/forgejo/releases/download/v{version}/forgejo-{version}-linux-amd64"
-    )
 }
 
 fn http_get(url: &str) -> Result<Vec<u8>, DownloadError> {
@@ -234,8 +297,26 @@ mod tests {
 
     #[test]
     fn default_url_embeds_version() {
-        let url = default_url("7.0.12");
+        let url = (FORGEJO_PIN.url)("7.0.12");
         assert!(url.ends_with("/v7.0.12/forgejo-7.0.12-linux-amd64"));
+        assert_eq!(
+            (FORGEJO_PIN.file_name)("7.0.12"),
+            "forgejo-7.0.12-linux-amd64"
+        );
+    }
+
+    #[test]
+    fn runner_pin_url_and_file_name() {
+        let url = (FORGEJO_RUNNER_PIN.url)("3.5.1");
+        assert!(
+            url.ends_with("/v3.5.1/forgejo-runner-3.5.1-linux-amd64"),
+            "unexpected runner url: {url}"
+        );
+        assert!(url.contains("code.forgejo.org/forgejo/runner/releases"));
+        assert_eq!(
+            (FORGEJO_RUNNER_PIN.file_name)("3.5.1"),
+            "forgejo-runner-3.5.1-linux-amd64"
+        );
     }
 
     #[test]
