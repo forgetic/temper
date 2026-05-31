@@ -182,6 +182,9 @@ fn provision(root: &Path, owner: &str, name: &str) {
         run_secs: Some(0),
         clock: worker_bin::ClockKind::Deterministic,
         agents: worker_bin::AgentsKind::Fake,
+        auth: worker_bin::AgentsAuthKind::default(),
+        codex_model: None,
+        auth_file: None,
     };
     worker_bin::run(&args).expect("provisioning the repository and labels succeeds");
 }

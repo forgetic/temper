@@ -17,8 +17,8 @@
 //!
 //! Doubly gated: `#[ignore]`d **and** requires **both** `HARNESS_FORGEJO_E2E=1`
 //! (boots a server/runner, as the rest of the Forgejo e2e suite does) **and**
-//! `HARNESS_FORGEJO_AGENTS=1` (real LLM calls — non-deterministic and cost
-//! money). The default `cargo test` runs neither. Run with:
+//! `HARNESS_FORGEJO_AGENTS=1` (real LLM calls — non-deterministic). The default
+//! `cargo test` runs neither. Run with:
 //!
 //! ```sh
 //! HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
@@ -30,8 +30,11 @@
 //! runtime must live off any async reactor, and async backend work is driven on a
 //! one-shot current-thread Tokio runtime via [`block_on`].
 //!
-//! The DeepSeek API key is read at runtime from `.cache/deepseek-api-key` (or the
-//! `HARNESS_DEEPSEEK_API_KEY*` env vars); it is never logged or committed.
+//! Per the cost policy this defaults to **ChatGPT OAuth** (the flat
+//! subscription), reading the shared `~/.pi/agent/auth.json` — **no DeepSeek
+//! tokens are spent**. Opt back to DeepSeek with `HARNESS_AGENTS_AUTH=deepseek`
+//! (then the key is read from `.cache/deepseek-api-key` or `HARNESS_DEEPSEEK_API_KEY*`).
+//! Either credential is never logged or committed.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -39,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use harness_agents::engineer::EngineerPrep;
-use harness_agents::{LlmEngineer, ProviderConfig};
+use harness_agents::{AuthChoice, LlmEngineer, ProviderConfig};
 use harness_forge::{CreateIssue, CreatePullRequest, Forge, PullRequestQuery, RepositoryId};
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use harness_runner::{Agent, AgentError, RoleTools, RoleWorker, Worker};
@@ -67,23 +70,37 @@ fn enabled() -> bool {
     eprintln!(
         "skipping Forgejo LLM-engineer e2e: set BOTH HARNESS_FORGEJO_E2E=1 and \
          HARNESS_FORGEJO_AGENTS=1 (boots a real Forgejo + runner and makes real, \
-         paid, non-deterministic DeepSeek calls)"
+         non-deterministic LLM calls)"
     );
     false
 }
 
+/// The agent auth mode: ChatGPT OAuth by default (the cost policy — a flat
+/// subscription, not pay-per-token DeepSeek), overridable to DeepSeek with
+/// `HARNESS_AGENTS_AUTH=deepseek`.
+fn agents_auth_choice() -> AuthChoice {
+    match std::env::var("HARNESS_AGENTS_AUTH").ok().as_deref() {
+        Some("deepseek") => AuthChoice::DeepSeek,
+        _ => AuthChoice::ChatGptOAuth,
+    }
+}
+
 #[test]
-#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
             run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
 fn llm_engineer_opens_pr_through_role_tools() {
     if !enabled() {
         return;
     }
 
-    // Fail fast with a clear message if the key is missing, before booting a
-    // server. The error never includes the key bytes.
-    let provider = ProviderConfig::deepseek_from_env()
-        .expect("DeepSeek provider config builds (is .cache/deepseek-api-key present?)");
+    // Fail fast with a clear message if the credential is missing, before booting
+    // a server. The error never includes secret bytes. Defaults to ChatGPT OAuth
+    // (cost policy); HARNESS_AGENTS_AUTH=deepseek opts back to the API key.
+    let auth = agents_auth_choice();
+    let provider = ProviderConfig::from_auth(auth, None, None).expect(
+        "LLM provider config builds (ChatGPT OAuth: run `pi /login openai-codex`; \
+         DeepSeek: place .cache/deepseek-api-key)",
+    );
 
     let server = ForgejoServer::start().expect("forgejo server boots");
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");

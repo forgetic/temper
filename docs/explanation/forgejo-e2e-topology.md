@@ -50,6 +50,23 @@ a known password) and mints a token per role. So one provisioned login can serve
 all three needs — REST token, PR assignee `UserId`, and web-UI CI login — the
 role users are given `id == handle`.
 
+## Provisioning is server-agnostic and operator-runnable
+
+The provisioning sequence (org → per-role user/token → `auto_init` repo → label
+upsert → CI workflow commit) is split so it does not depend on the throwaway
+server. `provision_world(base_url, admin_token, owner, name, roles,
+default_branch)` is the portable REST/Forge portion; `provision(&server)` is the
+throwaway-server wrapper that bootstraps an admin (CLI) then calls it. Role
+logins come from the passed-in binding list (`runner_config().role_bindings`),
+never hardcoded. `seed_intake_issue(base_url, token, owner, name)` adds one
+realistic intake issue whose labels are **derived from the compiled workflow**
+(the entry issue artifact a queue filters on), idempotently. The operator binary
+`harness-testing-provision` wires these together for the real-world example: it
+takes `--base-url/--owner/--name/--out`, reads the admin token from
+`HARNESS_FORGEJO_ADMIN_TOKEN` (never argv), and writes the per-role
+`{user, token, password}` to a `0600` POSIX-sourceable secrets file
+(`HARNESS_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret.
+
 ## Real CI: producing and reading
 
 **Producing.** The provisioned repo commits `.forgejo/workflows/ci.yml`

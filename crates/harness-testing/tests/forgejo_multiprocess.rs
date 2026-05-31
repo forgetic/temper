@@ -62,7 +62,7 @@ use std::time::{Duration, Instant};
 /// the filesystem test's 30 s.
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Convergence budget for the **real-agent** topology. Each tick adds one or more
-/// DeepSeek round-trips on top of the already-slow real CI, and several roles must
+/// LLM round-trips on top of the already-slow real CI, and several roles must
 /// each take an LLM-decided step in sequence (triage → claim/open PR → review →
 /// align → merge → reconcile), so the ceiling is well above the fake topology's.
 const REAL_AGENTS_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(900);
@@ -91,8 +91,9 @@ struct Variant {
     /// `--ci-sentinel` value passed to the engineer role worker.
     ci_sentinel: &'static str,
     /// `--agents` value passed to every role worker (`fake` or `real`). The
-    /// `real` topology swaps the deterministic fakes for in-process
-    /// DeepSeek-backed LLM agents and is double-gated (see [`Agents`]).
+    /// `real` topology swaps the deterministic fakes for in-process LLM agents
+    /// (ChatGPT OAuth by default per the cost policy) and is double-gated (see
+    /// [`Agents`]).
     agents: Agents,
 }
 
@@ -101,8 +102,9 @@ struct Variant {
 /// The seed/assert closures and end state are **identical** across both — only
 /// *who decides* changes (the whole point of reusing the scenario). `Real`
 /// additionally requires `HARNESS_FORGEJO_AGENTS=1` (real LLM calls are
-/// non-deterministic and cost money) and gets a larger convergence budget for
-/// LLM latency.
+/// non-deterministic) and gets a larger convergence budget for LLM latency.
+/// Per the cost policy the real agents default to ChatGPT OAuth (a flat
+/// subscription); set `HARNESS_AGENTS_AUTH=deepseek` to opt back to DeepSeek.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Agents {
     Fake,
@@ -129,8 +131,8 @@ impl Agents {
 
 /// Returns whether the env opt-in for `agents` is present; prints a skip note
 /// when not. The fake topology needs only `HARNESS_FORGEJO_E2E=1`; the real
-/// topology additionally needs `HARNESS_FORGEJO_AGENTS=1` (real, paid,
-/// non-deterministic DeepSeek calls), matching the B1 engineer e2e gate.
+/// topology additionally needs `HARNESS_FORGEJO_AGENTS=1` (real,
+/// non-deterministic LLM calls), matching the B1 engineer e2e gate.
 fn enabled(agents: Agents) -> bool {
     let e2e = std::env::var("HARNESS_FORGEJO_E2E").ok().as_deref() == Some("1");
     match agents {
@@ -151,9 +153,10 @@ fn enabled(agents: Agents) -> bool {
             }
             eprintln!(
                 "skipping Forgejo real-agent multiprocess e2e: set BOTH HARNESS_FORGEJO_E2E=1 and \
-                 HARNESS_FORGEJO_AGENTS=1 (boots a real Forgejo + runner and makes real, paid, \
-                 non-deterministic DeepSeek calls; needs a DeepSeek key via \
-                 HARNESS_DEEPSEEK_API_KEY[_PATH] or .cache/deepseek-api-key)"
+                 HARNESS_FORGEJO_AGENTS=1 (boots a real Forgejo + runner and makes real, \
+                 non-deterministic LLM calls). Defaults to ChatGPT OAuth (run \
+                 `pi /login openai-codex`); set HARNESS_AGENTS_AUTH=deepseek to use a DeepSeek \
+                 key via HARNESS_DEEPSEEK_API_KEY[_PATH] or .cache/deepseek-api-key)"
             );
             false
         }
@@ -216,7 +219,7 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
 
 // ---------------------------------------------------------------------------
 // Real-agent topology (Phase B2). Same scenarios, same seed/assert closures, but
-// every role worker runs an in-process DeepSeek-backed LLM agent (`--agents
+// every role worker runs an in-process LLM agent (ChatGPT OAuth by default; `--agents
 // real`) instead of the deterministic fakes. Double-gated behind
 // HARNESS_FORGEJO_E2E=1 **and** HARNESS_FORGEJO_AGENTS=1.
 //
@@ -226,7 +229,7 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
             run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
 fn happy_path_converges_with_real_agents() {
     run_variant(&Variant {
@@ -239,7 +242,7 @@ fn happy_path_converges_with_real_agents() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
             run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
 fn changes_requested_then_approved_with_real_agents() {
     run_variant(&Variant {
@@ -252,7 +255,7 @@ fn changes_requested_then_approved_with_real_agents() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
             run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
 fn ci_fails_then_passes_with_real_agents() {
     run_variant(&Variant {
@@ -265,7 +268,7 @@ fn ci_fails_then_passes_with_real_agents() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
             run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
 fn dependency_chain_mechanically_unblocked_with_real_agents() {
     run_variant(&Variant {
@@ -285,13 +288,16 @@ fn run_variant(variant: &Variant) {
         return;
     }
 
-    // For the real-agent topology, fail fast with a clear message if the DeepSeek
-    // key is missing — before booting a server or making any LLM call. The error
-    // never includes the key bytes.
+    // For the real-agent topology, fail fast with a clear message if the
+    // credential is missing — before booting a server or making any LLM call. The
+    // error never includes secret bytes. Defaults to ChatGPT OAuth (the cost
+    // policy: a flat subscription, not pay-per-token DeepSeek); opt back to
+    // DeepSeek with HARNESS_AGENTS_AUTH=deepseek.
     if variant.agents == Agents::Real {
-        harness_agents::ProviderConfig::deepseek_from_env().expect(
-            "DeepSeek provider config builds for --agents real \
-             (set HARNESS_DEEPSEEK_API_KEY[_PATH] or place .cache/deepseek-api-key)",
+        harness_agents::ProviderConfig::from_auth(agents_auth_choice(), None, None).expect(
+            "LLM provider config builds for --agents real \
+             (ChatGPT OAuth: run `pi /login openai-codex`; \
+             DeepSeek: set HARNESS_DEEPSEEK_API_KEY[_PATH] or place .cache/deepseek-api-key)",
         );
     }
 
@@ -509,13 +515,35 @@ fn touch(path: &Path) {
 /// Env var the worker reads the DeepSeek API key from (direct value).
 const DEEPSEEK_API_KEY_ENV: &str = "HARNESS_DEEPSEEK_API_KEY";
 
+/// The agent auth mode for the real-agent topology: ChatGPT OAuth by default
+/// (the cost policy — a flat subscription, not pay-per-token DeepSeek),
+/// overridable to DeepSeek with `HARNESS_AGENTS_AUTH=deepseek`. The spawned
+/// workers default to the same mode (their `--auth` flag defaults to
+/// chatgpt-oauth), but the driver passes `--auth` explicitly so a deepseek
+/// override also reaches the children.
+fn agents_auth_choice() -> harness_agents::AuthChoice {
+    match std::env::var("HARNESS_AGENTS_AUTH").ok().as_deref() {
+        Some("deepseek") => harness_agents::AuthChoice::DeepSeek,
+        _ => harness_agents::AuthChoice::ChatGptOAuth,
+    }
+}
+
+/// The `--auth` flag value matching [`agents_auth_choice`].
+fn agents_auth_flag() -> &'static str {
+    match agents_auth_choice() {
+        harness_agents::AuthChoice::DeepSeek => "deepseek",
+        harness_agents::AuthChoice::ChatGptOAuth => "chatgpt-oauth",
+    }
+}
+
 /// Resolves the DeepSeek API key the same way `harness_agents::ProviderConfig`
 /// does, so it can be passed explicitly to each real-agent worker child (whose
 /// CWD differs from the workspace root and so cannot resolve the default relative
 /// `.cache/deepseek-api-key`). Resolution order: `HARNESS_DEEPSEEK_API_KEY`
 /// (direct), else the file at `HARNESS_DEEPSEEK_API_KEY_PATH`, else the
 /// workspace-root `.cache/deepseek-api-key`. The key is never logged; the driver
-/// already validated it builds via `ProviderConfig::deepseek_from_env`.
+/// already validated it builds via `ProviderConfig::from_auth`. Only used for the
+/// DeepSeek opt-out; the ChatGPT OAuth path reads the absolute shared auth file.
 fn resolve_deepseek_key() -> String {
     if let Ok(key) = std::env::var(DEEPSEEK_API_KEY_ENV) {
         let trimmed = key.trim();
@@ -565,13 +593,16 @@ impl WorkerFleet {
         let repo = format!("{}/{}", provisioned.owner, provisioned.name);
         let mut workers = Vec::new();
 
-        // For `--agents real`, each role worker reads the DeepSeek key from the
-        // env. Resolve it once in the driver and pass it explicitly (the child's
-        // CWD is the crate dir, so the default relative `.cache/...` would not
-        // resolve). Empty for `--agents fake`. Passed via env, never argv.
-        let deepseek_key = match variant.agents {
-            Agents::Real => Some(resolve_deepseek_key()),
-            Agents::Fake => None,
+        // For `--agents real` with the DeepSeek opt-out, each role worker reads
+        // the DeepSeek key from the env. Resolve it once in the driver and pass it
+        // explicitly (the child's CWD is the crate dir, so the default relative
+        // `.cache/...` would not resolve). The default ChatGPT OAuth path needs no
+        // key — it reads the absolute shared `~/.pi/agent/auth.json`. Passed via
+        // env, never argv; empty for `--agents fake`.
+        let auth_flag = agents_auth_flag();
+        let deepseek_key = match (variant.agents, agents_auth_choice()) {
+            (Agents::Real, harness_agents::AuthChoice::DeepSeek) => Some(resolve_deepseek_key()),
+            _ => None,
         };
 
         // Derive role workers from the compiled workflow ∩ registered fake agents
@@ -604,6 +635,7 @@ impl WorkerFleet {
                     ("--reviewer", variant.reviewer),
                     ("--ci-sentinel", variant.ci_sentinel),
                     ("--agents", variant.agents.flag()),
+                    ("--auth", auth_flag),
                 ],
                 &env,
             );

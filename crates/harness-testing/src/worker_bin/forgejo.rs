@@ -168,10 +168,11 @@ fn registry_with_forgejo_engineer(
 ///
 /// Mirrors [`registry_with_forgejo_engineer`] but for `--agents real`: the
 /// architect/reviewer variants and engineer prep come from
-/// [`real_registry_for`], so every role is the DeepSeek-backed LLM agent while
-/// the engineer keeps the real-PR/real-CI side effects. The DeepSeek key is read
-/// at runtime by `real_registry_for`; a missing key fails as a `Backend` setup
-/// error before any worker ticks.
+/// [`real_registry_for`], so every role is an LLM agent (DeepSeek or ChatGPT
+/// OAuth, per `--auth`) while the engineer keeps the real-PR/real-CI side
+/// effects. The credential is resolved at runtime by `real_registry_for`; a
+/// missing key or login fails as a `Backend` setup error before any worker
+/// ticks.
 fn real_registry_with_forgejo_prep(
     forgejo: &ForgejoArgs,
     args: &WorkerArgs,
@@ -184,7 +185,7 @@ fn real_registry_with_forgejo_prep(
         args.name.clone(),
         behavior.ci_sentinel,
     )) as Arc<dyn harness_agents::EngineerPrep<dyn Forge>>;
-    real_registry_for(behavior, prep)
+    real_registry_for(args, behavior, prep)
 }
 
 /// Optional repo+labels provisioning step, given a token with admin rights.

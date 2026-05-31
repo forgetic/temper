@@ -38,3 +38,5 @@ Use `template.md`. Keep each entry short and specific.
 | [0007](0007-forgejo-cli-token-and-runner-gotchas.md) | Forgejo 7.0.x CLI token + runner registration gotchas | forgejo, ci, testing, tooling |
 | [0008](0008-pin-pi-sdk-transitive-deps.md) | Pin `pi_agent_rust`'s transitive deps when the SDK won't compile | tooling, rust, agents, dependencies, pi-sdk |
 | [0009](0009-cap-throwaway-forgejo-cpu.md) | Cap (and clean up) the throwaway Forgejo's CPU in the e2e | forgejo, ci, testing, tooling, process |
+| [0010](0010-chatgpt-oauth-shared-auth-dual-schema.md) | Read the shared pi auth.json tolerantly (dual on-disk schema) | agents, pi-sdk, oauth, auth |
+| [0011](0011-validate-blocking-launch-script.md) | Validate the blocking launch script in the background, then stop via its sentinel | process, tooling, forgejo, testing |

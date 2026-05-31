@@ -43,8 +43,8 @@ use crate::agents::{
 };
 use crate::ci::{FailThenPassCiPolicy, FilesystemCiSink, FixedCiPolicy};
 use crate::worker_bin::args::{
-    AgentsKind, ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior,
-    WorkerArgs, WorkerKind,
+    AgentsAuthKind, AgentsKind, ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind,
+    RoleBehavior, WorkerArgs, WorkerKind,
 };
 use crate::{block_on, runner_config, workflow};
 use harness_runner::AgentRegistry;
@@ -191,7 +191,7 @@ fn run_role(
     // (the default) is unchanged.
     let registry = match args.agents {
         AgentsKind::Fake => registry_for(behavior),
-        AgentsKind::Real => real_registry_for(behavior, Arc::new(harness_agents::NoPrep))?,
+        AgentsKind::Real => real_registry_for(args, behavior, Arc::new(harness_agents::NoPrep))?,
     };
     let agent = registry
         .get(&role_id)
@@ -246,17 +246,23 @@ pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
 /// match `behavior` and whose engineer carries `engineer_prep`.
 ///
 /// This is the `--agents real` counterpart of [`registry_for`]: it constructs the
-/// shared DeepSeek [`ProviderConfig`](harness_agents::ProviderConfig) once (key
-/// read at runtime from the env/file; never logged) and maps every role to its
-/// LLM agent through [`harness_agents::real_registry_with`]. `engineer_prep`
-/// carries the backend-specific PR-head/CI side effects: `NoPrep` on filesystem,
-/// the Forgejo prep on the real backend (see [`super::forgejo`]).
+/// shared [`ProviderConfig`](harness_agents::ProviderConfig) once for the
+/// selected auth mode (DeepSeek key or ChatGPT OAuth login, resolved at runtime
+/// and never logged) and maps every role to its LLM agent through
+/// [`harness_agents::real_registry_with`]. `engineer_prep` carries the
+/// backend-specific PR-head/CI side effects: `NoPrep` on filesystem, the Forgejo
+/// prep on the real backend (see [`super::forgejo`]).
+///
+/// The provider is built with [`provider_for`], which resolves the auth mode,
+/// codex model, and auth-file path from `args` (precedence CLI > env > default)
+/// and runs an **eager credential preflight** so a missing key or login fails
+/// here — before any worker tick.
 pub(super) fn real_registry_for(
+    args: &WorkerArgs,
     behavior: RoleBehavior,
     engineer_prep: Arc<dyn harness_agents::EngineerPrep<dyn Forge>>,
 ) -> Result<AgentRegistry<dyn Forge>, RunError> {
-    let provider = harness_agents::ProviderConfig::deepseek_from_env()
-        .map_err(|error| RunError::Backend(error.to_string()))?;
+    let provider = provider_for(args)?;
     let config = harness_agents::RealRegistryConfig {
         architect_closing: matches!(behavior.architect, ArchitectKind::Closing),
         reviewer_request_changes_then_approve: matches!(
@@ -266,6 +272,28 @@ pub(super) fn real_registry_for(
         engineer_prep,
     };
     Ok(harness_agents::real_registry_with(provider, config))
+}
+
+/// Builds the shared [`ProviderConfig`](harness_agents::ProviderConfig) for the
+/// auth mode selected on `args`.
+///
+/// Maps the worker's [`AgentsAuthKind`] onto [`harness_agents::AuthChoice`] and
+/// forwards the `--codex-model` / `--auth-file` overrides (each `None` falls back
+/// to its env var then the built-in default inside `harness-agents`). The eager
+/// preflight inside `from_auth` surfaces a missing DeepSeek key or ChatGPT login
+/// as a [`RunError::Backend`] setup error, before any worker tick; the OAuth
+/// error points the operator at `pi /login openai-codex`.
+fn provider_for(args: &WorkerArgs) -> Result<harness_agents::ProviderConfig, RunError> {
+    let choice = match args.auth {
+        AgentsAuthKind::ChatGptOAuth => harness_agents::AuthChoice::ChatGptOAuth,
+        AgentsAuthKind::DeepSeek => harness_agents::AuthChoice::DeepSeek,
+    };
+    harness_agents::ProviderConfig::from_auth(
+        choice,
+        args.codex_model.clone(),
+        args.auth_file.clone(),
+    )
+    .map_err(|error| RunError::Backend(error.to_string()))
 }
 
 pub(super) fn resolve_role_user(
@@ -430,6 +458,9 @@ mod tests {
             run_secs: Some(0),
             clock: ClockKind::Deterministic,
             agents: AgentsKind::Fake,
+            auth: AgentsAuthKind::default(),
+            codex_model: None,
+            auth_file: None,
         }
     }
 

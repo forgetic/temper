@@ -68,10 +68,15 @@ pub async fn run_decision<D: DeserializeOwned>(
         max_tool_iterations: MAX_TOOL_ITERATIONS,
         ..AgentConfig::default()
     };
-    // The OpenAI-compatible provider authenticates from the per-request API key
-    // carried in stream options; never bake it into the provider object.
-    config.stream_options.api_key = Some(provider_config.api_key().to_string());
-    config.stream_options.temperature = Some(0.0);
+    // The provider authenticates from the per-request bearer carried in stream
+    // options; never bake it into the provider object. For ChatGPT OAuth the
+    // bearer is resolved (and refreshed if near expiry) fresh on each decision.
+    config.stream_options.api_key = Some(provider_config.resolve_bearer().await?);
+    // Mode-specific knobs: API-key (DeepSeek) pins temperature 0.0 and no
+    // reasoning; the codex reasoning models leave temperature unset and request
+    // minimal reasoning effort.
+    config.stream_options.temperature = provider_config.temperature();
+    config.stream_options.thinking_level = provider_config.thinking_level();
 
     // No tools: a `ToolRegistry` built from an empty enabled-list is empty, so
     // the model cannot reach bash/file tools — the workflow mutation path stays

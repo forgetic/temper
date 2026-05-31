@@ -3,6 +3,11 @@
 
 use super::*;
 
+// Backend-selection / Forgejo-secret parsing tests live in a sibling file to
+// keep each test file within the line budget; they reuse the helpers below.
+#[path = "args_parse_backend_tests.rs"]
+mod backend;
+
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_string()).collect()
 }
@@ -243,214 +248,6 @@ fn rejects_unknown_flag() {
 }
 
 #[test]
-fn parses_forgejo_role_with_env_secrets() {
-    let args = run_env(
-        &[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--backend",
-            "forgejo",
-            "--base-url",
-            "http://127.0.0.1:3000/",
-            "--root",
-            "/tmp/unused",
-            "--repo",
-            "acme/service",
-            "--clock",
-            "wall",
-        ],
-        &[
-            (FORGEJO_TOKEN_ENV, "tok-engineer"),
-            (FORGEJO_USERNAME_ENV, "engineer"),
-            (FORGEJO_PASSWORD_ENV, "pw-engineer"),
-        ],
-    );
-    assert_eq!(
-        args.backend,
-        Backend::Forgejo(ForgejoArgs {
-            base_url: "http://127.0.0.1:3000/".to_string(),
-            token: "tok-engineer".to_string(),
-            username: Some("engineer".to_string()),
-            password: Some("pw-engineer".to_string()),
-        })
-    );
-    assert_eq!(args.backend.kind(), BackendKind::Forgejo);
-}
-
-#[test]
-fn forgejo_token_comes_from_env_not_argv() {
-    let error = parse_env(
-        &[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--backend",
-            "forgejo",
-            "--base-url",
-            "http://127.0.0.1:3000",
-            "--root",
-            "/tmp/unused",
-            "--repo",
-            "acme/service",
-            "--clock",
-            "wall",
-        ],
-        &[],
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains(FORGEJO_TOKEN_ENV));
-}
-
-#[test]
-fn forgejo_requires_base_url() {
-    let error = parse_env(
-        &[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--backend",
-            "forgejo",
-            "--root",
-            "/tmp/unused",
-            "--repo",
-            "acme/service",
-            "--clock",
-            "wall",
-        ],
-        &[(FORGEJO_TOKEN_ENV, "tok")],
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("--base-url"));
-}
-
-#[test]
-fn forgejo_rejects_ci_kind() {
-    let error = parse_env(
-        &[
-            "--kind",
-            "ci",
-            "--backend",
-            "forgejo",
-            "--base-url",
-            "http://127.0.0.1:3000",
-            "--root",
-            "/tmp/unused",
-            "--repo",
-            "acme/service",
-            "--clock",
-            "wall",
-        ],
-        &[(FORGEJO_TOKEN_ENV, "tok")],
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("--kind ci"));
-    assert!(error.to_string().contains("forgejo"));
-}
-
-#[test]
-fn forgejo_requires_wall_clock() {
-    let error = parse_env(
-        &[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--backend",
-            "forgejo",
-            "--base-url",
-            "http://127.0.0.1:3000",
-            "--root",
-            "/tmp/unused",
-            "--repo",
-            "acme/service",
-        ],
-        &[(FORGEJO_TOKEN_ENV, "tok")],
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("--clock wall"));
-}
-
-#[test]
-fn filesystem_ci_kind_still_accepted() {
-    let args = run(&[
-        "--kind",
-        "ci",
-        "--ci",
-        "fail-then-pass",
-        "--root",
-        "/tmp/x",
-        "--repo",
-        "acme/service",
-    ]);
-    assert_eq!(args.backend, Backend::Filesystem);
-    assert_eq!(
-        args.kind,
-        WorkerKind::Ci {
-            policy: CiPolicyKind::FailThenPass
-        }
-    );
-}
-
-#[test]
-fn rejects_bad_backend() {
-    let error = parse(argv(&[
-        "--kind",
-        "provision",
-        "--backend",
-        "bogus",
-        "--root",
-        "/tmp/x",
-        "--repo",
-        "acme/service",
-    ]))
-    .unwrap_err();
-    assert!(error.to_string().contains("--backend"));
-}
-
-#[test]
-fn base_url_rejected_for_filesystem() {
-    let error = parse(argv(&[
-        "--kind",
-        "provision",
-        "--base-url",
-        "http://127.0.0.1:3000",
-        "--root",
-        "/tmp/x",
-        "--repo",
-        "acme/service",
-    ]))
-    .unwrap_err();
-    assert!(error.to_string().contains("--base-url"));
-}
-
-#[test]
-fn forgejo_debug_redacts_secrets() {
-    let args = ForgejoArgs {
-        base_url: "http://127.0.0.1:3000".to_string(),
-        token: "super-secret-token".to_string(),
-        username: Some("engineer".to_string()),
-        password: Some("super-secret-password".to_string()),
-    };
-    let rendered = format!("{args:?}");
-    assert!(!rendered.contains("super-secret-token"));
-    assert!(!rendered.contains("super-secret-password"));
-    assert!(rendered.contains("<redacted>"));
-    assert!(rendered.contains("http://127.0.0.1:3000"));
-}
-
-#[test]
 fn agents_defaults_to_fake() {
     let args = run(&[
         "--kind",
@@ -484,6 +281,117 @@ fn parses_agents_real() {
         "acme/service",
     ]);
     assert_eq!(args.agents, AgentsKind::Real);
+}
+
+#[test]
+fn auth_defaults_to_chatgpt_oauth() {
+    // The worker is a test/dev surface, so it defaults to the flat-rate ChatGPT
+    // subscription rather than pay-per-token DeepSeek (the cost policy).
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(args.auth, AgentsAuthKind::ChatGptOAuth);
+    assert_eq!(args.codex_model, None);
+    assert_eq!(args.auth_file, None);
+}
+
+#[test]
+fn parses_auth_codex_model_and_auth_file() {
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--auth",
+        "deepseek",
+        "--codex-model",
+        "gpt-5.9-codex",
+        "--auth-file",
+        "/tmp/auth.json",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(args.auth, AgentsAuthKind::DeepSeek);
+    assert_eq!(args.codex_model.as_deref(), Some("gpt-5.9-codex"));
+    assert_eq!(args.auth_file, Some(PathBuf::from("/tmp/auth.json")));
+}
+
+#[test]
+fn auth_env_bridges_config_file() {
+    // The launch script sources a config file into HARNESS_AGENTS_AUTH; absent a
+    // CLI flag, that env value selects the mode.
+    let args = run_env(
+        &[
+            "--kind",
+            "role",
+            "--role",
+            "engineer",
+            "--user",
+            "engineer",
+            "--root",
+            "/tmp/x",
+            "--repo",
+            "acme/service",
+        ],
+        &[(AGENTS_AUTH_ENV, "deepseek")],
+    );
+    assert_eq!(args.auth, AgentsAuthKind::DeepSeek);
+}
+
+#[test]
+fn auth_cli_overrides_env() {
+    // Precedence: CLI > config/env > default.
+    let args = run_env(
+        &[
+            "--kind",
+            "role",
+            "--role",
+            "engineer",
+            "--user",
+            "engineer",
+            "--auth",
+            "chatgpt-oauth",
+            "--root",
+            "/tmp/x",
+            "--repo",
+            "acme/service",
+        ],
+        &[(AGENTS_AUTH_ENV, "deepseek")],
+    );
+    assert_eq!(args.auth, AgentsAuthKind::ChatGptOAuth);
+}
+
+#[test]
+fn rejects_bad_auth() {
+    let error = parse(argv(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--auth",
+        "bogus",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]))
+    .unwrap_err();
+    assert!(error.to_string().contains("--auth"));
 }
 
 #[test]

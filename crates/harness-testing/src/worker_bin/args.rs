@@ -135,6 +135,37 @@ impl AgentsKind {
     }
 }
 
+/// Which credential the real (`--agents real`) LLM agents authenticate with
+/// (`--auth`).
+///
+/// This is a **test/dev surface**, so it defaults to [`AgentsAuthKind::ChatGptOAuth`]
+/// per the cost policy (a flat ChatGPT subscription instead of pay-per-token
+/// DeepSeek). It maps onto [`harness_agents::AuthChoice`] when the registry is
+/// built; it is irrelevant under `--agents fake` (no provider is constructed).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum AgentsAuthKind {
+    /// ChatGPT (OpenAI Codex) OAuth subscription (the test/dev default).
+    #[default]
+    ChatGptOAuth,
+    /// DeepSeek API key (pay-per-token fallback).
+    DeepSeek,
+}
+
+impl AgentsAuthKind {
+    /// Human-readable flag value, for error messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentsAuthKind::ChatGptOAuth => "chatgpt-oauth",
+            AgentsAuthKind::DeepSeek => "deepseek",
+        }
+    }
+}
+
+/// Environment variable selecting the real-agent auth mode (the launch-script
+/// bridge from a config file). A `--auth` CLI flag overrides it; absent both, the
+/// test/dev default ([`AgentsAuthKind::ChatGptOAuth`]) applies.
+pub const AGENTS_AUTH_ENV: &str = "HARNESS_AGENTS_AUTH";
+
 /// Which clock a poll-loop worker drives its ticks from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum ClockKind {
@@ -277,6 +308,14 @@ pub struct WorkerArgs {
     pub clock: ClockKind,
     /// Which agent registry a `role` worker populates (fake or real LLM).
     pub agents: AgentsKind,
+    /// Which credential the real LLM agents authenticate with (`--agents real`).
+    pub auth: AgentsAuthKind,
+    /// Codex model id override for ChatGPT OAuth (`--codex-model`); `None` falls
+    /// back to `HARNESS_AGENTS_CODEX_MODEL` then the built-in default.
+    pub codex_model: Option<String>,
+    /// Auth-file path override for ChatGPT OAuth (`--auth-file`); `None` falls
+    /// back to `HARNESS_AGENTS_AUTH_FILE` then `~/.pi/agent/auth.json`.
+    pub auth_file: Option<PathBuf>,
 }
 
 /// An argument-parsing failure with a user-facing message.

@@ -5,8 +5,9 @@
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
 > swapped to real**. With `--agents real` (Phase B2) every role also runs a real
-> DeepSeek-backed LLM agent, so **agents are swapped to real too** — only webhook
-> triggering remains on that guide's "swap to real" list. The design rationale
+> LLM agent (ChatGPT OAuth by default), so **agents are swapped to real too** —
+> only webhook triggering remains on that guide's "swap to real" list. The design
+> rationale
 > (topology, real CI, per-token identity) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
 > [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
@@ -33,20 +34,35 @@ to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
 ## Real LLM agents (Phase B2)
 
 The command above runs the deterministic **fake** agents. To run the **same**
-scenarios with real DeepSeek-backed agents in every role (`--agents real`), set a
-second gate and provide a DeepSeek key. The end state and the seed/assert
-closures are identical — only *who decides* changes:
+scenarios with real agents in every role (`--agents real`), set a second gate.
+The end state and the seed/assert closures are identical — only *who decides*
+changes.
+
+Per the cost policy these runs default to **ChatGPT OAuth** (a flat subscription,
+not pay-per-token DeepSeek), reading the shared `~/.pi/agent/auth.json`. Log in
+once with `pi /login openai-codex`; **no DeepSeek key is required**:
 
 ```sh
 HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
+  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored \
+  --test-threads=1 happy_path_converges_with_real_agents
+```
+
+To opt back to DeepSeek (the bring-your-own-key fallback), set
+`HARNESS_AGENTS_AUTH=deepseek` and provide the key:
+
+```sh
+HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 HARNESS_AGENTS_AUTH=deepseek \
   HARNESS_DEEPSEEK_API_KEY_PATH="$PWD/.cache/deepseek-api-key" \
   cargo test -p harness-testing --test forgejo_multiprocess -- --ignored \
   --test-threads=1 happy_path_converges_with_real_agents
 ```
 
-- It is **double-gated** (both env vars) and makes real, paid, non-deterministic
-  DeepSeek calls — never in the default suite. The key is read at runtime and
-  never logged; the worker children receive it via env, not argv.
+- It is **double-gated** (both env vars) and makes real, non-deterministic LLM
+  calls — never in the default suite. The ChatGPT OAuth bearer is resolved fresh
+  per decision from `~/.pi/agent/auth.json` (refreshed near expiry); any DeepSeek
+  key is read at runtime. Neither is ever logged; the worker children receive
+  credentials via env (or the absolute shared auth file), not argv.
 - Run the real-agent tests **serially** (`--test-threads=1`): each boots its own
   real Forgejo, and several at once would multiply the CPU load.
 - All four scenarios converge (happy ~26–29 s, the others ~34–61 s on a 4-core

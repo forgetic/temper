@@ -14,10 +14,12 @@ pub mod download;
 pub mod pr_prep;
 pub mod provision;
 mod provision_rest;
+pub mod provision_seed;
 pub mod runner;
 
 pub use pr_prep::{commit_ci_sentinel, prepare_pull_request_head};
-pub use provision::{provision, ProvisionError, Provisioned, RoleIdentity};
+pub use provision::{provision, provision_world, ProvisionError, Provisioned, RoleIdentity};
+pub use provision_seed::{intake_labels, seed_intake_issue};
 pub use runner::{ForgejoRunner, RunnerError};
 
 use std::net::TcpListener;

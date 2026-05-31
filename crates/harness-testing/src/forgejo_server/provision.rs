@@ -29,6 +29,7 @@ use super::{ForgejoServer, ServerError};
 use crate::{runner_config, workflow};
 use harness_forge::RepositoryId;
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use harness_runner::RoleBinding;
 use harness_workflow::RoleId;
 use std::collections::BTreeMap;
 
@@ -227,24 +228,54 @@ pub(super) type Result<T> = std::result::Result<T, ProvisionError>;
 /// elsewhere. Idempotent where Forgejo allows it (re-creating an org/user/label
 /// is tolerated), so a retried provision does not wedge.
 pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
-    let base = server.base_url().to_string();
-    let client = rest::http_client()?;
-
     // 1. Admin bootstrap via the CLI (the REST user-create path needs an admin
-    //    token, and the admin itself must exist first).
+    //    token, and the admin itself must exist first). This is the only step
+    //    coupled to the throwaway [`ForgejoServer`]; everything else is portable
+    //    REST/Forge handled by [`provision_world`].
     let admin_token = bootstrap_admin(server)?;
 
-    // Repository coordinates come from the shared runner config.
+    // Repository coordinates and role bindings come from the shared runner config.
     let config = runner_config();
-    let owner = config.repository.owner.clone();
-    let name = config.repository.name.clone();
-    let default_branch = config.repository.default_branch.clone();
+    provision_world(
+        server.base_url(),
+        &admin_token,
+        &config.repository.owner,
+        &config.repository.name,
+        &config.role_bindings,
+        &config.repository.default_branch,
+    )
+    .await
+}
 
-    // 2. Org (owner). Idempotent: a 422 "already exists" is tolerated.
-    rest::ensure_org(&client, &base, &admin_token, &owner).await?;
-    let owners_team = rest::owners_team_id(&client, &base, &admin_token, &owner).await?;
+/// Provisions the org, per-role identity, repository, labels, and CI workflow
+/// against an **already-running** Forgejo, given an existing admin token.
+///
+/// This is the server-agnostic REST/Forge portion of [`provision`]: it does not
+/// touch [`ForgejoServer`] at all, so an operator binary can drive it against a
+/// real instance (the admin token comes from the operator's own
+/// `forgejo admin user generate-access-token`, not the throwaway CLI bootstrap).
+/// `provision(&server)` is the throwaway-server wrapper that bootstraps an admin
+/// then calls this; both share one code path so behaviour stays identical.
+///
+/// `roles` is the role-binding list (from `runner_config()` or operator config),
+/// so role logins stay derived from config and are never hardcoded. Idempotent
+/// where Forgejo allows it (re-creating an org/user/label/repo is tolerated), so
+/// a retried provision against the same instance does not wedge.
+pub async fn provision_world(
+    base_url: &str,
+    admin_token: &str,
+    owner: &str,
+    name: &str,
+    roles: &[RoleBinding],
+    default_branch: &str,
+) -> Result<Provisioned> {
+    let client = rest::http_client()?;
 
-    // 3. Per-role identity: user + Owners membership + basic-auth token.
+    // 1. Org (owner). Idempotent: a 422 "already exists" is tolerated.
+    rest::ensure_org(&client, base_url, admin_token, owner).await?;
+    let owners_team = rest::owners_team_id(&client, base_url, admin_token, owner).await?;
+
+    // 2. Per-role identity: user + Owners membership + basic-auth token.
     //
     // The Forgejo **login** must equal both the user's display handle (the
     // web-UI CI-read login form authenticates by handle) **and** the bound
@@ -253,8 +284,8 @@ pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
     // login, and a mismatch 500s with `UpdateAssignees: user does not exist`).
     // `runner_config()` therefore binds each role to a user whose `id` and
     // `handle` are the same string, so this single login satisfies both.
-    let mut roles = BTreeMap::new();
-    for binding in &config.role_bindings {
+    let mut role_map = BTreeMap::new();
+    for binding in roles {
         debug_assert_eq!(
             binding.user.id.as_str(),
             binding.user.handle,
@@ -262,10 +293,10 @@ pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
         );
         let login = binding.user.handle.clone();
         let email = format!("{login}@example.invalid");
-        rest::create_user(&client, &base, &admin_token, &login, &email).await?;
-        rest::add_team_member(&client, &base, &admin_token, owners_team, &login).await?;
-        let token = rest::mint_user_token(&client, &base, &login).await?;
-        roles.insert(
+        rest::create_user(&client, base_url, admin_token, &login, &email).await?;
+        rest::add_team_member(&client, base_url, admin_token, owners_team, &login).await?;
+        let token = rest::mint_user_token(&client, base_url, &login).await?;
+        role_map.insert(
             binding.role.clone(),
             RoleIdentity {
                 user: login,
@@ -276,34 +307,34 @@ pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
         );
     }
 
-    // 4. Repository (auto_init so `main` exists for PRs). Created by the admin
+    // 3. Repository (auto_init so `main` exists for PRs). Created by the admin
     //    under the org; idempotent on re-create.
-    rest::ensure_repo(&client, &base, &admin_token, &owner, &name, &default_branch).await?;
+    rest::ensure_repo(&client, base_url, admin_token, owner, name, default_branch).await?;
 
-    // 5. Labels through the real async backend (mirrors `upsert_labels`).
-    let repository = upsert_labels(&base, &admin_token, &owner, &name).await?;
+    // 4. Labels through the real async backend (mirrors `upsert_labels`).
+    let repository = upsert_labels(base_url, admin_token, owner, name).await?;
 
-    // 6. CI workflow file + enable Actions.
+    // 5. CI workflow file + enable Actions.
     rest::commit_file(
         &client,
-        &base,
-        &admin_token,
-        &owner,
-        &name,
-        WORKFLOW_PATH,
-        CI_WORKFLOW,
-        "add CI workflow (runs-on: host)",
-        &default_branch,
-    )
-    .await?;
-    rest::enable_actions(&client, &base, &admin_token, &owner, &name).await?;
-
-    Ok(Provisioned {
+        base_url,
         admin_token,
         owner,
         name,
+        WORKFLOW_PATH,
+        CI_WORKFLOW,
+        "add CI workflow (runs-on: host)",
+        default_branch,
+    )
+    .await?;
+    rest::enable_actions(&client, base_url, admin_token, owner, name).await?;
+
+    Ok(Provisioned {
+        admin_token: admin_token.to_string(),
+        owner: owner.to_string(),
+        name: name.to_string(),
         repository,
-        roles,
+        roles: role_map,
     })
 }
 
