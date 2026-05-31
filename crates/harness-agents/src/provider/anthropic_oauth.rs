@@ -30,6 +30,18 @@ const TOKEN_URL_ENV: &str = "HARNESS_AGENTS_ANTHROPIC_TOKEN_URL";
 
 /// Default Anthropic model targeted by the OAuth mode (overridable).
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
+/// Identity line Anthropic's Claude **subscription OAuth** path requires as the
+/// first `system` block. Any request whose first system block is not exactly
+/// this line is rejected with a generic `429 rate_limit_error`
+/// (`{"message":"Error"}`), independent of `anthropic-beta` flags. The pinned
+/// SDK sends `system` as a single string and never injects this itself, so the
+/// decision adapter sends this identity as the system prompt and folds the role
+/// prompt into the user turn. Verified live against `claude-opus-4-8`:
+/// identity-only system → 200; role-only, arbitrary, or
+/// identity-prefixed-then-appended single string → 429; identity as a separate
+/// first array block → 200 (but the SDK cannot send an array `system`).
+pub const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude.";
 /// Provider key under which the Anthropic credential lives in the auth file.
 const PROVIDER_KEY: &str = "anthropic";
 /// Compiled-in Anthropic OAuth refresh endpoint + public client id (matching the

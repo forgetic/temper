@@ -5,8 +5,9 @@
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
 > swapped to real**. With `--agents real` (Phase B2) every role also runs a real
-> LLM agent (ChatGPT OAuth by default), so **agents are swapped to real too** —
-> only webhook triggering remains on that guide's "swap to real" list. The design
+> LLM agent (ChatGPT OAuth by default), so **agents are swapped to real too**. The
+> production reference-delivery demo now carries the ADR 0009 webhook trigger;
+> this gated test remains poll-driven unless extended separately. The design
 > rationale
 > (topology, real CI, per-token identity) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and

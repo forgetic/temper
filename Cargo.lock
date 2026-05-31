@@ -2835,8 +2835,10 @@ dependencies = [
  "harness-forge-forgejo",
  "harness-runner",
  "harness-workflow",
+ "hmac 0.12.1",
  "reqwest",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
 ]
 

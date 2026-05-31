@@ -25,6 +25,7 @@
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
 #       pkill -f harness-worker
+#       pkill -f harness-trigger-forgejo
 #       rm -rf examples/reference-delivery/run
 #
 # POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
@@ -47,7 +48,11 @@ STOP_FILE="$RUN_DIR/stop"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 WORKERS_PID_FILE="$RUN_DIR/workers.pids"
+TRIGGER_PID_FILE="$RUN_DIR/trigger.pid"
+WAKE_DIR="$RUN_DIR/wake"
 ROLES_ENV="$SECRETS_DIR/roles.env"
+WEBHOOK_SECRET_FILE="$SECRETS_DIR/webhook-secret"
+WAKE_SECRET_FILE="$SECRETS_DIR/wake-secret"
 
 # Pinned versions for the bundled throwaway server/runner used by this example.
 FORGEJO_VERSION=7.0.12
@@ -111,11 +116,12 @@ cleanup() {
     [ -d "$RUN_DIR" ] && : >"$STOP_FILE" 2>/dev/null || true
     sleep 1
     stop_pid_file "$WORKERS_PID_FILE"
+    stop_pid_file "$TRIGGER_PID_FILE"
     stop_pid_file "$RUNNER_PID_FILE"
     stop_pid_file "$SERVER_PID_FILE"
     # Drop the throwaway server/runner data + sentinel so a re-run starts fresh;
     # keep logs/ for inspection.
-    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" 2>/dev/null || true
+    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$WAKE_DIR" "$STOP_FILE" 2>/dev/null || true
     log 'teardown complete'
 }
 
@@ -129,10 +135,11 @@ cmd_stop() {
 # Config knobs whose pre-existing environment value should win over the file
 # (precedence: CLI/env > config/harness.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
-CONFIG_KNOBS="OWNER NAME BASE_URL POLL_MS RUN_SECS HARNESS_AGENTS_AUTH \
-HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL HARNESS_AGENTS_AUTH_FILE \
-HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY HARNESS_FORGEJO_RUNNER_BINARY \
-HARNESS_WORKER_BIN HARNESS_PROVISION_BIN HARNESS_BUILD_PACKAGE"
+CONFIG_KNOBS="OWNER NAME BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
+HARNESS_AGENTS_AUTH HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL \
+HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
+HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
+HARNESS_TRIGGER_BIN HARNESS_BUILD_PACKAGE"
 
 load_config() {
     [ -f "$CONFIG_DIR/harness.env" ] || die "missing $CONFIG_DIR/harness.env"
@@ -158,6 +165,9 @@ load_config() {
     BASE_URL=${BASE_URL:-http://127.0.0.1:3000}
     POLL_MS=${POLL_MS:-2000}
     RUN_SECS=${RUN_SECS:-600}
+    WEBHOOKS=${WEBHOOKS:-1}
+    TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
+    WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:38080/forgejo/webhook}
     HARNESS_AGENTS_AUTH=${HARNESS_AGENTS_AUTH:-chatgpt-oauth}
     HARNESS_AGENTS_CODEX_MODEL=${HARNESS_AGENTS_CODEX_MODEL:-}
     HARNESS_AGENTS_ANTHROPIC_MODEL=${HARNESS_AGENTS_ANTHROPIC_MODEL:-}
@@ -167,6 +177,7 @@ load_config() {
     HARNESS_FORGEJO_RUNNER_BINARY=${HARNESS_FORGEJO_RUNNER_BINARY:-}
     HARNESS_WORKER_BIN=${HARNESS_WORKER_BIN:-}
     HARNESS_PROVISION_BIN=${HARNESS_PROVISION_BIN:-}
+    HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
     HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
@@ -247,7 +258,8 @@ check_auth() {
 resolve_binaries() {
     WORKER_BIN=${HARNESS_WORKER_BIN:-$WORKSPACE_ROOT/target/release/harness-worker}
     PROVISION_BIN=${HARNESS_PROVISION_BIN:-$WORKSPACE_ROOT/target/release/harness-provision-forgejo}
-    if [ ! -x "$WORKER_BIN" ] || [ ! -x "$PROVISION_BIN" ]; then
+    TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-$WORKSPACE_ROOT/target/release/harness-trigger-forgejo}
+    if [ ! -x "$WORKER_BIN" ] || [ ! -x "$PROVISION_BIN" ] || [ ! -x "$TRIGGER_BIN" ]; then
         if [ "${HARNESS_SKIP_BUILD:-0}" = "1" ]; then
             die "production binaries missing under target/release and HARNESS_SKIP_BUILD=1"
         fi
@@ -257,6 +269,7 @@ resolve_binaries() {
     fi
     [ -x "$WORKER_BIN" ] || die "worker binary not found: $WORKER_BIN"
     [ -x "$PROVISION_BIN" ] || die "provision binary not found: $PROVISION_BIN"
+    [ -x "$TRIGGER_BIN" ] || die "trigger binary not found: $TRIGGER_BIN"
 
     # Pinned Forgejo + runner: env override, else the cached pinned path.
     FORGEJO_BIN=${HARNESS_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
@@ -345,6 +358,18 @@ boot_server() {
     log "Forgejo ready (pid $SERVER_PID)"
 }
 
+ensure_secret_file() {
+    _file=$1
+    [ -f "$_file" ] && return 0
+    umask 077
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32 >"$_file"
+    else
+        dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' >"$_file"
+        printf '\n' >>"$_file"
+    fi
+}
+
 boot_runner() {
     log 'registering host-mode forgejo-runner ...'
     mkdir -p "$RUNNER_DIR"
@@ -362,6 +387,22 @@ boot_runner() {
     log "runner daemon running (pid $RUNNER_PID)"
 }
 
+boot_trigger() {
+    [ "$WEBHOOKS" = "1" ] || return 0
+    log "starting webhook trigger at $TRIGGER_BIND ..."
+    ensure_secret_file "$WEBHOOK_SECRET_FILE"
+    ensure_secret_file "$WAKE_SECRET_FILE"
+    mkdir -p "$WAKE_DIR"
+    "$TRIGGER_BIN" --bind "$TRIGGER_BIND" \
+        --webhook-secret-file "$WEBHOOK_SECRET_FILE" \
+        --wake-secret-file "$WAKE_SECRET_FILE" \
+        --wake-dir "$WAKE_DIR" \
+        >"$LOG_DIR/trigger.log" 2>&1 &
+    TRIGGER_PID=$!
+    echo "$TRIGGER_PID" >"$TRIGGER_PID_FILE"
+    log "trigger running (pid $TRIGGER_PID; logs/trigger.log)"
+}
+
 # --- Provision + seed ---------------------------------------------------------
 
 bootstrap_and_provision() {
@@ -376,8 +417,16 @@ bootstrap_and_provision() {
         --scopes all --raw | tr -d '[:space:]')
     [ -n "$ADMIN_TOKEN" ] || die 'failed to mint an admin access token'
 
+    _webhook_args=
+    if [ "$WEBHOOKS" = "1" ]; then
+        _webhook_args="--webhook-url $WEBHOOK_URL --webhook-secret-file $WEBHOOK_SECRET_FILE"
+    fi
+    # _webhook_args intentionally word-split: POSIX sh has no arrays and the
+    # example paths above are controlled by this script/config.
+    # shellcheck disable=SC2086
     _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
-        --base-url "$BASE_URL" --owner "$OWNER" --name "$NAME" --out "$ROLES_ENV") \
+        --base-url "$BASE_URL" --owner "$OWNER" --name "$NAME" --out "$ROLES_ENV" \
+        $_webhook_args) \
         || die 'provisioning failed'
     log "$_status"
 
@@ -402,10 +451,15 @@ launch_role_worker() {
     eval "_password=\${HARNESS_FORGEJO_PASSWORD_${_key}:-}"
     [ -n "$_token" ] || die "no token for role '$_role' in $ROLES_ENV"
 
+    _wake_args=
+    if [ "$WEBHOOKS" = "1" ]; then
+        _wake_args="--wake-socket $WAKE_DIR/$_role.sock --wake-secret-file $WAKE_SECRET_FILE"
+    fi
+
     # Per-role secrets are literal env-assignment prefixes (never on argv). The
     # auth-mode env (DeepSeek key path) is exported globally by check_auth.
-    # CODEX_MODEL_ARG / AUTH_FILE_ARG intentionally word-split (POSIX has no
-    # arrays); they are empty unless configured.
+    # CODEX_MODEL_ARG / AUTH_FILE_ARG / _wake_args intentionally word-split
+    # (POSIX has no arrays); they are empty unless configured.
     # shellcheck disable=SC2086
     HARNESS_FORGEJO_TOKEN="$_token" \
     HARNESS_FORGEJO_USERNAME="$_user" \
@@ -415,6 +469,7 @@ launch_role_worker() {
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+        $_wake_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
     echo "$!" >>"$WORKERS_PID_FILE"
     log "  role:$_role -> pid $! (logs/$_role.log)"
@@ -434,10 +489,16 @@ launch_workers() {
     done
 
     # One mechanical reconciler (controller plane; admin token, no agent).
+    _wake_args=
+    if [ "$WEBHOOKS" = "1" ]; then
+        _wake_args="--wake-socket $WAKE_DIR/mechanical.sock --wake-secret-file $WAKE_SECRET_FILE"
+    fi
+    # shellcheck disable=SC2086
     HARNESS_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$OWNER/$NAME" \
         --kind mechanical \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+        $_wake_args \
         >"$LOG_DIR/mechanical.log" 2>&1 &
     echo "$!" >>"$WORKERS_PID_FILE"
     log "  mechanical -> pid $! (logs/mechanical.log)"
@@ -491,6 +552,7 @@ cmd_start() {
 
     boot_server
     boot_runner
+    boot_trigger
     bootstrap_and_provision
     launch_workers
     monitor

@@ -60,6 +60,7 @@ pub mod driver;
 pub mod scan;
 pub mod signal;
 pub mod stage;
+pub mod trigger;
 pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
@@ -72,4 +73,5 @@ pub use stage::{
     InProcessWorkerFactory, MultiProcessStage, Scenario, ScenarioError, ScenarioFuture,
     ScenarioStep, Stage, StageError, WorkerProcess, DEFAULT_SCENARIO_BUDGET,
 };
+pub use trigger::{broad_targets, ChangeHint, ChangeKind, TriggerScheduler, WakeTarget};
 pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};

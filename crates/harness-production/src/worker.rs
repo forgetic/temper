@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration as StdDuration, Instant};
 
 use harness_forge::{Forge, ForgeError, RepositoryId, RepositoryPath};
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -11,6 +11,7 @@ use harness_runner::{MechanicalWorker, RoleWorker, RunReport, WorkerRunReport};
 use harness_workflow::{InMemoryJournal, LeasePolicy, RoleId};
 
 use crate::forgejo_prep::ForgejoLlmPrep;
+use crate::wake::{WakeConfig, WakeError, WakeListener};
 use crate::worker_args::{AuthKind, ForgejoArgs, WorkerArgs, WorkerKind};
 use crate::{runner_config, workflow};
 
@@ -163,13 +164,12 @@ async fn drive_async<W: harness_runner::Worker>(
     args: &WorkerArgs,
     worker: &W,
 ) -> Result<RunReport, RunError> {
-    use std::time::Duration as StdDuration;
-
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
     let interval = args
         .poll_interval
         .to_std()
         .unwrap_or_else(|_| StdDuration::from_millis(1_000));
+    let wake = build_wake_listener(args)?;
     let mut consecutive_failures = 0u32;
     let mut report = RunReport {
         ticks: 0,
@@ -205,10 +205,58 @@ async fn drive_async<W: harness_runner::Worker>(
         if stop.should_stop() {
             break;
         }
-        tokio::time::sleep(interval).await;
+        wait_for_next_tick(&stop, interval, wake.as_ref()).await?;
     }
 
     Ok(report)
+}
+
+fn build_wake_listener(args: &WorkerArgs) -> Result<Option<WakeListener>, RunError> {
+    let Some(socket) = args.wake_socket.clone() else {
+        return Ok(None);
+    };
+    let config = WakeConfig::from_files(socket, args.wake_secret_file.clone())
+        .map_err(|error| RunError::Backend(error.to_string()))?;
+    WakeListener::bind(config)
+        .map(Some)
+        .map_err(|error| RunError::Backend(error.to_string()))
+}
+
+async fn wait_for_next_tick(
+    stop: &StopSignal,
+    interval: StdDuration,
+    wake: Option<&WakeListener>,
+) -> Result<(), RunError> {
+    let deadline = tokio::time::sleep(interval);
+    tokio::pin!(deadline);
+    loop {
+        if stop.should_stop() {
+            return Ok(());
+        }
+        let stop_check = tokio::time::sleep(StdDuration::from_millis(250));
+        tokio::pin!(stop_check);
+        match wake {
+            Some(listener) => {
+                tokio::select! {
+                    _ = &mut deadline => return Ok(()),
+                    _ = &mut stop_check => {},
+                    received = listener.recv() => match received {
+                        Ok(()) => return Ok(()),
+                        Err(WakeError::Unauthorized) => {
+                            eprintln!("harness-worker: ignored unauthorized wake message");
+                        }
+                        Err(error) => return Err(RunError::Backend(error.to_string())),
+                    },
+                }
+            }
+            None => {
+                tokio::select! {
+                    _ = &mut deadline => return Ok(()),
+                    _ = &mut stop_check => {},
+                }
+            }
+        }
+    }
 }
 
 struct StopSignal {

@@ -63,8 +63,21 @@ pub async fn run_decision<D: DeserializeOwned>(
 ) -> Result<D, DecisionError> {
     let provider = provider_config.build_provider()?;
 
+    // Anthropic's Claude subscription OAuth path rejects any request whose first
+    // `system` block is not exactly the Claude Code identity (HTTP 429
+    // rate_limit_error). The SDK sends `system` as a single string, so for that
+    // mode we send the identity as the system prompt and fold the role prompt
+    // into the user turn; every other mode keeps the role prompt as `system`.
+    let (effective_system, effective_user) = match provider_config.required_system_identity() {
+        Some(identity) => (
+            identity.to_string(),
+            format!("{system_prompt}\n\n{user_context}"),
+        ),
+        None => (system_prompt.to_string(), user_context.to_string()),
+    };
+
     let mut config = AgentConfig {
-        system_prompt: Some(system_prompt.to_string()),
+        system_prompt: Some(effective_system),
         max_tool_iterations: MAX_TOOL_ITERATIONS,
         ..AgentConfig::default()
     };
@@ -87,7 +100,7 @@ pub async fn run_decision<D: DeserializeOwned>(
     let mut agent = Agent::new(Arc::clone(&provider), tools, config);
 
     let assistant = agent
-        .run(user_context.to_string(), |_event| {})
+        .run(effective_user, |_event| {})
         .await
         .map_err(|error| DecisionError::Run(error.to_string()))?;
 

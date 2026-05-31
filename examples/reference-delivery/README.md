@@ -6,12 +6,18 @@ per workflow role, all coordinating through the Forge to drive the bundled
 reference-delivery workflow from an intake issue to a merged, reconciled PR.
 
 > **Status:** this example is wired to production-owned binary names
-> (`harness-worker` and `harness-provision-forgejo`) from the
-> `harness-production` crate instead of the `harness-testing` binaries. The
-> binaries now exist, but this shell launcher still needs live revalidation; see
+> (`harness-worker`, `harness-provision-forgejo`, and
+> `harness-trigger-forgejo`) from the `harness-production` crate instead of the
+> `harness-testing` binaries. It has
+> been **revalidated live end-to-end** (the happy path converged to a merged,
+> reconciled PR against the bundled Forgejo + real CI, driven by real LLM agents
+> on the Anthropic OAuth `claude-opus-4-8` auth mode). Two bugs surfaced and
+> were fixed during that run — the Anthropic OAuth Claude Code system identity
+> (agent lesson 0012) and the provisioner's CI workflow YAML losing its
+> indentation to `\`-continued string literals (agent lesson 0013). See
 > [`plans/production-binaries/`](../../plans/production-binaries/README.md).
-> The topology was previously validated end-to-end by the gated Forgejo
-> multi-process test and the earlier testing-binary launcher.
+> The topology was also previously validated by the gated Forgejo multi-process
+> test and the earlier testing-binary launcher.
 
 ## Honest framing — read this first
 
@@ -37,10 +43,11 @@ end-to-end rehearsal.
 ## Prerequisites
 
 - The production workspace binaries built: `cargo build --release -p
-  harness-production` (provides `harness-worker` and
-  `harness-provision-forgejo`). `run.sh` builds them on first run unless
-  `HARNESS_SKIP_BUILD=1`. Override paths with `HARNESS_WORKER_BIN` /
-  `HARNESS_PROVISION_BIN` if needed.
+  harness-production` (provides `harness-worker`,
+  `harness-provision-forgejo`, and `harness-trigger-forgejo`). `run.sh` builds
+  them on first run unless `HARNESS_SKIP_BUILD=1`. Override paths with
+  `HARNESS_WORKER_BIN` / `HARNESS_PROVISION_BIN` / `HARNESS_TRIGGER_BIN` if
+  needed.
 - The two pinned binaries: Forgejo `7.0.12` and `forgejo-runner` `3.5.1`. Let
   the first run download + checksum them into `.cache/forgejo/`, or pre-stage
   them and set `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY` in
@@ -105,10 +112,11 @@ logs live); per-process logs land under `logs/`.
 
 ## What it does
 
-Boots Forgejo + a host-mode `forgejo-runner`, provisions an org/repo with a
-per-role user + token (and seeds one intake issue), then launches one
-`harness-worker` per role-with-an-agent plus one mechanical reconciler, all using
-Forgejo, real LLM agents, and wall-clock polling.
+Boots Forgejo + a host-mode `forgejo-runner`, starts the local webhook trigger,
+provisions an org/repo with a per-role user + token (and seeds one intake issue),
+then launches one `harness-worker` per role-with-an-agent plus one mechanical
+reconciler. Workers still use wall-clock polling as the liveness backstop;
+webhooks only wake them early.
 
 The seeded intake issue then flows through the reference-delivery workflow, each
 step driven by the role worker whose LLM **decides** and then mutates workflow
@@ -147,8 +155,9 @@ the run/data dirs.
 Change `BASE_URL` to your instance, supply real per-role tokens instead of the
 generated ones, and skip the bundled server/runner + provisioning steps. Replace
 `config/ci.yml` with your real CI and pair the engineer with a real coding agent.
-The one remaining "swap to real" item is **webhook triggering** (an
-ADR 0009 `ChangeHint` accelerator alongside the level-triggered `PollLoop`).
-This is the same swap-to-real path documented in
+The demo now includes the ADR 0009 **webhook triggering** accelerator for the
+local topology. For a real Forgejo, expose `WEBHOOK_URL` over HTTPS to the Forgejo
+server and keep the worker wake sockets host-local. This is the same
+swap-to-real path documented in
 [`docs/how-to/run-forgejo-multiprocess-e2e.md`](../../docs/how-to/run-forgejo-multiprocess-e2e.md)
 and [`docs/explanation/forgejo-e2e-topology.md`](../../docs/explanation/forgejo-e2e-topology.md).

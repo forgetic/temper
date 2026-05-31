@@ -11,10 +11,10 @@ This page is a factual map of the repository. It complements the top-level READM
 | `crates/harness-forge-filesystem/` | Local filesystem reference backend used for development, fixtures, and process-split tests. It serializes mutations with a store-level advisory lock. |
 | `crates/harness-forge-forgejo/` | Forgejo provider backend. It implements the full `Forge` trait through Forgejo HTTP APIs, with mock HTTP contract tests by default and optional live smoke tests. |
 | `crates/harness-workflow/` | Workflow/orchestration layer: typed specs, validation, artifact classification, relation handling, compilation, planning, execution, leases, journaling, reconciliation, and recovery application. |
-| `crates/harness-runner/` | Backend-agnostic runner primitives: queue scans, `Agent` and `RoleTools`, role and mechanical workers, CI test seam, poll loop, drivers, and scenario stages. |
+| `crates/harness-runner/` | Backend-agnostic runner primitives: queue scans, `Agent` and `RoleTools`, role and mechanical workers, CI test seam, poll loop, trigger hint/coalescing primitives, drivers, and scenario stages. |
 | `crates/harness-testing/` | Non-production testing support: deterministic fake agents, CI policies and sinks, fixtures, scenarios, the `harness-testing-worker` binary, and gated multi-process rehearsals. Production crates should not depend on it normally. |
 | `crates/harness-agents/` | Real in-process LLM role agents using `pi_agent_rust`. This is the only crate that depends on the LLM SDK; workflow state mutations still go through `RoleTools`. |
-| `crates/harness-production/` | Production-owned executable wiring: `harness-worker` for Forgejo role/mechanical workers with real agents, and `harness-provision-forgejo` for demo/dev Forgejo provisioning. It does not depend on `harness-testing`. |
+| `crates/harness-production/` | Production-owned executable wiring: `harness-worker` for Forgejo role/mechanical workers with real agents and optional wake sockets, `harness-provision-forgejo` for demo/dev Forgejo provisioning and webhook registration, and `harness-trigger-forgejo` for webhook-to-local-wake triggering. It does not depend on `harness-testing`. |
 
 ## Other top-level directories
 

@@ -7,6 +7,9 @@ pub mod forgejo_prep;
 pub mod forgejo_rest;
 pub mod provision;
 pub mod provision_args;
+pub mod trigger;
+pub mod trigger_args;
+pub mod wake;
 pub mod worker;
 pub mod worker_args;
 

@@ -14,7 +14,8 @@ pub const USAGE: &str = concat!(
     "--kind <role|mechanical> [--role <id> --user <handle>] ",
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] ",
-    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>]\n",
+    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
+    "[--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo token comes from HARNESS_FORGEJO_TOKEN; optional web UI credentials ",
     "come from HARNESS_FORGEJO_USERNAME/HARNESS_FORGEJO_PASSWORD"
 );
@@ -70,6 +71,8 @@ pub struct WorkerArgs {
     pub auth: AuthKind,
     pub codex_model: Option<String>,
     pub auth_file: Option<PathBuf>,
+    pub wake_socket: Option<PathBuf>,
+    pub wake_secret_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +127,8 @@ struct RawArgs {
     auth: Option<String>,
     codex_model: Option<String>,
     auth_file: Option<String>,
+    wake_socket: Option<String>,
+    wake_secret_file: Option<String>,
 }
 
 impl RawArgs {
@@ -148,6 +153,8 @@ impl RawArgs {
                 "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
                 "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
+                "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
+                "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -201,6 +208,8 @@ impl RawArgs {
             auth: parse_auth(self.auth.as_deref(), env)?,
             codex_model: non_empty(self.codex_model),
             auth_file: non_empty(self.auth_file).map(PathBuf::from),
+            wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
+            wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
         })
     }
 
@@ -347,6 +356,38 @@ mod tests {
         assert_eq!(args.owner, "acme");
         assert!(format!("{:?}", args.forgejo).contains("<redacted>"));
         assert!(!format!("{:?}", args.forgejo).contains("secret-token"));
+    }
+
+    #[test]
+    fn parses_optional_wake_socket() {
+        let outcome = parse_with_env(
+            [
+                "--backend",
+                "forgejo",
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--repo",
+                "acme/service",
+                "--kind",
+                "mechanical",
+                "--wake-socket",
+                "run/wake/mechanical.sock",
+                "--wake-secret-file",
+                "secrets/wake",
+            ]
+            .into_iter()
+            .map(String::from),
+            env,
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert_eq!(
+            args.wake_socket,
+            Some(PathBuf::from("run/wake/mechanical.sock"))
+        );
+        assert_eq!(args.wake_secret_file, Some(PathBuf::from("secrets/wake")));
     }
 
     #[test]

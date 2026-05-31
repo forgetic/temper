@@ -8,7 +8,8 @@ use crate::provision::{self, ProvisionError};
 pub const ADMIN_TOKEN_ENV: &str = "HARNESS_FORGEJO_ADMIN_TOKEN";
 
 pub const USAGE: &str = concat!(
-    "harness-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path>\n",
+    "harness-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path> ",
+    "[--webhook-url <url> --webhook-secret-file <path>]\n",
     "  the admin token comes from HARNESS_FORGEJO_ADMIN_TOKEN (required), never argv"
 );
 
@@ -25,6 +26,8 @@ pub struct ProvisionArgs {
     pub name: String,
     pub out: PathBuf,
     pub admin_token: String,
+    pub webhook_url: Option<String>,
+    pub webhook_secret_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for ProvisionArgs {
@@ -36,6 +39,8 @@ impl fmt::Debug for ProvisionArgs {
             .field("name", &self.name)
             .field("out", &self.out)
             .field("admin_token", &"<redacted>")
+            .field("webhook_url", &self.webhook_url)
+            .field("webhook_secret_file", &self.webhook_secret_file)
             .finish()
     }
 }
@@ -102,6 +107,8 @@ where
     let mut owner = None;
     let mut name = None;
     let mut out = None;
+    let mut webhook_url = None;
+    let mut webhook_secret_file = None;
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
@@ -110,6 +117,8 @@ where
             "--owner" => owner = Some(value_for(&flag, &mut iter)?),
             "--name" => name = Some(value_for(&flag, &mut iter)?),
             "--out" => out = Some(value_for(&flag, &mut iter)?),
+            "--webhook-url" => webhook_url = Some(value_for(&flag, &mut iter)?),
+            "--webhook-secret-file" => webhook_secret_file = Some(value_for(&flag, &mut iter)?),
             other => {
                 return Err(ArgsError::new(format!(
                     "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -130,6 +139,8 @@ where
         name: require(name, "--name")?,
         out: PathBuf::from(require(out, "--out")?),
         admin_token,
+        webhook_url,
+        webhook_secret_file: webhook_secret_file.map(PathBuf::from),
     }))
 }
 
@@ -143,6 +154,8 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         &args.admin_token,
         &args.owner,
         &args.name,
+        args.webhook_url.as_deref(),
+        args.webhook_secret_file.as_deref(),
     ))?;
     provision::write_secrets_file(&args.out, &provision::format_secrets_env(&provisioned))?;
     Ok(format!(

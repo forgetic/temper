@@ -270,6 +270,21 @@ impl ProviderConfig {
         }
     }
 
+    /// The mandatory first `system` block for this mode, if any.
+    ///
+    /// `Some` only for Anthropic OAuth, whose Claude subscription path rejects
+    /// any request whose first system block is not exactly the Claude Code
+    /// identity (HTTP 429). Because the SDK sends `system` as a single string,
+    /// the decision adapter sets this as the system prompt and folds the role
+    /// prompt into the user turn. All other modes return `None` and keep the
+    /// role prompt as the system prompt.
+    pub(crate) fn required_system_identity(&self) -> Option<&'static str> {
+        match &self.auth {
+            AuthMode::AnthropicOAuth { .. } => Some(anthropic_oauth::CLAUDE_CODE_SYSTEM_IDENTITY),
+            AuthMode::ApiKey { .. } | AuthMode::ChatGptOAuth { .. } => None,
+        }
+    }
+
     /// The request temperature for this mode. API-key (DeepSeek) pins `0.0` for
     /// deterministic decisions; Codex reasoning models and Anthropic OAuth leave
     /// temperature unset.
@@ -501,6 +516,23 @@ mod tests {
     fn chatgpt_oauth_applies_model_override() {
         let config = ProviderConfig::chatgpt_oauth(Some("gpt-5.9-codex".to_string()), None);
         assert_eq!(config.model_id(), "gpt-5.9-codex");
+    }
+
+    #[test]
+    fn anthropic_oauth_requires_claude_code_system_identity() {
+        let config = ProviderConfig::anthropic_oauth_from_env();
+        assert_eq!(
+            config.required_system_identity(),
+            Some("You are Claude Code, Anthropic's official CLI for Claude.")
+        );
+        // Other modes keep the role prompt as the system prompt.
+        let deepseek =
+            ProviderConfig::new("deepseek", "deepseek-chat", DEFAULT_BASE_URL, "sk-secret");
+        assert_eq!(deepseek.required_system_identity(), None);
+        assert_eq!(
+            ProviderConfig::chatgpt_oauth_from_env().required_system_identity(),
+            None
+        );
     }
 
     #[test]

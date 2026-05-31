@@ -21,21 +21,27 @@ configurable greeting so I can tell environments apart at a glance.\n\n\
 Acceptance: a `BANNER_GREETING` setting whose value is printed on startup, \
 defaulting to the current text when unset.";
 
-pub const CI_WORKFLOW: &str = "name: ci\n\
-on: [push]\n\
-jobs:\n\
-  build:\n\
-    runs-on: host\n\
-    steps:\n\
-      - name: gate on commit message marker\n\
-        run: |\n\
-          echo \"head commit message: ${MSG}\"\n\
-          case \"${MSG}\" in\n\
-            *'[ci-pass]'*) echo \"marker present; passing\" ;;\n\
-            *) echo \"marker absent; failing\"; exit 1 ;;\n\
-          esac\n\
-        env:\n\
-          MSG: ${{ github.event.head_commit.message }}\n";
+// NOTE: this MUST be a raw string. A normal string literal with `\<newline>`
+// continuations strips the leading whitespace of each continued source line,
+// which is exactly the YAML indentation — the committed workflow then lands
+// flush-left, is invalid, and Forgejo silently detects no workflow (no CI runs
+// ever fire). See agent lesson 0013.
+pub const CI_WORKFLOW: &str = r#"name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: gate on commit message marker
+        run: |
+          echo "head commit message: ${MSG}"
+          case "${MSG}" in
+            *'[ci-pass]'*) echo "marker present; passing" ;;
+            *) echo "marker absent; failing"; exit 1 ;;
+          esac
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+"#;
 
 #[derive(Clone)]
 pub struct RoleIdentity {
@@ -331,6 +337,8 @@ pub async fn provision_and_seed(
     admin_token: &str,
     owner: &str,
     name: &str,
+    webhook_url: Option<&str>,
+    webhook_secret_file: Option<&Path>,
 ) -> Result<(Provisioned, ItemNumber)> {
     let config = runner_config();
     let provisioned = provision_world(
@@ -342,6 +350,25 @@ pub async fn provision_and_seed(
         &config.repository.default_branch,
     )
     .await?;
+    if let Some(webhook_url) = webhook_url {
+        let Some(secret_file) = webhook_secret_file else {
+            return Err(ProvisionError::Shape {
+                what: "webhook secret".into(),
+                detail: "--webhook-url requires --webhook-secret-file".into(),
+            });
+        };
+        let secret = std::fs::read_to_string(secret_file)?.trim().to_string();
+        forgejo_rest::ensure_repo_webhook(
+            &forgejo_rest::http_client()?,
+            base_url,
+            admin_token,
+            owner,
+            name,
+            webhook_url,
+            &secret,
+        )
+        .await?;
+    }
     let issue = seed_intake_issue(base_url, admin_token, owner, name).await?;
     Ok((provisioned, issue))
 }
@@ -382,6 +409,29 @@ mod tests {
         assert!(CI_WORKFLOW.contains("runs-on: host"));
         assert!(CI_WORKFLOW.contains(crate::forgejo_prep::CI_PASS_MARKER));
         assert!(CI_WORKFLOW.contains("github.event.head_commit.message"));
+    }
+
+    #[test]
+    fn ci_workflow_yaml_is_indented_not_flush_left() {
+        // Regression for lesson 0013: a `\<newline>`-continued string literal
+        // strips the YAML indentation, producing a flush-left, invalid workflow
+        // that Forgejo silently fails to detect. The mapping keys MUST keep
+        // their leading spaces.
+        assert!(
+            CI_WORKFLOW.contains("\n  build:\n"),
+            "`build:` must be indented under `jobs:`"
+        );
+        assert!(
+            CI_WORKFLOW.contains("\n    runs-on: host\n"),
+            "`runs-on:` must be indented under `build:`"
+        );
+        assert!(
+            CI_WORKFLOW.contains("\n    steps:\n"),
+            "`steps:` must be indented under `build:`"
+        );
+        // No job-level key should appear flush-left (column 0).
+        assert!(!CI_WORKFLOW.contains("\nbuild:\n"));
+        assert!(!CI_WORKFLOW.contains("\nruns-on:"));
     }
 
     #[test]

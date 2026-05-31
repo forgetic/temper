@@ -106,10 +106,9 @@ is `#[ignore]`d and gated behind `HARNESS_FORGEJO_E2E=1`, so the default
 `cargo test` stays hermetic and deterministic. The in-process scenarios remain
 the default coverage for workflow logic; this covers the real-backend topology.
 
-## What remains on the "swap to real" list
+## Triggering status
 
-- **Agents** — still the deterministic behavior-only fakes. Real LLM agents
-  (Set B: `pi_agent_rust` + DeepSeek) plug into the same `Agent`/`RoleTools`
-  boundary.
-- **Webhook/`ChangeHint` triggering** — still `PollLoop`-only; the ADR 0009
-  accelerator is future latency work, not correctness.
+The gated Forgejo multi-process test remains poll-driven. The production
+reference-delivery demo now has the ADR 0009 webhook accelerator via
+`harness-trigger-forgejo` and worker wake sockets; polling stays the correctness
+backstop in both topologies.

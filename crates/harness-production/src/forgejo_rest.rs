@@ -224,6 +224,62 @@ pub async fn create_branch(
     accept_or_conflict(resp, "create branch").await
 }
 
+pub async fn ensure_repo_webhook(
+    client: &Client,
+    base: &str,
+    token: &str,
+    owner: &str,
+    name: &str,
+    url: &str,
+    secret: &str,
+) -> Result<()> {
+    let existing = client
+        .get(format!("{base}/api/v1/repos/{owner}/{name}/hooks"))
+        .header("Authorization", format!("token {token}"))
+        .send()
+        .await
+        .map_err(http_err)?;
+    let hooks: Value = json_ok(existing, "list repo hooks").await?;
+    let already_registered = hooks
+        .as_array()
+        .is_some_and(|hooks| hooks.iter().any(|hook| hook_config_url(hook) == Some(url)));
+    if already_registered {
+        return Ok(());
+    }
+
+    let resp = client
+        .post(format!("{base}/api/v1/repos/{owner}/{name}/hooks"))
+        .header("Authorization", format!("token {token}"))
+        .json(&json!({
+            "type": "gitea",
+            "active": true,
+            "events": [
+                "push",
+                "issues",
+                "issue_comment",
+                "pull_request",
+                "pull_request_review_approved",
+                "pull_request_review_rejected",
+                "pull_request_review_comment",
+            ],
+            "config": {
+                "url": url,
+                "content_type": "json",
+                "secret": secret,
+            },
+        }))
+        .send()
+        .await
+        .map_err(http_err)?;
+    json_ok(resp, "create repo webhook").await.map(|_| ())
+}
+
+fn hook_config_url(hook: &Value) -> Option<&str> {
+    hook.pointer("/config/url")
+        .and_then(Value::as_str)
+        .or_else(|| hook["url"].as_str())
+}
+
 pub async fn enable_actions(
     client: &Client,
     base: &str,

@@ -14,10 +14,15 @@ path = "src/bin/harness-worker.rs"
 name = "harness-provision-forgejo"
 path = "src/bin/harness-provision-forgejo.rs"
 
+[[bin]]
+name = "harness-trigger-forgejo"
+path = "src/bin/harness-trigger-forgejo.rs"
+
 [dependencies]
 async-trait.workspace = true
 base64 = "0.22"
 chrono.workspace = true
+hmac = "0.12"
 harness-agents = { path = "../harness-agents" }
 harness-forge = { path = "../harness-forge" }
 harness-forge-forgejo = { path = "../harness-forge-forgejo" }
@@ -25,7 +30,8 @@ harness-runner = { path = "../harness-runner" }
 harness-workflow = { path = "../harness-workflow" }
 reqwest = { workspace = true, features = ["json"] }
 serde_json.workspace = true
-tokio = { version = "1", features = ["rt", "time"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
 
 [lints]
 workspace = true
