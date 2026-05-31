@@ -2774,6 +2774,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2820,6 +2821,23 @@ dependencies = [
  "async-trait",
  "chrono",
  "harness-forge",
+]
+
+[[package]]
+name = "harness-production"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "harness-agents",
+ "harness-forge",
+ "harness-forge-forgejo",
+ "harness-runner",
+ "harness-workflow",
+ "reqwest",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

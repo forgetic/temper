@@ -330,6 +330,25 @@ fn parses_auth_codex_model_and_auth_file() {
 }
 
 #[test]
+fn parses_anthropic_oauth_auth() {
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--auth",
+        "anthropic-oauth",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(args.auth, AgentsAuthKind::AnthropicOAuth);
+}
+
+#[test]
 fn auth_env_bridges_config_file() {
     // The launch script sources a config file into HARNESS_AGENTS_AUTH; absent a
     // CLI flag, that env value selects the mode.
@@ -346,9 +365,9 @@ fn auth_env_bridges_config_file() {
             "--repo",
             "acme/service",
         ],
-        &[(AGENTS_AUTH_ENV, "deepseek")],
+        &[(AGENTS_AUTH_ENV, "anthropic-oauth")],
     );
-    assert_eq!(args.auth, AgentsAuthKind::DeepSeek);
+    assert_eq!(args.auth, AgentsAuthKind::AnthropicOAuth);
 }
 
 #[test]

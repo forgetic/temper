@@ -279,14 +279,16 @@ pub(super) fn real_registry_for(
 ///
 /// Maps the worker's [`AgentsAuthKind`] onto [`harness_agents::AuthChoice`] and
 /// forwards the `--codex-model` / `--auth-file` overrides (each `None` falls back
-/// to its env var then the built-in default inside `harness-agents`). The eager
-/// preflight inside `from_auth` surfaces a missing DeepSeek key or ChatGPT login
-/// as a [`RunError::Backend`] setup error, before any worker tick; the OAuth
-/// error points the operator at `pi /login openai-codex`.
+/// to its env var then the built-in default inside `harness-agents`). Anthropic
+/// model selection is env-only (`HARNESS_AGENTS_ANTHROPIC_MODEL`). The eager
+/// preflight inside `from_auth` surfaces a missing DeepSeek key, ChatGPT login,
+/// or Anthropic login as a [`RunError::Backend`] setup error, before any worker
+/// tick; OAuth errors point the operator at the matching `pi /login ...` command.
 fn provider_for(args: &WorkerArgs) -> Result<harness_agents::ProviderConfig, RunError> {
     let choice = match args.auth {
         AgentsAuthKind::ChatGptOAuth => harness_agents::AuthChoice::ChatGptOAuth,
         AgentsAuthKind::DeepSeek => harness_agents::AuthChoice::DeepSeek,
+        AgentsAuthKind::AnthropicOAuth => harness_agents::AuthChoice::AnthropicOAuth,
     };
     harness_agents::ProviderConfig::from_auth(
         choice,

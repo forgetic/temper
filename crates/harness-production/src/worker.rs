@@ -1,0 +1,235 @@
+//! Runtime construction for `harness-worker`.
+
+use std::error::Error;
+use std::fmt;
+use std::sync::Arc;
+use std::time::Instant;
+
+use harness_forge::{Forge, ForgeError, RepositoryId, RepositoryPath};
+use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use harness_runner::{MechanicalWorker, RoleWorker, RunReport, WorkerRunReport};
+use harness_workflow::{InMemoryJournal, LeasePolicy, RoleId};
+
+use crate::forgejo_prep::ForgejoLlmPrep;
+use crate::worker_args::{AuthKind, ForgejoArgs, WorkerArgs, WorkerKind};
+use crate::{runner_config, workflow};
+
+#[derive(Debug)]
+pub enum RunError {
+    Forge(ForgeError),
+    RepositoryMissing { owner: String, name: String },
+    UnknownRole { role: String },
+    Drive(Box<dyn Error + Send + Sync + 'static>),
+    Backend(String),
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunError::Forge(error) => write!(formatter, "forge operation failed: {error}"),
+            RunError::RepositoryMissing { owner, name } => {
+                write!(formatter, "repository {owner}/{name} not found")
+            }
+            RunError::UnknownRole { role } => {
+                write!(formatter, "no agent registered for role '{role}'")
+            }
+            RunError::Drive(error) => write!(formatter, "worker run failed: {error}"),
+            RunError::Backend(message) => write!(formatter, "backend setup failed: {message}"),
+        }
+    }
+}
+
+impl Error for RunError {}
+
+impl From<ForgeError> for RunError {
+    fn from(error: ForgeError) -> Self {
+        Self::Forge(error)
+    }
+}
+
+/// Runs the production worker to completion.
+pub fn run(args: &WorkerArgs) -> Result<RunReport, RunError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| RunError::Backend(format!("failed to start Tokio runtime: {error}")))?;
+    runtime.block_on(run_async(args))
+}
+
+async fn run_async(args: &WorkerArgs) -> Result<RunReport, RunError> {
+    let forge = build_forge(&args.forgejo);
+    match &args.kind {
+        WorkerKind::Role { role, user: _ } => run_role(args, &forge, role).await,
+        WorkerKind::Mechanical => run_mechanical(args, &forge).await,
+    }
+}
+
+fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
+    let mut config = ForgejoConfig::new(forgejo.base_url.clone(), forgejo.token.clone());
+    if let (Some(username), Some(password)) = (&forgejo.username, &forgejo.password) {
+        config = config.with_web_ui_credentials(username, password);
+    }
+    ForgejoForge::new(config)
+}
+
+async fn run_role(
+    args: &WorkerArgs,
+    forge: &ForgejoForge,
+    role: &str,
+) -> Result<RunReport, RunError> {
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let config = runner_config();
+    let role_id = RoleId::new(role);
+    let provider = provider_for(args)?;
+    let prep = Arc::new(ForgejoLlmPrep::new(
+        args.forgejo.base_url.clone(),
+        args.forgejo.token.clone(),
+        args.owner.clone(),
+        args.name.clone(),
+    )) as Arc<dyn harness_agents::EngineerPrep<dyn Forge>>;
+    let registry = harness_agents::real_registry_with(
+        provider,
+        harness_agents::RealRegistryConfig {
+            engineer_prep: prep,
+            ..Default::default()
+        },
+    );
+    let agent = registry
+        .get(&role_id)
+        .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
+        .clone();
+    let repo = resolve_repository(forge, &args.owner, &args.name).await?;
+    let worker = RoleWorker::new(
+        &workflow,
+        &compiled,
+        forge as &dyn Forge,
+        &repo,
+        role_id.clone(),
+        agent,
+        config.execution_context(&role_id),
+    );
+    drive_async(args, &worker).await
+}
+
+async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {
+    let workflow = workflow();
+    let config = runner_config();
+    let repo = resolve_repository(forge, &args.owner, &args.name).await?;
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(
+        &workflow,
+        forge as &dyn Forge,
+        &repo,
+        &journal,
+        LeasePolicy::new(config.lease_ttl),
+    );
+    drive_async(args, &worker).await
+}
+
+fn provider_for(args: &WorkerArgs) -> Result<harness_agents::ProviderConfig, RunError> {
+    let choice = match args.auth {
+        AuthKind::DeepSeek => harness_agents::AuthChoice::DeepSeek,
+        AuthKind::ChatGptOAuth => harness_agents::AuthChoice::ChatGptOAuth,
+        AuthKind::AnthropicOAuth => harness_agents::AuthChoice::AnthropicOAuth,
+    };
+    harness_agents::ProviderConfig::from_auth(
+        choice,
+        args.codex_model.clone(),
+        args.auth_file.clone(),
+    )
+    .map_err(|error| RunError::Backend(error.to_string()))
+}
+
+async fn resolve_repository<F: Forge + ?Sized>(
+    forge: &F,
+    owner: &str,
+    name: &str,
+) -> Result<RepositoryId, RunError> {
+    let path = RepositoryPath::new(owner, name);
+    forge
+        .get_repository_by_path(&path)
+        .await?
+        .map(|repo| repo.id)
+        .ok_or_else(|| RunError::RepositoryMissing {
+            owner: owner.into(),
+            name: name.into(),
+        })
+}
+
+const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
+
+async fn drive_async<W: harness_runner::Worker>(
+    args: &WorkerArgs,
+    worker: &W,
+) -> Result<RunReport, RunError> {
+    use std::time::Duration as StdDuration;
+
+    let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
+    let interval = args
+        .poll_interval
+        .to_std()
+        .unwrap_or_else(|_| StdDuration::from_millis(1_000));
+    let mut consecutive_failures = 0u32;
+    let mut report = RunReport {
+        ticks: 0,
+        workers: vec![WorkerRunReport {
+            name: worker.name().to_string(),
+            ticks: 0,
+            actions: 0,
+        }],
+    };
+
+    while !stop.should_stop() {
+        match worker.tick(chrono::Utc::now()).await {
+            Ok(progress) => {
+                consecutive_failures = 0;
+                report.ticks = report.ticks.saturating_add(1);
+                report.workers[0].ticks = report.workers[0].ticks.saturating_add(1);
+                report.workers[0].actions = report.workers[0]
+                    .actions
+                    .saturating_add(u64::from(progress.actions));
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                eprintln!(
+                    "harness-worker: worker '{}' tick failed \
+                     ({consecutive_failures}/{MAX_CONSECUTIVE_TICK_FAILURES}), retrying: {error}",
+                    worker.name()
+                );
+                if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES {
+                    return Err(RunError::Drive(Box::new(error)));
+                }
+            }
+        }
+        if stop.should_stop() {
+            break;
+        }
+        tokio::time::sleep(interval).await;
+    }
+
+    Ok(report)
+}
+
+struct StopSignal {
+    stop_file: Option<std::path::PathBuf>,
+    started: Instant,
+    run_secs: Option<u64>,
+}
+
+impl StopSignal {
+    fn new(stop_file: Option<std::path::PathBuf>, run_secs: Option<u64>) -> Self {
+        Self {
+            stop_file,
+            started: Instant::now(),
+            run_secs,
+        }
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop_file.as_ref().is_some_and(|path| path.exists())
+            || self
+                .run_secs
+                .is_some_and(|seconds| self.started.elapsed().as_secs() >= seconds)
+    }
+}

@@ -112,8 +112,8 @@ pub struct RoleBehavior {
 ///
 /// `fake` (the default everywhere) uses the deterministic behavior-only fakes, so
 /// the filesystem topology and the no-LLM Forgejo e2e are unchanged. `real` uses
-/// the in-process DeepSeek-backed LLM agents from `harness-agents`; it reads the
-/// API key at runtime (file/env) and is only exercised by the double-gated
+/// the in-process LLM agents from `harness-agents`; its selected auth mode
+/// resolves credentials at runtime and is only exercised by the double-gated
 /// real-agent e2e. The architect/reviewer behavior flags still select variants in
 /// either mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
@@ -121,7 +121,7 @@ pub enum AgentsKind {
     /// Deterministic fake agents (the default).
     #[default]
     Fake,
-    /// Real, in-process LLM agents (DeepSeek via `harness-agents`).
+    /// Real, in-process LLM agents (via `harness-agents`).
     Real,
 }
 
@@ -140,8 +140,9 @@ impl AgentsKind {
 ///
 /// This is a **test/dev surface**, so it defaults to [`AgentsAuthKind::ChatGptOAuth`]
 /// per the cost policy (a flat ChatGPT subscription instead of pay-per-token
-/// DeepSeek). It maps onto [`harness_agents::AuthChoice`] when the registry is
-/// built; it is irrelevant under `--agents fake` (no provider is constructed).
+/// DeepSeek). Anthropic OAuth is opt-in. It maps onto
+/// [`harness_agents::AuthChoice`] when the registry is built; it is irrelevant
+/// under `--agents fake` (no provider is constructed).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum AgentsAuthKind {
     /// ChatGPT (OpenAI Codex) OAuth subscription (the test/dev default).
@@ -149,6 +150,8 @@ pub enum AgentsAuthKind {
     ChatGptOAuth,
     /// DeepSeek API key (pay-per-token fallback).
     DeepSeek,
+    /// Anthropic OAuth subscription (opt-in).
+    AnthropicOAuth,
 }
 
 impl AgentsAuthKind {
@@ -157,6 +160,7 @@ impl AgentsAuthKind {
         match self {
             AgentsAuthKind::ChatGptOAuth => "chatgpt-oauth",
             AgentsAuthKind::DeepSeek => "deepseek",
+            AgentsAuthKind::AnthropicOAuth => "anthropic-oauth",
         }
     }
 }
@@ -311,7 +315,8 @@ pub struct WorkerArgs {
     /// Which credential the real LLM agents authenticate with (`--agents real`).
     pub auth: AgentsAuthKind,
     /// Codex model id override for ChatGPT OAuth (`--codex-model`); `None` falls
-    /// back to `HARNESS_AGENTS_CODEX_MODEL` then the built-in default.
+    /// back to `HARNESS_AGENTS_CODEX_MODEL` then the built-in default. Anthropic
+    /// OAuth model selection is env-only (`HARNESS_AGENTS_ANTHROPIC_MODEL`).
     pub codex_model: Option<String>,
     /// Auth-file path override for ChatGPT OAuth (`--auth-file`); `None` falls
     /// back to `HARNESS_AGENTS_AUTH_FILE` then `~/.pi/agent/auth.json`.

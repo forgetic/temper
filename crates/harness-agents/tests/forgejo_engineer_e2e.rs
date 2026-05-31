@@ -1,5 +1,5 @@
-//! Phase B1 proof: a real DeepSeek-backed engineer drives its workflow action on
-//! a real Forgejo, mutating state only through `RoleTools`.
+//! Phase B1 proof: a real LLM-backed engineer drives its workflow action on a
+//! real Forgejo, mutating state only through `RoleTools`.
 //!
 //! This boots a throwaway Forgejo server + host-mode runner, provisions the org /
 //! repo / per-role users + tokens / labels / CI workflow (the same harness Phase
@@ -7,8 +7,8 @@
 //! in-process two-worker world:
 //!
 //! - a **fake** architect (triages `untriaged` → `code` + `ready`), and
-//! - the **real** [`LlmEngineer`] (decides via DeepSeek; acts through
-//!   [`RoleTools`]).
+//! - the **real** [`LlmEngineer`] (decides via the selected LLM auth mode; acts
+//!   through [`RoleTools`]).
 //!
 //! It ticks until the engineer has opened the implementation PR (parented to the
 //! triaged code issue) through the idempotent `open_pull_request` seam — the
@@ -32,9 +32,11 @@
 //!
 //! Per the cost policy this defaults to **ChatGPT OAuth** (the flat
 //! subscription), reading the shared `~/.pi/agent/auth.json` — **no DeepSeek
-//! tokens are spent**. Opt back to DeepSeek with `HARNESS_AGENTS_AUTH=deepseek`
-//! (then the key is read from `.cache/deepseek-api-key` or `HARNESS_DEEPSEEK_API_KEY*`).
-//! Either credential is never logged or committed.
+//! tokens are spent**. Opt into Anthropic OAuth with
+//! `HARNESS_AGENTS_AUTH=anthropic-oauth` (after `pi /login anthropic`) or opt back
+//! to DeepSeek with `HARNESS_AGENTS_AUTH=deepseek` (then the key is read from
+//! `.cache/deepseek-api-key` or `HARNESS_DEEPSEEK_API_KEY*`). Credentials are
+//! never logged or committed.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -76,11 +78,13 @@ fn enabled() -> bool {
 }
 
 /// The agent auth mode: ChatGPT OAuth by default (the cost policy — a flat
-/// subscription, not pay-per-token DeepSeek), overridable to DeepSeek with
+/// subscription, not pay-per-token DeepSeek), overridable to Anthropic OAuth with
+/// `HARNESS_AGENTS_AUTH=anthropic-oauth` or DeepSeek with
 /// `HARNESS_AGENTS_AUTH=deepseek`.
 fn agents_auth_choice() -> AuthChoice {
     match std::env::var("HARNESS_AGENTS_AUTH").ok().as_deref() {
         Some("deepseek") => AuthChoice::DeepSeek,
+        Some("anthropic-oauth") => AuthChoice::AnthropicOAuth,
         _ => AuthChoice::ChatGptOAuth,
     }
 }
@@ -95,11 +99,11 @@ fn llm_engineer_opens_pr_through_role_tools() {
 
     // Fail fast with a clear message if the credential is missing, before booting
     // a server. The error never includes secret bytes. Defaults to ChatGPT OAuth
-    // (cost policy); HARNESS_AGENTS_AUTH=deepseek opts back to the API key.
+    // (cost policy); HARNESS_AGENTS_AUTH selects Anthropic OAuth or DeepSeek.
     let auth = agents_auth_choice();
     let provider = ProviderConfig::from_auth(auth, None, None).expect(
         "LLM provider config builds (ChatGPT OAuth: run `pi /login openai-codex`; \
-         DeepSeek: place .cache/deepseek-api-key)",
+         Anthropic OAuth: run `pi /login anthropic`; DeepSeek: place .cache/deepseek-api-key)",
     );
 
     let server = ForgejoServer::start().expect("forgejo server boots");

@@ -8,12 +8,14 @@
 //! ## Layout
 //!
 //! - [`provider`] — the one place LLM provider/model and **auth-mode** wiring
-//!   live. Two modes: **`ApiKey`** (the default — DeepSeek behind the SDK's
-//!   OpenAI-compatible route, key read at runtime) and **`ChatGptOAuth`** (a
+//!   live. Three modes: **`ApiKey`** (the default — DeepSeek behind the SDK's
+//!   OpenAI-compatible route, key read at runtime), **`ChatGptOAuth`** (a
 //!   ChatGPT/OpenAI-Codex subscription — provider `openai-codex`, bearer resolved
 //!   fresh per decision from the shared `~/.pi/agent/auth.json` both pi CLIs
-//!   write, tolerant of its dual on-disk schema, refreshed near expiry). Swap the
-//!   model, backend, or credential here.
+//!   write, tolerant of its dual on-disk schema, refreshed near expiry), and
+//!   **`AnthropicOAuth`** (Anthropic OAuth subscription — provider `anthropic`,
+//!   bearer from the same shared auth file plus Claude Code-compatible request
+//!   headers). Swap the model, backend, or credential here.
 //! - [`decision`] — runs a one-shot LLM turn through the SDK and parses the
 //!   reply into a structured decision.
 //! - [`prompts`] — role system prompts embedded as data.
@@ -44,6 +46,9 @@ pub use architect::{ArchitectDecision, LlmArchitect};
 pub use engineer::{EngineerDecision, EngineerPrep, LlmEngineer, NoPrep};
 pub use human::{HumanDecision, LlmHuman};
 pub use owner::{LlmOwner, OwnerDecision};
-pub use provider::{AuthChoice, ProviderConfig, ProviderError, default_auth_path};
+pub use provider::{
+    ANTHROPIC_MODEL_ENV, AuthChoice, DEFAULT_ANTHROPIC_MODEL, ProviderConfig, ProviderError,
+    default_auth_path,
+};
 pub use registry::{RealRegistryConfig, real_registry, real_registry_with};
 pub use reviewer::{LlmReviewer, ReviewerDecision};

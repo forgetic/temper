@@ -30,7 +30,7 @@ pub const USAGE: &str = concat!(
     "[--role <id> --user <handle>] ",
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
-    "[--agents <fake|real>] [--auth <deepseek|chatgpt-oauth>] ",
+    "[--agents <fake|real>] [--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] ",
     "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>]\n",
     "  forgejo secrets come from the environment, never argv: ",
@@ -407,8 +407,9 @@ where
         None => Ok(AgentsAuthKind::default()),
         Some("chatgpt-oauth") => Ok(AgentsAuthKind::ChatGptOAuth),
         Some("deepseek") => Ok(AgentsAuthKind::DeepSeek),
+        Some("anthropic-oauth") => Ok(AgentsAuthKind::AnthropicOAuth),
         Some(other) => Err(ArgsError::new(format!(
-            "unknown --auth '{other}'; expected deepseek|chatgpt-oauth"
+            "unknown --auth '{other}'; expected deepseek|chatgpt-oauth|anthropic-oauth"
         ))),
     }
 }

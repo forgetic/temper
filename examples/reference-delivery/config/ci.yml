@@ -1,8 +1,8 @@
 # Bundled CI workflow for the reference-delivery example.
 #
-# This is the same shape as the workflow the e2e test provisioning commits
-# (crates/harness-testing/src/forgejo_server/provision.rs::CI_WORKFLOW). It runs
-# directly on the host (`runs-on: host`, no containers) because the bundled
+# This is the same shape the production Forgejo provisioner should commit for
+# this demo. It runs directly on the host (`runs-on: host`, no containers)
+# because the bundled
 # forgejo-runner is registered in host mode.
 #
 # The single `build` job gates on a COMMIT-MESSAGE MARKER ("[ci-pass]") rather

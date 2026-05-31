@@ -1,20 +1,25 @@
 # Reference-delivery example
 
-A **self-contained, runnable demo** of the harness's production topology: a
+A **self-contained operator demo** of the harness's production topology: a
 Forgejo server, a `forgejo-runner` producing real CI, and one LLM-backed worker
 per workflow role, all coordinating through the Forge to drive the bundled
 reference-delivery workflow from an intake issue to a merged, reconciled PR.
 
-> **Status:** complete and validated. `run.sh` boots and tears down every
-> process, and a real end-to-end run (ChatGPT OAuth agents, real CI) converged
-> the intake issue to a merged, reconciled PR in ~22 s on a 4-core host. The
-> same convergence is asserted by the gated test
-> `crates/harness-testing/tests/forgejo_multiprocess.rs`.
+> **Status:** this example is wired to production-owned binary names
+> (`harness-worker` and `harness-provision-forgejo`) from the
+> `harness-production` crate instead of the `harness-testing` binaries. The
+> binaries now exist, but this shell launcher still needs live revalidation; see
+> [`plans/production-binaries/`](../../plans/production-binaries/README.md).
+> The topology was previously validated end-to-end by the gated Forgejo
+> multi-process test and the earlier testing-binary launcher.
 
 ## Honest framing — read this first
 
 This is a **demo**, not a turnkey production deployment:
 
+- It uses the production-owned binaries and does not fall back to
+  `harness-testing` entry points. If those binaries are absent, `run.sh` stops at
+  the build/resolve step.
 - It boots its **own throwaway Forgejo + runner** so it runs from binaries
   alone. To target a **real** Forgejo you change `BASE_URL` + tokens and drop the
   bundled server/runner + provisioning — the same "swap to real" story as
@@ -23,17 +28,19 @@ This is a **demo**, not a turnkey production deployment:
   **commit-message marker** the engineer emits — there is no real
   toolchain/checkout. A real project swaps in its real CI and a real coding
   agent.
-- It is the operator-runnable, shell-driven version of the gated test
-  `crates/harness-testing/tests/forgejo_multiprocess.rs` — not new behavior.
+- It is the operator-facing, shell-driven version of the same topology covered
+  by the gated Forgejo multi-process test — not new workflow behavior.
 
 Keep these caveats in mind; this does not pretend to be more than a faithful
 end-to-end rehearsal.
 
 ## Prerequisites
 
-- The workspace binaries built: `cargo build --release -p harness-testing`
-  (provides `harness-testing-worker` and `harness-testing-provision`). `run.sh`
-  builds them on first run unless `HARNESS_SKIP_BUILD=1`.
+- The production workspace binaries built: `cargo build --release -p
+  harness-production` (provides `harness-worker` and
+  `harness-provision-forgejo`). `run.sh` builds them on first run unless
+  `HARNESS_SKIP_BUILD=1`. Override paths with `HARNESS_WORKER_BIN` /
+  `HARNESS_PROVISION_BIN` if needed.
 - The two pinned binaries: Forgejo `7.0.12` and `forgejo-runner` `3.5.1`. Let
   the first run download + checksum them into `.cache/forgejo/`, or pre-stage
   them and set `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY` in
@@ -44,10 +51,12 @@ end-to-end rehearsal.
   - **ChatGPT login (preferred, no per-call cost):** `pi /login openai-codex`
     once, which populates `~/.pi/agent/auth.json`. This is the default
     (`HARNESS_AGENTS_AUTH=chatgpt-oauth`).
+  - **Anthropic OAuth (opt-in):** `pi /login anthropic` once, then set
+    `HARNESS_AGENTS_AUTH=anthropic-oauth`.
   - **DeepSeek key (fallback, bills per token):** set
     `HARNESS_AGENTS_AUTH=deepseek` and provide `secrets/deepseek-api-key`.
 
-See `secrets/.env.example` for both options in detail.
+See `secrets/.env.example` for the options in detail.
 
 ## Layout
 
@@ -83,8 +92,8 @@ From this directory:
 ./run.sh help     # usage
 ```
 
-The first run builds the workspace binaries (`cargo build --release -p
-harness-testing`) if they are missing and expects the pinned Forgejo +
+The first run builds the production workspace binaries (`cargo build --release
+-p harness-production`) if they are missing and expects the pinned Forgejo +
 `forgejo-runner` binaries under `.cache/forgejo/` (or set
 `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY`). Edit
 `config/harness.env` for the repo, endpoint, cadence, and auth knobs; any of
@@ -98,8 +107,8 @@ logs live); per-process logs land under `logs/`.
 
 Boots Forgejo + a host-mode `forgejo-runner`, provisions an org/repo with a
 per-role user + token (and seeds one intake issue), then launches one
-`harness-testing-worker --backend forgejo --agents real --clock wall` per
-role-with-an-agent plus one mechanical reconciler.
+`harness-worker` per role-with-an-agent plus one mechanical reconciler, all using
+Forgejo, real LLM agents, and wall-clock polling.
 
 The seeded intake issue then flows through the reference-delivery workflow, each
 step driven by the role worker whose LLM **decides** and then mutates workflow
@@ -130,7 +139,7 @@ reconcile labels move. Worker logs land under `logs/` (created at run time).
 
 `./run.sh stop` (or a `SIGINT`/`SIGTERM` to the running script) kills every spawned
 process and removes the throwaway data dirs. If a run is force-killed, clean up
-orphans with `pkill -f forgejo` / `pkill -f harness-testing-worker` and remove
+orphans with `pkill -f forgejo` / `pkill -f harness-worker` and remove
 the run/data dirs.
 
 ## Point it at your own Forgejo

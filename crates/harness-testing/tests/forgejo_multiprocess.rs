@@ -104,7 +104,8 @@ struct Variant {
 /// additionally requires `HARNESS_FORGEJO_AGENTS=1` (real LLM calls are
 /// non-deterministic) and gets a larger convergence budget for LLM latency.
 /// Per the cost policy the real agents default to ChatGPT OAuth (a flat
-/// subscription); set `HARNESS_AGENTS_AUTH=deepseek` to opt back to DeepSeek.
+/// subscription); set `HARNESS_AGENTS_AUTH=deepseek` to opt back to DeepSeek or
+/// `HARNESS_AGENTS_AUTH=anthropic-oauth` to opt into Anthropic OAuth.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Agents {
     Fake,
@@ -155,8 +156,10 @@ fn enabled(agents: Agents) -> bool {
                 "skipping Forgejo real-agent multiprocess e2e: set BOTH HARNESS_FORGEJO_E2E=1 and \
                  HARNESS_FORGEJO_AGENTS=1 (boots a real Forgejo + runner and makes real, \
                  non-deterministic LLM calls). Defaults to ChatGPT OAuth (run \
-                 `pi /login openai-codex`); set HARNESS_AGENTS_AUTH=deepseek to use a DeepSeek \
-                 key via HARNESS_DEEPSEEK_API_KEY[_PATH] or .cache/deepseek-api-key)"
+                 `pi /login openai-codex`); set HARNESS_AGENTS_AUTH=anthropic-oauth for \
+                 Anthropic OAuth (`pi /login anthropic`) or HARNESS_AGENTS_AUTH=deepseek \
+                 to use a DeepSeek key via HARNESS_DEEPSEEK_API_KEY[_PATH] or \
+                 .cache/deepseek-api-key)"
             );
             false
         }
@@ -291,12 +294,14 @@ fn run_variant(variant: &Variant) {
     // For the real-agent topology, fail fast with a clear message if the
     // credential is missing — before booting a server or making any LLM call. The
     // error never includes secret bytes. Defaults to ChatGPT OAuth (the cost
-    // policy: a flat subscription, not pay-per-token DeepSeek); opt back to
+    // policy: a flat subscription, not pay-per-token DeepSeek); opt into
+    // Anthropic OAuth with HARNESS_AGENTS_AUTH=anthropic-oauth or opt back to
     // DeepSeek with HARNESS_AGENTS_AUTH=deepseek.
     if variant.agents == Agents::Real {
         harness_agents::ProviderConfig::from_auth(agents_auth_choice(), None, None).expect(
             "LLM provider config builds for --agents real \
              (ChatGPT OAuth: run `pi /login openai-codex`; \
+             Anthropic OAuth: run `pi /login anthropic`; \
              DeepSeek: set HARNESS_DEEPSEEK_API_KEY[_PATH] or place .cache/deepseek-api-key)",
         );
     }
@@ -524,6 +529,7 @@ const DEEPSEEK_API_KEY_ENV: &str = "HARNESS_DEEPSEEK_API_KEY";
 fn agents_auth_choice() -> harness_agents::AuthChoice {
     match std::env::var("HARNESS_AGENTS_AUTH").ok().as_deref() {
         Some("deepseek") => harness_agents::AuthChoice::DeepSeek,
+        Some("anthropic-oauth") => harness_agents::AuthChoice::AnthropicOAuth,
         _ => harness_agents::AuthChoice::ChatGptOAuth,
     }
 }
@@ -533,6 +539,7 @@ fn agents_auth_flag() -> &'static str {
     match agents_auth_choice() {
         harness_agents::AuthChoice::DeepSeek => "deepseek",
         harness_agents::AuthChoice::ChatGptOAuth => "chatgpt-oauth",
+        harness_agents::AuthChoice::AnthropicOAuth => "anthropic-oauth",
     }
 }
 
@@ -543,7 +550,7 @@ fn agents_auth_flag() -> &'static str {
 /// (direct), else the file at `HARNESS_DEEPSEEK_API_KEY_PATH`, else the
 /// workspace-root `.cache/deepseek-api-key`. The key is never logged; the driver
 /// already validated it builds via `ProviderConfig::from_auth`. Only used for the
-/// DeepSeek opt-out; the ChatGPT OAuth path reads the absolute shared auth file.
+/// DeepSeek opt-out; OAuth paths read the absolute shared auth file.
 fn resolve_deepseek_key() -> String {
     if let Ok(key) = std::env::var(DEEPSEEK_API_KEY_ENV) {
         let trimmed = key.trim();
@@ -596,9 +603,9 @@ impl WorkerFleet {
         // For `--agents real` with the DeepSeek opt-out, each role worker reads
         // the DeepSeek key from the env. Resolve it once in the driver and pass it
         // explicitly (the child's CWD is the crate dir, so the default relative
-        // `.cache/...` would not resolve). The default ChatGPT OAuth path needs no
-        // key — it reads the absolute shared `~/.pi/agent/auth.json`. Passed via
-        // env, never argv; empty for `--agents fake`.
+        // `.cache/...` would not resolve). OAuth paths need no key — they read the
+        // absolute shared `~/.pi/agent/auth.json`. Passed via env, never argv;
+        // empty for `--agents fake`.
         let auth_flag = agents_auth_flag();
         let deepseek_key = match (variant.agents, agents_auth_choice()) {
             (Agents::Real, harness_agents::AuthChoice::DeepSeek) => Some(resolve_deepseek_key()),

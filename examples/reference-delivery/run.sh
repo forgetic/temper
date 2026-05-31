@@ -1,19 +1,19 @@
 #!/bin/sh
-# Reference-delivery example — POSIX launcher / teardown (phase B3).
+# Reference-delivery example — POSIX launcher / teardown.
 #
 # Boots EVERY process of the production topology from compiled binaries:
 #   1. a throwaway Forgejo server (SQLite, Actions enabled),
 #   2. a host-mode forgejo-runner producing real CI,
-#   3. admin bootstrap + the B1 provision/seed binary (org/users/tokens/repo/
-#      labels/CI workflow + one intake issue),
-#   4. one harness-testing-worker per workflow role-with-an-agent, plus one
-#      mechanical reconciler — all --backend forgejo --agents real --clock wall,
+#   3. admin bootstrap + the production provision/seed binary
+#      (org/users/tokens/repo/labels/CI workflow + one intake issue),
+#   4. one harness-worker per workflow role-with-an-agent, plus one mechanical
+#      reconciler — all against Forgejo with real LLM agents and wall time,
 # then tears them all down cleanly on Ctrl-C / signal / `./run.sh stop`.
 #
-# It is the operator-runnable, shell-driven twin of the gated test
-# crates/harness-testing/tests/forgejo_multiprocess.rs — not new behavior. See
-# the example README for the honest framing and the "point it at your own
-# Forgejo" notes.
+# This script now targets the planned production binaries from
+# plans/production-binaries/README.md instead of the harness-testing entry
+# points. Until that plan lands, it is forward-looking wiring rather than a
+# runnable demo from a clean checkout.
 #
 # Usage:
 #   ./run.sh [start]   boot everything and block until Ctrl-C / stop-file
@@ -24,7 +24,7 @@
 # trap guards do not fire; clean up survivors by hand with:
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
-#       pkill -f harness-testing-worker
+#       pkill -f harness-worker
 #       rm -rf examples/reference-delivery/run
 #
 # POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
@@ -43,14 +43,13 @@ LOG_DIR="$SCRIPT_DIR/logs"
 FORGEJO_DATA="$RUN_DIR/forgejo"
 APP_INI="$FORGEJO_DATA/custom/conf/app.ini"
 RUNNER_DIR="$RUN_DIR/runner"
-WORKER_ROOT="$RUN_DIR/worker-root-unused"  # required by the parser, unused on forgejo
 STOP_FILE="$RUN_DIR/stop"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 WORKERS_PID_FILE="$RUN_DIR/workers.pids"
 ROLES_ENV="$SECRETS_DIR/roles.env"
 
-# Pinned versions (must match crates/harness-testing/src/forgejo_server/download.rs).
+# Pinned versions for the bundled throwaway server/runner used by this example.
 FORGEJO_VERSION=7.0.12
 FORGEJO_RUNNER_VERSION=3.5.1
 
@@ -59,11 +58,6 @@ FORGEJO_RUNNER_VERSION=3.5.1
 ADMIN_USER=refadmin
 ADMIN_EMAIL=refadmin@example.invalid
 ADMIN_PASSWORD='Ref-Delivery-Admin-1!'
-
-# Happy-path worker behavior (overridable by env before invoking the script).
-ARCHITECT=${ARCHITECT:-default}
-REVIEWER=${REVIEWER:-default}
-CI_SENTINEL=${CI_SENTINEL:-present}
 
 log() { printf '[run.sh] %s\n' "$*"; }
 die() { printf '[run.sh] error: %s\n' "$*" >&2; exit 1; }
@@ -121,7 +115,7 @@ cleanup() {
     stop_pid_file "$SERVER_PID_FILE"
     # Drop the throwaway server/runner data + sentinel so a re-run starts fresh;
     # keep logs/ for inspection.
-    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$WORKER_ROOT" "$STOP_FILE" 2>/dev/null || true
+    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" 2>/dev/null || true
     log 'teardown complete'
 }
 
@@ -136,8 +130,9 @@ cmd_stop() {
 # (precedence: CLI/env > config/harness.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
 CONFIG_KNOBS="OWNER NAME BASE_URL POLL_MS RUN_SECS HARNESS_AGENTS_AUTH \
-HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS \
-HARNESS_FORGEJO_BINARY HARNESS_FORGEJO_RUNNER_BINARY"
+HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL HARNESS_AGENTS_AUTH_FILE \
+HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY HARNESS_FORGEJO_RUNNER_BINARY \
+HARNESS_WORKER_BIN HARNESS_PROVISION_BIN HARNESS_BUILD_PACKAGE"
 
 load_config() {
     [ -f "$CONFIG_DIR/harness.env" ] || die "missing $CONFIG_DIR/harness.env"
@@ -165,10 +160,14 @@ load_config() {
     RUN_SECS=${RUN_SECS:-600}
     HARNESS_AGENTS_AUTH=${HARNESS_AGENTS_AUTH:-chatgpt-oauth}
     HARNESS_AGENTS_CODEX_MODEL=${HARNESS_AGENTS_CODEX_MODEL:-}
+    HARNESS_AGENTS_ANTHROPIC_MODEL=${HARNESS_AGENTS_ANTHROPIC_MODEL:-}
     HARNESS_AGENTS_AUTH_FILE=${HARNESS_AGENTS_AUTH_FILE:-}
     HARNESS_FORGEJO_GOMAXPROCS=${HARNESS_FORGEJO_GOMAXPROCS:-2}
     HARNESS_FORGEJO_BINARY=${HARNESS_FORGEJO_BINARY:-}
     HARNESS_FORGEJO_RUNNER_BINARY=${HARNESS_FORGEJO_RUNNER_BINARY:-}
+    HARNESS_WORKER_BIN=${HARNESS_WORKER_BIN:-}
+    HARNESS_PROVISION_BIN=${HARNESS_PROVISION_BIN:-}
+    HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
     # Exported so both Go processes inherit it; harmless for the Rust workers.
@@ -187,7 +186,8 @@ load_config() {
 }
 
 # Validates the selected auth's input and sets CLI flag fragments. ChatGPT OAuth
-# (default) reads the shared pi auth.json in place; DeepSeek reads a key file.
+# (default) and Anthropic OAuth read the shared pi auth.json in place; DeepSeek
+# reads a key file.
 # Fails fast with a clear message when the selected auth's input is missing.
 CODEX_MODEL_ARG=
 AUTH_FILE_ARG=
@@ -209,6 +209,22 @@ check_auth() {
             [ -n "$HARNESS_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $HARNESS_AGENTS_AUTH_FILE"
             log "auth: ChatGPT OAuth (reads $_auth_file)"
             ;;
+        anthropic-oauth)
+            _auth_file=${HARNESS_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
+            if [ ! -f "$_auth_file" ]; then
+                die "Anthropic OAuth selected but $_auth_file is missing.
+       Log in once:  pi /login anthropic"
+            fi
+            if ! grep -q '"anthropic"' "$_auth_file" 2>/dev/null; then
+                die "no 'anthropic' entry in $_auth_file.
+       Log in once:  pi /login anthropic"
+            fi
+            AUTH_FLAG=anthropic-oauth
+            [ -n "$HARNESS_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $HARNESS_AGENTS_AUTH_FILE"
+            # Anthropic model selection is env-only in the worker/provider seam.
+            [ -n "$HARNESS_AGENTS_ANTHROPIC_MODEL" ] && export HARNESS_AGENTS_ANTHROPIC_MODEL
+            log "auth: Anthropic OAuth (reads $_auth_file; model ${HARNESS_AGENTS_ANTHROPIC_MODEL:-claude-opus-4-8})"
+            ;;
         deepseek)
             _key_file="$SECRETS_DIR/deepseek-api-key"
             [ -f "$_key_file" ] || die "DeepSeek selected but $_key_file is missing.
@@ -221,7 +237,7 @@ check_auth() {
             log "auth: DeepSeek (key file $_key_file)"
             ;;
         *)
-            die "unknown HARNESS_AGENTS_AUTH '$HARNESS_AGENTS_AUTH' (expected chatgpt-oauth|deepseek)"
+            die "unknown HARNESS_AGENTS_AUTH '$HARNESS_AGENTS_AUTH' (expected chatgpt-oauth|deepseek|anthropic-oauth)"
             ;;
     esac
 }
@@ -229,14 +245,14 @@ check_auth() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    WORKER_BIN="$WORKSPACE_ROOT/target/release/harness-testing-worker"
-    PROVISION_BIN="$WORKSPACE_ROOT/target/release/harness-testing-provision"
+    WORKER_BIN=${HARNESS_WORKER_BIN:-$WORKSPACE_ROOT/target/release/harness-worker}
+    PROVISION_BIN=${HARNESS_PROVISION_BIN:-$WORKSPACE_ROOT/target/release/harness-provision-forgejo}
     if [ ! -x "$WORKER_BIN" ] || [ ! -x "$PROVISION_BIN" ]; then
         if [ "${HARNESS_SKIP_BUILD:-0}" = "1" ]; then
-            die "workspace binaries missing under target/release and HARNESS_SKIP_BUILD=1"
+            die "production binaries missing under target/release and HARNESS_SKIP_BUILD=1"
         fi
-        log 'building workspace binaries (cargo build --release -p harness-testing)...'
-        ( cd "$WORKSPACE_ROOT" && cargo build --release -p harness-testing ) \
+        log "building production binaries (cargo build --release -p $HARNESS_BUILD_PACKAGE)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build --release -p "$HARNESS_BUILD_PACKAGE" ) \
             || die 'cargo build failed'
     fi
     [ -x "$WORKER_BIN" ] || die "worker binary not found: $WORKER_BIN"
@@ -396,10 +412,8 @@ launch_role_worker() {
     HARNESS_FORGEJO_PASSWORD="$_password" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$OWNER/$NAME" \
-        --root "$WORKER_ROOT" --clock wall \
         --kind role --role "$_role" --user "$_user" \
-        --architect "$ARCHITECT" --reviewer "$REVIEWER" --ci-sentinel "$CI_SENTINEL" \
-        --agents real --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
+        --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         >"$LOG_DIR/$_role.log" 2>&1 &
     echo "$!" >>"$WORKERS_PID_FILE"
@@ -414,7 +428,7 @@ launch_workers() {
     _roles=$(sed -n "s/^HARNESS_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" "$ROLES_ENV")
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
 
-    log 'launching role workers (--agents real) ...'
+    log 'launching role workers (production binary, real agents) ...'
     for _r in $_roles; do
         launch_role_worker "$_r"
     done
@@ -422,7 +436,7 @@ launch_workers() {
     # One mechanical reconciler (controller plane; admin token, no agent).
     HARNESS_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$OWNER/$NAME" \
-        --root "$WORKER_ROOT" --clock wall --kind mechanical \
+        --kind mechanical \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         >"$LOG_DIR/mechanical.log" 2>&1 &
     echo "$!" >>"$WORKERS_PID_FILE"

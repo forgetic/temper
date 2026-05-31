@@ -74,9 +74,11 @@ pub async fn run_decision<D: DeserializeOwned>(
     config.stream_options.api_key = Some(provider_config.resolve_bearer().await?);
     // Mode-specific knobs: API-key (DeepSeek) pins temperature 0.0 and no
     // reasoning; the codex reasoning models leave temperature unset and request
-    // minimal reasoning effort.
+    // the lowest supported reasoning effort; Anthropic OAuth injects Claude Code-compatible
+    // identity headers through the SDK's per-request header override path.
     config.stream_options.temperature = provider_config.temperature();
     config.stream_options.thinking_level = provider_config.thinking_level();
+    config.stream_options.headers = provider_config.request_headers();
 
     // No tools: a `ToolRegistry` built from an empty enabled-list is empty, so
     // the model cannot reach bash/file tools — the workflow mutation path stays
