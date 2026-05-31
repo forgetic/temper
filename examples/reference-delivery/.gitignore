@@ -1,0 +1,6 @@
+# Runtime artifacts the launch script (run.sh, phase B3) creates. The tracked
+# scaffold is config/, secrets/*.example, secrets/.gitignore, and this README.
+/run/
+/logs/
+*.pid
+*.log

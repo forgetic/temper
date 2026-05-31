@@ -1,0 +1,34 @@
+# Bundled CI workflow for the reference-delivery example.
+#
+# This is the same shape as the workflow the e2e test provisioning commits
+# (crates/harness-testing/src/forgejo_server/provision.rs::CI_WORKFLOW). It runs
+# directly on the host (`runs-on: host`, no containers) because the bundled
+# forgejo-runner is registered in host mode.
+#
+# The single `build` job gates on a COMMIT-MESSAGE MARKER ("[ci-pass]") rather
+# than a checked-out file: the host-mode runner has no `actions/checkout`
+# offline, so a working-directory `test -f` would always fail. The push event's
+# head-commit message is available in the runner context
+# (github.event.head_commit.message) without any checkout, so the gate reads it
+# directly. A PR head whose latest commit lacks the marker fails CI; the
+# engineer's fix commit carries the marker, so the re-run on the new head SHA
+# passes — two SHAs, two verdicts.
+#
+# A REAL project replaces this entire file with its real CI (build, test, lint,
+# whatever), and its real coding agent produces commits that pass it. The marker
+# is purely a demo stand-in so the example converges from binaries alone.
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: gate on commit message marker
+        run: |
+          echo "head commit message: ${MSG}"
+          case "${MSG}" in
+            *'[ci-pass]'*) echo "marker present; passing" ;;
+            *) echo "marker absent; failing"; exit 1 ;;
+          esac
+        env:
+          MSG: ${{ github.event.head_commit.message }}

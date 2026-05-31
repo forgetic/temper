@@ -1,0 +1,720 @@
+{
+  "name": "reference-delivery",
+  "roles": [
+    {
+      "id": "architect",
+      "charter": "Turn requests into epics, design issues, and ready code issues; resolve needs-architect items; reconcile landed PRs.",
+      "concurrency": 1,
+      "queues": [
+        "design_triage",
+        "needs_architect",
+        "landed_inbox"
+      ]
+    },
+    {
+      "id": "engineer",
+      "charter": "Claim ready code issues, implement them, open PRs, and address failed review or CI gates.",
+      "concurrency": 3,
+      "queues": [
+        "code_ready",
+        "pr_changes_requested",
+        "pr_ci_failed"
+      ]
+    },
+    {
+      "id": "reviewer",
+      "charter": "Statically review PRs against the contract catalog; approve or request changes.",
+      "concurrency": 2,
+      "queues": [
+        "pr_needs_review"
+      ]
+    },
+    {
+      "id": "owner",
+      "charter": "Resolve needs-owner items and run holistic alignment review of landed cohorts; escalate to humans when needed.",
+      "concurrency": 1,
+      "queues": [
+        "needs_owner",
+        "merge_ready",
+        "owner_alignment"
+      ]
+    },
+    {
+      "id": "human",
+      "charter": "Resolve needs-human items that require non-agent judgment.",
+      "concurrency": 1,
+      "queues": [
+        "needs_human"
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "id": "untriaged",
+      "description": "human-filed issue awaiting triage by the architect"
+    },
+    {
+      "id": "epic",
+      "description": "identifies a long-lived epic issue"
+    },
+    {
+      "id": "design",
+      "description": "identifies a design issue"
+    },
+    {
+      "id": "code",
+      "description": "identifies a code issue"
+    },
+    {
+      "id": "implementation",
+      "description": "identifies an implementation pull request"
+    },
+    {
+      "id": "draft",
+      "description": "work item is still being shaped"
+    },
+    {
+      "id": "ready",
+      "description": "work item is ready for the next workflow step"
+    },
+    {
+      "id": "in-progress",
+      "description": "work item is currently being advanced"
+    },
+    {
+      "id": "blocked",
+      "description": "work item is blocked by unmet dependencies"
+    },
+    {
+      "id": "needs-reviewer",
+      "description": "pull request awaits reviewer action"
+    },
+    {
+      "id": "needs-architect",
+      "description": "agent escalation flag routed to the architect"
+    },
+    {
+      "id": "needs-owner",
+      "description": "owner-input flag routed to the owner"
+    },
+    {
+      "id": "needs-human",
+      "description": "human-input flag routed to the human"
+    },
+    {
+      "id": "needs-merge",
+      "description": "implementation PR awaits owner merge approval once gates pass"
+    },
+    {
+      "id": "landed",
+      "description": "merged PR awaiting architect reconcile"
+    },
+    {
+      "id": "alignment",
+      "description": "merged PR awaiting owner alignment review"
+    }
+  ],
+  "artifact_kinds": [
+    {
+      "id": "intake",
+      "target": "issue",
+      "identifying_labels": [
+        "untriaged"
+      ]
+    },
+    {
+      "id": "epic",
+      "target": "issue",
+      "identifying_labels": [
+        "epic"
+      ]
+    },
+    {
+      "id": "design",
+      "target": "issue",
+      "identifying_labels": [
+        "design"
+      ]
+    },
+    {
+      "id": "code",
+      "target": "issue",
+      "identifying_labels": [
+        "code"
+      ]
+    },
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": [
+        "implementation"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "kind": "parent",
+      "source": "design",
+      "target": "epic"
+    },
+    {
+      "kind": "parent",
+      "source": "code",
+      "target": "design"
+    },
+    {
+      "kind": "parent",
+      "source": "code",
+      "target": "epic"
+    },
+    {
+      "kind": "dependency",
+      "source": "code",
+      "target": "code"
+    },
+    {
+      "kind": "produced_pr",
+      "source": "implementation_pr",
+      "target": "code"
+    }
+  ],
+  "state_dimensions": [
+    {
+      "id": "work_lifecycle",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "draft",
+          "label": "draft",
+          "artifacts": [
+            "design"
+          ]
+        },
+        {
+          "id": "ready",
+          "label": "ready",
+          "artifacts": [
+            "design",
+            "code"
+          ]
+        },
+        {
+          "id": "in_progress",
+          "label": "in-progress",
+          "artifacts": [
+            "epic",
+            "code"
+          ]
+        },
+        {
+          "id": "blocked",
+          "label": "blocked",
+          "artifacts": [
+            "code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "attention",
+      "exclusive": false,
+      "states": [
+        {
+          "id": "needs_architect",
+          "label": "needs-architect"
+        },
+        {
+          "id": "needs_owner",
+          "label": "needs-owner",
+          "artifacts": [
+            "design"
+          ]
+        },
+        {
+          "id": "needs_human",
+          "label": "needs-human",
+          "artifacts": [
+            "design"
+          ]
+        },
+        {
+          "id": "needs_merge",
+          "label": "needs-merge",
+          "artifacts": [
+            "implementation_pr"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "post_merge",
+      "exclusive": false,
+      "states": [
+        {
+          "id": "landed",
+          "label": "landed"
+        },
+        {
+          "id": "alignment",
+          "label": "alignment"
+        }
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "id": "design_triage",
+      "artifact": "intake",
+      "labels": [
+        "untriaged"
+      ]
+    },
+    {
+      "id": "code_ready",
+      "artifact": "code",
+      "labels": [
+        "ready"
+      ]
+    },
+    {
+      "id": "pr_needs_review",
+      "artifact": "implementation_pr",
+      "labels": [
+        "needs-reviewer"
+      ]
+    },
+    {
+      "id": "pr_changes_requested",
+      "artifact": "implementation_pr",
+      "condition": {
+        "kind": "review_changes_requested"
+      }
+    },
+    {
+      "id": "pr_ci_failed",
+      "artifact": "implementation_pr",
+      "condition": {
+        "kind": "ci_failed"
+      }
+    },
+    {
+      "id": "needs_architect",
+      "artifact": [
+        "intake",
+        "epic",
+        "design",
+        "code",
+        "implementation_pr"
+      ],
+      "labels": [
+        "needs-architect"
+      ]
+    },
+    {
+      "id": "needs_owner",
+      "artifact": "design",
+      "labels": [
+        "needs-owner"
+      ]
+    },
+    {
+      "id": "needs_human",
+      "artifact": "design",
+      "labels": [
+        "needs-human"
+      ]
+    },
+    {
+      "id": "landed_inbox",
+      "artifact": "implementation_pr",
+      "labels": [
+        "landed"
+      ]
+    },
+    {
+      "id": "merge_ready",
+      "artifact": "implementation_pr",
+      "labels": [
+        "needs-merge"
+      ],
+      "condition": {
+        "kind": "ci_passed"
+      }
+    },
+    {
+      "id": "owner_alignment",
+      "artifact": "implementation_pr",
+      "labels": [
+        "alignment"
+      ],
+      "min_depth": 5,
+      "max_age": 604800
+    }
+  ],
+  "transitions": [
+    {
+      "id": "triage_to_code",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "code"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        }
+      ]
+    },
+    {
+      "id": "triage_to_design",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "design"
+        },
+        {
+          "kind": "add_label",
+          "label": "draft"
+        }
+      ]
+    },
+    {
+      "id": "refine_design",
+      "artifact": "design",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "draft"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        }
+      ]
+    },
+    {
+      "id": "mark_code_ready",
+      "artifact": "code",
+      "roles": [
+        "architect"
+      ],
+      "requires_gates": [
+        "dependency_gate"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "blocked"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        }
+      ]
+    },
+    {
+      "id": "reconcile_landed",
+      "artifact": "implementation_pr",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "landed"
+        }
+      ]
+    },
+    {
+      "id": "resolve_architect_request",
+      "artifact": "implementation_pr",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-architect"
+        }
+      ]
+    },
+    {
+      "id": "request_owner_input",
+      "artifact": "design",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-owner"
+        }
+      ]
+    },
+    {
+      "id": "claim_code",
+      "artifact": "code",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "ready"
+        },
+        {
+          "kind": "add_label",
+          "label": "in-progress"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "engineer"
+        }
+      ]
+    },
+    {
+      "id": "open_pr",
+      "artifact": "code",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "create_pull_request"
+        }
+      ]
+    },
+    {
+      "id": "request_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "add_label",
+          "label": "needs-merge"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "address_review_changes",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "address_ci_failure",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "request_architect_input",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer",
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "needs-architect"
+        }
+      ]
+    },
+    {
+      "id": "approve_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "submit_review",
+          "decision": "approved"
+        }
+      ]
+    },
+    {
+      "id": "request_changes",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "submit_review",
+          "decision": "changes_requested"
+        }
+      ]
+    },
+    {
+      "id": "clear_owner_flag",
+      "artifact": "design",
+      "roles": [
+        "owner"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-owner"
+        }
+      ]
+    },
+    {
+      "id": "request_human_input",
+      "artifact": "design",
+      "roles": [
+        "owner"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-owner"
+        },
+        {
+          "kind": "add_label",
+          "label": "needs-human"
+        }
+      ]
+    },
+    {
+      "id": "clear_human_flag",
+      "artifact": "design",
+      "roles": [
+        "human"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-human"
+        }
+      ]
+    },
+    {
+      "id": "review_alignment",
+      "artifact": "implementation_pr",
+      "roles": [
+        "owner"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "alignment"
+        }
+      ]
+    },
+    {
+      "id": "approve_merge",
+      "artifact": "implementation_pr",
+      "roles": [
+        "owner"
+      ],
+      "requires_gates": [
+        "review_gate",
+        "ci_gate"
+      ],
+      "effects": [
+        {
+          "kind": "merge_pull_request"
+        },
+        {
+          "kind": "remove_label",
+          "label": "needs-merge"
+        },
+        {
+          "kind": "add_label",
+          "label": "landed"
+        },
+        {
+          "kind": "add_label",
+          "label": "alignment"
+        }
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "review_gate",
+      "condition": {
+        "kind": "review_approved"
+      }
+    },
+    {
+      "id": "ci_gate",
+      "condition": {
+        "kind": "ci_passed"
+      }
+    },
+    {
+      "id": "dependency_gate",
+      "condition": {
+        "kind": "dependencies_resolved"
+      }
+    }
+  ]
+}
