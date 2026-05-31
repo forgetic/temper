@@ -7,9 +7,9 @@
 //! of flags, reconsider a small lockfile crate rather than hand-rolling more.
 
 use super::args::{
-    ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind, ClockKind,
-    ForgejoArgs, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind, FORGEJO_PASSWORD_ENV,
-    FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
+    AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
+    ClockKind, ForgejoArgs, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
+    FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
 };
 use chrono::Duration;
 use std::path::PathBuf;
@@ -30,6 +30,7 @@ pub const USAGE: &str = concat!(
     "[--role <id> --user <handle>] ",
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
+    "[--agents <fake|real>] ",
     "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>]\n",
     "  forgejo secrets come from the environment, never argv: ",
     "HARNESS_FORGEJO_TOKEN (required), HARNESS_FORGEJO_USERNAME/HARNESS_FORGEJO_PASSWORD ",
@@ -84,6 +85,7 @@ struct RawArgs {
     stop_file: Option<String>,
     run_secs: Option<String>,
     clock: Option<String>,
+    agents: Option<String>,
 }
 
 impl RawArgs {
@@ -108,6 +110,7 @@ impl RawArgs {
             stop_file: None,
             run_secs: None,
             clock: None,
+            agents: None,
         };
         let mut iter = args.into_iter();
         while let Some(flag) = iter.next() {
@@ -128,6 +131,7 @@ impl RawArgs {
                 "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
                 "--clock" => raw.clock = Some(value_for(&flag, &mut iter)?),
+                "--agents" => raw.agents = Some(value_for(&flag, &mut iter)?),
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -156,6 +160,7 @@ impl RawArgs {
             .map(|raw| parse_u64(&raw, "--run-secs"))
             .transpose()?;
         let clock = parse_clock(self.clock.as_deref())?;
+        let agents = parse_agents(self.agents.as_deref())?;
 
         let backend = match backend_kind {
             BackendKind::Filesystem => {
@@ -212,6 +217,7 @@ impl RawArgs {
             stop_file,
             run_secs,
             clock,
+            agents,
         })
     }
 
@@ -354,6 +360,16 @@ fn parse_clock(clock: Option<&str>) -> Result<ClockKind, ArgsError> {
         Some("wall") => Ok(ClockKind::Wall),
         Some(other) => Err(ArgsError::new(format!(
             "unknown --clock '{other}'; expected deterministic|wall"
+        ))),
+    }
+}
+
+fn parse_agents(agents: Option<&str>) -> Result<AgentsKind, ArgsError> {
+    match agents {
+        None | Some("fake") => Ok(AgentsKind::Fake),
+        Some("real") => Ok(AgentsKind::Real),
+        Some(other) => Err(ArgsError::new(format!(
+            "unknown --agents '{other}'; expected fake|real"
         ))),
     }
 }

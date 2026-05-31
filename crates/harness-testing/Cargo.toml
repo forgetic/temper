@@ -14,6 +14,7 @@ path = "src/bin/harness-testing-worker.rs"
 async-trait.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
+harness-agents = { path = "../harness-agents" }
 harness-forge = { path = "../harness-forge" }
 harness-forge-filesystem = { path = "../harness-forge-filesystem" }
 harness-forge-forgejo = { path = "../harness-forge-forgejo" }

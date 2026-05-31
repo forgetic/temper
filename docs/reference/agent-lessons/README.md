@@ -37,3 +37,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0006](0006-wire-modules-and-run-tests-not-just-build.md) | Wire new modules into the crate and run tests, not just build | rust, tooling, forgejo, process |
 | [0007](0007-forgejo-cli-token-and-runner-gotchas.md) | Forgejo 7.0.x CLI token + runner registration gotchas | forgejo, ci, testing, tooling |
 | [0008](0008-pin-pi-sdk-transitive-deps.md) | Pin `pi_agent_rust`'s transitive deps when the SDK won't compile | tooling, rust, agents, dependencies, pi-sdk |
+| [0009](0009-cap-throwaway-forgejo-cpu.md) | Cap (and clean up) the throwaway Forgejo's CPU in the e2e | forgejo, ci, testing, tooling, process |

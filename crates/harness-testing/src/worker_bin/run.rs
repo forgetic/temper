@@ -34,6 +34,7 @@ use harness_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::agents::{
@@ -42,8 +43,8 @@ use crate::agents::{
 };
 use crate::ci::{FailThenPassCiPolicy, FilesystemCiSink, FixedCiPolicy};
 use crate::worker_bin::args::{
-    ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior, WorkerArgs,
-    WorkerKind,
+    AgentsKind, ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior,
+    WorkerArgs, WorkerKind,
 };
 use crate::{block_on, runner_config, workflow};
 use harness_runner::AgentRegistry;
@@ -185,7 +186,13 @@ fn run_role(
     let config = runner_config();
     let role_id = RoleId::new(role);
 
-    let registry = registry_for(behavior);
+    // The filesystem backend needs no engineer prep (no real git refs / CI), so
+    // `--agents real` here uses the LLM agents with `NoPrep`. `--agents fake`
+    // (the default) is unchanged.
+    let registry = match args.agents {
+        AgentsKind::Fake => registry_for(behavior),
+        AgentsKind::Real => real_registry_for(behavior, Arc::new(harness_agents::NoPrep))?,
+    };
     let agent = registry
         .get(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
@@ -233,6 +240,32 @@ pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
             fake_registry_with(ClosingArchitect, RequestChangesThenApproveReviewer::new())
         }
     }
+}
+
+/// Builds the **real** (LLM-backed) registry whose architect/reviewer variants
+/// match `behavior` and whose engineer carries `engineer_prep`.
+///
+/// This is the `--agents real` counterpart of [`registry_for`]: it constructs the
+/// shared DeepSeek [`ProviderConfig`](harness_agents::ProviderConfig) once (key
+/// read at runtime from the env/file; never logged) and maps every role to its
+/// LLM agent through [`harness_agents::real_registry_with`]. `engineer_prep`
+/// carries the backend-specific PR-head/CI side effects: `NoPrep` on filesystem,
+/// the Forgejo prep on the real backend (see [`super::forgejo`]).
+pub(super) fn real_registry_for(
+    behavior: RoleBehavior,
+    engineer_prep: Arc<dyn harness_agents::EngineerPrep<dyn Forge>>,
+) -> Result<AgentRegistry<dyn Forge>, RunError> {
+    let provider = harness_agents::ProviderConfig::deepseek_from_env()
+        .map_err(|error| RunError::Backend(error.to_string()))?;
+    let config = harness_agents::RealRegistryConfig {
+        architect_closing: matches!(behavior.architect, ArchitectKind::Closing),
+        reviewer_request_changes_then_approve: matches!(
+            behavior.reviewer,
+            ReviewerKind::RequestChangesThenApprove
+        ),
+        engineer_prep,
+    };
+    Ok(harness_agents::real_registry_with(provider, config))
 }
 
 pub(super) fn resolve_role_user(
@@ -396,6 +429,7 @@ mod tests {
             stop_file: None,
             run_secs: Some(0),
             clock: ClockKind::Deterministic,
+            agents: AgentsKind::Fake,
         }
     }
 

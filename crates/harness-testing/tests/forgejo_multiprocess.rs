@@ -61,13 +61,19 @@ use std::time::{Duration, Instant};
 /// and every PR carries real git branch + HTTP round-trips, so this is far above
 /// the filesystem test's 30 s.
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Convergence budget for the **real-agent** topology. Each tick adds one or more
+/// DeepSeek round-trips on top of the already-slow real CI, and several roles must
+/// each take an LLM-decided step in sequence (triage → claim/open PR → review →
+/// align → merge → reconcile), so the ceiling is well above the fake topology's.
+const REAL_AGENTS_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(900);
 /// How often the driver re-runs the assert closure while polling.
 const ASSERT_POLL: Duration = Duration::from_secs(2);
 /// Worker poll cadence; modest because every tick is real HTTP (findings-phase-0
 /// §6 measured ~10–20 ms/call locally).
 const WORKER_POLL_MS: u64 = 500;
 /// Backstop run length per child, in case the driver dies before stopping it.
-const WORKER_RUN_SECS: u64 = 600;
+/// Large enough to cover the real-agent convergence budget plus teardown slack.
+const WORKER_RUN_SECS: u64 = 1200;
 
 /// The worker behavior that distinguishes one scenario's topology.
 ///
@@ -84,18 +90,74 @@ struct Variant {
     reviewer: &'static str,
     /// `--ci-sentinel` value passed to the engineer role worker.
     ci_sentinel: &'static str,
+    /// `--agents` value passed to every role worker (`fake` or `real`). The
+    /// `real` topology swaps the deterministic fakes for in-process
+    /// DeepSeek-backed LLM agents and is double-gated (see [`Agents`]).
+    agents: Agents,
 }
 
-/// Returns whether the env opt-in is present; prints a skip note when not.
-fn enabled() -> bool {
-    if std::env::var("HARNESS_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        return true;
+/// Which agent registry the role workers run, and how the test is gated.
+///
+/// The seed/assert closures and end state are **identical** across both — only
+/// *who decides* changes (the whole point of reusing the scenario). `Real`
+/// additionally requires `HARNESS_FORGEJO_AGENTS=1` (real LLM calls are
+/// non-deterministic and cost money) and gets a larger convergence budget for
+/// LLM latency.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Agents {
+    Fake,
+    Real,
+}
+
+impl Agents {
+    fn flag(self) -> &'static str {
+        match self {
+            Agents::Fake => "fake",
+            Agents::Real => "real",
+        }
     }
-    eprintln!(
-        "skipping Forgejo multiprocess e2e test: set HARNESS_FORGEJO_E2E=1 to enable \
-         (downloads pinned Forgejo + forgejo-runner binaries and spawns a host-mode runner)"
-    );
-    false
+
+    /// Convergence budget: real agents add LLM round-trips per tick on top of the
+    /// already-slow real CI, so the real topology gets a much larger ceiling.
+    fn convergence_timeout(self) -> Duration {
+        match self {
+            Agents::Fake => CONVERGENCE_TIMEOUT,
+            Agents::Real => REAL_AGENTS_CONVERGENCE_TIMEOUT,
+        }
+    }
+}
+
+/// Returns whether the env opt-in for `agents` is present; prints a skip note
+/// when not. The fake topology needs only `HARNESS_FORGEJO_E2E=1`; the real
+/// topology additionally needs `HARNESS_FORGEJO_AGENTS=1` (real, paid,
+/// non-deterministic DeepSeek calls), matching the B1 engineer e2e gate.
+fn enabled(agents: Agents) -> bool {
+    let e2e = std::env::var("HARNESS_FORGEJO_E2E").ok().as_deref() == Some("1");
+    match agents {
+        Agents::Fake => {
+            if e2e {
+                return true;
+            }
+            eprintln!(
+                "skipping Forgejo multiprocess e2e test: set HARNESS_FORGEJO_E2E=1 to enable \
+                 (downloads pinned Forgejo + forgejo-runner binaries and spawns a host-mode runner)"
+            );
+            false
+        }
+        Agents::Real => {
+            let real = std::env::var("HARNESS_FORGEJO_AGENTS").ok().as_deref() == Some("1");
+            if e2e && real {
+                return true;
+            }
+            eprintln!(
+                "skipping Forgejo real-agent multiprocess e2e: set BOTH HARNESS_FORGEJO_E2E=1 and \
+                 HARNESS_FORGEJO_AGENTS=1 (boots a real Forgejo + runner and makes real, paid, \
+                 non-deterministic DeepSeek calls; needs a DeepSeek key via \
+                 HARNESS_DEEPSEEK_API_KEY[_PATH] or .cache/deepseek-api-key)"
+            );
+            false
+        }
+    }
 }
 
 #[test]
@@ -107,6 +169,7 @@ fn happy_path_converges_against_real_forgejo() {
         architect: "default",
         reviewer: "default",
         ci_sentinel: "present",
+        agents: Agents::Fake,
     });
 }
 
@@ -119,6 +182,7 @@ fn changes_requested_then_approved_converges_against_real_forgejo() {
         architect: "default",
         reviewer: "request-changes-then-approve",
         ci_sentinel: "present",
+        agents: Agents::Fake,
     });
 }
 
@@ -133,6 +197,7 @@ fn ci_fails_then_passes_converges_against_real_forgejo() {
         // The PR head omits `ci-ok` so the first run fails; the engineer's fix
         // commit adds it, producing a second, passing head SHA (two verdicts).
         ci_sentinel: "deferred",
+        agents: Agents::Fake,
     });
 }
 
@@ -145,6 +210,70 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
         architect: "closing",
         reviewer: "default",
         ci_sentinel: "present",
+        agents: Agents::Fake,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Real-agent topology (Phase B2). Same scenarios, same seed/assert closures, but
+// every role worker runs an in-process DeepSeek-backed LLM agent (`--agents
+// real`) instead of the deterministic fakes. Double-gated behind
+// HARNESS_FORGEJO_E2E=1 **and** HARNESS_FORGEJO_AGENTS=1.
+//
+// The **happy path** is B2's bar (it must converge). The harder scenarios are
+// attempted too; if a real run is flaky, see `findings-phase-b.md` for the
+// known-limitation note rather than forcing it.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+            run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
+fn happy_path_converges_with_real_agents() {
+    run_variant(&Variant {
+        scenario: happy_path,
+        architect: "default",
+        reviewer: "default",
+        ci_sentinel: "present",
+        agents: Agents::Real,
+    });
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+            run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
+fn changes_requested_then_approved_with_real_agents() {
+    run_variant(&Variant {
+        scenario: changes_requested_then_approved,
+        architect: "default",
+        reviewer: "request-changes-then-approve",
+        ci_sentinel: "present",
+        agents: Agents::Real,
+    });
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+            run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
+fn ci_fails_then_passes_with_real_agents() {
+    run_variant(&Variant {
+        scenario: ci_fails_then_passes,
+        architect: "default",
+        reviewer: "default",
+        ci_sentinel: "deferred",
+        agents: Agents::Real,
+    });
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + runner and makes real DeepSeek calls; \
+            run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
+fn dependency_chain_mechanically_unblocked_with_real_agents() {
+    run_variant(&Variant {
+        scenario: dependency_chain_mechanically_unblocked,
+        architect: "closing",
+        reviewer: "default",
+        ci_sentinel: "present",
+        agents: Agents::Real,
     });
 }
 
@@ -152,8 +281,18 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
 /// Forgejo, asserting it converges to the same end state as the in-process
 /// scenario.
 fn run_variant(variant: &Variant) {
-    if !enabled() {
+    if !enabled(variant.agents) {
         return;
+    }
+
+    // For the real-agent topology, fail fast with a clear message if the DeepSeek
+    // key is missing — before booting a server or making any LLM call. The error
+    // never includes the key bytes.
+    if variant.agents == Agents::Real {
+        harness_agents::ProviderConfig::deepseek_from_env().expect(
+            "DeepSeek provider config builds for --agents real \
+             (set HARNESS_DEEPSEEK_API_KEY[_PATH] or place .cache/deepseek-api-key)",
+        );
     }
 
     // Boot the server + runner. `ForgejoServer::start` polls readiness with a
@@ -178,7 +317,8 @@ fn run_variant(variant: &Variant) {
     let mut workers = WorkerFleet::spawn(&server, &provisioned, &stop_file, &config, variant);
 
     // Detect convergence in-process by polling the exact scenario assert.
-    let converged = poll_until_converged(&server, &provisioned, &scenario);
+    let timeout = variant.agents.convergence_timeout();
+    let converged = poll_until_converged(&server, &provisioned, &scenario, timeout);
 
     // Stop: touch the sentinel and join every child.
     touch(&stop_file);
@@ -187,7 +327,7 @@ fn run_variant(variant: &Variant) {
     if let Err(error) = converged {
         let diag = ci_diagnostics(&server, &provisioned);
         panic!(
-            "multi-process world did not converge within {CONVERGENCE_TIMEOUT:?}: {error}\n\
+            "multi-process world did not converge within {timeout:?}: {error}\n\
              runner running={}, runner log tail:\n{}\n--- CI diagnostics ---\n{}",
             runner.is_running(),
             runner.log_tail(),
@@ -323,8 +463,9 @@ fn poll_until_converged(
     server: &ForgejoServer,
     provisioned: &Provisioned,
     scenario: &Scenario,
+    timeout: Duration,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         let forge = admin_forge(server, provisioned);
         let last_error = match futures_block_on((scenario.assert)(&forge, &provisioned.repository))
@@ -365,6 +506,40 @@ fn touch(path: &Path) {
     std::fs::write(path, b"stop").expect("writing the stop sentinel succeeds");
 }
 
+/// Env var the worker reads the DeepSeek API key from (direct value).
+const DEEPSEEK_API_KEY_ENV: &str = "HARNESS_DEEPSEEK_API_KEY";
+
+/// Resolves the DeepSeek API key the same way `harness_agents::ProviderConfig`
+/// does, so it can be passed explicitly to each real-agent worker child (whose
+/// CWD differs from the workspace root and so cannot resolve the default relative
+/// `.cache/deepseek-api-key`). Resolution order: `HARNESS_DEEPSEEK_API_KEY`
+/// (direct), else the file at `HARNESS_DEEPSEEK_API_KEY_PATH`, else the
+/// workspace-root `.cache/deepseek-api-key`. The key is never logged; the driver
+/// already validated it builds via `ProviderConfig::deepseek_from_env`.
+fn resolve_deepseek_key() -> String {
+    if let Ok(key) = std::env::var(DEEPSEEK_API_KEY_ENV) {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let path = std::env::var("HARNESS_DEEPSEEK_API_KEY_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            // CARGO_MANIFEST_DIR is crates/harness-testing; the key lives at the
+            // workspace root's .cache/.
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.cache/deepseek-api-key")
+        });
+    std::fs::read_to_string(&path)
+        .map(|raw| raw.trim().to_string())
+        .unwrap_or_else(|error| {
+            panic!(
+                "could not read DeepSeek API key for --agents real from {}: {error}",
+                path.display()
+            )
+        })
+}
+
 /// A spawned worker process labelled for clear failure messages.
 struct SpawnedWorker {
     label: String,
@@ -390,12 +565,33 @@ impl WorkerFleet {
         let repo = format!("{}/{}", provisioned.owner, provisioned.name);
         let mut workers = Vec::new();
 
+        // For `--agents real`, each role worker reads the DeepSeek key from the
+        // env. Resolve it once in the driver and pass it explicitly (the child's
+        // CWD is the crate dir, so the default relative `.cache/...` would not
+        // resolve). Empty for `--agents fake`. Passed via env, never argv.
+        let deepseek_key = match variant.agents {
+            Agents::Real => Some(resolve_deepseek_key()),
+            Agents::Fake => None,
+        };
+
         // Derive role workers from the compiled workflow ∩ registered fake agents
         // ∩ configured role bindings — never a hardcoded list.
         for role in role_workers(config) {
             let identity = provisioned
                 .role(&RoleId::new(&role))
                 .unwrap_or_else(|| panic!("role '{role}' is provisioned with an identity"));
+            // Each role acts as its own token; every role is given web-UI
+            // credentials too so whichever role observes a CI gate can read it via
+            // the Phase 3b fallback. Real-agent roles additionally get the
+            // DeepSeek key.
+            let mut env: Vec<(&str, &str)> = vec![
+                (FORGEJO_TOKEN_ENV, identity.token.as_str()),
+                (FORGEJO_USERNAME_ENV, identity.user.as_str()),
+                (FORGEJO_PASSWORD_ENV, identity.password.as_str()),
+            ];
+            if let Some(key) = &deepseek_key {
+                env.push((DEEPSEEK_API_KEY_ENV, key.as_str()));
+            }
             let child = spawn_worker(
                 &base,
                 &repo,
@@ -407,15 +603,9 @@ impl WorkerFleet {
                     ("--architect", variant.architect),
                     ("--reviewer", variant.reviewer),
                     ("--ci-sentinel", variant.ci_sentinel),
+                    ("--agents", variant.agents.flag()),
                 ],
-                // Each role acts as its own token; every role is given web-UI
-                // credentials too so whichever role observes a CI gate can read
-                // it via the Phase 3b fallback.
-                &[
-                    (FORGEJO_TOKEN_ENV, identity.token.as_str()),
-                    (FORGEJO_USERNAME_ENV, identity.user.as_str()),
-                    (FORGEJO_PASSWORD_ENV, identity.password.as_str()),
-                ],
+                &env,
             );
             workers.push(SpawnedWorker {
                 label: format!("role:{role}"),

@@ -4,12 +4,12 @@
 > real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
-> swapped to real** — only the fake agents and webhook triggering remain on that
-> guide's "swap to real" list. The design rationale (topology, real CI, per-token
-> identity) lives in
+> swapped to real**. With `--agents real` (Phase B2) every role also runs a real
+> DeepSeek-backed LLM agent, so **agents are swapped to real too** — only webhook
+> triggering remains on that guide's "swap to real" list. The design rationale
+> (topology, real CI, per-token identity) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
-> [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md). The next effort (Set B)
-> swaps the fake agents for real LLM agents.
+> [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
 
 This harness runs a **real Forgejo** server locally so the reference-delivery
 workflow can be exercised against the `harness-forge-forgejo` backend instead of
@@ -29,6 +29,42 @@ converges all four reference-delivery scenarios across real OS processes. It
 spawns real processes and executes CI **on this host**, so run it only where that
 is acceptable. Budget several minutes. The per-phase smoke tests below build up
 to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
+
+## Real LLM agents (Phase B2)
+
+The command above runs the deterministic **fake** agents. To run the **same**
+scenarios with real DeepSeek-backed agents in every role (`--agents real`), set a
+second gate and provide a DeepSeek key. The end state and the seed/assert
+closures are identical — only *who decides* changes:
+
+```sh
+HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
+  HARNESS_DEEPSEEK_API_KEY_PATH="$PWD/.cache/deepseek-api-key" \
+  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored \
+  --test-threads=1 happy_path_converges_with_real_agents
+```
+
+- It is **double-gated** (both env vars) and makes real, paid, non-deterministic
+  DeepSeek calls — never in the default suite. The key is read at runtime and
+  never logged; the worker children receive it via env, not argv.
+- Run the real-agent tests **serially** (`--test-threads=1`): each boots its own
+  real Forgejo, and several at once would multiply the CPU load.
+- All four scenarios converge (happy ~26–29 s, the others ~34–61 s on a 4-core
+  host); see `plans/forgejo-e2e/findings-phase-b.md` for cost/latency.
+
+### CPU note (sustained-CPU incident + mitigation)
+
+The throwaway **forgejo web server** (a Go program), not the workers, can drive
+the host to **2+ cores of *sustained* CPU for minutes** under this multi-process
+workload. Brief git/CI spikes are normal; the steady runaway is the concern. The
+harness caps `GOMAXPROCS` on the spawned server and runner (default `2`, override
+with `HARNESS_FORGEJO_GOMAXPROCS`, or set it empty to opt out) so the Go runtime
+cannot exceed ~2 cores — measured peak dropped from ~222% to ~112% with every
+scenario still converging. Note `taskset -cp` alone is insufficient: it re-pins
+only the main thread, while Go keeps goroutines on every core. If a run is
+**force-killed** (SIGKILL), the Rust `Drop` guards do not run — clean up orphans
+with `pkill -f forgejo` / `pkill -f harness-testing-worker` and
+`rm -rf /tmp/harness-forgejo-*`.
 
 ## Smoke test (Phase 1)
 

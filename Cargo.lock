@@ -2843,6 +2843,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "harness-agents",
  "harness-forge",
  "harness-forge-filesystem",
  "harness-forge-forgejo",

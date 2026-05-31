@@ -110,13 +110,16 @@ the **exact** scenario seed/assert closures, with these two pieces made real:
   per role and feeds each worker its own, so `current_user` matches the
   role-to-user map the executor authorizes against.
 
+- **Agents — ✅ done (Forgejo topology, `--agents real`).** The fake
+  `AgentRegistry` entries (`registry_for`) have a real counterpart
+  (`real_registry_for` → `harness-agents`): DeepSeek-backed LLM agents for every
+  role implementing the same `Agent<F>` trait, mutating workflow state only
+  through `RoleTools`. Selected by the worker's `--agents real|fake` flag (default
+  `fake`). The double-gated real-agent variants of `forgejo_multiprocess.rs`
+  converge all four scenarios with real agents (`plans/forgejo-e2e/` Phase B2).
+
 **Still on fakes — pending:**
 
-- **Agents.** Replace the fake `AgentRegistry` entries (`registry_for`) with real
-  LLM agents implementing the same `Agent<F>` trait. They keep mutating workflow
-  state only through `RoleTools` — the authorized transition path is unchanged.
-  This is the next effort (`plans/forgejo-e2e/` "Phase set B": `pi_agent_rust` +
-  DeepSeek).
 - **Triggering.** Add the ADR 0009 webhook/`ChangeHint` accelerator **alongside**
   `PollLoop`, feeding the same pull→classify→plan→execute→reconcile reaction
   path. Both topologies are still `PollLoop`-only; polling stays as the

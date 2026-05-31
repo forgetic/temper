@@ -181,6 +181,7 @@ fn provision(root: &Path, owner: &str, name: &str) {
         stop_file: None,
         run_secs: Some(0),
         clock: worker_bin::ClockKind::Deterministic,
+        agents: worker_bin::AgentsKind::Fake,
     };
     worker_bin::run(&args).expect("provisioning the repository and labels succeeds");
 }

@@ -108,6 +108,33 @@ pub struct RoleBehavior {
     pub ci_sentinel: CiSentinelKind,
 }
 
+/// Which agent registry a `role` worker populates (`--agents`).
+///
+/// `fake` (the default everywhere) uses the deterministic behavior-only fakes, so
+/// the filesystem topology and the no-LLM Forgejo e2e are unchanged. `real` uses
+/// the in-process DeepSeek-backed LLM agents from `harness-agents`; it reads the
+/// API key at runtime (file/env) and is only exercised by the double-gated
+/// real-agent e2e. The architect/reviewer behavior flags still select variants in
+/// either mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum AgentsKind {
+    /// Deterministic fake agents (the default).
+    #[default]
+    Fake,
+    /// Real, in-process LLM agents (DeepSeek via `harness-agents`).
+    Real,
+}
+
+impl AgentsKind {
+    /// Human-readable flag value, for error messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentsKind::Fake => "fake",
+            AgentsKind::Real => "real",
+        }
+    }
+}
+
 /// Which clock a poll-loop worker drives its ticks from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum ClockKind {
@@ -248,6 +275,8 @@ pub struct WorkerArgs {
     pub run_secs: Option<u64>,
     /// Clock fidelity for poll-loop ticks.
     pub clock: ClockKind,
+    /// Which agent registry a `role` worker populates (fake or real LLM).
+    pub agents: AgentsKind,
 }
 
 /// An argument-parsing failure with a user-facing message.

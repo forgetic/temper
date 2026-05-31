@@ -34,12 +34,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness_forge::{CreatePullRequest, Forge, ItemNumber};
 use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
-use harness_workflow::{
-    ArtifactKindId, ArtifactSource, ExecutionError, TransitionId, WorkflowMetadata,
-    render_metadata_block,
-};
+use harness_workflow::{ArtifactKindId, ArtifactSource, WorkflowMetadata, render_metadata_block};
 use serde::Deserialize;
 
+use crate::common::{build_context, run_or_ignore_stale};
 use crate::decision::{DecisionError, run_decision};
 use crate::prompts::ENGINEER_SYSTEM_PROMPT;
 use crate::provider::ProviderConfig;
@@ -215,44 +213,6 @@ impl<F: Forge + ?Sized> LlmEngineer<F> {
     }
 }
 
-/// Serializes the work item plus the issue/PR it points at into the JSON the
-/// model reasons over. Reads go through [`RoleTools`]; a read failure aborts the
-/// tick (it is not the model's fault).
-async fn build_context<F: Forge + ?Sized>(
-    item: &WorkItem,
-    tools: &RoleTools<'_, F>,
-) -> Result<String, AgentError> {
-    let artifact = match item.target {
-        ArtifactSource::Issue { number } => tools.get_issue(number).await?.map(|issue| {
-            serde_json::json!({
-                "type": "issue",
-                "number": number.get(),
-                "title": issue.title,
-                "body": issue.body,
-                "labels": issue.labels,
-                "state": format!("{:?}", issue.state),
-            })
-        }),
-        ArtifactSource::PullRequest { number } => tools.get_pull_request(number).await?.map(|pr| {
-            serde_json::json!({
-                "type": "pull_request",
-                "number": number.get(),
-                "title": pr.title,
-                "body": pr.body,
-                "labels": pr.labels,
-                "state": format!("{:?}", pr.state),
-            })
-        }),
-    };
-
-    let context = serde_json::json!({
-        "queue": item.queue.as_str(),
-        "kind": item.kind.as_str(),
-        "artifact": artifact,
-    });
-    Ok(serde_json::to_string_pretty(&context).unwrap_or_else(|_| context.to_string()))
-}
-
 /// Builds the implementation-PR input (title, metadata-tagged body, head branch).
 ///
 /// The head branch follows the same `<prefix>/pr-for-code-N` convention the fake
@@ -286,28 +246,4 @@ fn implementation_pr_input(
         labels: vec!["implementation".to_string()],
         assignees: Vec::new(),
     }
-}
-
-/// Runs a transition, treating stale/precondition/classification failures as "no
-/// progress" (return `false`) exactly as the fakes do, so a model acting on a
-/// stale item degrades gracefully.
-async fn run_or_ignore_stale<F: Forge + ?Sized>(
-    tools: &RoleTools<'_, F>,
-    target: ArtifactSource,
-    transition: &str,
-) -> Result<bool, AgentError> {
-    match tools.run(target, &TransitionId::new(transition)).await {
-        Ok(_) => Ok(true),
-        Err(error) if stale_execution(&error) => Ok(false),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn stale_execution(error: &ExecutionError) -> bool {
-    matches!(
-        error,
-        ExecutionError::Precondition { .. }
-            | ExecutionError::TargetMissing { .. }
-            | ExecutionError::Classification(_)
-    )
 }

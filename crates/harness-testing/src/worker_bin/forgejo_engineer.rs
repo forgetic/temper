@@ -143,3 +143,106 @@ impl<F: Forge + ?Sized> Agent<F> for ForgejoEngineer {
         engineer_service(item, tools, self).await
     }
 }
+
+/// The Forgejo [`harness_agents::EngineerPrep`] for the **real** LLM engineer.
+///
+/// The real [`LlmEngineer`](harness_agents::LlmEngineer) is backend-agnostic and
+/// takes an injected prep hook for the side effects a real Forge needs before a
+/// PR opens / a CI failure is addressed. This adapter performs exactly the same
+/// side effects as [`ForgejoEngineer`]'s `EnginePrep` impl above —
+/// [`prepare_pull_request_head`] (real head branch + differing commit) and
+/// [`commit_ci_sentinel`] (the `[ci-pass]` / `ci-ok` marker the committed workflow
+/// gates on) — but bridges to the `harness-agents` trait instead of the testing
+/// crate's, so the `--agents real` Forgejo worker drives the LLM engineer while
+/// keeping the real-PR/real-CI mechanics. Idempotent across re-attempts.
+///
+/// `sentinel` mirrors the fake path: `Present` seeds `ci-ok` at PR-open (the PR
+/// passes immediately), `Deferred` withholds it so the first run fails and the
+/// `before_address_ci_failure` fix commit supplies the passing head SHA.
+pub(crate) struct ForgejoLlmPrep {
+    base_url: String,
+    token: String,
+    owner: String,
+    name: String,
+    sentinel: CiSentinelKind,
+}
+
+impl ForgejoLlmPrep {
+    pub(crate) fn new(
+        base_url: String,
+        token: String,
+        owner: String,
+        name: String,
+        sentinel: CiSentinelKind,
+    ) -> Self {
+        Self {
+            base_url,
+            token,
+            owner,
+            name,
+            sentinel,
+        }
+    }
+
+    /// Resolves the PR head branch for a `pr_ci_failed` target (see
+    /// [`ForgejoEngineer::pr_head_branch`]).
+    async fn pr_head_branch<F: Forge + ?Sized>(
+        &self,
+        tools: &RoleTools<'_, F>,
+        target: ArtifactSource,
+    ) -> Result<Option<String>, AgentError> {
+        let ArtifactSource::PullRequest { number } = target else {
+            return Ok(None);
+        };
+        let Some(pull_request) = tools.get_pull_request(number).await? else {
+            return Ok(None);
+        };
+        Ok(Some(pull_request.source.branch))
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> harness_agents::EngineerPrep<F> for ForgejoLlmPrep {
+    async fn before_open_pr(
+        &self,
+        _tools: &RoleTools<'_, F>,
+        input: &CreatePullRequest,
+    ) -> Result<(), AgentError> {
+        prepare_pull_request_head(&self.base_url, &self.token, &self.owner, &self.name, input)
+            .await
+            .map_err(|error| AgentError::message(format!("forgejo PR prep failed: {error}")))?;
+        if matches!(self.sentinel, CiSentinelKind::Present) {
+            commit_ci_sentinel(
+                &self.base_url,
+                &self.token,
+                &self.owner,
+                &self.name,
+                input.source.branch.as_str(),
+            )
+            .await
+            .map_err(|error| {
+                AgentError::message(format!("forgejo CI sentinel seed failed: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn before_address_ci_failure(
+        &self,
+        tools: &RoleTools<'_, F>,
+        target: ArtifactSource,
+    ) -> Result<(), AgentError> {
+        let Some(branch) = self.pr_head_branch(tools, target).await? else {
+            return Ok(());
+        };
+        commit_ci_sentinel(
+            &self.base_url,
+            &self.token,
+            &self.owner,
+            &self.name,
+            &branch,
+        )
+        .await
+        .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
+    }
+}

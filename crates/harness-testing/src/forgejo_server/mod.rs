@@ -208,20 +208,56 @@ fn free_port() -> Result<u16, ServerError> {
     Ok(listener.local_addr()?.port())
 }
 
+/// Default cap on the number of OS threads the spawned Forgejo (a Go program)
+/// uses to run goroutines, bounding its CPU to roughly this many cores.
+///
+/// The throwaway e2e Forgejo otherwise drives its host to **2+ cores of
+/// *sustained* CPU for minutes** under the multi-process workload (an
+/// actions/git/indexer load characteristic of this build, observed while the
+/// real-agent e2e ran): not a brief spike, but a steady runaway that can
+/// saturate a small dev box for the whole run. Capping `GOMAXPROCS` bounds it at
+/// the source so the rest of the run (cargo, the worker children, agent IO)
+/// always keeps cores free, regardless of run length.
+///
+/// `taskset` alone is insufficient: `taskset -cp` re-pins only a process's main
+/// thread, and Go spreads goroutines across `GOMAXPROCS` OS threads that keep
+/// running on every core. `GOMAXPROCS` caps the thread count itself.
+///
+/// Override with `HARNESS_FORGEJO_GOMAXPROCS` (set it to the empty string to
+/// leave Go's default — one thread per core — in place).
+const DEFAULT_FORGEJO_GOMAXPROCS: &str = "2";
+
+/// The `GOMAXPROCS` value to set on spawned Forgejo processes, or `None` to leave
+/// it unset (explicit opt-out via an empty `HARNESS_FORGEJO_GOMAXPROCS`).
+fn forgejo_gomaxprocs() -> Option<String> {
+    match std::env::var("HARNESS_FORGEJO_GOMAXPROCS") {
+        Ok(value) if value.trim().is_empty() => None,
+        Ok(value) => Some(value.trim().to_string()),
+        Err(_) => Some(DEFAULT_FORGEJO_GOMAXPROCS.to_string()),
+    }
+}
+
+/// Applies the [`forgejo_gomaxprocs`] CPU cap to `command` (a Forgejo or
+/// `forgejo-runner` invocation). Child processes Forgejo spawns (git hooks)
+/// inherit the env, so the cap propagates to them too.
+pub(super) fn apply_cpu_cap(command: &mut Command) {
+    if let Some(value) = forgejo_gomaxprocs() {
+        command.env("GOMAXPROCS", value);
+    }
+}
+
 fn run_forgejo(binary: &Path, config: &Path, args: &[&str]) -> Result<String, ServerError> {
-    let output = Command::new(binary)
-        .arg("--config")
-        .arg(config)
-        .args(args)
-        .env(
-            "GITEA_WORK_DIR",
-            config
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent)
-                .unwrap_or(config),
-        )
-        .output()?;
+    let mut command = Command::new(binary);
+    command.arg("--config").arg(config).args(args).env(
+        "GITEA_WORK_DIR",
+        config
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .unwrap_or(config),
+    );
+    apply_cpu_cap(&mut command);
+    let output = command.output()?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -237,14 +273,16 @@ fn run_forgejo(binary: &Path, config: &Path, args: &[&str]) -> Result<String, Se
 fn spawn_web(binary: &Path, config: &Path, data_dir: &Path) -> Result<Child, ServerError> {
     use std::process::Stdio;
     let log = std::fs::File::create(data_dir.join("web.log"))?;
-    let child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("--config")
         .arg(config)
         .arg("web")
         .env("GITEA_WORK_DIR", data_dir)
         .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .spawn()?;
+        .stderr(Stdio::from(log));
+    apply_cpu_cap(&mut command);
+    let child = command.spawn()?;
     Ok(child)
 }
 
@@ -307,6 +345,24 @@ mod tests {
         let b = free_port().expect("port b");
         assert_ne!(a, 0);
         assert_ne!(b, 0);
+    }
+
+    #[test]
+    fn cpu_cap_defaults_to_two_and_is_applied() {
+        // Documents the GOMAXPROCS mitigation for the sustained-CPU incident.
+        assert_eq!(DEFAULT_FORGEJO_GOMAXPROCS, "2");
+        let mut command = Command::new("forgejo");
+        apply_cpu_cap(&mut command);
+        let gomaxprocs = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("GOMAXPROCS"))
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+        // Only assert the default path so the test is not racy against an
+        // override; in the default test env the var is unset.
+        if std::env::var("HARNESS_FORGEJO_GOMAXPROCS").is_err() {
+            assert_eq!(gomaxprocs.as_deref(), Some("2"));
+        }
     }
 
     #[test]

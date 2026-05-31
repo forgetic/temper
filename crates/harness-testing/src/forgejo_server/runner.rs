@@ -201,11 +201,15 @@ fn spawn_daemon(binary: &Path, work_dir: &Path) -> Result<Child, RunnerError> {
     // `daemon` reads `.runner` from its working dir; log to a file so failures
     // are diagnosable without inheriting the test's stdio.
     let log = std::fs::File::create(work_dir.join("daemon.log"))?;
-    let child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .current_dir(work_dir)
         .arg("daemon")
         .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .spawn()?;
+        .stderr(Stdio::from(log));
+    // Bound the runner (also a Go program) to the same CPU cap as the server so
+    // real CI jobs cannot saturate the host either (see `super::apply_cpu_cap`).
+    super::apply_cpu_cap(&mut command);
+    let child = command.spawn()?;
     Ok(child)
 }

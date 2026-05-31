@@ -449,3 +449,59 @@ fn forgejo_debug_redacts_secrets() {
     assert!(rendered.contains("<redacted>"));
     assert!(rendered.contains("http://127.0.0.1:3000"));
 }
+
+#[test]
+fn agents_defaults_to_fake() {
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(args.agents, AgentsKind::Fake);
+}
+
+#[test]
+fn parses_agents_real() {
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--agents",
+        "real",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(args.agents, AgentsKind::Real);
+}
+
+#[test]
+fn rejects_bad_agents() {
+    let error = parse(argv(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--agents",
+        "bogus",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]))
+    .unwrap_err();
+    assert!(error.to_string().contains("--agents"));
+}
