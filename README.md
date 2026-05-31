@@ -1,62 +1,61 @@
 # Harness
 
-Harness is a Rust workspace for building agentic workflows on top of Forge-like collaboration platforms.
+Harness is a Rust workspace for building agentic workflows on top of Forge-like collaboration platforms such as Forgejo. It treats issues, pull requests, labels, comments, reviews, dependency links, CI results, and workflow metadata as the durable source of truth, then coordinates agents through a typed workflow runtime.
 
-The project is intentionally backend-agnostic. The `harness-forge` crate defines the Forge domain model and abstract interface for repositories, users, issues, pull requests, native dependency links, comments, labels, reviews, merges, and CI jobs. Concrete backends can adapt that interface to local files, in-memory stores, Forgejo, GitHub, or other systems, following the `harness-forge-<provider>` naming convention (see ADR 0008). The `harness-workflow` crate is the workflow/orchestration layer; it now contains the typed workflow spec, static validation, artifact/metadata classification of Forge issues and pull requests, first-class relation declarations, compilation to role/prompt/tool/queue/label manifests, pure queue evaluation with multi-kind/disjunctive matching, queue activation, and transition planning, external/runtime-signal gates including native CI and reviews, a runtime executor that applies planned transitions through the `Forge` trait, and recovery primitives — leases, command journaling, and a reconciler (Phases 2–7) — plus deterministic robustness and crash-injection tests that prove the runtime's safety properties (Phase 8). The `harness-runner` crate collects reusable production runner primitives: read-only Forge scans from active queues to role-addressed work items, the `Agent`/`RoleTools` tool boundary, tickable `Worker`/`RoleWorker` plus `MechanicalWorker` units, the test-only CI producer seam, and the config/driver/stage composition seam for runnable worlds, including reference-delivery happy, failure-return, and dependency-unblock scenarios on both memory and filesystem backends.
+The project is intentionally backend-agnostic: workflow policy lives above a portable `Forge` interface, while concrete backends adapt that interface to memory, the local filesystem, Forgejo, or future providers.
 
-## Status
+## What is in this repository
 
-This repository is at the design-first scaffold stage. Expect the public interface to evolve, but document every change as if future agents will maintain the project without conversational context.
+Harness has four main layers:
 
-Current state:
+- **Forge interface and backends** define the collaboration-domain model and provider adapters.
+- **Workflow runtime** validates workflow specs, classifies Forge artifacts, plans transitions, executes authorized effects, and repairs interrupted work through leases, journaling, and reconciliation.
+- **Runner primitives** scan active queues, dispatch role work to agents, expose role-scoped tools, and run mechanical controller work.
+- **Agents and test harnesses** provide deterministic fake agents for reproducible scenarios and real in-process LLM agents for Forgejo end-to-end rehearsals.
 
-- `harness-forge` contains the provider-neutral Forge domain model and async interface.
-- `harness-workflow` implements the workflow spec types (`RawWorkflowSpec`), typed ids, validation diagnostics, and `ValidatedWorkflow` (Phase 2), plus artifact/Forge mapping, workflow metadata blocks, and a classifier that turns Forge issues and pull requests into typed artifacts or classification diagnostics (Phase 3), plus compilation of a validated workflow into role, prompt, tool, queue, and label manifests and a runtime transition table (Phase 4), plus a pure planner that matches classified artifacts against queues, evaluates queue activation, and plans transitions into typed effects and postconditions without touching a backend (Phase 5), plus a runtime executor (`Executor`) that loads fresh Forge state, re-plans, applies label transitions through the `Forge` trait, verifies postconditions, and supports idempotent issue creation via correlation keys (Phase 6), plus recovery primitives: leases (`LeasePlanner`/`LeaseManager`), command journaling (`CommandJournal`/`InMemoryJournal` with a journaled executor), and a reconciler (`Reconciler`/`RecoveryPolicy`) that scans artifacts and journal entries for expired leases, partial transitions, and impossible states (Phase 7), plus deterministic robustness and crash-injection tests (a `CrashForge` fault-injecting `Forge` wrapper) that prove the runtime's safety properties (Phase 8), plus expression/planning of non-label assignee, comment, pull-request create, and merge effects for the evolving reference workflow (Phase 9a), execution of assignee and comment effects with runtime role-to-user resolution plus comment idempotency markers (Phase 9b), at-most-once execution of `MergePullRequest` with the post-merge `landed`/`alignment` projection modeled as `add_label` effects (Phase 9c), idempotent pull-request creation via `Executor::ensure_pull_request` plus `CreatePullRequest` execution with runtime create inputs (Phase 10), external-signal gates satisfied by Forge-projected label/state conditions (Phase 11), native CI gates fed from `CiJob` conclusions with derived merge eligibility (ADR 0014), first-class relation declarations plus typed classification of metadata-projected relations (Phase 12a), a relation-driven `dependency_gate` (the `dependencies_resolved` gate condition) with a mechanical reconciler unblock for `blocked` work (Phase 12b), native dependency links with metadata fallback and Forge-derived dependency status (ADR 0015), queue activation policy via `min_depth`/`max_age` (Phase 13), multi-kind/disjunctive queue matching (Phase 14), native pull-request reviews with review gates (ADR 0016), and CI pass/failure routing from native CI status rather than testing labels (ADR 0017). It depends on `harness-forge` for the domain types it classifies and executes against. See ADR 0007, ADR 0010, ADR 0011, ADR 0012, ADR 0014, ADR 0015, ADR 0016, ADR 0017, and `docs/reference/robustness-guarantees.md`.
-- `harness-forge-filesystem` implements filesystem backend support for users, per-handle identity, repositories, repository labels, issues, native dependency links, issue comments, pull requests, pull-request comments, pull-request reviews, pull-request merges, and CI job listing/lookup plus deterministic CI fixture seeding.
-- `harness-forge-memory` implements the same Forge contract entirely in memory. It reproduces the filesystem backend's deterministic identifiers, logical clock, ordering, and query semantics, adds a handle-local `as_user` identity hook plus a one-shot fault hook for testing backend error paths, and is the backend the workflow-layer tests run against.
-- `harness-forge-forgejo` is the first real-world provider backend (`harness-forge-<provider>` convention). It adapts the **full** `Forge` trait to Forgejo's HTTP API through a mockable client seam: identity, repositories, labels, issues, pull requests, comments, requested reviewers, native reviews (one-call submission), merge, native dependency links, and CI (Actions) jobs. It is offline-tested by default — a recording mock HTTP seam serves every contract test, so `cargo test` never touches the network — and ships optional, `#[ignore]`d, env-gated live smoke tests (`tests/live.rs`, opt in with `HARNESS_FORGEJO_LIVE=1`). Provider behaviors that cannot be verified without a live instance are **best-effort** and documented as such: optimistic concurrency via an `ETag`/`updated_at` validator cache, the merge and dependency payload shapes, and non-self org repo creation; pending-review submission is rejected with a portable `InvalidRequest`. No `Forge` method is a stub. See `docs/reference/forgejo-backend.md`.
-- `harness-runner` contains backend-agnostic runner primitives. It provides read-only `scan`/`scan_role` functions that list Forge issues and pull requests, classify them, read public workflow `GateSignals`, apply queue activation, and emit one `WorkItem` per active queue member and subscriber role. It also defines `Agent`, `RoleTools`, `Worker`, `RoleWorker`, `MechanicalWorker`, and the `CiSink`/`CiWorker` test seam: agents service work items through role-scoped tools, `RoleTools` is the only workflow-state mutation path exposed to agents (authorized transition execution plus the idempotent pull-request creation seam and a narrow native issue-close tool), the mechanical worker runs reconcile → apply ticks for expired leases, partial transitions, dependency unblocks, and stale commands without spawning agents, and CI producer tests can seed native jobs while production continues to rely on the real provider's CI system. `RunnerConfig`, `FixpointDriver`, `PollLoop`, `Scenario`/`Stage`, `InProcessStage`, and the `MultiProcessStage` rehearsal now compose those workers into process-layout-independent runnable worlds for layered tests and future production glue. The checked-in fake reference-delivery agents now live in the `harness-testing` crate (a dev-dependency of `harness-runner`) and are behavior-only adapters behind the same `Agent` trait used by real agents; the L2/L3 happy path plus review-failure, CI-failure, and dependency-unblock variants run the same scenarios on `MemoryForge` and `FilesystemForge`, and the happy path also runs through the distinct-handle filesystem process-split sketch.
-- `harness-testing` houses the reusable non-production testing machinery (the deterministic reference-delivery fakes, CI policies/sinks, backend-neutral scenarios, and `RunnerConfig`/fixture helpers), the `harness-testing-worker` binary (a fake worker process dispatching on `--kind provision|role|mechanical|ci`, with `--architect`/`--reviewer`/`--ci` behavior flags, `--clock deterministic|wall`, and a `--backend filesystem|forgejo` seam), the Forgejo-server/runner fixtures (`forgejo_server`: a throwaway server, a host-mode `forgejo-runner`, and provisioning of per-role users/tokens), and two `#[ignore]`d multi-process rehearsals: `tests/multiprocess.rs` converges all four reference-delivery scenarios across real OS processes sharing one `FilesystemForge` store, and the env-gated (`HARNESS_FORGEJO_E2E=1`) `tests/forgejo_multiprocess.rs` converges the **same four scenarios** — reusing the exact seed/assert closures — against a **real Forgejo server plus a real host-mode `forgejo-runner` producing genuine CI** (read via the web-UI fallback path of ADR 0019). An `--agents real|fake` worker flag (default `fake`) additionally runs the real `harness-agents` LLM agents in every role (auth mode selectable via `--auth deepseek|chatgpt-oauth` / `HARNESS_AGENTS_AUTH`, defaulting to the flat ChatGPT subscription on this test/dev surface): the double-gated (`HARNESS_FORGEJO_AGENTS=1`) real-agent variants of that test converge all four scenarios through real OS processes + real Forgejo + real CI + real agents (Phase B2), so the backend, CI, **and agents** swaps are done and only webhook triggering remains on the "swap to real" list. The throwaway server/runner fixtures cap `GOMAXPROCS` (default `2`, `HARNESS_FORGEJO_GOMAXPROCS`) so the spawned Go Forgejo cannot saturate the host for minutes during a run. It is a dev-dependency only, never a normal dependency of a production crate. See `docs/how-to/run-multiprocess-e2e.md`, `docs/how-to/run-forgejo-multiprocess-e2e.md`, `docs/explanation/forgejo-e2e-topology.md`, and `docs/how-to/run-reference-delivery-end-to-end.md`.
-- `examples/reference-delivery/` is an operator-runnable, self-contained demo of the production topology: a POSIX `run.sh` boots a throwaway Forgejo + host-mode `forgejo-runner`, provisions/seeds via the `harness-testing-provision` binary, and launches one real LLM-backed `harness-testing-worker` per role plus the mechanical reconciler (`--backend forgejo --agents real --clock wall`, ChatGPT OAuth by default), driving the bundled reference-delivery workflow from an intake issue to a merged, reconciled PR. It is the shell-driven twin of the gated `forgejo_multiprocess.rs` test (validated end-to-end on ChatGPT OAuth, ~22 s on a 4-core host); CI converges on a commit-message marker, so a real project swaps in real CI + a real coding agent. See `examples/reference-delivery/README.md`.
-- The reference-workflow backlog (Phases 9a–14) is complete, and lease acquisition is now a portable compare-and-swap: issues and pull requests carry an optimistic-concurrency `Version`, `UpdateIssue`/`UpdatePullRequest` take an `expected_version` precondition, and `LeaseManager` writes leases conditionally so two "no lease" acquirers cannot both win (ADR 0013). Reconciler actions are now applied automatically: `recover::Applier` routes each `RecoveryAction` through the executor's idempotent label-apply path, `LeaseManager::clear`, and the command journal, idempotently and crash-safely, so the scan→apply loop converges (`Escalate`/`Diagnose` stay advisory). The native-Forge-state backlog has completed Phase A (derived merge eligibility and native CI gates), Phase B (native dependency links with metadata fallback), Phase C (native pull-request reviews), and the ADR 0017 cleanup that routes CI pass/failure from native CI status instead of testing labels; likely next work is adding thin per-worker filesystem binaries for the process split, live-refining the now offline-complete `harness-forge-forgejo` backend against a real instance, native review-provider adapters, or projecting `Escalate`/`Diagnose` into labels/comments. See `docs/reference/robustness-guarantees.md`, `docs/explanation/reference-workflow-roadmap.md`, `docs/explanation/native-forge-state-roadmap.md`, and `docs/explanation/runner-process-split.md`.
+The core workflow path is implemented and covered by deterministic memory/filesystem tests. The Forgejo backend is implemented and tested offline by default, with gated live and multi-process end-to-end tests for real Forgejo, real CI, and optional real LLM agents. The operator-facing demo in `examples/reference-delivery/` now targets production-owned binaries in `harness-production`; it still needs live revalidation and is not yet a turnkey deployment.
 
-## Workspace layout
+## Workspace map
 
 ```text
 crates/
-  harness-forge/            Domain types and the backend-agnostic Forge interface.
-  harness-workflow/         Workflow/orchestration crate (spec, validation, classification, relations, compilation, planning, execution, leases, journaling, reconciliation).
-  harness-forge-filesystem/ Local filesystem backend used for fast development and tests.
-  harness-forge-memory/     In-memory backend used for fast workflow tests and local runs.
-  harness-forge-forgejo/    First real-world provider backend: Forgejo HTTP API adapter implementing the full Forge trait (offline-tested; best-effort optional live smoke tests).
-  harness-runner/           Backend-agnostic runner primitives: scanning, workers, CI test seam, drivers, stages.
-  harness-testing/          Reusable non-production testing machinery (fake agents, CI policies/sinks, scenarios, config/fixture helpers), the harness-testing-worker binary, and the #[ignore]d multi-process rehearsal; dev-dependency only.
-  harness-agents/           Real, in-process LLM role agents (via pi_agent_rust) for every role (engineer, architect incl. closing, reviewer incl. request-changes-then-approve, owner, human) + the real_registry builder. Two auth modes (ProviderConfig::from_auth): DeepSeek API key (library default) and ChatGPT/OpenAI-Codex OAuth (test/dev default; shared ~/.pi/agent/auth.json, ADR 0020). The only crate that depends on the LLM SDK; agents decide via the model but mutate workflow state only through RoleTools.
-examples/
-  reference-delivery/       Operator-runnable demo of the full topology (run.sh + config + secrets templates); not part of the Cargo workspace.
-docs/
-  tutorials/      Learning-oriented walkthroughs.
-  how-to/         Task-oriented recipes.
-  reference/      Precise API and behavior contracts.
-  explanation/    Concepts, rationale, and trade-offs.
-  adr/            Architecture decision records.
+  harness-forge/            Portable Forge domain model and async interface.
+  harness-forge-memory/     In-memory reference backend for fast tests.
+  harness-forge-filesystem/ Filesystem reference backend for local and process-split tests.
+  harness-forge-forgejo/    Forgejo HTTP backend with offline contract tests.
+  harness-workflow/         Workflow spec, validation, planning, execution, and recovery.
+  harness-runner/           Scanner, workers, role tools, drivers, and poll loop primitives.
+  harness-testing/          Non-production fake agents, fixtures, scenarios, and worker binary.
+  harness-agents/           Real LLM role agents behind the same runner `Agent` boundary.
+  harness-production/       Production `harness-worker` and `harness-provision-forgejo` binaries.
+
+docs/                       Diátaxis documentation: tutorials, how-to, reference, explanation, ADRs.
+examples/reference-delivery/ Shell demo for the intended production topology.
+plans/                      Implementation plans and findings for larger work streams.
 ```
 
-## Documentation model
+For a more detailed crate inventory, see `docs/reference/workspace-layout.md`.
 
-Documentation follows [Diátaxis](https://diataxis.fr/): tutorials, how-to guides, reference, and explanation. Start with `docs/README.md`.
+## Getting started as a developer
 
-Agent learning from past mistakes is captured in `docs/reference/agent-lessons/`; read its index during session bootstrap.
-
-## Development quick start
-
-Use the fast local-development aliases from `.cargo/config.toml`:
+Use the fast workspace aliases from `.cargo/config.toml`:
 
 ```sh
-cargo dev-check
+cargo dev-check       # cargo check --workspace --all-targets
 cargo fmt --all
+cargo dev-clippy
 ```
 
-`cargo dev-check` expands to `cargo check --workspace --all-targets`. Cargo uses all available logical CPU cores by default; keep that default for agent development.
+When behavior changes, run the relevant tests; `cargo dev-test` runs the workspace test suite. Default tests are intended to be hermetic and should not contact live services. Live Forgejo and real-agent scenarios are opt-in through the documented environment gates.
 
-When changing behavior or public interfaces, update the relevant documentation in the same change. At the end of a session, follow `docs/how-to/end-a-development-session.md`.
+Useful next reads:
+
+- `docs/README.md` — documentation map.
+- `docs/how-to/fast-local-iteration.md` — local validation loop.
+- `docs/how-to/run-reference-delivery-end-to-end.md` — deterministic reference scenarios.
+- `docs/how-to/run-forgejo-multiprocess-e2e.md` — gated real Forgejo/CI rehearsals.
+- `docs/explanation/agentic-workflows.md` — the conceptual model.
+
+## For coding agents
+
+Autonomous coding agents should start with `AGENTS.md`. It contains the detailed current repository state, operating rules, validation expectations, and links to the agent lessons register.
