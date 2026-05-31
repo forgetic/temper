@@ -74,8 +74,9 @@ DeepSeek key or a missing ChatGPT login fails at setup — before any worker tic
 mirroring the existing DeepSeek "key unavailable" behavior; the OAuth error
 points the operator at `pi /login openai-codex`.
 
-The `harness-testing-worker` exposes this as `--auth deepseek|chatgpt-oauth`,
-`--codex-model <id>`, `--auth-file <path>`, with `HARNESS_AGENTS_AUTH` as the
+The `harness-testing-worker` exposes this as `--auth deepseek|chatgpt-oauth`
+(later extended with `anthropic-oauth`), `--codex-model <id>`, `--auth-file
+<path>`, with `HARNESS_AGENTS_AUTH` as the
 config-file bridge (precedence CLI > env > default). The **library default stays
 `deepseek`** (production wiring is explicit and unchanged), but the **test/dev
 surfaces default to `chatgpt-oauth`** per the cost policy, so our own runs never

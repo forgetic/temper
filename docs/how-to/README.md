@@ -11,10 +11,11 @@ Current guides:
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)
 - [Run the Forgejo multi-process end-to-end harness](run-forgejo-multiprocess-e2e.md)
-- [Use ChatGPT (OpenAI Codex) OAuth for the LLM agents](use-chatgpt-oauth-auth.md)
-- Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — the
-  shell-driven, self-contained version of the Forgejo e2e harness; see its
-  [README](../../examples/reference-delivery/README.md).
+- [Use OAuth auth modes for the LLM agents](use-chatgpt-oauth-auth.md)
+- Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — now wired
+  to the planned production binary names; see its
+  [README](../../examples/reference-delivery/README.md) and
+  [production-binaries plan](../../plans/production-binaries/README.md).
 
 Planned guides:
 

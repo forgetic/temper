@@ -60,8 +60,8 @@ throwaway-server wrapper that bootstraps an admin (CLI) then calls it. Role
 logins come from the passed-in binding list (`runner_config().role_bindings`),
 never hardcoded. `seed_intake_issue(base_url, token, owner, name)` adds one
 realistic intake issue whose labels are **derived from the compiled workflow**
-(the entry issue artifact a queue filters on), idempotently. The operator binary
-`harness-testing-provision` wires these together for the real-world example: it
+(the entry issue artifact a queue filters on), idempotently. The production
+binary plan moves this operator-facing wiring to `harness-provision-forgejo`: it
 takes `--base-url/--owner/--name/--out`, reads the admin token from
 `HARNESS_FORGEJO_ADMIN_TOKEN` (never argv), and writes the per-role
 `{user, token, password}` to a `0600` POSIX-sourceable secrets file

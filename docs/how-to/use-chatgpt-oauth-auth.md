@@ -1,9 +1,10 @@
-# Use ChatGPT (OpenAI Codex) OAuth for the LLM agents
+# Use OAuth auth modes for the LLM agents
 
-The real, in-process LLM agents (`harness-agents`) can authenticate two ways: a
-DeepSeek **API key** (pay-per-token) or a ChatGPT (OpenAI Codex) **OAuth
-subscription** (a flat subscription, no per-call cost). This guide covers the
-OAuth mode. See ADR 0020 for the rationale.
+The real, in-process LLM agents (`harness-agents`) can authenticate with a
+DeepSeek **API key** (pay-per-token), ChatGPT (OpenAI Codex) **OAuth** (a flat
+subscription, no per-call cost), or opt-in Anthropic **OAuth**. This guide
+covers the ChatGPT default and notes the Anthropic OAuth selection surface. See
+ADR 0020 for the ChatGPT rationale.
 
 > **Cost note.** Prefer ChatGPT OAuth for tests and local development: it bills
 > nothing per call against a flat subscription, where DeepSeek bills per token.
@@ -50,35 +51,58 @@ The launch script sources a config file (e.g. the example's
 `config/harness.env`) that exports the env vars the worker reads:
 
 ```sh
-HARNESS_AGENTS_AUTH=chatgpt-oauth        # deepseek | chatgpt-oauth
-HARNESS_AGENTS_CODEX_MODEL=gpt-5.3-codex # optional override (default)
-HARNESS_AGENTS_AUTH_FILE=/path/auth.json # optional override
+HARNESS_AGENTS_AUTH=chatgpt-oauth        # deepseek | chatgpt-oauth | anthropic-oauth
+HARNESS_AGENTS_CODEX_MODEL=gpt-5.3-codex # optional Codex override (default)
+HARNESS_AGENTS_AUTH_FILE=/path/auth.json # optional shared auth-file override
 ```
 
 A CLI flag overrides the matching env var; absent both, the test/dev default is
 `chatgpt-oauth`. (The `harness-agents` **library** default stays `deepseek` so
 production wiring is explicit.)
 
-## 3. Setup errors surface before any work
+## 3. Anthropic OAuth opt-in
+
+Anthropic OAuth is available but not the default. Log in once:
+
+```sh
+pi /login anthropic
+```
+
+Then select it explicitly:
+
+```sh
+HARNESS_AGENTS_AUTH=anthropic-oauth
+HARNESS_AGENTS_ANTHROPIC_MODEL=claude-opus-4-8 # optional; this is the default
+```
+
+It reads the `anthropic` entry from the same shared auth file, tolerates both pi
+schemas, refreshes near-expiry credentials, and injects Claude Code-compatible
+HTTP identity headers per request. The worker has no `--anthropic-model` flag;
+use the env var when overriding the default.
+
+## 4. Setup errors surface before any work
 
 If no login is found, the worker fails at startup with a clear setup error
-naming `openai-codex` and pointing you back at `pi /login openai-codex` — it does
-not silently start and stall on the first tick. (The DeepSeek mode fails the same
-way when its key is missing.)
+naming `openai-codex` or `anthropic` and pointing you back at the matching
+`pi /login ...` command — it does not silently start and stall on the first tick.
+(The DeepSeek mode fails the same way when its key is missing.)
 
-## 4. Verify
+## 5. Verify
 
 - **Gated live check (A3):** `HARNESS_CHATGPT_OAUTH=1 cargo test -p harness-agents
   --test chatgpt_oauth_live -- --ignored` runs one real decision against the
   Codex endpoint and a near-expiry refresh check.
+- **Anthropic gated live check:** `HARNESS_ANTHROPIC_OAUTH=1 cargo test -p
+  harness-agents --test anthropic_oauth_live -- --ignored` runs one real decision
+  against the Anthropic endpoint.
 - **End-to-end:** run the example from Track B (`examples/reference-delivery`) or
   the gated Forgejo multi-process test with `--agents real` and
-  `HARNESS_AGENTS_AUTH=chatgpt-oauth`.
+  `HARNESS_AGENTS_AUTH=chatgpt-oauth` (or explicit `anthropic-oauth`).
 
 ## Limits
 
-- ChatGPT/Codex **subscription rate limits** apply.
-- The OAuth access token is **short-lived**; the harness refreshes it
-  automatically. A `401`/`403` means the login expired or lacks Codex access —
-  re-run `pi /login openai-codex`.
+- ChatGPT/Codex or Anthropic **subscription rate limits** apply.
+- OAuth access tokens are **short-lived**; the harness refreshes them
+  automatically. A `401`/`403` means the login expired or lacks provider access —
+  re-run the matching `pi /login ...`.
 - No token is ever logged or placed in an error.
