@@ -241,25 +241,33 @@ the same end state. CI is gated on a **commit-message marker** (`[ci-pass]`) the
 engineer's commit carries — not a checked-out file — because the host-mode runner
 has no `actions/checkout` offline.
 
-## Long-poll webhook wakeup regression
+## Long-poll webhook wakeup regressions
+
+Single repo:
 
 ```sh
 HARNESS_FORGEJO_E2E=1 \
   cargo test -p harness-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
 ```
 
-This Phase 4 wakeup regression uses the same throwaway Forgejo + real
-`forgejo-runner`, registers the production `/forgejo/webhook` trigger on the
-repo, and launches fake-agent Forgejo workers with authenticated Unix wake
-sockets and `--poll-ms 120000`. The test waits until every worker has completed
-its initial no-work tick, then seeds the happy path. It must converge in less
-than the poll interval and the worker logs must show an authenticated wake was
-consumed, proving Forgejo webhooks (including issue handoff and PR push/CI
-signals) are waking scans rather than changing workflow decisions directly.
+Multi repo, one fixed worker set:
+
+```sh
+HARNESS_FORGEJO_E2E=1 \
+  cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+```
+
+These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
+register the production `/forgejo/webhook` trigger, and launch fake-agent
+Forgejo workers with authenticated Unix wake sockets and `--poll-ms 120000`. The
+multi-repo variant provisions a second repo, registers webhooks for both repos,
+passes both `--repo` values to one role/mechanical worker set, files one issue in
+each repo, and requires both to converge in less than the poll interval.
 
 On timeout the panic prints the trigger URL (trigger logs are on test stderr),
-worker log tails, runner log tail, and CI diagnostics. Run it serially for the
-same CPU/isolation reasons as the multi-process suite.
+repo-specific stalled assertion text, worker log paths/tails, runner log tail,
+and per-repo CI diagnostics. Run these serially for the same CPU/isolation
+reasons as the multi-process suite.
 
 ## Running it in CI
 

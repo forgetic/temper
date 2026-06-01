@@ -62,6 +62,24 @@ fn parses_provision() {
 }
 
 #[test]
+fn parses_multiple_repositories() {
+    let args = run(&[
+        "--kind",
+        "mechanical",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service-alpha",
+        "--repo",
+        "acme/service-beta",
+    ]);
+    assert_eq!(args.owner, "acme");
+    assert_eq!(args.name, "service-alpha");
+    assert_eq!(args.repositories.len(), 2);
+    assert_eq!(args.repositories[1].name, "service-beta");
+}
+
+#[test]
 fn parses_role_with_identity() {
     let args = run(&[
         "--kind",

@@ -177,6 +177,7 @@ fn provision(root: &Path, owner: &str, name: &str) {
         root: root.to_path_buf(),
         owner: owner.to_string(),
         name: name.to_string(),
+        repositories: vec![RepositoryPath::new(owner, name)],
         poll_interval: chrono::Duration::milliseconds(WORKER_POLL_MS as i64),
         stop_file: None,
         run_secs: Some(0),

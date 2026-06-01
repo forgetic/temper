@@ -109,10 +109,11 @@ the default coverage for workflow logic; this covers the real-backend topology.
 ## Triggering status
 
 The four-scenario Forgejo multi-process suite remains poll-driven so it can
-compare directly with the filesystem rehearsal. A separate gated long-poll
-regression (`forgejo_webhook_wakeup`) now covers the real webhook accelerator:
-real Forgejo posts to the production trigger, the trigger sends authenticated
-wake datagrams, fake-agent Forgejo workers consume them, and the happy path must
-converge before the `120000` ms poll backstop can fire. Polling still stays the
-correctness backstop; webhook payloads are hints only and every wake runs the
-same fresh Forge scan.
+compare directly with the filesystem rehearsal. Separate gated long-poll
+regressions cover the real webhook accelerator: `forgejo_webhook_wakeup` for one
+repo, and `forgejo_multi_repo_webhook` for one fixed worker set scanning two
+repos. Real Forgejo posts to the production trigger, the trigger sends
+authenticated wake datagrams, fake-agent Forgejo workers consume them, and the
+happy path must converge before the `120000` ms poll backstop can fire. Polling
+still stays the correctness backstop; webhook payloads are hints only and every
+wake runs the same fresh Forge scan.

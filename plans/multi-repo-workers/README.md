@@ -95,12 +95,17 @@ Status legend: ☐ pending · ☑ done
    single-repo default and adds optional `REPOS="owner/a owner/b"`; worker token
    Forge permissions, not scan-shard membership, remain the write authority.
 
-4. ☐ **Phase 4 — Multi-repo e2e tests.**
+4. ☑ **Phase 4 — Multi-repo e2e tests.**
    `prompts/phase-4-e2e.md`
 
    Add end-to-end regressions that start one fixed worker set and file issues in
    multiple repos. Include a deterministic filesystem/process test and a gated
-   real-Forgejo test using the completed webhook wake path.
+   real-Forgejo test using the completed webhook wake path. Done:
+   `harness-testing/tests/multi_repo_multiprocess.rs` provisions two filesystem
+   repos and runs one fake worker set over both; `forgejo_multi_repo_webhook.rs`
+   boots throwaway Forgejo + real runner, provisions a second repo, registers
+   webhooks for both repos, launches one multi-repo fake worker set with long
+   polling, and requires convergence before the poll backstop.
 
 5. ☐ **Phase 5 — Examples and operator docs.**
    `prompts/phase-5-examples-and-docs.md`

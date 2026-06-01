@@ -25,10 +25,13 @@
 //!   `--kind ci` is rejected for this backend at parse time.
 
 use chrono::{DateTime, Duration, Utc};
-use harness_forge::{Forge, ForgeError, RepositoryId, RepositoryPath, UpsertLabel, User};
+use harness_forge::{
+    CreateRepository, Forge, ForgeError, RepositoryId, RepositoryPath, UpsertLabel, User,
+};
 use harness_forge_filesystem::FilesystemForge;
 use harness_runner::{
-    CiWorker, ManualClock, MechanicalWorker, PollLoop, RoleWorker, RunReport, RunnerConfig,
+    ManualClock, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, PollLoop,
+    RepositoryJournal, RepositorySet, RepositoryTarget, RoleWorker, RunReport, RunnerConfig,
 };
 use harness_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId};
 use std::error::Error;
@@ -41,11 +44,11 @@ use crate::agents::{
     fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
     RequestChangesThenApproveReviewer,
 };
-use crate::ci::{FailThenPassCiPolicy, FilesystemCiSink, FixedCiPolicy};
 use crate::worker_bin::args::{
     AgentsAuthKind, AgentsKind, ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind,
     RoleBehavior, WorkerArgs, WorkerKind,
 };
+use crate::worker_bin::multi_ci::MultiRepoCiWorker;
 use crate::{block_on, runner_config, workflow};
 use harness_runner::AgentRegistry;
 
@@ -134,21 +137,28 @@ async fn provision(args: &WorkerArgs) -> Result<(), RunError> {
     let forge = FilesystemForge::new(&args.root);
     let workflow = workflow();
     let compiled = workflow.compile();
-    let repo = ensure_repository(&forge, &args.owner, &args.name).await?;
-    upsert_labels(&forge, &repo, &compiled).await?;
+    for path in &args.repositories {
+        let repo = ensure_repository(&forge, path).await?;
+        upsert_labels(&forge, &repo, &compiled).await?;
+    }
     Ok(())
 }
 
 async fn ensure_repository(
     forge: &FilesystemForge,
-    owner: &str,
-    name: &str,
+    path: &RepositoryPath,
 ) -> Result<RepositoryId, RunError> {
-    let path = RepositoryPath::new(owner, name);
-    if let Some(repo) = forge.get_repository_by_path(&path).await? {
+    if let Some(repo) = forge.get_repository_by_path(path).await? {
         return Ok(repo.id);
     }
-    let repo = forge.create_repository(runner_config().repository).await?;
+    let repo = forge
+        .create_repository(CreateRepository {
+            owner: path.owner.clone(),
+            name: path.name.clone(),
+            default_branch: runner_config().repository.default_branch,
+            description: None,
+        })
+        .await?;
     Ok(repo.id)
 }
 
@@ -204,18 +214,31 @@ fn run_role(
     let user = resolve_role_user(&config, &role_id, user_handle);
     let base = FilesystemForge::new(&args.root);
     let forge = base.as_user(user);
-    let repo = block_on(resolve_repository(&forge, &args.owner, &args.name))?;
-
-    let worker = RoleWorker::new(
-        &workflow,
-        &compiled,
-        &forge as &dyn Forge,
-        &repo,
-        role_id.clone(),
-        agent,
-        config.execution_context(&role_id),
-    );
-    drive(args, &worker)
+    if args.repositories.len() == 1 {
+        let repo = block_on(resolve_repository(&forge, &args.owner, &args.name))?;
+        let worker = RoleWorker::new(
+            &workflow,
+            &compiled,
+            &forge as &dyn Forge,
+            &repo,
+            role_id.clone(),
+            agent,
+            config.execution_context(&role_id),
+        );
+        drive(args, &worker)
+    } else {
+        let repositories = block_on(resolve_repository_set(&forge, &args.repositories))?;
+        let worker = MultiRepoRoleWorker::new(
+            &workflow,
+            &compiled,
+            &forge as &dyn Forge,
+            repositories,
+            role_id.clone(),
+            agent,
+            config.execution_context(&role_id),
+        );
+        drive(args, &worker)
+    }
 }
 
 /// Builds the fake registry whose architect and reviewer match `behavior`.
@@ -313,41 +336,55 @@ fn run_mechanical(args: &WorkerArgs) -> Result<RunReport, RunError> {
     let workflow = workflow();
     let config = runner_config();
     let forge = FilesystemForge::new(&args.root);
-    let repo = block_on(resolve_repository(&forge, &args.owner, &args.name))?;
+    if args.repositories.len() == 1 {
+        let repo = block_on(resolve_repository(&forge, &args.owner, &args.name))?;
 
-    // The journal is per-process fast-recovery state, not durable coordination:
-    // leases live in Forge metadata (ADR 0013/0018), so the mechanical worker
-    // re-derives everything it needs from Forge each tick. A fresh in-memory
-    // journal per process is therefore correct across a restart.
-    let journal = InMemoryJournal::new();
-    let worker = MechanicalWorker::new(
-        &workflow,
-        &forge as &dyn Forge,
-        &repo,
-        &journal,
-        LeasePolicy::new(config.lease_ttl),
-    );
-    drive(args, &worker)
+        // The journal is per-process fast-recovery state, not durable coordination:
+        // leases live in Forge metadata (ADR 0013/0018), so the mechanical worker
+        // re-derives everything it needs from Forge each tick. A fresh in-memory
+        // journal per process is therefore correct across a restart.
+        let journal = InMemoryJournal::new();
+        let worker = MechanicalWorker::new(
+            &workflow,
+            &forge as &dyn Forge,
+            &repo,
+            &journal,
+            LeasePolicy::new(config.lease_ttl),
+        );
+        drive(args, &worker)
+    } else {
+        let repositories = block_on(resolve_repository_set(&forge, &args.repositories))?;
+        let journals: Vec<InMemoryJournal> = repositories
+            .repositories()
+            .iter()
+            .map(|_| InMemoryJournal::new())
+            .collect();
+        let bindings: Vec<RepositoryJournal<'_, InMemoryJournal>> = repositories
+            .repositories()
+            .iter()
+            .zip(journals.iter())
+            .map(|(repository, journal)| RepositoryJournal {
+                repository: &repository.id,
+                journal,
+            })
+            .collect();
+        let worker = MultiRepoMechanicalWorker::new(
+            &workflow,
+            &forge as &dyn Forge,
+            repositories.clone(),
+            bindings,
+            LeasePolicy::new(config.lease_ttl),
+        )
+        .map_err(|error| RunError::Backend(error.to_string()))?;
+        drive(args, &worker)
+    }
 }
 
 fn run_ci(args: &WorkerArgs, policy: CiPolicyKind) -> Result<RunReport, RunError> {
     let forge = FilesystemForge::new(&args.root);
-    let repo = block_on(resolve_repository(&forge, &args.owner, &args.name))?;
-    let sink = FilesystemCiSink::new(forge.clone());
-    match policy {
-        CiPolicyKind::Pass => {
-            let worker = CiWorker::new(&forge, &repo, sink);
-            drive(args, &worker)
-        }
-        CiPolicyKind::FailThenPass => {
-            let worker = CiWorker::with_policy(&forge, &repo, sink, FailThenPassCiPolicy);
-            drive(args, &worker)
-        }
-        CiPolicyKind::FixedFail => {
-            let worker = CiWorker::with_policy(&forge, &repo, sink, FixedCiPolicy::fail());
-            drive(args, &worker)
-        }
-    }
+    let repos = block_on(resolve_repository_ids(&forge, &args.repositories))?;
+    let worker = MultiRepoCiWorker::new(&forge, repos, policy);
+    drive(args, &worker)
 }
 
 /// Resolves the repository id by owner/name, generic over the Forge backend.
@@ -364,6 +401,37 @@ pub(super) async fn resolve_repository<F: Forge + ?Sized>(
             owner: owner.into(),
             name: name.into(),
         })
+}
+
+pub(super) async fn resolve_repository_set<F: Forge + ?Sized>(
+    forge: &F,
+    paths: &[RepositoryPath],
+) -> Result<RepositorySet, RunError> {
+    let mut targets = Vec::new();
+    for path in paths {
+        let repo = forge.get_repository_by_path(path).await?.ok_or_else(|| {
+            RunError::RepositoryMissing {
+                owner: path.owner.clone(),
+                name: path.name.clone(),
+            }
+        })?;
+        targets.push(RepositoryTarget::new(
+            repo.id,
+            RepositoryPath::new(repo.owner, repo.name),
+        ));
+    }
+    Ok(RepositorySet::new(targets))
+}
+
+async fn resolve_repository_ids<F: Forge + ?Sized>(
+    forge: &F,
+    paths: &[RepositoryPath],
+) -> Result<Vec<RepositoryId>, RunError> {
+    let mut repos = Vec::new();
+    for path in paths {
+        repos.push(resolve_repository(forge, &path.owner, &path.name).await?);
+    }
+    Ok(repos)
 }
 
 /// Drives `worker` with a poll loop until the stop signal fires, on [`block_on`].
@@ -434,132 +502,5 @@ fn sentinel_exists(path: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::worker_bin::args::WorkerArgs;
-    use harness_runner::Worker;
-
-    fn temp_root(suite: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "harness-testing-worker-{suite}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        path
-    }
-
-    fn base_args(root: PathBuf, kind: WorkerKind) -> WorkerArgs {
-        WorkerArgs {
-            kind,
-            backend: Backend::Filesystem,
-            root,
-            owner: "acme".into(),
-            name: "service".into(),
-            poll_interval: Duration::milliseconds(1),
-            stop_file: None,
-            run_secs: Some(0),
-            clock: ClockKind::Deterministic,
-            agents: AgentsKind::Fake,
-            auth: AgentsAuthKind::default(),
-            codex_model: None,
-            auth_file: None,
-            wake_socket: None,
-            wake_secret_file: None,
-        }
-    }
-
-    #[test]
-    fn each_kind_wires_up_against_a_temp_root() {
-        let root = temp_root("wireup");
-
-        // Provision first so the repository and labels exist for the others.
-        run(&base_args(root.clone(), WorkerKind::Provision)).expect("provision succeeds");
-
-        // No-sleep bounded ticks per kind prove the construction path wires up
-        // against the shared store without spawning processes or sleeping.
-        let workflow = workflow();
-        let compiled = workflow.compile();
-        let config = runner_config();
-
-        // Role worker for every role that has a fake agent.
-        let registry = registry_for(RoleBehavior::default());
-        for role in compiled.roles() {
-            if registry.get(&role.id).is_none() {
-                continue;
-            }
-            let user = resolve_role_user(&config, &role.id, role.id.as_str());
-            let forge = FilesystemForge::new(&root).as_user(user);
-            let repo = block_on(resolve_repository(&forge, "acme", "service")).expect("repo");
-            let agent = registry.get(&role.id).expect("agent").clone();
-            let worker = RoleWorker::new(
-                &workflow,
-                &compiled,
-                &forge as &dyn Forge,
-                &repo,
-                role.id.clone(),
-                agent,
-                config.execution_context(&role.id),
-            );
-            let clock = ManualClock::with_tick_step(epoch(), Duration::seconds(1));
-            let poll = PollLoop::with_clock(&worker, Duration::milliseconds(1), clock);
-            block_on(poll.run_bounded(2)).expect("role worker ticks");
-        }
-
-        // Mechanical worker.
-        {
-            let forge = FilesystemForge::new(&root);
-            let repo = block_on(resolve_repository(&forge, "acme", "service")).expect("repo");
-            let journal = InMemoryJournal::new();
-            let worker = MechanicalWorker::new(
-                &workflow,
-                &forge as &dyn Forge,
-                &repo,
-                &journal,
-                LeasePolicy::new(config.lease_ttl),
-            );
-            assert_eq!(worker.name(), "mechanical");
-            let clock = ManualClock::with_tick_step(epoch(), Duration::seconds(1));
-            let poll = PollLoop::with_clock(&worker, Duration::milliseconds(1), clock);
-            block_on(poll.run_bounded(2)).expect("mechanical worker ticks");
-        }
-
-        // CI worker, each policy.
-        for policy in [
-            CiPolicyKind::Pass,
-            CiPolicyKind::FailThenPass,
-            CiPolicyKind::FixedFail,
-        ] {
-            let report =
-                run(&base_args(root.clone(), WorkerKind::Ci { policy })).expect("ci worker runs");
-            assert_eq!(report.workers.len(), 1);
-        }
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn run_role_reports_unknown_role() {
-        let root = temp_root("unknown-role");
-        run(&base_args(root.clone(), WorkerKind::Provision)).expect("provision");
-        let error = run(&base_args(
-            root.clone(),
-            WorkerKind::Role {
-                role: "ghost".into(),
-                user: "ghost".into(),
-                behavior: RoleBehavior::default(),
-            },
-        ))
-        .unwrap_err();
-        assert!(matches!(error, RunError::UnknownRole { .. }));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn resolve_repository_reports_missing() {
-        let root = temp_root("missing-repo");
-        let forge = FilesystemForge::new(&root);
-        let error = block_on(resolve_repository(&forge, "acme", "service")).unwrap_err();
-        assert!(matches!(error, RunError::RepositoryMissing { .. }));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-}
+#[path = "run_tests.rs"]
+mod tests;

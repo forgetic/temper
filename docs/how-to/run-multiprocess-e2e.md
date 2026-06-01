@@ -12,9 +12,22 @@ coordinate only through a shared on-disk `FilesystemForge` store.
 cargo test -p harness-testing --test multiprocess -- --ignored
 ```
 
-The tests live in `crates/harness-testing/tests/multiprocess.rs`. They are
-`#[ignore]`d, so the default `cargo test` skips them; the `--ignored` flag opts
-in.
+The single-repo scenario tests live in `crates/harness-testing/tests/multiprocess.rs`.
+They are `#[ignore]`d, so the default `cargo test` skips them; the `--ignored`
+flag opts in.
+
+## Multi-repo fixed worker set
+
+Phase 4 of the multi-repo worker plan adds a focused two-repository rehearsal:
+
+```sh
+cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored
+```
+
+That test provisions `acme/service-alpha` and `acme/service-beta` in one shared
+filesystem store, starts one role worker per role plus one mechanical worker and
+one fake CI producer, and passes both `--repo` values to every child. On timeout
+it reports the stalled repository path next to the last scenario assertion error.
 
 ## Scenarios
 

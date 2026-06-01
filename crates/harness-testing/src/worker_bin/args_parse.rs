@@ -12,6 +12,8 @@ use super::args::{
     AGENTS_AUTH_ENV, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
 };
 use chrono::Duration;
+use harness_forge::RepositoryPath;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Outcome of parsing the raw argument vector.
@@ -26,7 +28,7 @@ pub enum ParseOutcome {
 /// One-line usage string for `--help` and error context.
 pub const USAGE: &str = concat!(
     "harness-testing-worker --kind <provision|role|mechanical|ci> --root <path> ",
-    "--repo <owner/name> [--backend <filesystem|forgejo>] [--base-url <url>] ",
+    "--repo <owner/name> [--repo <owner/name> ...] [--backend <filesystem|forgejo>] [--base-url <url>] ",
     "[--role <id> --user <handle>] ",
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
@@ -76,7 +78,7 @@ struct RawArgs {
     backend: Option<String>,
     base_url: Option<String>,
     root: Option<String>,
-    repo: Option<String>,
+    repos: Vec<String>,
     role: Option<String>,
     user: Option<String>,
     architect: Option<String>,
@@ -106,7 +108,7 @@ impl RawArgs {
             backend: None,
             base_url: None,
             root: None,
-            repo: None,
+            repos: Vec::new(),
             role: None,
             user: None,
             architect: None,
@@ -132,7 +134,7 @@ impl RawArgs {
                 "--backend" => raw.backend = Some(value_for(&flag, &mut iter)?),
                 "--base-url" => raw.base_url = Some(value_for(&flag, &mut iter)?),
                 "--root" => raw.root = Some(value_for(&flag, &mut iter)?),
-                "--repo" => raw.repo = Some(value_for(&flag, &mut iter)?),
+                "--repo" => raw.repos.push(value_for(&flag, &mut iter)?),
                 "--role" => raw.role = Some(value_for(&flag, &mut iter)?),
                 "--user" => raw.user = Some(value_for(&flag, &mut iter)?),
                 "--architect" => raw.architect = Some(value_for(&flag, &mut iter)?),
@@ -166,7 +168,12 @@ impl RawArgs {
         let kind = self.parse_kind()?;
         let backend_kind = parse_backend(self.backend.as_deref())?;
         let root = PathBuf::from(require(self.root, "--root")?);
-        let (owner, name) = parse_repo(&require(self.repo, "--repo")?)?;
+        let repositories = parse_repositories(self.repos)?;
+        let first = repositories
+            .first()
+            .expect("parse_repositories returns at least one repository");
+        let owner = first.owner.clone();
+        let name = first.name.clone();
         let poll_interval = match self.poll_ms {
             Some(raw) => Duration::milliseconds(parse_i64(&raw, "--poll-ms")?),
             None => Duration::milliseconds(50),
@@ -237,6 +244,7 @@ impl RawArgs {
             root,
             owner,
             name,
+            repositories,
             poll_interval,
             stop_file,
             run_secs,
@@ -300,7 +308,25 @@ fn require_ref(value: Option<&str>, flag: &str) -> Result<String, ArgsError> {
         .ok_or_else(|| ArgsError::new(format!("missing required {flag}\nusage: {USAGE}")))
 }
 
-fn parse_repo(repo: &str) -> Result<(String, String), ArgsError> {
+fn parse_repositories(repos: Vec<String>) -> Result<Vec<RepositoryPath>, ArgsError> {
+    if repos.is_empty() {
+        return Err(ArgsError::new(format!(
+            "missing required --repo\nusage: {USAGE}"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    let mut parsed = Vec::new();
+    for repo in repos {
+        let path = parse_repo(&repo)?;
+        let key = (path.owner.clone(), path.name.clone());
+        if seen.insert(key) {
+            parsed.push(path);
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_repo(repo: &str) -> Result<RepositoryPath, ArgsError> {
     let (owner, name) = repo
         .split_once('/')
         .ok_or_else(|| ArgsError::new(format!("--repo must be owner/name, got '{repo}'")))?;
@@ -309,7 +335,7 @@ fn parse_repo(repo: &str) -> Result<(String, String), ArgsError> {
             "--repo must be owner/name with non-empty parts, got '{repo}'"
         )));
     }
-    Ok((owner.to_string(), name.to_string()))
+    Ok(RepositoryPath::new(owner, name))
 }
 
 fn parse_ci(ci: Option<&str>) -> Result<CiPolicyKind, ArgsError> {

@@ -24,13 +24,17 @@ use std::sync::Arc;
 
 use harness_forge::Forge;
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use harness_runner::{Agent, MechanicalWorker, RoleWorker, RunReport, WorkerRunReport};
+use harness_runner::{
+    Agent, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal,
+    RoleWorker, RunReport, WorkerRunReport,
+};
 use harness_workflow::{InMemoryJournal, LeasePolicy, RoleId};
 
 use crate::worker_bin::args::{AgentsKind, ForgejoArgs, RoleBehavior, WorkerArgs, WorkerKind};
 use crate::worker_bin::forgejo_engineer::{ForgejoEngineer, ForgejoLlmPrep};
 use crate::worker_bin::run::{
-    real_registry_for, registry_for, resolve_repository, upsert_labels, RunError, StopSignal,
+    real_registry_for, registry_for, resolve_repository, resolve_repository_set, upsert_labels,
+    RunError, StopSignal,
 };
 use crate::{runner_config, workflow};
 
@@ -71,7 +75,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
             // Forgejo-aware engineer; `--agents real` swaps in the LLM agents from
             // `harness-agents`, the engineer carrying the Forgejo prep hook.
             let registry = match args.agents {
-                AgentsKind::Fake => registry_with_forgejo_engineer(forgejo, args, *behavior),
+                AgentsKind::Fake => registry_with_forgejo_engineer(forgejo, *behavior),
                 AgentsKind::Real => real_registry_with_forgejo_prep(forgejo, args, *behavior)?,
             };
             let agent = registry
@@ -81,31 +85,72 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
 
             // Identity comes from the token baked into `forge`, not from a
             // handle relabel; `--user` is only a human-readable cross-check.
-            let repo = resolve_repository(&forge, &args.owner, &args.name).await?;
-            let worker = RoleWorker::new(
-                &workflow,
-                &compiled,
-                &forge as &dyn Forge,
-                &repo,
-                role_id.clone(),
-                agent,
-                config.execution_context(&role_id),
-            );
-            drive_async(args, &worker).await
+            if args.repositories.len() == 1 {
+                let repo = resolve_repository(&forge, &args.owner, &args.name).await?;
+                let worker = RoleWorker::new(
+                    &workflow,
+                    &compiled,
+                    &forge as &dyn Forge,
+                    &repo,
+                    role_id.clone(),
+                    agent,
+                    config.execution_context(&role_id),
+                );
+                drive_async(args, &worker).await
+            } else {
+                let repositories = resolve_repository_set(&forge, &args.repositories).await?;
+                let worker = MultiRepoRoleWorker::new(
+                    &workflow,
+                    &compiled,
+                    &forge as &dyn Forge,
+                    repositories,
+                    role_id.clone(),
+                    agent,
+                    config.execution_context(&role_id),
+                );
+                drive_async(args, &worker).await
+            }
         }
         WorkerKind::Mechanical => {
             let workflow = workflow();
             let config = runner_config();
-            let repo = resolve_repository(&forge, &args.owner, &args.name).await?;
-            let journal = InMemoryJournal::new();
-            let worker = MechanicalWorker::new(
-                &workflow,
-                &forge as &dyn Forge,
-                &repo,
-                &journal,
-                LeasePolicy::new(config.lease_ttl),
-            );
-            drive_async(args, &worker).await
+            if args.repositories.len() == 1 {
+                let repo = resolve_repository(&forge, &args.owner, &args.name).await?;
+                let journal = InMemoryJournal::new();
+                let worker = MechanicalWorker::new(
+                    &workflow,
+                    &forge as &dyn Forge,
+                    &repo,
+                    &journal,
+                    LeasePolicy::new(config.lease_ttl),
+                );
+                drive_async(args, &worker).await
+            } else {
+                let repositories = resolve_repository_set(&forge, &args.repositories).await?;
+                let journals: Vec<InMemoryJournal> = repositories
+                    .repositories()
+                    .iter()
+                    .map(|_| InMemoryJournal::new())
+                    .collect();
+                let bindings: Vec<RepositoryJournal<'_, InMemoryJournal>> = repositories
+                    .repositories()
+                    .iter()
+                    .zip(journals.iter())
+                    .map(|(repository, journal)| RepositoryJournal {
+                        repository: &repository.id,
+                        journal,
+                    })
+                    .collect();
+                let worker = MultiRepoMechanicalWorker::new(
+                    &workflow,
+                    &forge as &dyn Forge,
+                    repositories.clone(),
+                    bindings,
+                    LeasePolicy::new(config.lease_ttl),
+                )
+                .map_err(|error| RunError::Backend(error.to_string()))?;
+                drive_async(args, &worker).await
+            }
         }
         // Unreachable: parsing rejects `--kind ci` for the Forgejo backend.
         WorkerKind::Ci { .. } => Err(RunError::Backend(
@@ -145,15 +190,12 @@ fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
 /// the one agent it runs.
 fn registry_with_forgejo_engineer(
     forgejo: &ForgejoArgs,
-    args: &WorkerArgs,
     behavior: RoleBehavior,
 ) -> harness_runner::AgentRegistry<dyn Forge> {
     let mut registry = registry_for(behavior);
     let engineer = ForgejoEngineer::new(
         forgejo.base_url.clone(),
         forgejo.token.clone(),
-        args.owner.clone(),
-        args.name.clone(),
         behavior.ci_sentinel,
     );
     registry.insert(
@@ -181,8 +223,6 @@ fn real_registry_with_forgejo_prep(
     let prep = Arc::new(ForgejoLlmPrep::new(
         forgejo.base_url.clone(),
         forgejo.token.clone(),
-        args.owner.clone(),
-        args.name.clone(),
         behavior.ci_sentinel,
     )) as Arc<dyn harness_agents::EngineerPrep<dyn Forge>>;
     real_registry_for(args, behavior, prep)

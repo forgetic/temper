@@ -297,10 +297,13 @@ pub struct WorkerArgs {
     /// Filesystem store root shared by every worker process. Used by
     /// `--backend filesystem`; ignored by `--backend forgejo`.
     pub root: PathBuf,
-    /// Repository owner.
+    /// First configured repository owner, retained for legacy single-repo tests.
     pub owner: String,
-    /// Repository name.
+    /// First configured repository name, retained for legacy single-repo tests.
     pub name: String,
+    /// Repositories this worker scans. Forge permissions, not this list, remain
+    /// the write authority; this is only the worker's scan shard.
+    pub repositories: Vec<harness_forge::RepositoryPath>,
     /// Poll cadence between ticks.
     pub poll_interval: Duration,
     /// Sentinel file whose existence stops the run loop.
