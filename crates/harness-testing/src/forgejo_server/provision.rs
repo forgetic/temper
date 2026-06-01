@@ -67,40 +67,63 @@ const LABEL_COLOR: &str = "#ededed";
 /// The commit-message marker the CI workflow gates on. A head whose latest
 /// commit message contains it passes CI; one without it fails.
 ///
-/// The gate is keyed on the **commit message**, not a checked-out file, because
-/// the host-mode runner has no `actions/checkout` available offline — a working
-/// directory `test -f` would always fail. The push event's head-commit message
-/// is in the runner's context (`github.event.head_commit.message`) without any
-/// checkout, so the gate reads it directly.
+/// The gate is keyed on the message of `GITHUB_SHA`, not a checked-out file,
+/// because the host-mode runner has no `actions/checkout` available offline — a
+/// working directory `test -f` would always fail. Reading the commit by SHA also
+/// avoids depending on Forgejo's push-event `head_commit` payload ordering when
+/// several quick pushes target the same branch.
 pub const CI_PASS_MARKER: &str = "[ci-pass]";
 
 /// The CI workflow committed to the provisioned repo.
 ///
 /// **Fail→pass mechanism** (for `ci_fails_then_passes`): the single `build` job
-/// passes only when the head commit's message contains [`CI_PASS_MARKER`]. The
-/// first PR head's commits do not carry it, so the job fails; the engineer's
+/// passes only when `GITHUB_SHA`'s commit message contains [`CI_PASS_MARKER`].
+/// The first PR head's commits do not carry it, so the job fails; the engineer's
 /// *fix commit* carries the marker, so the re-run on the new head SHA passes.
 /// Because a CI run is keyed by SHA (findings-phase-0b), the fail and the pass
 /// live on two different head SHAs — exactly the two verdicts the scenario
-/// asserts. The marker is read from the push event context, so no checkout (and
+/// asserts. The marker is read through Forgejo's commit API, so no checkout (and
 /// thus no network for `actions/checkout`) is needed; the runner stays offline.
-/// Triggered on `push` only: each head push is the SHA whose verdict the engine
-/// reads, and the push event carries `head_commit.message`.
-pub const CI_WORKFLOW: &str = "name: ci\n\
-on: [push]\n\
-jobs:\n\
-\u{20}\u{20}build:\n\
-\u{20}\u{20}\u{20}\u{20}runs-on: host\n\
-\u{20}\u{20}\u{20}\u{20}steps:\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}- name: gate on commit message marker\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}run: |\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}echo \"head commit message: ${MSG}\"\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}case \"${MSG}\" in\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}*'[ci-pass]'*) echo \"marker present; passing\" ;;\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}*) echo \"marker absent; failing\"; exit 1 ;;\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}esac\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}env:\n\
-\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}\u{20}MSG: ${{ github.event.head_commit.message }}\n";
+pub const CI_WORKFLOW: &str = r#"name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: gate on commit message marker
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          api = os.environ["GITHUB_API_URL"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+
+          req = urllib.request.Request(
+              f"{api}/repos/{repo}/git/commits/{sha}",
+              headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/json",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=15) as resp:
+              data = json.load(resp)
+
+          msg = data.get("message") or data.get("commit", {}).get("message", "")
+          first_line = msg.splitlines()[0] if msg else ""
+          print(f"commit {sha}: {first_line}")
+
+          if "[ci-pass]" not in msg:
+              print("marker absent; failing")
+              sys.exit(1)
+
+          print("marker present; passing")
+          PY
+"#;
 
 /// Identity for one workflow role on the real Forgejo backend.
 ///
@@ -443,12 +466,14 @@ mod tests {
     #[test]
     fn workflow_is_host_mode_and_gated_on_commit_marker() {
         // The fail→pass mechanism: `runs-on: host` (Phase 1b) and a gate on the
-        // head commit message carrying the CI-pass marker (no checkout needed),
-        // which the engineer's fix commit adds. Both must be present for Phase 4
-        // to drive `ci_fails_then_passes`.
+        // `GITHUB_SHA` commit message carrying the CI-pass marker (no checkout
+        // needed), which the engineer's fix commit adds. Both must be present
+        // for Phase 4 to drive `ci_fails_then_passes`.
         assert!(CI_WORKFLOW.contains("runs-on: host"));
         assert!(CI_WORKFLOW.contains(CI_PASS_MARKER));
-        assert!(CI_WORKFLOW.contains("github.event.head_commit.message"));
+        assert!(CI_WORKFLOW.contains("GITHUB_SHA"));
+        assert!(CI_WORKFLOW.contains("/git/commits/"));
+        assert!(!CI_WORKFLOW.contains("github.event.head_commit.message"));
     }
 
     #[test]

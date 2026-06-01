@@ -44,3 +44,7 @@ Use `template.md`. Keep each entry short and specific.
 | [0013](0013-ci-workflow-string-literal-strips-yaml-indentation.md) | Don't build indented YAML with `\`-continued string literals | forgejo, ci, rust, provisioning, harness-production |
 | [0014](0014-allow-loopback-for-throwaway-forgejo-webhooks.md) | Allow loopback for throwaway Forgejo webhooks | forgejo, webhook, testing, configuration |
 | [0015](0015-start-downstream-wake-sockets-before-seeding-work.md) | Start downstream wake sockets before seeded work can hand off | webhook, process, forgejo, testing |
+| [0016](0016-refresh-demo-binaries-before-launch.md) | Refresh demo binaries before launch | examples, tooling, process, forgejo |
+| [0017](0017-cross-repo-demo-needs-closing-architect.md) | Cross-repo demo needs the closing architect | examples, cross-repo, workflow, agents, forgejo |
+| [0018](0018-snapshot-long-running-shell-launchers.md) | Snapshot long-running shell launchers | examples, process, shell, teardown |
+| [0019](0019-demo-ci-verdicts-follow-github-sha.md) | Demo CI verdicts follow `GITHUB_SHA` | examples, forgejo, ci, testing |

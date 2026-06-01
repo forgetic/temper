@@ -108,10 +108,10 @@ pub async fn prepare_pull_request_head(
 
 /// Idempotently pushes a CI-pass commit to `branch`.
 ///
-/// The committed workflow gates on the head commit's **message** containing
+/// The committed workflow gates on `GITHUB_SHA`'s commit **message** containing
 /// [`provision::CI_PASS_MARKER`] (a host-mode runner has no `actions/checkout`
 /// offline, so a working-directory file check is unavailable — the gate reads the
-/// push event's `head_commit.message` instead). This commits a trivial file with
+/// commit through Forgejo's API instead). This commits a trivial file with
 /// a marker-bearing message, producing a **new head SHA** whose CI run passes —
 /// the second of the two verdicts `ci_fails_then_passes` asserts (a CI run is
 /// keyed by SHA, findings-phase-0b). It is also used at PR-open time for the

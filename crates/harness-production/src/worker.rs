@@ -95,6 +95,7 @@ async fn run_role(
         provider,
         harness_agents::RealRegistryConfig {
             engineer_prep: prep,
+            architect_closing: args.architect_close_produced_issues,
             ..Default::default()
         },
     );

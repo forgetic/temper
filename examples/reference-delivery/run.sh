@@ -1,7 +1,7 @@
 #!/bin/sh
 # Reference-delivery example — POSIX launcher / teardown.
 #
-# Boots EVERY process of the production topology from compiled binaries:
+# Boots EVERY process of the production topology from development-profile binaries:
 #   1. a throwaway Forgejo server (SQLite, Actions enabled),
 #   2. a host-mode forgejo-runner producing real CI,
 #   3. admin bootstrap + the production provision/seed binary
@@ -11,8 +11,10 @@
 #      Forgejo with real LLM agents and wall time,
 # then tears them all down cleanly on Ctrl-C / signal / `./run.sh stop`.
 #
-# This script targets the production binaries from harness-production rather
-# than the harness-testing entry points.
+# This script targets the operator-facing entry points from harness-production
+# rather than the harness-testing entry points. By default it builds/uses the
+# development-profile binaries under target/debug; override HARNESS_*_BIN if you
+# want prebuilt or release artifacts.
 #
 # Usage:
 #   ./run.sh [start]          boot everything and block until Ctrl-C / stop-file
@@ -35,7 +37,11 @@
 set -eu
 
 # --- Locations ----------------------------------------------------------------
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -n "${HARNESS_REFERENCE_DELIVERY_SCRIPT_DIR:-}" ]; then
+    SCRIPT_DIR=$HARNESS_REFERENCE_DELIVERY_SCRIPT_DIR
+else
+    SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fi
 WORKSPACE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 CONFIG_DIR="$SCRIPT_DIR/config"
 SECRETS_DIR="$SCRIPT_DIR/secrets"
@@ -72,9 +78,30 @@ sleep_short() {
     sleep 0.2 2>/dev/null || sleep 1
 }
 
+DISPLAY_SCRIPT=${HARNESS_REFERENCE_DELIVERY_ORIGINAL:-$SCRIPT_DIR/run.sh}
+
+# Dash reads long-running scripts lazily. If this file is edited while the demo
+# is sleeping in monitor(), the running shell may parse a half-new tail and fail
+# during teardown. Run starts from a private snapshot so source edits/rebuilds do
+# not affect the already-running launcher.
+if [ "${HARNESS_REFERENCE_DELIVERY_SNAPSHOT:-0}" != "1" ]; then
+    case "${1:-start}" in
+        start | "")
+            mkdir -p "$RUN_DIR"
+            _snapshot="$RUN_DIR/run.sh.snapshot.$$"
+            cp "$SCRIPT_DIR/run.sh" "$_snapshot"
+            chmod 700 "$_snapshot"
+            HARNESS_REFERENCE_DELIVERY_SNAPSHOT=1 \
+            HARNESS_REFERENCE_DELIVERY_SCRIPT_DIR="$SCRIPT_DIR" \
+            HARNESS_REFERENCE_DELIVERY_ORIGINAL="$DISPLAY_SCRIPT" \
+                exec /bin/sh "$_snapshot" "$@"
+            ;;
+    esac
+fi
+
 usage() {
     cat <<EOF
-usage: $0 [start|validate-webhooks|validate-multi-repo|smoke-webhooks|stop|help]
+usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|smoke-webhooks|stop|help]
 
   start (default)      boot Forgejo + runner, provision every configured repo,
                        seed the source intake issue, launch one fixed worker pool, then block until
@@ -131,7 +158,10 @@ cleanup() {
     stop_pid_file "$SERVER_PID_FILE"
     # Drop the throwaway server/runner data + sentinel so a re-run starts fresh;
     # keep logs/ for inspection.
-    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$WAKE_DIR" "$STOP_FILE" 2>/dev/null || true
+    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$WAKE_DIR" "$STOP_FILE" \
+        "$RUN_DIR/cross-repo-intake.md" "$RUN_DIR"/run.sh.snapshot.* \
+        2>/dev/null || true
+    rmdir "$RUN_DIR" 2>/dev/null || true
     log 'teardown complete'
 }
 
@@ -146,6 +176,7 @@ cmd_stop() {
 # (precedence: CLI/env > config/harness.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
+ARCHITECT_CLOSE_PRODUCED_ISSUES \
 HARNESS_AGENTS_AUTH HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL \
 HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
 HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
@@ -203,6 +234,7 @@ load_config() {
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
     WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:38080/forgejo/webhook}
+    ARCHITECT_CLOSE_PRODUCED_ISSUES=${ARCHITECT_CLOSE_PRODUCED_ISSUES:-1}
     HARNESS_AGENTS_AUTH=${HARNESS_AGENTS_AUTH:-chatgpt-oauth}
     HARNESS_AGENTS_CODEX_MODEL=${HARNESS_AGENTS_CODEX_MODEL:-}
     HARNESS_AGENTS_ANTHROPIC_MODEL=${HARNESS_AGENTS_ANTHROPIC_MODEL:-}
@@ -317,20 +349,33 @@ check_auth() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    WORKER_BIN=${HARNESS_WORKER_BIN:-$WORKSPACE_ROOT/target/release/harness-worker}
-    PROVISION_BIN=${HARNESS_PROVISION_BIN:-$WORKSPACE_ROOT/target/release/harness-provision-forgejo}
-    TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-$WORKSPACE_ROOT/target/release/harness-trigger-forgejo}
-    if [ ! -x "$WORKER_BIN" ] || [ ! -x "$PROVISION_BIN" ] || [ ! -x "$TRIGGER_BIN" ]; then
-        if [ "${HARNESS_SKIP_BUILD:-0}" = "1" ]; then
-            die "production binaries missing under target/release and HARNESS_SKIP_BUILD=1"
-        fi
-        log "building production binaries (cargo build --release -p $HARNESS_BUILD_PACKAGE)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build --release -p "$HARNESS_BUILD_PACKAGE" ) \
+    WORKER_BIN=${HARNESS_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/harness-worker}
+    PROVISION_BIN=${HARNESS_PROVISION_BIN:-$WORKSPACE_ROOT/target/debug/harness-provision-forgejo}
+    TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/harness-trigger-forgejo}
+
+    # Keep the demo entry point self-healing after source changes. Cargo is a
+    # cheap no-op when the development binaries are already current; skipping
+    # this is an explicit operator choice for prebuilt/current binaries.
+    if [ "${HARNESS_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring development binaries are current (cargo build -p $HARNESS_BUILD_PACKAGE)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$HARNESS_BUILD_PACKAGE" ) \
             || die 'cargo build failed'
     fi
+
     [ -x "$WORKER_BIN" ] || die "worker binary not found: $WORKER_BIN"
     [ -x "$PROVISION_BIN" ] || die "provision binary not found: $PROVISION_BIN"
     [ -x "$TRIGGER_BIN" ] || die "trigger binary not found: $TRIGGER_BIN"
+
+    _provision_help=$("$PROVISION_BIN" --help 2>&1 || true)
+    case "$_provision_help" in
+        *--seed-intake*--intake-title*--intake-body-file*) ;;
+        *) die "provision binary is stale or incompatible: $PROVISION_BIN does not advertise --seed-intake/--intake-title/--intake-body-file. Re-run without HARNESS_SKIP_BUILD=1 or rebuild harness-production with cargo build -p $HARNESS_BUILD_PACKAGE." ;;
+    esac
+    _worker_help=$("$WORKER_BIN" --help 2>&1 || true)
+    case "$_worker_help" in
+        *--architect-close-produced-issues*) ;;
+        *) die "worker binary is stale or incompatible: $WORKER_BIN does not advertise --architect-close-produced-issues. Re-run without HARNESS_SKIP_BUILD=1 or rebuild harness-production with cargo build -p $HARNESS_BUILD_PACKAGE." ;;
+    esac
 
     # Pinned Forgejo + runner: env override, else the cached pinned path.
     FORGEJO_BIN=${HARNESS_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
@@ -402,6 +447,9 @@ forgejo_cli() {
 
 boot_server() {
     log "booting Forgejo at $BASE_URL ..."
+    if curl -fsS "$BASE_URL/api/v1/version" >/dev/null 2>&1; then
+        die "Forgejo already responds at $BASE_URL before this run started. Stop the existing run first, or clean up orphaned forgejo processes."
+    fi
     write_app_ini
     forgejo_cli migrate >"$LOG_DIR/forgejo-migrate.log" 2>&1 \
         || die "forgejo migrate failed (see logs/forgejo-migrate.log)"
@@ -616,6 +664,10 @@ launch_role_worker() {
         _wake_socket="$WAKE_DIR/$_role.sock"
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
+    _architect_args=
+    if [ "$_role" = "architect" ] && [ "$ARCHITECT_CLOSE_PRODUCED_ISSUES" = "1" ]; then
+        _architect_args="--architect-close-produced-issues"
+    fi
 
     # Per-role secrets are literal env-assignment prefixes (never on argv). The
     # auth-mode env (DeepSeek key path) is exported globally by check_auth.
@@ -630,7 +682,7 @@ launch_role_worker() {
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
-        $_wake_args \
+        $_wake_args $_architect_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
     _pid=$!
     echo "$_pid" >>"$WORKERS_PID_FILE"
@@ -864,7 +916,7 @@ monitor() {
         log 'should move — all in the Forgejo UI above.'
     fi
     log ''
-    log "Press Ctrl-C (or run '$0 stop') to tear everything down."
+    log "Press Ctrl-C (or run '$DISPLAY_SCRIPT stop') to tear everything down."
 
     _waited=0
     while [ ! -f "$STOP_FILE" ]; do
@@ -889,7 +941,7 @@ cmd_start() {
     resolve_binaries
 
     if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
-        die "a run appears active (run/server.pid). Stop it first: $0 stop"
+        die "a run appears active (run/server.pid). Stop it first: $DISPLAY_SCRIPT stop"
     fi
 
     mkdir -p "$RUN_DIR" "$LOG_DIR"

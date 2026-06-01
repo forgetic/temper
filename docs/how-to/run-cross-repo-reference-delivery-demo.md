@@ -24,6 +24,7 @@ REPOS="acme/service acme/service-canary"
 CROSS_REPO_INTAKE=auto
 POLL_MS=120000
 WEBHOOKS=1
+ARCHITECT_CLOSE_PRODUCED_ISSUES=1
 ```
 
 `auto` enables cross-repo intake seeding when `REPOS` contains more than one
@@ -41,7 +42,9 @@ The launcher provisions every configured repo. It seeds exactly one parent
 intake issue in the first repo and writes that issue with explicit target repo
 ids for every child. The architect should fan out child code issues, one per
 repo. Each child then follows the ordinary per-repo path: engineer PR, CI,
-review, owner merge, landed reconciliation.
+review, owner merge, landed reconciliation, and architect-side closure of the
+produced code issue. That closure is the portable landed signal used to unblock
+the cross-repo parent.
 
 ## Validate logs
 

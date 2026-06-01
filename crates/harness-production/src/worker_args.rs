@@ -17,7 +17,8 @@ pub const USAGE: &str = concat!(
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] ",
     "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
-    "[--wake-socket <path>] [--wake-secret-file <path>]\n",
+    "[--wake-socket <path>] [--wake-secret-file <path>] ",
+    "[--architect-close-produced-issues]\n",
     "  forgejo token comes from HARNESS_FORGEJO_TOKEN; optional web UI credentials ",
     "come from HARNESS_FORGEJO_USERNAME/HARNESS_FORGEJO_PASSWORD"
 );
@@ -80,6 +81,10 @@ pub struct WorkerArgs {
     pub auth_file: Option<PathBuf>,
     pub wake_socket: Option<PathBuf>,
     pub wake_secret_file: Option<PathBuf>,
+    /// When true, the architect closes parent code issues after reconciling a
+    /// landed implementation PR. Cross-repo dependency aggregation relies on
+    /// issue closure as the portable "landed" signal for issue dependencies.
+    pub architect_close_produced_issues: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,6 +142,7 @@ struct RawArgs {
     auth_file: Option<String>,
     wake_socket: Option<String>,
     wake_secret_file: Option<String>,
+    architect_close_produced_issues: bool,
 }
 
 impl RawArgs {
@@ -164,6 +170,7 @@ impl RawArgs {
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
                 "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
+                "--architect-close-produced-issues" => raw.architect_close_produced_issues = true,
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -225,6 +232,7 @@ impl RawArgs {
             auth_file: non_empty(self.auth_file).map(PathBuf::from),
             wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
+            architect_close_produced_issues: self.architect_close_produced_issues,
         })
     }
 
@@ -415,6 +423,36 @@ mod tests {
         );
         assert!(format!("{:?}", args.forgejo).contains("<redacted>"));
         assert!(!format!("{:?}", args.forgejo).contains("secret-token"));
+        assert!(!args.architect_close_produced_issues);
+    }
+
+    #[test]
+    fn parses_architect_close_produced_issues_flag() {
+        let outcome = parse_with_env(
+            [
+                "--backend",
+                "forgejo",
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--repo",
+                "acme/service",
+                "--kind",
+                "role",
+                "--role",
+                "architect",
+                "--user",
+                "architect",
+                "--architect-close-produced-issues",
+            ]
+            .into_iter()
+            .map(String::from),
+            env,
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert!(args.architect_close_produced_issues);
     }
 
     #[test]

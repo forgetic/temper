@@ -43,12 +43,13 @@ end-to-end rehearsal.
 
 ## Prerequisites
 
-- The production workspace binaries built: `cargo build --release -p
+- The operator-facing workspace binaries built: `cargo build -p
   harness-production` (provides `harness-worker`,
-  `harness-provision-forgejo`, and `harness-trigger-forgejo`). `run.sh` builds
-  them on first run unless `HARNESS_SKIP_BUILD=1`. Override paths with
-  `HARNESS_WORKER_BIN` / `HARNESS_PROVISION_BIN` / `HARNESS_TRIGGER_BIN` if
-  needed.
+  `harness-provision-forgejo`, and `harness-trigger-forgejo`). `run.sh` refreshes
+  the development-profile binaries under `target/debug` before start unless
+  `HARNESS_SKIP_BUILD=1`, so stale binaries do not break the demo after source
+  changes. Override paths with `HARNESS_WORKER_BIN` / `HARNESS_PROVISION_BIN` /
+  `HARNESS_TRIGGER_BIN` if needed.
 - The two pinned binaries: Forgejo `7.0.12` and `forgejo-runner` `3.5.1`.
   Pre-stage them under `.cache/forgejo/` (the gated Forgejo e2e fixtures do the
   download/checksum path) or set `HARNESS_FORGEJO_BINARY` /
@@ -103,10 +104,12 @@ POLL_MS=120000 ./run.sh       # long-poll mode: webhooks wake workers promptly;
 ./run.sh help                  # usage
 ```
 
-The first run builds the production workspace binaries (`cargo build --release
--p harness-production`) if they are missing and expects the pinned Forgejo +
-`forgejo-runner` binaries under `.cache/forgejo/` (or set
-`HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY`). Edit
+Each start refreshes the development-profile workspace binaries (`cargo build -p
+harness-production`, usually a no-op when current) under `target/debug` and
+expects the pinned Forgejo + `forgejo-runner` binaries under `.cache/forgejo/`
+(or set `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY`). `run.sh
+start` runs from a private snapshot under `run/`, so editing the launcher while a
+demo is running cannot corrupt the eventual teardown path. Edit
 `config/harness.env` for the repo set, endpoint, cadence, and auth knobs; any of
 those may also be overridden by exporting the matching env var before invoking
 the script (env wins over the file). The checked-in default is
@@ -144,8 +147,10 @@ fakes use):
 3. the **`forgejo-runner`** runs real CI on each PR head;
 4. **reviewer** approves each PR;
 5. **owner** merges once each PR's CI + review gates are green;
-6. post-merge, the **architect/owner** reconcile routing labels, and dependency
-   aggregation unblocks the parent only after every child has landed.
+6. post-merge, the **architect** closes the produced code issue (enabled by the
+   demo's `ARCHITECT_CLOSE_PRODUCED_ISSUES=1`), the **architect/owner** reconcile
+   routing labels, and dependency aggregation unblocks the parent only after
+   every child issue has closed.
 
 The **mechanical** worker runs the controller plane (lease expiry, partial-
 transition repair, dependency unblock) without an agent. See
@@ -253,11 +258,16 @@ than reasserting Forge state.
 - **Wakes sent but a worker lacks `consumed authenticated wake`:** inspect that
   worker's log for auth/backend setup errors. Polling will still recover at the
   next `POLL_MS` deadline, but the accelerator is not working for that worker.
-- **Logs do not contain the strings above:** rebuild the production binaries
-  (`cargo build --release -p harness-production`) or leave `HARNESS_SKIP_BUILD`
-  unset. `HARNESS_SKIP_BUILD=1` assumes `target/release` is already current.
+- **`provision binary is stale or incompatible` or `worker binary is stale or
+  incompatible`:** rerun without `HARNESS_SKIP_BUILD=1`, or rebuild the
+  development binaries manually with `cargo build -p harness-production`.
+  `HARNESS_SKIP_BUILD=1` assumes `target/debug` and any `HARNESS_*_BIN`
+  overrides are already current.
 - **Wake consumed with `actions=0`:** the wake path worked; that worker simply
   had no active queue item after re-reading Forge state.
+- **`Forgejo already responds` on start:** an orphaned or separately started
+  server is still bound to `BASE_URL`. Run `./run.sh stop`; if pid files were
+  lost, clean up with the orphan commands below.
 
 ## Teardown
 

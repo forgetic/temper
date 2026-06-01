@@ -7,12 +7,12 @@
 #
 # The single `build` job gates on a COMMIT-MESSAGE MARKER ("[ci-pass]") rather
 # than a checked-out file: the host-mode runner has no `actions/checkout`
-# offline, so a working-directory `test -f` would always fail. The push event's
-# head-commit message is available in the runner context
-# (github.event.head_commit.message) without any checkout, so the gate reads it
-# directly. A PR head whose latest commit lacks the marker fails CI; the
-# engineer's fix commit carries the marker, so the re-run on the new head SHA
-# passes — two SHAs, two verdicts.
+# offline, so a working-directory `test -f` would always fail. The gate reads the
+# message for the exact `GITHUB_SHA` being judged through Forgejo's commit API,
+# so quick same-branch push events cannot make CI judge a stale
+# `head_commit.message` payload. A PR head whose latest commit lacks the marker
+# fails CI; the engineer's fix commit carries the marker, so the re-run on the
+# new head SHA passes — two SHAs, two verdicts.
 #
 # A REAL project replaces this entire file with its real CI (build, test, lint,
 # whatever), and its real coding agent produces commits that pass it. The marker
@@ -25,10 +25,34 @@ jobs:
     steps:
       - name: gate on commit message marker
         run: |
-          echo "head commit message: ${MSG}"
-          case "${MSG}" in
-            *'[ci-pass]'*) echo "marker present; passing" ;;
-            *) echo "marker absent; failing"; exit 1 ;;
-          esac
-        env:
-          MSG: ${{ github.event.head_commit.message }}
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          api = os.environ["GITHUB_API_URL"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+
+          req = urllib.request.Request(
+              f"{api}/repos/{repo}/git/commits/{sha}",
+              headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/json",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=15) as resp:
+              data = json.load(resp)
+
+          msg = data.get("message") or data.get("commit", {}).get("message", "")
+          first_line = msg.splitlines()[0] if msg else ""
+          print(f"commit {sha}: {first_line}")
+
+          if "[ci-pass]" not in msg:
+              print("marker absent; failing")
+              sys.exit(1)
+
+          print("marker present; passing")
+          PY

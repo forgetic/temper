@@ -49,13 +49,37 @@ jobs:
     steps:
       - name: gate on commit message marker
         run: |
-          echo "head commit message: ${MSG}"
-          case "${MSG}" in
-            *'[ci-pass]'*) echo "marker present; passing" ;;
-            *) echo "marker absent; failing"; exit 1 ;;
-          esac
-        env:
-          MSG: ${{ github.event.head_commit.message }}
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          api = os.environ["GITHUB_API_URL"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+
+          req = urllib.request.Request(
+              f"{api}/repos/{repo}/git/commits/{sha}",
+              headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/json",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=15) as resp:
+              data = json.load(resp)
+
+          msg = data.get("message") or data.get("commit", {}).get("message", "")
+          first_line = msg.splitlines()[0] if msg else ""
+          print(f"commit {sha}: {first_line}")
+
+          if "[ci-pass]" not in msg:
+              print("marker absent; failing")
+              sys.exit(1)
+
+          print("marker present; passing")
+          PY
 "#;
 
 #[derive(Clone)]
@@ -429,7 +453,9 @@ mod tests {
     fn ci_workflow_uses_commit_message_marker() {
         assert!(CI_WORKFLOW.contains("runs-on: host"));
         assert!(CI_WORKFLOW.contains(crate::forgejo_prep::CI_PASS_MARKER));
-        assert!(CI_WORKFLOW.contains("github.event.head_commit.message"));
+        assert!(CI_WORKFLOW.contains("GITHUB_SHA"));
+        assert!(CI_WORKFLOW.contains("/git/commits/"));
+        assert!(!CI_WORKFLOW.contains("github.event.head_commit.message"));
     }
 
     #[test]
