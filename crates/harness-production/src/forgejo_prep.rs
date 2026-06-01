@@ -21,18 +21,22 @@ pub const CI_PASS_MARKER: &str = "[ci-pass]";
 pub struct ForgejoLlmPrep {
     base_url: String,
     token: String,
-    owner: String,
-    name: String,
 }
 
 impl ForgejoLlmPrep {
-    pub fn new(base_url: String, token: String, owner: String, name: String) -> Self {
-        Self {
-            base_url,
-            token,
-            owner,
-            name,
-        }
+    pub fn new(base_url: String, token: String) -> Self {
+        Self { base_url, token }
+    }
+
+    async fn repo_path<F: Forge + ?Sized>(
+        &self,
+        tools: &RoleTools<'_, F>,
+    ) -> Result<(String, String), AgentError> {
+        let repository = tools
+            .get_repository()
+            .await?
+            .ok_or_else(|| AgentError::message(format!("repository {} not found", tools.repo())))?;
+        Ok((repository.owner, repository.name))
     }
 
     async fn pr_head_branch<F: Forge + ?Sized>(
@@ -54,17 +58,18 @@ impl ForgejoLlmPrep {
 impl<F: Forge + ?Sized> harness_agents::EngineerPrep<F> for ForgejoLlmPrep {
     async fn before_open_pr(
         &self,
-        _tools: &RoleTools<'_, F>,
+        tools: &RoleTools<'_, F>,
         input: &CreatePullRequest,
     ) -> Result<(), AgentError> {
-        prepare_pull_request_head(&self.base_url, &self.token, &self.owner, &self.name, input)
+        let (owner, name) = self.repo_path(tools).await?;
+        prepare_pull_request_head(&self.base_url, &self.token, &owner, &name, input)
             .await
             .map_err(|error| AgentError::message(format!("forgejo PR prep failed: {error}")))?;
         commit_ci_sentinel(
             &self.base_url,
             &self.token,
-            &self.owner,
-            &self.name,
+            &owner,
+            &name,
             input.source.branch.as_str(),
         )
         .await
@@ -79,15 +84,10 @@ impl<F: Forge + ?Sized> harness_agents::EngineerPrep<F> for ForgejoLlmPrep {
         let Some(branch) = self.pr_head_branch(tools, target).await? else {
             return Ok(());
         };
-        commit_ci_sentinel(
-            &self.base_url,
-            &self.token,
-            &self.owner,
-            &self.name,
-            &branch,
-        )
-        .await
-        .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
+        let (owner, name) = self.repo_path(tools).await?;
+        commit_ci_sentinel(&self.base_url, &self.token, &owner, &name, &branch)
+            .await
+            .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
     }
 }
 

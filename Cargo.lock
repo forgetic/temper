@@ -2833,6 +2833,7 @@ dependencies = [
  "harness-agents",
  "harness-forge",
  "harness-forge-forgejo",
+ "harness-forge-memory",
  "harness-runner",
  "harness-workflow",
  "hmac 0.12.1",

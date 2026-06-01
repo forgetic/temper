@@ -10,7 +10,7 @@ use crate::WorkItem;
 use async_trait::async_trait;
 use harness_forge::{
     CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest,
-    PullRequestQuery, RepositoryId, UpdateIssue,
+    PullRequestQuery, Repository, RepositoryId, UpdateIssue,
 };
 use harness_workflow::{
     parse_metadata_block, ArtifactSource, EnsureOutcome, ExecutionContext, ExecutionError,
@@ -140,6 +140,11 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         self.executor
             .ensure_pull_request(self.repo, correlation_key, input)
             .await
+    }
+
+    /// Reads the repository these tools are scoped to.
+    pub async fn get_repository(&self) -> Result<Option<Repository>, ForgeError> {
+        self.forge.get_repository(self.repo).await
     }
 
     /// Reads an issue by repository-scoped number.

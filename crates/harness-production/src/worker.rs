@@ -5,10 +5,13 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
-use harness_forge::{Forge, ForgeError, RepositoryId, RepositoryPath};
+use harness_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use harness_runner::{MechanicalWorker, RoleWorker, RunReport, WorkerRunReport};
-use harness_workflow::{InMemoryJournal, LeasePolicy, RoleId};
+use harness_runner::{
+    MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
+    RepositoryTarget, RunReport, Worker, WorkerError, WorkerRunReport,
+};
+use harness_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
 
 use crate::forgejo_prep::ForgejoLlmPrep;
 use crate::wake::{WakeConfig, WakeError, WakeListener};
@@ -18,7 +21,7 @@ use crate::{runner_config, workflow};
 #[derive(Debug)]
 pub enum RunError {
     Forge(ForgeError),
-    RepositoryMissing { owner: String, name: String },
+    RepositoryUnavailable { owner: String, name: String },
     UnknownRole { role: String },
     Drive(Box<dyn Error + Send + Sync + 'static>),
     Backend(String),
@@ -28,9 +31,10 @@ impl fmt::Display for RunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RunError::Forge(error) => write!(formatter, "forge operation failed: {error}"),
-            RunError::RepositoryMissing { owner, name } => {
-                write!(formatter, "repository {owner}/{name} not found")
-            }
+            RunError::RepositoryUnavailable { owner, name } => write!(
+                formatter,
+                "repository {owner}/{name} not found or not readable by this worker token"
+            ),
             RunError::UnknownRole { role } => {
                 write!(formatter, "no agent registered for role '{role}'")
             }
@@ -86,8 +90,6 @@ async fn run_role(
     let prep = Arc::new(ForgejoLlmPrep::new(
         args.forgejo.base_url.clone(),
         args.forgejo.token.clone(),
-        args.owner.clone(),
-        args.name.clone(),
     )) as Arc<dyn harness_agents::EngineerPrep<dyn Forge>>;
     let registry = harness_agents::real_registry_with(
         provider,
@@ -100,12 +102,14 @@ async fn run_role(
         .get(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
         .clone();
-    let repo = resolve_repository(forge, &args.owner, &args.name).await?;
-    let worker = RoleWorker::new(
+    let repositories = resolve_repositories(forge, &args.repositories).await?;
+    ensure_workflow_labels(forge, &repositories, &compiled).await?;
+    log_repository_set("role", role, &repositories);
+    let worker = MultiRepoRoleWorker::new(
         &workflow,
         &compiled,
         forge as &dyn Forge,
-        &repo,
+        repositories,
         role_id.clone(),
         agent,
         config.execution_context(&role_id),
@@ -115,16 +119,33 @@ async fn run_role(
 
 async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {
     let workflow = workflow();
+    let compiled = workflow.compile();
     let config = runner_config();
-    let repo = resolve_repository(forge, &args.owner, &args.name).await?;
-    let journal = InMemoryJournal::new();
-    let worker = MechanicalWorker::new(
+    let repositories = resolve_repositories(forge, &args.repositories).await?;
+    ensure_workflow_labels(forge, &repositories, &compiled).await?;
+    log_repository_set("mechanical", "mechanical", &repositories);
+    let journals: Vec<InMemoryJournal> = repositories
+        .repositories()
+        .iter()
+        .map(|_| InMemoryJournal::new())
+        .collect();
+    let journal_bindings: Vec<RepositoryJournal<'_, InMemoryJournal>> = repositories
+        .repositories()
+        .iter()
+        .zip(journals.iter())
+        .map(|(repository, journal)| RepositoryJournal {
+            repository: &repository.id,
+            journal,
+        })
+        .collect();
+    let worker = MultiRepoMechanicalWorker::new(
         &workflow,
         forge as &dyn Forge,
-        &repo,
-        &journal,
+        repositories.clone(),
+        journal_bindings,
         LeasePolicy::new(config.lease_ttl),
-    );
+    )
+    .map_err(|error| RunError::Backend(error.to_string()))?;
     drive_async(args, &worker).await
 }
 
@@ -142,28 +163,128 @@ fn provider_for(args: &WorkerArgs) -> Result<harness_agents::ProviderConfig, Run
     .map_err(|error| RunError::Backend(error.to_string()))
 }
 
-async fn resolve_repository<F: Forge + ?Sized>(
+async fn resolve_repositories<F: Forge + ?Sized>(
     forge: &F,
-    owner: &str,
-    name: &str,
-) -> Result<RepositoryId, RunError> {
-    let path = RepositoryPath::new(owner, name);
-    forge
-        .get_repository_by_path(&path)
-        .await?
-        .map(|repo| repo.id)
-        .ok_or_else(|| RunError::RepositoryMissing {
-            owner: owner.into(),
-            name: name.into(),
-        })
+    paths: &[RepositoryPath],
+) -> Result<RepositorySet, RunError> {
+    let mut repositories = Vec::new();
+    for path in paths {
+        let repo = forge.get_repository_by_path(path).await?.ok_or_else(|| {
+            RunError::RepositoryUnavailable {
+                owner: path.owner.clone(),
+                name: path.name.clone(),
+            }
+        })?;
+        repositories.push(RepositoryTarget::new(
+            repo.id,
+            RepositoryPath::new(repo.owner, repo.name),
+        ));
+    }
+    Ok(RepositorySet::new(repositories))
+}
+
+async fn ensure_workflow_labels<F: Forge + ?Sized>(
+    forge: &F,
+    repositories: &RepositorySet,
+    compiled: &harness_workflow::CompiledWorkflow,
+) -> Result<(), RunError> {
+    for repository in repositories.repositories() {
+        for label in compiled.labels().labels() {
+            forge
+                .upsert_label(
+                    &repository.id,
+                    UpsertLabel {
+                        name: label.id.to_string(),
+                        color: Some("#ededed".to_string()),
+                        description: None,
+                    },
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+fn log_repository_set(kind: &str, name: &str, repositories: &RepositorySet) {
+    let repos = repositories
+        .repositories()
+        .iter()
+        .map(RepositoryTarget::display_path)
+        .collect::<Vec<_>>()
+        .join(",");
+    eprintln!(
+        "harness-worker: resolved repositories worker_kind={kind} worker={name} repos={repos}"
+    );
 }
 
 const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
 
-async fn drive_async<W: harness_runner::Worker>(
-    args: &WorkerArgs,
-    worker: &W,
-) -> Result<RunReport, RunError> {
+#[async_trait::async_trait]
+trait DriveWorker: Sync {
+    async fn tick_for_wake(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        hints: &[ChangeHint],
+    ) -> Result<harness_runner::Progress, WorkerError>;
+
+    fn name(&self) -> &str;
+}
+
+#[async_trait::async_trait]
+impl<F: Forge + ?Sized> DriveWorker for MultiRepoRoleWorker<'_, F> {
+    async fn tick_for_wake(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        hints: &[ChangeHint],
+    ) -> Result<harness_runner::Progress, WorkerError> {
+        let known = known_hints_for(self.repositories(), hints);
+        self.tick_hinted(now, &known).await.into_worker_result()
+    }
+
+    fn name(&self) -> &str {
+        Worker::name(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl<F, J, P> DriveWorker for MultiRepoMechanicalWorker<'_, F, J, P>
+where
+    F: Forge + ?Sized,
+    J: CommandJournal,
+    P: harness_workflow::RecoveryPolicy + Clone + Send + Sync,
+{
+    async fn tick_for_wake(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        _hints: &[ChangeHint],
+    ) -> Result<harness_runner::Progress, WorkerError> {
+        Worker::tick(self, now).await
+    }
+
+    fn name(&self) -> &str {
+        Worker::name(self)
+    }
+}
+
+fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<ChangeHint> {
+    let mut known = Vec::new();
+    for hint in hints {
+        if repositories
+            .matching_hints(std::slice::from_ref(hint))
+            .is_empty()
+        {
+            eprintln!(
+                "harness-worker: wake hint for unconfigured repo {}/{}; treating wake as broad scan",
+                hint.repo.owner, hint.repo.name
+            );
+        } else {
+            known.push(hint.clone());
+        }
+    }
+    known
+}
+
+async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<RunReport, RunError> {
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
     let interval = args
         .poll_interval
@@ -172,6 +293,7 @@ async fn drive_async<W: harness_runner::Worker>(
     let wake = build_wake_listener(args)?;
     let mut consecutive_failures = 0u32;
     let mut next_tick_reason = TickReason::Initial;
+    let mut pending_hints = Vec::new();
     let mut report = RunReport {
         ticks: 0,
         workers: vec![WorkerRunReport {
@@ -183,7 +305,12 @@ async fn drive_async<W: harness_runner::Worker>(
 
     while !stop.should_stop() {
         let tick_reason = next_tick_reason;
-        match worker.tick(chrono::Utc::now()).await {
+        let tick_hints = if tick_reason == TickReason::Wake {
+            std::mem::take(&mut pending_hints)
+        } else {
+            Vec::new()
+        };
+        match worker.tick_for_wake(chrono::Utc::now(), &tick_hints).await {
             Ok(progress) => {
                 consecutive_failures = 0;
                 report.ticks = report.ticks.saturating_add(1);
@@ -216,7 +343,10 @@ async fn drive_async<W: harness_runner::Worker>(
         match wait_for_next_tick(&stop, interval, wake.as_ref()).await? {
             WaitOutcome::PollDeadline => next_tick_reason = TickReason::Poll,
             WaitOutcome::Stop => break,
-            WaitOutcome::Wake => {
+            WaitOutcome::Wake(hint) => {
+                if let Some(hint) = hint {
+                    pending_hints.push(hint);
+                }
                 eprintln!(
                     "harness-worker: worker '{}' consumed authenticated wake; ticking immediately",
                     worker.name()
@@ -257,11 +387,11 @@ impl TickReason {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum WaitOutcome {
     PollDeadline,
     Stop,
-    Wake,
+    Wake(Option<ChangeHint>),
 }
 
 async fn wait_for_next_tick(
@@ -283,7 +413,7 @@ async fn wait_for_next_tick(
                     _ = &mut deadline => return Ok(WaitOutcome::PollDeadline),
                     _ = &mut stop_check => {},
                     received = listener.recv() => match received {
-                        Ok(()) => return Ok(WaitOutcome::Wake),
+                        Ok(hint) => return Ok(WaitOutcome::Wake(hint)),
                         Err(WakeError::Unauthorized) => {
                             eprintln!("harness-worker: ignored unauthorized wake message");
                         }
@@ -325,103 +455,5 @@ impl StopSignal {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use crate::wake::send_wake;
-    use std::path::PathBuf;
-    use std::thread;
-
-    fn temp_path(name: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "harness-production-worker-{name}-{}-{}.sock",
-            std::process::id(),
-            chrono::Utc::now()
-                .timestamp_nanos_opt()
-                .expect("timestamp has nanos")
-        ));
-        path
-    }
-
-    fn runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime builds")
-    }
-
-    #[test]
-    fn authenticated_wake_interrupts_long_wait() {
-        let socket = temp_path("authenticated");
-        let runtime = runtime();
-        let _guard = runtime.enter();
-        let listener = WakeListener::bind(WakeConfig {
-            socket: socket.clone(),
-            secret: Some("wake-secret".into()),
-        })
-        .expect("listener binds");
-        let stop = StopSignal::new(None, None);
-        let sender = thread::spawn(move || {
-            thread::sleep(StdDuration::from_millis(50));
-            send_wake(&socket, Some("wake-secret")).expect("wake sends");
-        });
-        let start = Instant::now();
-
-        let outcome = runtime
-            .block_on(wait_for_next_tick(
-                &stop,
-                StdDuration::from_secs(60),
-                Some(&listener),
-            ))
-            .expect("wait succeeds");
-        sender.join().expect("sender joins");
-
-        assert_eq!(outcome, WaitOutcome::Wake);
-        assert!(
-            start.elapsed() < StdDuration::from_secs(1),
-            "authenticated wake should beat the long poll interval"
-        );
-    }
-
-    #[test]
-    fn unauthorized_wake_is_ignored_until_stop_or_poll() {
-        let socket = temp_path("unauthorized");
-        let stop_file = temp_path("stop").with_extension("stop");
-        let runtime = runtime();
-        let _guard = runtime.enter();
-        let listener = WakeListener::bind(WakeConfig {
-            socket: socket.clone(),
-            secret: Some("wake-secret".into()),
-        })
-        .expect("listener binds");
-        let stop = StopSignal::new(Some(stop_file.clone()), None);
-        let stop_file_for_thread = stop_file.clone();
-        let sender = thread::spawn(move || {
-            thread::sleep(StdDuration::from_millis(50));
-            send_wake(&socket, Some("wrong-secret")).expect("unauthorized wake sends");
-            thread::sleep(StdDuration::from_millis(150));
-            std::fs::write(&stop_file_for_thread, b"stop").expect("stop file writes");
-        });
-        let start = Instant::now();
-
-        let outcome = runtime
-            .block_on(wait_for_next_tick(
-                &stop,
-                StdDuration::from_secs(60),
-                Some(&listener),
-            ))
-            .expect("wait succeeds");
-        sender.join().expect("sender joins");
-
-        assert_eq!(outcome, WaitOutcome::Stop);
-        assert!(
-            start.elapsed() >= StdDuration::from_millis(150),
-            "unauthorized wake must not end the wait"
-        );
-        assert!(
-            start.elapsed() < StdDuration::from_secs(2),
-            "stop backstop should end the test before the poll interval"
-        );
-        let _ = std::fs::remove_file(stop_file);
-    }
-}
+#[path = "worker_tests.rs"]
+mod tests;

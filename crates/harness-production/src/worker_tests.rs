@@ -1,0 +1,176 @@
+use super::*;
+use crate::wake::{send_wake, send_wake_with_hint};
+use harness_forge::{ChangeKind, CreateRepository};
+use harness_forge_memory::MemoryForge;
+use std::path::PathBuf;
+use std::thread;
+
+fn temp_path(name: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "harness-production-worker-{name}-{}-{}.sock",
+        std::process::id(),
+        chrono::Utc::now()
+            .timestamp_nanos_opt()
+            .expect("timestamp has nanos")
+    ));
+    path
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime builds")
+}
+
+#[test]
+fn resolves_multiple_repositories_and_reports_missing_without_secret() {
+    let forge = MemoryForge::new();
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    runtime
+        .block_on(forge.create_repository(CreateRepository {
+            owner: "acme".into(),
+            name: "service".into(),
+            default_branch: "main".into(),
+            description: None,
+        }))
+        .expect("repo creates");
+
+    let repositories = runtime
+        .block_on(resolve_repositories(
+            &forge,
+            &[
+                RepositoryPath::new("acme", "service"),
+                RepositoryPath::new("acme", "missing"),
+            ],
+        ))
+        .unwrap_err();
+
+    let rendered = repositories.to_string();
+    assert!(rendered.contains("acme/missing"));
+    assert!(rendered.contains("not found or not readable"));
+    assert!(!rendered.contains("secret-token"));
+}
+
+#[test]
+fn known_hints_drop_unknown_repos_so_wake_becomes_broad_scan() {
+    let repositories = RepositorySet::new(vec![RepositoryTarget::new(
+        harness_forge::RepositoryId::new("repo-1"),
+        RepositoryPath::new("acme", "service"),
+    )]);
+    let known = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+    let unknown = ChangeHint::repo(RepositoryPath::new("acme", "other"), ChangeKind::Issue);
+
+    assert_eq!(
+        known_hints_for(&repositories, std::slice::from_ref(&known)),
+        vec![known]
+    );
+    assert!(known_hints_for(&repositories, &[unknown]).is_empty());
+}
+
+#[test]
+fn authenticated_wake_interrupts_long_wait() {
+    let socket = temp_path("authenticated");
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let listener = WakeListener::bind(WakeConfig {
+        socket: socket.clone(),
+        secret: Some("wake-secret".into()),
+    })
+    .expect("listener binds");
+    let stop = StopSignal::new(None, None);
+    let sender = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(50));
+        send_wake(&socket, Some("wake-secret")).expect("wake sends");
+    });
+    let start = Instant::now();
+
+    let outcome = runtime
+        .block_on(wait_for_next_tick(
+            &stop,
+            StdDuration::from_secs(60),
+            Some(&listener),
+        ))
+        .expect("wait succeeds");
+    sender.join().expect("sender joins");
+
+    assert_eq!(outcome, WaitOutcome::Wake(None));
+    assert!(
+        start.elapsed() < StdDuration::from_secs(1),
+        "authenticated wake should beat the long poll interval"
+    );
+}
+
+#[test]
+fn wake_payload_carries_repository_hint_to_waiter() {
+    let socket = temp_path("hinted");
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let listener = WakeListener::bind(WakeConfig {
+        socket: socket.clone(),
+        secret: Some("wake-secret".into()),
+    })
+    .expect("listener binds");
+    let stop = StopSignal::new(None, None);
+    let hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+    let hint_for_thread = hint.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(50));
+        send_wake_with_hint(&socket, Some("wake-secret"), &hint_for_thread).expect("wake sends");
+    });
+
+    let outcome = runtime
+        .block_on(wait_for_next_tick(
+            &stop,
+            StdDuration::from_secs(60),
+            Some(&listener),
+        ))
+        .expect("wait succeeds");
+    sender.join().expect("sender joins");
+
+    assert_eq!(outcome, WaitOutcome::Wake(Some(hint)));
+}
+
+#[test]
+fn unauthorized_wake_is_ignored_until_stop_or_poll() {
+    let socket = temp_path("unauthorized");
+    let stop_file = temp_path("stop").with_extension("stop");
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let listener = WakeListener::bind(WakeConfig {
+        socket: socket.clone(),
+        secret: Some("wake-secret".into()),
+    })
+    .expect("listener binds");
+    let stop = StopSignal::new(Some(stop_file.clone()), None);
+    let stop_file_for_thread = stop_file.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(50));
+        send_wake(&socket, Some("wrong-secret")).expect("unauthorized wake sends");
+        thread::sleep(StdDuration::from_millis(150));
+        std::fs::write(&stop_file_for_thread, b"stop").expect("stop file writes");
+    });
+    let start = Instant::now();
+
+    let outcome = runtime
+        .block_on(wait_for_next_tick(
+            &stop,
+            StdDuration::from_secs(60),
+            Some(&listener),
+        ))
+        .expect("wait succeeds");
+    sender.join().expect("sender joins");
+
+    assert_eq!(outcome, WaitOutcome::Stop);
+    assert!(
+        start.elapsed() >= StdDuration::from_millis(150),
+        "unauthorized wake must not end the wait"
+    );
+    assert!(
+        start.elapsed() < StdDuration::from_secs(2),
+        "stop backstop should end the test before the poll interval"
+    );
+    let _ = std::fs::remove_file(stop_file);
+}

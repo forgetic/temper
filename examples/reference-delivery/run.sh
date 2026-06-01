@@ -142,7 +142,7 @@ cmd_stop() {
 # Config knobs whose pre-existing environment value should win over the file
 # (precedence: CLI/env > config/harness.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
-CONFIG_KNOBS="OWNER NAME BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
+CONFIG_KNOBS="OWNER NAME REPOS BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
 HARNESS_AGENTS_AUTH HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL \
 HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
 HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
@@ -169,6 +169,7 @@ load_config() {
 
     OWNER=${OWNER:-acme}
     NAME=${NAME:-service}
+    REPOS=${REPOS:-}
     BASE_URL=${BASE_URL:-http://127.0.0.1:3000}
     POLL_MS=${POLL_MS:-2000}
     RUN_SECS=${RUN_SECS:-600}
@@ -186,6 +187,15 @@ load_config() {
     HARNESS_PROVISION_BIN=${HARNESS_PROVISION_BIN:-}
     HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
     HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
+
+    if [ -n "$REPOS" ]; then
+        WORKER_REPO_ARGS=
+        for _repo in $REPOS; do
+            WORKER_REPO_ARGS="$WORKER_REPO_ARGS --repo $_repo"
+        done
+    else
+        WORKER_REPO_ARGS="--repo $OWNER/$NAME"
+    fi
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
     # Exported so both Go processes inherit it; harmless for the Rust workers.
@@ -508,14 +518,14 @@ launch_role_worker() {
 
     # Per-role secrets are literal env-assignment prefixes (never on argv). The
     # auth-mode env (DeepSeek key path) is exported globally by check_auth.
-    # CODEX_MODEL_ARG / AUTH_FILE_ARG / _wake_args intentionally word-split
-    # (POSIX has no arrays); they are empty unless configured.
+    # WORKER_REPO_ARGS / CODEX_MODEL_ARG / AUTH_FILE_ARG / _wake_args intentionally
+    # word-split (POSIX has no arrays); repo values are owner/name with no spaces.
     # shellcheck disable=SC2086
     HARNESS_FORGEJO_TOKEN="$_token" \
     HARNESS_FORGEJO_USERNAME="$_user" \
     HARNESS_FORGEJO_PASSWORD="$_password" \
         "$WORKER_BIN" \
-        --backend forgejo --base-url "$BASE_URL" --repo "$OWNER/$NAME" \
+        --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
@@ -559,7 +569,7 @@ launch_workers() {
     fi
     # shellcheck disable=SC2086
     HARNESS_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
-        --backend forgejo --base-url "$BASE_URL" --repo "$OWNER/$NAME" \
+        --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
         --kind mechanical \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         $_wake_args \

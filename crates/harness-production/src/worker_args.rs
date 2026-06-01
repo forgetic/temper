@@ -1,6 +1,8 @@
 //! Argument parsing for `harness-worker`.
 
 use chrono::Duration;
+use harness_forge::RepositoryPath;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -10,7 +12,7 @@ pub const FORGEJO_PASSWORD_ENV: &str = "HARNESS_FORGEJO_PASSWORD";
 pub const AGENTS_AUTH_ENV: &str = "HARNESS_AGENTS_AUTH";
 
 pub const USAGE: &str = concat!(
-    "harness-worker --backend forgejo --base-url <url> --repo <owner/name> ",
+    "harness-worker --backend forgejo --base-url <url> (--repo <owner/name> [--repo <owner/name> ...] | --repo-list <path>) ",
     "--kind <role|mechanical> [--role <id> --user <handle>] ",
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] ",
@@ -63,8 +65,13 @@ impl fmt::Debug for ForgejoArgs {
 pub struct WorkerArgs {
     pub kind: WorkerKind,
     pub forgejo: ForgejoArgs,
+    /// First configured repository, retained for legacy callers/tests.
     pub owner: String,
+    /// First configured repository, retained for legacy callers/tests.
     pub name: String,
+    /// Repositories this worker scans. This is a scan shard, not a write-authority list:
+    /// Forge permissions on the token remain the authority for mutations.
+    pub repositories: Vec<RepositoryPath>,
     pub poll_interval: Duration,
     pub stop_file: Option<PathBuf>,
     pub run_secs: Option<u64>,
@@ -117,7 +124,8 @@ struct RawArgs {
     help: bool,
     backend: Option<String>,
     base_url: Option<String>,
-    repo: Option<String>,
+    repos: Vec<String>,
+    repo_list: Option<String>,
     kind: Option<String>,
     role: Option<String>,
     user: Option<String>,
@@ -143,7 +151,8 @@ impl RawArgs {
                 "--help" | "-h" => raw.help = true,
                 "--backend" => raw.backend = Some(value_for(&flag, &mut iter)?),
                 "--base-url" => raw.base_url = Some(value_for(&flag, &mut iter)?),
-                "--repo" => raw.repo = Some(value_for(&flag, &mut iter)?),
+                "--repo" => raw.repos.push(value_for(&flag, &mut iter)?),
+                "--repo-list" => raw.repo_list = Some(value_for(&flag, &mut iter)?),
                 "--kind" => raw.kind = Some(value_for(&flag, &mut iter)?),
                 "--role" => raw.role = Some(value_for(&flag, &mut iter)?),
                 "--user" => raw.user = Some(value_for(&flag, &mut iter)?),
@@ -183,7 +192,12 @@ impl RawArgs {
             }
         }
         let kind = self.parse_kind()?;
-        let (owner, name) = parse_repo(&require(self.repo, "--repo")?)?;
+        let repositories = parse_repositories(self.repos, self.repo_list)?;
+        let first = repositories
+            .first()
+            .expect("parse_repositories returns at least one repository");
+        let owner = first.owner.clone();
+        let name = first.name.clone();
         let token = require_env(env, FORGEJO_TOKEN_ENV)?;
         let forgejo = ForgejoArgs {
             base_url: require(self.base_url, "--base-url")?,
@@ -196,6 +210,7 @@ impl RawArgs {
             forgejo,
             owner,
             name,
+            repositories,
             poll_interval: Duration::milliseconds(match self.poll_ms {
                 Some(raw) => parse_i64(&raw, "--poll-ms")?,
                 None => 1_000,
@@ -245,16 +260,55 @@ fn require_ref(value: Option<&str>, flag: &str) -> Result<String, ArgsError> {
         .ok_or_else(|| ArgsError::new(format!("missing required {flag}\nusage: {USAGE}")))
 }
 
-fn parse_repo(repo: &str) -> Result<(String, String), ArgsError> {
-    let (owner, name) = repo
-        .split_once('/')
-        .ok_or_else(|| ArgsError::new(format!("--repo must be owner/name, got '{repo}'")))?;
-    if owner.is_empty() || name.is_empty() {
+fn parse_repositories(
+    repos: Vec<String>,
+    repo_list: Option<String>,
+) -> Result<Vec<RepositoryPath>, ArgsError> {
+    let mut raw = repos;
+    if let Some(path) = repo_list {
+        let contents = std::fs::read_to_string(&path).map_err(|error| {
+            ArgsError::new(format!("failed to read --repo-list {path}: {error}"))
+        })?;
+        for (index, line) in contents.lines().enumerate() {
+            let trimmed = line.split('#').next().unwrap_or_default().trim();
+            if !trimmed.is_empty() {
+                raw.push(trimmed.to_string());
+            } else if line.trim_start().starts_with('#') || line.trim().is_empty() {
+                continue;
+            } else {
+                return Err(ArgsError::new(format!(
+                    "malformed --repo-list {path} line {}",
+                    index + 1
+                )));
+            }
+        }
+    }
+    if raw.is_empty() {
+        return Err(ArgsError::new(format!(
+            "missing required --repo or --repo-list\nusage: {USAGE}"
+        )));
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut parsed = Vec::new();
+    for repo in raw {
+        let path = parse_repo(&repo)?;
+        let key = (path.owner.clone(), path.name.clone());
+        if seen.insert(key) {
+            parsed.push(path);
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_repo(repo: &str) -> Result<RepositoryPath, ArgsError> {
+    let parts: Vec<&str> = repo.split('/').collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
         return Err(ArgsError::new(format!(
             "--repo must be owner/name with non-empty parts, got '{repo}'"
         )));
     }
-    Ok((owner.to_string(), name.to_string()))
+    Ok(RepositoryPath::new(parts[0], parts[1]))
 }
 
 fn parse_auth<E>(raw: Option<&str>, env: &E) -> Result<AuthKind, ArgsError>
@@ -354,6 +408,11 @@ mod tests {
             panic!("expected run")
         };
         assert_eq!(args.owner, "acme");
+        assert_eq!(args.name, "service");
+        assert_eq!(
+            args.repositories,
+            vec![RepositoryPath::new("acme", "service")]
+        );
         assert!(format!("{:?}", args.forgejo).contains("<redacted>"));
         assert!(!format!("{:?}", args.forgejo).contains("secret-token"));
     }
@@ -388,6 +447,94 @@ mod tests {
             Some(PathBuf::from("run/wake/mechanical.sock"))
         );
         assert_eq!(args.wake_secret_file, Some(PathBuf::from("secrets/wake")));
+    }
+
+    #[test]
+    fn parses_multiple_repos_and_deduplicates() {
+        let outcome = parse_with_env(
+            [
+                "--backend",
+                "forgejo",
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--repo",
+                "acme/service",
+                "--repo",
+                "acme/other",
+                "--repo",
+                "acme/service",
+                "--kind",
+                "mechanical",
+            ]
+            .into_iter()
+            .map(String::from),
+            env,
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert_eq!(
+            args.repositories,
+            vec![
+                RepositoryPath::new("acme", "service"),
+                RepositoryPath::new("acme", "other")
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_repo_list_file() {
+        let path = std::env::temp_dir().join(format!(
+            "harness-production-repos-{}-{}.txt",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::write(
+            &path,
+            "# scan shard\nacme/service\nacme/other # inline comment\n",
+        )
+        .expect("repo-list writes");
+        let outcome = parse_with_env(
+            vec![
+                "--backend".to_string(),
+                "forgejo".to_string(),
+                "--base-url".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+                "--repo-list".to_string(),
+                path.display().to_string(),
+                "--kind".to_string(),
+                "mechanical".to_string(),
+            ],
+            env,
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert_eq!(args.repositories.len(), 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_malformed_repo_names() {
+        let error = parse_with_env(
+            [
+                "--backend",
+                "forgejo",
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--repo",
+                "acme/service/extra",
+                "--kind",
+                "mechanical",
+            ]
+            .into_iter()
+            .map(String::from),
+            env,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("owner/name"));
     }
 
     #[test]

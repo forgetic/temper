@@ -106,7 +106,10 @@ The first run builds the production workspace binaries (`cargo build --release
 `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY`). Edit
 `config/harness.env` for the repo, endpoint, cadence, and auth knobs; any of
 those may also be overridden by exporting the matching env var before invoking
-the script (env wins over the file).
+the script (env wins over the file). `OWNER`/`NAME` preserves the single-repo
+mode. Setting `REPOS="owner/a owner/b"` makes every production worker scan that
+repository set (tokens must have Forge access to every listed repo; Forge
+permissions, not scan-shard membership, authorize writes).
 
 Progress is printed without secrets (server URL, the seeded issue URL, where
 logs live); per-process logs land under `logs/`. The checked-in default
@@ -145,7 +148,10 @@ for the durable topology and real-CI design.
 Open the Forgejo UI at `BASE_URL` (log in as any provisioned role). Watch the
 issue get triaged, the PR open, CI run, the review land, and the merge +
 reconcile labels move. Worker logs land under `logs/` (created at run time).
-With webhooks enabled:
+When webhooks are enabled, the trigger wakes the fixed worker pool for events
+from any repo. Wake payloads carry the repository hint; configured repos are
+scanned first and unknown-repo hints are logged by workers and treated as a
+broad scan:
 
 - `logs/provision.log` records `webhook registered url=...` after the provisioner
   successfully registered the repo hook;

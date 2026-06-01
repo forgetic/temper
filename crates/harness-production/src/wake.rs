@@ -1,5 +1,6 @@
 //! Host-local wake bus for production workers.
 
+use harness_runner::ChangeHint;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +35,7 @@ pub enum WakeError {
     Io(std::io::Error),
     Unsupported,
     Unauthorized,
+    InvalidPayload(String),
 }
 
 impl fmt::Display for WakeError {
@@ -42,6 +44,9 @@ impl fmt::Display for WakeError {
             WakeError::Io(error) => write!(formatter, "wake socket I/O failed: {error}"),
             WakeError::Unsupported => write!(formatter, "wake sockets require a Unix platform"),
             WakeError::Unauthorized => write!(formatter, "wake message authentication failed"),
+            WakeError::InvalidPayload(error) => {
+                write!(formatter, "wake payload was invalid: {error}")
+            }
         }
     }
 }
@@ -82,14 +87,10 @@ impl WakeListener {
         })
     }
 
-    pub async fn recv(&self) -> Result<(), WakeError> {
-        let mut buf = [0_u8; 512];
+    pub async fn recv(&self) -> Result<Option<ChangeHint>, WakeError> {
+        let mut buf = [0_u8; 2048];
         let size = self.socket.recv(&mut buf).await?;
-        if authorized(&buf[..size], self.secret.as_deref()) {
-            Ok(())
-        } else {
-            Err(WakeError::Unauthorized)
-        }
+        decode_payload(&buf[..size], self.secret.as_deref())
     }
 }
 
@@ -109,7 +110,7 @@ impl WakeListener {
         Err(WakeError::Unsupported)
     }
 
-    pub async fn recv(&self) -> Result<(), WakeError> {
+    pub async fn recv(&self) -> Result<Option<ChangeHint>, WakeError> {
         Err(WakeError::Unsupported)
     }
 }
@@ -119,8 +120,22 @@ pub fn send_wake(path: &Path, secret: Option<&str>) -> Result<(), WakeError> {
     use std::os::unix::net::UnixDatagram;
 
     let socket = UnixDatagram::unbound()?;
-    let payload = secret.unwrap_or("wake");
-    socket.send_to(payload.as_bytes(), path)?;
+    let payload = encode_payload(secret, None)?;
+    socket.send_to(&payload, path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn send_wake_with_hint(
+    path: &Path,
+    secret: Option<&str>,
+    hint: &ChangeHint,
+) -> Result<(), WakeError> {
+    use std::os::unix::net::UnixDatagram;
+
+    let socket = UnixDatagram::unbound()?;
+    let payload = encode_payload(secret, Some(hint))?;
+    socket.send_to(&payload, path)?;
     Ok(())
 }
 
@@ -129,12 +144,54 @@ pub fn send_wake(_path: &Path, _secret: Option<&str>) -> Result<(), WakeError> {
     Err(WakeError::Unsupported)
 }
 
+#[cfg(not(unix))]
+pub fn send_wake_with_hint(
+    _path: &Path,
+    _secret: Option<&str>,
+    _hint: &ChangeHint,
+) -> Result<(), WakeError> {
+    Err(WakeError::Unsupported)
+}
+
+fn encode_payload(secret: Option<&str>, hint: Option<&ChangeHint>) -> Result<Vec<u8>, WakeError> {
+    let mut payload = secret.unwrap_or("wake").as_bytes().to_vec();
+    if let Some(hint) = hint {
+        payload.push(b'\n');
+        payload.extend_from_slice(
+            serde_json::to_string(hint)
+                .map_err(|error| WakeError::InvalidPayload(error.to_string()))?
+                .as_bytes(),
+        );
+    }
+    Ok(payload)
+}
+
+fn decode_payload(payload: &[u8], secret: Option<&str>) -> Result<Option<ChangeHint>, WakeError> {
+    if !authorized(payload, secret) {
+        return Err(WakeError::Unauthorized);
+    }
+    let Some(newline) = payload.iter().position(|byte| *byte == b'\n') else {
+        return Ok(None);
+    };
+    let hint = &payload[newline + 1..];
+    if hint.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_slice(hint)
+        .map(Some)
+        .map_err(|error| WakeError::InvalidPayload(error.to_string()))
+}
+
 fn authorized(payload: &[u8], secret: Option<&str>) -> bool {
+    let marker = payload
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or(payload);
     match secret {
-        Some(secret) => std::str::from_utf8(payload)
+        Some(secret) => std::str::from_utf8(marker)
             .map(|text| text.trim() == secret)
             .unwrap_or(false),
-        None => true,
+        None => marker == b"wake",
     }
 }
 
@@ -157,5 +214,19 @@ mod tests {
         assert!(authorized(b"wake", None));
         assert!(authorized(b"secret\n", Some("secret")));
         assert!(!authorized(b"wrong", Some("secret")));
+        assert!(!authorized(b"not-wake", None));
+    }
+
+    #[test]
+    fn payload_round_trips_repo_hint() {
+        let hint = ChangeHint::repo(
+            harness_forge::RepositoryPath::new("acme", "service"),
+            harness_runner::ChangeKind::Issue,
+        );
+        let payload = encode_payload(Some("wake-secret"), Some(&hint)).expect("payload encodes");
+        assert_eq!(
+            decode_payload(&payload, Some("wake-secret")).expect("payload decodes"),
+            Some(hint)
+        );
     }
 }

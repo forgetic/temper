@@ -1,7 +1,7 @@
 //! Forgejo webhook receiver for host-local worker wakes.
 
 use crate::trigger_args::TriggerArgs;
-use crate::wake::{send_wake, WakeError};
+use crate::wake::{send_wake_with_hint, WakeError};
 use harness_forge::{ItemNumber, RepositoryPath};
 use harness_runner::{ChangeHint, ChangeKind};
 use hmac::{Hmac, Mac};
@@ -116,7 +116,7 @@ fn handle_request(
 ) -> HttpResponse {
     match accept_webhook(request, webhook_secret) {
         Ok(hint) => {
-            let delivery = deliver_wakes(args, wake_secret);
+            let delivery = deliver_wakes(args, wake_secret, &hint);
             eprintln!(
                 "harness-trigger-forgejo: webhook accepted kind={:?} repo={}/{} item={:?} wake_outcome={} targets={} sent={} failed={}",
                 hint.kind,
@@ -137,7 +137,11 @@ fn handle_request(
     }
 }
 
-fn deliver_wakes(args: &TriggerArgs, wake_secret: Option<&str>) -> WakeDeliveryReport {
+fn deliver_wakes(
+    args: &TriggerArgs,
+    wake_secret: Option<&str>,
+    hint: &ChangeHint,
+) -> WakeDeliveryReport {
     let sockets = wake_sockets(args);
     let mut report = WakeDeliveryReport {
         targets: sockets.len() as u64,
@@ -150,7 +154,7 @@ fn deliver_wakes(args: &TriggerArgs, wake_secret: Option<&str>) -> WakeDeliveryR
         return report;
     }
     for (target, path) in sockets {
-        match send_wake(&path, wake_secret) {
+        match send_wake_with_hint(&path, wake_secret, hint) {
             Ok(()) => report.sent = report.sent.saturating_add(1),
             Err(error) => {
                 report.failed = report.failed.saturating_add(1);
@@ -526,9 +530,12 @@ mod tests {
         let response = handle_request(&request(body, "secret", "issues"), &args, "secret", None);
 
         assert_eq!(response.status, 202);
-        let mut buf = [0_u8; 32];
+        let mut buf = [0_u8; 512];
         let size = socket.recv(&mut buf).expect("wake is received");
-        assert_eq!(&buf[..size], b"wake");
+        let payload = std::str::from_utf8(&buf[..size]).expect("wake payload is utf8");
+        assert!(payload.starts_with("wake\n"));
+        assert!(payload.contains("\"owner\":\"acme\""));
+        assert!(payload.contains("\"name\":\"service\""));
         drop(socket);
         let _ = std::fs::remove_file(socket_path);
         let _ = std::fs::remove_dir_all(dir);
@@ -551,7 +558,8 @@ mod tests {
         };
         let body = br#"{"repository":{"full_name":"acme/service"},"issue":{"number":7}}"#;
 
-        let report = deliver_wakes(&args, None);
+        let hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+        let report = deliver_wakes(&args, None, &hint);
         let response = handle_request(&request(body, "secret", "issues"), &args, "secret", None);
 
         assert_eq!(response.status, 202);
@@ -569,7 +577,8 @@ mod tests {
         let dir = temp_dir("no-sockets");
         let args = trigger_args_with_dir(dir.clone());
 
-        let report = deliver_wakes(&args, None);
+        let hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+        let report = deliver_wakes(&args, None, &hint);
 
         assert_eq!(report.targets, 0);
         assert_eq!(report.sent, 0);

@@ -78,12 +78,22 @@ Status legend: ☐ pending · ☑ done
    needed; the invariant is one `RepositoryId` plus one repository-bound journal
    per target.
 
-3. ☐ **Phase 3 — Production CLI/config/provisioning.**
+3. ☑ **Phase 3 — Production CLI/config/provisioning.**
    `prompts/phase-3-production-config.md`
 
    Extend production worker/provisioning surfaces from one `--repo` to an
    explicit repository set, while keeping the old single-repo mode as a special
    case. Ensure labels can be applied idempotently to every configured repo.
+   Done: `harness-worker` accepts repeated `--repo owner/name` values and
+   `--repo-list <path>` (one `owner/name` per non-comment line), deduplicates the
+   configured scan shard, resolves every repo at startup with redacted
+   not-found/not-readable errors, logs the resolved set, ensures workflow labels
+   in every configured repo, and constructs production `MultiRepoRoleWorker` /
+   `MultiRepoMechanicalWorker` instances. Wake datagrams now carry the parsed
+   `ChangeHint`; role workers prioritize known hinted repos and log unknown-repo
+   hints as broad scans. The example config keeps `OWNER`/`NAME` as the legacy
+   single-repo default and adds optional `REPOS="owner/a owner/b"`; worker token
+   Forge permissions, not scan-shard membership, remain the write authority.
 
 4. ☐ **Phase 4 — Multi-repo e2e tests.**
    `prompts/phase-4-e2e.md`

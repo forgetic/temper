@@ -308,7 +308,7 @@ async fn drive_async<W: harness_runner::Worker>(
                         _ = &mut sleep => break,
                         _ = &mut stop_check => {},
                         received = listener.recv() => match received {
-                            Ok(()) => {
+                            Ok(_) => {
                                 eprintln!(
                                     "harness-testing-worker: worker '{}' consumed authenticated wake; ticking immediately",
                                     worker.name()
