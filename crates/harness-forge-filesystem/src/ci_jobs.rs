@@ -1,7 +1,7 @@
 use crate::lists::sort_ci_jobs_by_name;
 use crate::validation::validate_stored_ci_jobs;
 use crate::FilesystemForge;
-use harness_forge::{CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
+use harness_forge::{ChangeKind, CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
 use std::path::PathBuf;
 
 impl FilesystemForge {
@@ -20,7 +20,9 @@ impl FilesystemForge {
                 "invalid repository id {repo_id} for CI jobs path"
             )));
         };
-        self.write_json(&path, &ci_jobs)
+        self.write_json(&path, &ci_jobs)?;
+        self.publish_repo_hint(repo_id, ChangeKind::Ci);
+        Ok(())
     }
 
     pub(crate) fn ci_jobs_file(&self, repo_id: &RepositoryId) -> Option<PathBuf> {

@@ -103,6 +103,12 @@ Pull-request reviews are stored in `repositories/<repo-id>/pull_requests/<pull-r
 
 CI jobs are stored in `repositories/<repo-id>/ci_jobs.json` as serialized Forge `CiJob` records. The Forge interface has no CI job creation operation, so tests and local scenarios seed this file with deterministic fixture records, usually through `FilesystemForge::seed_ci_jobs(repo_id, jobs)`, which replaces the repository's stored jobs. CI job IDs are fixture-provided opaque IDs. Stored CI jobs must belong to the repository, have non-empty names and commit SHAs, and not duplicate IDs within the repository. CI job timestamps come from the fixture record.
 
+## Local change hints
+
+`FilesystemForge::subscribe_hints()` returns a companion `ChangeSource` for local process-split tests and development. It is not part of the `Forge` trait and is not authoritative state. Mutations append JSON-line `ChangeHint` records to `<root>/hints.log` after the durable state files have been written; issue, pull-request, comment, review, label, merge, reviewer-request, dependency, repository, and `seed_ci_jobs` writes all publish broad-enough hints. Failed mutations publish nothing. Hint append failures are best-effort and do not change the result of the already-committed Forge mutation; the normal poll loop remains the liveness backstop.
+
+A subscriber starts at the current end of the log, so a restarted listener may miss older hints. The source tails the file without taking the store lock, skips malformed complete lines, and waits for a later complete line if a writer leaves a partial final line. Hints may be duplicated, broad, stale, or reordered; workers must always re-read Forge state before acting.
+
 ## Listing and sorting
 
 `list_repositories` returns deterministic results. Without an explicit sort, repositories are sorted by owner/name path ascending, then stable ID.

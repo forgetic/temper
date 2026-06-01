@@ -10,43 +10,25 @@ use crate::lists::{
     sort_pull_requests, sort_pull_requests_by_number, sort_repositories, update_issue_state,
     update_pull_request_state,
 };
+use crate::merge::merge_pull_request as merge_pull_request_impl;
 use crate::metadata::next_timestamp;
 use crate::record_ids::{
-    issue_comment_id, issue_id, label_id, merge_commit_sha, pull_request_comment_id,
-    pull_request_id,
+    issue_comment_id, issue_id, label_id, pull_request_comment_id, pull_request_id,
 };
 use crate::reviews::{list_reviews, request_reviewers, submit_review};
-use crate::validation::{validate_create_repository, validate_upsert_label};
+use crate::validation::{
+    check_expected_version, validate_create_repository, validate_upsert_label,
+};
 use crate::FilesystemForge;
 use async_trait::async_trait;
 use harness_forge::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
+    ChangeKind, CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
     IssueQuery, IssueState, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
     PullRequestId, PullRequestQuery, PullRequestReview, PullRequestState, Repository, RepositoryId,
     RepositoryPath, RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel,
     User, UserId, Version,
 };
-
-/// Enforces an optimistic-concurrency precondition.
-///
-/// Returns [`ForgeError::Conflict`] when `expected` is `Some` and does not equal
-/// the stored `actual` version; a `None` precondition always passes (an
-/// unconditional update). Checked before the logical clock advances or any file
-/// is written, so a rejected conditional update leaves the store untouched.
-fn check_expected_version(
-    kind: &str,
-    id: &impl std::fmt::Display,
-    expected: Option<Version>,
-    actual: Version,
-) -> ForgeResult<()> {
-    match expected {
-        Some(expected) if expected != actual => Err(ForgeError::Conflict(format!(
-            "{kind} {id} expected version {expected} but found {actual}"
-        ))),
-        _ => Ok(()),
-    }
-}
 
 #[async_trait]
 impl Forge for FilesystemForge {
@@ -95,6 +77,10 @@ impl Forge for FilesystemForge {
         })?;
         self.write_json(&repository_path, &repository)?;
         self.write_metadata(&metadata)?;
+        self.publish_path_hint(
+            RepositoryPath::new(repository.owner.clone(), repository.name.clone()),
+            ChangeKind::Unknown,
+        );
 
         Ok(repository)
     }
@@ -140,6 +126,7 @@ impl Forge for FilesystemForge {
 
         sort_labels(&mut labels);
         self.write_labels(repo_id, &labels)?;
+        self.publish_repo_hint(repo_id, ChangeKind::Label);
 
         Ok(label)
     }
@@ -190,6 +177,7 @@ impl Forge for FilesystemForge {
         sort_issues_by_number(&mut issues);
         self.write_issues(repo_id, &issues)?;
         self.write_metadata(&metadata)?;
+        self.publish_item_hint(repo_id, issue.number, ChangeKind::Issue);
 
         Ok(issue)
     }
@@ -256,13 +244,16 @@ impl Forge for FilesystemForge {
         sort_issues_by_number(&mut issues);
         self.write_issues(&repo_id, &issues)?;
         self.write_metadata(&metadata)?;
+        self.publish_item_hint(&repo_id, updated.number, ChangeKind::Issue);
 
         Ok(updated)
     }
 
     async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
         let _guard = self.write_lock()?;
-        add_issue_dependency(self, id, target)
+        let issue = add_issue_dependency(self, id, target)?;
+        self.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+        Ok(issue)
     }
 
     async fn remove_issue_dependency(
@@ -271,7 +262,9 @@ impl Forge for FilesystemForge {
         target: ItemNumber,
     ) -> ForgeResult<Issue> {
         let _guard = self.write_lock()?;
-        remove_issue_dependency(self, id, target)
+        let issue = remove_issue_dependency(self, id, target)?;
+        self.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+        Ok(issue)
     }
 
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
@@ -305,6 +298,9 @@ impl Forge for FilesystemForge {
         sort_comments(&mut comments);
         self.write_issue_comments(&repo_id, id, &comments)?;
         self.write_metadata(&metadata)?;
+        if let Some(issue) = self.find_issue_by_id(id)? {
+            self.publish_item_hint(&repo_id, issue.number, ChangeKind::Comment);
+        }
 
         Ok(comment)
     }
@@ -365,6 +361,7 @@ impl Forge for FilesystemForge {
         sort_pull_requests_by_number(&mut pull_requests);
         self.write_pull_requests(repo_id, &pull_requests)?;
         self.write_metadata(&metadata)?;
+        self.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
 
         Ok(pull_request)
     }
@@ -440,6 +437,7 @@ impl Forge for FilesystemForge {
         sort_pull_requests_by_number(&mut pull_requests);
         self.write_pull_requests(&repo_id, &pull_requests)?;
         self.write_metadata(&metadata)?;
+        self.publish_pull_request_hint(&updated, ChangeKind::PullRequest);
 
         Ok(updated)
     }
@@ -450,7 +448,9 @@ impl Forge for FilesystemForge {
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
         let _guard = self.write_lock()?;
-        add_pull_request_dependency(self, id, target)
+        let pull_request = add_pull_request_dependency(self, id, target)?;
+        self.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        Ok(pull_request)
     }
 
     async fn remove_pull_request_dependency(
@@ -459,7 +459,9 @@ impl Forge for FilesystemForge {
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
         let _guard = self.write_lock()?;
-        remove_pull_request_dependency(self, id, target)
+        let pull_request = remove_pull_request_dependency(self, id, target)?;
+        self.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        Ok(pull_request)
     }
 
     async fn request_pull_request_reviewers(
@@ -468,7 +470,9 @@ impl Forge for FilesystemForge {
         input: RequestReviewers,
     ) -> ForgeResult<PullRequest> {
         let _guard = self.write_lock()?;
-        request_reviewers(self, id, input)
+        let pull_request = request_reviewers(self, id, input)?;
+        self.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        Ok(pull_request)
     }
 
     async fn list_pull_request_reviews(
@@ -484,7 +488,11 @@ impl Forge for FilesystemForge {
         input: CreatePullRequestReview,
     ) -> ForgeResult<PullRequestReview> {
         let _guard = self.write_lock()?;
-        submit_review(self, id, input)
+        let review = submit_review(self, id, input)?;
+        if let Some(pull_request) = self.find_pull_request_by_id(id)? {
+            self.publish_pull_request_hint(&pull_request, ChangeKind::Review);
+        }
+        Ok(review)
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
@@ -523,6 +531,9 @@ impl Forge for FilesystemForge {
         sort_comments(&mut comments);
         self.write_pull_request_comments(&repo_id, id, &comments)?;
         self.write_metadata(&metadata)?;
+        if let Some(pull_request) = self.find_pull_request_by_id(id)? {
+            self.publish_pull_request_hint(&pull_request, ChangeKind::Comment);
+        }
 
         Ok(comment)
     }
@@ -533,47 +544,7 @@ impl Forge for FilesystemForge {
         input: MergePullRequest,
     ) -> ForgeResult<MergeRecord> {
         let _guard = self.write_lock()?;
-        let repo_id = self
-            .find_pull_request_repository_by_id(id)?
-            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
-
-        let mut pull_requests = self.read_pull_requests_for_existing_repository(&repo_id)?;
-        let pull_request = pull_requests
-            .iter_mut()
-            .find(|pull_request| &pull_request.id == id)
-            .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
-
-        match pull_request.state {
-            PullRequestState::Open => {}
-            PullRequestState::Closed => {
-                return Err(ForgeError::Conflict(format!("pull request {id} is closed")));
-            }
-            PullRequestState::Merged => {
-                return Err(ForgeError::Conflict(format!("pull request {id} is merged")));
-            }
-        }
-
-        let mut metadata = self.read_metadata()?;
-        let merged_by = self.effective_user(&metadata).id;
-        let now = next_timestamp(&mut metadata)?;
-        let merge = MergeRecord {
-            method: input.method,
-            commit_sha: merge_commit_sha(metadata.clock_tick),
-            merged_by,
-            merged_at: now,
-        };
-
-        pull_request.state = PullRequestState::Merged;
-        pull_request.merge = Some(merge.clone());
-        pull_request.version = pull_request.version.next();
-        pull_request.updated_at = now;
-        pull_request.closed_at = Some(now);
-
-        sort_pull_requests_by_number(&mut pull_requests);
-        self.write_pull_requests(&repo_id, &pull_requests)?;
-        self.write_metadata(&metadata)?;
-
-        Ok(merge)
+        merge_pull_request_impl(self, id, input)
     }
 
     async fn list_ci_jobs(

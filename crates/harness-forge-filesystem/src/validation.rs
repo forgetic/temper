@@ -6,7 +6,23 @@ use crate::record_ids::{
 use harness_forge::{
     CiJob, Comment, CommentId, CreateRepository, ForgeError, ForgeResult, Issue, IssueId, Label,
     PullRequest, PullRequestId, PullRequestReview, PullRequestState, RepositoryId, UpsertLabel,
+    Version,
 };
+
+/// Enforces an optimistic-concurrency precondition.
+pub(crate) fn check_expected_version(
+    kind: &str,
+    id: &impl std::fmt::Display,
+    expected: Option<Version>,
+    actual: Version,
+) -> ForgeResult<()> {
+    match expected {
+        Some(expected) if expected != actual => Err(ForgeError::Conflict(format!(
+            "{kind} {id} expected version {expected} but found {actual}"
+        ))),
+        _ => Ok(()),
+    }
+}
 
 pub(crate) fn validate_create_repository(input: &CreateRepository) -> ForgeResult<()> {
     if input.owner.trim().is_empty() {

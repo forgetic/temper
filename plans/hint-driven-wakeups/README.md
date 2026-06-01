@@ -48,12 +48,17 @@ Status legend: ☐ pending · ☑ done
    `WakeablePollLoop`; `MemoryForge::subscribe_hints()` publishes best-effort
    in-process hints for successful mutations.
 
-2. ☐ **Phase 2 — Filesystem backend cross-process hints.**
+2. ☑ **Phase 2 — Filesystem backend cross-process hints.**
    `prompts/phase-2-filesystem-hints.md`
 
    Extend the same contract to `FilesystemForge` with integration tests using
    distinct handles/process-style isolation. The test should fail if handoff
-   latency is governed by the configured poll interval.
+   latency is governed by the configured poll interval. Done: `FilesystemForge`
+   appends best-effort JSON-line `ChangeHint`s to `<root>/hints.log`, exposes a
+   tailing `subscribe_hints()` source, publishes only after successful durable
+   mutations, and runner integration tests prove distinct handles wake well
+   before a large poll deadline while restarted listeners still converge through
+   the poll/tick backstop.
 
 3. ☐ **Phase 3 — Production wake path hardening.**
    `prompts/phase-3-production-wake-path.md`

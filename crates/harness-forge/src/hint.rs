@@ -5,10 +5,12 @@
 
 use crate::ids::ItemNumber;
 use crate::model::RepositoryPath;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Coarse kind of provider event represented by a wake hint.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
     Issue,
     PullRequest,
@@ -24,7 +26,7 @@ pub enum ChangeKind {
 ///
 /// Hints are never trusted as state. They only shorten the wait before a worker
 /// performs its existing authoritative Forge scan.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ChangeHint {
     pub repo: RepositoryPath,
     pub item: Option<ItemNumber>,
