@@ -96,7 +96,7 @@ fn authenticated_wake_interrupts_long_wait() {
         .expect("wait succeeds");
     sender.join().expect("sender joins");
 
-    assert_eq!(outcome, WaitOutcome::Wake(None));
+    assert_eq!(outcome, WaitOutcome::Wake(Vec::new()));
     assert!(
         start.elapsed() < StdDuration::from_secs(1),
         "authenticated wake should beat the long poll interval"
@@ -130,7 +130,38 @@ fn wake_payload_carries_repository_hint_to_waiter() {
         .expect("wait succeeds");
     sender.join().expect("sender joins");
 
-    assert_eq!(outcome, WaitOutcome::Wake(Some(hint)));
+    assert_eq!(outcome, WaitOutcome::Wake(vec![hint]));
+}
+
+#[test]
+fn burst_wakes_are_coalesced_into_one_wait_outcome() {
+    let socket = temp_path("burst");
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let listener = WakeListener::bind(WakeConfig {
+        socket: socket.clone(),
+        secret: Some("wake-secret".into()),
+    })
+    .expect("listener binds");
+    let stop = StopSignal::new(None, None);
+    let issue_hint = ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
+    let pr_hint = ChangeHint::repo(
+        RepositoryPath::new("acme", "service-canary"),
+        ChangeKind::PullRequest,
+    );
+    send_wake_with_hint(&socket, Some("wake-secret"), &issue_hint).expect("first wake sends");
+    send_wake(&socket, Some("wake-secret")).expect("broad wake sends");
+    send_wake_with_hint(&socket, Some("wake-secret"), &pr_hint).expect("second hinted wake sends");
+
+    let outcome = runtime
+        .block_on(wait_for_next_tick(
+            &stop,
+            StdDuration::from_secs(60),
+            Some(&listener),
+        ))
+        .expect("wait succeeds");
+
+    assert_eq!(outcome, WaitOutcome::Wake(vec![issue_hint, pr_hint]));
 }
 
 #[test]

@@ -344,12 +344,11 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
         match wait_for_next_tick(&stop, interval, wake.as_ref()).await? {
             WaitOutcome::PollDeadline => next_tick_reason = TickReason::Poll,
             WaitOutcome::Stop => break,
-            WaitOutcome::Wake(hint) => {
-                if let Some(hint) = hint {
-                    pending_hints.push(hint);
-                }
+            WaitOutcome::Wake(hints) => {
+                let wake_count = hints.len();
+                pending_hints.extend(hints);
                 eprintln!(
-                    "harness-worker: worker '{}' consumed authenticated wake; ticking immediately",
+                    "harness-worker: worker '{}' consumed authenticated wake batch hints={wake_count}; ticking immediately",
                     worker.name()
                 );
                 next_tick_reason = TickReason::Wake;
@@ -392,7 +391,40 @@ impl TickReason {
 enum WaitOutcome {
     PollDeadline,
     Stop,
-    Wake(Option<ChangeHint>),
+    Wake(Vec<ChangeHint>),
+}
+
+const MAX_WAKE_DRAIN: usize = 1024;
+const WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
+
+fn drain_wake_batch(
+    listener: &WakeListener,
+    first: Option<ChangeHint>,
+) -> Result<Vec<ChangeHint>, WakeError> {
+    let mut hints = first.into_iter().collect::<Vec<_>>();
+    let mut drained = 0usize;
+    loop {
+        if drained >= MAX_WAKE_DRAIN {
+            eprintln!(
+                "harness-worker: wake drain hit cap ({MAX_WAKE_DRAIN}); remaining queued wakes will form a later batch"
+            );
+            break;
+        }
+        match listener.try_recv() {
+            Ok(Some(Some(hint))) => {
+                hints.push(hint);
+                drained += 1;
+            }
+            Ok(Some(None)) => drained += 1,
+            Ok(None) => break,
+            Err(WakeError::Unauthorized) => {
+                eprintln!("harness-worker: ignored unauthorized wake message");
+                drained += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(hints)
 }
 
 async fn wait_for_next_tick(
@@ -414,7 +446,12 @@ async fn wait_for_next_tick(
                     _ = &mut deadline => return Ok(WaitOutcome::PollDeadline),
                     _ = &mut stop_check => {},
                     received = listener.recv() => match received {
-                        Ok(hint) => return Ok(WaitOutcome::Wake(hint)),
+                        Ok(hint) => {
+                            tokio::time::sleep(WAKE_DEBOUNCE).await;
+                            return drain_wake_batch(listener, hint)
+                                .map(WaitOutcome::Wake)
+                                .map_err(|error| RunError::Backend(error.to_string()));
+                        }
                         Err(WakeError::Unauthorized) => {
                             eprintln!("harness-worker: ignored unauthorized wake message");
                         }

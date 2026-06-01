@@ -265,7 +265,19 @@ than reasserting Forge state.
   `HARNESS_SKIP_BUILD=1` assumes `target/debug` and any `HARNESS_*_BIN`
   overrides are already current.
 - **Wake consumed with `actions=0`:** the wake path worked; that worker simply
-  had no active queue item after re-reading Forge state.
+  had no active queue item after re-reading Forge state. Workers batch queued
+  wake datagrams before a tick, so a webhook burst should show one
+  `consumed authenticated wake batch ...` line followed by one
+  `completed tick trigger=wake actions=0` follow-up per worker, rather than a
+  long train of stale no-op scans.
+- **Forgejo remains CPU-heavy after the workflow is done:** first check whether
+  worker logs are still processing wake batches. Persistent `actions=0` batches
+  mean webhooks are only causing fresh scans; `git cat-file` processes are normal
+  Forgejo helpers and are not by themselves proof of active work. Also remember
+  that `ps %CPU` is a lifetime average; use `top`, `pidstat`, or two `/proc/PID/stat`
+  samples to see whether CPU dropped after stopping workers. The demo caps
+  `GOMAXPROCS` for Forgejo/runner; lower `HARNESS_FORGEJO_GOMAXPROCS` if you
+  need a tighter local CPU ceiling.
 - **`Forgejo already responds` on start:** an orphaned or separately started
   server is still bound to `BASE_URL`. Run `./run.sh stop`; if pid files were
   lost, clean up with the orphan commands below.

@@ -92,6 +92,15 @@ impl WakeListener {
         let size = self.socket.recv(&mut buf).await?;
         decode_payload(&buf[..size], self.secret.as_deref())
     }
+
+    pub fn try_recv(&self) -> Result<Option<Option<ChangeHint>>, WakeError> {
+        let mut buf = [0_u8; 2048];
+        match self.socket.try_recv(&mut buf) {
+            Ok(size) => decode_payload(&buf[..size], self.secret.as_deref()).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(WakeError::Io(error)),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -111,6 +120,10 @@ impl WakeListener {
     }
 
     pub async fn recv(&self) -> Result<Option<ChangeHint>, WakeError> {
+        Err(WakeError::Unsupported)
+    }
+
+    pub fn try_recv(&self) -> Result<Option<Option<ChangeHint>>, WakeError> {
         Err(WakeError::Unsupported)
     }
 }

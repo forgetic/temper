@@ -13,16 +13,20 @@ small dev box. They asked future runs to detect a recurrence and work around it.
 ## What went wrong
 
 The throwaway Forgejo web server (`harness_testing::forgejo_server`) — a Go
-program — drives the host to **2+ cores of sustained CPU** under the
-multi-process polling workload (5 role workers polling every 500 ms + actions +
-git). It is the *server* that spins, not the workers or the runner (they idle
-near 0–1%). Two traps:
+program — can drive the host to **2+ cores of sustained CPU** under busy
+multi-process workloads (many role workers + actions + git). It is often the
+*server* that spins, not the runner. Two traps:
 
 - `taskset -cp <pid>` does **not** contain it: it re-pins only the process's main
   thread, while Go spreads goroutines across `GOMAXPROCS` OS threads that keep
   running on every core. The process still climbed past 200%.
 - Force-killing the test (SIGKILL) orphans the server, runner, and worker
   children — the Rust `Drop` guards only run on a clean exit.
+- In the production demo, webhook bursts can enqueue many wake datagrams while
+  workers are busy. If each stale datagram triggers a fresh no-op scan after the
+  workflow has already converged, the workers keep hitting Forgejo and the
+  server keeps spawning/using `git cat-file` helpers. Debounce and coalesce
+  queued wakes on the worker side before ticking.
 
 ## Steering for future agents
 
@@ -34,6 +38,10 @@ near 0–1%). Two traps:
   its own ~2-core Forgejo, so parallel tests multiply the load.
 - When monitoring, sample `ps`/`taskset -acp` (all threads) to pin forgejo to a
   core subset and keep cores free; do not rely on `taskset -cp`.
+- If CPU stays high after apparent convergence, inspect worker logs for many
+  `consumed authenticated wake` / `actions=0` pairs. That means the wake path is
+  draining stale notifications rather than discovering new work; batching should
+  collapse those into one follow-up scan per worker.
 - After any force-kill, clean up orphans: `pkill -f forgejo`,
   `pkill -f harness-testing-worker`, and `rm -rf /tmp/harness-forgejo-*`.
 - `ps pcpu` is a **lifetime average**, not instantaneous — it lags; treat a
@@ -43,5 +51,8 @@ near 0–1%). Two traps:
 
 - `crates/harness-testing/src/forgejo_server/mod.rs` (`apply_cpu_cap`,
   `forgejo_gomaxprocs`, `DEFAULT_FORGEJO_GOMAXPROCS`) + `runner.rs`.
+- `crates/harness-production/src/worker.rs` (`WAKE_DEBOUNCE` and
+  `drain_wake_batch`) debounces/coalesces the production demo's queued
+  Unix-datagram wakes before a tick.
 - `docs/how-to/run-forgejo-multiprocess-e2e.md` ("Real LLM agents" / "CPU note").
 - `plans/forgejo-e2e/findings-phase-b.md` ("The sustained-CPU incident").
