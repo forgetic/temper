@@ -171,6 +171,7 @@ async fn drive_async<W: harness_runner::Worker>(
         .unwrap_or_else(|_| StdDuration::from_millis(1_000));
     let wake = build_wake_listener(args)?;
     let mut consecutive_failures = 0u32;
+    let mut next_tick_reason = TickReason::Initial;
     let mut report = RunReport {
         ticks: 0,
         workers: vec![WorkerRunReport {
@@ -181,6 +182,7 @@ async fn drive_async<W: harness_runner::Worker>(
     };
 
     while !stop.should_stop() {
+        let tick_reason = next_tick_reason;
         match worker.tick(chrono::Utc::now()).await {
             Ok(progress) => {
                 consecutive_failures = 0;
@@ -189,13 +191,22 @@ async fn drive_async<W: harness_runner::Worker>(
                 report.workers[0].actions = report.workers[0]
                     .actions
                     .saturating_add(u64::from(progress.actions));
+                if tick_reason != TickReason::Poll {
+                    eprintln!(
+                        "harness-worker: worker '{}' completed tick trigger={} actions={}",
+                        worker.name(),
+                        tick_reason.as_str(),
+                        progress.actions
+                    );
+                }
             }
             Err(error) => {
                 consecutive_failures += 1;
                 eprintln!(
-                    "harness-worker: worker '{}' tick failed \
+                    "harness-worker: worker '{}' tick failed trigger={} \
                      ({consecutive_failures}/{MAX_CONSECUTIVE_TICK_FAILURES}), retrying: {error}",
-                    worker.name()
+                    worker.name(),
+                    tick_reason.as_str()
                 );
                 if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES {
                     return Err(RunError::Drive(Box::new(error)));
@@ -203,12 +214,15 @@ async fn drive_async<W: harness_runner::Worker>(
             }
         }
         match wait_for_next_tick(&stop, interval, wake.as_ref()).await? {
-            WaitOutcome::PollDeadline => {}
+            WaitOutcome::PollDeadline => next_tick_reason = TickReason::Poll,
             WaitOutcome::Stop => break,
-            WaitOutcome::Wake => eprintln!(
-                "harness-worker: worker '{}' consumed authenticated wake; ticking immediately",
-                worker.name()
-            ),
+            WaitOutcome::Wake => {
+                eprintln!(
+                    "harness-worker: worker '{}' consumed authenticated wake; ticking immediately",
+                    worker.name()
+                );
+                next_tick_reason = TickReason::Wake;
+            }
         }
     }
 
@@ -224,6 +238,23 @@ fn build_wake_listener(args: &WorkerArgs) -> Result<Option<WakeListener>, RunErr
     WakeListener::bind(config)
         .map(Some)
         .map_err(|error| RunError::Backend(error.to_string()))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TickReason {
+    Initial,
+    Poll,
+    Wake,
+}
+
+impl TickReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            TickReason::Initial => "initial",
+            TickReason::Poll => "poll",
+            TickReason::Wake => "wake",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

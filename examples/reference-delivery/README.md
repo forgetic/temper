@@ -93,10 +93,11 @@ only carries what an operator must edit (repo, endpoint, cadence, auth).
 From this directory:
 
 ```sh
-./run.sh          # boot Forgejo + runner, provision + seed, launch the workers,
-                  #   then block; Ctrl-C tears everything down
-./run.sh stop     # tear down a previous run via the saved PIDs
-./run.sh help     # usage
+POLL_MS=120000 ./run.sh   # long-poll mode: webhooks wake workers promptly;
+                           #   Ctrl-C tears everything down
+./run.sh validate-webhooks # summarize webhook registration/delivery/wake logs
+./run.sh stop              # tear down a previous run via the saved PIDs
+./run.sh help              # usage
 ```
 
 The first run builds the production workspace binaries (`cargo build --release
@@ -108,7 +109,9 @@ those may also be overridden by exporting the matching env var before invoking
 the script (env wins over the file).
 
 Progress is printed without secrets (server URL, the seeded issue URL, where
-logs live); per-process logs land under `logs/`.
+logs live); per-process logs land under `logs/`. The checked-in default
+`POLL_MS=120000` is intentional: polling is only the liveness backstop, while
+webhooks should make the demo visibly progress before the two-minute deadline.
 
 ## What it does
 
@@ -137,15 +140,55 @@ transition repair, dependency unblock) without an agent. See
 [`docs/explanation/forgejo-e2e-topology.md`](../../docs/explanation/forgejo-e2e-topology.md)
 for the durable topology and real-CI design.
 
-## Watching progress
+## Watching progress and validating webhooks
 
 Open the Forgejo UI at `BASE_URL` (log in as any provisioned role). Watch the
 issue get triaged, the PR open, CI run, the review land, and the merge +
 reconcile labels move. Worker logs land under `logs/` (created at run time).
-With webhooks enabled, `logs/trigger.log` reports `webhook accepted` or
-`webhook rejected` plus `wake_delivery outcome=no_sockets|sent|all_failed`;
-worker logs report `consumed authenticated wake` when a wake shortens the poll
-sleep.
+With webhooks enabled:
+
+- `logs/provision.log` records `webhook registered url=...` after the provisioner
+  successfully registered the repo hook;
+- `logs/trigger.log` reports `listening on`, `webhook accepted` or
+  `webhook rejected`, and `wake_delivery outcome=no_sockets|sent|all_failed`
+  with target/sent/failed counts;
+- worker logs report `consumed authenticated wake` and then
+  `completed tick trigger=wake actions=N`. `actions=0` means the worker woke,
+  scanned fresh Forge state, and found no queue item.
+
+In another terminal, run:
+
+```sh
+./run.sh validate-webhooks
+```
+
+It summarizes accepted webhook deliveries, wake batches sent, per-worker wake
+consumption, wake-triggered ticks, and whether any wake-triggered tick made
+workflow progress (`actions>0`). For a long-poll smoke, start the demo with
+`POLL_MS=120000 ./run.sh`, wait until some workflow movement appears in Forgejo,
+then run `./run.sh validate-webhooks`; it should pass before any two-minute poll
+backstop is needed.
+
+## Troubleshooting long-poll wakeups
+
+- **No `webhook registered` in `logs/provision.log`:** provisioning failed before
+  the hook was registered, or `WEBHOOKS=0` was set.
+- **Registered but no `webhook accepted` in `logs/trigger.log`:** confirm the
+  trigger reached `listening on`, `WEBHOOK_URL` points at `TRIGGER_BIND`, and the
+  bundled Forgejo config allows loopback webhooks (`ALLOWED_HOST_LIST` includes
+  `127.0.0.1,localhost`).
+- **Accepted but `wake_delivery outcome=no_sockets`:** a webhook arrived before
+  workers created wake sockets. The launcher starts downstream workers and waits
+  for their sockets before launching the architect, so persistent `no_sockets`
+  usually means workers failed during startup; inspect the role logs.
+- **Wakes sent but a worker lacks `consumed authenticated wake`:** inspect that
+  worker's log for auth/backend setup errors. Polling will still recover at the
+  next `POLL_MS` deadline, but the accelerator is not working for that worker.
+- **Logs do not contain the strings above:** rebuild the production binaries
+  (`cargo build --release -p harness-production`) or leave `HARNESS_SKIP_BUILD`
+  unset. `HARNESS_SKIP_BUILD=1` assumes `target/release` is already current.
+- **Wake consumed with `actions=0`:** the wake path worked; that worker simply
+  had no active queue item after re-reading Forge state.
 
 ## Teardown
 

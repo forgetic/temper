@@ -85,12 +85,16 @@ Status legend: ☐ pending · ☑ done
    timeout diagnostics include worker logs, runner logs, trigger address, and CI
    state.
 
-5. ☐ **Phase 5 — Working example + operator docs.**
+5. ☑ **Phase 5 — Working example + operator docs.**
    `prompts/phase-5-example-and-docs.md`
 
    Make `examples/reference-delivery/run.sh` visibly depend on and validate the
-   wake path. The example should be runnable with `POLL_MS=120000` and still
-   converge promptly; docs should explain how to inspect wake delivery.
+   wake path. Done: the example's supported long-poll mode is
+   `POLL_MS=120000 ./run.sh`; the launcher waits for trigger readiness, records
+   webhook registration, starts downstream worker wake sockets before launching
+   the architect to avoid the first-handoff race, and adds
+   `./run.sh validate-webhooks` / `smoke-webhooks` to summarize registered,
+   accepted, sent, consumed, and wake-triggered progress logs.
 
 ## Acceptance criteria for the whole plan
 

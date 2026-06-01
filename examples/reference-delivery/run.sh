@@ -16,9 +16,10 @@
 # runnable demo from a clean checkout.
 #
 # Usage:
-#   ./run.sh [start]   boot everything and block until Ctrl-C / stop-file
-#   ./run.sh stop      tear down a previous run via the saved PIDs
-#   ./run.sh help      show this usage
+#   ./run.sh [start]          boot everything and block until Ctrl-C / stop-file
+#   ./run.sh validate-webhooks inspect logs from a running/completed long-poll run
+#   ./run.sh stop             tear down a previous run via the saved PIDs
+#   ./run.sh help             show this usage
 #
 # Orphan cleanup (lesson 0009) — if a run is force-killed (SIGKILL) the Drop/
 # trap guards do not fire; clean up survivors by hand with:
@@ -67,14 +68,20 @@ ADMIN_PASSWORD='Ref-Delivery-Admin-1!'
 log() { printf '[run.sh] %s\n' "$*"; }
 die() { printf '[run.sh] error: %s\n' "$*" >&2; exit 1; }
 
+sleep_short() {
+    sleep 0.2 2>/dev/null || sleep 1
+}
+
 usage() {
     cat <<EOF
-usage: $0 [start|stop|help]
+usage: $0 [start|validate-webhooks|smoke-webhooks|stop|help]
 
-  start (default)  boot Forgejo + runner, provision + seed, launch the workers,
-                   then block until Ctrl-C or the stop-file.
-  stop             tear down a previous run via run/*.pid.
-  help             show this message.
+  start (default)     boot Forgejo + runner, provision + seed, launch the workers,
+                      then block until Ctrl-C or the stop-file.
+  validate-webhooks   inspect logs/ and report whether webhook wakes were
+                      registered, accepted, delivered, consumed, and acted on.
+  stop                tear down a previous run via run/*.pid.
+  help                show this message.
 
 Configuration is read from config/harness.env (no secrets). Auth selection is
 HARNESS_AGENTS_AUTH (default chatgpt-oauth); see secrets/.env.example.
@@ -390,19 +397,48 @@ boot_runner() {
     log "runner daemon running (pid $RUNNER_PID)"
 }
 
+wait_for_log_line() {
+    _file=$1
+    _needle=$2
+    _pid=$3
+    _label=$4
+    _i=0
+    while ! grep -q "$_needle" "$_file" 2>/dev/null; do
+        kill -0 "$_pid" 2>/dev/null || die "$_label exited before readiness (see $_file)"
+        _i=$((_i + 1))
+        [ "$_i" -gt 100 ] && die "$_label did not become ready (see $_file)"
+        sleep_short
+    done
+}
+
+wait_for_socket() {
+    _socket=$1
+    _pid=$2
+    _label=$3
+    _i=0
+    while [ ! -S "$_socket" ]; do
+        kill -0 "$_pid" 2>/dev/null || die "$_label exited before creating wake socket $_socket"
+        _i=$((_i + 1))
+        [ "$_i" -gt 100 ] && die "$_label did not create wake socket $_socket"
+        sleep_short
+    done
+}
+
 boot_trigger() {
     [ "$WEBHOOKS" = "1" ] || return 0
     log "starting webhook trigger at $TRIGGER_BIND ..."
     ensure_secret_file "$WEBHOOK_SECRET_FILE"
     ensure_secret_file "$WAKE_SECRET_FILE"
     mkdir -p "$WAKE_DIR"
+    : >"$LOG_DIR/trigger.log"
     "$TRIGGER_BIN" --bind "$TRIGGER_BIND" \
         --webhook-secret-file "$WEBHOOK_SECRET_FILE" \
         --wake-secret-file "$WAKE_SECRET_FILE" \
         --wake-dir "$WAKE_DIR" \
-        >"$LOG_DIR/trigger.log" 2>&1 &
+        >>"$LOG_DIR/trigger.log" 2>&1 &
     TRIGGER_PID=$!
     echo "$TRIGGER_PID" >"$TRIGGER_PID_FILE"
+    wait_for_log_line "$LOG_DIR/trigger.log" 'listening on' "$TRIGGER_PID" 'webhook trigger'
     log "trigger running (pid $TRIGGER_PID; logs/trigger.log)"
 }
 
@@ -431,7 +467,16 @@ bootstrap_and_provision() {
         --base-url "$BASE_URL" --owner "$OWNER" --name "$NAME" --out "$ROLES_ENV" \
         $_webhook_args) \
         || die 'provisioning failed'
+    {
+        printf '%s\n' "$_status"
+        if [ "$WEBHOOKS" = "1" ]; then
+            printf 'webhook registered url=%s\n' "$WEBHOOK_URL"
+        else
+            printf 'webhook disabled\n'
+        fi
+    } >"$LOG_DIR/provision.log"
     log "$_status"
+    [ "$WEBHOOKS" = "1" ] && log "webhook registered ($WEBHOOK_URL; logs/provision.log)"
 
     [ -f "$ROLES_ENV" ] || die "provision did not write $ROLES_ENV"
     # shellcheck disable=SC1090
@@ -455,8 +500,10 @@ launch_role_worker() {
     [ -n "$_token" ] || die "no token for role '$_role' in $ROLES_ENV"
 
     _wake_args=
+    _wake_socket=
     if [ "$WEBHOOKS" = "1" ]; then
-        _wake_args="--wake-socket $WAKE_DIR/$_role.sock --wake-secret-file $WAKE_SECRET_FILE"
+        _wake_socket="$WAKE_DIR/$_role.sock"
+        _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
 
     # Per-role secrets are literal env-assignment prefixes (never on argv). The
@@ -474,8 +521,12 @@ launch_role_worker() {
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         $_wake_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
-    echo "$!" >>"$WORKERS_PID_FILE"
-    log "  role:$_role -> pid $! (logs/$_role.log)"
+    _pid=$!
+    echo "$_pid" >>"$WORKERS_PID_FILE"
+    if [ "$WEBHOOKS" = "1" ]; then
+        wait_for_socket "$_wake_socket" "$_pid" "role:$_role"
+    fi
+    log "  role:$_role -> pid $_pid (logs/$_role.log)"
 }
 
 launch_workers() {
@@ -487,14 +538,24 @@ launch_workers() {
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
 
     log 'launching role workers (production binary, real agents) ...'
+    # The seeded intake issue is immediately available to the architect. Start
+    # every other wake listener first, then launch architect last, so the first
+    # role handoff webhook can find all downstream sockets even with a long poll.
+    _architect_role=
     for _r in $_roles; do
-        launch_role_worker "$_r"
+        if [ "$_r" = "architect" ]; then
+            _architect_role=$_r
+        else
+            launch_role_worker "$_r"
+        fi
     done
 
     # One mechanical reconciler (controller plane; admin token, no agent).
     _wake_args=
+    _wake_socket=
     if [ "$WEBHOOKS" = "1" ]; then
-        _wake_args="--wake-socket $WAKE_DIR/mechanical.sock --wake-secret-file $WAKE_SECRET_FILE"
+        _wake_socket="$WAKE_DIR/mechanical.sock"
+        _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     # shellcheck disable=SC2086
     HARNESS_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
@@ -503,8 +564,115 @@ launch_workers() {
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         $_wake_args \
         >"$LOG_DIR/mechanical.log" 2>&1 &
-    echo "$!" >>"$WORKERS_PID_FILE"
-    log "  mechanical -> pid $! (logs/mechanical.log)"
+    _pid=$!
+    echo "$_pid" >>"$WORKERS_PID_FILE"
+    if [ "$WEBHOOKS" = "1" ]; then
+        wait_for_socket "$_wake_socket" "$_pid" 'mechanical'
+    fi
+    log "  mechanical -> pid $_pid (logs/mechanical.log)"
+
+    if [ -n "$_architect_role" ]; then
+        launch_role_worker "$_architect_role"
+    fi
+}
+
+# --- Webhook validation -------------------------------------------------------
+
+count_matches() {
+    _pattern=$1
+    _file=$2
+    _count=$(grep -c "$_pattern" "$_file" 2>/dev/null || true)
+    [ -n "$_count" ] || _count=0
+    printf '%s\n' "$_count"
+}
+
+validate_contains() {
+    _file=$1
+    _pattern=$2
+    _description=$3
+    if grep -q "$_pattern" "$_file" 2>/dev/null; then
+        log "ok: $_description"
+        return 0
+    fi
+    log "missing: $_description (looked in $_file)"
+    return 1
+}
+
+cmd_validate_webhooks() {
+    load_config
+    _ok=0
+    _trigger_log="$LOG_DIR/trigger.log"
+    _provision_log="$LOG_DIR/provision.log"
+
+    [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
+    log "validating webhook wake logs under $LOG_DIR"
+    log "configured POLL_MS=$POLL_MS; long-poll smoke expects POLL_MS=120000"
+
+    validate_contains "$_provision_log" 'webhook registered url=' \
+        'repo webhook registration recorded' || _ok=1
+    validate_contains "$_trigger_log" 'listening on' \
+        'trigger reached listening readiness' || _ok=1
+    validate_contains "$_trigger_log" 'webhook accepted' \
+        'Forgejo delivered at least one accepted webhook' || _ok=1
+    validate_contains "$_trigger_log" 'wake_delivery outcome=sent' \
+        'trigger found sockets and sent at least one wake batch' || _ok=1
+
+    _accepted=$(count_matches 'webhook accepted' "$_trigger_log")
+    _sent=$(count_matches 'wake_delivery outcome=sent' "$_trigger_log")
+    _no_sockets=$(count_matches 'wake_delivery outcome=no_sockets' "$_trigger_log")
+    _failed=$(count_matches 'wake_send_failed' "$_trigger_log")
+    log "trigger summary: accepted=$_accepted sent_batches=$_sent no_socket_batches=$_no_sockets send_failures=$_failed"
+
+    _workers=0
+    _consumed=0
+    _wake_ticks=0
+    _wake_progress=0
+    _wake_no_work=0
+    for _log in "$LOG_DIR"/*.log; do
+        [ -f "$_log" ] || continue
+        grep -q 'harness-worker:' "$_log" 2>/dev/null || continue
+        _workers=$((_workers + 1))
+        _name=${_log##*/}
+        if grep -q 'consumed authenticated wake' "$_log" 2>/dev/null; then
+            _consumed=$((_consumed + 1))
+            _consumed_text=yes
+        else
+            _consumed_text=no
+            _ok=1
+        fi
+        if grep -q 'completed tick trigger=wake actions=' "$_log" 2>/dev/null; then
+            _wake_ticks=$((_wake_ticks + 1))
+            _tick_text=yes
+        else
+            _tick_text=no
+            _ok=1
+        fi
+        if grep -E -q 'completed tick trigger=wake actions=[1-9][0-9]*' "$_log" 2>/dev/null; then
+            _wake_progress=$((_wake_progress + 1))
+        fi
+        if grep -q 'completed tick trigger=wake actions=0' "$_log" 2>/dev/null; then
+            _wake_no_work=$((_wake_no_work + 1))
+        fi
+        log "worker $_name: consumed_wake=$_consumed_text wake_tick=$_tick_text"
+    done
+
+    if [ "$_workers" -eq 0 ]; then
+        log 'missing: no harness-worker logs found'
+        _ok=1
+    fi
+    if [ "$_wake_progress" -eq 0 ]; then
+        log 'missing: no wake-triggered worker tick reported actions>0'
+        _ok=1
+    fi
+    log "worker summary: workers=$_workers consumed=$_consumed wake_ticks=$_wake_ticks wake_progress=$_wake_progress wake_no_work=$_wake_no_work"
+    log 'wake_no_work>0 means a worker woke, scanned fresh Forge state, and found no queue item.'
+
+    if [ "$_ok" -eq 0 ]; then
+        log 'webhook wake validation passed'
+    else
+        log 'webhook wake validation failed; inspect logs/provision.log, logs/trigger.log, and worker logs'
+    fi
+    return "$_ok"
 }
 
 # --- Monitor ------------------------------------------------------------------
@@ -566,6 +734,7 @@ cmd_start() {
 
 case "${1:-start}" in
     start | "") cmd_start ;;
+    validate-webhooks | smoke-webhooks) cmd_validate_webhooks ;;
     stop) cmd_stop ;;
     help | -h | --help) usage ;;
     *)
