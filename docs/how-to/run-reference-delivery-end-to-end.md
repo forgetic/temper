@@ -45,7 +45,9 @@ scenarios from runner test support on:
 
 - Merging a produced PR does not automatically close its parent code issue. The
   dependency variant uses a closing fake architect on `reconcile_landed` to make
-  that native issue lifecycle projection explicit for the dependency gate.
+  that native issue lifecycle projection explicit for the dependency gate. That
+  close also clears `in-progress`, so completed code issues do not remain
+  labelled as active work.
 - Merged PRs keep `alignment` until `owner_alignment` activates. The end-to-end
   cohorts are below that queue's `min_depth` of 5 and are fresh, so the queue
   should not activate.

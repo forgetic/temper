@@ -260,11 +260,13 @@ async fn assert_dependency_chain(forge: &dyn Forge, repo: &RepositoryId) -> Resu
             "dependent issue was not mechanically unblocked",
         ));
     }
-    if !has_label(&dependent.labels, "in-progress") {
+    if dependent.state != IssueState::Closed {
         return Err(boxed_error(
-            "dependent issue never progressed past the ready state after unblock",
+            "dependent issue was not explicitly closed after its PR landed",
         ));
     }
+    assert_no_in_progress(prerequisite, "prerequisite issue")?;
+    assert_no_in_progress(dependent, "dependent issue")?;
 
     let pull_requests = implementation_prs(forge, repo).await?;
     if pull_requests.len() != 2 {
@@ -460,6 +462,16 @@ fn assert_closed(issue: &Issue, repo: &Repository, label: &str) -> Result<(), Bo
             issue.number,
             issue.state,
             issue.labels
+        )));
+    }
+    assert_no_in_progress(issue, label)
+}
+
+fn assert_no_in_progress(issue: &Issue, label: &str) -> Result<(), BoxError> {
+    if has_label(&issue.labels, "in-progress") {
+        return Err(boxed_error(format!(
+            "{label} #{} is complete but still has in-progress: {:?}",
+            issue.number, issue.labels
         )));
     }
     Ok(())

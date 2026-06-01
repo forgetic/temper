@@ -147,8 +147,9 @@ fakes use):
 3. the **`forgejo-runner`** runs real CI on each PR head;
 4. **reviewer** approves each PR;
 5. **owner** merges once each PR's CI + review gates are green;
-6. post-merge, the **architect** closes the produced code issue (enabled by the
-   demo's `ARCHITECT_CLOSE_PRODUCED_ISSUES=1`), the **architect/owner** reconcile
+6. post-merge, the **architect** closes the produced code issue and clears its
+   `in-progress` label (enabled by the demo's
+   `ARCHITECT_CLOSE_PRODUCED_ISSUES=1`), the **architect/owner** reconcile
    routing labels, and dependency aggregation unblocks the parent only after
    every child issue has closed.
 

@@ -248,22 +248,30 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
     /// Closes an issue by repository-scoped number.
     ///
     /// This is a narrow native lifecycle tool rather than a workflow-label
-    /// transition. The reference-delivery fake architect uses it to document the
+    /// transition. The reference-delivery architect uses it to document the
     /// current engine gap that merging a produced PR does not automatically
     /// close its parent code issue; dependency gates observe the resulting
-    /// native closed state.
+    /// native closed state. Closing also clears the active `in-progress`
+    /// lifecycle label so completed code issues no longer look claimed.
     pub async fn close_issue(&self, number: ItemNumber) -> Result<bool, ForgeError> {
         let Some(issue) = self.get_issue(number).await? else {
             return Ok(false);
         };
-        if issue.state == IssueState::Closed {
+        let was_open = issue.state != IssueState::Closed;
+        let was_in_progress = issue.labels.iter().any(|label| label == "in-progress");
+        if !was_open && !was_in_progress {
             return Ok(false);
         }
         self.forge
             .update_issue(
                 &issue.id,
                 UpdateIssue {
-                    state: Some(IssueState::Closed),
+                    state: was_open.then_some(IssueState::Closed),
+                    remove_labels: if was_in_progress {
+                        vec!["in-progress".to_string()]
+                    } else {
+                        Vec::new()
+                    },
                     ..UpdateIssue::default()
                 },
             )

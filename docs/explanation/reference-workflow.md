@@ -118,7 +118,8 @@ mutating. A failed review or CI run returns the PR to the engineer (native
   Closing that issue on merge is intended, but not automatic in the engine. The
   happy path accepts it staying open; the dependency scenario uses an explicit
   architect-side issue close during `reconcile_landed` so dependency gates can
-  observe the native closed state.
+  observe the native closed state. That close also clears the active
+  `in-progress` lifecycle label so completed code issues do not look claimed.
 
 ## Escalation and the human loop
 
@@ -138,7 +139,9 @@ Merging an `implementation_pr` fires two independent consumers:
 
 - **Architect, eager and per-item.** A merged PR carries `landed`. The architect
   drains `landed_inbox` as soon as possible: update the epic body, file
-  follow-ups, then clear `landed`. Latency matters because a merge may satisfy a
+  follow-ups, then clear `landed`. In the closing architect variant used by the
+  demo/dependency scenarios, this also closes the produced code issue and clears
+  its `in-progress` label. Latency matters because a merge may satisfy a
   `dependency_gate`. The dependency unblock itself is mechanical (reconcile/plan
   re-evaluates dependents); the architect handles only the judgment residue.
 - **Owner, batched and holistic.** A merged PR also carries `alignment`. The

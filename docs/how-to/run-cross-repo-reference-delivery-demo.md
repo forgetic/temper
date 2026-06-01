@@ -43,8 +43,8 @@ intake issue in the first repo and writes that issue with explicit target repo
 ids for every child. The architect should fan out child code issues, one per
 repo. Each child then follows the ordinary per-repo path: engineer PR, CI,
 review, owner merge, landed reconciliation, and architect-side closure of the
-produced code issue. That closure is the portable landed signal used to unblock
-the cross-repo parent.
+produced code issue. That closure clears the child's `in-progress` label and is
+the portable landed signal used to unblock the cross-repo parent.
 
 ## Validate logs
 

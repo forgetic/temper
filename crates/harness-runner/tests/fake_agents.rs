@@ -1,18 +1,20 @@
 //! Behavior tests for the deterministic reference-delivery fake agents.
 
 use harness_forge::{
-    CreatePullRequestReview, CreateRepository, Forge, IssueQuery, ItemNumber, PullRequestState,
-    RepositoryId, RequestReviewers, ReviewDecision, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, IssueQuery, IssueState, ItemNumber,
+    PullRequestState, RepositoryId, RequestReviewers, ReviewDecision, UserId,
 };
 use harness_forge_memory::MemoryForge;
 use harness_runner::{Agent, CiSink, Progress, RoleTools, RoleWorker, WorkItem, Worker};
 use harness_workflow::{
-    parse_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, QueueId, RoleId,
+    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource,
+    QueueId, RoleId, WorkflowMetadata,
 };
 use std::sync::Arc;
 
 use harness_testing::agents::{
-    FakeArchitect, FakeEngineer, FakeHuman, FakeOwner, FakeReviewer, ARCHITECT_PLAN_BEGIN,
+    ClosingArchitect, FakeArchitect, FakeEngineer, FakeHuman, FakeOwner, FakeReviewer,
+    ARCHITECT_PLAN_BEGIN,
 };
 use harness_testing::ci::MemoryCiSink;
 use harness_testing::{
@@ -54,6 +56,51 @@ fn architect_fake_triages_intake_and_reconciles_landed_pr() {
         .expect("lookup succeeds")
         .expect("pull request exists");
     assert_eq!(labels(pr.labels), vec!["implementation"]);
+}
+
+#[test]
+fn closing_architect_clears_in_progress_when_closing_produced_issue() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let parent = create_issue(&forge, &repo, &["code", "in-progress"], "build thing", "");
+    let pr_body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        parents: vec![ArtifactRef::same_repo(parent)],
+        ..WorkflowMetadata::default()
+    });
+    create_pr(
+        &forge,
+        &repo,
+        &["implementation", "landed"],
+        "impl",
+        &pr_body,
+    );
+    let workflow = harness_testing::workflow();
+    let compiled = workflow.compile();
+    let architect_forge = forge.as_user(actor_user("architect"));
+    let worker = RoleWorker::new(
+        &workflow,
+        &compiled,
+        &architect_forge,
+        &repo,
+        RoleId::new("architect"),
+        Arc::new(ClosingArchitect),
+        runner_config().execution_context(&RoleId::new("architect")),
+    );
+
+    assert_eq!(
+        tick(&worker),
+        Progress {
+            changed: true,
+            actions: 1
+        }
+    );
+
+    let issue = block_on(forge.get_issue_by_number(&repo, parent))
+        .expect("lookup succeeds")
+        .expect("parent issue exists");
+    assert_eq!(issue.state, IssueState::Closed);
+    assert_eq!(labels(issue.labels), vec!["code"]);
 }
 
 #[test]
