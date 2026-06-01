@@ -64,6 +64,8 @@ pub enum WorkerError {
     Agent(AgentError),
     /// A fake outside-world CI producer failed.
     Ci(CiError),
+    /// One or more repositories failed in a multi-repo wrapper tick.
+    MultiRepo(crate::multi_repo::MultiRepoError),
 }
 
 impl fmt::Display for WorkerError {
@@ -78,6 +80,7 @@ impl fmt::Display for WorkerError {
             WorkerError::Apply(error) => write!(formatter, "worker recovery apply failed: {error}"),
             WorkerError::Agent(error) => write!(formatter, "worker agent failed: {error}"),
             WorkerError::Ci(error) => write!(formatter, "worker CI producer failed: {error}"),
+            WorkerError::MultiRepo(error) => write!(formatter, "multi-repo worker failed: {error}"),
         }
     }
 }
@@ -92,6 +95,7 @@ impl Error for WorkerError {
             WorkerError::Apply(error) => Some(error),
             WorkerError::Agent(error) => Some(error),
             WorkerError::Ci(error) => Some(error),
+            WorkerError::MultiRepo(error) => Some(error),
         }
     }
 }

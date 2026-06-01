@@ -36,6 +36,10 @@
 //! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
 //!   judgment queues and delegate to agents, while the mechanical worker runs
 //!   reconcile → apply once per tick without spawning agents.
+//! - [`RepositorySet`], [`MultiRepoRoleWorker`], and
+//!   [`MultiRepoMechanicalWorker`], which let one worker tick a deterministic
+//!   set of repositories while reporting per-repo failures and continuing the
+//!   rest of the scan.
 //! - [`CiSink`] and [`CiWorker`], the test-only outside-world CI producer seam
 //!   used to seed native CI jobs for layered scenarios; real deployments rely on
 //!   provider CI and only use the engine's read side.
@@ -57,6 +61,7 @@
 pub mod agent;
 pub mod config;
 pub mod driver;
+pub mod multi_repo;
 pub mod scan;
 pub mod signal;
 pub mod stage;
@@ -67,6 +72,11 @@ pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use config::{PullRequestCreateBinding, RoleBinding, RunnerConfig};
 pub use driver::{
     DriveError, FixpointDriver, ManualClock, PollLoop, RunReport, WakeablePollLoop, WorkerRunReport,
+};
+pub use multi_repo::{
+    MultiRepoConfigError, MultiRepoError, MultiRepoMechanicalWorker, MultiRepoRoleWorker,
+    MultiRepoTickReport, RepositoryFailure, RepositoryJournal, RepositoryProgress, RepositorySet,
+    RepositoryTarget,
 };
 pub use scan::{scan, scan_role, ScanError, WorkItem};
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
