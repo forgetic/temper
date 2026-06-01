@@ -525,15 +525,15 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         );
 
         let entries = journal.list().await?;
-        let deps = self.dependency_status(&snapshots, &issues, &pull_requests);
+        let deps = self.dependency_status(forge, repo_id, &snapshots).await;
         Ok(self.scan(&snapshots, &entries, &deps, now))
     }
 
-    fn dependency_status(
+    async fn dependency_status<F: Forge + ?Sized>(
         &self,
+        forge: &F,
+        repo_id: &RepositoryId,
         snapshots: &[ArtifactSnapshot],
-        issues: &[Issue],
-        pull_requests: &[PullRequest],
     ) -> DependencyStatus {
         let classifier = Classifier::new(self.workflow);
         let artifacts = snapshots
@@ -549,7 +549,7 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
                     .ok()
             })
             .collect::<Vec<_>>();
-        dependency_state::status_from_records(&artifacts, issues, pull_requests)
+        dependency_state::status_for_artifacts(forge, repo_id, &artifacts).await
     }
 }
 

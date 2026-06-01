@@ -408,7 +408,7 @@ fn reconcile_derives_dependency_status_from_native_links() {
 }
 
 #[test]
-fn reconcile_keeps_cross_repo_dependency_targets_distinct() {
+fn reconcile_does_not_confuse_cross_repo_dependency_with_same_number_ambient_item() {
     let root = TestRoot::new();
     let forge = root.forge();
     let workflow = workflow();
@@ -425,7 +425,6 @@ fn reconcile_keeps_cross_repo_dependency_targets_distinct() {
     let same_number = create_issue(&forge, &repo, &["code", "ready"], "");
     close_issue(&forge, &repo, same_number);
     let other_number = create_issue(&forge, &other_repo, &["code", "ready"], "");
-    close_issue(&forge, &other_repo, other_number);
     let body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("code")),
         dependencies: vec![ArtifactRef::in_repo(other_repo, other_number)],
@@ -443,7 +442,7 @@ fn reconcile_keeps_cross_repo_dependency_targets_distinct() {
 
     assert!(
         report.is_clean(),
-        "Phase 1 must not treat a same-number item in the ambient repo as a landed cross-repo target"
+        "a landed same-number item in the ambient repo must not satisfy an open cross-repo target"
     );
 }
 

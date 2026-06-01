@@ -11,6 +11,7 @@ use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
 use crate::ids::TransitionId;
 use std::collections::HashSet;
+use std::fmt;
 
 /// Runtime-supplied resolution status of dependency relation targets.
 ///
@@ -20,9 +21,31 @@ use std::collections::HashSet;
 /// repo-qualified artifact references whose work has landed. The planner stays
 /// pure: it only checks set membership against the artifact's typed
 /// `dependency` relations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyReadFailure {
+    /// Dependency target that could not be read freshly.
+    pub target: ArtifactRef,
+    /// Portable backend error text captured for diagnostics.
+    pub message: String,
+}
+
+impl fmt::Display for DependencyReadFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.target.repository_id {
+            Some(repository_id) => write!(
+                formatter,
+                "{}#{}: {}",
+                repository_id, self.target.number, self.message
+            ),
+            None => write!(formatter, "#{}: {}", self.target.number, self.message),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DependencyStatus {
     landed: HashSet<ArtifactRef>,
+    read_failures: Vec<DependencyReadFailure>,
 }
 
 impl DependencyStatus {
@@ -41,12 +64,33 @@ impl DependencyStatus {
     {
         Self {
             landed: items.into_iter().map(Into::into).collect(),
+            read_failures: Vec::new(),
         }
     }
 
     /// Marks one artifact's work as landed.
     pub fn mark_landed(&mut self, item: impl Into<ArtifactRef>) {
         self.landed.insert(item.into());
+    }
+
+    /// Records that a dependency target could not be read freshly.
+    ///
+    /// The target is deliberately not marked landed. Runtime callers can expose
+    /// these diagnostics while the planner keeps using only [`Self::is_landed`].
+    pub fn mark_read_failure(
+        &mut self,
+        target: impl Into<ArtifactRef>,
+        message: impl Into<String>,
+    ) {
+        self.read_failures.push(DependencyReadFailure {
+            target: target.into(),
+            message: message.into(),
+        });
+    }
+
+    /// Returns dependency targets whose fresh state could not be read.
+    pub fn read_failures(&self) -> &[DependencyReadFailure] {
+        &self.read_failures
     }
 
     /// Returns whether the given artifact's work has landed.

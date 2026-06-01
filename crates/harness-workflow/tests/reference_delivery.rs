@@ -113,7 +113,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
     assert_eq!(workflow.queues().len(), 11);
-    assert_eq!(workflow.transitions().len(), 20);
+    assert_eq!(workflow.transitions().len(), 21);
     assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow

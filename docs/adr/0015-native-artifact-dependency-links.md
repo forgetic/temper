@@ -41,11 +41,13 @@ the same repository as either an issue or pull request. Removing a missing link
 is a no-op once the source exists. A link change advances the source artifact's
 version and timestamp; an idempotent no-op returns the current record unchanged.
 
-Native dependency links are now the source of truth for `dependency` relations.
-The metadata `dependencies` field remains a compatibility fallback for older
-artifacts or backends with no native links. When native dependencies are present
-on an artifact, the classifier ignores metadata `dependencies` for that
-artifact.
+Native dependency links are now the source of truth for same-repository
+`dependency` relations. The metadata `dependencies` field remains a
+compatibility fallback for older artifacts, backends with no native links, and
+cross-repository targets represented as repo-qualified `ArtifactRef` values. When
+same-repository native dependencies are present on an artifact, the classifier
+ignores same-repository metadata dependency fallbacks but preserves explicit
+repo-qualified metadata targets that native same-repository links cannot express.
 
 `parent` and `produced_pr` remain metadata-projected relation kinds under ADR
 0011. Forgejo has no native parent/child link, and GitHub sub-issues are a
@@ -60,12 +62,16 @@ interface.
 - `dependencies_resolved` keeps the pure-planner shape: the planner reads a
   `DependencyStatus` signal, while runtime layers derive that signal from fresh
   Forge state. Issue targets are landed when closed; pull-request targets are
-  landed when merged. Missing targets remain not landed.
+  landed when merged. Repo-qualified metadata fallback targets are read in their
+  own repository. Missing or temporarily unreadable targets remain not landed.
 - The reference backends persist dependency links on issue and pull-request
   records and share the same ordering, idempotency, target-existence, and version
   semantics (ADR 0008).
 - Existing metadata-only artifacts continue to classify because metadata
   `dependencies` is still read when no native dependency links are present.
+- The portable Forge dependency-link trait remains same-repository in this ADR;
+  cross-repository native links can be promoted later with a separate trait
+  change if a portable backend intersection proves out.
 
 ## Alternatives considered
 

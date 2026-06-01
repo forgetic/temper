@@ -3,15 +3,21 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, Forge, Issue, IssueQuery, IssueState,
-    ItemNumber, PullRequest, PullRequestQuery, PullRequestState, RepositoryId, ReviewDecision,
+    ItemNumber, PullRequest, PullRequestQuery, PullRequestState, Repository, RepositoryId,
+    RepositoryQuery, ReviewDecision,
 };
 use harness_runner::{scan, BoxError, Scenario};
-use harness_workflow::{parse_metadata_block, CiStatus, QueueId};
+use harness_workflow::{parse_metadata_block, ArtifactRef, CiStatus, QueueId};
+use serde_json::json;
 
+use crate::agents::ARCHITECT_PLAN_BEGIN;
 use crate::workflow;
 
 const DEPENDENCY_A_TITLE: &str = "Implement prerequisite A";
 const DEPENDENCY_B_TITLE: &str = "Implement dependent B";
+const CROSS_REPO_PARENT_TITLE: &str = "Ship cross-repo reference delivery";
+const CROSS_REPO_SOURCE_CHILD_TITLE: &str = "Implement service-side cross-repo work";
+const CROSS_REPO_TARGET_CHILD_TITLE: &str = "Implement canary-side cross-repo work";
 
 /// Happy path: one human-filed request becomes a merged implementation PR.
 pub fn happy_path() -> Scenario {
@@ -46,6 +52,15 @@ pub fn dependency_chain_mechanically_unblocked() -> Scenario {
         "dependency chain mechanically unblocked",
         Box::new(|forge, repo| Box::pin(seed_dependency_chain(forge, repo))),
         Box::new(|forge, repo| Box::pin(assert_dependency_chain(forge, repo))),
+    )
+}
+
+/// Variant: one intake in repo A fans out into code children in repos A and B.
+pub fn cross_repo_fanout_converges() -> Scenario {
+    Scenario::new(
+        "cross-repo fan-out converges",
+        Box::new(|forge, repo| Box::pin(seed_cross_repo_fanout(forge, repo))),
+        Box::new(|forge, repo| Box::pin(assert_cross_repo_fanout(forge, repo))),
     )
 }
 
@@ -89,6 +104,44 @@ async fn seed_dependency_chain(forge: &dyn Forge, repo: &RepositoryId) -> Result
         .await?;
     forge
         .add_issue_dependency(&dependent.id, prerequisite.number)
+        .await?;
+    Ok(())
+}
+
+async fn seed_cross_repo_fanout(forge: &dyn Forge, repo: &RepositoryId) -> Result<(), BoxError> {
+    let targets = cross_repo_targets(forge, repo).await?;
+    let body = format!(
+        "A human asks for one change that must be implemented in both `{}` and `{}`.\n\n{}\n{}\n-->",
+        repo_display(&targets.source),
+        repo_display(&targets.target),
+        ARCHITECT_PLAN_BEGIN,
+        json!({
+            "children": [
+                {
+                    "slug": "service",
+                    "target_repo": targets.source.id,
+                    "title": CROSS_REPO_SOURCE_CHILD_TITLE,
+                    "body": "Implement the service-side part of the cross-repo change."
+                },
+                {
+                    "slug": "canary",
+                    "target_repo": targets.target.id,
+                    "title": CROSS_REPO_TARGET_CHILD_TITLE,
+                    "body": "Implement the canary-side part of the cross-repo change."
+                }
+            ]
+        })
+    );
+    forge
+        .create_issue(
+            repo,
+            CreateIssue {
+                title: CROSS_REPO_PARENT_TITLE.into(),
+                body,
+                labels: vec!["untriaged".into()],
+                assignees: Vec::new(),
+            },
+        )
         .await?;
     Ok(())
 }
@@ -237,6 +290,69 @@ async fn assert_dependency_chain(forge: &dyn Forge, repo: &RepositoryId) -> Resu
     assert_quiescent(forge, repo).await
 }
 
+async fn assert_cross_repo_fanout(forge: &dyn Forge, repo: &RepositoryId) -> Result<(), BoxError> {
+    let targets = cross_repo_targets(forge, repo).await?;
+    let source_issues = forge
+        .list_issues(&targets.source.id, IssueQuery::default())
+        .await?;
+    let target_issues = forge
+        .list_issues(&targets.target.id, IssueQuery::default())
+        .await?;
+    let parent = issue_by_title(&source_issues, CROSS_REPO_PARENT_TITLE)?;
+    let source_child = issue_by_title(&source_issues, CROSS_REPO_SOURCE_CHILD_TITLE)?;
+    let target_child = issue_by_title(&target_issues, CROSS_REPO_TARGET_CHILD_TITLE)?;
+
+    assert_closed(source_child, &targets.source, "source child issue")?;
+    assert_closed(target_child, &targets.target, "target child issue")?;
+    assert_closed(parent, &targets.source, "parent intake issue")?;
+
+    let parent_metadata = parse_metadata_block(&parent.body)?
+        .ok_or_else(|| boxed_error("parent intake issue is missing workflow metadata"))?;
+    let source_ref = ArtifactRef::in_repo(targets.source.id.clone(), source_child.number);
+    let target_ref = ArtifactRef::in_repo(targets.target.id.clone(), target_child.number);
+    if !parent_metadata.dependencies.contains(&source_ref)
+        || !parent_metadata.dependencies.contains(&target_ref)
+    {
+        return Err(boxed_error(format!(
+            "parent dependencies did not include both children: expected {}#{} and {}#{}, got {:?}",
+            repo_display(&targets.source),
+            source_child.number,
+            repo_display(&targets.target),
+            target_child.number,
+            parent_metadata.dependencies
+        )));
+    }
+
+    let source_prs = implementation_prs(forge, &targets.source.id).await?;
+    let target_prs = implementation_prs(forge, &targets.target.id).await?;
+    let source_child_pr = implementation_pr_for_parent(&source_prs, source_child.number)?;
+    let parent_pr = implementation_pr_for_parent(&source_prs, parent.number)?;
+    let target_child_pr = implementation_pr_for_parent(&target_prs, target_child.number)?;
+    assert_pr_merged_and_reconciled(source_child_pr)?;
+    assert_pr_merged_and_reconciled(target_child_pr)?;
+    assert_pr_merged_and_reconciled(parent_pr)?;
+
+    let latest_child_closed = source_child
+        .closed_at
+        .into_iter()
+        .chain(target_child.closed_at)
+        .max()
+        .ok_or_else(|| boxed_error("closed children are missing closed_at timestamps"))?;
+    let parent_closed = parent
+        .closed_at
+        .ok_or_else(|| boxed_error("closed parent issue is missing closed_at"))?;
+    if parent_closed < latest_child_closed || parent_pr.created_at < latest_child_closed {
+        return Err(boxed_error(format!(
+            "parent in {} resolved before both children landed (latest child closed at {latest_child_closed}, parent PR created at {}, parent closed at {parent_closed})",
+            repo_display(&targets.source),
+            parent_pr.created_at
+        )));
+    }
+
+    assert_quiescent(forge, &targets.source.id).await?;
+    assert_quiescent(forge, &targets.target.id).await
+}
+
 async fn implementation_prs(
     forge: &dyn Forge,
     repo: &RepositoryId,
@@ -334,6 +450,56 @@ fn issue_by_title<'a>(issues: &'a [Issue], title: &str) -> Result<&'a Issue, Box
         .iter()
         .find(|issue| issue.title == title)
         .ok_or_else(|| boxed_error(format!("issue '{title}' was not found")))
+}
+
+fn assert_closed(issue: &Issue, repo: &Repository, label: &str) -> Result<(), BoxError> {
+    if issue.state != IssueState::Closed {
+        return Err(boxed_error(format!(
+            "{label} {}#{} was not closed (state: {:?}, labels: {:?})",
+            repo_display(repo),
+            issue.number,
+            issue.state,
+            issue.labels
+        )));
+    }
+    Ok(())
+}
+
+struct CrossRepoTargets {
+    source: Repository,
+    target: Repository,
+}
+
+async fn cross_repo_targets(
+    forge: &dyn Forge,
+    source_repo: &RepositoryId,
+) -> Result<CrossRepoTargets, BoxError> {
+    let source = forge
+        .get_repository(source_repo)
+        .await?
+        .ok_or_else(|| boxed_error(format!("source repository {source_repo} was not found")))?;
+    let mut repositories = forge.list_repositories(RepositoryQuery::default()).await?;
+    repositories.sort_by(|left, right| {
+        (left.owner.as_str(), left.name.as_str(), &left.id).cmp(&(
+            right.owner.as_str(),
+            right.name.as_str(),
+            &right.id,
+        ))
+    });
+    let target = repositories
+        .into_iter()
+        .find(|candidate| candidate.id != *source_repo)
+        .ok_or_else(|| {
+            boxed_error(format!(
+                "cross-repo scenario needs a second repository visible from {}",
+                repo_display(&source)
+            ))
+        })?;
+    Ok(CrossRepoTargets { source, target })
+}
+
+fn repo_display(repo: &Repository) -> String {
+    format!("{}/{}", repo.owner, repo.name)
 }
 
 fn parent_numbers(pull_request: &PullRequest) -> Result<Vec<ItemNumber>, BoxError> {

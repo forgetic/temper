@@ -32,8 +32,8 @@ use harness_forge_filesystem::FilesystemForge;
 use harness_runner::{RunnerConfig, Scenario};
 use harness_testing::agents::fake_registry;
 use harness_testing::scenarios::{
-    changes_requested_then_approved, ci_fails_then_passes, dependency_chain_mechanically_unblocked,
-    happy_path,
+    changes_requested_then_approved, ci_fails_then_passes, cross_repo_fanout_converges,
+    dependency_chain_mechanically_unblocked, happy_path,
 };
 use harness_testing::worker_bin::{self, WorkerArgs, WorkerKind};
 use harness_testing::{block_on, runner_config, workflow};
@@ -68,6 +68,8 @@ struct Variant {
     reviewer: &'static str,
     /// `--ci` policy passed to the CI producer process.
     ci: &'static str,
+    /// Whether this variant runs one fixed worker fleet over two repositories.
+    multi_repo: bool,
 }
 
 #[test]
@@ -79,6 +81,7 @@ fn happy_path_converges_across_real_processes() {
         architect: "default",
         reviewer: "default",
         ci: "pass",
+        multi_repo: false,
     });
 }
 
@@ -91,6 +94,7 @@ fn changes_requested_then_approved_converges_across_real_processes() {
         architect: "default",
         reviewer: "request-changes-then-approve",
         ci: "pass",
+        multi_repo: false,
     });
 }
 
@@ -103,6 +107,7 @@ fn ci_fails_then_passes_converges_across_real_processes() {
         architect: "default",
         reviewer: "default",
         ci: "fail-then-pass",
+        multi_repo: false,
     });
 }
 
@@ -115,6 +120,20 @@ fn dependency_chain_mechanically_unblocked_across_real_processes() {
         architect: "closing",
         reviewer: "default",
         ci: "pass",
+        multi_repo: false,
+    });
+}
+
+#[test]
+#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
+fn cross_repo_fanout_converges_across_one_fixed_worker_fleet() {
+    run_variant(&Variant {
+        suite: "multiprocess-cross-repo-fanout",
+        scenario: cross_repo_fanout_converges,
+        architect: "closing",
+        reviewer: "default",
+        ci: "pass",
+        multi_repo: true,
     });
 }
 
@@ -123,17 +142,15 @@ fn dependency_chain_mechanically_unblocked_across_real_processes() {
 fn run_variant(variant: &Variant) {
     let root = TempRoot::new(variant.suite);
     let config = runner_config();
-    let (owner, name) = (
-        config.repository.owner.clone(),
-        config.repository.name.clone(),
-    );
+    let paths = scenario_paths(&config, variant.multi_repo);
 
     // Provision (repo + labels) in-process through the worker library, then seed
     // via the scenario's exact seed closure against the shared store. The driver
     // only ever touches the store to set up and observe; workflow state is
     // advanced exclusively by the spawned worker processes.
-    provision(&root.path, &owner, &name);
-    let repo = resolve_repo(&root.path, &owner, &name);
+    provision(&root.path, &paths);
+    let repos = resolve_repos(&root.path, &paths);
+    let repo = repos[0].clone();
     let scenario = (variant.scenario)();
     seed(&root.path, &repo, &scenario);
 
@@ -141,7 +158,7 @@ fn run_variant(variant: &Variant) {
 
     // Spawn one process per moving part behind a kill-on-drop guard, so a panic
     // anywhere below never orphans a child.
-    let mut workers = WorkerFleet::spawn(&root.path, &owner, &name, &stop_file, &config, variant);
+    let mut workers = WorkerFleet::spawn(&root.path, &paths, &stop_file, &config, variant);
 
     // Detect convergence in-process by polling the exact scenario assert.
     let converged = poll_until_converged(&repo, &scenario, &root.path);
@@ -169,15 +186,30 @@ fn run_variant(variant: &Variant) {
     block_on(assert).expect("final scenario assertion passes after workers stop");
 }
 
+fn scenario_paths(config: &RunnerConfig, multi_repo: bool) -> Vec<RepositoryPath> {
+    let mut paths = vec![RepositoryPath::new(
+        &config.repository.owner,
+        &config.repository.name,
+    )];
+    if multi_repo {
+        paths.push(RepositoryPath::new(
+            &config.repository.owner,
+            "service-canary",
+        ));
+    }
+    paths
+}
+
 /// Provisions repo + labels in-process via the worker library's provision kind.
-fn provision(root: &Path, owner: &str, name: &str) {
+fn provision(root: &Path, paths: &[RepositoryPath]) {
+    let first = &paths[0];
     let args = WorkerArgs {
         kind: WorkerKind::Provision,
         backend: worker_bin::Backend::Filesystem,
         root: root.to_path_buf(),
-        owner: owner.to_string(),
-        name: name.to_string(),
-        repositories: vec![RepositoryPath::new(owner, name)],
+        owner: first.owner.clone(),
+        name: first.name.clone(),
+        repositories: paths.to_vec(),
         poll_interval: chrono::Duration::milliseconds(WORKER_POLL_MS as i64),
         stop_file: None,
         run_secs: Some(0),
@@ -189,15 +221,22 @@ fn provision(root: &Path, owner: &str, name: &str) {
         wake_socket: None,
         wake_secret_file: None,
     };
-    worker_bin::run(&args).expect("provisioning the repository and labels succeeds");
+    worker_bin::run(&args).expect("provisioning the repositories and labels succeeds");
 }
 
-fn resolve_repo(root: &Path, owner: &str, name: &str) -> RepositoryId {
+fn resolve_repos(root: &Path, paths: &[RepositoryPath]) -> Vec<RepositoryId> {
     let forge = FilesystemForge::new(root);
-    block_on(forge.get_repository_by_path(&RepositoryPath::new(owner, name)))
-        .expect("repository lookup succeeds")
-        .expect("provisioned repository exists")
-        .id
+    paths
+        .iter()
+        .map(|path| {
+            block_on(forge.get_repository_by_path(path))
+                .unwrap_or_else(|error| {
+                    panic!("repository lookup failed for {}: {error}", display(path))
+                })
+                .unwrap_or_else(|| panic!("provisioned repository {} exists", display(path)))
+                .id
+        })
+        .collect()
 }
 
 /// Seeds the store in-process using the scenario's exact seed closure.
@@ -246,16 +285,14 @@ impl WorkerFleet {
     /// Spawns one process per role-with-an-agent, plus mechanical, plus CI.
     fn spawn(
         root: &Path,
-        owner: &str,
-        name: &str,
+        repos: &[RepositoryPath],
         stop_file: &Path,
         config: &RunnerConfig,
         variant: &Variant,
     ) -> Self {
-        let repo = format!("{owner}/{name}");
         let mut workers = Vec::new();
         let mut spawn = |label: String, extra: &[(&str, &str)]| {
-            let child = spawn_worker(root, &repo, stop_file, extra);
+            let child = spawn_worker(root, repos, stop_file, extra);
             workers.push(SpawnedWorker { label, child });
         };
 
@@ -322,13 +359,22 @@ fn role_workers(config: &RunnerConfig) -> Vec<(String, String)> {
         .collect()
 }
 
-fn spawn_worker(root: &Path, repo: &str, stop_file: &Path, extra: &[(&str, &str)]) -> Child {
+fn display(path: &RepositoryPath) -> String {
+    format!("{}/{}", path.owner, path.name)
+}
+
+fn spawn_worker(
+    root: &Path,
+    repos: &[RepositoryPath],
+    stop_file: &Path,
+    extra: &[(&str, &str)],
+) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_harness-testing-worker"));
+    command.arg("--root").arg(root);
+    for repo in repos {
+        command.arg("--repo").arg(display(repo));
+    }
     command
-        .arg("--root")
-        .arg(root)
-        .arg("--repo")
-        .arg(repo)
         .arg("--poll-ms")
         .arg(WORKER_POLL_MS.to_string())
         .arg("--stop-file")

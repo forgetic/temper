@@ -141,6 +141,8 @@ Adds require the source to exist and the target item number to resolve to an iss
 
 A link add/remove that changes the set advances the source artifact's `Version` and `updated_at`. An idempotent no-op returns the current artifact unchanged. Backends whose issue and pull-request numbers are not cross-type unique should treat the target number as existing when either an issue or pull request with that number exists.
 
+Cross-repository dependency aggregation is intentionally not modeled in this trait revision. Workflow-level cross-repo dependencies use repo-qualified metadata projection and resolve each target by reading that target repository freshly. A future trait change may add portable native cross-repo dependency links if enough backends share the same semantics.
+
 ## Comment operations
 
 Comments are append-only in the current interface. `add_issue_comment` and `add_pull_request_comment` create comments authored by the backend client's current or provider-authenticated user. Comment list methods must return deterministic results, preferably chronological with stable ID tie-breaks. Supported comment operations return `ForgeError::NotFound` when the target issue or pull request is missing.

@@ -108,13 +108,18 @@ Status legend: ☐ pending · ☑ done
    with memory-backed tests proving cross-repo fan-out is idempotent and plain
    same-repo triage is unchanged.
 
-4. ☐ **Phase 4 — Cross-repo dependency aggregation.**
+4. ☑ **Phase 4 — Cross-repo dependency aggregation.**
    `prompts/phase-4-cross-repo-aggregation.md`
 
    Generalize the dependency-state reader to resolve each target in its own
-   repo (native cross-repo links where available, repo-qualified metadata
-   fallback), and prove the parent intake issue unblocks/resolves only when every
-   cross-repo child has landed. Reconciler `Unblock` works across repos.
+   repo (repo-qualified metadata fallback; the portable native dependency-link
+   trait remains same-repository), and prove the parent intake issue
+   unblocks/resolves only when every cross-repo child has landed. Reconciler
+   `Unblock` works across repos. Done: dependency aggregation now reads every
+   repo-qualified target from its resolved repository, treats transient child
+   reads as not-landed with a recorded `DependencyStatus` read failure, keeps the
+   planner pure, and memory/filesystem tests prove all-children-landed unblock,
+   post-apply single firing, and transient read failure safety.
 
 5. ☐ **Phase 5 — End-to-end cross-repo scenario.**
    `prompts/phase-5-e2e.md`

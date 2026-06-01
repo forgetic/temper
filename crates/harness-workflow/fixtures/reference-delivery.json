@@ -374,6 +374,27 @@
       ]
     },
     {
+      "id": "triage_to_blocked_code",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "code"
+        },
+        {
+          "kind": "add_label",
+          "label": "blocked"
+        }
+      ]
+    },
+    {
       "id": "triage_to_design",
       "artifact": "intake",
       "roles": [

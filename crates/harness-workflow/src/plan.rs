@@ -39,7 +39,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
-pub use dependency::{DependencyStatus, MechanicalPlan};
+pub use dependency::{DependencyReadFailure, DependencyStatus, MechanicalPlan};
 pub use queue::{matches_queue, matches_queue_with, queue_active, QueueMember, QueueQuery};
 pub use signals::{CiState, CiStatus, GateSignals, ReviewStatus};
 pub use types::{Postcondition, TransitionPlan, WorkflowEffect};

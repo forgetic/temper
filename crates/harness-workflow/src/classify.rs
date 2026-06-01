@@ -438,11 +438,18 @@ impl<'a> Classifier<'a> {
                 &mut relations,
             );
         } else {
-            let dependency_targets: Vec<ArtifactRef> = dependencies
+            let mut dependency_targets: Vec<ArtifactRef> = dependencies
                 .iter()
                 .copied()
                 .map(ArtifactRef::same_repo)
                 .collect();
+            dependency_targets.extend(
+                metadata
+                    .dependencies
+                    .iter()
+                    .filter(|target| !target.is_same_repo())
+                    .cloned(),
+            );
             self.push_metadata_relations(
                 source,
                 RelationKind::Dependency,

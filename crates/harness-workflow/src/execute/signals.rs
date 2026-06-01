@@ -26,7 +26,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         loaded: &Loaded,
     ) -> Result<GateSignals, ExecutionError> {
         let dependencies =
-            dependency_state::status_for_artifact(self.forge, repo_id, loaded.classified()).await?;
+            dependency_state::status_for_artifact(self.forge, repo_id, loaded.classified()).await;
         let signals = GateSignals::new().with_dependencies(dependencies);
 
         match loaded {

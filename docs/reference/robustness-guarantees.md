@@ -40,6 +40,7 @@ is supplied explicitly, so the suite is reproducible.
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
 | Reconciler actions are applied through the runtime and re-applying a report is a no-op | `recovery.rs` (`requeue_lease_clears_the_lease_through_the_manager`, `repair_realizes_pending_labels_and_reconciles_the_command`, `unblock_realizes_labels_and_journals_a_completed_command`, `re_applying_a_report_is_a_no_op`) |
+| Cross-repo dependency aggregation unblocks a parent only after every child has landed in its own repository; a transient child read failure is not a false unblock | `dependency_aggregation.rs` |
 | Applying a repair/unblock is retry-safe across a crash before or after the write | `crash_injection.rs` (`applying_a_repair_is_retry_safe_under_a_crash`, `applying_an_unblock_is_retry_safe_under_a_crash`) |
 | The scan→apply loop converges to a clean state | `recovery.rs` (`the_scan_apply_loop_converges_to_a_clean_state`) |
 
@@ -106,6 +107,10 @@ window, but a wider window can no longer produce a lost-update lease race.
   incomplete for the next scan to re-derive. `Escalate`/`Diagnose` are recorded
   as advisory and never silently mutate workflow state. Running scan→apply to a
   fixpoint therefore converges.
+- **Cross-repo dependency reads.** Dependency gates read each target from its own
+  repository on every scan. A child repo that is temporarily unreadable records
+  a dependency read failure and is treated as not landed, so partial outages
+  preserve the block instead of producing a false `Unblock`.
 
 ## Limitations discovered by the tests
 
@@ -121,6 +126,10 @@ rather than hidden:
   applier records them in `ApplyOutcome::advisory` and performs no Forge
   mutation. Projecting an escalation into a label or comment is left to a
   workflow-specific adapter on top of the advisory list, not decided here.
+- **Dependency read failures are not projected to Forge.** A child-repo outage
+  is surfaced in `DependencyStatus::read_failures`, but the default reconciler
+  report stays clean rather than creating an escalation. Operators that need
+  visible outage markers should add a workflow-specific adapter.
 
 ## Out of scope
 

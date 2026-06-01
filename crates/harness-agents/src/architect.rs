@@ -220,7 +220,12 @@ impl<F: Forge + ?Sized> Agent<F> for LlmArchitect {
         match self.decide(item, &context).await? {
             ArchitectDecision::TriageToCode { children } => {
                 let children_changed = self.ensure_planned_children(item, tools, &children).await?;
-                let triaged = run_or_ignore_stale(tools, item.target, "triage_to_code").await?;
+                let transition = if children.is_empty() {
+                    "triage_to_code"
+                } else {
+                    "triage_to_blocked_code"
+                };
+                let triaged = run_or_ignore_stale(tools, item.target, transition).await?;
                 Ok(children_changed || triaged)
             }
             ArchitectDecision::ReconcileLanded => {

@@ -14,6 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+harness-forge-filesystem = { path = "../harness-forge-filesystem" }
 harness-forge-memory = { path = "../harness-forge-memory" }
 
 [lints]

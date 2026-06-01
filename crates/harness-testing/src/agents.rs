@@ -267,9 +267,14 @@ async fn service_architect<F: Forge + ?Sized>(
     close_parent_issues: bool,
 ) -> Result<bool, AgentError> {
     if item.queue.as_str() == "design_triage" && item.kind.as_str() == "intake" {
-        let children_changed = fan_out_architect_children(item, tools).await?;
-        let triaged = run_or_ignore_stale(tools, item.target, "triage_to_code").await?;
-        return Ok(children_changed || triaged);
+        let fanout = fan_out_architect_children(item, tools).await?;
+        let transition = if fanout.has_children {
+            "triage_to_blocked_code"
+        } else {
+            "triage_to_code"
+        };
+        let triaged = run_or_ignore_stale(tools, item.target, transition).await?;
+        return Ok(fanout.changed || triaged);
     }
     if item.queue.as_str() == "landed_inbox" && item.kind.as_str() == "implementation_pr" {
         let reconciled = run_or_ignore_stale(tools, item.target, "reconcile_landed").await?;
@@ -281,17 +286,29 @@ async fn service_architect<F: Forge + ?Sized>(
     Ok(false)
 }
 
+struct FanOutResult {
+    changed: bool,
+    has_children: bool,
+}
+
 async fn fan_out_architect_children<F: Forge + ?Sized>(
     item: &WorkItem,
     tools: &RoleTools<'_, F>,
-) -> Result<bool, AgentError> {
+) -> Result<FanOutResult, AgentError> {
     let ArtifactSource::Issue { number: parent } = item.target else {
-        return Ok(false);
+        return Ok(FanOutResult {
+            changed: false,
+            has_children: false,
+        });
     };
     let Some(issue) = tools.get_issue(parent).await? else {
-        return Ok(false);
+        return Ok(FanOutResult {
+            changed: false,
+            has_children: false,
+        });
     };
     let plan = parse_architect_plan(&issue.body)?;
+    let has_children = !plan.children.is_empty();
     let mut changed = false;
     for child in plan.children {
         validate_architect_child(&child)?;
@@ -317,7 +334,10 @@ async fn fan_out_architect_children<F: Forge + ?Sized>(
             )
             .await?;
     }
-    Ok(changed)
+    Ok(FanOutResult {
+        changed,
+        has_children,
+    })
 }
 
 fn parse_architect_plan(body: &str) -> Result<ArchitectPlan, AgentError> {

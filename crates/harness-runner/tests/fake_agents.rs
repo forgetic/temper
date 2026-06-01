@@ -93,7 +93,7 @@ fn architect_fake_fans_out_cross_repo_children_idempotently() {
     let parent_issue = block_on(forge.get_issue_by_number(&source_repo, parent))
         .expect("lookup succeeds")
         .expect("parent exists");
-    assert_eq!(labels(parent_issue.labels), vec!["code", "ready"]);
+    assert_eq!(labels(parent_issue.labels), vec!["blocked", "code"]);
     let parent_metadata = parse_metadata_block(&parent_issue.body)
         .expect("parent metadata parses")
         .expect("parent metadata exists");

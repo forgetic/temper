@@ -23,9 +23,11 @@ created in the parent issue's `repository`.
 Choose `action` from this closed set, matching it to the item's `queue`:
 
 - `triage_to_code` — the item is an intake issue on the `design_triage` queue.
-  Triage it into ready code work. If the request clearly spans multiple
-  repositories, add one child per repository-scoped code work item and set each
-  child's `target_repo` to the repository that should own that work.
+  Triage it into code work. If the request clearly spans multiple repositories,
+  add one child per repository-scoped code work item and set each child's
+  `target_repo` to the repository that should own that work; the parent will be
+  blocked until those children land. If there are no children, the parent becomes
+  ready code work.
 - `reconcile_landed` — the item is an implementation pull request on the
   `landed_inbox` queue (it just merged). Reconcile the landed work back into the
   project's state.
@@ -42,6 +44,7 @@ Rules:
 - Use a child `target_repo` only when the child belongs in a different
   repository or when the request explicitly names the target. Same-repository
   work may omit `target_repo`.
-- Child issues are additive: the parent issue still receives the normal
-  `triage_to_code` transition.
+- Child issues are additive: the parent issue is still triaged. When `children`
+  is non-empty, the harness blocks the parent on those children instead of
+  making it ready immediately.
 - Output only the single JSON object. Any extra text is an error.

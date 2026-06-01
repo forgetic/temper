@@ -43,9 +43,13 @@ use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use harness_runner::{RunnerConfig, Scenario};
 use harness_testing::agents::fake_registry;
 use harness_testing::forgejo_server::{provision, ForgejoRunner, ForgejoServer, Provisioned};
+#[allow(dead_code)]
+#[path = "support/forgejo_multi_repo.rs"]
+mod multi_repo_support;
+
 use harness_testing::scenarios::{
-    changes_requested_then_approved, ci_fails_then_passes, dependency_chain_mechanically_unblocked,
-    happy_path,
+    changes_requested_then_approved, ci_fails_then_passes, cross_repo_fanout_converges,
+    dependency_chain_mechanically_unblocked, happy_path,
 };
 use harness_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV};
 use harness_testing::{runner_config, workflow};
@@ -95,6 +99,9 @@ struct Variant {
     /// (ChatGPT OAuth by default per the cost policy) and is double-gated (see
     /// [`Agents`]).
     agents: Agents,
+    /// Whether this variant provisions a second repo and passes both repos to
+    /// the one fixed worker fleet.
+    multi_repo: bool,
 }
 
 /// Which agent registry the role workers run, and how the test is gated.
@@ -176,6 +183,7 @@ fn happy_path_converges_against_real_forgejo() {
         reviewer: "default",
         ci_sentinel: "present",
         agents: Agents::Fake,
+        multi_repo: false,
     });
 }
 
@@ -189,6 +197,7 @@ fn changes_requested_then_approved_converges_against_real_forgejo() {
         reviewer: "request-changes-then-approve",
         ci_sentinel: "present",
         agents: Agents::Fake,
+        multi_repo: false,
     });
 }
 
@@ -204,6 +213,7 @@ fn ci_fails_then_passes_converges_against_real_forgejo() {
         // commit adds it, producing a second, passing head SHA (two verdicts).
         ci_sentinel: "deferred",
         agents: Agents::Fake,
+        multi_repo: false,
     });
 }
 
@@ -217,6 +227,21 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
         reviewer: "default",
         ci_sentinel: "present",
         agents: Agents::Fake,
+        multi_repo: false,
+    });
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; \
+            run with HARNESS_FORGEJO_E2E=1 -- --ignored"]
+fn cross_repo_fanout_converges_against_real_forgejo() {
+    run_variant(&Variant {
+        scenario: cross_repo_fanout_converges,
+        architect: "closing",
+        reviewer: "default",
+        ci_sentinel: "present",
+        agents: Agents::Fake,
+        multi_repo: true,
     });
 }
 
@@ -241,6 +266,7 @@ fn happy_path_converges_with_real_agents() {
         reviewer: "default",
         ci_sentinel: "present",
         agents: Agents::Real,
+        multi_repo: false,
     });
 }
 
@@ -254,6 +280,7 @@ fn changes_requested_then_approved_with_real_agents() {
         reviewer: "request-changes-then-approve",
         ci_sentinel: "present",
         agents: Agents::Real,
+        multi_repo: false,
     });
 }
 
@@ -267,6 +294,7 @@ fn ci_fails_then_passes_with_real_agents() {
         reviewer: "default",
         ci_sentinel: "deferred",
         agents: Agents::Real,
+        multi_repo: false,
     });
 }
 
@@ -280,6 +308,21 @@ fn dependency_chain_mechanically_unblocked_with_real_agents() {
         reviewer: "default",
         ci_sentinel: "present",
         agents: Agents::Real,
+        multi_repo: false,
+    });
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
+            run with HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 -- --ignored"]
+fn cross_repo_fanout_converges_with_real_agents() {
+    run_variant(&Variant {
+        scenario: cross_repo_fanout_converges,
+        architect: "closing",
+        reviewer: "default",
+        ci_sentinel: "present",
+        agents: Agents::Real,
+        multi_repo: true,
     });
 }
 
@@ -315,6 +358,17 @@ fn run_variant(variant: &Variant) {
     assert!(runner.is_running(), "runner daemon exited immediately");
 
     let provisioned = block_on_provision(&server);
+    let mut repo_args = vec![format!("{}/{}", provisioned.owner, provisioned.name)];
+    if variant.multi_repo {
+        let second_name = "service-canary".to_string();
+        multi_repo_support::futures_block_on(multi_repo_support::provision_extra_repo(
+            &server,
+            &provisioned,
+            &second_name,
+        ))
+        .expect("second Forgejo repo provisions for cross-repo scenario");
+        repo_args.push(format!("{}/{}", provisioned.owner, second_name));
+    }
     let config = runner_config();
 
     // Seed via the scenario's exact seed closure against an admin-owner backend.
@@ -325,7 +379,14 @@ fn run_variant(variant: &Variant) {
     let _ = std::fs::remove_file(&stop_file);
 
     // Spawn one process per moving part behind a kill-on-drop guard.
-    let mut workers = WorkerFleet::spawn(&server, &provisioned, &stop_file, &config, variant);
+    let mut workers = WorkerFleet::spawn(
+        &server,
+        &provisioned,
+        &repo_args,
+        &stop_file,
+        &config,
+        variant,
+    );
 
     // Detect convergence in-process by polling the exact scenario assert.
     let timeout = variant.agents.convergence_timeout();
@@ -592,12 +653,12 @@ impl WorkerFleet {
     fn spawn(
         server: &ForgejoServer,
         provisioned: &Provisioned,
+        repos: &[String],
         stop_file: &Path,
         config: &RunnerConfig,
         variant: &Variant,
     ) -> Self {
         let base = server.base_url().to_string();
-        let repo = format!("{}/{}", provisioned.owner, provisioned.name);
         let mut workers = Vec::new();
 
         // For `--agents real` with the DeepSeek opt-out, each role worker reads
@@ -632,7 +693,7 @@ impl WorkerFleet {
             }
             let child = spawn_worker(
                 &base,
-                &repo,
+                repos,
                 stop_file,
                 &[
                     ("--kind", "role"),
@@ -656,7 +717,7 @@ impl WorkerFleet {
         // admin token so it can reconcile regardless of role.
         let child = spawn_worker(
             &base,
-            &repo,
+            repos,
             stop_file,
             &[("--kind", "mechanical")],
             &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
@@ -711,7 +772,7 @@ fn role_workers(config: &RunnerConfig) -> Vec<String> {
 /// Spawns the worker binary with the Forgejo backend flags and per-child env.
 fn spawn_worker(
     base_url: &str,
-    repo: &str,
+    repos: &[String],
     stop_file: &Path,
     extra: &[(&str, &str)],
     env: &[(&str, &str)],
@@ -721,9 +782,11 @@ fn spawn_worker(
         .arg("--backend")
         .arg("forgejo")
         .arg("--base-url")
-        .arg(base_url)
-        .arg("--repo")
-        .arg(repo)
+        .arg(base_url);
+    for repo in repos {
+        command.arg("--repo").arg(repo);
+    }
+    command
         // `--root` is required by the parser but unused by the Forgejo backend.
         .arg("--root")
         .arg(std::env::temp_dir().join("harness-forgejo-mp-unused"))

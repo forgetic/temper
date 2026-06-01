@@ -2886,6 +2886,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "harness-forge",
+ "harness-forge-filesystem",
  "harness-forge-memory",
  "serde",
  "serde_json",

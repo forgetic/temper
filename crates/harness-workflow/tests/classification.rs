@@ -321,12 +321,16 @@ fn repo_qualified_metadata_relation_classifies_with_explicit_target_repo() {
 }
 
 #[test]
-fn native_dependencies_override_metadata_dependency_fallback() {
+fn native_dependencies_override_same_repo_metadata_but_keep_cross_repo_fallback() {
     let workflow = workflow();
     let classifier = Classifier::new(&workflow);
+    let cross_repo = ArtifactRef::in_repo("repo-other", ItemNumber::new(78));
     let body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("code")),
-        dependencies: vec![ArtifactRef::same_repo(ItemNumber::new(34))],
+        dependencies: vec![
+            ArtifactRef::same_repo(ItemNumber::new(34)),
+            cross_repo.clone(),
+        ],
         ..WorkflowMetadata::default()
     });
 
@@ -340,12 +344,20 @@ fn native_dependencies_override_metadata_dependency_fallback() {
             .iter()
             .filter(|relation| relation.kind == RelationKind::Dependency)
             .collect::<Vec<_>>(),
-        vec![&ClassifiedRelation {
-            kind: RelationKind::Dependency,
-            source: ArtifactKindId::new("code"),
-            target: ArtifactRef::same_repo(ItemNumber::new(56)),
-            target_kinds: vec![ArtifactKindId::new("code")],
-        }]
+        vec![
+            &ClassifiedRelation {
+                kind: RelationKind::Dependency,
+                source: ArtifactKindId::new("code"),
+                target: ArtifactRef::same_repo(ItemNumber::new(56)),
+                target_kinds: vec![ArtifactKindId::new("code")],
+            },
+            &ClassifiedRelation {
+                kind: RelationKind::Dependency,
+                source: ArtifactKindId::new("code"),
+                target: cross_repo,
+                target_kinds: vec![ArtifactKindId::new("code")],
+            },
+        ]
     );
 }
 
