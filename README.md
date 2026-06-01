@@ -1,61 +1,68 @@
 # Harness
 
-Harness is a Rust workspace for building agentic workflows on top of Forge-like collaboration platforms such as Forgejo. It treats issues, pull requests, labels, comments, reviews, dependency links, CI results, and workflow metadata as the durable source of truth, then coordinates agents through a typed workflow runtime.
+Harness is a way to run a software project where AI helpers and people work through the same issue tracker.
 
-The project is intentionally backend-agnostic: workflow policy lives above a portable `Forge` interface, while concrete backends adapt that interface to memory, the local filesystem, Forgejo, or future providers.
+The basic idea is simple: an AI helper should not secretly decide what to do next or change project state on its own. It should work the way a teammate would: pick up an issue, open a pull request, wait for CI, respond to review, and move the work forward only when the rules allow it.
 
-## What is in this repository
+Harness provides those rules.
 
-Harness has four main layers:
+## In plain English
 
-- **Forge interface and backends** define the collaboration-domain model and provider adapters.
-- **Workflow runtime** validates workflow specs, classifies Forge artifacts, plans transitions, executes authorized effects, and repairs interrupted work through leases, journaling, and reconciliation.
-- **Runner primitives** scan active queues, dispatch role work to agents, expose role-scoped tools, and run mechanical controller work.
-- **Agents and test harnesses** provide deterministic fake agents for reproducible scenarios and real in-process LLM agents for Forgejo end-to-end rehearsals.
+Harness watches a Forgejo project and asks:
 
-The core workflow path is implemented and covered by deterministic memory/filesystem tests. The Forgejo backend is implemented and tested offline by default, with gated live and multi-process end-to-end tests for real Forgejo, real CI, and optional real LLM agents. The operator-facing demo in `examples/reference-delivery/` now targets production-owned binaries in `harness-production`; it still needs live revalidation and is not yet a turnkey deployment.
+- Which issue or pull request needs attention now?
+- Who should handle it?
+- What are they allowed to do?
+- Has CI passed?
+- Has review approved it?
+- Is it safe to merge?
 
-## Workspace map
+The answers come from normal Forgejo things: issues, pull requests, labels, comments, reviews, dependencies, CI results, and merges.
+
+So the project stays understandable to humans. You can open Forgejo and see what is happening.
+
+## A small example
+
+Someone opens an issue:
 
 ```text
-crates/
-  harness-forge/            Portable Forge domain model and async interface.
-  harness-forge-memory/     In-memory reference backend for fast tests.
-  harness-forge-filesystem/ Filesystem reference backend for local and process-split tests.
-  harness-forge-forgejo/    Forgejo HTTP backend with offline contract tests.
-  harness-workflow/         Workflow spec, validation, planning, execution, and recovery.
-  harness-runner/           Scanner, workers, role tools, drivers, and poll loop primitives.
-  harness-testing/          Non-production fake agents, fixtures, scenarios, and worker binary.
-  harness-agents/           Real LLM role agents behind the same runner `Agent` boundary.
-  harness-production/       Production `harness-worker` and `harness-provision-forgejo` binaries.
-
-docs/                       Diátaxis documentation: tutorials, how-to, reference, explanation, ADRs.
-examples/reference-delivery/ Shell demo for the intended production topology.
-plans/                      Implementation plans and findings for larger work streams.
+Add password reset
 ```
 
-For a more detailed crate inventory, see `docs/reference/workspace-layout.md`.
+Harness can move it through a delivery flow like this:
 
-## Getting started as a developer
-
-Use the fast workspace aliases from `.cargo/config.toml`:
-
-```sh
-cargo dev-check       # cargo check --workspace --all-targets
-cargo fmt --all
-cargo dev-clippy
+```text
+Architect:  turns the request into ready engineering work
+Engineer:   claims the work and opens a pull request
+CI:         tests the pull request
+Reviewer:   approves it or asks for changes
+Owner:      merges it when CI and review are both green
 ```
 
-When behavior changes, run the relevant tests; `cargo dev-test` runs the workspace test suite. Default tests are intended to be hermetic and should not contact live services. Live Forgejo and real-agent scenarios are opt-in through the documented environment gates.
+If CI fails, the work goes back to the engineer.
 
-Useful next reads:
+If review asks for changes, the work goes back to the engineer.
 
-- `docs/README.md` — documentation map.
-- `docs/how-to/fast-local-iteration.md` — local validation loop.
-- `docs/how-to/run-reference-delivery-end-to-end.md` — deterministic reference scenarios.
-- `docs/how-to/run-forgejo-multiprocess-e2e.md` — gated real Forgejo/CI rehearsals.
-- `docs/explanation/agentic-workflows.md` — the conceptual model.
+If everything passes, the pull request can be merged.
 
-## For coding agents
+Nothing magic is hidden away. The issue labels change, the pull request appears, CI runs, review is recorded, and the merge happens in Forgejo.
 
-Autonomous coding agents should start with `AGENTS.md`. It contains the detailed current repository state, operating rules, validation expectations, and links to the agent lessons register.
+## Why this matters
+
+AI coding is easier to trust when it is kept inside a clear process.
+
+Harness is built around that idea:
+
+- humans can see the work;
+- each helper has limited permission;
+- important steps like CI and review are enforced;
+- crashed or repeated work can be recovered from;
+- the issue tracker remains the shared source of truth.
+
+## What is in this repository?
+
+This repository contains the Rust implementation of Harness, including the workflow runtime, Forgejo support, worker processes, tests, and a reference demo.
+
+The main demo lives in `examples/reference-delivery/`.
+
+For more background, read `docs/explanation/agentic-workflows.md`.
