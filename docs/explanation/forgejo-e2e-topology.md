@@ -13,7 +13,8 @@ The filesystem rehearsal proves the *topology* — workers coordinate solely
 through the Forge and survive real process boundaries — on fakes. The Forgejo
 twin keeps the **exact** scenario seed/assert closures and worker set, but makes
 two of the "swap to real" pieces real: the **backend** and **CI**. Agents stay
-the deterministic fakes; webhook/`ChangeHint` triggering stays `PollLoop`-only.
+the deterministic fakes in the main suite; separate gated regressions cover real
+webhook/`ChangeHint` triggering, including a two-repo fixed worker set.
 
 ## Process topology
 
@@ -44,11 +45,13 @@ For each scenario the test boots an isolated world:
 ## Identity is per-token
 
 Filesystem identity is a free `as_user(handle)` relabel. Forgejo identity **is
-the access token**: each role needs its own user + token, and `current_user` is
-whatever the token resolves to. Provisioning therefore creates a real user (with
-a known password) and mints a token per role. So one provisioned login can serve
-all three needs — REST token, PR assignee `UserId`, and web-UI CI login — the
-role users are given `id == handle`.
+the access token**: each role needs one user + token, and `current_user` is
+whatever the token resolves to. In multi-repo deployments that same role token
+must have Forge access to every repo in the worker's scan set. Provisioning
+therefore creates a real user (with a known password), adds it to the owner org,
+and mints a token per role. So one provisioned login can serve all three needs —
+REST token, PR assignee `UserId`, and web-UI CI login — the role users are given
+`id == handle`.
 
 ## Provisioning is server-agnostic and operator-runnable
 
@@ -61,11 +64,13 @@ logins come from the passed-in binding list (`runner_config().role_bindings`),
 never hardcoded. `seed_intake_issue(base_url, token, owner, name)` adds one
 realistic intake issue whose labels are **derived from the compiled workflow**
 (the entry issue artifact a queue filters on), idempotently. The production
-binary plan moves this operator-facing wiring to `harness-provision-forgejo`: it
-takes `--base-url/--owner/--name/--out`, reads the admin token from
+binary exposes this as `harness-provision-forgejo`: it takes
+`--base-url/--owner/--name/--out`, reads the admin token from
 `HARNESS_FORGEJO_ADMIN_TOKEN` (never argv), and writes the per-role
 `{user, token, password}` to a `0600` POSIX-sourceable secrets file
-(`HARNESS_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret.
+(`HARNESS_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret. The
+operator demo calls it once per configured repo so labels, CI, webhooks, and one
+seed issue are present in every repo before the single shared worker pool starts.
 
 ## Real CI: producing and reading
 

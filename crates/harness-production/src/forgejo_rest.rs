@@ -129,11 +129,23 @@ pub async fn add_team_member(
 }
 
 pub async fn mint_user_token(client: &Client, base: &str, login: &str) -> Result<String> {
+    // Forgejo token names are user-unique. The reference demo may run the
+    // provisioner once per configured repository, reusing the same role users;
+    // give each minted token a unique, non-secret name so repeated provisioning
+    // does not fail with a duplicate-token conflict.
+    let token_name = format!(
+        "harness-{login}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    );
     let resp = client
         .post(format!("{base}/api/v1/users/{login}/tokens"))
         .basic_auth(login, Some(ROLE_PASSWORD))
         .json(&json!({
-            "name": format!("harness-{login}"),
+            "name": token_name,
             "scopes": TOKEN_SCOPES,
         }))
         .send()

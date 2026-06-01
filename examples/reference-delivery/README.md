@@ -2,22 +2,20 @@
 
 A **self-contained operator demo** of the harness's production topology: a
 Forgejo server, a `forgejo-runner` producing real CI, and one LLM-backed worker
-per workflow role, all coordinating through the Forge to drive the bundled
-reference-delivery workflow from an intake issue to a merged, reconciled PR.
+per workflow role scanning a configured repository set, all coordinating through
+the Forge to drive the bundled reference-delivery workflow from intake issues to
+merged, reconciled PRs.
 
 > **Status:** this example is wired to production-owned binary names
 > (`harness-worker`, `harness-provision-forgejo`, and
 > `harness-trigger-forgejo`) from the `harness-production` crate instead of the
-> `harness-testing` binaries. It has
-> been **revalidated live end-to-end** (the happy path converged to a merged,
-> reconciled PR against the bundled Forgejo + real CI, driven by real LLM agents
-> on the Anthropic OAuth `claude-opus-4-8` auth mode). Two bugs surfaced and
-> were fixed during that run — the Anthropic OAuth Claude Code system identity
-> (agent lesson 0012) and the provisioner's CI workflow YAML losing its
-> indentation to `\`-continued string literals (agent lesson 0013). See
-> [`plans/production-binaries/`](../../plans/production-binaries/README.md).
-> The topology was also previously validated by the gated Forgejo multi-process
-> test and the earlier testing-binary launcher.
+> `harness-testing` binaries. The single-repo happy path has been **revalidated
+> live end-to-end** (merged, reconciled PR against the bundled Forgejo + real CI,
+> driven by real LLM agents on Anthropic OAuth). The multi-repo worker-pool path
+> is validated by the gated `forgejo_multi_repo_webhook` e2e and by this
+> launcher's repo-specific log validator. See
+> [`plans/production-binaries/`](../../plans/production-binaries/README.md) and
+> [`plans/multi-repo-workers/`](../../plans/multi-repo-workers/README.md).
 
 ## Honest framing — read this first
 
@@ -35,7 +33,9 @@ This is a **demo**, not a turnkey production deployment:
   toolchain/checkout. A real project swaps in its real CI and a real coding
   agent.
 - It is the operator-facing, shell-driven version of the same topology covered
-  by the gated Forgejo multi-process test — not new workflow behavior.
+  by the gated Forgejo multi-process tests — not new workflow behavior.
+- Multi-repo means a fixed scan shard of independent repos. It does **not** add
+  cross-repo dependencies, routing, shared queues, or fairness guarantees.
 
 Keep these caveats in mind; this does not pretend to be more than a faithful
 end-to-end rehearsal.
@@ -48,10 +48,10 @@ end-to-end rehearsal.
   them on first run unless `HARNESS_SKIP_BUILD=1`. Override paths with
   `HARNESS_WORKER_BIN` / `HARNESS_PROVISION_BIN` / `HARNESS_TRIGGER_BIN` if
   needed.
-- The two pinned binaries: Forgejo `7.0.12` and `forgejo-runner` `3.5.1`. Let
-  the first run download + checksum them into `.cache/forgejo/`, or pre-stage
-  them and set `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY` in
-  `config/harness.env`.
+- The two pinned binaries: Forgejo `7.0.12` and `forgejo-runner` `3.5.1`.
+  Pre-stage them under `.cache/forgejo/` (the gated Forgejo e2e fixtures do the
+  download/checksum path) or set `HARNESS_FORGEJO_BINARY` /
+  `HARNESS_FORGEJO_RUNNER_BINARY` in `config/harness.env`.
 - A host that permits **host-mode** CI jobs (spawning child processes, binding a
   loopback port) — the runner executes steps directly on the host, no containers.
 - LLM agent auth — **one of**:
@@ -93,41 +93,43 @@ only carries what an operator must edit (repo, endpoint, cadence, auth).
 From this directory:
 
 ```sh
-POLL_MS=120000 ./run.sh   # long-poll mode: webhooks wake workers promptly;
-                           #   Ctrl-C tears everything down
-./run.sh validate-webhooks # summarize webhook registration/delivery/wake logs
-./run.sh stop              # tear down a previous run via the saved PIDs
-./run.sh help              # usage
+POLL_MS=120000 ./run.sh       # long-poll mode: webhooks wake workers promptly;
+                               #   Ctrl-C tears everything down
+./run.sh validate-multi-repo   # repo-specific provisioning/webhook/worker smoke
+./run.sh validate-webhooks     # summarize webhook registration/delivery/wake logs
+./run.sh stop                  # tear down a previous run via the saved PIDs
+./run.sh help                  # usage
 ```
 
 The first run builds the production workspace binaries (`cargo build --release
 -p harness-production`) if they are missing and expects the pinned Forgejo +
 `forgejo-runner` binaries under `.cache/forgejo/` (or set
 `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY`). Edit
-`config/harness.env` for the repo, endpoint, cadence, and auth knobs; any of
+`config/harness.env` for the repo set, endpoint, cadence, and auth knobs; any of
 those may also be overridden by exporting the matching env var before invoking
-the script (env wins over the file). `OWNER`/`NAME` preserves the single-repo
-mode. Setting `REPOS="owner/a owner/b"` makes every production worker scan that
+the script (env wins over the file). The checked-in default is
+`REPOS="acme/service acme/service-canary"`; set `REPOS=` to preserve the
+single-repo `OWNER`/`NAME` mode. Every production worker scans the same
 repository set (tokens must have Forge access to every listed repo; Forge
 permissions, not scan-shard membership, authorize writes).
 
-Progress is printed without secrets (server URL, the seeded issue URL, where
-logs live); per-process logs land under `logs/`. The checked-in default
+Progress is printed without secrets (server URL, seeded issue URLs, where logs
+live); per-process logs land under `logs/`. The checked-in default
 `POLL_MS=120000` is intentional: polling is only the liveness backstop, while
 webhooks should make the demo visibly progress before the two-minute deadline.
 
 ## What it does
 
 Boots Forgejo + a host-mode `forgejo-runner`, starts the local webhook trigger,
-provisions an org/repo with a per-role user + token (and seeds one intake issue),
-then launches one `harness-worker` per role-with-an-agent plus one mechanical
-reconciler. Workers still use wall-clock polling as the liveness backstop;
-webhooks only wake them early.
+provisions each configured repo with labels, CI, a webhook, and one seeded intake
+issue, then launches exactly one `harness-worker` per role-with-an-agent plus one
+mechanical reconciler. Workers still use wall-clock polling as the liveness
+backstop; webhooks only wake them early.
 
-The seeded intake issue then flows through the reference-delivery workflow, each
-step driven by the role worker whose LLM **decides** and then mutates workflow
-state **only through `RoleTools`** (the same narrow boundary the deterministic
-fakes use):
+Each repo's seeded intake issue then flows independently through the
+reference-delivery workflow, driven by the role worker whose LLM **decides** and
+then mutates workflow state **only through `RoleTools`** (the same narrow
+boundary the deterministic fakes use):
 
 1. **architect** triages the intake issue into a `code` issue;
 2. **engineer** claims it (`in-progress`), prepares a real head branch, and opens
@@ -143,18 +145,30 @@ transition repair, dependency unblock) without an agent. See
 [`docs/explanation/forgejo-e2e-topology.md`](../../docs/explanation/forgejo-e2e-topology.md)
 for the durable topology and real-CI design.
 
+## Multi-repo production model
+
+- Run **one worker per role**, not one worker pool per repository. The same role
+  process scans every configured repo.
+- Use **one token identity per role** with Forge access to every configured repo.
+  Labels, CI workflow, and webhooks are ensured **per repo** during provisioning
+  and worker startup.
+- Webhooks carry repo-specific hints that wake the shared pool and prioritize the
+  hinted repo; polling remains the correctness backstop.
+- Repos are independent. No cross-repo dependencies, issue routing, shared queue
+  state, or write authority beyond the Forge permissions are provided here.
+
 ## Watching progress and validating webhooks
 
-Open the Forgejo UI at `BASE_URL` (log in as any provisioned role). Watch the
-issue get triaged, the PR open, CI run, the review land, and the merge +
-reconcile labels move. Worker logs land under `logs/` (created at run time).
-When webhooks are enabled, the trigger wakes the fixed worker pool for events
-from any repo. Wake payloads carry the repository hint; configured repos are
-scanned first and unknown-repo hints are logged by workers and treated as a
-broad scan:
+Open the Forgejo UI at `BASE_URL` (log in as any provisioned role). For each
+configured repo URL printed by `run.sh`, watch the issue get triaged, the PR
+open, CI run, the review land, and the merge + reconcile labels move. Worker
+logs land under `logs/` (created at run time). When webhooks are enabled, the
+trigger wakes the fixed worker pool for events from any repo. Wake payloads carry
+the repository hint; configured repos are scanned first and unknown-repo hints
+are logged by workers and treated as a broad scan:
 
-- `logs/provision.log` records `webhook registered url=...` after the provisioner
-  successfully registered the repo hook;
+- `logs/provision.log` records `repo=owner/name intake_issue_url=...` and
+  `repo=owner/name webhook registered url=...` for each configured repo;
 - `logs/trigger.log` reports `listening on`, `webhook accepted` or
   `webhook rejected`, and `wake_delivery outcome=no_sockets|sent|all_failed`
   with target/sent/failed counts;
@@ -165,15 +179,39 @@ broad scan:
 In another terminal, run:
 
 ```sh
-./run.sh validate-webhooks
+./run.sh validate-multi-repo
 ```
 
-It summarizes accepted webhook deliveries, wake batches sent, per-worker wake
-consumption, wake-triggered ticks, and whether any wake-triggered tick made
-workflow progress (`actions>0`). For a long-poll smoke, start the demo with
-`POLL_MS=120000 ./run.sh`, wait until some workflow movement appears in Forgejo,
-then run `./run.sh validate-webhooks`; it should pass before any two-minute poll
-backstop is needed.
+It verifies that every configured repo appears in provisioning, trigger, and
+worker startup logs, then summarizes accepted webhook deliveries, wake batches
+sent, per-worker wake consumption, wake-triggered ticks, and whether any
+wake-triggered tick made workflow progress (`actions>0`). For a cheaper generic
+wake check, use `./run.sh validate-webhooks`. For a long-poll smoke, start the
+demo with `POLL_MS=120000 ./run.sh`, wait until workflow movement appears in
+Forgejo for each repo, then run `./run.sh validate-multi-repo`; it should pass
+before any two-minute poll backstop is needed.
+
+## Validated smoke paths
+
+The default, hermetic multi-repo topology smoke is the ignored filesystem process
+rehearsal:
+
+```sh
+cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored
+```
+
+The live Forgejo/webhook smoke is explicitly gated because it boots Forgejo and a
+host-mode runner:
+
+```sh
+HARNESS_FORGEJO_E2E=1 \
+  cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+```
+
+That live test validated: two repos, one fixed fake-agent worker set, per-repo
+webhooks, real Forgejo CI, repo-hinted wakes before the long poll, and both repos
+converging. The shell demo's own validation path is `./run.sh validate-multi-repo`
+after a run; it validates the operator logs rather than reasserting Forge state.
 
 ## Troubleshooting long-poll wakeups
 
@@ -205,12 +243,13 @@ the run/data dirs.
 
 ## Point it at your own Forgejo
 
-Change `BASE_URL` to your instance, supply real per-role tokens instead of the
-generated ones, and skip the bundled server/runner + provisioning steps. Replace
+Change `BASE_URL` to your instance, set `REPOS` (or a production `--repo-list`)
+to the scan shard, supply one real per-role token with access to every listed
+repo, and skip the bundled server/runner + provisioning steps. Replace
 `config/ci.yml` with your real CI and pair the engineer with a real coding agent.
-The demo now includes the ADR 0009 **webhook triggering** accelerator for the
-local topology. For a real Forgejo, expose `WEBHOOK_URL` over HTTPS to the Forgejo
-server and keep the worker wake sockets host-local. This is the same
-swap-to-real path documented in
+The demo includes the ADR 0009 **webhook triggering** accelerator for the local
+topology. For a real Forgejo, register a hook on each repo, expose `WEBHOOK_URL`
+over HTTPS to the Forgejo server, and keep the worker wake sockets host-local.
+This is the same swap-to-real path documented in
 [`docs/how-to/run-forgejo-multiprocess-e2e.md`](../../docs/how-to/run-forgejo-multiprocess-e2e.md)
 and [`docs/explanation/forgejo-e2e-topology.md`](../../docs/explanation/forgejo-e2e-topology.md).

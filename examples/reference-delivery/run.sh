@@ -6,18 +6,18 @@
 #   2. a host-mode forgejo-runner producing real CI,
 #   3. admin bootstrap + the production provision/seed binary
 #      (org/users/tokens/repo/labels/CI workflow + one intake issue),
-#   4. one harness-worker per workflow role-with-an-agent, plus one mechanical
-#      reconciler — all against Forgejo with real LLM agents and wall time,
+#   4. one fixed harness-worker pool (one process per workflow role, plus one
+#      mechanical reconciler) scanning every configured repo — all against
+#      Forgejo with real LLM agents and wall time,
 # then tears them all down cleanly on Ctrl-C / signal / `./run.sh stop`.
 #
-# This script now targets the planned production binaries from
-# plans/production-binaries/README.md instead of the harness-testing entry
-# points. Until that plan lands, it is forward-looking wiring rather than a
-# runnable demo from a clean checkout.
+# This script targets the production binaries from harness-production rather
+# than the harness-testing entry points.
 #
 # Usage:
 #   ./run.sh [start]          boot everything and block until Ctrl-C / stop-file
 #   ./run.sh validate-webhooks inspect logs from a running/completed long-poll run
+#   ./run.sh validate-multi-repo inspect provisioning + wake logs for all configured repos
 #   ./run.sh stop             tear down a previous run via the saved PIDs
 #   ./run.sh help             show this usage
 #
@@ -74,14 +74,17 @@ sleep_short() {
 
 usage() {
     cat <<EOF
-usage: $0 [start|validate-webhooks|smoke-webhooks|stop|help]
+usage: $0 [start|validate-webhooks|validate-multi-repo|smoke-webhooks|stop|help]
 
-  start (default)     boot Forgejo + runner, provision + seed, launch the workers,
-                      then block until Ctrl-C or the stop-file.
-  validate-webhooks   inspect logs/ and report whether webhook wakes were
-                      registered, accepted, delivered, consumed, and acted on.
-  stop                tear down a previous run via run/*.pid.
-  help                show this message.
+  start (default)      boot Forgejo + runner, provision + seed every configured
+                       repo, launch one fixed worker pool, then block until
+                       Ctrl-C or the stop-file.
+  validate-webhooks    inspect logs/ and report whether webhook wakes were
+                       registered, accepted, delivered, consumed, and acted on.
+  validate-multi-repo  additionally require every configured repo to appear in
+                       provisioning, trigger, and worker startup logs.
+  stop                 tear down a previous run via run/*.pid.
+  help                 show this message.
 
 Configuration is read from config/harness.env (no secrets). Auth selection is
 HARNESS_AGENTS_AUTH (default chatgpt-oauth); see secrets/.env.example.
@@ -148,6 +151,21 @@ HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
 HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
 HARNESS_TRIGGER_BIN HARNESS_BUILD_PACKAGE"
 
+repo_owner() { printf '%s\n' "${1%%/*}"; }
+repo_name() { printf '%s\n' "${1#*/}"; }
+
+validate_repo_path() {
+    _repo=$1
+    case "$_repo" in
+        */*) ;;
+        *) die "repository must be owner/name, got '$_repo'" ;;
+    esac
+    _owner=$(repo_owner "$_repo")
+    _name=$(repo_name "$_repo")
+    [ -n "$_owner" ] && [ -n "$_name" ] && [ "$_owner/$_name" = "$_repo" ] \
+        || die "repository must be owner/name with non-empty parts, got '$_repo'"
+}
+
 load_config() {
     [ -f "$CONFIG_DIR/harness.env" ] || die "missing $CONFIG_DIR/harness.env"
     # Snapshot any pre-existing env values so they survive the file sourcing.
@@ -188,14 +206,18 @@ load_config() {
     HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
     HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
 
-    if [ -n "$REPOS" ]; then
-        WORKER_REPO_ARGS=
-        for _repo in $REPOS; do
-            WORKER_REPO_ARGS="$WORKER_REPO_ARGS --repo $_repo"
-        done
-    else
-        WORKER_REPO_ARGS="--repo $OWNER/$NAME"
-    fi
+    _raw_repos=${REPOS:-$OWNER/$NAME}
+    CONFIGURED_REPOS=
+    WORKER_REPO_ARGS=
+    for _repo in $_raw_repos; do
+        validate_repo_path "$_repo"
+        case " $CONFIGURED_REPOS " in
+            *" $_repo "*) continue ;;
+        esac
+        CONFIGURED_REPOS="${CONFIGURED_REPOS:+$CONFIGURED_REPOS }$_repo"
+        WORKER_REPO_ARGS="$WORKER_REPO_ARGS --repo $_repo"
+    done
+    [ -n "$CONFIGURED_REPOS" ] || die 'no repositories configured'
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
     # Exported so both Go processes inherit it; harmless for the Rust workers.
@@ -455,7 +477,7 @@ boot_trigger() {
 # --- Provision + seed ---------------------------------------------------------
 
 bootstrap_and_provision() {
-    log 'bootstrapping admin + provisioning (org/users/tokens/repo/labels/CI/issue) ...'
+    log 'bootstrapping admin + provisioning every configured repo (org/users/tokens/repo/labels/CI/issue) ...'
     # Create the admin (tolerate a pre-existing one on a re-run), then mint an
     # all-scoped token. The token stays in a shell variable; it is never echoed
     # and reaches the provision step only via the environment.
@@ -470,23 +492,32 @@ bootstrap_and_provision() {
     if [ "$WEBHOOKS" = "1" ]; then
         _webhook_args="--webhook-url $WEBHOOK_URL --webhook-secret-file $WEBHOOK_SECRET_FILE"
     fi
-    # _webhook_args intentionally word-split: POSIX sh has no arrays and the
-    # example paths above are controlled by this script/config.
-    # shellcheck disable=SC2086
-    _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
-        --base-url "$BASE_URL" --owner "$OWNER" --name "$NAME" --out "$ROLES_ENV" \
-        $_webhook_args) \
-        || die 'provisioning failed'
-    {
-        printf '%s\n' "$_status"
-        if [ "$WEBHOOKS" = "1" ]; then
-            printf 'webhook registered url=%s\n' "$WEBHOOK_URL"
-        else
-            printf 'webhook disabled\n'
-        fi
-    } >"$LOG_DIR/provision.log"
-    log "$_status"
-    [ "$WEBHOOKS" = "1" ] && log "webhook registered ($WEBHOOK_URL; logs/provision.log)"
+    : >"$LOG_DIR/provision.log"
+    for _repo in $CONFIGURED_REPOS; do
+        _owner=$(repo_owner "$_repo")
+        _name=$(repo_name "$_repo")
+        log "provisioning $_repo (labels + CI + seeded intake issue) ..."
+        # _webhook_args intentionally word-split: POSIX sh has no arrays and the
+        # example paths above are controlled by this script/config.
+        # shellcheck disable=SC2086
+        _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+            --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
+            $_webhook_args) \
+            || die "provisioning $_repo failed"
+        _issue=$(printf '%s\n' "$_status" | sed -n 's/.*intake issue #\([0-9][0-9]*\).*/\1/p')
+        {
+            printf 'repo=%s %s\n' "$_repo" "$_status"
+            [ -n "$_issue" ] && printf 'repo=%s intake_issue_url=%s/%s/issues/%s\n' "$_repo" "$BASE_URL" "$_repo" "$_issue"
+            if [ "$WEBHOOKS" = "1" ]; then
+                printf 'repo=%s webhook registered url=%s\n' "$_repo" "$WEBHOOK_URL"
+            else
+                printf 'repo=%s webhook disabled\n' "$_repo"
+            fi
+        } >>"$LOG_DIR/provision.log"
+        log "$_status"
+        [ -n "$_issue" ] && log "  intake issue: $BASE_URL/$_repo/issues/$_issue"
+        [ "$WEBHOOKS" = "1" ] && log "  webhook registered for $_repo ($WEBHOOK_URL)"
+    done
 
     [ -f "$ROLES_ENV" ] || die "provision did not write $ROLES_ENV"
     # shellcheck disable=SC1090
@@ -600,12 +631,45 @@ validate_contains() {
     _file=$1
     _pattern=$2
     _description=$3
-    if grep -q "$_pattern" "$_file" 2>/dev/null; then
+    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
         log "ok: $_description"
         return 0
     fi
     log "missing: $_description (looked in $_file)"
     return 1
+}
+
+validate_repo_specific_logs() {
+    _ok=0
+    _provision_log="$LOG_DIR/provision.log"
+    _trigger_log="$LOG_DIR/trigger.log"
+    for _repo in $CONFIGURED_REPOS; do
+        validate_contains "$_provision_log" "repo=$_repo " \
+            "provisioning recorded for $_repo" || _ok=1
+        validate_contains "$_provision_log" "repo=$_repo intake_issue_url=" \
+            "seeded intake issue URL recorded for $_repo" || _ok=1
+        if [ "$WEBHOOKS" = "1" ]; then
+            validate_contains "$_provision_log" "repo=$_repo webhook registered" \
+                "webhook registration recorded for $_repo" || _ok=1
+            validate_contains "$_trigger_log" "repo=$_repo " \
+                "trigger accepted at least one webhook for $_repo" || _ok=1
+        fi
+        _worker_mentioned=0
+        for _log in "$LOG_DIR"/*.log; do
+            [ -f "$_log" ] || continue
+            grep -q 'harness-worker:' "$_log" 2>/dev/null || continue
+            if grep -F -q "$_repo" "$_log" 2>/dev/null; then
+                _worker_mentioned=1
+            fi
+        done
+        if [ "$_worker_mentioned" -eq 1 ]; then
+            log "ok: worker startup logs mention $_repo"
+        else
+            log "missing: no worker startup log mentions $_repo"
+            _ok=1
+        fi
+    done
+    return "$_ok"
 }
 
 cmd_validate_webhooks() {
@@ -616,7 +680,12 @@ cmd_validate_webhooks() {
 
     [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
     log "validating webhook wake logs under $LOG_DIR"
+    log "configured repos: $CONFIGURED_REPOS"
     log "configured POLL_MS=$POLL_MS; long-poll smoke expects POLL_MS=120000"
+
+    if [ "${VALIDATE_REPO_SPECIFIC:-0}" = "1" ]; then
+        validate_repo_specific_logs || _ok=1
+    fi
 
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
@@ -685,6 +754,10 @@ cmd_validate_webhooks() {
     return "$_ok"
 }
 
+cmd_validate_multi_repo() {
+    VALIDATE_REPO_SPECIFIC=1 cmd_validate_webhooks
+}
+
 # --- Monitor ------------------------------------------------------------------
 
 # Blocks until the stop-file appears, the server dies, or RUN_SECS elapses, so
@@ -692,10 +765,15 @@ cmd_validate_webhooks() {
 monitor() {
     log ''
     log "Forgejo UI:    $BASE_URL  (log in as any provisioned role)"
-    log "Repo + issues: $BASE_URL/$OWNER/$NAME/issues"
-    log "Worker logs:   $LOG_DIR/"
-    log 'Watch the intake issue get triaged, a PR open, CI run, the review land,'
-    log 'and the merge + reconcile labels move — all in the Forgejo UI above.'
+    log "Worker pool:   one worker per role scans: $CONFIGURED_REPOS"
+    log 'Repo issue URLs:'
+    for _repo in $CONFIGURED_REPOS; do
+        log "  $_repo -> $BASE_URL/$_repo/issues"
+    done
+    log "Worker logs:   $LOG_DIR/ (role logs include the resolved repo set)"
+    log 'Watch each repo independently: its intake issue should be triaged, a PR'
+    log 'should open, CI should run, review should land, and merge + reconcile labels'
+    log 'should move — all in the Forgejo UI above.'
     log ''
     log "Press Ctrl-C (or run '$0 stop') to tear everything down."
 
@@ -745,6 +823,7 @@ cmd_start() {
 case "${1:-start}" in
     start | "") cmd_start ;;
     validate-webhooks | smoke-webhooks) cmd_validate_webhooks ;;
+    validate-multi-repo) cmd_validate_multi_repo ;;
     stop) cmd_stop ;;
     help | -h | --help) usage ;;
     *)

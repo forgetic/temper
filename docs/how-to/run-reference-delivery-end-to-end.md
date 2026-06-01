@@ -3,7 +3,9 @@
 This guide runs the reference-delivery scenario suite at the current layered
 boundaries: L2 on `MemoryForge`, L3 on `FilesystemForge`, and the happy path on
 the L4 `MultiProcessStage` sketch with distinct filesystem handles. The same
-scenario definitions seed and assert each backend/topology.
+scenario definitions seed and assert each backend/topology. For the
+operator-facing multi-repo worker-pool demo, see
+`examples/reference-delivery/README.md`.
 
 ## Command
 
@@ -47,6 +49,25 @@ scenarios from runner test support on:
   should not activate.
 - CI production is test-only. The workflow still reads native CI through the
   Forge API; the fake CI policy only decides which test verdicts to seed.
+
+## Multi-repo smoke
+
+To prove one fixed worker set scans multiple repositories, opt into the ignored
+process-level smoke:
+
+```sh
+cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored
+```
+
+For the live Forgejo + webhook variant, use:
+
+```sh
+HARNESS_FORGEJO_E2E=1 \
+  cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+```
+
+These are topology smokes, not new workflow scenarios: repos are independent and
+all use the same compiled reference workflow.
 
 ## Related
 

@@ -107,12 +107,19 @@ Status legend: ☐ pending · ☑ done
    webhooks for both repos, launches one multi-repo fake worker set with long
    polling, and requires convergence before the poll backstop.
 
-5. ☐ **Phase 5 — Examples and operator docs.**
+5. ☑ **Phase 5 — Examples and operator docs.**
    `prompts/phase-5-examples-and-docs.md`
 
-   Update `examples/reference-delivery/` so it demonstrates one worker pool over
-   multiple repos, documents how to configure the repo set, and validates that a
-   new issue in any configured repo is picked up promptly.
+   Done: `examples/reference-delivery/config/harness.env` now defaults to a
+   two-repo demo set while preserving `REPOS=` → `OWNER/NAME` single-repo mode;
+   `run.sh` provisions every configured repo (labels, CI, webhook, seeded intake
+   issue), launches one fixed worker set with repeated `--repo` flags, prints
+   repo-specific issue URLs, and adds `validate-multi-repo` for per-repo log
+   smoke validation. The README documents the production model: one worker per
+   role, one role token with access to all repos, labels/CI/webhooks per repo,
+   repo-hinted webhooks plus polling backstop, and intentionally independent
+   repos. The validated live smoke remains the gated
+   `forgejo_multi_repo_webhook` e2e.
 
 ## Acceptance criteria
 
