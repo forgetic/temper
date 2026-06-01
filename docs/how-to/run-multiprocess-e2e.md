@@ -31,7 +31,7 @@ it reports the stalled repository path next to the last scenario assertion error
 
 ## Scenarios
 
-All four reference-delivery scenarios run across real processes. Each reuses its
+All five reference-delivery scenarios run across real processes. Each reuses its
 **exact** in-process seed/assert closures (`harness_testing::scenarios`); only
 the spawned worker *behavior* differs, selected with `harness-testing-worker`
 flags that mirror the in-process registry wiring in
@@ -43,6 +43,7 @@ flags that mirror the in-process registry wiring in
 | changes requested then approved | `default` | `request-changes-then-approve` | `pass` |
 | CI fails then passes | `default` | `default` | `fail-then-pass` |
 | dependency chain mechanically unblocked | `closing` | `default` | `pass` |
+| cross-repo fan-out converges | `closing` | `default` | `pass` |
 
 The flags only bite for the architect and reviewer role workers and the CI
 producer; every other worker ignores them. No assertion logic is forked per
@@ -83,7 +84,8 @@ workflow-state transition is made by a separate process. Because each scenario
 reuses its in-process seed and assert verbatim, the multi-process world is
 checked against the **same** end-state as the single-process world — including
 failed-gate return routing (changes requested), CI fail/recover, and
-cross-process mechanical unblocking of a dependency chain.
+cross-process mechanical unblocking of a dependency chain, and cross-repo fan-out
+on one fixed two-repo worker fleet.
 
 ## Determinism caveat
 
@@ -130,7 +132,7 @@ the **exact** scenario seed/assert closures, with these two pieces made real:
   `RoleTools` (ChatGPT OAuth default, DeepSeek or Anthropic OAuth opt-in).
   Selected by the worker's `--agents real|fake` flag (default `fake`). The
   double-gated real-agent variants of `forgejo_multiprocess.rs`
-  converge all four scenarios with real agents (`plans/forgejo-e2e/` Phase B2).
+  converge all five scenarios with real agents (`plans/forgejo-e2e/` Phase B2).
 
 **Still on fakes — pending:**
 

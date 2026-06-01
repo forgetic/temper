@@ -121,12 +121,17 @@ Status legend: ☐ pending · ☑ done
    planner pure, and memory/filesystem tests prove all-children-landed unblock,
    post-apply single firing, and transient read failure safety.
 
-5. ☐ **Phase 5 — End-to-end cross-repo scenario.**
+5. ☑ **Phase 5 — End-to-end cross-repo scenario.**
    `prompts/phase-5-e2e.md`
 
    Add a reference-delivery scenario where one intake issue spans two repos and
    converges on the multi-repo fleet. Deterministic filesystem/process test plus
-   a gated real-Forgejo variant.
+   a gated real-Forgejo variant. Done: `cross_repo_fanout_converges` seeds one
+   planned intake in repo A, creates children in repos A and B, verifies both
+   child PRs merge in their own repos before the parent resolves, and now runs in
+   the in-process memory/filesystem fleet, the filesystem multiprocess fleet,
+   the gated Forgejo multiprocess twin (fake and real agents), and the gated
+   Forgejo webhook/wake multi-repo regression.
 
 6. ☐ **Phase 6 — Examples and operator docs.**
    `prompts/phase-6-examples-and-docs.md`

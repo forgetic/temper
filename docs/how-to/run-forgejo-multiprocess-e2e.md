@@ -1,6 +1,6 @@
 # Run the Forgejo end-to-end harness
 
-> **Status: complete.** The full four-scenario multi-process test runs against a
+> **Status: complete.** The full five-scenario multi-process test runs against a
 > real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
@@ -26,7 +26,7 @@ HARNESS_FORGEJO_E2E=1 \
 ```
 
 This boots a Forgejo server **and** a host-mode `forgejo-runner`, provisions, and
-converges all four reference-delivery scenarios across real OS processes. It
+converges all five reference-delivery scenarios across real OS processes. It
 spawns real processes and executes CI **on this host**, so run it only where that
 is acceptable. Budget several minutes. The per-phase smoke tests below build up
 to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
@@ -75,7 +75,7 @@ HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 HARNESS_AGENTS_AUTH=deepseek \
   credentials via env (or the absolute shared auth file), not argv.
 - Run the real-agent tests **serially** (`--test-threads=1`): each boots its own
   real Forgejo, and several at once would multiply the CPU load.
-- All four scenarios converge (happy ~26–29 s, the others ~34–61 s on a 4-core
+- The original four scenarios converge (happy ~26–29 s, the others ~34–61 s on a 4-core
   host); see `plans/forgejo-e2e/findings-phase-b.md` for cost/latency.
 
 ### CPU note (sustained-CPU incident + mitigation)
@@ -218,15 +218,15 @@ HARNESS_FORGEJO_E2E=1 \
 
 This is the Forgejo twin of `tests/multiprocess.rs`: the **same** one-process-per-part
 rehearsal, but against a real Forgejo + a real host-mode `forgejo-runner`. For
-each of the four reference-delivery scenarios (happy path, changes-requested,
-CI-fails-then-passes, dependency-chain) it boots a server + runner, provisions,
-seeds via the scenario's **exact** seed closure, spawns the
+each of the five reference-delivery scenarios (happy path, changes-requested,
+CI-fails-then-passes, dependency-chain, and cross-repo fan-out) it boots a server
++ runner, provisions, seeds via the scenario's **exact** seed closure, spawns the
 `harness-testing-worker` binary `--backend forgejo --clock wall` once per
 role-with-an-agent plus one mechanical worker (**no** `--kind ci` — the real
 runner is the CI producer), polls the scenario's **exact** assert closure to
 convergence, then stops via the `--stop-file` sentinel and asserts each child
 exited 0. Each scenario boots its own server+runner for isolation, so run it
-`--test-threads=1` (four servers at once is heavy). Budget several minutes.
+`--test-threads=1` (five servers at once is heavy). Budget several minutes.
 
 Secrets travel by env only: each role worker gets its token via
 `HARNESS_FORGEJO_TOKEN`, plus `HARNESS_FORGEJO_USERNAME`/`PASSWORD` for the
@@ -260,9 +260,10 @@ HARNESS_FORGEJO_E2E=1 \
 These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
 register the production `/forgejo/webhook` trigger, and launch fake-agent
 Forgejo workers with authenticated Unix wake sockets and `--poll-ms 120000`. The
-multi-repo variant provisions a second repo, registers webhooks for both repos,
-passes both `--repo` values to one role/mechanical worker set, files one issue in
-each repo, and requires both to converge in less than the poll interval.
+multi-repo variants provision a second repo, register webhooks for both repos,
+pass both `--repo` values to one role/mechanical worker set, and require either
+one issue in each repo or one cross-repo fan-out intake to converge in less than
+the poll interval.
 
 On timeout the panic prints the trigger URL (trigger logs are on test stderr),
 repo-specific stalled assertion text, worker log paths/tails, runner log tail,
@@ -295,7 +296,7 @@ env-gated, so it never fires there). The dedicated job:
      cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
    ```
 
-   `--test-threads=1` keeps the four per-scenario servers from running at once.
+   `--test-threads=1` keeps the five per-scenario servers from running at once.
 
 The job should not block the default pipeline gate (it is slower and
 host-dependent); treat it as a periodic / on-demand real-backend check. The

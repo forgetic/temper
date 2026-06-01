@@ -1,5 +1,5 @@
 //! True one-process-per-part multi-process rehearsal of the reference-delivery
-//! workflow, across all four scenarios (Phases 4–5 of
+//! workflow, across all five scenarios (Phases 4–5 of
 //! `docs/explanation/multiprocess-e2e-roadmap.md`).
 //!
 //! Unlike the in-process `MultiProcessStage` sketch — which still runs every

@@ -113,7 +113,7 @@ the default coverage for workflow logic; this covers the real-backend topology.
 
 ## Triggering status
 
-The four-scenario Forgejo multi-process suite remains poll-driven so it can
+The five-scenario Forgejo multi-process suite remains poll-driven so it can
 compare directly with the filesystem rehearsal. Separate gated long-poll
 regressions cover the real webhook accelerator: `forgejo_webhook_wakeup` for one
 repo, and `forgejo_multi_repo_webhook` for one fixed worker set scanning two

@@ -240,12 +240,11 @@ pub fn poll_until_all_converged(
     loop {
         let mut all_ok = true;
         for (idx, repo) in repos.iter().enumerate() {
-            let forge = admin_forge(server, provisioned, repo);
-            match futures_block_on((scenario.assert)(&forge, &repo.id)) {
+            match assert_converged(server, provisioned, repo, scenario) {
                 Ok(()) => last[idx] = "converged".into(),
                 Err(error) => {
                     all_ok = false;
-                    last[idx] = error.to_string();
+                    last[idx] = error;
                 }
             }
         }
@@ -262,6 +261,34 @@ pub fn poll_until_all_converged(
         }
         std::thread::sleep(ASSERT_POLL);
     }
+}
+
+pub fn poll_until_converged(
+    server: &ForgejoServer,
+    provisioned: &Provisioned,
+    repo: &RepoTarget,
+    scenario: &Scenario,
+) -> Result<(), String> {
+    let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        match assert_converged(server, provisioned, repo, scenario) {
+            Ok(()) => return Ok(()),
+            Err(error) if Instant::now() >= deadline => {
+                return Err(format!("{} => {error}", repo.display()));
+            }
+            Err(_) => std::thread::sleep(ASSERT_POLL),
+        }
+    }
+}
+
+fn assert_converged(
+    server: &ForgejoServer,
+    provisioned: &Provisioned,
+    repo: &RepoTarget,
+    scenario: &Scenario,
+) -> Result<(), String> {
+    let forge = admin_forge(server, provisioned, repo);
+    futures_block_on((scenario.assert)(&forge, &repo.id)).map_err(|error| error.to_string())
 }
 
 pub fn futures_block_on<F: std::future::Future>(future: F) -> F::Output {
@@ -339,7 +366,7 @@ struct SpawnedWorker {
 
 impl WorkerFleet {
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn(
+    pub fn spawn_with_behavior(
         server: &ForgejoServer,
         provisioned: &Provisioned,
         repos: &[RepoTarget],
@@ -348,6 +375,8 @@ impl WorkerFleet {
         wake_secret: &Path,
         log_dir: &Path,
         config: &RunnerConfig,
+        architect: &str,
+        reviewer: &str,
     ) -> Self {
         let base = server.base_url().to_string();
         let mut workers = Vec::new();
@@ -366,6 +395,8 @@ impl WorkerFleet {
                     ("--kind", "role"),
                     ("--role", &role),
                     ("--user", &identity.user),
+                    ("--architect", architect),
+                    ("--reviewer", reviewer),
                 ],
                 &[
                     (FORGEJO_TOKEN_ENV, identity.token.as_str()),

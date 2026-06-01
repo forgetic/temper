@@ -3,7 +3,7 @@
 //!
 //! Same one-process-per-part rehearsal as the filesystem `multiprocess` test, but
 //! against a **real Forgejo server** with a **real host-mode `forgejo-runner`**
-//! producing genuine CI. For each of the four reference-delivery scenarios it:
+//! producing genuine CI. For each of the five reference-delivery scenarios it:
 //!
 //! 1. boots a throwaway [`ForgejoServer`] + [`ForgejoRunner`] and provisions the
 //!    org, repo (`auto_init`), per-role users/tokens/passwords, labels, and the
@@ -38,38 +38,25 @@
 //! full isolation (the simplest correct alternative to one-server-many-repos,
 //! given provisioning targets a fixed repo).
 
-use harness_forge::Forge;
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use harness_runner::{RunnerConfig, Scenario};
-use harness_testing::agents::fake_registry;
+use harness_runner::Scenario;
 use harness_testing::forgejo_server::{provision, ForgejoRunner, ForgejoServer, Provisioned};
 #[allow(dead_code)]
 #[path = "support/forgejo_multi_repo.rs"]
 mod multi_repo_support;
+#[path = "support/forgejo_multiprocess.rs"]
+mod multiprocess_support;
 
+use harness_testing::runner_config;
 use harness_testing::scenarios::{
     changes_requested_then_approved, ci_fails_then_passes, cross_repo_fanout_converges,
     dependency_chain_mechanically_unblocked, happy_path,
 };
-use harness_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV};
-use harness_testing::{runner_config, workflow};
-use harness_workflow::RoleId;
+use multiprocess_support::{agents_auth_choice, enabled, Agents, WorkerFleet};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// How long to wait for the multi-process world to converge before failing.
-///
-/// A real host CI job (cold-start runner, two runs for fail→pass) takes seconds,
-/// and every PR carries real git branch + HTTP round-trips, so this is far above
-/// the filesystem test's 30 s.
-const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
-/// Convergence budget for the **real-agent** topology. Each tick adds one or more
-/// LLM round-trips on top of the already-slow real CI, and several roles must
-/// each take an LLM-decided step in sequence (triage → claim/open PR → review →
-/// align → merge → reconcile), so the ceiling is well above the fake topology's.
-const REAL_AGENTS_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(900);
 /// How often the driver re-runs the assert closure while polling.
 const ASSERT_POLL: Duration = Duration::from_secs(2);
 /// Worker poll cadence; modest because every tick is real HTTP (findings-phase-0
@@ -102,75 +89,6 @@ struct Variant {
     /// Whether this variant provisions a second repo and passes both repos to
     /// the one fixed worker fleet.
     multi_repo: bool,
-}
-
-/// Which agent registry the role workers run, and how the test is gated.
-///
-/// The seed/assert closures and end state are **identical** across both — only
-/// *who decides* changes (the whole point of reusing the scenario). `Real`
-/// additionally requires `HARNESS_FORGEJO_AGENTS=1` (real LLM calls are
-/// non-deterministic) and gets a larger convergence budget for LLM latency.
-/// Per the cost policy the real agents default to ChatGPT OAuth (a flat
-/// subscription); set `HARNESS_AGENTS_AUTH=deepseek` to opt back to DeepSeek or
-/// `HARNESS_AGENTS_AUTH=anthropic-oauth` to opt into Anthropic OAuth.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Agents {
-    Fake,
-    Real,
-}
-
-impl Agents {
-    fn flag(self) -> &'static str {
-        match self {
-            Agents::Fake => "fake",
-            Agents::Real => "real",
-        }
-    }
-
-    /// Convergence budget: real agents add LLM round-trips per tick on top of the
-    /// already-slow real CI, so the real topology gets a much larger ceiling.
-    fn convergence_timeout(self) -> Duration {
-        match self {
-            Agents::Fake => CONVERGENCE_TIMEOUT,
-            Agents::Real => REAL_AGENTS_CONVERGENCE_TIMEOUT,
-        }
-    }
-}
-
-/// Returns whether the env opt-in for `agents` is present; prints a skip note
-/// when not. The fake topology needs only `HARNESS_FORGEJO_E2E=1`; the real
-/// topology additionally needs `HARNESS_FORGEJO_AGENTS=1` (real,
-/// non-deterministic LLM calls), matching the B1 engineer e2e gate.
-fn enabled(agents: Agents) -> bool {
-    let e2e = std::env::var("HARNESS_FORGEJO_E2E").ok().as_deref() == Some("1");
-    match agents {
-        Agents::Fake => {
-            if e2e {
-                return true;
-            }
-            eprintln!(
-                "skipping Forgejo multiprocess e2e test: set HARNESS_FORGEJO_E2E=1 to enable \
-                 (downloads pinned Forgejo + forgejo-runner binaries and spawns a host-mode runner)"
-            );
-            false
-        }
-        Agents::Real => {
-            let real = std::env::var("HARNESS_FORGEJO_AGENTS").ok().as_deref() == Some("1");
-            if e2e && real {
-                return true;
-            }
-            eprintln!(
-                "skipping Forgejo real-agent multiprocess e2e: set BOTH HARNESS_FORGEJO_E2E=1 and \
-                 HARNESS_FORGEJO_AGENTS=1 (boots a real Forgejo + runner and makes real, \
-                 non-deterministic LLM calls). Defaults to ChatGPT OAuth (run \
-                 `pi /login openai-codex`); set HARNESS_AGENTS_AUTH=anthropic-oauth for \
-                 Anthropic OAuth (`pi /login anthropic`) or HARNESS_AGENTS_AUTH=deepseek \
-                 to use a DeepSeek key via HARNESS_DEEPSEEK_API_KEY[_PATH] or \
-                 .cache/deepseek-api-key)"
-            );
-            false
-        }
-    }
 }
 
 #[test]
@@ -385,7 +303,10 @@ fn run_variant(variant: &Variant) {
         &repo_args,
         &stop_file,
         &config,
-        variant,
+        variant.architect,
+        variant.reviewer,
+        variant.ci_sentinel,
+        variant.agents,
     );
 
     // Detect convergence in-process by polling the exact scenario assert.
@@ -576,241 +497,4 @@ static NEXT_STOP: AtomicU64 = AtomicU64::new(0);
 
 fn touch(path: &Path) {
     std::fs::write(path, b"stop").expect("writing the stop sentinel succeeds");
-}
-
-/// Env var the worker reads the DeepSeek API key from (direct value).
-const DEEPSEEK_API_KEY_ENV: &str = "HARNESS_DEEPSEEK_API_KEY";
-
-/// The agent auth mode for the real-agent topology: ChatGPT OAuth by default
-/// (the cost policy — a flat subscription, not pay-per-token DeepSeek),
-/// overridable to DeepSeek with `HARNESS_AGENTS_AUTH=deepseek`. The spawned
-/// workers default to the same mode (their `--auth` flag defaults to
-/// chatgpt-oauth), but the driver passes `--auth` explicitly so a deepseek
-/// override also reaches the children.
-fn agents_auth_choice() -> harness_agents::AuthChoice {
-    match std::env::var("HARNESS_AGENTS_AUTH").ok().as_deref() {
-        Some("deepseek") => harness_agents::AuthChoice::DeepSeek,
-        Some("anthropic-oauth") => harness_agents::AuthChoice::AnthropicOAuth,
-        _ => harness_agents::AuthChoice::ChatGptOAuth,
-    }
-}
-
-/// The `--auth` flag value matching [`agents_auth_choice`].
-fn agents_auth_flag() -> &'static str {
-    match agents_auth_choice() {
-        harness_agents::AuthChoice::DeepSeek => "deepseek",
-        harness_agents::AuthChoice::ChatGptOAuth => "chatgpt-oauth",
-        harness_agents::AuthChoice::AnthropicOAuth => "anthropic-oauth",
-    }
-}
-
-/// Resolves the DeepSeek API key the same way `harness_agents::ProviderConfig`
-/// does, so it can be passed explicitly to each real-agent worker child (whose
-/// CWD differs from the workspace root and so cannot resolve the default relative
-/// `.cache/deepseek-api-key`). Resolution order: `HARNESS_DEEPSEEK_API_KEY`
-/// (direct), else the file at `HARNESS_DEEPSEEK_API_KEY_PATH`, else the
-/// workspace-root `.cache/deepseek-api-key`. The key is never logged; the driver
-/// already validated it builds via `ProviderConfig::from_auth`. Only used for the
-/// DeepSeek opt-out; OAuth paths read the absolute shared auth file.
-fn resolve_deepseek_key() -> String {
-    if let Ok(key) = std::env::var(DEEPSEEK_API_KEY_ENV) {
-        let trimmed = key.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    let path = std::env::var("HARNESS_DEEPSEEK_API_KEY_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            // CARGO_MANIFEST_DIR is crates/harness-testing; the key lives at the
-            // workspace root's .cache/.
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.cache/deepseek-api-key")
-        });
-    std::fs::read_to_string(&path)
-        .map(|raw| raw.trim().to_string())
-        .unwrap_or_else(|error| {
-            panic!(
-                "could not read DeepSeek API key for --agents real from {}: {error}",
-                path.display()
-            )
-        })
-}
-
-/// A spawned worker process labelled for clear failure messages.
-struct SpawnedWorker {
-    label: String,
-    child: Child,
-}
-
-/// Owns every spawned worker process and kills any survivors on drop.
-struct WorkerFleet {
-    workers: Vec<SpawnedWorker>,
-}
-
-impl WorkerFleet {
-    /// Spawns one `--backend forgejo` process per role-with-an-agent, plus the
-    /// mechanical worker. No CI worker — the real runner is the CI producer.
-    fn spawn(
-        server: &ForgejoServer,
-        provisioned: &Provisioned,
-        repos: &[String],
-        stop_file: &Path,
-        config: &RunnerConfig,
-        variant: &Variant,
-    ) -> Self {
-        let base = server.base_url().to_string();
-        let mut workers = Vec::new();
-
-        // For `--agents real` with the DeepSeek opt-out, each role worker reads
-        // the DeepSeek key from the env. Resolve it once in the driver and pass it
-        // explicitly (the child's CWD is the crate dir, so the default relative
-        // `.cache/...` would not resolve). OAuth paths need no key — they read the
-        // absolute shared `~/.pi/agent/auth.json`. Passed via env, never argv;
-        // empty for `--agents fake`.
-        let auth_flag = agents_auth_flag();
-        let deepseek_key = match (variant.agents, agents_auth_choice()) {
-            (Agents::Real, harness_agents::AuthChoice::DeepSeek) => Some(resolve_deepseek_key()),
-            _ => None,
-        };
-
-        // Derive role workers from the compiled workflow ∩ registered fake agents
-        // ∩ configured role bindings — never a hardcoded list.
-        for role in role_workers(config) {
-            let identity = provisioned
-                .role(&RoleId::new(&role))
-                .unwrap_or_else(|| panic!("role '{role}' is provisioned with an identity"));
-            // Each role acts as its own token; every role is given web-UI
-            // credentials too so whichever role observes a CI gate can read it via
-            // the Phase 3b fallback. Real-agent roles additionally get the
-            // DeepSeek key.
-            let mut env: Vec<(&str, &str)> = vec![
-                (FORGEJO_TOKEN_ENV, identity.token.as_str()),
-                (FORGEJO_USERNAME_ENV, identity.user.as_str()),
-                (FORGEJO_PASSWORD_ENV, identity.password.as_str()),
-            ];
-            if let Some(key) = &deepseek_key {
-                env.push((DEEPSEEK_API_KEY_ENV, key.as_str()));
-            }
-            let child = spawn_worker(
-                &base,
-                repos,
-                stop_file,
-                &[
-                    ("--kind", "role"),
-                    ("--role", &role),
-                    ("--user", &identity.user),
-                    ("--architect", variant.architect),
-                    ("--reviewer", variant.reviewer),
-                    ("--ci-sentinel", variant.ci_sentinel),
-                    ("--agents", variant.agents.flag()),
-                    ("--auth", auth_flag),
-                ],
-                &env,
-            );
-            workers.push(SpawnedWorker {
-                label: format!("role:{role}"),
-                child,
-            });
-        }
-
-        // The mechanical worker needs a write token but no web-UI creds; use the
-        // admin token so it can reconcile regardless of role.
-        let child = spawn_worker(
-            &base,
-            repos,
-            stop_file,
-            &[("--kind", "mechanical")],
-            &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
-        );
-        workers.push(SpawnedWorker {
-            label: "mechanical".into(),
-            child,
-        });
-
-        Self { workers }
-    }
-
-    /// Waits for every child and returns its (label, exit status).
-    fn wait_all(&mut self) -> Vec<(String, std::process::ExitStatus)> {
-        self.workers
-            .iter_mut()
-            .map(|worker| {
-                let status = worker.child.wait().unwrap_or_else(|error| {
-                    panic!("waiting on '{}' failed: {error}", worker.label)
-                });
-                (worker.label.clone(), status)
-            })
-            .collect()
-    }
-}
-
-impl Drop for WorkerFleet {
-    fn drop(&mut self) {
-        for worker in &mut self.workers {
-            let _ = worker.child.kill();
-            let _ = worker.child.wait();
-        }
-    }
-}
-
-/// Role ids that have both a registered fake agent and a configured binding —
-/// the same derivation the filesystem multiprocess test uses, so the worker set
-/// is never hardcoded.
-fn role_workers(config: &RunnerConfig) -> Vec<String> {
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let registry = fake_registry::<dyn Forge>();
-    compiled
-        .roles()
-        .iter()
-        .filter(|role| registry.get(&role.id).is_some())
-        .filter(|role| config.role_binding(&role.id).is_some())
-        .map(|role| role.id.to_string())
-        .collect()
-}
-
-/// Spawns the worker binary with the Forgejo backend flags and per-child env.
-fn spawn_worker(
-    base_url: &str,
-    repos: &[String],
-    stop_file: &Path,
-    extra: &[(&str, &str)],
-    env: &[(&str, &str)],
-) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_harness-testing-worker"));
-    command
-        .arg("--backend")
-        .arg("forgejo")
-        .arg("--base-url")
-        .arg(base_url);
-    for repo in repos {
-        command.arg("--repo").arg(repo);
-    }
-    command
-        // `--root` is required by the parser but unused by the Forgejo backend.
-        .arg("--root")
-        .arg(std::env::temp_dir().join("harness-forgejo-mp-unused"))
-        .arg("--clock")
-        .arg("wall")
-        .arg("--poll-ms")
-        .arg(WORKER_POLL_MS.to_string())
-        .arg("--stop-file")
-        .arg(stop_file)
-        .arg("--run-secs")
-        .arg(WORKER_RUN_SECS.to_string());
-    for (flag, value) in extra {
-        command.arg(flag).arg(value);
-    }
-    // Secrets travel via env, never argv. Clear inherited Forgejo vars first so a
-    // stray value from the operator's shell cannot leak into a child.
-    command
-        .env_remove(FORGEJO_TOKEN_ENV)
-        .env_remove(FORGEJO_USERNAME_ENV)
-        .env_remove(FORGEJO_PASSWORD_ENV);
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    command
-        .spawn()
-        .unwrap_or_else(|error| panic!("spawning worker {extra:?} failed: {error}"))
 }

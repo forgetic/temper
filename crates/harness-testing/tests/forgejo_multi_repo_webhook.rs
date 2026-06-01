@@ -11,14 +11,48 @@
 #[path = "support/forgejo_multi_repo.rs"]
 mod support;
 
+use harness_runner::Scenario;
 use harness_testing::forgejo_server::{ForgejoRunner, ForgejoServer};
 use harness_testing::runner_config;
-use harness_testing::scenarios::happy_path;
+use harness_testing::scenarios::{cross_repo_fanout_converges, happy_path};
 use std::time::{Duration, Instant};
 
 #[test]
 #[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with HARNESS_FORGEJO_E2E=1 -- --ignored"]
 fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
+    run_webhook_variant(WebhookVariant {
+        second_repo: "service-beta",
+        scenario: happy_path,
+        architect: "default",
+        seed: SeedMode::EveryRepo,
+    });
+}
+
+#[test]
+#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with HARNESS_FORGEJO_E2E=1 -- --ignored"]
+fn cross_repo_fanout_converges_by_webhook_wake() {
+    run_webhook_variant(WebhookVariant {
+        second_repo: "service-canary",
+        scenario: cross_repo_fanout_converges,
+        architect: "closing",
+        seed: SeedMode::SourceRepoOnly,
+    });
+}
+
+struct WebhookVariant {
+    second_repo: &'static str,
+    scenario: fn() -> Scenario,
+    architect: &'static str,
+    seed: SeedMode,
+}
+
+#[derive(Clone, Copy)]
+enum SeedMode {
+    EveryRepo,
+    SourceRepoOnly,
+}
+
+fn run_webhook_variant(variant: WebhookVariant) {
     if !support::enabled() {
         return;
     }
@@ -28,7 +62,7 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
     assert!(runner.is_running(), "runner daemon exited immediately");
 
     let provisioned = support::block_on_provision(&server);
-    let second_name = "service-beta".to_string();
+    let second_name = variant.second_repo.to_string();
     let second_repo = support::futures_block_on(support::provision_extra_repo(
         &server,
         &provisioned,
@@ -44,7 +78,9 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
         },
     ];
 
-    let run_dir = server.data_dir().join("multi-repo-webhook");
+    let run_dir = server
+        .data_dir()
+        .join(format!("multi-repo-webhook-{}", variant.second_repo));
     let log_dir = run_dir.join("logs");
     let wake_dir = run_dir.join("wake");
     std::fs::create_dir_all(&log_dir).expect("log dir is created");
@@ -73,8 +109,8 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
         );
     }
 
-    let scenario = happy_path();
-    let mut workers = support::WorkerFleet::spawn(
+    let scenario = (variant.scenario)();
+    let mut workers = support::WorkerFleet::spawn_with_behavior(
         &server,
         &provisioned,
         &repos,
@@ -83,14 +119,28 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
         &wake_secret,
         &log_dir,
         &runner_config(),
+        variant.architect,
+        "default",
     );
     workers.wait_for_initial_ticks(Duration::from_secs(30));
 
     let started = Instant::now();
-    for repo in &repos {
-        support::seed(&server, &provisioned, repo, &scenario);
+    match variant.seed {
+        SeedMode::EveryRepo => {
+            for repo in &repos {
+                support::seed(&server, &provisioned, repo, &scenario);
+            }
+        }
+        SeedMode::SourceRepoOnly => support::seed(&server, &provisioned, &repos[0], &scenario),
     }
-    let converged = support::poll_until_all_converged(&server, &provisioned, &repos, &scenario);
+    let converged = match variant.seed {
+        SeedMode::EveryRepo => {
+            support::poll_until_all_converged(&server, &provisioned, &repos, &scenario)
+        }
+        SeedMode::SourceRepoOnly => {
+            support::poll_until_converged(&server, &provisioned, &repos[0], &scenario)
+        }
+    };
     let elapsed = started.elapsed();
 
     support::touch(&stop_file);
@@ -105,7 +155,10 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
              worker logs under {}:\n{}\n--- runner running={} log ---\n{}\n--- CI diagnostics ---\n{}",
             support::CONVERGENCE_TIMEOUT,
             support::LONG_POLL_MS,
-            repos.iter().map(support::RepoTarget::display).collect::<Vec<_>>().join(","),
+            repos.iter()
+                .map(support::RepoTarget::display)
+                .collect::<Vec<_>>()
+                .join(","),
             log_dir.display(),
             workers.logs(),
             runner.is_running(),
@@ -134,4 +187,11 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
 #[ignore]
 fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
     eprintln!("skipping Forgejo multi-repo webhook e2e: Unix wake sockets are required");
+}
+
+#[test]
+#[cfg(not(unix))]
+#[ignore]
+fn cross_repo_fanout_converges_by_webhook_wake() {
+    eprintln!("skipping Forgejo cross-repo webhook e2e: Unix wake sockets are required");
 }
