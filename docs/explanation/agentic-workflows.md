@@ -73,9 +73,9 @@ Kubernetes-controller pattern:
 
 Both feed the same reaction path (pull → classify → plan → execute → reconcile).
 Webhook receipt, verification, and payload parsing are provider-specific and
-live in the backend/runner layer. A normalized `ChangeHint` and an optional
-`ChangeSource` companion trait may carry push portably later, but stay off the
-`Forge` trait. See ADR 0009 for the decision and follow-up work.
+live in the backend/runner layer. The portable `ChangeHint` and `ChangeSource`
+companion types carry push-style wakeups without adding notification methods to
+the `Forge` trait. See ADR 0009 for the decision.
 
 ## Rust's role
 

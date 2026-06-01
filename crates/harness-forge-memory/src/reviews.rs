@@ -3,15 +3,15 @@ use crate::lists::{normalize_user_set, sort_pull_requests_by_number, sort_review
 use crate::util::next_comment_number;
 use crate::MemoryForge;
 use harness_forge::{
-    CreatePullRequestReview, ForgeError, ForgeResult, PullRequest, PullRequestId,
-    PullRequestReview, RequestReviewers,
+    CreatePullRequestReview, ForgeError, ForgeResult, ItemNumber, PullRequest, PullRequestId,
+    PullRequestReview, RepositoryId, RequestReviewers,
 };
 
 pub(crate) fn request_reviewers(
     forge: &MemoryForge,
     id: &PullRequestId,
     input: RequestReviewers,
-) -> ForgeResult<PullRequest> {
+) -> ForgeResult<(PullRequest, bool)> {
     let mut inner = forge.lock();
     let (repo_id, existing) = inner
         .state
@@ -26,7 +26,7 @@ pub(crate) fn request_reviewers(
     }
     requested.sort();
     if requested == before {
-        return Ok(existing);
+        return Ok((existing, false));
     }
 
     let now = inner.state.next_timestamp()?;
@@ -40,7 +40,7 @@ pub(crate) fn request_reviewers(
     pull_request.updated_at = now;
     let updated = pull_request.clone();
     sort_pull_requests_by_number(pull_requests);
-    Ok(updated)
+    Ok((updated, true))
 }
 
 pub(crate) fn list_reviews(
@@ -61,9 +61,9 @@ pub(crate) fn submit_review(
     forge: &MemoryForge,
     id: &PullRequestId,
     input: CreatePullRequestReview,
-) -> ForgeResult<PullRequestReview> {
+) -> ForgeResult<(PullRequestReview, RepositoryId, ItemNumber)> {
     let mut inner = forge.lock();
-    inner
+    let (repo_id, pull_request) = inner
         .state
         .find_pull_request(id)
         .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
@@ -81,5 +81,5 @@ pub(crate) fn submit_review(
     };
     reviews.push(review.clone());
     sort_reviews(reviews);
-    Ok(review)
+    Ok((review, repo_id, pull_request.number))
 }

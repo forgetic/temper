@@ -9,13 +9,13 @@ pub(crate) fn add_issue_dependency(
     inner: &mut Inner,
     id: &IssueId,
     target: ItemNumber,
-) -> ForgeResult<Issue> {
+) -> ForgeResult<(Issue, bool)> {
     let (repo_id, existing) = inner
         .state
         .find_issue(id)
         .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
     if existing.dependencies.contains(&target) {
-        return Ok(existing);
+        return Ok((existing, false));
     }
     ensure_target_exists(&inner.state, &repo_id, target)?;
 
@@ -30,20 +30,20 @@ pub(crate) fn add_issue_dependency(
     issue.updated_at = now;
     let updated = issue.clone();
     sort_issues_by_number(issues);
-    Ok(updated)
+    Ok((updated, true))
 }
 
 pub(crate) fn remove_issue_dependency(
     inner: &mut Inner,
     id: &IssueId,
     target: ItemNumber,
-) -> ForgeResult<Issue> {
+) -> ForgeResult<(Issue, bool)> {
     let (repo_id, existing) = inner
         .state
         .find_issue(id)
         .ok_or_else(|| ForgeError::NotFound(format!("issue {id}")))?;
     if !existing.dependencies.contains(&target) {
-        return Ok(existing);
+        return Ok((existing, false));
     }
 
     let now = inner.state.next_timestamp()?;
@@ -59,20 +59,20 @@ pub(crate) fn remove_issue_dependency(
     issue.updated_at = now;
     let updated = issue.clone();
     sort_issues_by_number(issues);
-    Ok(updated)
+    Ok((updated, true))
 }
 
 pub(crate) fn add_pull_request_dependency(
     inner: &mut Inner,
     id: &PullRequestId,
     target: ItemNumber,
-) -> ForgeResult<PullRequest> {
+) -> ForgeResult<(PullRequest, bool)> {
     let (repo_id, existing) = inner
         .state
         .find_pull_request(id)
         .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
     if existing.dependencies.contains(&target) {
-        return Ok(existing);
+        return Ok((existing, false));
     }
     ensure_target_exists(&inner.state, &repo_id, target)?;
 
@@ -87,20 +87,20 @@ pub(crate) fn add_pull_request_dependency(
     pull_request.updated_at = now;
     let updated = pull_request.clone();
     sort_pull_requests_by_number(pull_requests);
-    Ok(updated)
+    Ok((updated, true))
 }
 
 pub(crate) fn remove_pull_request_dependency(
     inner: &mut Inner,
     id: &PullRequestId,
     target: ItemNumber,
-) -> ForgeResult<PullRequest> {
+) -> ForgeResult<(PullRequest, bool)> {
     let (repo_id, existing) = inner
         .state
         .find_pull_request(id)
         .ok_or_else(|| ForgeError::NotFound(format!("pull request {id}")))?;
     if !existing.dependencies.contains(&target) {
-        return Ok(existing);
+        return Ok((existing, false));
     }
 
     let now = inner.state.next_timestamp()?;
@@ -116,7 +116,7 @@ pub(crate) fn remove_pull_request_dependency(
     pull_request.updated_at = now;
     let updated = pull_request.clone();
     sort_pull_requests_by_number(pull_requests);
-    Ok(updated)
+    Ok((updated, true))
 }
 
 fn ensure_target_exists(

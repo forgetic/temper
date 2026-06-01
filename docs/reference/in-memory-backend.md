@@ -59,6 +59,19 @@ returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
 `Arc`, so a clone observes and mutates the same records. This lets a test hand
 the backend to several helpers while keeping one logical store.
 
+## In-process change hints
+
+`MemoryForge::subscribe_hints()` is an optional companion surface returning a
+`MemoryHintReceiver`, which implements `harness_forge::ChangeSource`. Successful
+mutations publish best-effort `ChangeHint`s to subscribers on the same shared
+store, including fixture CI changes from `seed_ci_jobs`. Failed operations,
+rejected optimistic-concurrency preconditions, and idempotent no-op dependency or
+reviewer-request calls do not publish because no state changed.
+
+Hints are never authoritative state. Tests and runners use them only to wake the
+normal Forge scan; the worker still re-reads issues, pull requests, reviews, CI,
+and labels before acting.
+
 ## Per-handle identity
 
 `MemoryForge::as_user(user)` returns another handle over the same shared store

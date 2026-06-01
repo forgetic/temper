@@ -1,56 +1,14 @@
 //! Portable webhook/poll trigger primitives.
 //!
-//! Triggering stays above `harness-forge`: a [`ChangeHint`] is only a wake-up
-//! hint that tells a worker to run its normal pull/classify/plan/execute path.
+//! Triggering stays above the [`harness_forge::Forge`] trait: a [`ChangeHint`]
+//! is only a wake-up hint that tells a worker to run its normal
+//! pull/classify/plan/execute path.
 
 use chrono::{DateTime, Duration, Utc};
-use harness_forge::{ItemNumber, RepositoryPath};
+use harness_forge::ItemNumber;
+pub use harness_forge::{ChangeHint, ChangeKind};
 use harness_workflow::RoleId;
 use std::collections::{BTreeMap, BTreeSet};
-
-/// Coarse kind of provider event represented by a wake hint.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ChangeKind {
-    Issue,
-    PullRequest,
-    Label,
-    Comment,
-    Review,
-    Push,
-    Ci,
-    Unknown,
-}
-
-/// Provider-neutral signal that a repository or item may have changed.
-///
-/// Hints are never trusted as state. They only shorten the wait before a worker
-/// performs its existing authoritative Forge scan.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ChangeHint {
-    pub repo: RepositoryPath,
-    pub item: Option<ItemNumber>,
-    pub kind: ChangeKind,
-}
-
-impl ChangeHint {
-    /// Creates a repository-scoped hint.
-    pub fn repo(repo: RepositoryPath, kind: ChangeKind) -> Self {
-        Self {
-            repo,
-            item: None,
-            kind,
-        }
-    }
-
-    /// Creates an item-scoped hint.
-    pub fn item(repo: RepositoryPath, item: ItemNumber, kind: ChangeKind) -> Self {
-        Self {
-            repo,
-            item: Some(item),
-            kind,
-        }
-    }
-}
 
 /// Worker endpoint selected for a wake.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -167,6 +125,11 @@ impl TriggerScheduler {
             .is_some_and(|state| state.due_at.is_some())
     }
 
+    /// Returns the target's next scheduled wake time, if any.
+    pub fn next_due_at(&self, target: &WakeTarget) -> Option<DateTime<Utc>> {
+        self.workers.get(target).and_then(|state| state.due_at)
+    }
+
     /// Returns whether the target has a tick in progress.
     pub fn is_in_flight(&self, target: &WakeTarget) -> bool {
         self.workers
@@ -178,6 +141,7 @@ impl TriggerScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harness_forge::{ItemNumber, RepositoryPath};
 
     fn t(seconds: i64) -> DateTime<Utc> {
         DateTime::<Utc>::from_timestamp(seconds, 0).expect("valid timestamp")

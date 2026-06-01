@@ -6,15 +6,16 @@
 //! drives them to completion without an async runtime.
 
 use harness_forge::{
-    BranchRef, CiJob, CiJobQuery, CiJobStatus, CreateComment, CreateIssue, CreatePullRequest,
-    CreateRepository, Forge, ForgeError, IssueQuery, IssueState, ItemNumber, MergeMethod,
-    MergePullRequest, PullRequestState, RepositoryId, RepositoryPath, UpdateIssue,
-    UpdatePullRequest, UpsertLabel, UserId, Version,
+    BranchRef, ChangeSource, ChangeSourceEvent, CiJob, CiJobQuery, CiJobStatus, CreateComment,
+    CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueQuery, IssueState,
+    ItemNumber, MergeMethod, MergePullRequest, PullRequestState, RepositoryId, RepositoryPath,
+    UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
 };
 use harness_forge_memory::{FaultOp, MemoryForge};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::Duration;
 
 struct NoopWake;
 impl Wake for NoopWake {
@@ -70,6 +71,51 @@ fn pr_input(repo: &RepositoryId, labels: &[&str]) -> CreatePullRequest {
         labels: labels.iter().map(|l| (*l).to_string()).collect(),
         assignees: Vec::<UserId>::new(),
     }
+}
+
+#[test]
+fn successful_mutation_publishes_hint_to_shared_handle() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let mut hints = forge
+        .as_user(harness_forge::User {
+            id: UserId::new("user-observer"),
+            handle: "observer".into(),
+            display_name: None,
+            email: None,
+        })
+        .subscribe_hints();
+
+    block_on(forge.create_issue(&repo, issue_input(&["code", "ready"]))).expect("issue is created");
+
+    assert!(matches!(
+        hints.recv_timeout(Duration::from_millis(10)),
+        ChangeSourceEvent::Hint(_)
+    ));
+}
+
+#[test]
+fn rejected_mutation_does_not_publish_hint() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let issue = block_on(forge.create_issue(&repo, issue_input(&["code", "ready"])))
+        .expect("issue is created");
+    let mut hints = forge.subscribe_hints();
+
+    let error = block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            expected_version: Some(Version::new(999)),
+            ..UpdateIssue::default()
+        },
+    ))
+    .expect_err("stale version is rejected");
+
+    assert!(matches!(error, ForgeError::Conflict(_)));
+    assert_eq!(
+        hints.recv_timeout(Duration::from_millis(10)),
+        ChangeSourceEvent::Timeout
+    );
 }
 
 #[test]

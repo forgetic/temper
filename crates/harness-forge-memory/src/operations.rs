@@ -26,7 +26,7 @@ use crate::util::{
 };
 use async_trait::async_trait;
 use harness_forge::{
-    CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
+    ChangeKind, CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
     IssueQuery, IssueState, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
     PullRequestId, PullRequestQuery, PullRequestReview, PullRequestState, Repository, RepositoryId,
@@ -80,6 +80,8 @@ impl Forge for MemoryForge {
             updated_at: now,
         };
         inner.state.insert_repository(repository.clone());
+        let path = RepositoryPath::new(repository.owner.clone(), repository.name.clone());
+        inner.publish_path_hint(path, ChangeKind::Unknown);
         Ok(repository)
     }
 
@@ -126,6 +128,7 @@ impl Forge for MemoryForge {
             label
         };
         sort_labels(labels);
+        inner.publish_repo_hint(repo_id, ChangeKind::Label);
         Ok(label)
     }
 
@@ -173,6 +176,7 @@ impl Forge for MemoryForge {
         };
         issues.push(issue.clone());
         sort_issues_by_number(issues);
+        inner.publish_item_hint(repo_id, issue.number, ChangeKind::Issue);
         Ok(issue)
     }
 
@@ -236,11 +240,17 @@ impl Forge for MemoryForge {
         issue.updated_at = now;
         let updated = issue.clone();
         sort_issues_by_number(issues);
+        inner.publish_item_hint(&repo_id, updated.number, ChangeKind::Issue);
         Ok(updated)
     }
 
     async fn add_issue_dependency(&self, id: &IssueId, target: ItemNumber) -> ForgeResult<Issue> {
-        add_issue_dependency(&mut self.lock(), id, target)
+        let mut inner = self.lock();
+        let (issue, changed) = add_issue_dependency(&mut inner, id, target)?;
+        if changed {
+            inner.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+        }
+        Ok(issue)
     }
 
     async fn remove_issue_dependency(
@@ -248,7 +258,12 @@ impl Forge for MemoryForge {
         id: &IssueId,
         target: ItemNumber,
     ) -> ForgeResult<Issue> {
-        remove_issue_dependency(&mut self.lock(), id, target)
+        let mut inner = self.lock();
+        let (issue, changed) = remove_issue_dependency(&mut inner, id, target)?;
+        if changed {
+            inner.publish_item_hint(&issue.repo_id, issue.number, ChangeKind::Issue);
+        }
+        Ok(issue)
     }
 
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>> {
@@ -281,6 +296,9 @@ impl Forge for MemoryForge {
         };
         comments.push(comment.clone());
         sort_comments(comments);
+        if let Some((repo_id, issue)) = inner.state.find_issue(id) {
+            inner.publish_item_hint(&repo_id, issue.number, ChangeKind::Comment);
+        }
         Ok(comment)
     }
 
@@ -338,6 +356,7 @@ impl Forge for MemoryForge {
         };
         pull_requests.push(pull_request.clone());
         sort_pull_requests_by_number(pull_requests);
+        inner.publish_item_hint(repo_id, pull_request.number, ChangeKind::PullRequest);
         Ok(pull_request)
     }
 
@@ -409,6 +428,7 @@ impl Forge for MemoryForge {
         pull_request.updated_at = now;
         let updated = pull_request.clone();
         sort_pull_requests_by_number(pull_requests);
+        inner.publish_item_hint(&repo_id, updated.number, ChangeKind::PullRequest);
         Ok(updated)
     }
 
@@ -417,7 +437,12 @@ impl Forge for MemoryForge {
         id: &PullRequestId,
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
-        add_pull_request_dependency(&mut self.lock(), id, target)
+        let mut inner = self.lock();
+        let (pull_request, changed) = add_pull_request_dependency(&mut inner, id, target)?;
+        if changed {
+            inner.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        }
+        Ok(pull_request)
     }
 
     async fn remove_pull_request_dependency(
@@ -425,7 +450,12 @@ impl Forge for MemoryForge {
         id: &PullRequestId,
         target: ItemNumber,
     ) -> ForgeResult<PullRequest> {
-        remove_pull_request_dependency(&mut self.lock(), id, target)
+        let mut inner = self.lock();
+        let (pull_request, changed) = remove_pull_request_dependency(&mut inner, id, target)?;
+        if changed {
+            inner.publish_pull_request_hint(&pull_request, ChangeKind::PullRequest);
+        }
+        Ok(pull_request)
     }
 
     async fn request_pull_request_reviewers(
@@ -433,7 +463,12 @@ impl Forge for MemoryForge {
         id: &PullRequestId,
         input: RequestReviewers,
     ) -> ForgeResult<PullRequest> {
-        request_reviewers(self, id, input)
+        let (pull_request, changed) = request_reviewers(self, id, input)?;
+        if changed {
+            self.lock()
+                .publish_pull_request_hint(&pull_request, ChangeKind::Review);
+        }
+        Ok(pull_request)
     }
 
     async fn list_pull_request_reviews(
@@ -448,7 +483,10 @@ impl Forge for MemoryForge {
         id: &PullRequestId,
         input: CreatePullRequestReview,
     ) -> ForgeResult<PullRequestReview> {
-        submit_review(self, id, input)
+        let (review, repo_id, number) = submit_review(self, id, input)?;
+        self.lock()
+            .publish_item_hint(&repo_id, number, ChangeKind::Review);
+        Ok(review)
     }
 
     async fn list_pull_request_comments(&self, id: &PullRequestId) -> ForgeResult<Vec<Comment>> {
@@ -485,6 +523,9 @@ impl Forge for MemoryForge {
         };
         comments.push(comment.clone());
         sort_comments(comments);
+        if let Some((repo_id, pull_request)) = inner.state.find_pull_request(id) {
+            inner.publish_item_hint(&repo_id, pull_request.number, ChangeKind::Comment);
+        }
         Ok(comment)
     }
 
@@ -528,8 +569,10 @@ impl Forge for MemoryForge {
         pull_request.merge = Some(merge.clone());
         pull_request.version = pull_request.version.next();
         pull_request.updated_at = now;
+        let number = pull_request.number;
         pull_request.closed_at = Some(now);
         sort_pull_requests_by_number(pull_requests);
+        inner.publish_item_hint(&repo_id, number, ChangeKind::PullRequest);
         Ok(merge)
     }
 

@@ -21,6 +21,20 @@ The `harness_forge::Forge` trait exposes operations for:
 
 All methods are asynchronous because remote providers are expected. Local implementations may use synchronous internals behind the async trait.
 
+## Companion change hints
+
+`ChangeHint`, `ChangeKind`, `ChangeSource`, and `ChangeSourceEvent` are portable
+companion types in `harness-forge`, but they are deliberately **not** methods on
+the `Forge` trait. A hint source is an optional latency accelerator for runners:
+it may be lossy, duplicate, stale, broad, reordered, or closed. Consumers must
+use hints only to wake the normal poll path, then re-read Forge state through the
+trait before planning or mutating.
+
+Backends and adapters that can emit hints may expose an inherent subscribe/watch
+method or wrapper returning a `ChangeSource`. Backends that cannot emit hints are
+still complete Forge implementations; periodic polling remains the liveness and
+correctness backstop.
+
 ## Identity model
 
 Every durable resource has a typed stable identifier:

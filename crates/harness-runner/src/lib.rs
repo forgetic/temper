@@ -39,8 +39,8 @@
 //! - [`CiSink`] and [`CiWorker`], the test-only outside-world CI producer seam
 //!   used to seed native CI jobs for layered scenarios; real deployments rely on
 //!   provider CI and only use the engine's read side.
-//! - [`FixpointDriver`], [`PollLoop`], and [`Stage`]/[`InProcessStage`]/
-//!   [`MultiProcessStage`], which compose workers into deterministic memory,
+//! - [`FixpointDriver`], [`PollLoop`], [`WakeablePollLoop`], and [`Stage`]/
+//!   [`InProcessStage`]/[`MultiProcessStage`], which compose workers into deterministic memory,
 //!   filesystem, and process-split rehearsal worlds while keeping per-worker
 //!   Forge identity a handle-construction concern. Integration-test support
 //!   supplies deterministic fake reference-delivery agents behind [`Agent`];
@@ -65,7 +65,9 @@ pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use config::{PullRequestCreateBinding, RoleBinding, RunnerConfig};
-pub use driver::{DriveError, FixpointDriver, ManualClock, PollLoop, RunReport, WorkerRunReport};
+pub use driver::{
+    DriveError, FixpointDriver, ManualClock, PollLoop, RunReport, WakeablePollLoop, WorkerRunReport,
+};
 pub use scan::{scan, scan_role, ScanError, WorkItem};
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{

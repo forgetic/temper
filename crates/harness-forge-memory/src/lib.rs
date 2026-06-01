@@ -20,6 +20,7 @@
 
 mod dependencies;
 mod fault;
+mod hint;
 mod ids;
 mod lists;
 mod operations;
@@ -28,16 +29,19 @@ mod state;
 mod util;
 
 use crate::fault::FaultStore;
+use crate::hint::HintBus;
 use crate::state::State;
 use harness_forge::{CiJob, RepositoryId, User};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 pub use crate::fault::FaultOp;
+pub use crate::hint::MemoryHintReceiver;
 
 /// The mutex-guarded interior: record store plus armed faults.
 pub(crate) struct Inner {
     pub(crate) state: State,
     pub(crate) faults: FaultStore,
+    pub(crate) hints: HintBus,
 }
 
 /// In-memory [`Forge`](harness_forge::Forge) backend.
@@ -63,6 +67,7 @@ impl MemoryForge {
             inner: Arc::new(Mutex::new(Inner {
                 state: State::new(user),
                 faults: FaultStore::default(),
+                hints: HintBus::default(),
             })),
             current_user: None,
         }
@@ -96,13 +101,24 @@ impl MemoryForge {
         self.lock().faults.clear();
     }
 
+    /// Subscribes to in-process change hints from this shared store.
+    ///
+    /// This is an optional memory-backend companion surface, not part of the
+    /// Forge trait. Every successful mutation publishes a best-effort hint to
+    /// current subscribers; callers must still re-read Forge state after waking.
+    pub fn subscribe_hints(&self) -> MemoryHintReceiver {
+        self.lock().subscribe_hints()
+    }
+
     /// Seeds CI jobs for a repository, replacing any previously seeded jobs.
     ///
     /// The Forge interface has no CI-job creation operation, so tests inject
     /// deterministic fixture jobs through this hook, matching the filesystem
     /// backend's `ci_jobs.json` seeding.
     pub fn seed_ci_jobs(&self, repo_id: &RepositoryId, jobs: Vec<CiJob>) {
-        self.lock().state.set_ci_jobs(repo_id, jobs);
+        let mut inner = self.lock();
+        inner.state.set_ci_jobs(repo_id, jobs);
+        inner.publish_repo_hint(repo_id, harness_forge::ChangeKind::Ci);
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Inner> {

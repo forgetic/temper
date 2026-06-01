@@ -2,19 +2,24 @@
 
 use async_trait::async_trait;
 use chrono::Duration;
-use harness_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId, User, UserId};
+use harness_forge::{
+    ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, CreateIssue, CreateRepository, Forge,
+    IssueQuery, ItemNumber, RepositoryId, RepositoryPath, User, UserId,
+};
 use harness_forge_memory::MemoryForge;
 use harness_runner::{
     run_scenario, Agent, AgentError, AgentRegistry, BoxError, FixpointDriver, InProcessStage,
     ManualClock, MechanicalWorker, PollLoop, Progress, RoleTools, RoleWorker, RunnerConfig,
-    Scenario, WorkItem, Worker,
+    Scenario, WakeTarget, WakeablePollLoop, WorkItem, Worker,
 };
 use harness_workflow::{
     ArtifactKindId, InMemoryJournal, LeasePolicy, QueueId, RawWorkflowSpec, RoleId, TransitionId,
 };
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration as StdDuration, Instant};
 
 const FIXTURE: &str = include_str!("../../harness-workflow/fixtures/reference-delivery.json");
 
@@ -76,6 +81,37 @@ fn runner_config() -> RunnerConfig {
 
 struct ClaimOnlyAgent;
 
+struct NotifyingClaimAgent {
+    claimed: Arc<AtomicBool>,
+}
+
+struct CountingWorker {
+    ticks: Arc<AtomicU64>,
+    send_on_first_tick: Option<mpsc::Sender<ChangeHint>>,
+}
+
+struct ChannelSource {
+    receiver: mpsc::Receiver<ChangeHint>,
+}
+
+impl ChangeSource for ChannelSource {
+    fn recv_timeout(&mut self, timeout: StdDuration) -> ChangeSourceEvent {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(hint) => ChangeSourceEvent::Hint(hint),
+            Err(mpsc::RecvTimeoutError::Timeout) => ChangeSourceEvent::Timeout,
+            Err(mpsc::RecvTimeoutError::Disconnected) => ChangeSourceEvent::Closed,
+        }
+    }
+
+    fn try_recv(&mut self) -> ChangeSourceEvent {
+        match self.receiver.try_recv() {
+            Ok(hint) => ChangeSourceEvent::Hint(hint),
+            Err(mpsc::TryRecvError::Empty) => ChangeSourceEvent::Timeout,
+            Err(mpsc::TryRecvError::Disconnected) => ChangeSourceEvent::Closed,
+        }
+    }
+}
+
 #[async_trait]
 impl Agent<MemoryForge> for ClaimOnlyAgent {
     async fn service(
@@ -83,15 +119,69 @@ impl Agent<MemoryForge> for ClaimOnlyAgent {
         item: &WorkItem,
         tools: &RoleTools<'_, MemoryForge>,
     ) -> Result<bool, AgentError> {
-        if item.queue == QueueId::new("code_ready") && item.kind == ArtifactKindId::new("code") {
-            tools
-                .run(item.target, &TransitionId::new("claim_code"))
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        claim_ready_code(item, tools).await.map(|changed| changed.0)
     }
+}
+
+#[async_trait]
+impl Agent<MemoryForge> for NotifyingClaimAgent {
+    async fn service(
+        &self,
+        item: &WorkItem,
+        tools: &RoleTools<'_, MemoryForge>,
+    ) -> Result<bool, AgentError> {
+        let changed = claim_ready_code(item, tools).await?;
+        if changed.0 {
+            self.claimed.store(true, Ordering::SeqCst);
+        }
+        Ok(changed.0)
+    }
+}
+
+struct Changed(bool);
+
+async fn claim_ready_code(
+    item: &WorkItem,
+    tools: &RoleTools<'_, MemoryForge>,
+) -> Result<Changed, AgentError> {
+    if item.queue == QueueId::new("code_ready") && item.kind == ArtifactKindId::new("code") {
+        tools
+            .run(item.target, &TransitionId::new("claim_code"))
+            .await?;
+        Ok(Changed(true))
+    } else {
+        Ok(Changed(false))
+    }
+}
+
+#[async_trait]
+impl Worker for CountingWorker {
+    async fn tick(
+        &self,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Progress, harness_runner::WorkerError> {
+        let previous = self.ticks.fetch_add(1, Ordering::SeqCst);
+        if previous == 0 {
+            if let Some(sender) = &self.send_on_first_tick {
+                for _ in 0..3 {
+                    sender.send(test_hint()).expect("hint receiver is alive");
+                }
+            }
+        }
+        Ok(Progress::unchanged())
+    }
+
+    fn name(&self) -> &str {
+        "counting"
+    }
+}
+
+fn test_hint() -> ChangeHint {
+    ChangeHint::item(
+        RepositoryPath::new("acme", "service"),
+        ItemNumber::new(1),
+        ChangeKind::Issue,
+    )
 }
 
 #[test]
@@ -122,6 +212,55 @@ fn fixpoint_driver_over_empty_repo_converges_in_one_tick() {
             }],
         }
     );
+}
+
+#[test]
+fn wakeable_poll_loop_coalesces_duplicate_burst() {
+    let (sender, receiver) = mpsc::channel();
+    for _ in 0..3 {
+        sender.send(test_hint()).expect("hint queued");
+    }
+    let ticks = Arc::new(AtomicU64::new(0));
+    let worker = CountingWorker {
+        ticks: Arc::clone(&ticks),
+        send_on_first_tick: None,
+    };
+    let mut source = ChannelSource { receiver };
+    let target = WakeTarget::Mechanical;
+    let loop_ = WakeablePollLoop::new(&worker, target.clone(), Duration::seconds(60));
+
+    let report = block_on(loop_.run_until(
+        &mut source,
+        |_| vec![target.clone()],
+        || ticks.load(Ordering::SeqCst) >= 2,
+    ))
+    .expect("wake loop exits after coalesced wake");
+
+    assert_eq!(report.ticks, 2);
+    assert_eq!(ticks.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn wakeable_poll_loop_coalesces_hints_created_during_tick() {
+    let (sender, receiver) = mpsc::channel();
+    let ticks = Arc::new(AtomicU64::new(0));
+    let worker = CountingWorker {
+        ticks: Arc::clone(&ticks),
+        send_on_first_tick: Some(sender),
+    };
+    let mut source = ChannelSource { receiver };
+    let target = WakeTarget::Mechanical;
+    let loop_ = WakeablePollLoop::new(&worker, target.clone(), Duration::seconds(60));
+
+    let report = block_on(loop_.run_until(
+        &mut source,
+        |_| vec![target.clone()],
+        || ticks.load(Ordering::SeqCst) >= 2,
+    ))
+    .expect("wake loop exits after one follow-up");
+
+    assert_eq!(report.ticks, 2);
+    assert_eq!(ticks.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -165,6 +304,69 @@ fn poll_loop_run_bounded_ticks_single_role_worker() {
     assert!(issue.labels.iter().any(|label| label == "in-progress"));
     assert!(!issue.labels.iter().any(|label| label == "ready"));
     assert!(issue.assignees.contains(&UserId::new("user-engineer")));
+}
+
+#[test]
+fn memory_hint_wakes_role_worker_before_large_poll_deadline() {
+    let forge = MemoryForge::new();
+    let producer = forge.clone();
+    let repo = new_repo(&forge);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+    let engineer_forge = forge.as_user(user("user-engineer", "engineer"));
+    let claimed = Arc::new(AtomicBool::new(false));
+    let agent = Arc::new(NotifyingClaimAgent {
+        claimed: Arc::clone(&claimed),
+    });
+    let mut hints = forge.subscribe_hints();
+    let worker = RoleWorker::new(
+        &workflow,
+        &compiled,
+        &engineer_forge,
+        &repo,
+        role.clone(),
+        agent,
+        runner_config().execution_context(&role),
+    );
+    let target = WakeTarget::Role(role.clone());
+    let loop_ = WakeablePollLoop::new(&worker, target.clone(), Duration::seconds(5));
+    let start = Instant::now();
+
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(move || {
+            block_on(loop_.run_until(
+                &mut hints,
+                |_| vec![target.clone()],
+                || claimed.load(Ordering::SeqCst),
+            ))
+        });
+
+        std::thread::sleep(StdDuration::from_millis(50));
+        block_on(producer.create_issue(
+            &repo,
+            CreateIssue {
+                title: "implement feature".into(),
+                body: String::new(),
+                labels: vec!["code".into(), "ready".into()],
+                assignees: Vec::new(),
+            },
+        ))
+        .expect("issue is created");
+
+        let report = handle
+            .join()
+            .expect("worker thread joins")
+            .expect("wake loop runs");
+        assert!(report.ticks >= 2);
+    });
+
+    assert!(
+        start.elapsed() < StdDuration::from_secs(1),
+        "hint-driven handoff should beat the 5s poll interval"
+    );
+    let issues = block_on(forge.list_issues(&repo, IssueQuery::default())).expect("list succeeds");
+    assert!(issues[0].labels.iter().any(|label| label == "in-progress"));
 }
 
 #[test]
