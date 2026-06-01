@@ -2868,6 +2868,7 @@ dependencies = [
  "harness-forge-filesystem",
  "harness-forge-forgejo",
  "harness-forge-memory",
+ "harness-production",
  "harness-runner",
  "harness-workflow",
  "reqwest",

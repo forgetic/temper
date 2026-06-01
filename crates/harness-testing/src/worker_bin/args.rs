@@ -321,6 +321,10 @@ pub struct WorkerArgs {
     /// Auth-file path override for ChatGPT OAuth (`--auth-file`); `None` falls
     /// back to `HARNESS_AGENTS_AUTH_FILE` then `~/.pi/agent/auth.json`.
     pub auth_file: Option<PathBuf>,
+    /// Optional Unix datagram socket that authenticated webhook wakes interrupt.
+    pub wake_socket: Option<PathBuf>,
+    /// Optional file containing the local wake secret accepted on `wake_socket`.
+    pub wake_secret_file: Option<PathBuf>,
 }
 
 /// An argument-parsing failure with a user-facing message.

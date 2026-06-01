@@ -349,6 +349,27 @@ fn parses_anthropic_oauth_auth() {
 }
 
 #[test]
+fn parses_wake_socket_options() {
+    let args = run(&[
+        "--kind",
+        "mechanical",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+        "--wake-socket",
+        "/tmp/worker.sock",
+        "--wake-secret-file",
+        "/tmp/wake-secret",
+    ]);
+    assert_eq!(args.wake_socket, Some(PathBuf::from("/tmp/worker.sock")));
+    assert_eq!(
+        args.wake_secret_file,
+        Some(PathBuf::from("/tmp/wake-secret"))
+    );
+}
+
+#[test]
 fn auth_env_bridges_config_file() {
     // The launch script sources a config file into HARNESS_AGENTS_AUTH; absent a
     // CLI flag, that env value selects the mode.

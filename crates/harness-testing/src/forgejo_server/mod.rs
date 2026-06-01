@@ -332,6 +332,9 @@ fn app_ini(data_dir: &Path, port: u16, base_url: &str) -> String {
          [mailer]\n\
          ENABLED = false\n\
          \n\
+         [webhook]\n\
+         ALLOWED_HOST_LIST = 127.0.0.1,localhost\n\
+         \n\
          [actions]\n\
          ENABLED = true\n"
     )

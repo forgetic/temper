@@ -185,6 +185,8 @@ fn provision(root: &Path, owner: &str, name: &str) {
         auth: worker_bin::AgentsAuthKind::default(),
         codex_model: None,
         auth_file: None,
+        wake_socket: None,
+        wake_secret_file: None,
     };
     worker_bin::run(&args).expect("provisioning the repository and labels succeeds");
 }

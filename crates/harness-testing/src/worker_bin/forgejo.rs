@@ -228,11 +228,13 @@ const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
 ///
 /// The Forgejo backend writes wall-clock timestamps, so the deterministic
 /// `ManualClock` epoch seam does not apply (`--clock wall` is enforced at parse
-/// time); ticks are stamped with [`Utc::now`].
+/// time); ticks are stamped with [`Utc::now`]. If `--wake-socket` is present, the
+/// same tick path is also resumed by authenticated local webhook wakes.
 async fn drive_async<W: harness_runner::Worker>(
     args: &WorkerArgs,
     worker: &W,
 ) -> Result<RunReport, RunError> {
+    use harness_production::wake::{WakeConfig, WakeError, WakeListener};
     use std::time::Duration as StdDuration;
 
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
@@ -240,11 +242,41 @@ async fn drive_async<W: harness_runner::Worker>(
         .poll_interval
         .to_std()
         .unwrap_or_else(|_| StdDuration::from_millis(50));
+    let wake = match args.wake_socket.clone() {
+        Some(socket) => Some(
+            WakeListener::bind(
+                WakeConfig::from_files(socket, args.wake_secret_file.clone())
+                    .map_err(|error| RunError::Backend(error.to_string()))?,
+            )
+            .map_err(|error| RunError::Backend(error.to_string()))?,
+        ),
+        None => None,
+    };
     let mut consecutive_failures = 0u32;
+    let mut report = RunReport {
+        ticks: 0,
+        workers: vec![WorkerRunReport {
+            name: worker.name().to_string(),
+            ticks: 0,
+            actions: 0,
+        }],
+    };
 
     while !stop.should_stop() {
         match worker.tick(chrono::Utc::now()).await {
-            Ok(_) => consecutive_failures = 0,
+            Ok(progress) => {
+                consecutive_failures = 0;
+                report.ticks = report.ticks.saturating_add(1);
+                report.workers[0].ticks = report.workers[0].ticks.saturating_add(1);
+                report.workers[0].actions = report.workers[0]
+                    .actions
+                    .saturating_add(u64::from(progress.actions));
+                eprintln!(
+                    "harness-testing-worker: worker '{}' completed tick actions={}",
+                    worker.name(),
+                    progress.actions
+                );
+            }
             Err(error) => {
                 consecutive_failures += 1;
                 // The worker name is safe to log; the error's Display never
@@ -262,15 +294,43 @@ async fn drive_async<W: harness_runner::Worker>(
         if stop.should_stop() {
             break;
         }
-        tokio::time::sleep(interval).await;
+        let sleep = tokio::time::sleep(interval);
+        tokio::pin!(sleep);
+        loop {
+            if stop.should_stop() {
+                break;
+            }
+            let stop_check = tokio::time::sleep(StdDuration::from_millis(250));
+            tokio::pin!(stop_check);
+            match wake.as_ref() {
+                Some(listener) => {
+                    tokio::select! {
+                        _ = &mut sleep => break,
+                        _ = &mut stop_check => {},
+                        received = listener.recv() => match received {
+                            Ok(()) => {
+                                eprintln!(
+                                    "harness-testing-worker: worker '{}' consumed authenticated wake; ticking immediately",
+                                    worker.name()
+                                );
+                                break;
+                            }
+                            Err(WakeError::Unauthorized) => {
+                                eprintln!("harness-testing-worker: ignored unauthorized wake message");
+                            }
+                            Err(error) => return Err(RunError::Backend(error.to_string())),
+                        },
+                    }
+                }
+                None => {
+                    tokio::select! {
+                        _ = &mut sleep => break,
+                        _ = &mut stop_check => {},
+                    }
+                }
+            }
+        }
     }
 
-    Ok(RunReport {
-        ticks: 0,
-        workers: vec![WorkerRunReport {
-            name: worker.name().to_string(),
-            ticks: 0,
-            actions: 0,
-        }],
-    })
+    Ok(report)
 }

@@ -72,12 +72,18 @@ Status legend: ☐ pending · ☑ done
    `--wake-dir` sockets on each webhook; Unix socket unit tests prove long waits
    are interrupted only by authenticated wakes.
 
-4. ☐ **Phase 4 — Real Forgejo webhook e2e.**
+4. ☑ **Phase 4 — Real Forgejo webhook e2e.**
    `prompts/phase-4-forgejo-e2e.md`
 
    Add a gated real-Forgejo end-to-end regression with `POLL_MS` set very high.
-   It must prove that Forgejo webhooks wake role/mechanical workers and that the
-   reference workflow progresses well before the poll backstop could fire.
+   Done: `harness-testing/tests/forgejo_webhook_wakeup.rs` boots real Forgejo +
+   real `forgejo-runner`, registers the production Forgejo webhook trigger,
+   launches fake-agent Forgejo workers with authenticated wake sockets and
+   `--poll-ms 120000`, waits until they have completed their initial no-work
+   tick, then seeds the happy path and requires convergence before the poll
+   backstop could fire. Worker logs assert authenticated wakes were consumed;
+   timeout diagnostics include worker logs, runner logs, trigger address, and CI
+   state.
 
 5. ☐ **Phase 5 — Working example + operator docs.**
    `prompts/phase-5-example-and-docs.md`

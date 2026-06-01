@@ -463,6 +463,8 @@ mod tests {
             auth: AgentsAuthKind::default(),
             codex_model: None,
             auth_file: None,
+            wake_socket: None,
+            wake_secret_file: None,
         }
     }
 

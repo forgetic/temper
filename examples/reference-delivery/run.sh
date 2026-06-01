@@ -326,6 +326,9 @@ REQUIRE_SIGNIN_VIEW = false
 [mailer]
 ENABLED = false
 
+[webhook]
+ALLOWED_HOST_LIST = 127.0.0.1,localhost
+
 [actions]
 ENABLED = true
 EOF

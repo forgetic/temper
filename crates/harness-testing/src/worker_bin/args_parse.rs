@@ -32,7 +32,8 @@ pub const USAGE: &str = concat!(
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
     "[--agents <fake|real>] [--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] ",
-    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>]\n",
+    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
+    "[--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
     "HARNESS_FORGEJO_TOKEN (required), HARNESS_FORGEJO_USERNAME/HARNESS_FORGEJO_PASSWORD ",
     "(optional, for the CI-reading role's web-UI login)",
@@ -90,6 +91,8 @@ struct RawArgs {
     auth: Option<String>,
     codex_model: Option<String>,
     auth_file: Option<String>,
+    wake_socket: Option<String>,
+    wake_secret_file: Option<String>,
 }
 
 impl RawArgs {
@@ -118,6 +121,8 @@ impl RawArgs {
             auth: None,
             codex_model: None,
             auth_file: None,
+            wake_socket: None,
+            wake_secret_file: None,
         };
         let mut iter = args.into_iter();
         while let Some(flag) = iter.next() {
@@ -142,6 +147,8 @@ impl RawArgs {
                 "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
                 "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
+                "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
+                "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -238,6 +245,8 @@ impl RawArgs {
             auth,
             codex_model,
             auth_file,
+            wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
+            wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
         })
     }
 

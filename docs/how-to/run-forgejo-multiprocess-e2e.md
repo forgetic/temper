@@ -7,9 +7,8 @@
 > swapped to real**. With `--agents real` (Phase B2) every role also runs a real
 > LLM agent (ChatGPT OAuth by default), so **agents are swapped to real too**. The
 > production reference-delivery demo now carries the ADR 0009 webhook trigger;
-> this gated test remains poll-driven unless extended separately. The design
-> rationale
-> (topology, real CI, per-token identity) lives in
+> the separate long-poll wakeup regression covers that path. The design rationale
+> (topology, real CI, per-token identity, webhook wakeups) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
 > [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
 
@@ -241,6 +240,26 @@ seed/assert closures are reused verbatim, so both topologies are checked against
 the same end state. CI is gated on a **commit-message marker** (`[ci-pass]`) the
 engineer's commit carries — not a checked-out file — because the host-mode runner
 has no `actions/checkout` offline.
+
+## Long-poll webhook wakeup regression
+
+```sh
+HARNESS_FORGEJO_E2E=1 \
+  cargo test -p harness-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
+```
+
+This Phase 4 wakeup regression uses the same throwaway Forgejo + real
+`forgejo-runner`, registers the production `/forgejo/webhook` trigger on the
+repo, and launches fake-agent Forgejo workers with authenticated Unix wake
+sockets and `--poll-ms 120000`. The test waits until every worker has completed
+its initial no-work tick, then seeds the happy path. It must converge in less
+than the poll interval and the worker logs must show an authenticated wake was
+consumed, proving Forgejo webhooks (including issue handoff and PR push/CI
+signals) are waking scans rather than changing workflow decisions directly.
+
+On timeout the panic prints the trigger URL (trigger logs are on test stderr),
+worker log tails, runner log tail, and CI diagnostics. Run it serially for the
+same CPU/isolation reasons as the multi-process suite.
 
 ## Running it in CI
 

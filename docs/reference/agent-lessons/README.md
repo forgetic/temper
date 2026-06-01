@@ -42,3 +42,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0011](0011-validate-blocking-launch-script.md) | Validate the blocking launch script in the background, then stop via its sentinel | process, tooling, forgejo, testing |
 | [0012](0012-anthropic-oauth-requires-claude-code-system-block.md) | Anthropic OAuth needs the Claude Code identity as the first system block | agents, pi-sdk, oauth, auth, anthropic |
 | [0013](0013-ci-workflow-string-literal-strips-yaml-indentation.md) | Don't build indented YAML with `\`-continued string literals | forgejo, ci, rust, provisioning, harness-production |
+| [0014](0014-allow-loopback-for-throwaway-forgejo-webhooks.md) | Allow loopback for throwaway Forgejo webhooks | forgejo, webhook, testing, configuration |
