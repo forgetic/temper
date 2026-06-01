@@ -242,7 +242,7 @@ async fn implementation_pr(forge: &dyn Forge, repo: &RepositoryId) -> Option<(u6
     for pr in prs {
         if let Ok(Some(metadata)) = parse_metadata_block(&pr.body) {
             if let Some(parent) = metadata.parents.first() {
-                return Some((pr.number.get(), parent.get()));
+                return Some((pr.number.get(), parent.number.get()));
             }
         }
     }

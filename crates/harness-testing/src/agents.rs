@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use harness_forge::{Forge, ItemNumber};
 use harness_runner::{Agent, AgentError, AgentRegistry, RoleTools, WorkItem};
 use harness_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactSource, ExecutionError,
-    RoleId, TransitionId, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource,
+    ExecutionError, RoleId, TransitionId, WorkflowMetadata,
 };
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -275,7 +275,9 @@ async fn close_produced_parent_issues<F: Forge + ?Sized>(
 
     let mut closed = false;
     for parent in metadata.parents {
-        closed |= tools.close_issue(parent).await?;
+        if parent.is_same_repo() {
+            closed |= tools.close_issue(parent.number).await?;
+        }
     }
     Ok(closed)
 }
@@ -331,7 +333,7 @@ pub(crate) fn implementation_pr_input<F: Forge + ?Sized>(
 ) -> harness_forge::CreatePullRequest {
     let metadata = WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
-        parents: vec![code_number],
+        parents: vec![ArtifactRef::same_repo(code_number)],
         ..WorkflowMetadata::default()
     };
     let body = format!(

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactSource, ArtifactTarget,
+    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget,
     ClassificationDiagnostic, ClassifiedRelation, Classifier, LabelId, RawWorkflowSpec,
     RelationKind, StateDimensionId, StateId, ValidatedWorkflow, WorkflowMetadata,
 };
@@ -266,8 +266,8 @@ fn metadata_parents_and_dependencies_surface_typed_relations() {
     let classifier = Classifier::new(&workflow);
     let body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("code")),
-        parents: vec![ItemNumber::new(12)],
-        dependencies: vec![ItemNumber::new(34)],
+        parents: vec![ArtifactRef::same_repo(ItemNumber::new(12))],
+        dependencies: vec![ArtifactRef::same_repo(ItemNumber::new(34))],
         ..WorkflowMetadata::default()
     });
 
@@ -281,16 +281,42 @@ fn metadata_parents_and_dependencies_surface_typed_relations() {
             ClassifiedRelation {
                 kind: RelationKind::Parent,
                 source: ArtifactKindId::new("code"),
-                target: ItemNumber::new(12),
+                target: ArtifactRef::same_repo(ItemNumber::new(12)),
                 target_kinds: vec![ArtifactKindId::new("epic")],
             },
             ClassifiedRelation {
                 kind: RelationKind::Dependency,
                 source: ArtifactKindId::new("code"),
-                target: ItemNumber::new(34),
+                target: ArtifactRef::same_repo(ItemNumber::new(34)),
                 target_kinds: vec![ArtifactKindId::new("code")],
             },
         ]
+    );
+}
+
+#[test]
+fn repo_qualified_metadata_relation_classifies_with_explicit_target_repo() {
+    let workflow = workflow();
+    let classifier = Classifier::new(&workflow);
+    let cross_repo = ArtifactRef::in_repo("repo-other", ItemNumber::new(34));
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        dependencies: vec![cross_repo.clone()],
+        ..WorkflowMetadata::default()
+    });
+
+    let artifact = classifier
+        .classify_issue(&issue(1, &["code"], &body))
+        .expect("code issue with cross-repo relation classifies");
+
+    assert_eq!(
+        artifact.relations,
+        vec![ClassifiedRelation {
+            kind: RelationKind::Dependency,
+            source: ArtifactKindId::new("code"),
+            target: cross_repo,
+            target_kinds: vec![ArtifactKindId::new("code")],
+        }]
     );
 }
 
@@ -300,7 +326,7 @@ fn native_dependencies_override_metadata_dependency_fallback() {
     let classifier = Classifier::new(&workflow);
     let body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("code")),
-        dependencies: vec![ItemNumber::new(34)],
+        dependencies: vec![ArtifactRef::same_repo(ItemNumber::new(34))],
         ..WorkflowMetadata::default()
     });
 
@@ -317,7 +343,7 @@ fn native_dependencies_override_metadata_dependency_fallback() {
         vec![&ClassifiedRelation {
             kind: RelationKind::Dependency,
             source: ArtifactKindId::new("code"),
-            target: ItemNumber::new(56),
+            target: ArtifactRef::same_repo(ItemNumber::new(56)),
             target_kinds: vec![ArtifactKindId::new("code")],
         }]
     );
@@ -329,7 +355,7 @@ fn metadata_parent_projection_can_surface_produced_pr_relation() {
     let classifier = Classifier::new(&workflow);
     let body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
-        parents: vec![ItemNumber::new(42)],
+        parents: vec![ArtifactRef::same_repo(ItemNumber::new(42))],
         ..WorkflowMetadata::default()
     });
 
@@ -342,7 +368,7 @@ fn metadata_parent_projection_can_surface_produced_pr_relation() {
         vec![ClassifiedRelation {
             kind: RelationKind::ProducedPr,
             source: ArtifactKindId::new("implementation_pr"),
-            target: ItemNumber::new(42),
+            target: ArtifactRef::same_repo(ItemNumber::new(42)),
             target_kinds: vec![ArtifactKindId::new("code")],
         }]
     );

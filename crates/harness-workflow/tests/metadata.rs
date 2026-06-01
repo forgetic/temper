@@ -1,10 +1,10 @@
 //! Tests for workflow metadata block render/parse (Phase 3).
 
 use chrono::{DateTime, Utc};
-use harness_forge::ItemNumber;
+use harness_forge::{ItemNumber, RepositoryId};
 use harness_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactKindId, Lease, MetadataError, RoleId,
-    WorkflowMetadata,
+    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, Lease, MetadataError,
+    RoleId, WorkflowMetadata,
 };
 
 fn ts(value: &str) -> DateTime<Utc> {
@@ -14,8 +14,11 @@ fn ts(value: &str) -> DateTime<Utc> {
 fn full_metadata() -> WorkflowMetadata {
     WorkflowMetadata {
         kind: Some(ArtifactKindId::new("code")),
-        parents: vec![ItemNumber::new(12)],
-        dependencies: vec![ItemNumber::new(34), ItemNumber::new(56)],
+        parents: vec![ArtifactRef::same_repo(ItemNumber::new(12))],
+        dependencies: vec![
+            ArtifactRef::same_repo(ItemNumber::new(34)),
+            ArtifactRef::same_repo(ItemNumber::new(56)),
+        ],
         correlation_key: Some("code-issue-42".to_string()),
         lease: Some(Lease {
             role: RoleId::new("engineer"),
@@ -44,6 +47,25 @@ fn render_is_deterministic() {
         render_metadata_block(&metadata),
         render_metadata_block(&metadata)
     );
+}
+
+#[test]
+fn repo_qualified_metadata_projection_round_trips() {
+    let metadata = WorkflowMetadata {
+        parents: vec![ArtifactRef::in_repo(
+            RepositoryId::new("repo-service"),
+            ItemNumber::new(12),
+        )],
+        dependencies: vec![ArtifactRef::same_repo(ItemNumber::new(34))],
+        ..WorkflowMetadata::default()
+    };
+
+    let rendered = render_metadata_block(&metadata);
+    assert!(rendered.contains("\"repository_id\": \"repo-service\""));
+    let parsed = parse_metadata_block(&rendered)
+        .expect("renders to parseable block")
+        .expect("block is present");
+    assert_eq!(parsed, metadata);
 }
 
 #[test]

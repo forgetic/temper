@@ -34,7 +34,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness_forge::{CreatePullRequest, Forge, ItemNumber};
 use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
-use harness_workflow::{ArtifactKindId, ArtifactSource, WorkflowMetadata, render_metadata_block};
+use harness_workflow::{
+    ArtifactKindId, ArtifactRef, ArtifactSource, WorkflowMetadata, render_metadata_block,
+};
 use serde::Deserialize;
 
 use crate::common::{build_context, run_or_ignore_stale};
@@ -225,7 +227,7 @@ fn implementation_pr_input(
 ) -> CreatePullRequest {
     let metadata = WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
-        parents: vec![code_number],
+        parents: vec![ArtifactRef::same_repo(code_number)],
         ..WorkflowMetadata::default()
     };
     let body = format!(

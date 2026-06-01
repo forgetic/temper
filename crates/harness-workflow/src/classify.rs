@@ -9,7 +9,7 @@
 //! Classification never mutates Forge state. It is the read-side interpretation
 //! that later phases build transition planning and reconciliation on top of.
 
-use crate::artifact::ArtifactTarget;
+use crate::artifact::{ArtifactRef, ArtifactTarget};
 use crate::ids::{ArtifactKindId, LabelId, StateDimensionId, StateId};
 use crate::metadata::{parse_metadata_block, WorkflowMetadata};
 use crate::relation::RelationKind;
@@ -59,8 +59,9 @@ pub struct ClassifiedRelation {
     pub kind: RelationKind,
     /// Current artifact kind carrying the relation source.
     pub source: ArtifactKindId,
-    /// The linked Forge item number in the same repository.
-    pub target: ItemNumber,
+    /// The linked Forge item. A reference without `repository_id` means the
+    /// target is in the source artifact's repository.
+    pub target: ArtifactRef,
     /// Declared artifact kinds this target item may have for this relation.
     pub target_kinds: Vec<ArtifactKindId>,
 }
@@ -429,17 +430,26 @@ impl<'a> Classifier<'a> {
             &metadata.parents,
             &mut relations,
         );
-        let dependency_targets: &[ItemNumber] = if dependencies.is_empty() {
-            &metadata.dependencies
+        if dependencies.is_empty() {
+            self.push_metadata_relations(
+                source,
+                RelationKind::Dependency,
+                &metadata.dependencies,
+                &mut relations,
+            );
         } else {
-            dependencies
-        };
-        self.push_metadata_relations(
-            source,
-            RelationKind::Dependency,
-            dependency_targets,
-            &mut relations,
-        );
+            let dependency_targets: Vec<ArtifactRef> = dependencies
+                .iter()
+                .copied()
+                .map(ArtifactRef::same_repo)
+                .collect();
+            self.push_metadata_relations(
+                source,
+                RelationKind::Dependency,
+                &dependency_targets,
+                &mut relations,
+            );
+        }
         relations
     }
 
@@ -447,7 +457,7 @@ impl<'a> Classifier<'a> {
         &self,
         source: &ArtifactKindId,
         kind: RelationKind,
-        targets: &[ItemNumber],
+        targets: &[ArtifactRef],
         relations: &mut Vec<ClassifiedRelation>,
     ) {
         if targets.is_empty() {
@@ -467,7 +477,7 @@ impl<'a> Classifier<'a> {
             relations.push(ClassifiedRelation {
                 kind,
                 source: source.clone(),
-                target: *target,
+                target: target.clone(),
                 target_kinds: target_kinds.clone(),
             });
         }

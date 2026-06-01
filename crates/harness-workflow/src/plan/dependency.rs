@@ -7,9 +7,9 @@
 //! dependency-gated work.
 
 use super::{Postcondition, WorkflowEffect};
+use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
 use crate::ids::TransitionId;
-use harness_forge::ItemNumber;
 use std::collections::HashSet;
 
 /// Runtime-supplied resolution status of dependency relation targets.
@@ -17,11 +17,12 @@ use std::collections::HashSet;
 /// `dependency_gate` asks whether an artifact's prerequisite work has landed.
 /// Like the CI signal behind `ci_gate`, "has it landed" is decided by runtime
 /// Forge reads — never inside the pure planner — and supplied here as the set of
-/// item numbers whose work has landed. The planner stays pure: it only checks
-/// set membership against the artifact's typed `dependency` relations.
+/// repo-qualified artifact references whose work has landed. The planner stays
+/// pure: it only checks set membership against the artifact's typed
+/// `dependency` relations.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DependencyStatus {
-    landed: HashSet<ItemNumber>,
+    landed: HashSet<ArtifactRef>,
 }
 
 impl DependencyStatus {
@@ -30,21 +31,27 @@ impl DependencyStatus {
         Self::default()
     }
 
-    /// Builds a status from the item numbers whose work has landed.
-    pub fn landed<I: IntoIterator<Item = ItemNumber>>(items: I) -> Self {
+    /// Builds a status from the artifact references whose work has landed.
+    /// Bare [`harness_forge::ItemNumber`] inputs remain same-repository
+    /// references for backward-compatible call sites.
+    pub fn landed<I, T>(items: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<ArtifactRef>,
+    {
         Self {
-            landed: items.into_iter().collect(),
+            landed: items.into_iter().map(Into::into).collect(),
         }
     }
 
-    /// Marks one item's work as landed.
-    pub fn mark_landed(&mut self, item: ItemNumber) {
-        self.landed.insert(item);
+    /// Marks one artifact's work as landed.
+    pub fn mark_landed(&mut self, item: impl Into<ArtifactRef>) {
+        self.landed.insert(item.into());
     }
 
-    /// Returns whether the given item's work has landed.
-    pub fn is_landed(&self, item: ItemNumber) -> bool {
-        self.landed.contains(&item)
+    /// Returns whether the given artifact's work has landed.
+    pub fn is_landed(&self, item: impl Into<ArtifactRef>) -> bool {
+        self.landed.contains(&item.into())
     }
 }
 

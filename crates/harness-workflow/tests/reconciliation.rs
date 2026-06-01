@@ -8,12 +8,13 @@
 
 mod support;
 
-use harness_forge::ItemNumber;
+use harness_forge::{CreateRepository, Forge, ItemNumber};
 use harness_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactSnapshot, ArtifactSource, CommandId,
-    CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus,
-    InMemoryJournal, Lease, Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy,
-    RoleId, StateDimensionId, StateId, TransitionId, WorkflowEffect, WorkflowMetadata,
+    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource,
+    CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
+    DependencyStatus, InMemoryJournal, Lease, Postcondition, ReconcileFinding, RecoveryAction,
+    RecoveryPolicy, RoleId, StateDimensionId, StateId, TransitionId, WorkflowEffect,
+    WorkflowMetadata,
 };
 use support::{
     add_issue_dependency, block_on, close_issue, create_issue, new_repo, ts, workflow, TestRoot,
@@ -403,6 +404,46 @@ fn reconcile_derives_dependency_status_from_native_links() {
             target: ArtifactSource::Issue { number: blocked },
             transition: TransitionId::new("mark_code_ready"),
         }]
+    );
+}
+
+#[test]
+fn reconcile_keeps_cross_repo_dependency_targets_distinct() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = workflow();
+    let repo = new_repo(&forge);
+    let other_repo = block_on(forge.create_repository(CreateRepository {
+        owner: "acme".into(),
+        name: "other".into(),
+        default_branch: "main".into(),
+        description: None,
+    }))
+    .expect("second repository is created")
+    .id;
+
+    let same_number = create_issue(&forge, &repo, &["code", "ready"], "");
+    close_issue(&forge, &repo, same_number);
+    let other_number = create_issue(&forge, &other_repo, &["code", "ready"], "");
+    close_issue(&forge, &other_repo, other_number);
+    let body = render_metadata_block(&WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        dependencies: vec![ArtifactRef::in_repo(other_repo, other_number)],
+        ..WorkflowMetadata::default()
+    });
+    create_issue(&forge, &repo, &["code", "blocked"], &body);
+
+    let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
+        &forge,
+        &repo,
+        &InMemoryJournal::new(),
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .expect("reconcile reads same-repo records");
+
+    assert!(
+        report.is_clean(),
+        "Phase 1 must not treat a same-number item in the ambient repo as a landed cross-repo target"
     );
 }
 

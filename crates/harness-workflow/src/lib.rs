@@ -98,7 +98,7 @@ pub mod spec;
 pub mod validate;
 pub mod validated;
 
-pub use artifact::ArtifactTarget;
+pub use artifact::{ArtifactRef, ArtifactTarget};
 pub use classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact,
     ClassifiedRelation, Classifier,

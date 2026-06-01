@@ -105,7 +105,9 @@ impl LlmArchitect {
 
         let mut closed = false;
         for parent in metadata.parents {
-            closed |= tools.close_issue(parent).await?;
+            if parent.is_same_repo() {
+                closed |= tools.close_issue(parent.number).await?;
+            }
         }
         Ok(closed)
     }

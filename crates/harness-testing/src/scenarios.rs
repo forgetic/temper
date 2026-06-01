@@ -339,7 +339,12 @@ fn issue_by_title<'a>(issues: &'a [Issue], title: &str) -> Result<&'a Issue, Box
 fn parent_numbers(pull_request: &PullRequest) -> Result<Vec<ItemNumber>, BoxError> {
     let metadata = parse_metadata_block(&pull_request.body)?
         .ok_or_else(|| boxed_error("implementation PR is missing workflow metadata"))?;
-    Ok(metadata.parents)
+    Ok(metadata
+        .parents
+        .into_iter()
+        .filter(|parent| parent.is_same_repo())
+        .map(|parent| parent.number)
+        .collect())
 }
 
 /// A backend-neutral "now" for the quiescence scan.

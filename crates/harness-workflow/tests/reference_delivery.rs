@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, Utc};
 use harness_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use harness_workflow::{
-    compile, render_metadata_block, ArtifactKindId, CiStatus, ClassifiedArtifact,
+    compile, render_metadata_block, ArtifactKindId, ArtifactRef, CiStatus, ClassifiedArtifact,
     ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals, LabelId,
     PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId,
     ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
@@ -324,8 +324,8 @@ fn reference_metadata_relations_classify_to_declared_kinds() {
     let classifier = Classifier::new(&workflow);
     let code_body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("code")),
-        parents: vec![ItemNumber::new(2)],
-        dependencies: vec![ItemNumber::new(3)],
+        parents: vec![ArtifactRef::same_repo(ItemNumber::new(2))],
+        dependencies: vec![ArtifactRef::same_repo(ItemNumber::new(3))],
         ..WorkflowMetadata::default()
     });
     let code = classifier
@@ -341,13 +341,13 @@ fn reference_metadata_relations_classify_to_declared_kinds() {
             ClassifiedRelation {
                 kind: RelationKind::Parent,
                 source: ArtifactKindId::new("code"),
-                target: ItemNumber::new(2),
+                target: ArtifactRef::same_repo(ItemNumber::new(2)),
                 target_kinds: vec![ArtifactKindId::new("design"), ArtifactKindId::new("epic")],
             },
             ClassifiedRelation {
                 kind: RelationKind::Dependency,
                 source: ArtifactKindId::new("code"),
-                target: ItemNumber::new(3),
+                target: ArtifactRef::same_repo(ItemNumber::new(3)),
                 target_kinds: vec![ArtifactKindId::new("code")],
             },
         ]
@@ -355,7 +355,7 @@ fn reference_metadata_relations_classify_to_declared_kinds() {
 
     let pr_body = render_metadata_block(&WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
-        parents: vec![ItemNumber::new(1)],
+        parents: vec![ArtifactRef::same_repo(ItemNumber::new(1))],
         ..WorkflowMetadata::default()
     });
     let pr = classifier
@@ -369,7 +369,7 @@ fn reference_metadata_relations_classify_to_declared_kinds() {
         vec![ClassifiedRelation {
             kind: RelationKind::ProducedPr,
             source: ArtifactKindId::new("implementation_pr"),
-            target: ItemNumber::new(1),
+            target: ArtifactRef::same_repo(ItemNumber::new(1)),
             target_kinds: vec![ArtifactKindId::new("code")],
         }]
     );

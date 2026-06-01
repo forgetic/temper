@@ -8,12 +8,12 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, Issue, IssueState, ItemNumber,
-    PullRequest, PullRequestState,
+    PullRequest, PullRequestState, RepositoryId,
 };
 use harness_workflow::{
-    compile, matches_queue, ArtifactKindId, CiState, CiStatus, ClassifiedArtifact, Classifier,
-    DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId,
-    RawWorkflowSpec, ReviewStatus, RoleId, StateDimensionId, StateId, TransitionId,
+    compile, matches_queue, ArtifactKindId, ArtifactRef, CiState, CiStatus, ClassifiedArtifact,
+    Classifier, DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition,
+    QueueId, RawWorkflowSpec, ReviewStatus, RoleId, StateDimensionId, StateId, TransitionId,
     ValidatedWorkflow, WorkflowEffect,
 };
 
@@ -431,6 +431,20 @@ fn dependency_gate_uses_native_dependency_relations() {
             WorkflowEffect::AddLabel(LabelId::new("ready")),
         ]
     );
+}
+
+#[test]
+fn dependency_status_distinguishes_same_repo_and_cross_repo_targets() {
+    let same_repo = ArtifactRef::same_repo(ItemNumber::new(41));
+    let cross_repo = ArtifactRef::in_repo(RepositoryId::new("repo-other"), ItemNumber::new(41));
+
+    let same_only = DependencyStatus::landed([same_repo.clone()]);
+    assert!(same_only.is_landed(&same_repo));
+    assert!(!same_only.is_landed(&cross_repo));
+
+    let cross_only = DependencyStatus::landed([cross_repo.clone()]);
+    assert!(!cross_only.is_landed(&same_repo));
+    assert!(cross_only.is_landed(&cross_repo));
 }
 
 #[test]

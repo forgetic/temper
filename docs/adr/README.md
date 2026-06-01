@@ -24,3 +24,4 @@ Current ADRs:
 - [ADR 0018: Filesystem backend cross-process concurrency via advisory locking](0018-filesystem-cross-process-concurrency.md)
 - [ADR 0019: Read Forgejo CI status through the password-authenticated web UI](0019-forgejo-ci-read-via-web-ui.md)
 - [ADR 0020: Support ChatGPT (OpenAI Codex) OAuth as an agent auth mode](0020-chatgpt-oauth-agent-auth.md)
+- [ADR 0021: Use repo-qualified artifact references for workflow links](0021-repo-qualified-artifact-references.md)

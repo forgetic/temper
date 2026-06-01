@@ -34,12 +34,13 @@
 //! sequence. The current fields cannot, so this limitation is acceptable.
 //!
 //! Metadata relations ([`WorkflowMetadata::parents`] and fallback
-//! [`WorkflowMetadata::dependencies`]) are stored as Forge item numbers in the
-//! same repository.
+//! [`WorkflowMetadata::dependencies`]) are stored as same-repository Forge item
+//! numbers by default. New metadata may use `{ "repository_id": "...",
+//! "number": 34 }` objects to point at another repository.
 
+use crate::artifact::ArtifactRef;
 use crate::ids::{ArtifactKindId, RoleId};
 use chrono::{DateTime, Utc};
-use harness_forge::ItemNumber;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -60,12 +61,14 @@ pub struct WorkflowMetadata {
     /// Authoritative workflow artifact kind for this Forge artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ArtifactKindId>,
-    /// Parent artifacts, as Forge item numbers in the same repository.
+    /// Parent artifacts. Bare numbers mean the same repository as the source;
+    /// object values may name an explicit target repository.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub parents: Vec<ItemNumber>,
-    /// Fallback dependency artifacts that must land first, as Forge item numbers.
+    pub parents: Vec<ArtifactRef>,
+    /// Fallback dependency artifacts that must land first. Bare numbers mean the
+    /// same repository as the source; object values may name another repository.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<ItemNumber>,
+    pub dependencies: Vec<ArtifactRef>,
     /// Idempotency key used to avoid creating duplicate artifacts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_key: Option<String>,

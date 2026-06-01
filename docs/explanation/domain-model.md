@@ -39,6 +39,10 @@ A pull request proposes changes from a source branch to a target branch. Pull re
 Pull requests also have both a stable `PullRequestId` and a human-facing `ItemNumber`.
 Portable workflows can look pull requests up by repository plus `ItemNumber`, but should store stable IDs for durable synchronization.
 
+## Artifact references
+
+The workflow layer names linked issues and pull requests with an `ArtifactRef`: a portable repository-qualified reference made from a `RepositoryId` and an `ItemNumber`. Existing same-repository links may omit the repository id as a shorthand; readers resolve that default against the artifact carrying the link. Cross-repository links use the explicit repository id.
+
 Only the merge operation can produce the `merged` state.
 Regular pull-request updates may open or close a pull request but cannot mark it merged without a merge record.
 
@@ -50,9 +54,9 @@ Issues and pull requests carry a `Version`: an opaque, monotonic optimistic-conc
 
 Relations are workflow-level links between artifact kinds. A workflow declares allowed relation kinds such as `parent`, `dependency`, and `produced_pr` between artifact kinds.
 
-Dependency links are now native Forge state: issues and pull requests carry the repository item numbers they depend on, and Forge operations add or remove those links idempotently. The workflow classifier combines native dependency numbers with relation declarations to produce typed `dependency` relations.
+Dependency links are now native Forge state for same-repository dependencies: issues and pull requests carry the repository item numbers they depend on, and Forge operations add or remove those links idempotently. The workflow classifier combines native dependency numbers with relation declarations to produce typed same-repository `dependency` relations.
 
-`parent` and `produced_pr` remain metadata-projected because they do not share a portable provider-native representation. The metadata `dependencies` field remains a fallback for older artifacts that have no native dependency links.
+`parent` and `produced_pr` remain metadata-projected because they do not share a portable provider-native representation. Metadata relation fields can carry same-repository item numbers or explicit `ArtifactRef` objects; the metadata `dependencies` field remains a fallback for older artifacts that have no native dependency links.
 
 ## Pull-request reviews
 
