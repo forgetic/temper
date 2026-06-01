@@ -45,6 +45,33 @@ impl From<WakeError> for TriggerError {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct WakeDeliveryReport {
+    targets: u64,
+    sent: u64,
+    failed: u64,
+    failures: Vec<WakeDeliveryFailure>,
+}
+
+impl WakeDeliveryReport {
+    fn outcome(&self) -> &'static str {
+        if self.targets == 0 {
+            "no_sockets"
+        } else if self.sent > 0 {
+            "sent"
+        } else {
+            "all_failed"
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WakeDeliveryFailure {
+    target: String,
+    path: String,
+    error: String,
+}
+
 pub fn run(args: &TriggerArgs) -> Result<(), TriggerError> {
     let webhook_secret = read_secret(&args.webhook_secret_file)?;
     let wake_secret = args
@@ -89,34 +116,65 @@ fn handle_request(
 ) -> HttpResponse {
     match accept_webhook(request, webhook_secret) {
         Ok(hint) => {
-            let mut sent = 0_u64;
-            let mut failed = 0_u64;
-            for socket in wake_sockets(args) {
-                match send_wake(&socket.1, wake_secret) {
-                    Ok(()) => sent += 1,
-                    Err(error) => {
-                        failed += 1;
-                        eprintln!(
-                            "harness-trigger-forgejo: wake '{}' failed: {error}",
-                            socket.0
-                        );
-                    }
-                }
-            }
+            let delivery = deliver_wakes(args, wake_secret);
             eprintln!(
-                "harness-trigger-forgejo: accepted {:?} for {}/{} item {:?}; wake sent={sent} failed={failed}",
+                "harness-trigger-forgejo: webhook accepted kind={:?} repo={}/{} item={:?} wake_outcome={} targets={} sent={} failed={}",
                 hint.kind,
                 hint.repo.owner,
                 hint.repo.name,
-                hint.item.map(ItemNumber::get)
+                hint.item.map(ItemNumber::get),
+                delivery.outcome(),
+                delivery.targets,
+                delivery.sent,
+                delivery.failed
             );
             HttpResponse::new(202, "accepted\n")
         }
         Err(error) => {
-            eprintln!("harness-trigger-forgejo: rejected webhook: {error}");
+            eprintln!("harness-trigger-forgejo: webhook rejected reason={error}");
             HttpResponse::new(401, "rejected\n")
         }
     }
+}
+
+fn deliver_wakes(args: &TriggerArgs, wake_secret: Option<&str>) -> WakeDeliveryReport {
+    let sockets = wake_sockets(args);
+    let mut report = WakeDeliveryReport {
+        targets: sockets.len() as u64,
+        ..WakeDeliveryReport::default()
+    };
+    if sockets.is_empty() {
+        eprintln!(
+            "harness-trigger-forgejo: wake_delivery outcome=no_sockets targets=0 sent=0 failed=0"
+        );
+        return report;
+    }
+    for (target, path) in sockets {
+        match send_wake(&path, wake_secret) {
+            Ok(()) => report.sent = report.sent.saturating_add(1),
+            Err(error) => {
+                report.failed = report.failed.saturating_add(1);
+                let path_text = path.display().to_string();
+                let error_text = error.to_string();
+                eprintln!(
+                    "harness-trigger-forgejo: wake_send_failed target={target} path={path_text} error={error_text}"
+                );
+                report.failures.push(WakeDeliveryFailure {
+                    target,
+                    path: path_text,
+                    error: error_text,
+                });
+            }
+        }
+    }
+    eprintln!(
+        "harness-trigger-forgejo: wake_delivery outcome={} targets={} sent={} failed={}",
+        report.outcome(),
+        report.targets,
+        report.sent,
+        report.failed
+    );
+    report
 }
 
 fn wake_sockets(args: &TriggerArgs) -> Vec<(String, std::path::PathBuf)> {
@@ -379,6 +437,8 @@ impl HttpResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trigger_args::NamedSocket;
+    use std::path::PathBuf;
 
     fn request(body: &[u8], secret: &str, event: &str) -> HttpRequest {
         let mut headers = BTreeMap::new();
@@ -422,5 +482,99 @@ mod tests {
         let hint = accept_webhook(&request(body, "secret", "mystery"), "secret")
             .expect("unknown events wake broadly");
         assert_eq!(hint.kind, ChangeKind::Unknown);
+    }
+
+    fn trigger_args_with_dir(dir: PathBuf) -> TriggerArgs {
+        TriggerArgs {
+            bind: "127.0.0.1:0".parse().expect("valid bind"),
+            webhook_secret_file: PathBuf::from("webhook-secret"),
+            wake_secret_file: None,
+            wake_dir: Some(dir),
+            wake_sockets: Vec::new(),
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "harness-production-trigger-{name}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now()
+                .timestamp_nanos_opt()
+                .expect("timestamp has nanos")
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir is created");
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wake_dir_discovers_socket_created_after_startup() {
+        use std::os::unix::net::UnixDatagram;
+        use std::time::Duration as StdDuration;
+
+        let dir = temp_dir("late-socket");
+        let args = trigger_args_with_dir(dir.clone());
+        assert!(wake_sockets(&args).is_empty());
+        let socket_path = dir.join("engineer.sock");
+        let socket = UnixDatagram::bind(&socket_path).expect("socket binds");
+        socket
+            .set_read_timeout(Some(StdDuration::from_secs(1)))
+            .expect("timeout is set");
+        let body = br#"{"repository":{"full_name":"acme/service"},"issue":{"number":7}}"#;
+
+        let response = handle_request(&request(body, "secret", "issues"), &args, "secret", None);
+
+        assert_eq!(response.status, 202);
+        let mut buf = [0_u8; 32];
+        let size = socket.recv(&mut buf).expect("wake is received");
+        assert_eq!(&buf[..size], b"wake");
+        drop(socket);
+        let _ = std::fs::remove_file(socket_path);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_socket_paths_are_reported_but_webhook_is_accepted() {
+        let dir = temp_dir("missing-socket");
+        let missing = dir.join("missing.sock");
+        let args = TriggerArgs {
+            bind: "127.0.0.1:0".parse().expect("valid bind"),
+            webhook_secret_file: PathBuf::from("webhook-secret"),
+            wake_secret_file: None,
+            wake_dir: None,
+            wake_sockets: vec![NamedSocket {
+                name: "missing".into(),
+                path: missing.clone(),
+            }],
+        };
+        let body = br#"{"repository":{"full_name":"acme/service"},"issue":{"number":7}}"#;
+
+        let report = deliver_wakes(&args, None);
+        let response = handle_request(&request(body, "secret", "issues"), &args, "secret", None);
+
+        assert_eq!(response.status, 202);
+        assert_eq!(report.targets, 1);
+        assert_eq!(report.sent, 0);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.outcome(), "all_failed");
+        assert_eq!(report.failures[0].target, "missing");
+        assert_eq!(report.failures[0].path, missing.display().to_string());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn no_sockets_found_is_a_distinct_delivery_outcome() {
+        let dir = temp_dir("no-sockets");
+        let args = trigger_args_with_dir(dir.clone());
+
+        let report = deliver_wakes(&args, None);
+
+        assert_eq!(report.targets, 0);
+        assert_eq!(report.sent, 0);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.outcome(), "no_sockets");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

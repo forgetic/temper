@@ -202,10 +202,14 @@ async fn drive_async<W: harness_runner::Worker>(
                 }
             }
         }
-        if stop.should_stop() {
-            break;
+        match wait_for_next_tick(&stop, interval, wake.as_ref()).await? {
+            WaitOutcome::PollDeadline => {}
+            WaitOutcome::Stop => break,
+            WaitOutcome::Wake => eprintln!(
+                "harness-worker: worker '{}' consumed authenticated wake; ticking immediately",
+                worker.name()
+            ),
         }
-        wait_for_next_tick(&stop, interval, wake.as_ref()).await?;
     }
 
     Ok(report)
@@ -222,26 +226,33 @@ fn build_wake_listener(args: &WorkerArgs) -> Result<Option<WakeListener>, RunErr
         .map_err(|error| RunError::Backend(error.to_string()))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WaitOutcome {
+    PollDeadline,
+    Stop,
+    Wake,
+}
+
 async fn wait_for_next_tick(
     stop: &StopSignal,
     interval: StdDuration,
     wake: Option<&WakeListener>,
-) -> Result<(), RunError> {
+) -> Result<WaitOutcome, RunError> {
     let deadline = tokio::time::sleep(interval);
     tokio::pin!(deadline);
     loop {
         if stop.should_stop() {
-            return Ok(());
+            return Ok(WaitOutcome::Stop);
         }
         let stop_check = tokio::time::sleep(StdDuration::from_millis(250));
         tokio::pin!(stop_check);
         match wake {
             Some(listener) => {
                 tokio::select! {
-                    _ = &mut deadline => return Ok(()),
+                    _ = &mut deadline => return Ok(WaitOutcome::PollDeadline),
                     _ = &mut stop_check => {},
                     received = listener.recv() => match received {
-                        Ok(()) => return Ok(()),
+                        Ok(()) => return Ok(WaitOutcome::Wake),
                         Err(WakeError::Unauthorized) => {
                             eprintln!("harness-worker: ignored unauthorized wake message");
                         }
@@ -251,7 +262,7 @@ async fn wait_for_next_tick(
             }
             None => {
                 tokio::select! {
-                    _ = &mut deadline => return Ok(()),
+                    _ = &mut deadline => return Ok(WaitOutcome::PollDeadline),
                     _ = &mut stop_check => {},
                 }
             }
@@ -279,5 +290,107 @@ impl StopSignal {
             || self
                 .run_secs
                 .is_some_and(|seconds| self.started.elapsed().as_secs() >= seconds)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::wake::send_wake;
+    use std::path::PathBuf;
+    use std::thread;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "harness-production-worker-{name}-{}-{}.sock",
+            std::process::id(),
+            chrono::Utc::now()
+                .timestamp_nanos_opt()
+                .expect("timestamp has nanos")
+        ));
+        path
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime builds")
+    }
+
+    #[test]
+    fn authenticated_wake_interrupts_long_wait() {
+        let socket = temp_path("authenticated");
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let listener = WakeListener::bind(WakeConfig {
+            socket: socket.clone(),
+            secret: Some("wake-secret".into()),
+        })
+        .expect("listener binds");
+        let stop = StopSignal::new(None, None);
+        let sender = thread::spawn(move || {
+            thread::sleep(StdDuration::from_millis(50));
+            send_wake(&socket, Some("wake-secret")).expect("wake sends");
+        });
+        let start = Instant::now();
+
+        let outcome = runtime
+            .block_on(wait_for_next_tick(
+                &stop,
+                StdDuration::from_secs(60),
+                Some(&listener),
+            ))
+            .expect("wait succeeds");
+        sender.join().expect("sender joins");
+
+        assert_eq!(outcome, WaitOutcome::Wake);
+        assert!(
+            start.elapsed() < StdDuration::from_secs(1),
+            "authenticated wake should beat the long poll interval"
+        );
+    }
+
+    #[test]
+    fn unauthorized_wake_is_ignored_until_stop_or_poll() {
+        let socket = temp_path("unauthorized");
+        let stop_file = temp_path("stop").with_extension("stop");
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let listener = WakeListener::bind(WakeConfig {
+            socket: socket.clone(),
+            secret: Some("wake-secret".into()),
+        })
+        .expect("listener binds");
+        let stop = StopSignal::new(Some(stop_file.clone()), None);
+        let stop_file_for_thread = stop_file.clone();
+        let sender = thread::spawn(move || {
+            thread::sleep(StdDuration::from_millis(50));
+            send_wake(&socket, Some("wrong-secret")).expect("unauthorized wake sends");
+            thread::sleep(StdDuration::from_millis(150));
+            std::fs::write(&stop_file_for_thread, b"stop").expect("stop file writes");
+        });
+        let start = Instant::now();
+
+        let outcome = runtime
+            .block_on(wait_for_next_tick(
+                &stop,
+                StdDuration::from_secs(60),
+                Some(&listener),
+            ))
+            .expect("wait succeeds");
+        sender.join().expect("sender joins");
+
+        assert_eq!(outcome, WaitOutcome::Stop);
+        assert!(
+            start.elapsed() >= StdDuration::from_millis(150),
+            "unauthorized wake must not end the wait"
+        );
+        assert!(
+            start.elapsed() < StdDuration::from_secs(2),
+            "stop backstop should end the test before the poll interval"
+        );
+        let _ = std::fs::remove_file(stop_file);
     }
 }

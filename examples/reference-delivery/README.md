@@ -142,6 +142,10 @@ for the durable topology and real-CI design.
 Open the Forgejo UI at `BASE_URL` (log in as any provisioned role). Watch the
 issue get triaged, the PR open, CI run, the review land, and the merge +
 reconcile labels move. Worker logs land under `logs/` (created at run time).
+With webhooks enabled, `logs/trigger.log` reports `webhook accepted` or
+`webhook rejected` plus `wake_delivery outcome=no_sockets|sent|all_failed`;
+worker logs report `consumed authenticated wake` when a wake shortens the poll
+sleep.
 
 ## Teardown
 

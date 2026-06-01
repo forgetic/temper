@@ -60,12 +60,17 @@ Status legend: ☐ pending · ☑ done
    before a large poll deadline while restarted listeners still converge through
    the poll/tick backstop.
 
-3. ☐ **Phase 3 — Production wake path hardening.**
+3. ☑ **Phase 3 — Production wake path hardening.**
    `prompts/phase-3-production-wake-path.md`
 
    Connect the generic wake driver semantics to the production Unix-datagram
    worker/trigger path. Add focused tests and logs/metrics that make it obvious
-   whether a webhook was accepted, routed, delivered, and consumed.
+   whether a webhook was accepted, routed, delivered, and consumed. Done:
+   production worker waits now distinguish poll deadline, stop, authenticated
+   wake, and ignored unauthorized wake; trigger delivery logs structured
+   accepted/rejected/no-sockets/sent/failed outcomes while discovering
+   `--wake-dir` sockets on each webhook; Unix socket unit tests prove long waits
+   are interrupted only by authenticated wakes.
 
 4. ☐ **Phase 4 — Real Forgejo webhook e2e.**
    `prompts/phase-4-forgejo-e2e.md`
