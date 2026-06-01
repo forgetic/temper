@@ -84,10 +84,12 @@ window, but a wider window can no longer produce a lost-update lease race.
   state is recoverable after a restart: if its effects never landed it is a
   `PartialTransition` to `Repair`; if they already landed it is a `StaleCommand`
   to `MarkReconciled`.
-- **Idempotent create.** `Executor::ensure_issue` and
-  `Executor::ensure_pull_request` stamp the correlation key into the new body
-  before creating, so an issue or PR create that crashes after it lands is found
-  by the retry instead of being duplicated.
+- **Idempotent create.** `Executor::ensure_issue`,
+  `Executor::ensure_issue_with_parent`, and `Executor::ensure_pull_request`
+  stamp the correlation key into the new body before creating, so an issue or PR
+  create that crashes after it lands is found by the retry instead of being
+  duplicated. The parent-aware issue path also ensures a found child issue keeps
+  the repo-qualified parent back-reference needed by cross-repo fan-out.
 - **At-most-once merge.** `MergePullRequest` runs before the label commit point
   and is skipped when the freshly loaded pull request is already merged. A crash
   that lands the merge but loses the response leaves the post-merge labels

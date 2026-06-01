@@ -235,7 +235,7 @@ cannot both win. See `docs/reference/robustness-guarantees.md`.
 
 ## Idempotency
 
-Create operations (`create_issue`, `create_pull_request`, `add_*_comment`, `submit_pull_request_review`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue`, `Executor::ensure_pull_request`, and review idempotency markers; see `docs/reference/workflow-layer.md`. Reviewer requests are already set-like and idempotent. A future revision may add a portable correlation-key contract if it proves broadly useful.
+Create operations (`create_issue`, `create_pull_request`, `add_*_comment`, `submit_pull_request_review`) have no native create-once primitive: each call creates a new resource. Callers that need idempotent creation must implement it above this interface, for example by storing a correlation key in artifact content and searching existing artifacts before creating. The workflow layer does this in `Executor::ensure_issue`, `Executor::ensure_issue_with_parent`, `Executor::ensure_pull_request`, and review idempotency markers; see `docs/reference/workflow-layer.md`. Reviewer requests are already set-like and idempotent. A future revision may add a portable correlation-key contract if it proves broadly useful.
 
 ## Compatibility notes
 

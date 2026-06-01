@@ -82,12 +82,17 @@ Status legend: ☐ pending · ☑ done
    gate signals now preserve repo-qualified targets while runtime resolution
    still handles same-repo targets only until Phase 4.
 
-2. ☐ **Phase 2 — Cross-repo idempotent issue creation + global correlation.**
+2. ☑ **Phase 2 — Cross-repo idempotent issue creation + global correlation.**
    `prompts/phase-2-cross-repo-create.md`
 
    Add an `Agent`/`RoleTools` capability to create-or-find an issue in a named
    target repo keyed by a globally-unique correlation key, with permission-gated
-   authority. Prove no duplication across re-scans and target-repo races.
+   authority. Prove no duplication across re-scans and target-repo races. Done:
+   `global_child_correlation_key` defines the length-prefixed global parent +
+   child-intent key, `RoleTools::ensure_issue_in_repo` targets an explicit repo
+   and embeds a repo-qualified parent back-reference, and memory/filesystem
+   tests prove repeated calls, pre-existing-key repair, visibility errors, and
+   distinct-handle target-repo races converge on one child issue.
 
 3. ☐ **Phase 3 — Architect fan-out planning.**
    `prompts/phase-3-architect-fanout.md`

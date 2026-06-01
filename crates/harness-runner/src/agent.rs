@@ -9,12 +9,13 @@
 use crate::WorkItem;
 use async_trait::async_trait;
 use harness_forge::{
-    CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest,
+    CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest,
     PullRequestQuery, Repository, RepositoryId, UpdateIssue,
 };
 use harness_workflow::{
-    parse_metadata_block, ArtifactSource, EnsureOutcome, ExecutionContext, ExecutionError,
-    ExecutionReport, Executor, RoleId, TransitionId, ValidatedWorkflow, WorkflowMetadata,
+    parse_metadata_block, ArtifactRef, ArtifactSource, EnsureOutcome, ExecutionContext,
+    ExecutionError, ExecutionReport, Executor, RoleId, TransitionId, ValidatedWorkflow,
+    WorkflowMetadata,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -142,6 +143,28 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
             .await
     }
 
+    /// Idempotently opens or finds an issue in `target_repo`.
+    ///
+    /// The target repository is checked through the same Forge handle that the
+    /// worker uses, so authority follows the token's repository visibility and
+    /// write permissions rather than this worker's scan shard. The created or
+    /// found issue carries `correlation_key` plus an explicit repo-qualified
+    /// parent back-reference in its workflow metadata.
+    pub async fn ensure_issue_in_repo(
+        &self,
+        target_repo: &RepositoryId,
+        correlation_key: &str,
+        parent: ArtifactRef,
+        input: CreateIssue,
+    ) -> Result<EnsureOutcome<Issue>, ExecutionError> {
+        self.ensure_target_repo_visible(target_repo).await?;
+        let parent = repo_qualified_parent(self.repo, parent);
+        self.executor
+            .ensure_issue_with_parent(target_repo, correlation_key, Some(parent), input)
+            .await
+            .map_err(|error| annotate_target_repo_error(target_repo, error))
+    }
+
     /// Reads the repository these tools are scoped to.
     pub async fn get_repository(&self) -> Result<Option<Repository>, ForgeError> {
         self.forge.get_repository(self.repo).await
@@ -200,6 +223,41 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         Ok(pull_requests
             .into_iter()
             .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
+    }
+
+    /// Finds an issue in `target_repo` whose workflow metadata carries
+    /// `correlation_key`.
+    pub async fn find_issue_in_repo_by_correlation(
+        &self,
+        target_repo: &RepositoryId,
+        correlation_key: &str,
+    ) -> Result<Option<Issue>, ForgeError> {
+        let issues = self
+            .forge
+            .list_issues(target_repo, Default::default())
+            .await?;
+        Ok(issues
+            .into_iter()
+            .find(|issue| metadata_has_correlation_key(&issue.body, correlation_key)))
+    }
+
+    async fn ensure_target_repo_visible(
+        &self,
+        target_repo: &RepositoryId,
+    ) -> Result<(), ExecutionError> {
+        match self.forge.get_repository(target_repo).await {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(ExecutionError::Backend {
+                message: format!(
+                    "cannot write target repository `{target_repo}`: repository is not visible to this Forge handle or does not exist"
+                ),
+            }),
+            Err(error) => Err(ExecutionError::Backend {
+                message: format!(
+                    "cannot verify access to target repository `{target_repo}`: {error}"
+                ),
+            }),
+        }
     }
 }
 
@@ -266,4 +324,17 @@ fn metadata_has_correlation_key(body: &str, correlation_key: &str) -> bool {
             ..
         })) if key == correlation_key
     )
+}
+
+fn repo_qualified_parent(source_repo: &RepositoryId, parent: ArtifactRef) -> ArtifactRef {
+    ArtifactRef::in_repo(parent.resolved_repository(source_repo), parent.number)
+}
+
+fn annotate_target_repo_error(target_repo: &RepositoryId, error: ExecutionError) -> ExecutionError {
+    match error {
+        ExecutionError::Backend { message } => ExecutionError::Backend {
+            message: format!("cannot ensure issue in target repository `{target_repo}`: {message}"),
+        },
+        other => other,
+    }
 }

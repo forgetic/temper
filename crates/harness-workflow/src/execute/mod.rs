@@ -70,25 +70,25 @@
 //! # Idempotent create
 //!
 //! The current [`Forge`] interface has no native create-once primitive, so
-//! [`Executor::ensure_issue`] and [`Executor::ensure_pull_request`] implement
-//! idempotency in the workflow layer: they stamp a
+//! [`Executor::ensure_issue`], [`Executor::ensure_issue_with_parent`], and
+//! [`Executor::ensure_pull_request`] implement idempotency in the workflow
+//! layer: they stamp a
 //! [correlation key](crate::metadata::WorkflowMetadata::correlation_key) into
 //! the new artifact's metadata block and search existing artifacts for that key
 //! before creating. Retrying with the same key returns the existing artifact
 //! instead of creating a duplicate.
 
 mod apply;
+mod ensure;
 mod signals;
 
 use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, Classifier};
 use crate::context::ExecutionContext;
 use crate::ids::{RoleId, TransitionId};
-use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMetadata};
 use crate::plan::{PlanDiagnostic, PlanError, Postcondition, TransitionPlan, WorkflowEffect};
 use crate::validated::ValidatedWorkflow;
 use harness_forge::{
-    CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestState, RepositoryId, UserId,
+    Forge, ForgeError, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId,
 };
 
 /// Outcome of an idempotent ensure-create operation.
@@ -447,117 +447,6 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             }
         }
     }
-
-    /// Idempotently ensures an issue exists for a correlation key.
-    ///
-    /// Searches existing issues for one whose metadata block carries
-    /// `correlation_key`; if found, returns it unchanged. Otherwise stamps the
-    /// key into the new issue's metadata block and creates it. Retrying with the
-    /// same key therefore returns the existing issue instead of duplicating it.
-    pub async fn ensure_issue(
-        &self,
-        repo_id: &RepositoryId,
-        correlation_key: &str,
-        input: CreateIssue,
-    ) -> Result<EnsureOutcome<Issue>, ExecutionError> {
-        if let Some(existing) = self
-            .find_issue_by_correlation(repo_id, correlation_key)
-            .await?
-        {
-            return Ok(EnsureOutcome::Existing(existing));
-        }
-
-        let body = body_with_correlation_key(&input.body, correlation_key)
-            .map_err(|message| ExecutionError::Backend { message })?;
-        let created = self
-            .forge
-            .create_issue(repo_id, CreateIssue { body, ..input })
-            .await?;
-        Ok(EnsureOutcome::Created(created))
-    }
-
-    /// Idempotently ensures a pull request exists for a correlation key.
-    ///
-    /// Searches existing pull requests for one whose metadata block carries
-    /// `correlation_key`; if found, returns it unchanged. Otherwise stamps the
-    /// key into the new pull request's metadata block and creates it. Retrying
-    /// with the same key therefore returns the existing pull request instead of
-    /// duplicating it.
-    pub async fn ensure_pull_request(
-        &self,
-        repo_id: &RepositoryId,
-        correlation_key: &str,
-        input: CreatePullRequest,
-    ) -> Result<EnsureOutcome<PullRequest>, ExecutionError> {
-        if let Some(existing) = self
-            .find_pull_request_by_correlation(repo_id, correlation_key)
-            .await?
-        {
-            return Ok(EnsureOutcome::Existing(existing));
-        }
-
-        let body = body_with_correlation_key(&input.body, correlation_key)
-            .map_err(|message| ExecutionError::Backend { message })?;
-        let created = self
-            .forge
-            .create_pull_request(repo_id, CreatePullRequest { body, ..input })
-            .await?;
-        Ok(EnsureOutcome::Created(created))
-    }
-
-    /// Finds an issue whose metadata block carries the correlation key.
-    async fn find_issue_by_correlation(
-        &self,
-        repo_id: &RepositoryId,
-        correlation_key: &str,
-    ) -> Result<Option<Issue>, ExecutionError> {
-        let issues = self
-            .forge
-            .list_issues(repo_id, IssueQuery::default())
-            .await?;
-        Ok(issues
-            .into_iter()
-            .find(|issue| metadata_has_correlation_key(&issue.body, correlation_key)))
-    }
-
-    /// Finds a pull request whose metadata block carries the correlation key.
-    async fn find_pull_request_by_correlation(
-        &self,
-        repo_id: &RepositoryId,
-        correlation_key: &str,
-    ) -> Result<Option<PullRequest>, ExecutionError> {
-        let pull_requests = self
-            .forge
-            .list_pull_requests(repo_id, PullRequestQuery::default())
-            .await?;
-        Ok(pull_requests
-            .into_iter()
-            .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
-    }
-}
-
-/// Returns `true` when `body` has a metadata block with `correlation_key`.
-fn metadata_has_correlation_key(body: &str, correlation_key: &str) -> bool {
-    matches!(
-        parse_metadata_block(body),
-        Ok(Some(WorkflowMetadata {
-            correlation_key: Some(ref key),
-            ..
-        })) if key == correlation_key
-    )
-}
-
-/// Returns `body` with `correlation_key` set in its metadata block.
-///
-/// Any existing metadata fields are preserved; only the correlation key is set.
-/// The result round-trips through [`parse_metadata_block`], so a later search
-/// can find the artifact.
-fn body_with_correlation_key(body: &str, correlation_key: &str) -> Result<String, String> {
-    let mut metadata = parse_metadata_block(body)
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default();
-    metadata.correlation_key = Some(correlation_key.to_string());
-    replace_metadata_block(body, &metadata).map_err(|error| error.to_string())
 }
 
 impl ValidatedWorkflow {

@@ -37,10 +37,17 @@
 //! [`WorkflowMetadata::dependencies`]) are stored as same-repository Forge item
 //! numbers by default. New metadata may use `{ "repository_id": "...",
 //! "number": 34 }` objects to point at another repository.
+//!
+//! Cross-repository fan-out uses globally unique correlation keys derived only
+//! from the parent artifact and child intent. [`global_child_correlation_key`]
+//! encodes the stable parent repository id, parent item number, and a
+//! caller-chosen child slug with length prefixes, so re-running the same intent
+//! recomputes the same key without delimiter collisions.
 
 use crate::artifact::ArtifactRef;
 use crate::ids::{ArtifactKindId, RoleId};
 use chrono::{DateTime, Utc};
+use harness_forge::{ItemNumber, RepositoryId};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -82,6 +89,27 @@ impl WorkflowMetadata {
     pub fn is_empty(&self) -> bool {
         self == &WorkflowMetadata::default()
     }
+}
+
+/// Builds the canonical cross-repository child correlation key.
+///
+/// The key is stable for a parent artifact plus child intent and unique across
+/// repositories. `child_slug` is chosen by the planner/agent for one intended
+/// child, such as `api-schema` or `web-client`. Length prefixes make the format
+/// collision-free even if repository ids or slugs contain separators.
+pub fn global_child_correlation_key(
+    parent_repo: &RepositoryId,
+    parent_number: ItemNumber,
+    child_slug: &str,
+) -> String {
+    format!(
+        "parent-repo:{}:{}#parent:{}/child:{}:{}",
+        parent_repo.as_str().len(),
+        parent_repo.as_str(),
+        parent_number.get(),
+        child_slug.len(),
+        child_slug
+    )
 }
 
 /// A claim lease, recording who holds an artifact and until when.

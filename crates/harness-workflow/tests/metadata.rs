@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use harness_forge::{ItemNumber, RepositoryId};
 use harness_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, Lease, MetadataError,
-    RoleId, WorkflowMetadata,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactKindId,
+    ArtifactRef, Lease, MetadataError, RoleId, WorkflowMetadata,
 };
 
 fn ts(value: &str) -> DateTime<Utc> {
@@ -66,6 +66,27 @@ fn repo_qualified_metadata_projection_round_trips() {
         .expect("renders to parseable block")
         .expect("block is present");
     assert_eq!(parsed, metadata);
+}
+
+#[test]
+fn global_child_correlation_key_is_stable_and_delimiter_safe() {
+    let repo = RepositoryId::new("forgejo:acme/service#one");
+    let first = global_child_correlation_key(&repo, ItemNumber::new(7), "api/client");
+    let second = global_child_correlation_key(&repo, ItemNumber::new(7), "api/client");
+    let different_repo = global_child_correlation_key(
+        &RepositoryId::new("forgejo:acme/service"),
+        ItemNumber::new(7),
+        "api/client",
+    );
+    let different_slug = global_child_correlation_key(&repo, ItemNumber::new(7), "api#client");
+
+    assert_eq!(first, second);
+    assert_ne!(first, different_repo);
+    assert_ne!(first, different_slug);
+    assert_eq!(
+        first,
+        "parent-repo:24:forgejo:acme/service#one#parent:7/child:10:api/client"
+    );
 }
 
 #[test]

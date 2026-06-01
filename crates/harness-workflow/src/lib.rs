@@ -120,8 +120,8 @@ pub use lease::{
     LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy, PreparedAcquire,
 };
 pub use metadata::{
-    parse_metadata_block, render_metadata_block, replace_metadata_block, Lease, MetadataError,
-    WorkflowMetadata, METADATA_BEGIN, METADATA_END,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block,
+    replace_metadata_block, Lease, MetadataError, WorkflowMetadata, METADATA_BEGIN, METADATA_END,
 };
 pub use plan::{
     matches_queue, queue_active, CiState, CiStatus, DependencyStatus, GateSignals, MechanicalPlan,
