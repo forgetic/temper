@@ -38,6 +38,8 @@ scenarios from runner test support on:
 - `dependency_chain_mechanically_unblocked()` — code issue B depends on code
   issue A; after A lands and is closed, the mechanical worker removes `blocked`,
   adds `ready`, and B proceeds to its own merged PR.
+- `cross_repo_fanout_converges()` — one parent intake in repo A creates child
+  code issues in repos A and B; both child PRs merge before the parent resolves.
 
 ## Accepted seams
 
@@ -66,8 +68,8 @@ HARNESS_FORGEJO_E2E=1 \
   cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
 ```
 
-These are topology smokes, not new workflow scenarios: repos are independent and
-all use the same compiled reference workflow.
+These include the cross-repo fan-out scenario on the same fixed worker fleet;
+all repos still use the same compiled reference workflow.
 
 ## Related
 

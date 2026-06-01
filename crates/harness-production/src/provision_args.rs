@@ -9,11 +9,13 @@ pub const ADMIN_TOKEN_ENV: &str = "HARNESS_FORGEJO_ADMIN_TOKEN";
 
 pub const USAGE: &str = concat!(
     "harness-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path> ",
-    "[--webhook-url <url> --webhook-secret-file <path>]\n",
+    "[--webhook-url <url> --webhook-secret-file <path>] ",
+    "[--seed-intake yes|no] [--intake-title <title>] [--intake-body-file <path>]\n",
     "  the admin token comes from HARNESS_FORGEJO_ADMIN_TOKEN (required), never argv"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ParseOutcome {
     Run(ProvisionArgs),
     Help,
@@ -28,6 +30,9 @@ pub struct ProvisionArgs {
     pub admin_token: String,
     pub webhook_url: Option<String>,
     pub webhook_secret_file: Option<PathBuf>,
+    pub seed_intake: bool,
+    pub intake_title: Option<String>,
+    pub intake_body_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for ProvisionArgs {
@@ -41,6 +46,9 @@ impl fmt::Debug for ProvisionArgs {
             .field("admin_token", &"<redacted>")
             .field("webhook_url", &self.webhook_url)
             .field("webhook_secret_file", &self.webhook_secret_file)
+            .field("seed_intake", &self.seed_intake)
+            .field("intake_title", &self.intake_title)
+            .field("intake_body_file", &self.intake_body_file)
             .finish()
     }
 }
@@ -109,6 +117,9 @@ where
     let mut out = None;
     let mut webhook_url = None;
     let mut webhook_secret_file = None;
+    let mut seed_intake = true;
+    let mut intake_title = None;
+    let mut intake_body_file = None;
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
@@ -119,6 +130,9 @@ where
             "--out" => out = Some(value_for(&flag, &mut iter)?),
             "--webhook-url" => webhook_url = Some(value_for(&flag, &mut iter)?),
             "--webhook-secret-file" => webhook_secret_file = Some(value_for(&flag, &mut iter)?),
+            "--seed-intake" => seed_intake = parse_bool(&value_for(&flag, &mut iter)?)?,
+            "--intake-title" => intake_title = Some(value_for(&flag, &mut iter)?),
+            "--intake-body-file" => intake_body_file = Some(value_for(&flag, &mut iter)?),
             other => {
                 return Err(ArgsError::new(format!(
                     "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -141,6 +155,9 @@ where
         admin_token,
         webhook_url,
         webhook_secret_file: webhook_secret_file.map(PathBuf::from),
+        seed_intake,
+        intake_title,
+        intake_body_file: intake_body_file.map(PathBuf::from),
     }))
 }
 
@@ -149,6 +166,20 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         .enable_all()
         .build()
         .map_err(|err| RunError::Runtime(err.to_string()))?;
+    let intake_seed = if args.seed_intake {
+        Some(provision::IntakeIssueSeed {
+            title: args
+                .intake_title
+                .clone()
+                .unwrap_or_else(|| provision::DEFAULT_INTAKE_TITLE.into()),
+            body: match &args.intake_body_file {
+                Some(path) => std::fs::read_to_string(path)?,
+                None => provision::DEFAULT_INTAKE_BODY.into(),
+            },
+        })
+    } else {
+        None
+    };
     let (provisioned, issue) = runtime.block_on(provision::provision_and_seed(
         &args.base_url,
         &args.admin_token,
@@ -156,14 +187,18 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         &args.name,
         args.webhook_url.as_deref(),
         args.webhook_secret_file.as_deref(),
+        intake_seed.as_ref(),
     ))?;
     provision::write_secrets_file(&args.out, &provision::format_secrets_env(&provisioned))?;
+    let intake = issue
+        .map(|number| format!("intake issue #{number}"))
+        .unwrap_or_else(|| "no intake issue seeded".to_string());
     Ok(format!(
-        "provisioned {}/{}: {} role(s), intake issue #{}; secrets written to {}",
+        "provisioned {}/{}: {} role(s), {}; secrets written to {}",
         provisioned.owner,
         provisioned.name,
         provisioned.roles.len(),
-        issue,
+        intake,
         args.out.display(),
     ))
 }
@@ -178,6 +213,16 @@ where
 
 fn require(value: Option<String>, flag: &str) -> Result<String, ArgsError> {
     value.ok_or_else(|| ArgsError::new(format!("missing required {flag}\nusage: {USAGE}")))
+}
+
+fn parse_bool(value: &str) -> Result<bool, ArgsError> {
+    match value {
+        "yes" | "true" | "1" => Ok(true),
+        "no" | "false" | "0" => Ok(false),
+        other => Err(ArgsError::new(format!(
+            "--seed-intake expects yes|no, got '{other}'"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -226,8 +271,41 @@ mod tests {
         let ParseOutcome::Run(args) = outcome else {
             panic!("expected run")
         };
+        assert!(args.seed_intake);
         let rendered = format!("{args:?}");
         assert!(!rendered.contains("admin-secret"));
         assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn parse_allows_disabling_or_customizing_seed_intake() {
+        let outcome = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+                "--seed-intake",
+                "no",
+                "--intake-title",
+                "Custom intake",
+                "--intake-body-file",
+                "body.md",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string()),
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert!(!args.seed_intake);
+        assert_eq!(args.intake_title.as_deref(), Some("Custom intake"));
+        assert_eq!(args.intake_body_file, Some(PathBuf::from("body.md")));
     }
 }

@@ -193,7 +193,7 @@ JSON-in-an-HTML-comment is deliberate: it renders invisibly in Forge markdown, n
 
 `render_metadata_block` and `parse_metadata_block` are inverses. Parsing returns `Ok(None)` when no block is present, `Ok(Some(_))` when one parses, and `Err(MetadataError)` when a block is present but unterminated or contains invalid JSON. Relation projections (`parents`, fallback `dependencies`) accept bare Forge item numbers as the same-repository shorthand, or objects of the form `{ "repository_id": "...", "number": 34 }` for explicit cross-repository targets; classifiers type them by consulting declared `relation` primitives.
 
-Cross-repository fan-out correlation keys use `global_child_correlation_key(parent_repo, parent_number, child_slug)`. The canonical string is `parent-repo:<repo-len>:<repo-id>#parent:<number>/child:<slug-len>:<slug>`. It is stable from only the parent artifact plus child intent, globally unique across repositories, and delimiter-safe because repository ids and slugs are length-prefixed.
+Cross-repository fan-out correlation keys use `global_child_correlation_key(parent_repo, parent_number, child_slug)`. The canonical string is `parent-repo:<repo-len>:<repo-id>#parent:<number>/child:<slug-len>:<slug>`. It is stable from only the parent artifact plus child intent, globally unique across repositories, and delimiter-safe because repository ids and slugs are length-prefixed. See [cross-repo workflow contracts](cross-repo-workflows.md) for the complete correlation and relation semantics.
 
 ## Artifact classification
 

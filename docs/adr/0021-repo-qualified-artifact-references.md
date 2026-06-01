@@ -50,9 +50,10 @@ dependency item numbers into same-repository `ArtifactRef`s and preserves
 metadata repo qualifications in `ClassifiedRelation.target`.
 
 Dependency gate planning now compares repo-qualified targets in its
-`DependencyStatus` set. Runtime dependency resolution still resolves
-same-repository targets through the ambient repo. Cross-repository resolution is
-deferred to the later cross-repo aggregation phase.
+`DependencyStatus` set. Runtime dependency resolution initially resolved only
+same-repository targets through the ambient repo; the later cross-repo aggregation
+phase now resolves each explicit target by reading that target's repository
+without changing the Forge trait.
 
 ## Consequences
 
@@ -60,7 +61,8 @@ deferred to the later cross-repo aggregation phase.
   classify as same-repository references.
 - A bare item number and an explicit cross-repository reference with the same
   number are distinct dependency targets.
-- Cross-repo links are representable before runtime aggregation can follow them.
+- Cross-repo links are representable independently from provider-native link
+  features.
 - The Forge trait stays unchanged; future phases can add provider-backed
   cross-repo dependency operations only if a portable need is proven.
 

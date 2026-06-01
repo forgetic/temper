@@ -15,11 +15,26 @@ use crate::{runner_config, workflow};
 
 const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 const LABEL_COLOR: &str = "#ededed";
-const INTAKE_TITLE: &str = "Add a configurable greeting to the service banner";
-const INTAKE_BODY: &str = "As an operator I want the service banner to show a \
+pub const DEFAULT_INTAKE_TITLE: &str = "Add a configurable greeting to the service banner";
+pub const DEFAULT_INTAKE_BODY: &str = "As an operator I want the service banner to show a \
 configurable greeting so I can tell environments apart at a glance.\n\n\
 Acceptance: a `BANNER_GREETING` setting whose value is printed on startup, \
 defaulting to the current text when unset.";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntakeIssueSeed {
+    pub title: String,
+    pub body: String,
+}
+
+impl Default for IntakeIssueSeed {
+    fn default() -> Self {
+        Self {
+            title: DEFAULT_INTAKE_TITLE.into(),
+            body: DEFAULT_INTAKE_BODY.into(),
+        }
+    }
+}
 
 // NOTE: this MUST be a raw string. A normal string literal with `\<newline>`
 // continuations strips the leading whitespace of each continued source line,
@@ -177,6 +192,7 @@ pub async fn seed_intake_issue(
     token: &str,
     owner: &str,
     name: &str,
+    seed: &IntakeIssueSeed,
 ) -> Result<ItemNumber> {
     let workflow = workflow();
     let labels = intake_labels(&workflow);
@@ -198,7 +214,7 @@ pub async fn seed_intake_issue(
         })?;
 
     let existing = forge.list_issues(&repo.id, IssueQuery::default()).await?;
-    if let Some(found) = existing.iter().find(|issue| issue.title == INTAKE_TITLE) {
+    if let Some(found) = existing.iter().find(|issue| issue.title == seed.title) {
         return Ok(found.number);
     }
 
@@ -206,8 +222,8 @@ pub async fn seed_intake_issue(
         .create_issue(
             &repo.id,
             CreateIssue {
-                title: INTAKE_TITLE.into(),
-                body: INTAKE_BODY.into(),
+                title: seed.title.clone(),
+                body: seed.body.clone(),
                 labels,
                 assignees: Vec::new(),
             },
@@ -339,7 +355,8 @@ pub async fn provision_and_seed(
     name: &str,
     webhook_url: Option<&str>,
     webhook_secret_file: Option<&Path>,
-) -> Result<(Provisioned, ItemNumber)> {
+    intake_seed: Option<&IntakeIssueSeed>,
+) -> Result<(Provisioned, Option<ItemNumber>)> {
     let config = runner_config();
     let provisioned = provision_world(
         base_url,
@@ -369,7 +386,11 @@ pub async fn provision_and_seed(
         )
         .await?;
     }
-    let issue = seed_intake_issue(base_url, admin_token, owner, name).await?;
+    let issue = if let Some(seed) = intake_seed {
+        Some(seed_intake_issue(base_url, admin_token, owner, name, seed).await?)
+    } else {
+        None
+    };
     Ok((provisioned, issue))
 }
 

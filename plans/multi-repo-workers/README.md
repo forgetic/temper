@@ -23,10 +23,10 @@ for this plan.
 
 ## Non-goals
 
-- Cross-repository workflow semantics or dependency gates. These are a deliberate
-  follow-on: `plans/cross-repo-workflows/` builds on this fleet substrate once it
-  lands. Phase 3 carries one forward-compatibility constraint for that plan (keep
-  "which repos do I scan" separable from "which repos may I write to"); see
+- Cross-repository workflow semantics or dependency gates. These were a deliberate
+  follow-on: `plans/cross-repo-workflows/` now builds on this fleet substrate and
+  is complete. Phase 3 carried the forward-compatibility constraint for that plan
+  (keep "which repos do I scan" separable from "which repos may I write to"); see
   `prompts/phase-3-production-config.md`.
 - Per-repository workflow definitions. All repos use the compiled reference
   workflow for now.

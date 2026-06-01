@@ -5,7 +5,7 @@
 #   1. a throwaway Forgejo server (SQLite, Actions enabled),
 #   2. a host-mode forgejo-runner producing real CI,
 #   3. admin bootstrap + the production provision/seed binary
-#      (org/users/tokens/repo/labels/CI workflow + one intake issue),
+#      (org/users/tokens/repo/labels/CI workflow + one cross-repo intake issue),
 #   4. one fixed harness-worker pool (one process per workflow role, plus one
 #      mechanical reconciler) scanning every configured repo — all against
 #      Forgejo with real LLM agents and wall time,
@@ -76,8 +76,8 @@ usage() {
     cat <<EOF
 usage: $0 [start|validate-webhooks|validate-multi-repo|smoke-webhooks|stop|help]
 
-  start (default)      boot Forgejo + runner, provision + seed every configured
-                       repo, launch one fixed worker pool, then block until
+  start (default)      boot Forgejo + runner, provision every configured repo,
+                       seed the source intake issue, launch one fixed worker pool, then block until
                        Ctrl-C or the stop-file.
   validate-webhooks    inspect logs/ and report whether webhook wakes were
                        registered, accepted, delivered, consumed, and acted on.
@@ -145,7 +145,7 @@ cmd_stop() {
 # Config knobs whose pre-existing environment value should win over the file
 # (precedence: CLI/env > config/harness.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
-CONFIG_KNOBS="OWNER NAME REPOS BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
+CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
 HARNESS_AGENTS_AUTH HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL \
 HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
 HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
@@ -169,6 +169,10 @@ validate_repo_path() {
 load_config() {
     [ -f "$CONFIG_DIR/harness.env" ] || die "missing $CONFIG_DIR/harness.env"
     # Snapshot any pre-existing env values so they survive the file sourcing.
+    # REPOS is special: an intentionally empty `REPOS=` selects legacy
+    # OWNER/NAME mode, so presence matters even when the value is empty.
+    _repos_was_set=${REPOS+x}
+    _pre_REPOS_VALUE=${REPOS-}
     for _k in $CONFIG_KNOBS; do
         eval "_pre_$_k=\${$_k:-}"
     done
@@ -184,10 +188,15 @@ load_config() {
         eval "_p=\${_pre_$_k}"
         [ -n "$_p" ] && eval "$_k=\$_p"
     done
+    if [ -n "$_repos_was_set" ]; then
+        REPOS=${_pre_REPOS_VALUE}
+    fi
 
     OWNER=${OWNER:-acme}
     NAME=${NAME:-service}
     REPOS=${REPOS:-}
+    CROSS_REPO_INTAKE=${CROSS_REPO_INTAKE:-auto}
+    CROSS_REPO_INTAKE_TITLE=${CROSS_REPO_INTAKE_TITLE:-Coordinate greeting across service and canary}
     BASE_URL=${BASE_URL:-http://127.0.0.1:3000}
     POLL_MS=${POLL_MS:-2000}
     RUN_SECS=${RUN_SECS:-600}
@@ -209,6 +218,8 @@ load_config() {
     _raw_repos=${REPOS:-$OWNER/$NAME}
     CONFIGURED_REPOS=
     WORKER_REPO_ARGS=
+    FIRST_CONFIGURED_REPO=
+    REPO_COUNT=0
     for _repo in $_raw_repos; do
         validate_repo_path "$_repo"
         case " $CONFIGURED_REPOS " in
@@ -216,8 +227,19 @@ load_config() {
         esac
         CONFIGURED_REPOS="${CONFIGURED_REPOS:+$CONFIGURED_REPOS }$_repo"
         WORKER_REPO_ARGS="$WORKER_REPO_ARGS --repo $_repo"
+        [ -z "$FIRST_CONFIGURED_REPO" ] && FIRST_CONFIGURED_REPO=$_repo
+        REPO_COUNT=$((REPO_COUNT + 1))
     done
     [ -n "$CONFIGURED_REPOS" ] || die 'no repositories configured'
+    case "$CROSS_REPO_INTAKE" in
+        auto) [ "$REPO_COUNT" -gt 1 ] && CROSS_REPO_ENABLED=1 || CROSS_REPO_ENABLED=0 ;;
+        1 | yes | true) CROSS_REPO_ENABLED=1 ;;
+        0 | no | false) CROSS_REPO_ENABLED=0 ;;
+        *) die "CROSS_REPO_INTAKE must be auto, 1, or 0" ;;
+    esac
+    if [ "$CROSS_REPO_ENABLED" = "1" ] && [ "$REPO_COUNT" -lt 2 ]; then
+        die 'cross-repo intake requires at least two repos; add REPOS or set CROSS_REPO_INTAKE=0'
+    fi
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
     # Exported so both Go processes inherit it; harmless for the Rust workers.
@@ -476,8 +498,28 @@ boot_trigger() {
 
 # --- Provision + seed ---------------------------------------------------------
 
+repo_slug() {
+    repo_name "$1" | tr -c '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]' | sed 's/^-*//;s/-*$//'
+}
+
+write_cross_repo_intake_body() {
+    _body_file="$RUN_DIR/cross-repo-intake.md"
+    {
+        printf 'As an operator I want one visible greeting change coordinated across these repositories:\n\n'
+        for _repo in $CONFIGURED_REPOS; do
+            _slug=$(repo_slug "$_repo")
+            printf -- '- `%s` (`target_repo`: `forgejo:%s`, child `slug`: `%s`)\n' "$_repo" "$_repo" "$_slug"
+        done
+        printf '\nArchitect guidance: triage this intake with one child code issue per repository listed above. '
+        printf 'Use the exact `target_repo` and stable `slug` values shown, and keep each child scoped to its repository. '
+        printf 'The parent issue should remain blocked until every child issue lands.\n\n'
+        printf 'Acceptance: each repository receives its own implementation PR, CI passes, review approves, and all child PRs merge before this parent resolves.\n'
+    } >"$_body_file"
+    printf '%s\n' "$_body_file"
+}
+
 bootstrap_and_provision() {
-    log 'bootstrapping admin + provisioning every configured repo (org/users/tokens/repo/labels/CI/issue) ...'
+    log 'bootstrapping admin + provisioning every configured repo (org/users/tokens/repo/labels/CI/webhook) ...'
     # Create the admin (tolerate a pre-existing one on a re-run), then mint an
     # all-scoped token. The token stays in a shell variable; it is never echoed
     # and reaches the provision step only via the environment.
@@ -493,21 +535,49 @@ bootstrap_and_provision() {
         _webhook_args="--webhook-url $WEBHOOK_URL --webhook-secret-file $WEBHOOK_SECRET_FILE"
     fi
     : >"$LOG_DIR/provision.log"
+    _cross_body=
+    if [ "$CROSS_REPO_ENABLED" = "1" ]; then
+        _cross_body=$(write_cross_repo_intake_body)
+        log "cross-repo intake enabled: seeding one parent issue in $FIRST_CONFIGURED_REPO"
+    fi
     for _repo in $CONFIGURED_REPOS; do
         _owner=$(repo_owner "$_repo")
         _name=$(repo_name "$_repo")
-        log "provisioning $_repo (labels + CI + seeded intake issue) ..."
-        # _webhook_args intentionally word-split: POSIX sh has no arrays and the
-        # example paths above are controlled by this script/config.
-        # shellcheck disable=SC2086
-        _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
-            --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
-            $_webhook_args) \
-            || die "provisioning $_repo failed"
+        if [ "$CROSS_REPO_ENABLED" = "1" ] && [ "$_repo" != "$FIRST_CONFIGURED_REPO" ]; then
+            log "provisioning $_repo (labels + CI + webhook; no separate intake) ..."
+            # _webhook_args intentionally word-split: POSIX sh has no arrays and the
+            # example paths above are controlled by this script/config.
+            # shellcheck disable=SC2086
+            _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+                --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
+                $_webhook_args --seed-intake no) \
+                || die "provisioning $_repo failed"
+        elif [ "$CROSS_REPO_ENABLED" = "1" ]; then
+            log "provisioning $_repo (labels + CI + cross-repo parent intake) ..."
+            # shellcheck disable=SC2086
+            _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+                --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
+                $_webhook_args --intake-title "$CROSS_REPO_INTAKE_TITLE" \
+                --intake-body-file "$_cross_body") \
+                || die "provisioning $_repo failed"
+        else
+            log "provisioning $_repo (labels + CI + seeded intake issue) ..."
+            # shellcheck disable=SC2086
+            _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+                --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
+                $_webhook_args) \
+                || die "provisioning $_repo failed"
+        fi
         _issue=$(printf '%s\n' "$_status" | sed -n 's/.*intake issue #\([0-9][0-9]*\).*/\1/p')
         {
             printf 'repo=%s %s\n' "$_repo" "$_status"
             [ -n "$_issue" ] && printf 'repo=%s intake_issue_url=%s/%s/issues/%s\n' "$_repo" "$BASE_URL" "$_repo" "$_issue"
+            if [ "$CROSS_REPO_ENABLED" = "1" ] && [ "$_repo" = "$FIRST_CONFIGURED_REPO" ] && [ -n "$_issue" ]; then
+                printf 'repo=%s cross_repo_parent_url=%s/%s/issues/%s\n' "$_repo" "$BASE_URL" "$_repo" "$_issue"
+            fi
+            if [ "$CROSS_REPO_ENABLED" = "1" ] && [ "$_repo" != "$FIRST_CONFIGURED_REPO" ]; then
+                printf 'repo=%s no_intake_seeded=cross-repo-target\n' "$_repo"
+            fi
             if [ "$WEBHOOKS" = "1" ]; then
                 printf 'repo=%s webhook registered url=%s\n' "$_repo" "$WEBHOOK_URL"
             else
@@ -646,8 +716,18 @@ validate_repo_specific_logs() {
     for _repo in $CONFIGURED_REPOS; do
         validate_contains "$_provision_log" "repo=$_repo " \
             "provisioning recorded for $_repo" || _ok=1
-        validate_contains "$_provision_log" "repo=$_repo intake_issue_url=" \
-            "seeded intake issue URL recorded for $_repo" || _ok=1
+        if [ "$CROSS_REPO_ENABLED" = "1" ]; then
+            if [ "$_repo" = "$FIRST_CONFIGURED_REPO" ]; then
+                validate_contains "$_provision_log" "repo=$_repo cross_repo_parent_url=" \
+                    "cross-repo parent issue URL recorded for $_repo" || _ok=1
+            else
+                validate_contains "$_provision_log" "repo=$_repo no_intake_seeded=cross-repo-target" \
+                    "target repo $_repo provisioned without a duplicate intake" || _ok=1
+            fi
+        else
+            validate_contains "$_provision_log" "repo=$_repo intake_issue_url=" \
+                "seeded intake issue URL recorded for $_repo" || _ok=1
+        fi
         if [ "$WEBHOOKS" = "1" ]; then
             validate_contains "$_provision_log" "repo=$_repo webhook registered" \
                 "webhook registration recorded for $_repo" || _ok=1
@@ -766,14 +846,23 @@ monitor() {
     log ''
     log "Forgejo UI:    $BASE_URL  (log in as any provisioned role)"
     log "Worker pool:   one worker per role scans: $CONFIGURED_REPOS"
+    if [ "$CROSS_REPO_ENABLED" = "1" ]; then
+        log "Cross-repo:    one parent intake in $FIRST_CONFIGURED_REPO fans out across the repo set"
+    fi
     log 'Repo issue URLs:'
     for _repo in $CONFIGURED_REPOS; do
         log "  $_repo -> $BASE_URL/$_repo/issues"
     done
     log "Worker logs:   $LOG_DIR/ (role logs include the resolved repo set)"
-    log 'Watch each repo independently: its intake issue should be triaged, a PR'
-    log 'should open, CI should run, review should land, and merge + reconcile labels'
-    log 'should move — all in the Forgejo UI above.'
+    if [ "$CROSS_REPO_ENABLED" = "1" ]; then
+        log 'Watch the source intake issue create one child issue per repo; each child'
+        log 'should open its own PR, pass CI, receive review, merge, and then unblock'
+        log 'the parent aggregation issue.'
+    else
+        log 'Watch each repo independently: its intake issue should be triaged, a PR'
+        log 'should open, CI should run, review should land, and merge + reconcile labels'
+        log 'should move — all in the Forgejo UI above.'
+    fi
     log ''
     log "Press Ctrl-C (or run '$0 stop') to tear everything down."
 

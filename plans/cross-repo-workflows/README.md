@@ -17,6 +17,10 @@ repositories.
 Hand the prompt files to the agent loop **one phase at a time, in order**. Each
 phase should land green and update this README's status.
 
+**Status:** complete. All six phases are done; the cross-repo reference workflow
+is implemented, tested, documented, and demonstrated by the reference-delivery
+example.
+
 ## Goal
 
 An operator files one workflow issue in repository A. If the work spans more
@@ -133,12 +137,18 @@ Status legend: ☐ pending · ☑ done
    the gated Forgejo multiprocess twin (fake and real agents), and the gated
    Forgejo webhook/wake multi-repo regression.
 
-6. ☐ **Phase 6 — Examples and operator docs.**
+6. ☑ **Phase 6 — Examples and operator docs.**
    `prompts/phase-6-examples-and-docs.md`
 
-   Document the cross-repo planning model (Diátaxis), update
-   `examples/reference-delivery/`, and add an agent lesson if the build surfaced
-   one.
+   Done: `docs/explanation/cross-repo-workflows.md` explains architect fan-out,
+   repo-qualified references, per-repo execution, and parent aggregation;
+   `docs/reference/cross-repo-workflows.md` records the global child correlation
+   key and relation/dependency contracts;
+   `docs/how-to/run-cross-repo-reference-delivery-demo.md` gives the operator
+   recipe. `examples/reference-delivery/` now defaults to a
+   two-repo cross-repo intake demo (`CROSS_REPO_INTAKE=auto`), provisioning all
+   repos while seeding one parent issue in the source repo and documenting the
+   walkthrough.
 
 ## Acceptance criteria
 

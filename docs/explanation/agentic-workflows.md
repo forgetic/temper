@@ -25,7 +25,7 @@ A transition is an authorized state change with preconditions and effects. Gener
 
 A gate is a condition that unlocks a transition. For example, a PR may be mergeable only when native CI and review gates both succeed. A gate may be satisfied by a workflow transition, by Forge-projected labels/state, or by a native signal such as CI job conclusions or dependency target state.
 
-A relation links artifacts, such as feature request to epic, epic to design issue, design issue to code issue, and code issue to PR.
+A relation links artifacts, such as feature request to epic, epic to design issue, design issue to code issue, and code issue to PR. Relations can cross repository boundaries through repo-qualified artifact references; see [Cross-repository workflow model](cross-repo-workflows.md).
 
 ## Example delivery workflow
 

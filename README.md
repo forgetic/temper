@@ -8,7 +8,7 @@ Harness provides those rules.
 
 ## In plain English
 
-Harness watches a Forgejo project and asks:
+Harness watches Forgejo projects and asks:
 
 - Which issue or pull request needs attention now?
 - Who should handle it?
@@ -16,6 +16,7 @@ Harness watches a Forgejo project and asks:
 - Has CI passed?
 - Has review approved it?
 - Is it safe to merge?
+- If one intake spans repositories, have all child work items landed?
 
 The answers come from normal Forgejo things: issues, pull requests, labels, comments, reviews, dependencies, CI results, and merges.
 
@@ -63,6 +64,7 @@ Harness is built around that idea:
 
 This repository contains the Rust implementation of Harness, including the workflow runtime, Forgejo support, worker processes, tests, and a reference demo.
 
-The main demo lives in `examples/reference-delivery/`.
+The main demo lives in `examples/reference-delivery/`; by default it shows one
+intake issue fanning out into work across two repositories.
 
 For more background, read `docs/explanation/agentic-workflows.md`.
