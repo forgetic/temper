@@ -79,6 +79,14 @@ Repository timestamps come from the logical clock, not wall-clock time. Each rep
 
 Repository owner/name paths are exact and case-sensitive. `create_repository` rejects empty owner, name, or default branch values and returns `ForgeError::AlreadyExists` for duplicate owner/name paths.
 
+Multi-repository runners must key all backend mutations by the stable
+`RepositoryId`, not by issue or pull-request number alone: item numbers are
+repository-scoped and may repeat across repositories. Runner-owned recovery
+journals are outside the filesystem backend, but when one worker scans multiple
+repositories it must bind one journal to each repository target (or otherwise
+namespace journal command ids by repository) so identical command ids or item
+numbers cannot alias across repos.
+
 ## Per-handle identity
 
 `FilesystemForge::as_user(user)` returns another handle rooted at the same directory but with a handle-local current-user override. Clones of that handle preserve the override; other handles keep their own identity. Operations attributed to the current user — issue/PR creation, comments, reviews, and merges — use the effective user for that handle.

@@ -65,12 +65,18 @@ Status legend: ☐ pending · ☑ done
    `MultiRepoTickReport`/`MultiRepoError` report repository-scoped partial
    failures while continuing remaining repos.
 
-2. ☐ **Phase 2 — Filesystem backend integration tests.**
+2. ☑ **Phase 2 — Filesystem backend integration tests.**
    `prompts/phase-2-filesystem-integration.md`
 
    Exercise the same multi-repo layer on `FilesystemForge` with distinct handles
    and process-style isolation. Prove repository-scoped persistence, leases, and
-   recovery stay independent across repos.
+   recovery stay independent across repos. Done: `harness-runner` now has
+   `tests/multi_repo_filesystem.rs`, covering durable two-repo role progress
+   across fresh handles, per-repo mechanical journals with identical command ids,
+   repo-local lease/dependency recovery after wrapper restart, and filesystem
+   hint wakeups plus missed-hint polling backstop. No repo-keying fixes were
+   needed; the invariant is one `RepositoryId` plus one repository-bound journal
+   per target.
 
 3. ☐ **Phase 3 — Production CLI/config/provisioning.**
    `prompts/phase-3-production-config.md`
