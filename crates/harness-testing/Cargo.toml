@@ -13,6 +13,7 @@ path = "src/bin/harness-testing-worker.rs"
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 harness-agents = { path = "../harness-agents" }
 harness-production = { path = "../harness-production" }

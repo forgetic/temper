@@ -5,12 +5,13 @@
 //! orchestration in runner workers/stages.
 
 use async_trait::async_trait;
-use harness_forge::{Forge, ItemNumber};
+use harness_forge::{CreateIssue, Forge, ItemNumber, RepositoryId};
 use harness_runner::{Agent, AgentError, AgentRegistry, RoleTools, WorkItem};
 use harness_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource,
-    ExecutionError, RoleId, TransitionId, WorkflowMetadata,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactKindId,
+    ArtifactRef, ArtifactSource, ExecutionError, RoleId, TransitionId, WorkflowMetadata,
 };
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -75,6 +76,27 @@ pub struct FakeOwner;
 
 #[derive(Clone, Debug, Default)]
 pub struct FakeHuman;
+
+/// Marker used by deterministic tests to tell the fake architect which child
+/// issues to fan out before applying the normal triage transition.
+pub const ARCHITECT_PLAN_BEGIN: &str = "<!-- harness:architect-plan";
+const ARCHITECT_PLAN_END: &str = "-->";
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ArchitectPlan {
+    #[serde(default)]
+    children: Vec<ArchitectPlanChild>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ArchitectPlanChild {
+    slug: String,
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default, alias = "target_repository")]
+    target_repo: Option<RepositoryId>,
+}
 
 pub fn fake_registry<F>() -> AgentRegistry<F>
 where
@@ -245,7 +267,9 @@ async fn service_architect<F: Forge + ?Sized>(
     close_parent_issues: bool,
 ) -> Result<bool, AgentError> {
     if item.queue.as_str() == "design_triage" && item.kind.as_str() == "intake" {
-        return run_or_ignore_stale(tools, item.target, "triage_to_code").await;
+        let children_changed = fan_out_architect_children(item, tools).await?;
+        let triaged = run_or_ignore_stale(tools, item.target, "triage_to_code").await?;
+        return Ok(children_changed || triaged);
     }
     if item.queue.as_str() == "landed_inbox" && item.kind.as_str() == "implementation_pr" {
         let reconciled = run_or_ignore_stale(tools, item.target, "reconcile_landed").await?;
@@ -255,6 +279,98 @@ async fn service_architect<F: Forge + ?Sized>(
         return Ok(reconciled);
     }
     Ok(false)
+}
+
+async fn fan_out_architect_children<F: Forge + ?Sized>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+) -> Result<bool, AgentError> {
+    let ArtifactSource::Issue { number: parent } = item.target else {
+        return Ok(false);
+    };
+    let Some(issue) = tools.get_issue(parent).await? else {
+        return Ok(false);
+    };
+    let plan = parse_architect_plan(&issue.body)?;
+    let mut changed = false;
+    for child in plan.children {
+        validate_architect_child(&child)?;
+        let target_repo = child
+            .target_repo
+            .clone()
+            .unwrap_or_else(|| tools.repo().clone());
+        let key = global_child_correlation_key(tools.repo(), parent, &child.slug);
+        let outcome = tools
+            .ensure_issue_in_repo(
+                &target_repo,
+                &key,
+                ArtifactRef::same_repo(parent),
+                architect_child_input(&child),
+            )
+            .await?;
+        let child_number = outcome.artifact().number;
+        changed |= outcome.was_created();
+        changed |= tools
+            .add_issue_dependency_metadata(
+                parent,
+                ArtifactRef::in_repo(target_repo.clone(), child_number),
+            )
+            .await?;
+    }
+    Ok(changed)
+}
+
+fn parse_architect_plan(body: &str) -> Result<ArchitectPlan, AgentError> {
+    let Some(start) = body.find(ARCHITECT_PLAN_BEGIN) else {
+        return Ok(ArchitectPlan::default());
+    };
+    let after = &body[start + ARCHITECT_PLAN_BEGIN.len()..];
+    let Some(end) = after.find(ARCHITECT_PLAN_END) else {
+        return Err(AgentError::message(
+            "architect plan block was not terminated with `-->`",
+        ));
+    };
+    serde_json::from_str(after[..end].trim()).map_err(|error| {
+        AgentError::message(format!(
+            "architect plan block contained invalid JSON: {error}"
+        ))
+    })
+}
+
+fn validate_architect_child(child: &ArchitectPlanChild) -> Result<(), AgentError> {
+    if child.slug.trim().is_empty() {
+        return Err(AgentError::message(
+            "architect child slug must not be empty",
+        ));
+    }
+    if child.title.trim().is_empty() {
+        return Err(AgentError::message(format!(
+            "architect child `{}` title must not be empty",
+            child.slug
+        )));
+    }
+    Ok(())
+}
+
+fn architect_child_input(child: &ArchitectPlanChild) -> CreateIssue {
+    CreateIssue {
+        title: child.title.clone(),
+        body: child_body(&child.body),
+        labels: vec!["code".to_string(), "ready".to_string()],
+        assignees: Vec::new(),
+    }
+}
+
+fn child_body(body: &str) -> String {
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        ..WorkflowMetadata::default()
+    };
+    if body.trim().is_empty() {
+        render_metadata_block(&metadata)
+    } else {
+        format!("{body}\n\n{}", render_metadata_block(&metadata))
+    }
 }
 
 async fn close_produced_parent_issues<F: Forge + ?Sized>(

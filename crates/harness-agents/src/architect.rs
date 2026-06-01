@@ -12,9 +12,12 @@
 //! fake — the model only decides *that* the PR should be reconciled.
 
 use async_trait::async_trait;
-use harness_forge::Forge;
+use harness_forge::{CreateIssue, Forge, RepositoryId};
 use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
-use harness_workflow::{ArtifactSource, parse_metadata_block};
+use harness_workflow::{
+    ArtifactKindId, ArtifactRef, ArtifactSource, WorkflowMetadata, global_child_correlation_key,
+    parse_metadata_block, render_metadata_block,
+};
 use serde::Deserialize;
 
 use crate::common::{build_context, run_or_ignore_stale};
@@ -23,15 +26,35 @@ use crate::prompts::ARCHITECT_SYSTEM_PROMPT;
 use crate::provider::ProviderConfig;
 
 /// The action the LLM chose for an architect work item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum ArchitectDecision {
-    /// Triage an intake design issue into ready code work.
-    TriageToCode,
+    /// Triage an intake design issue into ready code work, optionally fanning out
+    /// planned child code issues first.
+    TriageToCode {
+        /// Child issues to ensure before the parent leaves the triage queue.
+        #[serde(default)]
+        children: Vec<PlannedChildIssue>,
+    },
     /// Reconcile a freshly landed implementation pull request.
     ReconcileLanded,
     /// Do nothing (stale, already handled, or not applicable).
     NoAction,
+}
+
+/// One child issue planned by the architect during intake triage.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PlannedChildIssue {
+    /// Stable child intent used in the idempotency key.
+    pub slug: String,
+    /// Issue title for the child work item.
+    pub title: String,
+    /// Issue body for the child work item.
+    #[serde(default)]
+    pub body: String,
+    /// Target repository. Omitted means the same repository as the parent.
+    #[serde(default, alias = "target_repository")]
+    pub target_repo: Option<RepositoryId>,
 }
 
 /// A real architect agent: decide with the LLM, act through [`RoleTools`].
@@ -83,6 +106,47 @@ impl LlmArchitect {
         }
     }
 
+    /// Ensures every planned child issue exists and is linked from the parent.
+    async fn ensure_planned_children<F: Forge + ?Sized>(
+        &self,
+        item: &WorkItem,
+        tools: &RoleTools<'_, F>,
+        children: &[PlannedChildIssue],
+    ) -> Result<bool, AgentError> {
+        if children.is_empty() {
+            return Ok(false);
+        }
+        let ArtifactSource::Issue { number: parent } = item.target else {
+            return Ok(false);
+        };
+        let mut changed = false;
+        for child in children {
+            validate_child(child)?;
+            let target_repo = child
+                .target_repo
+                .clone()
+                .unwrap_or_else(|| tools.repo().clone());
+            let correlation_key = global_child_correlation_key(tools.repo(), parent, &child.slug);
+            let outcome = tools
+                .ensure_issue_in_repo(
+                    &target_repo,
+                    &correlation_key,
+                    ArtifactRef::same_repo(parent),
+                    child_issue_input(child),
+                )
+                .await?;
+            let child_number = outcome.artifact().number;
+            changed |= outcome.was_created();
+            changed |= tools
+                .add_issue_dependency_metadata(
+                    parent,
+                    ArtifactRef::in_repo(target_repo.clone(), child_number),
+                )
+                .await?;
+        }
+        Ok(changed)
+    }
+
     /// Closes every parent issue recorded in the landed PR's workflow metadata.
     /// Mirrors `ClosingArchitect::close_produced_parent_issues`.
     async fn close_produced_parent_issues<F: Forge + ?Sized>(
@@ -113,13 +177,51 @@ impl LlmArchitect {
     }
 }
 
+fn validate_child(child: &PlannedChildIssue) -> Result<(), AgentError> {
+    if child.slug.trim().is_empty() {
+        return Err(AgentError::message(
+            "architect child slug must not be empty",
+        ));
+    }
+    if child.title.trim().is_empty() {
+        return Err(AgentError::message(format!(
+            "architect child `{}` title must not be empty",
+            child.slug
+        )));
+    }
+    Ok(())
+}
+
+fn child_issue_input(child: &PlannedChildIssue) -> CreateIssue {
+    CreateIssue {
+        title: child.title.clone(),
+        body: child_body(&child.body),
+        labels: vec!["code".to_string(), "ready".to_string()],
+        assignees: Vec::new(),
+    }
+}
+
+fn child_body(body: &str) -> String {
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("code")),
+        ..WorkflowMetadata::default()
+    };
+    if body.trim().is_empty() {
+        render_metadata_block(&metadata)
+    } else {
+        format!("{body}\n\n{}", render_metadata_block(&metadata))
+    }
+}
+
 #[async_trait]
 impl<F: Forge + ?Sized> Agent<F> for LlmArchitect {
     async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
         let context = build_context(item, tools).await?;
         match self.decide(item, &context).await? {
-            ArchitectDecision::TriageToCode => {
-                run_or_ignore_stale(tools, item.target, "triage_to_code").await
+            ArchitectDecision::TriageToCode { children } => {
+                let children_changed = self.ensure_planned_children(item, tools, &children).await?;
+                let triaged = run_or_ignore_stale(tools, item.target, "triage_to_code").await?;
+                Ok(children_changed || triaged)
             }
             ArchitectDecision::ReconcileLanded => {
                 let reconciled =
@@ -131,5 +233,53 @@ impl<F: Forge + ?Sized> Agent<F> for LlmArchitect {
             }
             ArchitectDecision::NoAction => Ok(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_legacy_triage_decision_without_children() {
+        let decision: ArchitectDecision = serde_json::from_str(
+            r#"{"action":"triage_to_code","reason":"plain same-repo triage"}"#,
+        )
+        .expect("decision parses");
+
+        assert_eq!(
+            decision,
+            ArchitectDecision::TriageToCode {
+                children: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_triage_decision_with_target_repo_children() {
+        let decision: ArchitectDecision = serde_json::from_str(
+            r#"{
+              "action": "triage_to_code",
+              "children": [
+                {
+                  "slug": "canary",
+                  "target_repo": "forgejo:acme/service-canary",
+                  "title": "Canary work",
+                  "body": "Implement canary side."
+                }
+              ]
+            }"#,
+        )
+        .expect("decision parses");
+
+        let ArchitectDecision::TriageToCode { children } = decision else {
+            panic!("expected triage decision");
+        };
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].slug, "canary");
+        assert_eq!(
+            children[0].target_repo,
+            Some(RepositoryId::new("forgejo:acme/service-canary"))
+        );
     }
 }

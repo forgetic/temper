@@ -13,9 +13,9 @@ use harness_forge::{
     PullRequestQuery, Repository, RepositoryId, UpdateIssue,
 };
 use harness_workflow::{
-    parse_metadata_block, ArtifactRef, ArtifactSource, EnsureOutcome, ExecutionContext,
-    ExecutionError, ExecutionReport, Executor, RoleId, TransitionId, ValidatedWorkflow,
-    WorkflowMetadata,
+    parse_metadata_block, replace_metadata_block, ArtifactRef, ArtifactSource, EnsureOutcome,
+    ExecutionContext, ExecutionError, ExecutionReport, Executor, RoleId, TransitionId,
+    ValidatedWorkflow, WorkflowMetadata,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -163,6 +163,66 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
             .ensure_issue_with_parent(target_repo, correlation_key, Some(parent), input)
             .await
             .map_err(|error| annotate_target_repo_error(target_repo, error))
+    }
+
+    /// Records a metadata fallback dependency from a source issue in this repo
+    /// to `dependency`.
+    ///
+    /// This is the narrow parent→child link used by architect fan-out until a
+    /// backend exposes portable cross-repository native dependency links. The
+    /// update is compare-and-swap guarded and idempotent: retrying the same link
+    /// returns `false` once it is already present.
+    pub async fn add_issue_dependency_metadata(
+        &self,
+        source: ItemNumber,
+        dependency: ArtifactRef,
+    ) -> Result<bool, ExecutionError> {
+        for _ in 0..3 {
+            let Some(issue) = self.get_issue(source).await? else {
+                return Err(ExecutionError::TargetMissing {
+                    target: ArtifactSource::Issue { number: source },
+                });
+            };
+            let mut metadata = parse_metadata_block(&issue.body)
+                .map_err(|error| ExecutionError::Backend {
+                    message: format!("invalid issue workflow metadata: {error}"),
+                })?
+                .unwrap_or_default();
+            if metadata
+                .dependencies
+                .iter()
+                .any(|candidate| candidate == &dependency)
+            {
+                return Ok(false);
+            }
+            metadata.dependencies.push(dependency.clone());
+            let body = replace_metadata_block(&issue.body, &metadata).map_err(|error| {
+                ExecutionError::Backend {
+                    message: format!("could not update issue workflow metadata: {error}"),
+                }
+            })?;
+            match self
+                .forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        body: Some(body),
+                        expected_version: Some(issue.version),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ExecutionError::Backend {
+            message: format!(
+                "could not add dependency metadata to issue #{source} after concurrent updates"
+            ),
+        })
     }
 
     /// Reads the repository these tools are scoped to.

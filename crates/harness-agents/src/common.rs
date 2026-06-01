@@ -15,8 +15,8 @@ use harness_workflow::{ArtifactSource, ExecutionError, TransitionId};
 /// tick (it is not the model's fault).
 ///
 /// This is the **same** context every role sees, so the prompts can rely on a
-/// stable shape: `{queue, kind, artifact:{type, number, title, body, labels,
-/// state}}`.
+/// stable shape: `{repository, queue, kind, artifact:{type, number, title,
+/// body, labels, state}}`.
 pub(crate) async fn build_context<F: Forge + ?Sized>(
     item: &WorkItem,
     tools: &RoleTools<'_, F>,
@@ -45,6 +45,7 @@ pub(crate) async fn build_context<F: Forge + ?Sized>(
     };
 
     let context = serde_json::json!({
+        "repository": tools.repo().as_str(),
         "queue": item.queue.as_str(),
         "kind": item.kind.as_str(),
         "artifact": artifact,

@@ -75,13 +75,16 @@ fn chatgpt_oauth_validation() {
     // ArchitectDecision. This proves a real role agent works on OAuth, not just
     // the trivial run_decision shape.
     let triage_context = serde_json::json!({
+        "repository": "forgejo:acme/service",
         "queue": "design_triage",
-        "kind": "issue",
-        "issue": {
+        "kind": "intake",
+        "artifact": {
+            "type": "issue",
+            "number": 1,
             "title": "Add a configurable timeout to the client",
             "body": "A human asks the team to make the request timeout configurable.",
             "labels": ["untriaged"],
-            "state": "open",
+            "state": "Open",
         }
     })
     .to_string();
@@ -95,9 +98,8 @@ fn chatgpt_oauth_validation() {
         .expect("ChatGPT OAuth architect decision succeeds and parses");
     let role_latency = role_start.elapsed();
     eprintln!("[a3] architect decision: {decision:?} (latency: {role_latency:?})");
-    assert_eq!(
-        decision,
-        ArchitectDecision::TriageToCode,
+    assert!(
+        matches!(decision, ArchitectDecision::TriageToCode { .. }),
         "architect should triage a design_triage intake issue to code"
     );
 

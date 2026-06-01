@@ -94,13 +94,19 @@ Status legend: ☐ pending · ☑ done
    tests prove repeated calls, pre-existing-key repair, visibility errors, and
    distinct-handle target-repo races converge on one child issue.
 
-3. ☐ **Phase 3 — Architect fan-out planning.**
+3. ☑ **Phase 3 — Architect fan-out planning.**
    `prompts/phase-3-architect-fanout.md`
 
    Give the architect a plan format whose child items carry a target repo, the
    create-in-repo tool, and the parent→child cross-repo links. Update the
    architect prompt/decision parsing. Prove a single intake issue fans out into
-   child issues across repos.
+   child issues across repos. Done: real architect decisions now accept optional
+   child issue plans with per-child `target_repo`, create ready code children via
+   `RoleTools::ensure_issue_in_repo` using `global_child_correlation_key`, and
+   add parent metadata dependencies pointing at repo-qualified children; the fake
+   architect mirrors this through deterministic `harness:architect-plan` blocks,
+   with memory-backed tests proving cross-repo fan-out is idempotent and plain
+   same-repo triage is unchanged.
 
 4. ☐ **Phase 4 — Cross-repo dependency aggregation.**
    `prompts/phase-4-cross-repo-aggregation.md`
