@@ -24,7 +24,7 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 
 ## Documentation map
 
-- Start here for process: `docs/how-to/start-a-development-session.md`, then `docs/reference/agent-lessons/README.md`.
+- Start here for process: `docs/how-to/start-a-development-session.md`
 - Development rules and validation: `docs/reference/development-conventions.md`, `docs/how-to/fast-local-iteration.md`, and `docs/how-to/end-a-development-session.md`.
 - Contracts: `docs/reference/forge-interface.md`, `docs/reference/in-memory-backend.md`, `docs/reference/filesystem-backend.md`, `docs/reference/forgejo-backend.md`, `docs/reference/workflow-layer.md`, `docs/reference/cross-repo-workflows.md`, and `docs/reference/robustness-guarantees.md`.
 - Concepts: `docs/explanation/agentic-workflows.md`, `docs/explanation/domain-model.md`, `docs/explanation/cross-repo-workflows.md`, `docs/explanation/reference-workflow.md`, and `docs/explanation/forgejo-e2e-topology.md`.
