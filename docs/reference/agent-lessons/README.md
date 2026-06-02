@@ -52,3 +52,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0021](0021-user-defined-roles-own-prompt-behavior.md) | Keep workflow-role prompts user-defined | agents, workflow, prompts, architecture |
 | [0022](0022-forgejo-review-merge-timestamps-can-tie.md) | Treat equal Forgejo review and merge timestamps as ordered by state | forgejo, testing, reviews, ci |
 | [0023](0023-keep-agents-md-as-orientation-map.md) | Keep `AGENTS.md` as an orientation map | docs, process, agents |
+| [0024](0024-product-manager-is-an-interactive-profile.md) | Treat product-manager as an interactive profile | architecture, agents, workflow, product-chat, interaction |

@@ -13,6 +13,10 @@ __pycache__/
 !/plans/user-defined-role-agents/README.md
 !/plans/user-defined-role-agents/prompts/
 !/plans/user-defined-role-agents/prompts/*.md
+!/plans/interactive-agent-interfaces/
+!/plans/interactive-agent-interfaces/README.md
+!/plans/interactive-agent-interfaces/prompts/
+!/plans/interactive-agent-interfaces/prompts/*.md
 /examples/dogfood/logs/
 /examples/dogfood/run/
 /examples/dogfood/secrets/

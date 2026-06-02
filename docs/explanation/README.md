@@ -6,6 +6,7 @@ Current explanation pages:
 
 - [Domain model](domain-model.md)
 - [Agentic workflows](agentic-workflows.md)
+- [Interactive agent interfaces](interactive-agent-interfaces.md)
 - [Cross-repository workflow model](cross-repo-workflows.md)
 - [End-to-end big picture](end-to-end-big-picture.md)
 - [Runner process split bridge](runner-process-split.md)

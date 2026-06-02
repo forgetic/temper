@@ -1,10 +1,20 @@
 # Product-manager chat local API
 
-Temper provides the product-manager conversation **integration surface**: Forgejo
-transcripts, product-manager LLM turns, draft intake issue storage, and explicit
-filing into the normal workflow. External repositories may build a web app,
-PWA/Android wrapper, Matrix bridge, or voice UI on top of this API. This
-repository does not ship those frontends.
+This API is the current `product-manager` profile instance of Temper's broader
+interaction-plane target. The generic interactive conversation contract is
+specified in
+[Interactive conversation interface](interactive-conversation-interface.md), but
+it has not been extracted into code yet; do not treat the product-manager
+binary, endpoints, or type names as the framework abstraction.
+
+Temper currently provides the product-manager conversation **integration
+surface**: Forgejo transcripts, product-manager LLM turns, draft issue proposals,
+and explicit filing into the normal workflow. Product-manager draft intake issues
+are one proposal type: they are inert until a human explicitly accepts one for
+filing. External web, mobile, Matrix, and voice frontends should eventually target
+the generic interaction API and select `product-manager` as a profile. Until that
+API exists, external repositories may consume this local profile-specific API.
+This repository does not ship those frontends.
 
 ## Command
 
@@ -107,14 +117,15 @@ Response (`200`):
 
 Slash commands are handled locally before the LLM sees a turn. In particular,
 posting `{"message":"/help"}` returns the command list in `reply`; it is not
-mirrored to the transcript and does not call the product-manager model. Only the
-explicit file endpoint creates workflow intake issues.
+mirrored to the transcript and does not call the product-manager model. Only
+explicit acceptance through the file endpoint creates workflow intake issues.
 
 ### `POST /sessions/{id}/drafts/{slug}/file`
 
-Files the latest draft with the matching slug as a normal workflow intake issue
-labeled `untriaged`. The created issue body includes a transcript backlink and a
-hidden idempotency marker. Repeating the same request returns the existing issue.
+Explicitly accepts and files the latest draft with the matching slug as a normal
+workflow intake issue labeled `untriaged`. The created issue body includes a
+transcript backlink and a hidden idempotency marker. Repeating the same request
+returns the existing issue.
 
 Response (`200`):
 

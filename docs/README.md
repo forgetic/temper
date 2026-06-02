@@ -26,13 +26,13 @@ Precise contracts and factual details. Use these to define APIs, invariants, sch
 
 Start with `reference/development-conventions.md` and `reference/agent-lessons/README.md` during session bootstrap, then read task-relevant reference pages.
 
-See `reference/`.
+See `reference/`, including the [interactive conversation interface](reference/interactive-conversation-interface.md).
 
 ## Explanation
 
 Conceptual material, rationale, and trade-offs. Use these to explain why the system is shaped the way it is.
 
-See `explanation/`, including the [runner process split bridge](explanation/runner-process-split.md).
+See `explanation/`, including the [interactive agent interfaces](explanation/interactive-agent-interfaces.md) and [runner process split bridge](explanation/runner-process-split.md).
 
 ## Document size budget
 
