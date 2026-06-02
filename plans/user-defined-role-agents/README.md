@@ -130,7 +130,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    a PR unless the workspace produced a real non-bookkeeping diff. Add tests that
    reject synthetic-only diffs and accept a fixture product-code change.
 
-6. ☐ **Phase 6 — Dogfood/reference migration and re-enable criteria.**
+6. ☑ **Phase 6 — Dogfood/reference migration and re-enable criteria.**
    `prompts/phase-6-dogfood-reference-migration.md`
 
    Move any remaining reference-delivery role prose into workflow config or test

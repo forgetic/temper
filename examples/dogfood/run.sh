@@ -53,11 +53,14 @@ fi
 
 usage() {
     cat <<EOF
-usage: $DISPLAY_SCRIPT [start|product-chat|stop|status|help]
+usage: $DISPLAY_SCRIPT [start|preflight|product-chat|stop|status|help]
 
   start (default)  parse live credentials, register/refresh the webhook, open an
                    ssh reverse tunnel through 'rhi', launch trigger + workers,
                    then block until Ctrl-C.
+  preflight        explain whether engineer automation has the declared tool,
+                   runner binding, diff guard, credentials, and workspace paths;
+                   also reports why code+ready issues are idle when possible.
   product-chat     start an interactive terminal product-manager conversation;
                    pass extra args after the command (for example
                    --transcript-issue 3) to resume a transcript.
@@ -139,6 +142,9 @@ load_config() {
     DOGFOOD_REPO_PERMISSION=${DOGFOOD_REPO_PERMISSION:-write}
     DOGFOOD_CONFIGURE_CI=${DOGFOOD_CONFIGURE_CI:-0}
     DOGFOOD_ENABLE_ENGINEER_AUTOMATION=${DOGFOOD_ENABLE_ENGINEER_AUTOMATION:-0}
+    DOGFOOD_PR_DIFF_GUARD=${DOGFOOD_PR_DIFF_GUARD:-1}
+    DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR=${DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR:-0}
+    DOGFOOD_PREFLIGHT_QUERY_ISSUES=${DOGFOOD_PREFLIGHT_QUERY_ISSUES:-1}
     HARNESS_CODING_WORKSPACE_ROOT=${HARNESS_CODING_WORKSPACE_ROOT:-}
     HARNESS_CODING_WORKSPACE_COMMAND=${HARNESS_CODING_WORKSPACE_COMMAND:-}
     HARNESS_CODING_WORKSPACE_REMOTE=${HARNESS_CODING_WORKSPACE_REMOTE:-origin}
@@ -198,12 +204,33 @@ resolve_product_chat_binary() {
     [ -x "$PRODUCT_CHAT_BIN" ] || die "product-chat binary not found: $PRODUCT_CHAT_BIN"
 }
 
+dogfood_preflight() {
+    _strict=${1:-0}
+    _strict_args=
+    [ "$_strict" = "1" ] && _strict_args="--strict"
+    _query_args=
+    [ "${DOGFOOD_PREFLIGHT_QUERY_ISSUES:-1}" = "1" ] && _query_args="--query-issues"
+    # _strict_args/_query_args are generated flags and intentionally word-split.
+    # shellcheck disable=SC2086
+    python3 "$TOOLS_DIR/preflight.py" \
+        --workflow-file "$WORKSPACE_ROOT/crates/harness-workflow/fixtures/reference-delivery.json" \
+        --roles-env "$ROLES_ENV" \
+        --base-url "$BASE_URL" \
+        --owner "$OWNER" \
+        --repo "$NAME" \
+        --enable-engineer-automation "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" \
+        --workspace-root "$HARNESS_CODING_WORKSPACE_ROOT" \
+        --workspace-command "$HARNESS_CODING_WORKSPACE_COMMAND" \
+        --pr-diff-guard "$DOGFOOD_PR_DIFF_GUARD" \
+        --allow-bookkeeping-only-pr "$DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR" \
+        $_query_args $_strict_args
+}
+
 check_coding_workspace() {
-    [ "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" = "1" ] || return 0
-    [ -n "$HARNESS_CODING_WORKSPACE_ROOT" ] || die 'DOGFOOD_ENABLE_ENGINEER_AUTOMATION=1 requires HARNESS_CODING_WORKSPACE_ROOT'
-    [ -n "$HARNESS_CODING_WORKSPACE_COMMAND" ] || die 'DOGFOOD_ENABLE_ENGINEER_AUTOMATION=1 requires HARNESS_CODING_WORKSPACE_COMMAND'
-    [ -d "$HARNESS_CODING_WORKSPACE_ROOT" ] || die "coding workspace root not found: $HARNESS_CODING_WORKSPACE_ROOT"
-    log "coding workspace: $HARNESS_CODING_WORKSPACE_ROOT (local-git provider)"
+    dogfood_preflight 1 || die 'engineer automation preflight failed'
+    if [ "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" = "1" ]; then
+        log "coding workspace: $HARNESS_CODING_WORKSPACE_ROOT (local-git provider)"
+    fi
 }
 
 check_auth() {
@@ -518,6 +545,17 @@ monitor() {
     done
 }
 
+cmd_preflight() {
+    load_config
+    mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
+    if [ ! -f "$ROLES_ENV" ] && [ -f "$SECRETS_SOURCE" ]; then
+        parse_live_secrets
+    elif [ ! -f "$ROLES_ENV" ]; then
+        log "no $ROLES_ENV yet; credential and live issue checks will explain what is missing"
+    fi
+    dogfood_preflight 0
+}
+
 cmd_product_chat() {
     load_config
     mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
@@ -550,9 +588,9 @@ cmd_start() {
     rm -f "$STOP_FILE"
     RUN_STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     check_auth
+    parse_live_secrets
     check_coding_workspace
     resolve_binaries
-    parse_live_secrets
 
     if [ -f "$WORKERS_PID_FILE" ]; then
         die "a run may already be active; stop it first: $DISPLAY_SCRIPT stop"
@@ -579,6 +617,7 @@ cmd_status() {
 
 case "${1:-start}" in
     start | "") cmd_start ;;
+    preflight) cmd_preflight ;;
     product-chat) shift; cmd_product_chat "$@" ;;
     stop) cmd_stop ;;
     status) cmd_status ;;

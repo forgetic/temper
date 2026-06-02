@@ -17,16 +17,17 @@ The script:
 1. builds the worker/trigger with Cargo's development profile (`target/debug`)
    unless `HARNESS_SKIP_BUILD=1`;
 2. parses the live role credentials into `secrets/roles.env` (`0600`);
-3. starts a local `harness-trigger-forgejo`;
-4. opens `ssh -R` through `rhi` so the remote Forgejo can call the local trigger;
-5. ensures the non-workflow `product` label, grants the role/product users write
+3. runs the engineer-automation preflight;
+4. starts a local `harness-trigger-forgejo`;
+5. opens `ssh -R` through `rhi` so the remote Forgejo can call the local trigger;
+6. ensures the non-workflow `product` label, grants the role/product users write
    access to `ai/harness`, and registers/updates one repo webhook (CI workflow
    commits are explicit; set `DOGFOOD_CONFIGURE_CI=1` only for an intentional
    setup run);
-6. starts a local host-mode `forgejo-runner` registered with the live instance;
-7. starts a tiny dogfood-only intake labeler so newly filed issues get the
+7. starts a local host-mode `forgejo-runner` registered with the live instance;
+8. starts a tiny dogfood-only intake labeler so newly filed issues get the
    workflow's `untriaged` label automatically; and
-8. launches reviewer, human, architect, and mechanical workers; engineer and
+9. launches reviewer, human, architect, and mechanical workers; engineer and
    owner auto-merge workers stay skipped until a coding workspace binding is
    configured and intentionally enabled.
 
@@ -60,6 +61,44 @@ Resume an existing product transcript with:
 ./run.sh product-chat --transcript-issue 3
 ```
 
+## Engineer automation preflight
+
+Run this before trying to re-enable the engineer/owner pair:
+
+```sh
+cd examples/dogfood
+./run.sh preflight
+```
+
+A `code` + `ready` issue is intentionally idle when the report lists blockers
+for any of these keys/paths:
+
+- `DOGFOOD_ENABLE_ENGINEER_AUTOMATION` must stay `0` by default and become `1`
+  only for an intentional live issue.
+- The compiled reference workflow must declare
+  `roles[engineer].external_tools[id=coding_workspace]`.
+- `HARNESS_CODING_WORKSPACE_ROOT` must point at a git checkout and
+  `HARNESS_CODING_WORKSPACE_COMMAND` must name the operator-configured coder.
+- `DOGFOOD_PR_DIFF_GUARD=1` and `DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR=0` keep the
+  reviewer/owner diff guard active.
+- `secrets/roles.env` must be `0600` and contain engineer and owner tokens.
+
+The generated role prompt contains workflow mechanics and authorized actions.
+Reference-delivery behavior (how to implement, when to use `coding_workspace`,
+and why bookkeeping-only PRs are forbidden) comes from the workflow fixture's
+`charter`, `prompt.guidance`, `prompt.tool_guidance`, and `external_tools`
+entries. The LLM never receives shell/file tools; it can only choose a workflow
+action, after which the runner invokes the bound workspace provider.
+
+Focused validation commands:
+
+```sh
+python3 -m unittest discover -s examples/dogfood/tools -p '*_test.py'
+cargo test -p harness-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
+cargo test -p harness-production worker_tests::dogfood_reference_engineer_declares_coding_workspace
+HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
+```
+
 ## Notes
 
 - The webhook remains registered after stop; it will work again on the next run.
@@ -75,8 +114,3 @@ Resume an existing product transcript with:
   profile (`cargo dev-check`).
 - LLM auth defaults to ChatGPT/Codex OAuth from `~/.pi/agent/auth.json` with
   `HARNESS_AGENTS_CODEX_MODEL=gpt-5.5`; run `pi /login openai-codex` if needed.
-- The engineer and owner auto-merge workers are skipped while
-  `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0`. To enable them, configure
-  `HARNESS_CODING_WORKSPACE_ROOT` and `HARNESS_CODING_WORKSPACE_COMMAND`; the
-  workspace must commit a meaningful product diff, and the PR diff guard still
-  rejects bookkeeping-only changes such as `.harness-pr-prep` or `.harness-ci`.

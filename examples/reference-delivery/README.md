@@ -9,11 +9,12 @@ the Forge.
 > (`harness-worker`, `harness-provision-forgejo`, and
 > `harness-trigger-forgejo`) from the `harness-production` crate instead of the
 > `harness-testing` binaries. After the user-defined-role migration, production
-> workers register generic agents from compiled workflow manifests and no longer
-> carry the synthetic reference-delivery engineer/architect behavior needed to
-> drive bookkeeping-only demo PRs. Full intake-to-merged-PR convergence is still
-> validated by the gated `harness-testing` Forgejo e2e fixtures; revalidating this
-> launcher with real coding-workspace bindings is a later phase. See
+> workers register generic agents from compiled workflow manifests. Reference
+> role behavior for this demo lives in `config/workflow.json` and the canonical
+> workflow fixture, not in production prompt constants. Full intake-to-merged-PR
+> convergence still requires a bound coding workspace that can produce real
+> product diffs; the gated `harness-testing` Forgejo e2e fixtures cover the
+> topology. See
 > [`plans/production-binaries/`](../../plans/production-binaries/README.md) and
 > [`plans/multi-repo-workers/`](../../plans/multi-repo-workers/README.md).
 
@@ -31,7 +32,7 @@ This is a **demo**, not a turnkey production deployment:
 - The bundled `config/ci.yml` still demonstrates the old commit-message marker
   shape, but production role workers no longer synthesize PR-head commits. A real
   project must bind a real coding workspace before engineer automation can open
-  meaningful PRs.
+  meaningful PRs; the PR diff guard rejects bookkeeping-only heads.
 - It is the operator-facing, shell-driven version of the same topology covered
   by the gated Forgejo multi-process tests — not new workflow behavior.
 - Cross-repo fan-out is planning and aggregation only. It does **not** add atomic
@@ -85,11 +86,14 @@ examples/reference-delivery/
 └── run.sh               # launcher/teardown (phase B3)
 ```
 
-The workflow **roles** (architect, engineer, reviewer, owner, human) and the
-labels are **not** configured by hand — the workers derive them from
-`config/workflow.json` (the compiled workflow ∩ the role bindings). `config/`
-only carries what an operator must edit (repo, endpoint, cadence, auth, and
-whether the demo seeds one cross-repo parent intake).
+The workflow **roles** (architect, engineer, reviewer, owner, human), labels,
+role guidance, prompt extensions, and external-tool declarations are derived from
+`config/workflow.json` (which tracks the canonical fixture). Generated prompts
+carry mechanics and authority boundaries; `charter`, `prompt.guidance`,
+`prompt.tool_guidance`, and `external_tools` carry the reference-delivery demo's
+user-authored behavior. `config/` otherwise carries what an operator must edit
+(repo, endpoint, cadence, auth, coding workspace binding, and whether the demo
+seeds one cross-repo parent intake).
 
 ## Quick start
 
@@ -125,6 +129,32 @@ Progress is printed without secrets (server URL, seeded issue URLs, where logs
 live); per-process logs land under `logs/`. The checked-in default
 `POLL_MS=120000` is intentional: polling is only the liveness backstop, while
 webhooks should make the demo visibly progress before the two-minute deadline.
+
+## Coding workspace binding
+
+The engineer role declares `coding_workspace` in `config/workflow.json`, but the
+tool is unavailable until the runner binds a provider. Leave the binding empty to
+show the safe idle state: the generated prompt lists no bound external tools and
+ready code work should choose `no_action` rather than opening a PR. To validate a
+real implementation path, provide a clean checkout and command:
+
+```sh
+export HARNESS_CODING_WORKSPACE_ROOT=/path/to/checkout
+export HARNESS_CODING_WORKSPACE_COMMAND='your-coder --context "$HARNESS_CODING_WORKSPACE_CONTEXT"'
+export HARNESS_CODING_WORKSPACE_REMOTE=origin
+export HARNESS_CODING_WORKSPACE_PUSH=1
+./run.sh start
+```
+
+The command receives a JSON context path in `HARNESS_CODING_WORKSPACE_CONTEXT`.
+It must leave a meaningful non-`.harness*` product diff; the local-git provider
+commits and pushes the branch, then the workflow opens the PR through `RoleTools`.
+Use these focused checks before a full demo run:
+
+```sh
+cargo test -p harness-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
+HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
+```
 
 ## What it does
 

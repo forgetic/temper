@@ -12,7 +12,10 @@ setup. The important cross-repo requirements are:
 - every role token must have Forge permission on **all** involved repositories;
 - provisioning must ensure workflow labels, the CI workflow, and webhooks in
   every repository;
-- all repos use the same compiled reference-delivery workflow.
+- all repos use the same compiled reference-delivery workflow;
+- generated prompts provide workflow mechanics, while role behavior and
+  `coding_workspace` guidance come from `config/workflow.json` / the canonical
+  fixture rather than production prompt files.
 
 ## Configure
 
@@ -30,6 +33,17 @@ ARCHITECT_CLOSE_PRODUCED_ISSUES=1
 `auto` enables cross-repo intake seeding when `REPOS` contains more than one
 repo. Set `CROSS_REPO_INTAKE=0` to return to independent per-repo intake issues,
 or set `REPOS=` and `CROSS_REPO_INTAKE=0` for the legacy single-repo smoke.
+
+To let the engineer open real PRs, bind the declared coding workspace tool before
+`start`:
+
+```sh
+export HARNESS_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
+export HARNESS_CODING_WORKSPACE_COMMAND='your-coder --context "$HARNESS_CODING_WORKSPACE_CONTEXT"'
+```
+
+If those are empty, ready code issues may be idle by design: the engineer prompt
+will show no bound external tool, so the safe action is `no_action`.
 
 ## Run
 
@@ -57,7 +71,14 @@ cd examples/reference-delivery
 
 The validator checks per-repo provisioning, webhook registration and delivery,
 worker wake consumption, and that target repos were provisioned without duplicate
-parent intakes. Open Forgejo and confirm:
+parent intakes. For the workspace/PR guard path, also run:
+
+```sh
+cargo test -p harness-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
+HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
+```
+
+Open Forgejo and confirm:
 
 1. the source repo has the parent intake issue;
 2. each repo has one child code issue linked from that parent;

@@ -44,6 +44,25 @@ fn production_real_registry_uses_compiled_manifests_not_prompt_constants() {
 }
 
 #[test]
+fn dogfood_reference_engineer_declares_coding_workspace() {
+    let compiled = crate::workflow().compile();
+    let engineer = compiled
+        .role(&RoleId::new("engineer"))
+        .expect("engineer manifest exists");
+
+    assert!(engineer.external_tools.iter().any(|tool| {
+        tool.id.as_str() == harness_runner::CODING_WORKSPACE_TOOL_ID
+            && tool.description.contains("checked-out repository")
+    }));
+    assert!(engineer
+        .prompt_extension
+        .guidance
+        .as_deref()
+        .is_some_and(|guidance| guidance.contains("real product diff")));
+    assert!(engineer.prompt.render().contains("coding_workspace"));
+}
+
+#[test]
 fn pr_diff_guard_targets_are_derived_from_role_manifests() {
     let compiled = crate::workflow().compile();
 

@@ -57,5 +57,14 @@ workflow file. The worker then commits and pushes the branch and opens the PR vi
 boundary.
 
 Dogfood keeps `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0` by default. Turning it on
-requires the workspace env above and should only be done for an intentional live
-issue whose produced diff passes the guard.
+requires the workspace env above, the engineer role's `coding_workspace`
+declaration, active PR diff guard settings, and role credentials. Check the live
+setup with:
+
+```sh
+cd examples/dogfood
+./run.sh preflight
+```
+
+Only set `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=1` for an intentional live issue
+whose produced diff passes the guard.
