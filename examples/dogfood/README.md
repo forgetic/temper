@@ -33,15 +33,37 @@ discussion/planning records, not workflow intake, and the intake labeler will no
 add `untriaged` to them. Press `Ctrl-C` or run `./run.sh stop` to stop local
 processes.
 
+## Product-manager chat
+
+For the terminal-only product discussion MVP, run:
+
+```sh
+./run.sh product-chat
+```
+
+This builds `harness-product-manager-chat`, parses `secrets/roles.env`, maps the
+human token (or a short-lived admin fallback) to
+`HARNESS_PRODUCT_CHAT_HUMAN_TOKEN`, and maps the separate `product-manager`
+token to `HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN` for product-manager
+replies and confirmed filing. The REPL creates a Forgejo transcript issue labeled
+`product` only, mirrors turns as comments, shows draft intake issues, and files
+one as a normal `untriaged` workflow issue only after `/file <n>`. Resume an existing
+product transcript with:
+
+```sh
+./run.sh product-chat --transcript-issue 3
+```
+
 ## Notes
 
 - The webhook remains registered after stop; it will work again on the next run.
   Polling is set to 10s because this live instance may not emit webhooks for
   every label-only workflow transition.
 - Tokens/passwords are not printed. Logs live in `logs/`.
-- `product-manager` credentials are optional for normal dogfood workers. They are
-  parsed and granted repo access when present, and will be required only by the
-  future `product-chat` command once Phase 3 lands.
+- `product-manager` is a separate non-workflow identity, not the workflow
+  `owner` role. Its credentials are optional for normal dogfood workers, but
+  `./run.sh product-chat` requires `HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER` in
+  `secrets/roles.env` (parsed from the private note).
 - The local runner executes the repo's CI on this machine using Cargo's dev
   profile (`cargo dev-check`).
 - LLM auth defaults to ChatGPT/Codex OAuth from `~/.pi/agent/auth.json` with

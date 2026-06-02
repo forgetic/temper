@@ -143,13 +143,17 @@ Status legend: ☐ pending · ☑ done
    `cargo test -p harness-agents product_manager`, `cargo dev-clippy`, and
    `cargo dev-check`.
 
-3. ☐ **Phase 3 — CLI REPL MVP + Forgejo transcript/filing core.**
+3. ☑ **Phase 3 — CLI REPL MVP + Forgejo transcript/filing core.**
    `prompts/phase-3-cli-mvp.md`
 
-   Add `harness-product-manager-chat` and `examples/dogfood/run.sh product-chat`.
-   The REPL mirrors every turn to Forgejo, displays product-manager draft issues,
-   and supports `/file <n>` to create an idempotent `untriaged` intake issue.
-   This is the first human-facing MVP and intentionally has no web UI.
+   Done: `harness-production` ships `harness-product-manager-chat repl` plus a
+   reusable product-chat core for transcript create/resume, human/product-manager
+   comments, latest drafts, and idempotent `/file <n>` intake creation. The
+   dogfood wrapper exposes `./run.sh product-chat`, reads human/product-manager
+   tokens from env/parsed secrets, and keeps the MVP terminal-only with no web
+   assets. Validation run: `cargo fmt --all`,
+   `cargo test -p harness-production product_chat`, `cargo dev-clippy`, and
+   `cargo dev-check`.
 
 4. ☐ **Phase 4 — Local service API for external frontends.**
    `prompts/phase-4-service-api.md`

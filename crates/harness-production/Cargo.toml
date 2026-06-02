@@ -18,6 +18,10 @@ path = "src/bin/harness-provision-forgejo.rs"
 name = "harness-trigger-forgejo"
 path = "src/bin/harness-trigger-forgejo.rs"
 
+[[bin]]
+name = "harness-product-manager-chat"
+path = "src/bin/harness-product-manager-chat.rs"
+
 [dependencies]
 async-trait.workspace = true
 base64 = "0.22"

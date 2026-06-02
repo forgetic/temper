@@ -37,7 +37,7 @@ DISPLAY_SCRIPT=${HARNESS_DOGFOOD_ORIGINAL:-$SCRIPT_DIR/run.sh}
 # running teardown path (same rationale as examples/reference-delivery).
 if [ "${HARNESS_DOGFOOD_SNAPSHOT:-0}" != "1" ]; then
     case "${1:-start}" in
-        start | "")
+        start | "" | product-chat)
             mkdir -p "$RUN_DIR"
             _snapshot="$RUN_DIR/run.sh.snapshot.$$"
             cp "$SCRIPT_DIR/run.sh" "$_snapshot"
@@ -45,6 +45,7 @@ if [ "${HARNESS_DOGFOOD_SNAPSHOT:-0}" != "1" ]; then
             HARNESS_DOGFOOD_SNAPSHOT=1 \
             HARNESS_DOGFOOD_SCRIPT_DIR="$SCRIPT_DIR" \
             HARNESS_DOGFOOD_ORIGINAL="$DISPLAY_SCRIPT" \
+            HARNESS_DOGFOOD_SNAPSHOT_FILE="$_snapshot" \
                 exec /bin/sh "$_snapshot" "$@"
             ;;
     esac
@@ -52,11 +53,14 @@ fi
 
 usage() {
     cat <<EOF
-usage: $DISPLAY_SCRIPT [start|stop|status|help]
+usage: $DISPLAY_SCRIPT [start|product-chat|stop|status|help]
 
   start (default)  parse live credentials, register/refresh the webhook, open an
                    ssh reverse tunnel through 'rhi', launch trigger + workers,
                    then block until Ctrl-C.
+  product-chat     start an interactive terminal product-manager conversation;
+                   pass extra args after the command (for example
+                   --transcript-issue 3) to resume a transcript.
   stop             stop local workers, trigger, and ssh tunnel from run/*.pid.
   status           show local process/log locations.
   help             show this message.
@@ -134,6 +138,7 @@ load_config() {
     DOGFOOD_REPO_PERMISSION=${DOGFOOD_REPO_PERMISSION:-write}
     HARNESS_WORKER_BIN=${HARNESS_WORKER_BIN:-}
     HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
+    HARNESS_PRODUCT_CHAT_BIN=${HARNESS_PRODUCT_CHAT_BIN:-}
     HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
     HARNESS_FORGEJO_RUNNER_BINARY=${HARNESS_FORGEJO_RUNNER_BINARY:-}
     DOGFOOD_RUNNER=${DOGFOOD_RUNNER:-1}
@@ -174,6 +179,15 @@ resolve_binaries() {
     if [ "$DOGFOOD_RUNNER" = "1" ]; then
         [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN"
     fi
+}
+
+resolve_product_chat_binary() {
+    PRODUCT_CHAT_BIN=${HARNESS_PRODUCT_CHAT_BIN:-$WORKSPACE_ROOT/target/debug/harness-product-manager-chat}
+    if [ "${HARNESS_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring product-chat binary is current (cargo build -p $HARNESS_BUILD_PACKAGE --bin harness-product-manager-chat)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$HARNESS_BUILD_PACKAGE" --bin harness-product-manager-chat ) || die 'cargo build failed'
+    fi
+    [ -x "$PRODUCT_CHAT_BIN" ] || die "product-chat binary not found: $PRODUCT_CHAT_BIN"
 }
 
 check_auth() {
@@ -445,6 +459,11 @@ launch_workers() {
     launch_role_worker architect
 }
 
+cleanup_product_chat_snapshot() {
+    [ -n "${HARNESS_DOGFOOD_SNAPSHOT_FILE:-}" ] && rm -f "$HARNESS_DOGFOOD_SNAPSHOT_FILE" 2>/dev/null || true
+    rmdir "$RUN_DIR" 2>/dev/null || true
+}
+
 monitor() {
     log ''
     log "Dogfood target: $BASE_URL/$REPO"
@@ -462,6 +481,38 @@ monitor() {
             break
         fi
     done
+}
+
+cmd_product_chat() {
+    load_config
+    mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
+    trap cleanup_product_chat_snapshot EXIT INT TERM
+    check_auth
+    resolve_product_chat_binary
+    parse_live_secrets
+
+    _pm_token=${HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER:-}
+    [ -n "$_pm_token" ] || die "product-chat requires HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER in $ROLES_ENV"
+
+    _human_token=${HARNESS_FORGEJO_TOKEN_HUMAN:-}
+    if [ -z "$_human_token" ]; then
+        if [ -n "${DOGFOOD_ADMIN_TOKEN:-}" ]; then
+            _human_token=$DOGFOOD_ADMIN_TOKEN
+        else
+            log 'no human token found; minting a short-lived admin token for the human side of product-chat...'
+            _human_token=$(mint_admin_token) || die 'failed to mint admin token for product-chat'
+        fi
+    fi
+
+    # CODEX_MODEL_ARG/AUTH_FILE_ARG are generated from config by check_auth and
+    # intentionally word-split, matching role-worker launch style.
+    # shellcheck disable=SC2086
+    HARNESS_PRODUCT_CHAT_HUMAN_TOKEN="$_human_token" \
+    HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN="$_pm_token" \
+        "$PRODUCT_CHAT_BIN" repl \
+        --base-url "$BASE_URL" --repo "$REPO" \
+        --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
+        "$@"
 }
 
 cmd_start() {
@@ -498,6 +549,7 @@ cmd_status() {
 
 case "${1:-start}" in
     start | "") cmd_start ;;
+    product-chat) shift; cmd_product_chat "$@" ;;
     stop) cmd_stop ;;
     status) cmd_status ;;
     help | -h | --help) usage ;;
