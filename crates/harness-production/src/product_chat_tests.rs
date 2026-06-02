@@ -24,6 +24,8 @@ struct FakeResponder {
     response: ProductManagerResponse,
 }
 
+struct NeverResponder;
+
 #[async_trait]
 impl ProductManagerResponder for FakeResponder {
     async fn respond(
@@ -31,6 +33,16 @@ impl ProductManagerResponder for FakeResponder {
         _request: &ProductManagerRequest,
     ) -> Result<ProductManagerResponse, ProductManagerError> {
         Ok(self.response.clone())
+    }
+}
+
+#[async_trait]
+impl ProductManagerResponder for NeverResponder {
+    async fn respond(
+        &self,
+        _request: &ProductManagerRequest,
+    ) -> Result<ProductManagerResponse, ProductManagerError> {
+        panic!("local product-chat command should not call the responder")
     }
 }
 
@@ -94,13 +106,20 @@ fn product_chat_env(key: &str) -> Option<String> {
 }
 
 async fn fake_service_app(service_token: Option<&str>) -> ProductChatHttpApp {
+    service_app_with_responder(service_token, Arc::new(fake_responder())).await
+}
+
+async fn service_app_with_responder(
+    service_token: Option<&str>,
+    responder: Arc<dyn ProductManagerResponder>,
+) -> ProductChatHttpApp {
     let (human, product_manager, _repo) = seeded().await;
     let service = ProductChatService::new(
         "https://git.example.test".into(),
         RepositoryPath::new("ai", "harness"),
         Arc::new(human) as Arc<dyn Forge>,
         Arc::new(product_manager) as Arc<dyn Forge>,
-        Arc::new(fake_responder()) as Arc<dyn ProductManagerResponder>,
+        responder,
     );
     ProductChatHttpApp::new(service, service_token.map(str::to_string))
 }
@@ -341,6 +360,27 @@ async fn product_chat_service_post_messages_returns_reply_and_drafts() {
     assert_eq!(
         body["transcript_url"].as_str(),
         Some("https://git.example.test/ai/harness/issues/1")
+    );
+}
+
+#[tokio::test]
+async fn product_chat_service_help_command_is_local() {
+    let app = service_app_with_responder(None, Arc::new(NeverResponder)).await;
+    let session_id = create_service_session(&app).await;
+
+    let response = app
+        .handle_http_request(json_request(
+            "POST",
+            &format!("/sessions/{session_id}/messages"),
+            serde_json::json!({ "message": "/help" }),
+        ))
+        .await;
+
+    assert_eq!(response.status(), 200);
+    let body = response_json(&response);
+    assert_eq!(
+        body["reply"].as_str(),
+        Some("Commands: /drafts, /file <n>, /issue, /help, /quit")
     );
 }
 

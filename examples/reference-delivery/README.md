@@ -30,8 +30,9 @@ This is a **demo**, not a turnkey production deployment:
   [`docs/how-to/run-forgejo-multiprocess-e2e.md`](../../docs/how-to/run-forgejo-multiprocess-e2e.md).
 - CI converges because the bundled `config/ci.yml` gates on a simple
   **commit-message marker** the engineer emits — there is no real
-  toolchain/checkout. A real project swaps in its real CI and a real coding
-  agent.
+  toolchain/checkout. The launcher passes the worker's explicit synthetic-prep
+  and bookkeeping-PR allowances for this throwaway demo only. A real project
+  swaps in its real CI and a real coding agent.
 - It is the operator-facing, shell-driven version of the same topology covered
   by the gated Forgejo multi-process tests — not new workflow behavior.
 - Cross-repo fan-out is planning and aggregation only. It does **not** add atomic

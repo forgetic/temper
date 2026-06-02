@@ -105,7 +105,10 @@ Response (`200`):
 }
 ```
 
-Only the explicit file endpoint creates workflow intake issues.
+Slash commands are handled locally before the LLM sees a turn. In particular,
+posting `{"message":"/help"}` returns the command list in `reply`; it is not
+mirrored to the transcript and does not call the product-manager model. Only the
+explicit file endpoint creates workflow intake issues.
 
 ### `POST /sessions/{id}/drafts/{slug}/file`
 

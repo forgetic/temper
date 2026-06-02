@@ -48,3 +48,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0017](0017-cross-repo-demo-needs-closing-architect.md) | Cross-repo demo needs the closing architect | examples, cross-repo, workflow, agents, forgejo |
 | [0018](0018-snapshot-long-running-shell-launchers.md) | Snapshot long-running shell launchers | examples, process, shell, teardown |
 | [0019](0019-demo-ci-verdicts-follow-github-sha.md) | Demo CI verdicts follow `GITHUB_SHA` | examples, forgejo, ci, testing |
+| [0020](0020-dogfood-prs-must-not-be-bookkeeping-only.md) | Keep dogfood identities and PR diffs honest | dogfood, agents, forgejo, product-chat |

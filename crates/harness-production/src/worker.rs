@@ -8,12 +8,13 @@ use std::time::{Duration as StdDuration, Instant};
 use harness_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use harness_runner::{
-    MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
+    Agent, MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
     RepositoryTarget, RunReport, Worker, WorkerError, WorkerRunReport,
 };
 use harness_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
 
 use crate::forgejo_prep::ForgejoLlmPrep;
+use crate::pr_diff_guard::{GuardRole, PullRequestDiffGuard};
 use crate::wake::{WakeConfig, WakeError, WakeListener};
 use crate::worker_args::{AuthKind, ForgejoArgs, WorkerArgs, WorkerKind};
 use crate::{runner_config, workflow};
@@ -90,6 +91,7 @@ async fn run_role(
     let prep = Arc::new(ForgejoLlmPrep::new(
         args.forgejo.base_url.clone(),
         args.forgejo.token.clone(),
+        args.allow_synthetic_pr_prep,
     )) as Arc<dyn harness_agents::EngineerPrep<dyn Forge>>;
     let registry = harness_agents::real_registry_with(
         provider,
@@ -103,6 +105,7 @@ async fn run_role(
         .get(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
         .clone();
+    let agent = guard_agent_if_needed(args, role, agent);
     let repositories = resolve_repositories(forge, &args.repositories).await?;
     ensure_workflow_labels(forge, &repositories, &compiled).await?;
     log_repository_set("role", role, &repositories);
@@ -116,6 +119,27 @@ async fn run_role(
         config.execution_context(&role_id),
     );
     drive_async(args, &worker).await
+}
+
+fn guard_agent_if_needed(
+    args: &WorkerArgs,
+    role: &str,
+    agent: Arc<dyn Agent<dyn Forge>>,
+) -> Arc<dyn Agent<dyn Forge>> {
+    if args.allow_bookkeeping_only_pr {
+        return agent;
+    }
+    let guard_role = match role {
+        "reviewer" => GuardRole::Reviewer,
+        "owner" => GuardRole::Owner,
+        _ => return agent,
+    };
+    Arc::new(PullRequestDiffGuard::new(
+        agent,
+        guard_role,
+        args.forgejo.base_url.clone(),
+        args.forgejo.token.clone(),
+    )) as Arc<dyn Agent<dyn Forge>>
 }
 
 async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {

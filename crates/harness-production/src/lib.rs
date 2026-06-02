@@ -5,8 +5,10 @@
 
 pub mod forgejo_prep;
 pub mod forgejo_rest;
+pub mod pr_diff_guard;
 pub mod product_chat;
 pub mod product_chat_args;
+pub mod product_chat_commands;
 pub mod product_chat_repl;
 pub mod product_chat_service;
 pub mod provision;

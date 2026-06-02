@@ -50,7 +50,12 @@ def load_env(path: Path) -> dict[str, str]:
 
 
 class ParseSecretsTests(unittest.TestCase):
-    def run_parser(self, note: str, product_manager_user: str | None = None) -> dict[str, str]:
+    def run_parser(
+        self,
+        note: str,
+        product_manager_user: str | None = None,
+        product_chat_human_user: str | None = None,
+    ) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             source = tmp_path / "note.txt"
@@ -69,6 +74,8 @@ class ParseSecretsTests(unittest.TestCase):
             ]
             if product_manager_user is not None:
                 argv.extend(["--product-manager-user", product_manager_user])
+            if product_chat_human_user is not None:
+                argv.extend(["--product-chat-human-user", product_chat_human_user])
             with mock.patch.object(sys, "argv", argv):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(0, parse_secrets.main())
@@ -89,11 +96,21 @@ class ParseSecretsTests(unittest.TestCase):
         self.assertEqual("pm-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER"])
         self.assertIn("pm-bot", env["DOGFOOD_PERMISSION_USERS"].split())
 
+    def test_aliases_product_chat_human_separately_from_workflow_human(self) -> None:
+        env = self.run_parser(REQUIRED_NOTE + "free:free-pw\napi token: free-token\n", product_chat_human_user="free")
+
+        self.assertEqual("bot", env["HARNESS_FORGEJO_USER_HUMAN"])
+        self.assertEqual("bot-token", env["HARNESS_FORGEJO_TOKEN_HUMAN"])
+        self.assertEqual("free", env["HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
+        self.assertEqual("free-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"])
+        self.assertIn("free", env["DOGFOOD_PERMISSION_USERS"].split())
+
     def test_succeeds_without_product_manager_credentials(self) -> None:
         env = self.run_parser(REQUIRED_NOTE)
 
         self.assertNotIn("HARNESS_FORGEJO_USER_PRODUCT_MANAGER", env)
         self.assertNotIn("HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER", env)
+        self.assertNotIn("HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN", env)
         self.assertNotIn("product-manager", env["DOGFOOD_PERMISSION_USERS"].split())
 
 

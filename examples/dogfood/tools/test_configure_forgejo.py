@@ -27,6 +27,14 @@ class FakeForgejo:
 
 
 class ConfigureForgejoTests(unittest.TestCase):
+    def test_ci_workflow_requires_explicit_install_flag(self) -> None:
+        with self.assertRaises(SystemExit):
+            configure_forgejo.validate_ci_args(False, "ci.yml")
+        with self.assertRaises(SystemExit):
+            configure_forgejo.validate_ci_args(True, None)
+        configure_forgejo.validate_ci_args(True, "ci.yml")
+        configure_forgejo.validate_ci_args(False, None)
+
     def test_ensure_product_label_creates_missing_label(self) -> None:
         forgejo = FakeForgejo([])
 

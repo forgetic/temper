@@ -5,6 +5,8 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+/.harness-pr-prep/
+/.harness-ci/
 plans/
 /examples/dogfood/logs/
 /examples/dogfood/run/

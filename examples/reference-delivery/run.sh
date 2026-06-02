@@ -682,6 +682,7 @@ launch_role_worker() {
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+        --allow-synthetic-pr-prep --allow-bookkeeping-only-pr \
         $_wake_args $_architect_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
     _pid=$!

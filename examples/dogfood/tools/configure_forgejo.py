@@ -142,6 +142,13 @@ def list_repo_labels(forgejo: Forgejo, owner: str, repo: str) -> list[dict[str, 
         page += 1
 
 
+def validate_ci_args(install_ci: bool, ci_workflow_file: str | None) -> None:
+    if ci_workflow_file and not install_ci:
+        raise SystemExit("--ci-workflow-file requires explicit --install-ci")
+    if install_ci and not ci_workflow_file:
+        raise SystemExit("--install-ci requires --ci-workflow-file")
+
+
 def ensure_repo_label(forgejo: Forgejo, owner: str, repo: str, name: str, color: str, description: str) -> None:
     labels = list_repo_labels(forgejo, owner, repo)
     existing = next((label for label in labels if label.get("name") == name), None)
@@ -173,6 +180,7 @@ def main() -> int:
     parser.add_argument("--webhook-url")
     parser.add_argument("--webhook-secret-file")
     parser.add_argument("--ci-workflow-file")
+    parser.add_argument("--install-ci", action="store_true")
     parser.add_argument("--default-branch", default="main")
     parser.add_argument("--permission", default="write")
     args = parser.parse_args()
@@ -198,7 +206,8 @@ def main() -> int:
         PRODUCT_LABEL_DESCRIPTION,
     )
 
-    if args.ci_workflow_file:
+    validate_ci_args(args.install_ci, args.ci_workflow_file)
+    if args.install_ci:
         workflow = Path(args.ci_workflow_file).read_text()
         forgejo.api("PATCH", f"/repos/{owner}/{repo}", {"has_actions": True})
         commit_file(

@@ -21,11 +21,28 @@ pub const CI_PASS_MARKER: &str = "[ci-pass]";
 pub struct ForgejoLlmPrep {
     base_url: String,
     token: String,
+    allow_synthetic_bookkeeping: bool,
 }
 
 impl ForgejoLlmPrep {
-    pub fn new(base_url: String, token: String) -> Self {
-        Self { base_url, token }
+    pub fn new(base_url: String, token: String, allow_synthetic_bookkeeping: bool) -> Self {
+        Self {
+            base_url,
+            token,
+            allow_synthetic_bookkeeping,
+        }
+    }
+
+    fn require_synthetic_bookkeeping(&self) -> Result<(), AgentError> {
+        if self.allow_synthetic_bookkeeping {
+            Ok(())
+        } else {
+            Err(AgentError::message(
+                "Forgejo engineer coding path is disabled: refusing to create synthetic \
+                 .harness-pr-prep/.harness-ci commits; wire a real coding workspace or use \
+                 --allow-synthetic-pr-prep only for throwaway demos",
+            ))
+        }
     }
 
     async fn repo_path<F: Forge + ?Sized>(
@@ -61,6 +78,7 @@ impl<F: Forge + ?Sized> harness_agents::EngineerPrep<F> for ForgejoLlmPrep {
         tools: &RoleTools<'_, F>,
         input: &CreatePullRequest,
     ) -> Result<(), AgentError> {
+        self.require_synthetic_bookkeeping()?;
         let (owner, name) = self.repo_path(tools).await?;
         prepare_pull_request_head(&self.base_url, &self.token, &owner, &name, input)
             .await
@@ -81,6 +99,7 @@ impl<F: Forge + ?Sized> harness_agents::EngineerPrep<F> for ForgejoLlmPrep {
         tools: &RoleTools<'_, F>,
         target: ArtifactSource,
     ) -> Result<(), AgentError> {
+        self.require_synthetic_bookkeeping()?;
         let Some(branch) = self.pr_head_branch(tools, target).await? else {
             return Ok(());
         };

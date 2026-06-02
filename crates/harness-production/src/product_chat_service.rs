@@ -1,8 +1,4 @@
 //! Loopback HTTP API for product-manager chat.
-//!
-//! This module exposes the same [`ProductChatSession`](crate::product_chat::ProductChatSession)
-//! core used by the REPL. It intentionally implements only a small JSON API for
-//! trusted local frontends; it does not ship UI assets.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -23,9 +19,9 @@ use crate::product_chat::{
     ProductChatError, ProductChatOpenOptions, ProductChatSession, ProductManagerResponder,
 };
 use crate::product_chat_args::{AuthKind, ProductChatServeArgs};
+use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
 
 const MAX_REQUEST_BYTES: usize = 1_048_576;
-
 type DynSession = ProductChatSession<dyn Forge, dyn Forge, dyn ProductManagerResponder>;
 
 #[derive(Debug)]
@@ -216,6 +212,9 @@ impl ProductChatService {
         let session = sessions
             .get_mut(id)
             .ok_or_else(|| ApiError::not_found("session not found"))?;
+        if let Some(command) = ProductChatCommand::parse(&message) {
+            return handle_local_message_command(session, command);
+        }
         let response = session.send_human_turn(&message).await?;
         Ok(MessageResponse {
             reply: response.reply,
@@ -239,6 +238,33 @@ impl ProductChatService {
             transcript_url: session.transcript_url(),
         })
     }
+}
+
+fn handle_local_message_command(
+    session: &mut DynSession,
+    command: ProductChatCommand<'_>,
+) -> Result<MessageResponse, ApiError> {
+    let reply = match command {
+        ProductChatCommand::Help => COMMAND_HELP.to_string(),
+        ProductChatCommand::Drafts => render_drafts(session.latest_drafts()),
+        ProductChatCommand::Issue => session.transcript_url(),
+        ProductChatCommand::Quit => "Close the client to end this product conversation.".into(),
+        ProductChatCommand::File(_) => {
+            return Err(ApiError::bad_request(
+                "file drafts through POST /sessions/{id}/drafts/{slug}/file",
+            ))
+        }
+        ProductChatCommand::Unknown(command) => {
+            return Err(ApiError::bad_request(format!(
+                "unknown command '{command}'; try /help"
+            )))
+        }
+    };
+    Ok(MessageResponse {
+        reply,
+        drafts: session.latest_drafts().to_vec(),
+        transcript_url: session.transcript_url(),
+    })
 }
 
 pub struct ProductChatHttpApp {

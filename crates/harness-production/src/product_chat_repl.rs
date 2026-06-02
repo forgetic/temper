@@ -11,6 +11,7 @@ use crate::product_chat::{
     ProductChatError, ProductChatOpenOptions, ProductChatSession, ProductManagerResponder,
 };
 use crate::product_chat_args::{AuthKind, ProductChatArgs};
+use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
 
 pub fn run_repl(args: &ProductChatArgs) -> Result<(), ProductChatError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -81,18 +82,15 @@ where
         if input.is_empty() {
             continue;
         }
-        if input == "/quit" {
-            return Ok(());
-        } else if input == "/help" {
-            print_help();
-        } else if input == "/issue" {
-            println!("{}", session.transcript_url());
-        } else if input == "/drafts" {
-            print_drafts(session.latest_drafts());
-        } else if let Some(raw) = input.strip_prefix("/file ") {
-            handle_file_command(session, raw.trim()).await?;
-        } else if input.starts_with('/') {
-            println!("unknown command; try /help");
+        if let Some(command) = ProductChatCommand::parse(input) {
+            match command {
+                ProductChatCommand::Quit => return Ok(()),
+                ProductChatCommand::Help => print_help(),
+                ProductChatCommand::Issue => println!("{}", session.transcript_url()),
+                ProductChatCommand::Drafts => print_drafts(session.latest_drafts()),
+                ProductChatCommand::File(raw) => handle_file_command(session, raw).await?,
+                ProductChatCommand::Unknown(_) => println!("unknown command; try /help"),
+            }
         } else {
             let response = session.send_human_turn(input).await?;
             println!("\nproduct-manager> {}\n", response.reply.trim());
@@ -130,19 +128,9 @@ where
 }
 
 fn print_help() {
-    println!("Commands: /drafts, /file <n>, /issue, /help, /quit");
+    println!("{COMMAND_HELP}");
 }
 
 fn print_drafts(drafts: &[ProductManagerDraftIssue]) {
-    if drafts.is_empty() {
-        println!("Drafts: (none)");
-        return;
-    }
-    println!("Drafts:");
-    for (index, draft) in drafts.iter().enumerate() {
-        println!("[{}] {}", index + 1, draft.title);
-        if let Some(rationale) = draft.rationale.as_deref().filter(|text| !text.is_empty()) {
-            println!("    {rationale}");
-        }
-    }
+    println!("{}", render_drafts(drafts));
 }

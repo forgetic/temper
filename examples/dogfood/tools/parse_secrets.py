@@ -83,6 +83,7 @@ def main() -> int:
     parser.add_argument("--human-user", default="bot")
     parser.add_argument("--mechanical-user", default="bot")
     parser.add_argument("--product-manager-user", default="product-manager")
+    parser.add_argument("--product-chat-human-user", default="")
     args = parser.parse_args()
 
     source = Path(os.path.expanduser(args.source))
@@ -92,6 +93,8 @@ def main() -> int:
 
     roles, meta = parse(source)
     complete_alias(roles, "human", args.human_user.lower())
+    if args.product_chat_human_user.strip():
+        complete_alias(roles, "product-chat-human", args.product_chat_human_user.lower())
     complete_alias(roles, "product-manager", args.product_manager_user.lower())
 
     required = ["architect", "engineer", "reviewer", "owner"]
@@ -103,7 +106,15 @@ def main() -> int:
     for key, value in sorted(meta.items()):
         lines.append(f"DOGFOOD_{env_key(key)}={sh_quote(value)}")
 
-    identity_aliases = ["architect", "engineer", "reviewer", "owner", "human", "product-manager"]
+    identity_aliases = [
+        "architect",
+        "engineer",
+        "reviewer",
+        "owner",
+        "human",
+        "product-chat-human",
+        "product-manager",
+    ]
     for alias in identity_aliases:
         entry = roles.get(alias)
         if not entry or not entry.get("token"):
