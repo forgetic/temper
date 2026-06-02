@@ -4,23 +4,34 @@ use chrono::Duration;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration as StdDuration;
 use temper_forge::RepositoryPath;
+use temper_runner::WorkflowRoleDecisionProcessConfig;
 
 pub const FORGEJO_TOKEN_ENV: &str = "TEMPER_FORGEJO_TOKEN";
 pub const FORGEJO_USERNAME_ENV: &str = "TEMPER_FORGEJO_USERNAME";
 pub const FORGEJO_PASSWORD_ENV: &str = "TEMPER_FORGEJO_PASSWORD";
 pub const AGENTS_AUTH_ENV: &str = "TEMPER_AGENTS_AUTH";
+pub const ROLE_DECISION_COMMAND_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_COMMAND";
+pub const ROLE_DECISION_ARGS_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_ARGS_JSON";
+pub const ROLE_DECISION_CWD_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_CWD";
+pub const ROLE_DECISION_ENV_ALLOWLIST_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST";
+pub const ROLE_DECISION_TIMEOUT_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_TIMEOUT_SECS";
 
 pub const USAGE: &str = concat!(
     "temper-worker --backend forgejo --base-url <url> (--repo <owner/name> [--repo <owner/name> ...] | --repo-list <path>) ",
     "--kind <role|mechanical> [--role <id> --user <handle>] ",
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] ",
+    "[--role-decision-command <path>] [--role-decision-arg <arg>] ",
+    "[--role-decision-env <name>] [--role-decision-cwd <path>] ",
+    "[--role-decision-timeout-secs <n>] ",
     "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>] ",
     "[--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from TEMPER_FORGEJO_TOKEN; optional web UI credentials ",
-    "come from TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD"
+    "come from TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD; optional role ",
+    "decision process comes from TEMPER_WORKER_ROLE_DECISION_*"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,7 +73,7 @@ impl fmt::Debug for ForgejoArgs {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct WorkerArgs {
     pub kind: WorkerKind,
     pub forgejo: ForgejoArgs,
@@ -81,9 +92,36 @@ pub struct WorkerArgs {
     pub auth_file: Option<PathBuf>,
     pub wake_socket: Option<PathBuf>,
     pub wake_secret_file: Option<PathBuf>,
+    pub role_decision_process: Option<WorkflowRoleDecisionProcessConfig>,
     /// Allows reviewer/owner agents to approve or merge a PR whose changed files
     /// are only Temper bookkeeping paths. Intended only with synthetic demos.
     pub allow_bookkeeping_only_pr: bool,
+}
+
+impl fmt::Debug for WorkerArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerArgs")
+            .field("kind", &self.kind)
+            .field("forgejo", &self.forgejo)
+            .field("owner", &self.owner)
+            .field("name", &self.name)
+            .field("repositories", &self.repositories)
+            .field("poll_interval", &self.poll_interval)
+            .field("stop_file", &self.stop_file)
+            .field("run_secs", &self.run_secs)
+            .field("auth", &self.auth)
+            .field("codex_model", &self.codex_model)
+            .field("auth_file", &self.auth_file)
+            .field("wake_socket", &self.wake_socket)
+            .field("wake_secret_file", &self.wake_secret_file)
+            .field(
+                "role_decision_process",
+                &self.role_decision_process.as_ref().map(|_| "<configured>"),
+            )
+            .field("allow_bookkeeping_only_pr", &self.allow_bookkeeping_only_pr)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,6 +179,7 @@ struct RawArgs {
     auth_file: Option<String>,
     wake_socket: Option<String>,
     wake_secret_file: Option<String>,
+    role_decision: RawRoleDecisionProcessArgs,
     allow_bookkeeping_only_pr: bool,
 }
 
@@ -169,6 +208,18 @@ impl RawArgs {
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
                 "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
+                "--role-decision-command" => {
+                    raw.role_decision.command = Some(value_for(&flag, &mut iter)?)
+                }
+                "--role-decision-arg" => raw.role_decision.args.push(value_for(&flag, &mut iter)?),
+                "--role-decision-cwd" => raw.role_decision.cwd = Some(value_for(&flag, &mut iter)?),
+                "--role-decision-env" => raw
+                    .role_decision
+                    .env_allowlist
+                    .push(value_for(&flag, &mut iter)?),
+                "--role-decision-timeout-secs" => {
+                    raw.role_decision.timeout_secs = Some(value_for(&flag, &mut iter)?)
+                }
                 "--allow-bookkeeping-only-pr" => raw.allow_bookkeeping_only_pr = true,
                 other => {
                     return Err(ArgsError::new(format!(
@@ -211,6 +262,11 @@ impl RawArgs {
             username: non_empty_env(env, FORGEJO_USERNAME_ENV),
             password: non_empty_env(env, FORGEJO_PASSWORD_ENV),
         };
+        let role_decision_process = if matches!(kind, WorkerKind::Role { .. }) {
+            self.role_decision.into_config(env)?
+        } else {
+            None
+        };
         Ok(WorkerArgs {
             kind,
             forgejo,
@@ -231,6 +287,7 @@ impl RawArgs {
             auth_file: non_empty(self.auth_file).map(PathBuf::from),
             wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
+            role_decision_process,
             allow_bookkeeping_only_pr: self.allow_bookkeeping_only_pr,
         })
     }
@@ -246,6 +303,54 @@ impl RawArgs {
                 "unknown --kind '{other}'; expected role|mechanical"
             ))),
         }
+    }
+}
+
+#[derive(Default)]
+struct RawRoleDecisionProcessArgs {
+    command: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env_allowlist: Vec<String>,
+    timeout_secs: Option<String>,
+}
+
+impl RawRoleDecisionProcessArgs {
+    fn into_config<E>(self, env: &E) -> Result<Option<WorkflowRoleDecisionProcessConfig>, ArgsError>
+    where
+        E: Fn(&str) -> Option<String>,
+    {
+        let Some(command) =
+            non_empty(self.command).or_else(|| non_empty_env(env, ROLE_DECISION_COMMAND_ENV))
+        else {
+            return Ok(None);
+        };
+        let args = if self.args.is_empty() {
+            parse_role_decision_args_json(non_empty_env(env, ROLE_DECISION_ARGS_ENV))?
+        } else {
+            self.args
+        };
+        let cwd = non_empty(self.cwd).or_else(|| non_empty_env(env, ROLE_DECISION_CWD_ENV));
+        let env_allowlist = if self.env_allowlist.is_empty() {
+            parse_env_allowlist(non_empty_env(env, ROLE_DECISION_ENV_ALLOWLIST_ENV))
+        } else {
+            self.env_allowlist
+        };
+        let timeout_secs = match self
+            .timeout_secs
+            .or_else(|| non_empty_env(env, ROLE_DECISION_TIMEOUT_ENV))
+        {
+            Some(raw) => parse_role_decision_timeout_secs(&raw)?,
+            None => WorkflowRoleDecisionProcessConfig::DEFAULT_TIMEOUT.as_secs(),
+        };
+        let mut config = WorkflowRoleDecisionProcessConfig::new(command)
+            .with_args(args)
+            .with_env_allowlist(env_allowlist)
+            .with_timeout(StdDuration::from_secs(timeout_secs));
+        if let Some(cwd) = cwd {
+            config = config.with_working_dir(cwd);
+        }
+        Ok(Some(config))
     }
 }
 
@@ -334,6 +439,42 @@ where
             "unknown --auth '{other}'; expected deepseek|chatgpt-oauth|anthropic-oauth"
         ))),
     }
+}
+
+fn parse_role_decision_args_json(raw: Option<String>) -> Result<Vec<String>, ArgsError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str::<Vec<String>>(&raw).map_err(|error| {
+        ArgsError::new(format!(
+            "{ROLE_DECISION_ARGS_ENV} must be a JSON array of strings: {error}"
+        ))
+    })
+}
+
+fn parse_env_allowlist(raw: Option<String>) -> Vec<String> {
+    raw.map(|raw| {
+        raw.split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn parse_role_decision_timeout_secs(raw: &str) -> Result<u64, ArgsError> {
+    let value = raw.parse::<u64>().map_err(|_| {
+        ArgsError::new(format!(
+            "--role-decision-timeout-secs must be an integer, got '{raw}'"
+        ))
+    })?;
+    if value == 0 {
+        return Err(ArgsError::new(
+            "--role-decision-timeout-secs must be positive",
+        ));
+    }
+    Ok(value)
 }
 
 fn parse_i64(raw: &str, flag: &str) -> Result<i64, ArgsError> {

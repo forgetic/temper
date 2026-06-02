@@ -2,25 +2,20 @@
 
 use std::error::Error;
 use std::fmt;
-use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
-use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, ReviewDecision, UpsertLabel};
+use crate::wake::{WakeConfig, WakeError, WakeListener};
+use crate::worker_args::{ForgejoArgs, WorkerArgs, WorkerKind};
+use crate::worker_external_tools::configure_external_tool_executors;
+use crate::worker_role_agent::build_role_agent;
+use crate::{runner_config, workflow};
+use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_runner::{
-    Agent, MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
+    MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
     RepositoryTarget, RunReport, Worker, WorkerError, WorkerRunReport,
 };
-use temper_workflow::{
-    CommandJournal, CompiledWorkflow, Effect, InMemoryJournal, LeasePolicy, QueueId, RoleId,
-    RoleManifest, ToolManifest,
-};
-
-use crate::pr_diff_guard::{GuardRole, PullRequestDiffGuard};
-use crate::wake::{WakeConfig, WakeError, WakeListener};
-use crate::worker_args::{AuthKind, ForgejoArgs, WorkerArgs, WorkerKind};
-use crate::worker_external_tools::configure_external_tool_executors;
-use crate::{runner_config, workflow};
+use temper_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
 
 #[derive(Debug)]
 pub enum RunError {
@@ -92,22 +87,18 @@ async fn run_role(
     let external_tool_executors =
         configure_external_tool_executors(&compiled, &mut config).map_err(RunError::Backend)?;
     let role_id = RoleId::new(role);
-    let provider = provider_for(args)?;
-    let registry = temper_agents::real_registry_from_compiled_with_external_tool_executors(
-        provider,
-        &compiled,
-        &config,
-        external_tool_executors,
-    )
-    .map_err(|error| RunError::Backend(error.to_string()))?;
     let role_manifest = compiled
         .role(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?;
-    let agent = registry
-        .get(&role_id)
-        .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
-        .clone();
-    let agent = guard_agent_if_needed(args, &compiled, role_manifest, agent);
+    let agent = build_role_agent(
+        args,
+        &compiled,
+        &config,
+        external_tool_executors,
+        &role_id,
+        role_manifest,
+    )
+    .map_err(RunError::Backend)?;
     let repositories = resolve_repositories(forge, &args.repositories).await?;
     ensure_workflow_labels(forge, &repositories, &compiled).await?;
     log_repository_set("role", role, &repositories);
@@ -121,100 +112,6 @@ async fn run_role(
         config.execution_context(&role_id),
     );
     drive_async(args, &worker).await
-}
-
-fn guard_agent_if_needed(
-    args: &WorkerArgs,
-    compiled: &CompiledWorkflow,
-    role: &RoleManifest,
-    agent: Arc<dyn Agent<dyn Forge>>,
-) -> Arc<dyn Agent<dyn Forge>> {
-    if args.allow_bookkeeping_only_pr {
-        return agent;
-    }
-    let Some(guard_role) = guard_role_for_manifest(compiled, role) else {
-        return agent;
-    };
-    Arc::new(PullRequestDiffGuard::new(
-        agent,
-        guard_role,
-        args.forgejo.base_url.clone(),
-        args.forgejo.token.clone(),
-    )) as Arc<dyn Agent<dyn Forge>>
-}
-
-fn guard_role_for_manifest(compiled: &CompiledWorkflow, role: &RoleManifest) -> Option<GuardRole> {
-    let approval_tool = role.tools.iter().find(|tool| {
-        tool.effects.iter().any(|effect| {
-            matches!(
-                effect,
-                Effect::SubmitReview {
-                    decision: ReviewDecision::Approved
-                }
-            )
-        })
-    });
-    let request_changes_tool = role.tools.iter().find(|tool| {
-        tool.effects.iter().any(|effect| {
-            matches!(
-                effect,
-                Effect::SubmitReview {
-                    decision: ReviewDecision::ChangesRequested
-                }
-            )
-        })
-    });
-    if let (Some(approval), Some(request_changes)) = (approval_tool, request_changes_tool) {
-        let queues = guard_queues_for_tool(compiled, role, approval);
-        if !queues.is_empty() {
-            return Some(GuardRole::Reviewer {
-                request_changes: request_changes.transition.clone(),
-                queues,
-            });
-        }
-    }
-
-    let merge_tool = role.tools.iter().find(|tool| {
-        tool.effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::MergePullRequest))
-    });
-    merge_tool
-        .map(|tool| guard_queues_for_tool(compiled, role, tool))
-        .filter(|queues| !queues.is_empty())
-        .map(|queues| GuardRole::Owner { queues })
-}
-
-fn guard_queues_for_tool(
-    compiled: &CompiledWorkflow,
-    role: &RoleManifest,
-    tool: &ToolManifest,
-) -> Vec<QueueId> {
-    let removed_labels = tool
-        .effects
-        .iter()
-        .filter_map(|effect| match effect {
-            Effect::RemoveLabel(label) => Some(label),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    compiled
-        .queues()
-        .iter()
-        .filter(|queue| role.queues.contains(&queue.id))
-        .filter(|queue| queue.artifacts.contains(&tool.artifact))
-        .filter(|queue| {
-            removed_labels.iter().any(|label| {
-                queue.labels.contains(label)
-                    || queue
-                        .any_of
-                        .iter()
-                        .any(|label_set| label_set.labels.contains(label))
-            })
-        })
-        .map(|queue| queue.id.clone())
-        .collect()
 }
 
 async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {
@@ -247,20 +144,6 @@ async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunRe
     )
     .map_err(|error| RunError::Backend(error.to_string()))?;
     drive_async(args, &worker).await
-}
-
-fn provider_for(args: &WorkerArgs) -> Result<temper_agents::ProviderConfig, RunError> {
-    let choice = match args.auth {
-        AuthKind::DeepSeek => temper_agents::AuthChoice::DeepSeek,
-        AuthKind::ChatGptOAuth => temper_agents::AuthChoice::ChatGptOAuth,
-        AuthKind::AnthropicOAuth => temper_agents::AuthChoice::AnthropicOAuth,
-    };
-    temper_agents::ProviderConfig::from_auth(
-        choice,
-        args.codex_model.clone(),
-        args.auth_file.clone(),
-    )
-    .map_err(|error| RunError::Backend(error.to_string()))
 }
 
 async fn resolve_repositories<F: Forge + ?Sized>(

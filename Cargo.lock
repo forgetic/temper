@@ -5930,6 +5930,7 @@ dependencies = [
  "temper-forge-memory",
  "temper-testing",
  "temper-workflow",
+ "tokio",
 ]
 
 [[package]]

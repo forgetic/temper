@@ -21,6 +21,7 @@ pub const WORKFLOW_ROLE_DECISION_NO_ACTION: &str = "no_action";
 
 /// One authorized workflow action exposed to a role decision engine.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorizedWorkflowAction {
     /// Action string the decision reply may choose; equal to the manifest tool
     /// name and transition id in today's compiler output.
@@ -47,6 +48,7 @@ impl AuthorizedWorkflowAction {
 
 /// Request sent by Temper to an external workflow-role decision process.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowRoleDecisionRequest {
     /// Protocol version; currently [`WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION`].
     pub protocol_version: u32,
@@ -123,6 +125,7 @@ impl WorkflowRoleDecisionRequest {
 
 /// Reply returned by an external workflow-role decision process.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowRoleDecisionReply {
     /// Protocol version echoed by the responder.
     pub protocol_version: u32,

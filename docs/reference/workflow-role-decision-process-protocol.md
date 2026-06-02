@@ -2,7 +2,9 @@
 
 Temper owns workflow authority. An external workflow-role decision process may
 choose one manifest action, but Temper validates the reply against the compiled
-role manifest and executes only through `RoleTools`.
+role manifest and executes only through `RoleTools`. `temper-runner` provides the
+provider-neutral `WorkflowRoleDecisionProcessAgent` adapter; it has no Smith,
+pi-SDK, or provider-auth dependency.
 
 ## Types and fixtures
 
@@ -21,7 +23,8 @@ Version-1 JSON fixtures live at:
 
 Temper writes one UTF-8 JSON request to stdin, appends a newline, and closes
 stdin. The decision process writes exactly one UTF-8 JSON reply to stdout. Logs
-belong on stderr. Extra stdout makes the reply malformed.
+belong on stderr. Extra stdout makes the reply malformed. The adapter clears the
+child environment and copies only explicitly allow-listed variable names.
 
 A request contains:
 
@@ -46,5 +49,23 @@ workflow mutation tool. External-tool entries are metadata only. If a chosen
 action needs an executable external tool, Temper's runner invokes the bound
 provider after validating the action.
 
-Temper rejects replies with a mismatched protocol version or an action outside
-`authorized_actions`; it treats `reason` as operator/debug text only.
+Temper treats `reason` as operator/debug text only. Replies with malformed JSON,
+extra JSON, duplicate reply fields, unknown reply fields, or a mismatched
+`protocol_version` fail the role decision. An action outside `authorized_actions`
+is validated and then treated as no-action to match the existing generic
+role-agent behavior for unauthorized model output.
+
+## Production worker selection
+
+`temper-worker` keeps the in-process LLM role agents by default. A role worker
+uses the process adapter only when explicitly configured with
+`--role-decision-command` or `TEMPER_WORKER_ROLE_DECISION_COMMAND`. Matching
+options are `--role-decision-arg`, `--role-decision-cwd`,
+`--role-decision-env`, and `--role-decision-timeout-secs`; environment fallbacks
+are `TEMPER_WORKER_ROLE_DECISION_ARGS_JSON`,
+`TEMPER_WORKER_ROLE_DECISION_CWD`,
+`TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST`, and
+`TEMPER_WORKER_ROLE_DECISION_TIMEOUT_SECS`. Do not allow-list Forge tokens or
+Temper-owned provider secrets; Smith/provider credentials should be supplied
+through Smith-owned env/auth paths rather than broad ambient env. Temper never
+passes Forge handles or workflow mutation tools.

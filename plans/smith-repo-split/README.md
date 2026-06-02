@@ -104,12 +104,17 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    protocol, and the split coverage ledger at `coverage-ledger.md`. No
    `temper-agents` tests were moved or deleted.
 
-2. ☐ **Phase 2 — Add/finish Temper process adapters and conformance tests.**
+2. ☑ **Phase 2 — Add/finish Temper process adapters and conformance tests.**
    `prompts/phase-2-temper-process-adapters.md`
 
-   Ensure Temper can run interactive responders and workflow role decision
-   engines through provider-neutral subprocess adapters, using fake responder
-   binaries/scripts in tests.
+   Done: `temper-interaction` has hermetic process-responder tests for valid,
+   malformed, slow, failing, duplicate-proposal, and env-filtered replies;
+   `temper-runner` now has a provider-neutral workflow-role decision process
+   agent with strict reply validation, env allow-listing, authorized action
+   execution through `RoleTools`, and hermetic fake-process coverage; and
+   `temper-worker` can select that adapter with `--role-decision-*` /
+   `TEMPER_WORKER_ROLE_DECISION_*` configuration while preserving defaults when
+   unset.
 
 3. ☐ **Phase 3 — Bootstrap `~/src/rust/smith` and move provider core.**
    `prompts/phase-3-bootstrap-smith-provider-core.md`

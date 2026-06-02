@@ -22,6 +22,7 @@ pub mod wake;
 pub mod worker;
 pub mod worker_args;
 mod worker_external_tools;
+mod worker_role_agent;
 
 #[cfg(test)]
 mod product_chat_args_tests;

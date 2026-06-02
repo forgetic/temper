@@ -45,3 +45,19 @@ Temper test; until then the current command must remain runnable.
 | --- | --- | --- |
 | Interactive responder request/reply | `temper-interaction::{ConversationRequest, ConversationReply}` | `cargo test -p temper-interaction process_boundary_request_and_reply_json_round_trip` reads `crates/temper-interaction/fixtures/interactive-responder-*.json`. |
 | Workflow role decision request/reply | `temper-runner::{WorkflowRoleDecisionRequest, WorkflowRoleDecisionReply}` | `cargo test -p temper-runner role_decision` reads `crates/temper-runner/fixtures/workflow-role-decision-*.json`. |
+
+## Temper process-adapter coverage added in Phase 2
+
+| Adapter / config | Temper replacement coverage | Replaces or protects |
+| --- | --- | --- |
+| Interactive responder process adapter | `cargo test -p temper-interaction process_responder` uses hermetic `/bin/sh` responders for valid, timeout, nonzero exit, malformed stdout, duplicate proposal ids, and env allow-list behavior. | Protects the generic product-manager process boundary before Smith owns concrete product-manager behavior. |
+| Workflow role decision process adapter | `cargo test -p temper-runner role_decision_process` uses hermetic fake decision processes for valid action execution, env allow-listing, timeout, nonzero exit, malformed/duplicate/unknown reply fields, version mismatch, unauthorized action no-op, and coding-workspace PR action handoff through `RoleTools`. | Replaces Temper-side generic role-agent action validation/execution coverage from `cargo test -p temper-agents role`; Smith still owns provider/model decision quality later. |
+| Production worker process selection | `cargo test -p temper-production worker_args` covers `--role-decision-*` flags, `TEMPER_WORKER_ROLE_DECISION_*` env fallbacks, redacted debug output, and default in-process behavior when unset. | Preserves worker defaults while letting operators point role workers at a future Smith binary. |
+
+## Coverage still waiting for Smith
+
+- Provider/auth/OAuth unit and live-provider tests remain in Temper until Phase 3.
+- Concrete product-manager responder behavior and prompt tests remain in Temper until Phase 4.
+- Real workflow-role model decision behavior, real-agent Forgejo e2e, and Smith
+  workflow-role binaries remain pending until Phase 5.
+- Phase 2 did not delete or move any `temper-agents` tests.

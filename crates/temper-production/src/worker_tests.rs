@@ -1,5 +1,7 @@
 use super::*;
+use crate::pr_diff_guard::GuardRole;
 use crate::wake::{send_wake, send_wake_with_hint};
+use crate::worker_role_agent::guard_role_for_manifest;
 use std::path::PathBuf;
 use std::thread;
 use temper_forge::{ChangeKind, CreateRepository};
@@ -26,7 +28,11 @@ fn runtime() -> tokio::runtime::Runtime {
 
 #[test]
 fn production_real_registry_uses_compiled_manifests_not_prompt_constants() {
-    let worker_source = include_str!("worker.rs");
+    let worker_source = format!(
+        "{}{}",
+        include_str!("worker.rs"),
+        include_str!("worker_role_agent.rs")
+    );
     assert!(worker_source.contains("real_registry_from_compiled"));
     assert!(!worker_source.contains("real_registry_with("));
     for prompt_constant in [

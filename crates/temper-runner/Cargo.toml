@@ -11,6 +11,7 @@ async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio = { version = "1", features = ["io-util", "process", "time"] }
 temper-forge = { path = "../temper-forge" }
 temper-workflow = { path = "../temper-workflow" }
 
@@ -18,6 +19,7 @@ temper-workflow = { path = "../temper-workflow" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-testing = { path = "../temper-testing" }
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

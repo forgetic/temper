@@ -32,7 +32,9 @@
 //!   role-addressed [`WorkItem`]s without mutating anything.
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
 //!   agents mutate workflow state only by running authorized transitions or the
-//!   idempotent pull-request creation seam through role-scoped tools.
+//!   idempotent pull-request creation seam through role-scoped tools. The
+//!   workflow-role decision process adapter is provider-neutral and still runs
+//!   chosen actions only through this boundary.
 //! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
 //!   judgment queues and delegate to agents, while the mechanical worker runs
 //!   reconcile → apply once per tick without spawning agents.
@@ -64,6 +66,8 @@ pub mod config;
 pub mod driver;
 pub mod multi_repo;
 pub mod role_decision;
+pub mod role_decision_process;
+mod role_process_tools;
 pub mod scan;
 pub mod signal;
 pub mod stage;
@@ -92,6 +96,10 @@ pub use role_decision::{
     AuthorizedWorkflowAction, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,
     WorkflowRoleDecisionRequest, WORKFLOW_ROLE_DECISION_NO_ACTION,
     WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
+};
+pub use role_decision_process::{
+    WorkflowRoleDecisionProcessAgent, WorkflowRoleDecisionProcessConfig,
+    WorkflowRoleDecisionProcessError,
 };
 pub use scan::{scan, scan_role, ScanError, WorkItem};
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
