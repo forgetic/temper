@@ -9,6 +9,8 @@ description = "Reusable backend-agnostic runner primitives for Temper."
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-workflow = { path = "../temper-workflow" }
 
@@ -16,7 +18,6 @@ temper-workflow = { path = "../temper-workflow" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-testing = { path = "../temper-testing" }
-serde_json.workspace = true
 
 [lints]
 workspace = true

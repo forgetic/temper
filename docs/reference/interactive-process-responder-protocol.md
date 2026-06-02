@@ -2,7 +2,9 @@
 
 `temper-interaction` owns the provider-neutral process adapter because the
 protocol is only the interaction-domain wire contract plus process I/O. It has no
-pi SDK, provider-auth, Forgejo, production, workflow, or runner dependency.
+pi SDK, provider-auth, Forgejo, production, workflow, or runner dependency. The
+current `ConversationRequest`/`ConversationReply` JSON shape is the v1 wire
+contract and is frozen by the fixtures below.
 
 ## Invocation
 
@@ -36,7 +38,9 @@ Temper writes one UTF-8 JSON `ConversationRequest` to stdin, appends a newline,
 and closes stdin. The responder writes exactly one UTF-8 JSON
 `ConversationReply` to stdout. Trailing whitespace is allowed; logs belong on
 stderr. Any extra stdout before or after the JSON value makes the reply
-malformed.
+malformed. Fixture examples live at
+`crates/temper-interaction/fixtures/interactive-responder-request.json` and
+`crates/temper-interaction/fixtures/interactive-responder-reply.json`.
 
 ```json
 {

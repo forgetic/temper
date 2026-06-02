@@ -1,0 +1,89 @@
+{
+  "protocol_version": 1,
+  "workflow_id": "generic-agent-test",
+  "role_manifest": {
+    "id": "banana",
+    "charter": null,
+    "prompt_extension": {
+      "guidance": "When the task is in the todo queue, choose the advance action.",
+      "tool_guidance": null
+    },
+    "concurrency": null,
+    "queues": ["todo"],
+    "authority": ["advance"],
+    "tools": [
+      {
+        "name": "advance",
+        "transition": "advance",
+        "artifact": "task",
+        "requires_gates": [],
+        "effects": [
+          { "remove_label": "todo" },
+          { "add_label": "done" }
+        ]
+      }
+    ],
+    "external_tools": [
+      {
+        "id": "coding_workspace",
+        "description": "Edit and commit repository code when a workflow action needs an implementation branch.",
+        "required": false,
+        "constraints": ["Only touch the checked-out repository."],
+        "guidance": "Use only when the chosen workflow action creates an implementation PR."
+      }
+    ],
+    "prompt": {
+      "role": "banana",
+      "sections": [
+        {
+          "heading": "Role and workflow",
+          "lines": [
+            "Workflow: generic-agent-test",
+            "Role: banana",
+            "Concurrency: no declared limit"
+          ]
+        },
+        {
+          "heading": "Decision output",
+          "lines": [
+            "Return exactly one JSON object and no surrounding prose.",
+            "Schema: {\"action\":\"<one of: no_action, advance>\",\"reason\":\"short rationale\"}",
+            "Use `no_action` when no authorized workflow action is safe for the current work item."
+          ]
+        }
+      ]
+    }
+  },
+  "work_item_context": {
+    "repository": "forgejo:acme/service",
+    "queue": "todo",
+    "role": "banana",
+    "kind": "task",
+    "artifact": {
+      "type": "issue",
+      "number": 1,
+      "title": "Advance a generic task",
+      "body": "This synthetic task is ready for the generic action.",
+      "labels": ["task", "todo"],
+      "state": "Open"
+    }
+  },
+  "authorized_actions": [
+    {
+      "action": "advance",
+      "transition": "advance",
+      "artifact": "task",
+      "requires_gates": []
+    }
+  ],
+  "available_external_tools": [
+    {
+      "id": "coding_workspace",
+      "description": "Edit and commit repository code when a workflow action needs an implementation branch.",
+      "required": false,
+      "constraints": ["Only touch the checked-out repository."],
+      "guidance": "Use only when the chosen workflow action creates an implementation PR.",
+      "provider": "workspace-local"
+    }
+  ]
+}

@@ -6,7 +6,10 @@ agents. It is the only crate in this repository that depends on
 `temper-interaction` stay LLM-agnostic. `ProductManagerAgent` is a transitional
 in-process interactive profile responder; the preferred public
 profile-responder boundary is the `temper-interaction` process protocol so
-pi-SDK-backed responders can live in an external repository later.
+pi-SDK-backed responders can live in an external repository later. Workflow-role
+LLM decision engines should target the provider-neutral
+[`temper-runner` process protocol](workflow-role-decision-process-protocol.md)
+when split out of this repository.
 
 ## Runtime boundary
 

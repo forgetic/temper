@@ -123,22 +123,10 @@ impl InteractiveResponder for NeverResponder {
 
 #[test]
 fn process_boundary_request_and_reply_json_round_trip() {
-    let request_json = r#"{
-        "profile_id": "intake-assistant",
-        "conversation_id": "conversation-1",
-        "turns": [{
-            "id": "turn-1",
-            "participant": { "kind": "human", "display_name": "human" },
-            "body": "Can we add a mobile chat adapter?"
-        }],
-        "context": {
-            "repository": "owner/repo",
-            "transcript_url": "https://git.example.test/owner/repo/issues/7"
-        }
-    }"#;
+    let request_json = include_str!("../fixtures/interactive-responder-request.json");
     let request: ConversationRequest =
         serde_json::from_str(request_json).expect("process request deserializes");
-    assert_eq!(request.profile_id.as_str(), "intake-assistant");
+    assert_eq!(request.profile_id.as_str(), "product-manager");
     assert_eq!(request.conversation_id.as_str(), "conversation-1");
     assert_eq!(request.turns[0].id.as_ref().unwrap().as_str(), "turn-1");
 
@@ -147,20 +135,7 @@ fn process_boundary_request_and_reply_json_round_trip() {
         serde_json::from_str(&encoded_request).expect("request round-trips");
     assert_eq!(decoded_request, request);
 
-    let reply_json = r#"{
-        "message": "I would file one issue for the adapter first.",
-        "proposals": [{
-            "id": "mobile-chat-adapter",
-            "kind": "issue",
-            "title": "Add mobile chat adapter",
-            "summary": "Mobile access lets humans keep the conversation moving.",
-            "payload": {
-                "title": "Add mobile chat adapter",
-                "body": "Expose the interaction service through a mobile-friendly adapter.",
-                "rationale": "Mobile access lets humans keep the conversation moving."
-            }
-        }]
-    }"#;
+    let reply_json = include_str!("../fixtures/interactive-responder-reply.json");
     let reply: ConversationReply =
         serde_json::from_str(reply_json).expect("process reply deserializes");
     reply.validate().expect("reply validates");

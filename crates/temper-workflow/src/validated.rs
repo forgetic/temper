@@ -129,7 +129,7 @@ pub struct ValidatedRole {
 }
 
 /// User-authored prompt prose attached to a role.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RolePromptExtension {
     /// Behavioral guidance for role judgment. It is rendered separately from
     /// generated workflow mechanics and grants no authority by itself.
@@ -209,7 +209,8 @@ pub struct QueueLabelSet {
 }
 
 /// A validated transition effect with typed references.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Effect {
     AddLabel(LabelId),
     RemoveLabel(LabelId),

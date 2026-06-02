@@ -75,7 +75,7 @@ impl CompiledWorkflow {
 /// Everything a single role's agent runner needs: identity, user guidance,
 /// concurrency hint, subscribed queues, transition authority, the intent-level
 /// tools that authority compiles into, and a deterministic prompt.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RoleManifest {
     pub id: RoleId,
     /// Legacy user guidance carried from `RawRole::charter`.
@@ -102,7 +102,7 @@ pub struct RoleManifest {
 /// carries the transition's artifact kind, required gates, and effects so a
 /// later phase can generate a body that enforces preconditions and applies only
 /// the authorized effects. No generic Forge mutation is exposed.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ToolManifest {
     /// Intent-level tool name; equal to the transition id (e.g. `claim_code`).
     pub name: String,
@@ -120,7 +120,7 @@ pub struct ToolManifest {
 ///
 /// These entries grant no executable authority by themselves. A runner must bind
 /// a matching provider before an LLM role worker may see the tool as available.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExternalToolManifest {
     pub id: ExternalToolId,
     pub description: String,

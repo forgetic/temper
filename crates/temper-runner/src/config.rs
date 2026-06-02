@@ -51,7 +51,7 @@ pub struct ExternalToolBinding {
 }
 
 /// External tool metadata that survived declaration + runner binding validation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct BoundExternalTool {
     pub id: ExternalToolId,
     pub description: String,

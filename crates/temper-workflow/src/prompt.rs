@@ -10,7 +10,7 @@ use crate::ids::{ArtifactKindId, GateId, LabelId, RoleId};
 use crate::validated::ValidatedRole;
 
 /// Deterministic prompt sections for one role.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PromptManifest {
     pub role: RoleId,
     pub sections: Vec<PromptSection>,
@@ -47,7 +47,7 @@ impl PromptManifest {
 }
 
 /// One headed block of a prompt.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PromptSection {
     pub heading: String,
     pub lines: Vec<String>,

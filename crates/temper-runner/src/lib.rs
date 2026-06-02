@@ -63,6 +63,7 @@ pub mod coding_workspace;
 pub mod config;
 pub mod driver;
 pub mod multi_repo;
+pub mod role_decision;
 pub mod scan;
 pub mod signal;
 pub mod stage;
@@ -86,6 +87,11 @@ pub use multi_repo::{
     MultiRepoConfigError, MultiRepoError, MultiRepoMechanicalWorker, MultiRepoRoleWorker,
     MultiRepoTickReport, RepositoryFailure, RepositoryJournal, RepositoryProgress, RepositorySet,
     RepositoryTarget,
+};
+pub use role_decision::{
+    AuthorizedWorkflowAction, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,
+    WorkflowRoleDecisionRequest, WORKFLOW_ROLE_DECISION_NO_ACTION,
+    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
 };
 pub use scan::{scan, scan_role, ScanError, WorkItem};
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
