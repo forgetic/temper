@@ -47,11 +47,13 @@ This builds `harness-product-manager-chat`, parses `secrets/roles.env`, maps the
 configured `DOGFOOD_PRODUCT_CHAT_HUMAN_USER` token (default `free`) to
 `HARNESS_PRODUCT_CHAT_HUMAN_TOKEN`, and maps the separate `product-manager`
 token to `HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN` for product-manager
-replies and confirmed filing. Missing human/product-manager tokens fail closed;
-there is no bot/admin fallback for transcript authorship. The REPL creates a
-Forgejo transcript issue labeled `product` only, mirrors turns as comments,
-shows draft intake issues, and files one as a normal `untriaged` workflow issue
-only after `/file <n>`. Resume an existing product transcript with:
+replies and confirmed filing. If the private note's admin user is exactly the
+configured product-chat human, that same-user API token is accepted; otherwise
+missing human/product-manager tokens fail closed with no bot/admin fallback for
+a different transcript author. The REPL creates a Forgejo transcript issue
+labeled `product` only, mirrors turns as comments, shows draft intake issues,
+and files one as a normal `untriaged` workflow issue only after `/file <n>`.
+Resume an existing product transcript with:
 
 ```sh
 ./run.sh product-chat --transcript-issue 3

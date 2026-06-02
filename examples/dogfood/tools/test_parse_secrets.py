@@ -97,13 +97,36 @@ class ParseSecretsTests(unittest.TestCase):
         self.assertIn("pm-bot", env["DOGFOOD_PERMISSION_USERS"].split())
 
     def test_aliases_product_chat_human_separately_from_workflow_human(self) -> None:
-        env = self.run_parser(REQUIRED_NOTE + "free:free-pw\napi token: free-token\n", product_chat_human_user="free")
+        env = self.run_parser(
+            REQUIRED_NOTE + "free:free-pw\napi token: free-token\n",
+            product_chat_human_user="free",
+        )
 
         self.assertEqual("bot", env["HARNESS_FORGEJO_USER_HUMAN"])
         self.assertEqual("bot-token", env["HARNESS_FORGEJO_TOKEN_HUMAN"])
         self.assertEqual("free", env["HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
         self.assertEqual("free-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"])
         self.assertIn("free", env["DOGFOOD_PERMISSION_USERS"].split())
+
+    def test_uses_admin_token_only_when_product_chat_human_is_admin_user(self) -> None:
+        env = self.run_parser(
+            "admin user: free\npw: free-pw\ngitnex api token: free-admin-token\n"
+            + REQUIRED_NOTE,
+            product_chat_human_user="free",
+        )
+
+        self.assertEqual("free", env["HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
+        self.assertEqual(
+            "free-admin-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"]
+        )
+        self.assertEqual("free-pw", env["HARNESS_FORGEJO_PASSWORD_PRODUCT_CHAT_HUMAN"])
+
+        mismatch = self.run_parser(
+            "admin user: root\npw: root-pw\ngitnex api token: root-admin-token\n"
+            + REQUIRED_NOTE,
+            product_chat_human_user="free",
+        )
+        self.assertNotIn("HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN", mismatch)
 
     def test_succeeds_without_product_manager_credentials(self) -> None:
         env = self.run_parser(REQUIRED_NOTE)

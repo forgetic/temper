@@ -7,7 +7,8 @@ __pycache__/
 .vscode/
 /.harness-pr-prep/
 /.harness-ci/
-plans/
+# Ignore ad-hoc local plans
+/plans/*
 /examples/dogfood/logs/
 /examples/dogfood/run/
 /examples/dogfood/secrets/

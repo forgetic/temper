@@ -76,6 +76,38 @@ def complete_alias(roles: dict[str, dict[str, str]], alias: str, source: str) ->
         roles[alias] = copied
 
 
+def complete_product_chat_human_alias(
+    roles: dict[str, dict[str, str]],
+    meta: dict[str, str],
+    source: str,
+) -> None:
+    """Map product-chat human to a token for exactly the requested user.
+
+    The private dogfood note often stores the operator's own API token in the
+    admin metadata block rather than in a role-shaped `free:` section. Accept it
+    only when the configured product-chat human is that same Forgejo login; never
+    fall back to an admin/bot token for a different visible author.
+    """
+    requested = source.strip().lower()
+    if not requested:
+        return
+    complete_alias(roles, "product-chat-human", requested)
+    if roles.get("product-chat-human", {}).get("token"):
+        return
+
+    admin_user = meta.get("admin_user", "").strip()
+    if requested != admin_user.lower() or not meta.get("admin_token"):
+        return
+
+    entry = {
+        "user": admin_user,
+        "token": meta["admin_token"],
+    }
+    if meta.get("admin_password"):
+        entry["password"] = meta["admin_password"]
+    roles["product-chat-human"] = entry
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
@@ -93,8 +125,7 @@ def main() -> int:
 
     roles, meta = parse(source)
     complete_alias(roles, "human", args.human_user.lower())
-    if args.product_chat_human_user.strip():
-        complete_alias(roles, "product-chat-human", args.product_chat_human_user.lower())
+    complete_product_chat_human_alias(roles, meta, args.product_chat_human_user)
     complete_alias(roles, "product-manager", args.product_manager_user.lower())
 
     required = ["architect", "engineer", "reviewer", "owner"]

@@ -49,3 +49,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0018](0018-snapshot-long-running-shell-launchers.md) | Snapshot long-running shell launchers | examples, process, shell, teardown |
 | [0019](0019-demo-ci-verdicts-follow-github-sha.md) | Demo CI verdicts follow `GITHUB_SHA` | examples, forgejo, ci, testing |
 | [0020](0020-dogfood-prs-must-not-be-bookkeeping-only.md) | Keep dogfood identities and PR diffs honest | dogfood, agents, forgejo, product-chat |
+| [0021](0021-user-defined-roles-own-prompt-behavior.md) | Keep workflow-role prompts user-defined | agents, workflow, prompts, architecture |
