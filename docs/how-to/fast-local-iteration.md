@@ -1,6 +1,6 @@
 # Iterate quickly during local development
 
-Harness defaults are tuned for fast agent iteration rather than production builds.
+Temper defaults are tuned for fast agent iteration rather than production builds.
 
 ## Default loop
 
@@ -58,4 +58,4 @@ Cargo uses all available logical CPU cores by default. Keep `.cargo/config.toml`
 - many codegen units
 - no LTO
 
-Production profiles are intentionally not tuned yet. Make production-build decisions later when Harness has deployable artifacts and clear release requirements.
+Production profiles are intentionally not tuned yet. Make production-build decisions later when Temper has deployable artifacts and clear release requirements.

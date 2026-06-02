@@ -1,16 +1,16 @@
-# Harness
+# Temper
 
 **Issue-tracker-native execution engine for agentic workflows.**
 
 *Run agentic workflows on top of your Forge.*
 
-Harness is a workflow runtime that executes agentic workflows using your Forge as the source of truth.
+Temper is a workflow runtime that executes agentic workflows using your Forge as the source of truth.
 
-Issues, pull requests, labels, reviews, CI status, comments, and dependency links become workflow state. Harness evaluates that state against a declared workflow and dispatches work to agents while enforcing valid transitions.
+Issues, pull requests, labels, reviews, CI status, comments, and dependency links become workflow state. Temper evaluates that state against a declared workflow and dispatches work to agents while enforcing valid transitions.
 
 The Forge remains authoritative. There is no separate workflow database, no hidden workflow state, and no requirement to adopt a specific delivery process.
 
-Define a workflow as a state machine. Harness executes it.
+Define a workflow as a state machine. Temper executes it.
 
 [Docs](docs/README.md) · [Agentic workflows](docs/explanation/agentic-workflows.md) · [Workflow contract](docs/reference/workflow-layer.md) · [Forge interface](docs/reference/forge-interface.md) · [Reference demo](examples/reference-delivery/README.md)
 
@@ -22,7 +22,7 @@ Most workflow systems keep their state in a separate orchestration service.
 
 Issues are inputs. Pull requests are outputs. The actual workflow lives somewhere else.
 
-Harness takes the opposite approach.
+Temper takes the opposite approach.
 
 The Forge already contains the artifacts that software teams use to coordinate work:
 
@@ -34,7 +34,7 @@ The Forge already contains the artifacts that software teams use to coordinate w
 * dependency links
 * comments
 
-Harness treats those artifacts as workflow state.
+Temper treats those artifacts as workflow state.
 
 A workflow is defined as a state machine over Forge artifacts. Workers inspect Forge state, perform authorized actions, and advance work through declared transitions. If an agent crashes, loses context, or restarts, workflow state remains intact because it lives in the Forge itself.
 
@@ -46,7 +46,7 @@ Humans and agents participate through the same interface and observe the same so
 
 ### The Forge is authoritative
 
-Harness does not maintain a separate workflow database.
+Temper does not maintain a separate workflow database.
 
 Current workflow state is derived from the Forge itself:
 
@@ -64,7 +64,7 @@ Every transition reloads current Forge state before mutating anything.
 
 ### Workflows are state machines
 
-Harness does not prescribe a software delivery process.
+Temper does not prescribe a software delivery process.
 
 Users define workflows as state machines with:
 
@@ -75,7 +75,7 @@ Users define workflows as state machines with:
 * dependency rules
 * recovery behavior
 
-Harness validates and executes those workflows.
+Temper validates and executes those workflows.
 
 Whether the process is simple or complex is entirely up to the workflow definition.
 
@@ -83,7 +83,7 @@ Whether the process is simple or complex is entirely up to the workflow definiti
 
 Agents do not receive broad permission to manipulate repositories.
 
-Instead, Harness derives role-specific capabilities from the workflow definition.
+Instead, Temper derives role-specific capabilities from the workflow definition.
 
 An agent can only perform actions that are valid for:
 
@@ -106,13 +106,13 @@ Workflow state survives:
 
 Because the durable state already exists in the Forge.
 
-Harness continuously reconciles observed state against workflow expectations and repairs drift when possible.
+Temper continuously reconciles observed state against workflow expectations and repairs drift when possible.
 
 ---
 
-## What Harness does
+## What Temper does
 
-Given a set of repositories and workflow definitions, Harness repeatedly asks:
+Given a set of repositories and workflow definitions, Temper repeatedly asks:
 
 * Which artifacts match an active queue?
 * Which role is eligible to act on them?
@@ -123,7 +123,7 @@ Given a set of repositories and workflow definitions, Harness repeatedly asks:
 
 The answers come from the workflow specification and current Forge state.
 
-Harness then dispatches work, executes transitions, and keeps the workflow moving forward.
+Temper then dispatches work, executes transitions, and keeps the workflow moving forward.
 
 ---
 
@@ -155,7 +155,7 @@ owner      -> merge after required gates pass
 controller -> repair, recover, and unblock work
 ```
 
-Harness does not hard-code this process.
+Temper does not hard-code this process.
 
 It simply evaluates the workflow definition, observes Forge state, and executes valid transitions.
 
@@ -165,7 +165,7 @@ If CI fails, the workflow may block progress.
 
 If dependencies are resolved, the workflow may automatically unblock waiting work.
 
-The behavior comes from the workflow definition, not from Harness itself.
+The behavior comes from the workflow definition, not from Temper itself.
 
 ---
 
@@ -174,12 +174,12 @@ The behavior comes from the workflow definition, not from Harness itself.
 ```text
 Forge plane
   issues · PRs · labels · comments · dependencies · reviews · CI · merges
-  + harness metadata blocks in artifact bodies
+  + Temper metadata blocks in artifact bodies
         ↑
-harness-forge
+temper-forge
   provider-neutral Forge trait and domain model
         ↑
-harness-workflow
+temper-workflow
   workflow validation
   queue evaluation
   transition execution
@@ -187,13 +187,13 @@ harness-workflow
   lease management
   drift reconciliation
         ↑
-harness-runner
+temper-runner
   repository scanning
   role dispatch
   mechanical workers
   external tool integration
         ↑
-harness-agents / harness-production
+temper-agents / temper-production
   LLM agents
   Forge integrations
   provisioners
@@ -208,9 +208,9 @@ Everything else can be restarted, replaced, or recovered from current Forge stat
 
 ---
 
-## What Harness is not
+## What Temper is not
 
-Harness is not:
+Temper is not:
 
 * an issue tracker
 * a project management tool
@@ -218,7 +218,7 @@ Harness is not:
 * a workflow definition language tied to a single process
 * a hidden automation layer that owns workflow state
 
-Harness is an execution engine.
+Temper is an execution engine.
 
 It runs agentic workflows whose durable state lives in the Forge.
 
@@ -226,6 +226,6 @@ It runs agentic workflows whose durable state lives in the Forge.
 
 ## Status
 
-Harness is under active development.
+Temper is under active development.
 
 The current implementation is opinionated toward agentic software-delivery workflows and includes support for running role-specific agents directly. The underlying workflow engine, however, is designed around a more general model: state-machine workflows executed against Forge artifacts as the authoritative source of truth.

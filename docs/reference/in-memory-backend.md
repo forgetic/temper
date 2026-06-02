@@ -1,11 +1,11 @@
 # In-memory backend reference
 
-The `harness-forge-memory` crate implements `harness_forge::Forge` entirely in
+The `temper-forge-memory` crate implements `temper_forge::Forge` entirely in
 process. All records live in ordinary collections behind a single mutex, with no
 filesystem, network, or async runtime involved. It is a reference development and
 test backend, not a production forge.
 
-Rust type: `harness_forge_memory::MemoryForge`.
+Rust type: `temper_forge_memory::MemoryForge`.
 
 It is a sibling to the filesystem backend (see ADR 0008) and intentionally
 reproduces the same observable contract so tests can swap between them. The
@@ -62,7 +62,7 @@ the backend to several helpers while keeping one logical store.
 ## In-process change hints
 
 `MemoryForge::subscribe_hints()` is an optional companion surface returning a
-`MemoryHintReceiver`, which implements `harness_forge::ChangeSource`. Successful
+`MemoryHintReceiver`, which implements `temper_forge::ChangeSource`. Successful
 mutations publish best-effort `ChangeHint`s to subscribers on the same shared
 store, including fixture CI changes from `seed_ci_jobs`. Failed operations,
 rejected optimistic-concurrency preconditions, and idempotent no-op dependency or

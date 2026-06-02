@@ -151,10 +151,10 @@ def main() -> int:
         if not entry or not entry.get("token"):
             continue
         key = env_key(alias)
-        lines.append(f"HARNESS_FORGEJO_USER_{key}={sh_quote(entry.get('user', alias))}")
-        lines.append(f"HARNESS_FORGEJO_TOKEN_{key}={sh_quote(entry['token'])}")
+        lines.append(f"TEMPER_FORGEJO_USER_{key}={sh_quote(entry.get('user', alias))}")
+        lines.append(f"TEMPER_FORGEJO_TOKEN_{key}={sh_quote(entry['token'])}")
         if entry.get("password"):
-            lines.append(f"HARNESS_FORGEJO_PASSWORD_{key}={sh_quote(entry['password'])}")
+            lines.append(f"TEMPER_FORGEJO_PASSWORD_{key}={sh_quote(entry['password'])}")
 
     runner = roles.get("runner1") or roles.get("runner")
     if runner:

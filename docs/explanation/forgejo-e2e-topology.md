@@ -33,12 +33,12 @@ For each scenario the test boots an isolated world:
   └───────────┘  └──────────┘  └──────────────┘      └────────────────┘
 ```
 
-- **Server**: a throwaway Forgejo (`harness_testing::forgejo_server`), Actions
+- **Server**: a throwaway Forgejo (`temper_testing::forgejo_server`), Actions
   enabled, fresh SQLite, ephemeral port, killed and removed on drop.
 - **Runner**: a real host-mode `forgejo-runner` (`--labels host:host`, **no
   containers**) registered to the server. It is the genuine CI producer — there
   is no fake `--kind ci` worker on Forgejo.
-- **Role + mechanical workers**: the `harness-testing-worker` binary, one OS
+- **Role + mechanical workers**: the `temper-testing-worker` binary, one OS
   process per role-with-an-agent plus one mechanical reconciler, launched
   `--backend forgejo --clock wall`. They coordinate **only** through the server.
 
@@ -64,11 +64,11 @@ logins come from the passed-in binding list (`runner_config().role_bindings`),
 never hardcoded. `seed_intake_issue(base_url, token, owner, name)` adds one
 realistic intake issue whose labels are **derived from the compiled workflow**
 (the entry issue artifact a queue filters on), idempotently. The production
-binary exposes this as `harness-provision-forgejo`: it takes
+binary exposes this as `temper-provision-forgejo`: it takes
 `--base-url/--owner/--name/--out`, reads the admin token from
-`HARNESS_FORGEJO_ADMIN_TOKEN` (never argv), and writes the per-role
+`TEMPER_FORGEJO_ADMIN_TOKEN` (never argv), and writes the per-role
 `{user, token, password}` to a `0600` POSIX-sourceable secrets file
-(`HARNESS_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret. The
+(`TEMPER_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret. The
 operator demo calls it once per configured repo so labels, CI, webhooks, and one
 seed issue are present in every repo before the single shared worker pool starts.
 
@@ -92,7 +92,7 @@ jobs by run id.
 ## Backend hardening this forced
 
 Driving real concurrent workers through a real server surfaced gaps that landed
-in `harness-forge-forgejo` (all behind the unchanged `Forge` signatures):
+in `temper-forge-forgejo` (all behind the unchanged `Forge` signatures):
 
 - **Bounded `5xx` write retry** — concurrent workers contend on SQLite.
 - **No-auto-redirect client** — so the web-UI `303` login redirect is *observed*
@@ -106,8 +106,8 @@ in `harness-forge-forgejo` (all behind the unchanged `Forge` signatures):
 
 It boots real OS processes (server, runner, N workers), executes CI **on the
 host**, and detects convergence by wall-clock polling — non-deterministic,
-network-bound, and host-mutating. Like the `harness-forge-forgejo` live tests it
-is `#[ignore]`d and gated behind `HARNESS_FORGEJO_E2E=1`, so the default
+network-bound, and host-mutating. Like the `temper-forge-forgejo` live tests it
+is `#[ignore]`d and gated behind `TEMPER_FORGEJO_E2E=1`, so the default
 `cargo test` stays hermetic and deterministic. The in-process scenarios remain
 the default coverage for workflow logic; this covers the real-backend topology.
 

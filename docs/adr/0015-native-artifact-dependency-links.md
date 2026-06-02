@@ -20,7 +20,7 @@ parent-child equivalent, so only `depends_on` is portable.
 
 ## Decision
 
-Add a native dependency-link concept to `harness-forge`:
+Add a native dependency-link concept to `temper-forge`:
 
 - the source is an issue or pull request, identified by its stable `IssueId` or
   `PullRequestId`;

@@ -10,10 +10,10 @@ operator-facing multi-repo worker-pool demo, see
 ## Command
 
 ```sh
-cargo test -p harness-runner --test end_to_end
+cargo test -p temper-runner --test end_to_end
 ```
 
-The tests live in `crates/harness-runner/tests/end_to_end.rs`. They run shared
+The tests live in `crates/temper-runner/tests/end_to_end.rs`. They run shared
 scenarios from runner test support on:
 
 - `InProcessStage<MemoryForge>` with per-role `as_user` handles and
@@ -60,14 +60,14 @@ To prove one fixed worker set scans multiple repositories, opt into the ignored
 process-level smoke:
 
 ```sh
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored
 ```
 
 For the live Forgejo + webhook variant, use:
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
 ```
 
 These include the cross-repo fan-out scenario on the same fixed worker fleet;

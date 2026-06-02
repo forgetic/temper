@@ -2,7 +2,7 @@
 
 This page designs a clean five-role delivery workflow, using the production
 ekanayaka.io agent workflow as inspiration but removing its accidental
-complexity. It is the target the harness spec, compiler, planner, and executor
+complexity. It is the target Temper spec, compiler, planner, and executor
 should be able to express and run. The `reference-delivery.json`
 `RawWorkflowSpec` fixture transcribes it; any gap between this design and what
 the runtime can execute becomes implementation backlog.
@@ -13,7 +13,7 @@ The exact spec is the fixture; the exact runtime contract is
 
 ## Design principles
 
-The redesign is held to five rules, each chosen so the result maps onto harness
+The redesign is held to five rules, each chosen so the result maps onto Temper
 primitives instead of prose:
 
 1. **Every label is serviced by a queue or is a gate condition.** No decorative
@@ -167,7 +167,7 @@ review + CI gates required to merge; failed gate returns work
 (never lost); human-in-the-loop checkpoints; an escalation path for judgment;
 at-most-once claiming; no duplicate creates; and no premature merge.
 
-## Anticipated harness additions
+## Anticipated Temper additions
 
 The design deliberately leans on capabilities the runtime does not yet execute.
 The fixture exercise confirmed and prioritized the exact backlog in
@@ -193,4 +193,4 @@ expected backlog was:
   `review_changes_requested` are implemented as read-side planner predicates.
 
 The contract catalog and the layered prompt system stay as prose the runner
-injects; they are not modeled as harness machinery in this design.
+injects; they are not modeled as Temper machinery in this design.

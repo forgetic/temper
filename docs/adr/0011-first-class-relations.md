@@ -49,7 +49,7 @@ artifact's kind.
 
 - Workflows can declare and validate relation contracts before runtime.
 - The reference fixture can express parent, dependency, and produced-PR links
-  without changing `harness-forge`.
+  without changing `temper-forge`.
 - Existing metadata blocks remain compatible. ADR 0015 later promotes the
   portable `dependency` subset to the Forge interface while preserving metadata
   `dependencies` as a fallback.
@@ -64,7 +64,7 @@ artifact's kind.
 Keep metadata-only relations. Rejected because the spec would still have no
 validated relation contract.
 
-Add provider-level relations to `harness-forge`. Rejected for this phase because
+Add provider-level relations to `temper-forge`. Rejected for this phase because
 relation semantics were workflow policy. ADR 0015 later accepts the narrower
 portable dependency-link subset; GitHub sub-issues / parent-child hierarchy stay
 out of scope because Forgejo has no native equivalent.

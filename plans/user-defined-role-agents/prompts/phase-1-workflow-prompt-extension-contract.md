@@ -6,18 +6,18 @@ it renders only workflow mechanics plus explicit user-authored prompt extensions
 
 ## Session bootstrap
 
-1. Confirm you are in `/home/free/src/rust/harness`.
+1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `AGENTS.md`, `docs/README.md`, and the active lessons relevant to this
    task, especially:
    - `docs/reference/agent-lessons/0020-dogfood-prs-must-not-be-bookkeeping-only.md`
    - `docs/reference/agent-lessons/0021-user-defined-roles-own-prompt-behavior.md`
 3. Read `plans/user-defined-role-agents/README.md`.
 4. Read the workflow compilation and validation surfaces:
-   - `crates/harness-workflow/src/spec.rs`
-   - `crates/harness-workflow/src/validated.rs`
-   - `crates/harness-workflow/src/validate.rs`
-   - `crates/harness-workflow/src/compile.rs`
-   - `crates/harness-workflow/tests/compilation.rs`
+   - `crates/temper-workflow/src/spec.rs`
+   - `crates/temper-workflow/src/validated.rs`
+   - `crates/temper-workflow/src/validate.rs`
+   - `crates/temper-workflow/src/compile.rs`
+   - `crates/temper-workflow/tests/compilation.rs`
 5. Read the docs you will update:
    - `docs/reference/workflow-layer.md`
    - `docs/explanation/agentic-workflows.md`
@@ -64,7 +64,7 @@ compiled role prompts.
    such as “engineers implement code” or “reviewers approve PRs”. Those belong in
    user guidance.
 
-4. **Tests.** Update `crates/harness-workflow/tests/compilation.rs` and add any
+4. **Tests.** Update `crates/temper-workflow/tests/compilation.rs` and add any
    smaller validation tests needed. Prove:
    - prompt section order is deterministic;
    - a role with no user prompt extension still renders valid mechanical
@@ -83,8 +83,8 @@ compiled role prompts.
 
 ## Constraints
 
-- Keep `harness-workflow` LLM- and provider-agnostic.
-- Do not touch `harness-agents/src/prompts/` in this phase except to inspect it
+- Keep `temper-workflow` LLM- and provider-agnostic.
+- Do not touch `temper-agents/src/prompts/` in this phase except to inspect it
   for contrast.
 - Do not change production worker wiring yet.
 - Keep docs focused and Rust files under the repository line-budget guidance.
@@ -98,16 +98,16 @@ cargo fmt --all
 cargo test --workspace --all-targets
 cargo dev-clippy
 cargo dev-check
-cargo test -p harness-testing --test multiprocess -- --ignored --test-threads=1
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
+cargo test -p temper-testing --test multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
 ```
 
-Also run configured live provider gates (`HARNESS_CHATGPT_OAUTH=1`,
-`HARNESS_ANTHROPIC_OAUTH=1`, `HARNESS_FORGEJO_LIVE=1`) when available. Follow
+Also run configured live provider gates (`TEMPER_CHATGPT_OAUTH=1`,
+`TEMPER_ANTHROPIC_OAUTH=1`, `TEMPER_FORGEJO_LIVE=1`) when available. Follow
 `docs/how-to/end-a-development-session.md` and include the validation log in the
 handoff.

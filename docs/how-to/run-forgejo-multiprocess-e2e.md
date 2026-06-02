@@ -1,11 +1,11 @@
-# Run the Forgejo end-to-end harness
+# Run the Forgejo end-to-end fixture
 
 > **Status: complete.** The full five-scenario multi-process test runs against a
 > real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
 > swapped to real**. With `--agents real` every role runs a real LLM through
-> quarantined `harness-testing` reference-delivery fixtures (ChatGPT OAuth by
+> quarantined `temper-testing` reference-delivery fixtures (ChatGPT OAuth by
 > default), while production workers use generic manifest-driven agents. The
 > production reference-delivery demo now carries the ADR 0009 webhook trigger;
 > the separate long-poll wakeup regression covers that path. The design rationale
@@ -13,17 +13,17 @@
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
 > [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
 
-This harness runs a **real Forgejo** server locally so the reference-delivery
-workflow can be exercised against the `harness-forge-forgejo` backend instead of
-the in-memory/filesystem backends. Like the `harness-forge-forgejo` live tests,
+This fixture runs a **real Forgejo** server locally so the reference-delivery
+workflow can be exercised against the `temper-forge-forgejo` backend instead of
+the in-memory/filesystem backends. Like the `temper-forge-forgejo` live tests,
 everything here is `#[ignore]`d **and** gated behind an environment variable, so
 a plain `cargo test` never downloads a binary or opens a socket.
 
 ## One-line command (the full test)
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
 This boots a Forgejo server **and** a host-mode `forgejo-runner`, provisions, and
@@ -38,35 +38,35 @@ The command above runs the deterministic **fake** agents. To run the **same**
 scenarios with real agents in every role (`--agents real`), set a second gate.
 The end state and the seed/assert closures are identical — only *who decides*
 changes. These fixed reference-delivery adapters are test fixtures, not
-production `harness-agents` prompt/adaptor surfaces.
+production `temper-agents` prompt/adaptor surfaces.
 
 Per the cost policy these runs default to **ChatGPT OAuth** (a flat subscription,
 not pay-per-token DeepSeek), reading the shared `~/.pi/agent/auth.json`. Log in
 once with `pi /login openai-codex`; **no DeepSeek key is required**:
 
 ```sh
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored \
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored \
   --test-threads=1 happy_path_converges_with_real_agents
 ```
 
 To opt into Anthropic OAuth instead, log in with `pi /login anthropic` and set
-`HARNESS_AGENTS_AUTH=anthropic-oauth` (optionally
-`HARNESS_AGENTS_ANTHROPIC_MODEL`):
+`TEMPER_AGENTS_AUTH=anthropic-oauth` (optionally
+`TEMPER_AGENTS_ANTHROPIC_MODEL`):
 
 ```sh
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 HARNESS_AGENTS_AUTH=anthropic-oauth \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored \
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 TEMPER_AGENTS_AUTH=anthropic-oauth \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored \
   --test-threads=1 happy_path_converges_with_real_agents
 ```
 
 To opt back to DeepSeek (the bring-your-own-key fallback), set
-`HARNESS_AGENTS_AUTH=deepseek` and provide the key:
+`TEMPER_AGENTS_AUTH=deepseek` and provide the key:
 
 ```sh
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 HARNESS_AGENTS_AUTH=deepseek \
-  HARNESS_DEEPSEEK_API_KEY_PATH="$PWD/.cache/deepseek-api-key" \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored \
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 TEMPER_AGENTS_AUTH=deepseek \
+  TEMPER_DEEPSEEK_API_KEY_PATH="$PWD/.cache/deepseek-api-key" \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored \
   --test-threads=1 happy_path_converges_with_real_agents
 ```
 
@@ -84,21 +84,21 @@ HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 HARNESS_AGENTS_AUTH=deepseek \
 
 The throwaway **forgejo web server** (a Go program), not the workers, can drive
 the host to **2+ cores of *sustained* CPU for minutes** under this multi-process
-workload. Brief git/CI spikes are normal; the steady runaway is the concern. The
-harness caps `GOMAXPROCS` on the spawned server and runner (default `2`, override
-with `HARNESS_FORGEJO_GOMAXPROCS`, or set it empty to opt out) so the Go runtime
+workload. Brief git/CI spikes are normal; the steady runaway is the concern.
+Temper caps `GOMAXPROCS` on the spawned server and runner (default `2`, override
+with `TEMPER_FORGEJO_GOMAXPROCS`, or set it empty to opt out) so the Go runtime
 cannot exceed ~2 cores — measured peak dropped from ~222% to ~112% with every
 scenario still converging. Note `taskset -cp` alone is insufficient: it re-pins
 only the main thread, while Go keeps goroutines on every core. If a run is
 **force-killed** (SIGKILL), the Rust `Drop` guards do not run — clean up orphans
-with `pkill -f forgejo` / `pkill -f harness-testing-worker` and
-`rm -rf /tmp/harness-forgejo-*`.
+with `pkill -f forgejo` / `pkill -f temper-testing-worker` and
+`rm -rf /tmp/temper-forgejo-*`.
 
 ## Smoke test (Phase 1)
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_server -- --ignored
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_server -- --ignored
 ```
 
 This boots a throwaway Forgejo on an ephemeral port against a fresh SQLite data
@@ -108,8 +108,8 @@ data dir on drop.
 ## Runner smoke test (Phase 1b)
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_runner -- --ignored
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_runner -- --ignored
 ```
 
 CI is **real**: this boots the server plus a host-mode `forgejo-runner`
@@ -130,11 +130,11 @@ only where that is acceptable.
 ## Provisioning + identity (Phase 2)
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_provision -- --ignored
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_provision -- --ignored
 ```
 
-`harness_testing::forgejo_server::provision(&server)` turns a freshly-booted
+`temper_testing::forgejo_server::provision(&server)` turns a freshly-booted
 server into a world the reference-delivery scenarios can run against, and returns
 a `Provisioned { admin_token, owner, name, repository, roles }`. It is the
 real-backend analogue of the filesystem `provision` step; because Forgejo
@@ -182,8 +182,8 @@ an async context" guard.
 ## PR-prep: making a head branch real before opening a PR (Phase 2b)
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_pr_prep -- --ignored
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_pr_prep -- --ignored
 ```
 
 On the filesystem/memory backends the fake engineer opens a PR with a head
@@ -192,14 +192,14 @@ branch (`fake/pr-for-code-{N}`) that is never a real git ref — nothing checks.
 `404 "The target couldn't be found."`. So a PR cannot be opened until its head
 branch exists with a commit that differs from base.
 
-`harness_testing::forgejo_server::prepare_pull_request_head(base_url, token,
+`temper_testing::forgejo_server::prepare_pull_request_head(base_url, token,
 owner, name, &input)` closes that gap. It is a **Forgejo-only** step a worker runs
 **before** `open_pull_request`, not a change to the backend-agnostic `Forge`
 trait. Given the same `CreatePullRequest` the agent already built, it:
 
 1. creates the head branch (`input.source.branch`) off the base branch
    (`input.target.branch`) — `POST …/branches`; and
-2. commits one trivial file unique to the head (`.harness-pr-prep/<head>.txt`) so
+2. commits one trivial file unique to the head (`.temper-pr-prep/<head>.txt`) so
    the head diverges from base with a non-empty diff — `POST …/contents/{path}`.
 
 It is **idempotent**: re-creating the branch (`409/422`) and re-committing the
@@ -214,8 +214,8 @@ mergeability asynchronously, so the test polls); and re-running prep is a no-op.
 ## The multi-process test (Phase 4)
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
 This is the Forgejo twin of `tests/multiprocess.rs`: the **same** one-process-per-part
@@ -223,7 +223,7 @@ rehearsal, but against a real Forgejo + a real host-mode `forgejo-runner`. For
 each of the five reference-delivery scenarios (happy path, changes-requested,
 CI-fails-then-passes, dependency-chain, and cross-repo fan-out) it boots a server
 + runner, provisions, seeds via the scenario's **exact** seed closure, spawns the
-`harness-testing-worker` binary `--backend forgejo --clock wall` once per
+`temper-testing-worker` binary `--backend forgejo --clock wall` once per
 role-with-an-agent plus one mechanical worker (**no** `--kind ci` — the real
 runner is the CI producer), polls the scenario's **exact** assert closure to
 convergence, then stops via the `--stop-file` sentinel and asserts each child
@@ -231,7 +231,7 @@ exited 0. Each scenario boots its own server+runner for isolation, so run it
 `--test-threads=1` (five servers at once is heavy). Budget several minutes.
 
 Secrets travel by env only: each role worker gets its token via
-`HARNESS_FORGEJO_TOKEN`, plus `HARNESS_FORGEJO_USERNAME`/`PASSWORD` for the
+`TEMPER_FORGEJO_TOKEN`, plus `TEMPER_FORGEJO_USERNAME`/`PASSWORD` for the
 web-UI CI read, never on argv.
 
 The only per-topology differences from the filesystem test are the worker flags
@@ -248,15 +248,15 @@ has no `actions/checkout` offline.
 Single repo:
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
 ```
 
 Multi repo, one fixed worker set:
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
 ```
 
 These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
@@ -283,7 +283,7 @@ env-gated, so it never fires there). The dedicated job:
 1. **Provides the two pinned binaries.** Either let the first run download +
    checksum them into `.cache/forgejo/` (needs network to Codeberg /
    code.forgejo.org), or pre-stage them and point
-   `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY` at the absolute
+   `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY` at the absolute
    paths (the offline/sandboxed path — see [Environment knobs](#environment-knobs)).
    Cache `.cache/forgejo/` across runs to avoid re-downloading.
 2. **Runs on a host that allows host-mode jobs.** The `forgejo-runner` registers
@@ -294,8 +294,8 @@ env-gated, so it never fires there). The dedicated job:
 3. **Invokes exactly:**
 
    ```sh
-   HARNESS_FORGEJO_E2E=1 \
-     cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+   TEMPER_FORGEJO_E2E=1 \
+     cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
    ```
 
    `--test-threads=1` keeps the five per-scenario servers from running at once.
@@ -320,28 +320,28 @@ Both are `linux-amd64` (the server is SQLite, statically linked).
 
 ### Environment knobs
 
-The server uses the `HARNESS_FORGEJO_*` namespace; the runner mirrors it under
-`HARNESS_FORGEJO_RUNNER_*`.
+The server uses the `TEMPER_FORGEJO_*` namespace; the runner mirrors it under
+`TEMPER_FORGEJO_RUNNER_*`.
 
 | Variable | Effect |
 | --- | --- |
-| `HARNESS_FORGEJO_E2E=1` | opt in (required); without it the tests no-op |
-| `HARNESS_FORGEJO_BINARY` | absolute path to a pre-downloaded **server** binary; skips its download and checksum (operator vouches for it) |
-| `HARNESS_FORGEJO_VERSION` | override the pinned server version in the default download URL |
-| `HARNESS_FORGEJO_URL` | override the server download URL (checked only when paired with `HARNESS_FORGEJO_SHA256`) |
-| `HARNESS_FORGEJO_SHA256` | override the expected server checksum |
-| `HARNESS_FORGEJO_RUNNER_BINARY` | absolute path to a pre-downloaded **runner** binary; skips its download and checksum |
-| `HARNESS_FORGEJO_RUNNER_VERSION` | override the pinned runner version in the default download URL |
-| `HARNESS_FORGEJO_RUNNER_URL` | override the runner download URL (checked only when paired with `HARNESS_FORGEJO_RUNNER_SHA256`) |
-| `HARNESS_FORGEJO_RUNNER_SHA256` | override the expected runner checksum |
+| `TEMPER_FORGEJO_E2E=1` | opt in (required); without it the tests no-op |
+| `TEMPER_FORGEJO_BINARY` | absolute path to a pre-downloaded **server** binary; skips its download and checksum (operator vouches for it) |
+| `TEMPER_FORGEJO_VERSION` | override the pinned server version in the default download URL |
+| `TEMPER_FORGEJO_URL` | override the server download URL (checked only when paired with `TEMPER_FORGEJO_SHA256`) |
+| `TEMPER_FORGEJO_SHA256` | override the expected server checksum |
+| `TEMPER_FORGEJO_RUNNER_BINARY` | absolute path to a pre-downloaded **runner** binary; skips its download and checksum |
+| `TEMPER_FORGEJO_RUNNER_VERSION` | override the pinned runner version in the default download URL |
+| `TEMPER_FORGEJO_RUNNER_URL` | override the runner download URL (checked only when paired with `TEMPER_FORGEJO_RUNNER_SHA256`) |
+| `TEMPER_FORGEJO_RUNNER_SHA256` | override the expected runner checksum |
 
 A mismatched checksum fails loudly; the partial download is never published to
 the cache path. A sandboxed/offline machine should point the two `*_BINARY`
 overrides at pre-downloaded binaries.
 
-## Why blocking HTTP in the harness
+## Why blocking HTTP in Temper
 
-The harness downloads the binary and polls readiness with a **blocking**
-`reqwest` client. The async `harness-forge-forgejo` backend needs a Tokio
+Temper downloads the binary and polls readiness with a **blocking**
+`reqwest` client. The async `temper-forge-forgejo` backend needs a Tokio
 reactor, so driving it against the live server happens in the multi-process test
 (under an async runtime), not in the Phase 1 lifecycle code.

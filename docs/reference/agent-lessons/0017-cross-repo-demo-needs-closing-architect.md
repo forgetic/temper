@@ -26,6 +26,6 @@ role agents no longer expose a hard-coded closing-architect flag.
 
 ## Where this is now documented
 
-- `examples/reference-delivery/config/harness.env`
+- `examples/reference-delivery/config/temper.env`
 - `examples/reference-delivery/README.md`
 - `docs/how-to/run-cross-repo-reference-delivery-demo.md`

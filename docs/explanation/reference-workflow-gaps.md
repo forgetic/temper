@@ -1,7 +1,7 @@
 # Reference workflow: gap record
 
 This page records the expression and runtime gaps discovered while transcribing
-`reference-workflow.md` into `crates/harness-workflow/fixtures/reference-delivery.json`
+`reference-workflow.md` into `crates/temper-workflow/fixtures/reference-delivery.json`
 and exercising it through `tests/reference_delivery.rs`.
 
 The label-state-machine core — roles, type/state labels, artifact-scoped state

@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Harness is intended to be developed over time by humans and autonomous agents. Future contributors need documentation that makes intent, tasks, contracts, and rationale easy to find.
+Temper is intended to be developed over time by humans and autonomous agents. Future contributors need documentation that makes intent, tasks, contracts, and rationale easy to find.
 
 ## Decision
 

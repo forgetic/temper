@@ -1,6 +1,6 @@
 # Agent entry point
 
-This file is the first stop for coding agents working in Harness. It should be changed only if the codebase map or documentation map changes.
+This file is the first stop for coding agents working in Temper. It should be changed only if the codebase map or documentation map changes.
 Keep it as an orientation map only; stable process rules and detailed status live in the linked docs.
 For every session, read `README.md` first and then open the task-relevant docs below.
 
@@ -10,15 +10,15 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 
 | Path | Look here for |
 | --- | --- |
-| `crates/harness-forge/` | Portable Forge model and `Forge` trait; start here for provider-neutral issue, PR, review, dependency, CI, and change-hint API changes. |
-| `crates/harness-forge-memory/` | Fast in-memory reference backend for deterministic workflow tests and local scenarios. |
-| `crates/harness-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, and multi-process/process-split tests. |
-| `crates/harness-forge-forgejo/` | Forgejo HTTP backend, provider-specific mapping, optional live smoke tests, and offline mock-contract tests. |
-| `crates/harness-workflow/` | Workflow definitions and runtime logic: validation, classification, compilation, planning/execution, leases, reconciliation, and recovery. |
-| `crates/harness-runner/` | Backend-agnostic worker runtime: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and external-tool seams such as `coding_workspace`. |
-| `crates/harness-testing/` | Non-production fakes, fixtures, scenario drivers, CI sinks, the testing worker binary, and gated e2e rehearsals. |
-| `crates/harness-agents/` | Real in-process manifest-driven LLM role agents and provider/auth wiring; keep pi SDK usage here and keep workflow-role behavior in user config, not checked-in prompts. |
-| `crates/harness-production/` | Deployable Forgejo binaries: workers, provisioning, webhook trigger, product-manager chat, and production external-tool bindings. |
+| `crates/temper-forge/` | Portable Forge model and `Forge` trait; start here for provider-neutral issue, PR, review, dependency, CI, and change-hint API changes. |
+| `crates/temper-forge-memory/` | Fast in-memory reference backend for deterministic workflow tests and local scenarios. |
+| `crates/temper-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, and multi-process/process-split tests. |
+| `crates/temper-forge-forgejo/` | Forgejo HTTP backend, provider-specific mapping, optional live smoke tests, and offline mock-contract tests. |
+| `crates/temper-workflow/` | Workflow definitions and runtime logic: validation, classification, compilation, planning/execution, leases, reconciliation, and recovery. |
+| `crates/temper-runner/` | Backend-agnostic worker runtime: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and external-tool seams such as `coding_workspace`. |
+| `crates/temper-testing/` | Non-production fakes, fixtures, scenario drivers, CI sinks, the testing worker binary, and gated e2e rehearsals. |
+| `crates/temper-agents/` | Real in-process manifest-driven LLM role agents and provider/auth wiring; keep pi SDK usage here and keep workflow-role behavior in user config, not checked-in prompts. |
+| `crates/temper-production/` | Deployable Forgejo binaries: workers, provisioning, webhook trigger, product-manager chat, and production external-tool bindings. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo and launch scripts. |
 | `plans/` | Roadmaps and findings; promote stable behavior into `docs/` before relying on it. |
 

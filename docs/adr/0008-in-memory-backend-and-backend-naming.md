@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Harness had one concrete `Forge` backend, the filesystem store in the `harness-fs`
+Temper had one concrete `Forge` backend, the filesystem store in the `temper-fs`
 crate. It is deterministic and good for development, but every operation touches
 the filesystem: temporary directories must be created and cleaned up, records
 round-trip through JSON, and stored data is re-validated on every read.
@@ -18,7 +18,7 @@ simpler and faster, with no temp-directory lifecycle and no JSON serialization.
 
 Two further problems shaped the decision:
 
-- The crate name `harness-fs` did not signal that it is one *Forge backend*
+- The crate name `temper-fs` did not signal that it is one *Forge backend*
   among several. As more backends arrive (in-memory now, Forgejo or GitHub
   later) an unprefixed name does not scale.
 - The filesystem backend's only way to exercise the `ForgeError::Backend` error
@@ -27,11 +27,11 @@ Two further problems shaped the decision:
 
 ## Decision
 
-Adopt a `harness-forge-<provider>` naming convention for concrete backends:
+Adopt a `temper-forge-<provider>` naming convention for concrete backends:
 
-- rename `harness-fs` to `harness-forge-filesystem` (the `FilesystemForge` type
+- rename `temper-fs` to `temper-forge-filesystem` (the `FilesystemForge` type
   name is unchanged), and
-- add `harness-forge-memory` with an in-memory `MemoryForge`.
+- add `temper-forge-memory` with an in-memory `MemoryForge`.
 
 `MemoryForge` reproduces the filesystem backend's observable contract: the same
 deterministic identifier scheme, the same one-second logical clock, the same
@@ -51,8 +51,8 @@ exercises. A test arms a fault and the next call to that operation returns
 `ForgeError::Backend` before touching state. This replaces filesystem corruption
 as the way to test backend error paths and stays deterministic.
 
-Run the workflow-layer integration tests against `harness-forge-memory`. Keep
-the filesystem backend's own conformance tests on `harness-forge-filesystem`,
+Run the workflow-layer integration tests against `temper-forge-memory`. Keep
+the filesystem backend's own conformance tests on `temper-forge-filesystem`,
 because those tests exist to verify the filesystem backend specifically.
 
 ## Consequences
@@ -65,4 +65,4 @@ because those tests exist to verify the filesystem backend specifically.
   backends and both pages.
 - The duplicated helper logic must be changed in both crates when the shared
   semantics change. This is an accepted, documented trade-off.
-- The `harness-forge-` prefix sets the pattern for future backends.
+- The `temper-forge-` prefix sets the pattern for future backends.

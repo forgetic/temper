@@ -10,7 +10,7 @@ can produce meaningful product-code diffs before an implementation PR is opened.
 
 ## Session bootstrap
 
-1. Confirm you are in `/home/free/src/rust/harness`.
+1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `AGENTS.md`, `plans/user-defined-role-agents/README.md`, and Phases 1–4
    diffs.
 3. Read dogfood safety context:
@@ -18,10 +18,10 @@ can produce meaningful product-code diffs before an implementation PR is opened.
    - `examples/dogfood/README.md`
    - `examples/dogfood/config/dogfood.env`
 4. Read current PR prep/diff guard code:
-   - `crates/harness-production/src/forgejo_prep.rs`
-   - `crates/harness-production/src/pr_diff_guard.rs`
-   - `crates/harness-production/src/worker.rs`
-   - `crates/harness-testing/src/worker_bin/forgejo_engineer.rs`
+   - `crates/temper-production/src/forgejo_prep.rs`
+   - `crates/temper-production/src/pr_diff_guard.rs`
+   - `crates/temper-production/src/worker.rs`
+   - `crates/temper-testing/src/worker_bin/forgejo_engineer.rs`
 5. Read the generic agent/external tool binding code from Phases 2–4.
 
 ## Task
@@ -49,7 +49,7 @@ Implement a safe coding workspace seam and bind it as a declared external tool.
    must refuse to open a PR if the workspace did not produce a real diff.
 
 4. **Diff safety.** Reuse or extend `pr_diff_guard` so production dogfood rejects
-   synthetic/bookkeeping-only diffs such as `.harness-pr-prep` or `.harness-ci`
+   synthetic/bookkeeping-only diffs such as `.temper-pr-prep` or `.temper-ci`
    changes. Add tests that reject synthetic-only diffs and accept a fixture
    product-code change.
 
@@ -82,13 +82,13 @@ cargo fmt --all
 cargo test --workspace --all-targets
 cargo dev-clippy
 cargo dev-check
-cargo test -p harness-testing --test multiprocess -- --ignored --test-threads=1
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
+cargo test -p temper-testing --test multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
 ```
 
 Run configured live provider gates and any new git/workspace focused tests. Follow

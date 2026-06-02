@@ -11,7 +11,7 @@ Current guides:
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
 - [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)
-- [Run the Forgejo multi-process end-to-end harness](run-forgejo-multiprocess-e2e.md)
+- [Run the Forgejo multi-process end-to-end fixture](run-forgejo-multiprocess-e2e.md)
 - [Use OAuth auth modes for the LLM agents](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — now wired
@@ -24,4 +24,4 @@ Planned guides:
 - Add a new Forge backend.
 - Extend the Forge domain model safely.
 - Write deterministic backend conformance tests.
-- Map a provider-specific CI status into Harness CI states.
+- Map a provider-specific CI status into Temper CI states.

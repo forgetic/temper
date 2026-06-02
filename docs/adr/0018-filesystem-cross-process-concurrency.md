@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The filesystem backend (`harness-forge-filesystem`) stores all of a repository's
+The filesystem backend (`temper-forge-filesystem`) stores all of a repository's
 issues in one `issues.json`, all pull requests in one `pull_requests.json`, and
 the logical clock plus ID counters in one `metadata.json`. Each file is written
 through a temporary file followed by an atomic `rename`, so a single write is
@@ -56,7 +56,7 @@ workspace `forbid(unsafe_code)` lint stays intact for our crates.
 ### Why this is filesystem-specific
 
 This is a durability concern of a shared on-disk store, not an observable
-contract change. The single-process in-memory backend (`harness-forge-memory`)
+contract change. The single-process in-memory backend (`temper-forge-memory`)
 already serializes every operation behind one interior mutex and cannot be shared
 across OS processes, so it needs no parallel change. That keeps the ADR 0008
 observable-contract parity honest: both backends still expose identical behaviour

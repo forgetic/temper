@@ -20,7 +20,7 @@ that trait before we have cross-provider evidence would overfit Phase 1.
 
 ## Decision
 
-Add `artifact::ArtifactRef` in `harness-workflow` as the workflow-layer link
+Add `artifact::ArtifactRef` in `temper-workflow` as the workflow-layer link
 reference. Its portable fully resolved shape is:
 
 - `RepositoryId` — the repository containing the linked item;
@@ -32,7 +32,7 @@ and native dependency reads can use a same-repository shorthand. `None` means
 explicit repo-qualified target. Constructors make both cases clear:
 `ArtifactRef::same_repo(number)` and `ArtifactRef::in_repo(repo_id, number)`.
 
-`ArtifactRef` lives in `harness-workflow`, not `harness-forge`, because it is a
+`ArtifactRef` lives in `temper-workflow`, not `temper-forge`, because it is a
 workflow relation/reference model. The Forge domain model continues to expose
 provider-owned native dependency links as same-repository `ItemNumber`s per ADR
 0015, and no `Forge` trait method changes in this phase.
@@ -68,7 +68,7 @@ without changing the Forge trait.
 
 ## Alternatives considered
 
-- **Move the type to `harness-forge`.** Rejected for this phase: native Forge
+- **Move the type to `temper-forge`.** Rejected for this phase: native Forge
   artifacts still expose same-repository dependency numbers, while this type is
   specifically the workflow relation projection.
 - **Require every reference to serialize with a repository id immediately.**

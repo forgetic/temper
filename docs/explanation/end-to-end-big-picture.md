@@ -1,7 +1,7 @@
 # End-to-end big picture
 
 This page is the deployment-topology view: once the workflow core is complete
-and a `harness-forge-forgejo` backend exists, *where does each piece run and how
+and a `temper-forge-forgejo` backend exists, *where does each piece run and how
 do they fit together?* It does not restate the conceptual layering (see the
 "Layer model" in [Agentic workflows](agentic-workflows.md)), the triggering
 decision ([ADR 0009](../adr/0009-triggering-model-webhook-accelerated-poll-backstopped.md)),
@@ -11,7 +11,7 @@ It is the picture that ties them together for an operator.
 
 ## The four planes
 
-Harness is arranged so that **the Forge is the only authoritative state.**
+Temper is arranged so that **the Forge is the only authoritative state.**
 Nothing above it holds durable truth, which is what makes the system crash-safe
 and freely restartable. Four planes:
 
@@ -22,10 +22,10 @@ and freely restartable. Four planes:
 │  + workflow metadata blocks in bodies (kind / parents / deps  │
 │    / correlation_key / lease)        ← single source of truth │
 └───────────────────────────────────────────────────────────────┘
-        ▲ query / mutate (harness-forge-forgejo)   ▲ git push, CI
+        ▲ query / mutate (temper-forge-forgejo)   ▲ git push, CI
         │                                          │
 ┌─ Control plane ──────────────────────┐   ┌─ Worker plane ─────┐
-│  harness runner / controller         │   │ disposable agents  │
+│  Temper runner / controller         │   │ disposable agents  │
 │  • holds Compiled/ValidatedWorkflow  │──▶│ (LLM or human)     │
 │  • trigger loop (poll + webhook)     │   │ • role prompt      │
 │  • classify → plan → dispatch        │   │ • role tools only  │
@@ -39,8 +39,8 @@ and freely restartable. Four planes:
 └───────────────────────────────────────────────────────────────┘
 ```
 
-The three conceptual layers map onto this directly: `harness-forge` is the Forge
-plane interface, `harness-workflow` is the brain inside the control plane, and
+The three conceptual layers map onto this directly: `temper-forge` is the Forge
+plane interface, `temper-workflow` is the brain inside the control plane, and
 "agent runners" are the worker plane. The signal plane is the triggering model
 made operational.
 
@@ -60,13 +60,13 @@ as shared durable truth.
   compiled `LabelManifest`; the workflow's bot users are registered; webhooks
   point at the runner.
 - **The runner**: one long-lived service is enough to start. It holds the loaded
-  `ValidatedWorkflow`/`CompiledWorkflow`, a `harness-forge-forgejo` client, the
+  `ValidatedWorkflow`/`CompiledWorkflow`, a `temper-forge-forgejo` client, the
   trigger loop, and instances of `Executor`, `Reconciler`, and
   `recover::Applier`. Stateless, so restart/scale-out is safe.
 - **Agent workers**: ephemeral, one per claimed work item (or a small per-role
   pool sized by the role's `concurrency` hint — `engineer: 3`, `reviewer: 2` in
   the reference fixture). Each needs model/API access, a git workspace if the
-  role touches code, the harness tool layer pointed at Forgejo, and a worker
+  role touches code, the Temper tool layer pointed at Forgejo, and a worker
   identity for its lease.
 
 ## Mechanical vs. judgment dispatch
@@ -96,7 +96,7 @@ the runtime guarantees in [the workflow-layer reference](../reference/workflow-l
 What exists today is the whole decision core (spec → validate → compile →
 classify → plan → execute → reconcile → apply, with leases, journaling, and
 proven safety properties), runnable against the reference backends, plus the
-initial `harness-runner` worker-plane primitives: read-only scans that turn fresh
+initial `temper-runner` worker-plane primitives: read-only scans that turn fresh
 Forge state into active-queue work items, `Agent`/`RoleTools`, tickable
 `Worker`/`RoleWorker` units for judgment work, `MechanicalWorker` for the
 controller-plane reconcile → apply loop, `PollLoop` for one-worker cadence, and
@@ -108,7 +108,7 @@ See [Run the reference delivery end-to-end scenarios](../how-to/run-reference-de
 and [Runner process split bridge](runner-process-split.md). The remaining path
 to a live deployment, in dependency order:
 
-1. **`harness-forge-forgejo`** — implement the existing trait against Forgejo's
+1. **`temper-forge-forgejo`** — implement the existing trait against Forgejo's
    API, including the `Version`/`expected_version` CAS primitive
    ([ADR 0013](../adr/0013-portable-optimistic-concurrency.md)) and
    `list_ci_jobs` over Forgejo Actions, keeping observable-contract parity with

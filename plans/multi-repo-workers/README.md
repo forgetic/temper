@@ -5,7 +5,7 @@
 > trigger/wake path, and this one must build on the final hint contract rather
 > than race it.
 
-Today each `harness-worker` process is bound to one `--repo owner/name`. The
+Today each `temper-worker` process is bound to one `--repo owner/name`. The
 workflow and Forge interfaces are already repository-scoped, so this plan turns
 that deployment choice into a fixed worker pool that can process any configured
 repository independently.
@@ -59,7 +59,7 @@ Status legend: ☐ pending · ☑ done
    Add a backend-agnostic multi-repo runner layer, with fast unit tests on
    `MemoryForge`. Prove one role worker and one mechanical worker can process
    two repositories independently, with no cross-repo label/comment/PR leakage.
-   Done: `harness-runner::RepositorySet`/`RepositoryTarget` define the ordered
+   Done: `temper-runner::RepositorySet`/`RepositoryTarget` define the ordered
    repository set and hint-prioritized scan helpers; `MultiRepoRoleWorker` and
    `MultiRepoMechanicalWorker` delegate to the existing single-repo workers;
    `MultiRepoTickReport`/`MultiRepoError` report repository-scoped partial
@@ -70,7 +70,7 @@ Status legend: ☐ pending · ☑ done
 
    Exercise the same multi-repo layer on `FilesystemForge` with distinct handles
    and process-style isolation. Prove repository-scoped persistence, leases, and
-   recovery stay independent across repos. Done: `harness-runner` now has
+   recovery stay independent across repos. Done: `temper-runner` now has
    `tests/multi_repo_filesystem.rs`, covering durable two-repo role progress
    across fresh handles, per-repo mechanical journals with identical command ids,
    repo-local lease/dependency recovery after wrapper restart, and filesystem
@@ -84,7 +84,7 @@ Status legend: ☐ pending · ☑ done
    Extend production worker/provisioning surfaces from one `--repo` to an
    explicit repository set, while keeping the old single-repo mode as a special
    case. Ensure labels can be applied idempotently to every configured repo.
-   Done: `harness-worker` accepts repeated `--repo owner/name` values and
+   Done: `temper-worker` accepts repeated `--repo owner/name` values and
    `--repo-list <path>` (one `owner/name` per non-comment line), deduplicates the
    configured scan shard, resolves every repo at startup with redacted
    not-found/not-readable errors, logs the resolved set, ensures workflow labels
@@ -101,7 +101,7 @@ Status legend: ☐ pending · ☑ done
    Add end-to-end regressions that start one fixed worker set and file issues in
    multiple repos. Include a deterministic filesystem/process test and a gated
    real-Forgejo test using the completed webhook wake path. Done:
-   `harness-testing/tests/multi_repo_multiprocess.rs` provisions two filesystem
+   `temper-testing/tests/multi_repo_multiprocess.rs` provisions two filesystem
    repos and runs one fake worker set over both; `forgejo_multi_repo_webhook.rs`
    boots throwaway Forgejo + real runner, provisions a second repo, registers
    webhooks for both repos, launches one multi-repo fake worker set with long
@@ -110,7 +110,7 @@ Status legend: ☐ pending · ☑ done
 5. ☑ **Phase 5 — Examples and operator docs.**
    `prompts/phase-5-examples-and-docs.md`
 
-   Done: `examples/reference-delivery/config/harness.env` now defaults to a
+   Done: `examples/reference-delivery/config/temper.env` now defaults to a
    two-repo demo set while preserving `REPOS=` → `OWNER/NAME` single-repo mode;
    `run.sh` provisions every configured repo (labels, CI, webhook, seeded intake
    issue), launches one fixed worker set with repeated `--repo` flags, prints
@@ -139,14 +139,14 @@ Status legend: ☐ pending · ☑ done
 ## Relevant starting points
 
 - `plans/hint-driven-wakeups/README.md` — must be complete before this starts.
-- `crates/harness-runner/src/worker.rs`
-- `crates/harness-runner/src/scan.rs`
-- `crates/harness-runner/src/driver.rs`
-- `crates/harness-runner/src/trigger.rs`
-- `crates/harness-production/src/worker.rs`
-- `crates/harness-production/src/worker_args.rs`
-- `crates/harness-production/src/provision.rs`
-- `crates/harness-testing/src/worker_bin/`
-- `crates/harness-testing/tests/multiprocess.rs`
-- `crates/harness-testing/tests/forgejo_multiprocess.rs`
+- `crates/temper-runner/src/worker.rs`
+- `crates/temper-runner/src/scan.rs`
+- `crates/temper-runner/src/driver.rs`
+- `crates/temper-runner/src/trigger.rs`
+- `crates/temper-production/src/worker.rs`
+- `crates/temper-production/src/worker_args.rs`
+- `crates/temper-production/src/provision.rs`
+- `crates/temper-testing/src/worker_bin/`
+- `crates/temper-testing/tests/multiprocess.rs`
+- `crates/temper-testing/tests/forgejo_multiprocess.rs`
 - `examples/reference-delivery/run.sh`

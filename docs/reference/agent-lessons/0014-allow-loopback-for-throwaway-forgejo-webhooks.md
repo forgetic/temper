@@ -35,8 +35,8 @@ setting before debugging signatures or worker wake sockets.
 
 ## Where this is now documented
 
-- `crates/harness-testing/src/forgejo_server/mod.rs` writes the loopback
+- `crates/temper-testing/src/forgejo_server/mod.rs` writes the loopback
   `ALLOWED_HOST_LIST` into the e2e fixture config.
 - `examples/reference-delivery/run.sh` writes the same setting for the demo.
-- `crates/harness-testing/tests/forgejo_webhook_wakeup.rs` live-validates the
+- `crates/temper-testing/tests/forgejo_webhook_wakeup.rs` live-validates the
   path by requiring accepted Forgejo webhooks to wake long-poll workers.

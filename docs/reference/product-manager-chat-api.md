@@ -1,6 +1,6 @@
 # Product-manager chat local API
 
-Harness provides the product-manager conversation **integration surface**: Forgejo
+Temper provides the product-manager conversation **integration surface**: Forgejo
 transcripts, product-manager LLM turns, draft intake issue storage, and explicit
 filing into the normal workflow. External repositories may build a web app,
 PWA/Android wrapper, Matrix bridge, or voice UI on top of this API. This
@@ -9,31 +9,31 @@ repository does not ship those frontends.
 ## Command
 
 ```sh
-harness-product-manager-chat serve \
+temper-product-manager-chat serve \
   --bind 127.0.0.1:39200 \
   --base-url https://git.ekanayaka.io \
-  --repo ai/harness \
+  --repo ai/temper \
   --auth chatgpt-oauth
 ```
 
 `--bind` defaults to `127.0.0.1:39200`. Non-loopback binds require both
-`--allow-non-loopback` and `HARNESS_PRODUCT_CHAT_SERVICE_TOKEN`.
+`--allow-non-loopback` and `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`.
 
 Secrets come from env, never argv:
 
-- `HARNESS_PRODUCT_CHAT_HUMAN_TOKEN`: Forgejo token for human transcript turns.
-- `HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN`: Forgejo token for product-manager
+- `TEMPER_PRODUCT_CHAT_HUMAN_TOKEN`: Forgejo token for human transcript turns.
+- `TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN`: Forgejo token for product-manager
   replies and filed intake issues.
-- `HARNESS_PRODUCT_CHAT_SERVICE_TOKEN`: optional local API bearer token; required
+- `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`: optional local API bearer token; required
   for non-loopback binds.
-- `HARNESS_AGENTS_AUTH`, `HARNESS_AGENTS_CODEX_MODEL`,
-  `HARNESS_AGENTS_AUTH_FILE`, and provider-specific auth envs follow the normal
-  `harness-agents` rules. CLI `--auth`, `--codex-model`, and `--auth-file`
+- `TEMPER_AGENTS_AUTH`, `TEMPER_AGENTS_CODEX_MODEL`,
+  `TEMPER_AGENTS_AUTH_FILE`, and provider-specific auth envs follow the normal
+  `temper-agents` rules. CLI `--auth`, `--codex-model`, and `--auth-file`
   override the matching defaults.
 
 ## Authentication
 
-When `HARNESS_PRODUCT_CHAT_SERVICE_TOKEN` is set, every request must include:
+When `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN` is set, every request must include:
 
 ```text
 Authorization: Bearer <token>
@@ -65,7 +65,7 @@ Request:
 {
   "id": "pc-...",
   "transcript_issue": 3,
-  "transcript_url": "https://git.ekanayaka.io/ai/harness/issues/3",
+  "transcript_url": "https://git.ekanayaka.io/ai/temper/issues/3",
   "drafts": []
 }
 ```
@@ -101,7 +101,7 @@ Response (`200`):
       "rationale": "..."
     }
   ],
-  "transcript_url": "https://git.ekanayaka.io/ai/harness/issues/3"
+  "transcript_url": "https://git.ekanayaka.io/ai/temper/issues/3"
 }
 ```
 
@@ -123,10 +123,10 @@ Response (`200`):
   "created": false,
   "issue": {
     "number": 4,
-    "url": "https://git.ekanayaka.io/ai/harness/issues/4",
+    "url": "https://git.ekanayaka.io/ai/temper/issues/4",
     "title": "Add product-manager Matrix text adapter"
   },
-  "transcript_url": "https://git.ekanayaka.io/ai/harness/issues/3"
+  "transcript_url": "https://git.ekanayaka.io/ai/temper/issues/3"
 }
 ```
 

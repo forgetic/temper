@@ -14,7 +14,7 @@ small common subset that can drive gates without leaking provider rules.
 
 ## Decision
 
-Add a minimal review model to `harness-forge`:
+Add a minimal review model to `temper-forge`:
 
 - pull requests carry `requested_reviewers: Vec<UserId>`;
 - `request_pull_request_reviewers` adds reviewers set-like and idempotently;

@@ -12,9 +12,9 @@ workflow intake issues only after explicit human command.
    - Phase 1 and Phase 2 changes
    - `examples/dogfood/README.md`
    - `examples/dogfood/run.sh`
-   - `crates/harness-production/src/worker_args.rs` for CLI parsing style
-   - `crates/harness-production/src/forgejo_rest.rs` for REST helper style
-   - `crates/harness-workflow/src/execute/ensure.rs` for correlation-key pattern
+   - `crates/temper-production/src/worker_args.rs` for CLI parsing style
+   - `crates/temper-production/src/forgejo_rest.rs` for REST helper style
+   - `crates/temper-workflow/src/execute/ensure.rs` for correlation-key pattern
    - `docs/reference/workflow-layer.md` idempotent create section
 3. Keep the MVP terminal-only. Do not add a web app or frontend assets.
 
@@ -41,17 +41,17 @@ and get an interactive session that:
 Add a production-owned binary, for example:
 
 ```text
-crates/harness-production/src/bin/harness-product-manager-chat.rs
+crates/temper-production/src/bin/temper-product-manager-chat.rs
 ```
 
-and wire it in `crates/harness-production/Cargo.toml`.
+and wire it in `crates/temper-production/Cargo.toml`.
 
 The binary should support a REPL mode such as:
 
 ```sh
-harness-product-manager-chat repl \
+temper-product-manager-chat repl \
   --base-url https://git.ekanayaka.io \
-  --repo ai/harness \
+  --repo ai/temper \
   --auth chatgpt-oauth \
   [--codex-model gpt-5.5] \
   [--auth-file ~/.pi/agent/auth.json] \
@@ -61,8 +61,8 @@ harness-product-manager-chat repl \
 Secrets must come from env, not argv. Suggested env names:
 
 ```sh
-HARNESS_PRODUCT_CHAT_HUMAN_TOKEN=...
-HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN=...
+TEMPER_PRODUCT_CHAT_HUMAN_TOKEN=...
+TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN=...
 ```
 
 Optional username/password envs can be added only if the Forgejo backend path
@@ -73,8 +73,8 @@ Extend `examples/dogfood/run.sh`:
 - add `product-chat` to usage;
 - build/resolve the new binary;
 - load config and parse secrets;
-- mint or use the human/admin token for `HARNESS_PRODUCT_CHAT_HUMAN_TOKEN`;
-- require `HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER` for the product-manager token;
+- mint or use the human/admin token for `TEMPER_PRODUCT_CHAT_HUMAN_TOKEN`;
+- require `TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER` for the product-manager token;
 - pass auth/model flags consistently with existing role workers;
 - snapshot `product-chat` runs if the command blocks long enough that editing
   the script during a session could otherwise affect teardown/behavior.
@@ -92,7 +92,7 @@ Transcript issue requirements:
 
 - title default: `Product conversation: <date/time or short topic>`;
 - body contains a hidden marker, e.g.
-  `<!-- harness:product-chat-session=<session-key> -->`;
+  `<!-- temper:product-chat-session=<session-key> -->`;
 - labels: `product` only;
 - no `untriaged`;
 - if `--transcript-issue` is supplied, verify the issue exists and has `product`.
@@ -123,7 +123,7 @@ When `/file <n>` is entered:
   - the draft body;
   - backlink to the transcript issue;
   - a hidden correlation marker such as
-    `<!-- harness:product-chat-file=<session-key>:<draft-slug> -->`;
+    `<!-- temper:product-chat-file=<session-key>:<draft-slug> -->`;
   - `requested-by: <human>` if the current human identity is known.
 - before creating, search existing issues for the same correlation marker and
   return the existing issue if found.
@@ -134,7 +134,7 @@ human confirmation boundary.
 ## Core factoring
 
 Do not bury all logic in `main`. Add a small integration core module under
-`harness-production`, for example:
+`temper-production`, for example:
 
 ```text
 src/product_chat.rs
@@ -172,7 +172,7 @@ Run:
 
 ```sh
 cargo fmt --all
-cargo test -p harness-production product_chat
+cargo test -p temper-production product_chat
 cargo dev-check
 ```
 

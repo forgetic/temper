@@ -9,16 +9,16 @@ implicit authority or registering undeclared SDK tools.
 
 ## Session bootstrap
 
-1. Confirm you are in `/home/free/src/rust/harness`.
+1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `AGENTS.md`, `plans/user-defined-role-agents/README.md`, and Phases 1–3
    diffs.
 3. Read:
-   - `crates/harness-workflow/src/spec.rs`
-   - `crates/harness-workflow/src/compile.rs`
-   - the generic role-agent module in `crates/harness-agents`
-   - `crates/harness-runner/src/agent.rs`
-   - `crates/harness-runner/src/config.rs`
-   - `crates/harness-production/src/worker.rs`
+   - `crates/temper-workflow/src/spec.rs`
+   - `crates/temper-workflow/src/compile.rs`
+   - the generic role-agent module in `crates/temper-agents`
+   - `crates/temper-runner/src/agent.rs`
+   - `crates/temper-runner/src/config.rs`
+   - `crates/temper-production/src/worker.rs`
 4. Re-read `docs/reference/agent-lessons/0021-user-defined-roles-own-prompt-behavior.md`.
 
 ## Task
@@ -84,8 +84,8 @@ validation.
 
 - Do not implement the coding workspace itself in this phase; Phase 5 does that.
 - Do not add generic Forge mutation tools for the LLM.
-- Keep `harness-workflow` provider-agnostic and execution-free.
-- Keep `harness-agents` the only crate depending on the LLM SDK.
+- Keep `temper-workflow` provider-agnostic and execution-free.
+- Keep `temper-agents` the only crate depending on the LLM SDK.
 
 ## Done
 
@@ -96,13 +96,13 @@ cargo fmt --all
 cargo test --workspace --all-targets
 cargo dev-clippy
 cargo dev-check
-cargo test -p harness-testing --test multiprocess -- --ignored --test-threads=1
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
+cargo test -p temper-testing --test multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
 ```
 
 Run configured live provider gates when available. Follow

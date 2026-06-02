@@ -2760,141 +2760,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-agents"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "harness-forge",
- "harness-forge-forgejo",
- "harness-forge-memory",
- "harness-runner",
- "harness-testing",
- "harness-workflow",
- "pi_agent_rust",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "harness-forge"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "harness-forge-filesystem"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "fs2",
- "harness-forge",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "harness-forge-forgejo"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "harness-forge",
- "harness-workflow",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "harness-forge-memory"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "harness-forge",
-]
-
-[[package]]
-name = "harness-production"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "chrono",
- "harness-agents",
- "harness-forge",
- "harness-forge-forgejo",
- "harness-forge-memory",
- "harness-runner",
- "harness-workflow",
- "hmac 0.12.1",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
-name = "harness-runner"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "harness-forge",
- "harness-forge-filesystem",
- "harness-forge-memory",
- "harness-testing",
- "harness-workflow",
- "serde_json",
-]
-
-[[package]]
-name = "harness-testing"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "chrono",
- "harness-agents",
- "harness-forge",
- "harness-forge-filesystem",
- "harness-forge-forgejo",
- "harness-forge-memory",
- "harness-production",
- "harness-runner",
- "harness-workflow",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
-name = "harness-workflow"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "harness-forge",
- "harness-forge-filesystem",
- "harness-forge-memory",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5949,6 +5814,141 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+
+[[package]]
+name = "temper-agents"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "pi_agent_rust",
+ "serde",
+ "serde_json",
+ "temper-forge",
+ "temper-forge-forgejo",
+ "temper-forge-memory",
+ "temper-runner",
+ "temper-testing",
+ "temper-workflow",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "temper-forge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "temper-forge-filesystem"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "fs2",
+ "serde",
+ "serde_json",
+ "temper-forge",
+]
+
+[[package]]
+name = "temper-forge-forgejo"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "temper-forge",
+ "temper-workflow",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "temper-forge-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "temper-forge",
+]
+
+[[package]]
+name = "temper-production"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "hmac 0.12.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "temper-agents",
+ "temper-forge",
+ "temper-forge-forgejo",
+ "temper-forge-memory",
+ "temper-runner",
+ "temper-workflow",
+ "tokio",
+]
+
+[[package]]
+name = "temper-runner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "temper-forge",
+ "temper-forge-filesystem",
+ "temper-forge-memory",
+ "temper-testing",
+ "temper-workflow",
+]
+
+[[package]]
+name = "temper-testing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "temper-agents",
+ "temper-forge",
+ "temper-forge-filesystem",
+ "temper-forge-forgejo",
+ "temper-forge-memory",
+ "temper-production",
+ "temper-runner",
+ "temper-workflow",
+ "tokio",
+]
+
+[[package]]
+name = "temper-workflow"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "temper-forge",
+ "temper-forge-filesystem",
+ "temper-forge-memory",
+]
 
 [[package]]
 name = "tempfile"

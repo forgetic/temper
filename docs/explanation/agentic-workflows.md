@@ -1,14 +1,14 @@
 # Agentic workflows
 
-Harness workflows coordinate disposable agents through durable Forge artifacts.
+Temper workflows coordinate disposable agents through durable Forge artifacts.
 The Forge layer stores issues, pull requests, comments, labels, reviews, CI jobs, dependency links, and merges. The workflow layer interprets those artifacts as a state machine. The agent layer is compiled from the workflow and receives prompts plus a narrow set of role-specific tools.
 
 ## Layer model
 
 The intended stack is:
 
-1. `harness-forge`: provider-neutral collaboration interface.
-2. `harness-workflow`: workflow specifications, validation, compilation, runtime transitions, and recovery.
+1. `temper-forge`: provider-neutral collaboration interface.
+2. `temper-workflow`: workflow specifications, validation, compilation, runtime transitions, and recovery.
 3. agent runners: LLM or human workers using generated prompts and tools.
 
 This separation keeps provider details out of workflow policy and keeps generated agent prompts focused on workflow mechanics and the authority each role actually has. Role behavior is user configuration: a role may provide prompt guidance, tool guidance, and external-tool declarations, but prose and declarations do not create executable tools or permissions until the runner binds matching providers. For where these layers run as processes once a real backend exists, see [End-to-end big picture](end-to-end-big-picture.md).
@@ -49,7 +49,7 @@ CI and review gates proceed independently. Reviewers are requested on the PR and
 
 Agents are disposable. They may crash, repeat calls, lose context, or resume after another worker has changed the same artifact. The workflow runtime is the authority that checks fresh Forge state before every transition.
 
-The Forge projection should remain understandable to humans: labels and comments show workflow-owned public state. Native Forge dependency links and pull-request review state store dependency and review facts; machine-readable metadata in bodies or comments can store workflow kind, parent links, fallback dependency links, correlation keys, and leases. The harness stores this as a JSON block inside an HTML comment so it renders invisibly while staying deterministic to parse; see the metadata block format in `docs/reference/workflow-layer.md`.
+The Forge projection should remain understandable to humans: labels and comments show workflow-owned public state. Native Forge dependency links and pull-request review state store dependency and review facts; machine-readable metadata in bodies or comments can store workflow kind, parent links, fallback dependency links, correlation keys, and leases. Temper stores this as a JSON block inside an HTML comment so it renders invisibly while staying deterministic to parse; see the metadata block format in `docs/reference/workflow-layer.md`.
 
 The workflow layer reads labels plus that metadata block to classify a Forge issue or pull request into a typed artifact. Classification detects impossible label combinations (for example, two states of one mutually exclusive dimension) and label/metadata drift, so the reconciler and operator queues have a precise picture of state before any transition runs.
 
@@ -61,7 +61,7 @@ Create operations should be idempotent. A tool that creates a PR for an issue sh
 
 The runtime is pull-based: queues are queries and the executor re-loads fresh
 Forge state before every transition. Triggering decides *when* to run a queue
-scan; it is deliberately not part of the `harness-forge` trait, which stays a
+scan; it is deliberately not part of the `temper-forge` trait, which stays a
 request/response query+mutation contract.
 
 The intended model is level-triggered with an edge-triggered accelerator, the

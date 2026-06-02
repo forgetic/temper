@@ -6,7 +6,7 @@
 
 ## Trigger
 
-Wiring ChatGPT (OpenAI Codex) OAuth auth into `harness-agents` (plan
+Wiring ChatGPT (OpenAI Codex) OAuth auth into `temper-agents` (plan
 `real-world-example`, Track A). The plan is to reuse the shared
 `~/.pi/agent/auth.json` that both pi CLIs write and let the Rust SDK load it.
 
@@ -52,6 +52,6 @@ the bearer alone suffices — `accountId` is informational), and `expires` is in
 
 ## Where this is now documented
 
-- `crates/harness-agents/src/provider/oauth.rs` (tolerant reader + write-back).
+- `crates/temper-agents/src/provider/oauth.rs` (tolerant reader + write-back).
 - ADR 0020 (`docs/adr/0020-chatgpt-oauth-agent-auth.md`).
 - `docs/how-to/use-chatgpt-oauth-auth.md`.

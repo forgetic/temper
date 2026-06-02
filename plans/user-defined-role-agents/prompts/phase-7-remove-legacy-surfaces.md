@@ -10,14 +10,14 @@ prompt/adaptor surfaces and document the final model.
 
 ## Session bootstrap
 
-1. Confirm you are in `/home/free/src/rust/harness`.
+1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `AGENTS.md`, `plans/user-defined-role-agents/README.md`, and Phases 1–6
    diffs.
 3. Read:
-   - `crates/harness-agents/src/lib.rs`
-   - `crates/harness-agents/src/prompts.rs`
-   - `crates/harness-agents/src/prompts/`
-   - `crates/harness-agents/src/registry.rs`
+   - `crates/temper-agents/src/lib.rs`
+   - `crates/temper-agents/src/prompts.rs`
+   - `crates/temper-agents/src/prompts/`
+   - `crates/temper-agents/src/registry.rs`
    - `docs/reference/workflow-layer.md`
    - `docs/explanation/agentic-workflows.md`
    - `examples/dogfood/README.md`
@@ -31,7 +31,7 @@ code and add regressions/docs so they do not come back.
 1. **Delete or quarantine legacy prompts.** Remove production exports for
    workflow-role prompt constants such as engineer/architect/reviewer/owner/human.
    If a fixed prompt is still needed for a test, move it under a test fixture or
-   plan/demo fixture path outside production `harness-agents` role-worker code.
+   plan/demo fixture path outside production `temper-agents` role-worker code.
    The non-workflow product-manager conversational prompt is outside this rule;
    keep it only if its docs clearly identify it as non-workflow.
 
@@ -40,12 +40,12 @@ code and add regressions/docs so they do not come back.
    production registry should contain only generic manifest-driven role agents.
 
 3. **Regression check.** Add a grep-style test or CI/check test proving production
-   `harness-agents` does not ship checked-in workflow-role prompt files or import
+   `temper-agents` does not ship checked-in workflow-role prompt files or import
    role-specific prompt constants. Keep the check precise enough not to flag the
    product-manager conversational prompt or test fixtures.
 
 4. **Docs.** Update:
-   - `crates/harness-agents/src/lib.rs` crate docs;
+   - `crates/temper-agents/src/lib.rs` crate docs;
    - `docs/reference/workflow-layer.md`;
    - `docs/explanation/agentic-workflows.md`;
    - `examples/dogfood/README.md`;
@@ -64,7 +64,7 @@ code and add regressions/docs so they do not come back.
 
 ## Constraints
 
-- Do not delete deterministic fake agents in `harness-testing`; they are test
+- Do not delete deterministic fake agents in `temper-testing`; they are test
   behavior fixtures, not production LLM prompts.
 - Do not remove the product-manager conversational path unless it has become
   unused; it is not a workflow-role adapter.
@@ -80,13 +80,13 @@ cargo fmt --all
 cargo test --workspace --all-targets
 cargo dev-clippy
 cargo dev-check
-cargo test -p harness-testing --test multiprocess -- --ignored --test-threads=1
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
+cargo test -p temper-testing --test multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
 ```
 
 Run configured live provider gates when available. Follow

@@ -6,7 +6,7 @@
 
 ## Trigger
 
-Scaffolding `crates/harness-agents` (Phase B1) added `pi_agent_rust = "0.1.13"`.
+Scaffolding `crates/temper-agents` (Phase B1) added `pi_agent_rust = "0.1.13"`.
 The very first `cargo check` failed — not in our code, but deep inside a
 transitive dependency, `asupersync 0.3.1`, with errors like `no field
 'fallback_active' on type 'Result<DecisionOutcome, …>'`.
@@ -41,5 +41,5 @@ patch.
 ## Where this is now documented
 
 - `plans/forgejo-e2e/findings-phase-b.md` (the "CRITICAL gotcha" section).
-- `docs/reference/llm-agents.md` (the dependency note for `harness-agents`).
+- `docs/reference/llm-agents.md` (the dependency note for `temper-agents`).
 - The pin itself lives in the workspace `Cargo.lock`.

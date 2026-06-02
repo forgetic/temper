@@ -19,7 +19,7 @@ setup. The important cross-repo requirements are:
 
 ## Configure
 
-From `examples/reference-delivery/`, edit `config/harness.env` or export env
+From `examples/reference-delivery/`, edit `config/temper.env` or export env
 vars before running:
 
 ```sh
@@ -37,8 +37,8 @@ To let the engineer open real PRs, bind the declared coding workspace tool befor
 `start`:
 
 ```sh
-export HARNESS_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
-export HARNESS_CODING_WORKSPACE_COMMAND='your-coder --context "$HARNESS_CODING_WORKSPACE_CONTEXT"'
+export TEMPER_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
+export TEMPER_CODING_WORKSPACE_COMMAND='your-coder --context "$TEMPER_CODING_WORKSPACE_CONTEXT"'
 ```
 
 If those are empty, ready code issues may be idle by design: the engineer prompt
@@ -72,8 +72,8 @@ worker wake consumption, and that target repos were provisioned without duplicat
 parent intakes. For the workspace/PR guard path, also run:
 
 ```sh
-cargo test -p harness-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
+cargo test -p temper-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
 ```
 
 Open Forgejo and confirm:

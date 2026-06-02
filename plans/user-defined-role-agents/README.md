@@ -12,8 +12,8 @@ handoff.
 ## Target architecture
 
 - **No production hard-coded workflow-role prompts.** If a test needs fixed role
-  prose, it lives in test/demo fixtures, not in `harness-agents/src/prompts/`.
-- **Generated mechanics.** `harness-workflow` compiles each user-defined role into
+  prose, it lives in test/demo fixtures, not in `temper-agents/src/prompts/`.
+- **Generated mechanics.** `temper-workflow` compiles each user-defined role into
   a prompt that contains only workflow mechanics: role id, queues, current work
   item context contract, authorized workflow actions, output format, and the rule
   that authority comes only from the manifest.
@@ -23,7 +23,7 @@ handoff.
 - **Declared tools only.** Workflow-transition tools are derived from the
   workflow. Non-workflow tools, such as a coding workspace, must be declared by
   the user and bound by the runner before the LLM may use them.
-- **Generic LLM role adapter.** `harness-agents` should provide a manifest-driven
+- **Generic LLM role adapter.** `temper-agents` should provide a manifest-driven
   role agent, not one Rust module/prompt/decision enum per reference role.
 - **Dogfood safety.** Engineer automation remains disabled until a real coding
   workspace path can produce product-code diffs; synthetic/bookkeeping PR prep is
@@ -53,23 +53,23 @@ cargo dev-clippy
 cargo dev-check
 
 # Process/e2e tests that are ignored by default.
-cargo test -p harness-testing --test multiprocess -- --ignored --test-threads=1
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
 
 # Real Forgejo + real host-mode CI, fake agents.
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing -- --ignored --test-threads=1
 
 # Real Forgejo + real host-mode CI + real LLM agents.
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
 ```
 
 Also run any live provider gates that are configured locally, for example
-`HARNESS_CHATGPT_OAUTH=1`, `HARNESS_ANTHROPIC_OAUTH=1`, and
-`HARNESS_FORGEJO_LIVE=1`/`HARNESS_FORGEJO_LIVE_MUTATE=1` tests. If Python or
+`TEMPER_CHATGPT_OAUTH=1`, `TEMPER_ANTHROPIC_OAUTH=1`, and
+`TEMPER_FORGEJO_LIVE=1`/`TEMPER_FORGEJO_LIVE_MUTATE=1` tests. If Python or
 shell tooling is touched, include its focused tests too.
 
 ## Phases
@@ -90,7 +90,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
 2. ☑ **Phase 2 — Manifest-driven LLM role agent.**
    `prompts/phase-2-manifest-driven-llm-role-agent.md`
 
-   Introduce a generic role agent in `harness-agents` that takes a compiled
+   Introduce a generic role agent in `temper-agents` that takes a compiled
    `RoleManifest`, uses `role.prompt.render()` as the system prompt, asks for a
    generic decision such as `{ "action": "<manifest tool>", "reason": "..." }`,
    and executes only authorized manifest transitions through `RoleTools`. Add a
@@ -104,7 +104,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    one generic LLM agent per compiled role. Remove hard-coded workflow role ids,
    role prompts, role-specific decision enums, and role-specific adapters from
    the production path. Any reference-delivery prompt text needed by tests moves
-   into workflow/test fixtures under `harness-testing` or a plan-specific fixture
+   into workflow/test fixtures under `temper-testing` or a plan-specific fixture
    directory. Update live OAuth smoke tests to exercise the generic agent with a
    fixture role instead of importing `ARCHITECT_SYSTEM_PROMPT`.
 
@@ -145,11 +145,11 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    `prompts/phase-7-remove-legacy-surfaces.md`
 
    Delete or make test-only any remaining hard-coded workflow-role prompt files
-   and role-specific production adapters. Update `AGENTS.md`, `harness-agents`
+   and role-specific production adapters. Update `AGENTS.md`, `temper-agents`
    docs, workflow reference docs, and dogfood docs so future agents know:
    generated prompts handle mechanics, user config handles role behavior, and
    external tools require explicit declarations plus runner bindings. Add a grep
-   style regression test or CI check that production `harness-agents` has no
+   style regression test or CI check that production `temper-agents` has no
    checked-in workflow-role prompt files.
 
 ## Acceptance criteria
@@ -167,15 +167,15 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
 
 ## Starting points
 
-- `crates/harness-workflow/src/spec.rs`
-- `crates/harness-workflow/src/compile.rs`
-- `crates/harness-workflow/tests/compilation.rs`
-- `crates/harness-agents/src/registry.rs`
-- `crates/harness-agents/src/decision.rs`
-- `crates/harness-agents/src/prompts/`
-- `crates/harness-runner/src/agent.rs`
-- `crates/harness-production/src/worker.rs`
-- `crates/harness-production/src/forgejo_prep.rs`
-- `crates/harness-production/src/pr_diff_guard.rs`
+- `crates/temper-workflow/src/spec.rs`
+- `crates/temper-workflow/src/compile.rs`
+- `crates/temper-workflow/tests/compilation.rs`
+- `crates/temper-agents/src/registry.rs`
+- `crates/temper-agents/src/decision.rs`
+- `crates/temper-agents/src/prompts/`
+- `crates/temper-runner/src/agent.rs`
+- `crates/temper-production/src/worker.rs`
+- `crates/temper-production/src/forgejo_prep.rs`
+- `crates/temper-production/src/pr_diff_guard.rs`
 - `examples/dogfood/config/dogfood.env`
 - `docs/reference/agent-lessons/0020-dogfood-prs-must-not-be-bookkeeping-only.md`

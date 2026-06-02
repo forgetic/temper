@@ -27,7 +27,7 @@ To validate a blocking launcher non-interactively:
   labels, PR merged + reconciled labels) rather than scraping stdout.
 - Tear down with `./run.sh stop`, which kills via the saved PID files
   independently of the blocking driver, then **verify**: no orphan
-  `forgejo`/`harness-testing-worker` processes (`pgrep -af`), the port is freed,
+  `forgejo`/`temper-testing-worker` processes (`pgrep -af`), the port is freed,
   and `run/` is removed. `secrets/roles.env` is gitignored — confirm with
   `git check-ignore` and remove it after the run.
 - Use the default auth (ChatGPT OAuth, `~/.pi/agent/auth.json`) — never bill

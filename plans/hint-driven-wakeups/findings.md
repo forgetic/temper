@@ -8,9 +8,9 @@ shared pi auth file. I rebuilt the production binaries first so the launcher use
 the new worker/trigger diagnostics:
 
 ```sh
-cargo build --release -p harness-production
+cargo build --release -p temper-production
 cd examples/reference-delivery
-POLL_MS=120000 RUN_SECS=300 HARNESS_SKIP_BUILD=1 nohup ./run.sh >logs/driver.log 2>&1 &
+POLL_MS=120000 RUN_SECS=300 TEMPER_SKIP_BUILD=1 nohup ./run.sh >logs/driver.log 2>&1 &
 ./run.sh validate-webhooks
 ./run.sh stop
 ```
@@ -41,7 +41,7 @@ Findings:
   the worker with active queue work reported wake-triggered `actions>0`, while
   others logged wake-triggered `actions=0` no-work ticks.
 - A first attempt before rebuilding `target/release` used stale binaries and
-  produced the older log format. Operators who set `HARNESS_SKIP_BUILD=1` must
+  produced the older log format. Operators who set `TEMPER_SKIP_BUILD=1` must
   ensure the production binaries are current.
 
 Generated `examples/reference-delivery/logs/`, `run/`, and local secret files

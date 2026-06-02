@@ -10,8 +10,8 @@ The Forgejo CI phase was committed with `src/ci.rs`, `src/ci_match.rs`,
 `src/ci_time.rs`, and `src/dto.rs` that were never declared in `lib.rs`. The files
 imported a hallucinated API (`crate::client::ForgejoForge`, `crate::http`,
 `crate::dto`, `error::{decode, ensure_status, map_http_error, ApiResult}`,
-`harness_forge::{CiConclusion, CiStatus, Timestamp}`, `ForgejoForge::new(config,
-client)`) that does not exist. `cargo build -p harness-forge-forgejo` was green
+`temper_forge::{CiConclusion, CiStatus, Timestamp}`, `ForgejoForge::new(config,
+client)`) that does not exist. `cargo build -p temper-forge-forgejo` was green
 because the dead files were never compiled, while `cargo test` was red (26 errors)
 because `tests/ci.rs` did compile them.
 
@@ -33,7 +33,7 @@ model).
   tests (`cargo test -p <crate>`), not just `cargo build`. A green `build` with a
   red `test` means files are orphaned or only test code references them.
 - Before writing against an API, confirm it exists: read the real model
-  (`harness-forge/src/model.rs`, `forge.rs`) and the canonical patterns in the
+  (`temper-forge/src/model.rs`, `forge.rs`) and the canonical patterns in the
   crate (e.g. `pulls.rs`, `items.rs`, `error.rs`, `ids.rs`). Do not invent imports.
 
 ## Where this is now documented
@@ -41,6 +41,6 @@ model).
 - `docs/how-to/fast-local-iteration.md` (use `cargo dev-check` for the default loop).
 - `docs/how-to/end-a-development-session.md` (run the fast validation loop and
   task-specific tests before handoff).
-- The reimplemented CI lives in `crates/harness-forge-forgejo/src/ci.rs`,
+- The reimplemented CI lives in `crates/temper-forge-forgejo/src/ci.rs`,
   `ci_match.rs`, `ci_time.rs` (DTOs in `types.rs`), wired in `lib.rs`, with
   `tests/ci.rs` green; see `docs/reference/forgejo-backend.md`.

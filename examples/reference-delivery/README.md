@@ -1,19 +1,19 @@
 # Reference-delivery example
 
-A **self-contained operator demo** of the harness's production topology: a
+A **self-contained operator demo** of Temper's production topology: a
 Forgejo server, a `forgejo-runner` producing real CI, and one LLM-backed worker
 per workflow role scanning a configured repository set, all coordinating through
 the Forge.
 
 > **Status:** this example is wired to production-owned binary names
-> (`harness-worker`, `harness-provision-forgejo`, and
-> `harness-trigger-forgejo`) from the `harness-production` crate instead of the
-> `harness-testing` binaries. After the user-defined-role migration, production
+> (`temper-worker`, `temper-provision-forgejo`, and
+> `temper-trigger-forgejo`) from the `temper-production` crate instead of the
+> `temper-testing` binaries. After the user-defined-role migration, production
 > workers register generic agents from compiled workflow manifests. Reference
 > role behavior for this demo lives in `config/workflow.json` and the canonical
 > workflow fixture, not in production prompt constants. Full intake-to-merged-PR
 > convergence still requires a bound coding workspace that can produce real
-> product diffs; the gated `harness-testing` Forgejo e2e fixtures cover the
+> product diffs; the gated `temper-testing` Forgejo e2e fixtures cover the
 > topology. See
 > [`plans/production-binaries/`](../../plans/production-binaries/README.md) and
 > [`plans/multi-repo-workers/`](../../plans/multi-repo-workers/README.md).
@@ -23,7 +23,7 @@ the Forge.
 This is a **demo**, not a turnkey production deployment:
 
 - It uses the production-owned binaries and does not fall back to
-  `harness-testing` entry points. If those binaries are absent, `run.sh` stops at
+  `temper-testing` entry points. If those binaries are absent, `run.sh` stops at
   the build/resolve step.
 - It boots its **own throwaway Forgejo + runner** so it runs from binaries
   alone. To target a **real** Forgejo you change `BASE_URL` + tokens and drop the
@@ -45,26 +45,26 @@ end-to-end rehearsal.
 ## Prerequisites
 
 - The operator-facing workspace binaries built: `cargo build -p
-  harness-production` (provides `harness-worker`,
-  `harness-provision-forgejo`, and `harness-trigger-forgejo`). `run.sh` refreshes
+  temper-production` (provides `temper-worker`,
+  `temper-provision-forgejo`, and `temper-trigger-forgejo`). `run.sh` refreshes
   the development-profile binaries under `target/debug` before start unless
-  `HARNESS_SKIP_BUILD=1`, so stale binaries do not break the demo after source
-  changes. Override paths with `HARNESS_WORKER_BIN` / `HARNESS_PROVISION_BIN` /
-  `HARNESS_TRIGGER_BIN` if needed.
+  `TEMPER_SKIP_BUILD=1`, so stale binaries do not break the demo after source
+  changes. Override paths with `TEMPER_WORKER_BIN` / `TEMPER_PROVISION_BIN` /
+  `TEMPER_TRIGGER_BIN` if needed.
 - The two pinned binaries: Forgejo `7.0.12` and `forgejo-runner` `3.5.1`.
   Pre-stage them under `.cache/forgejo/` (the gated Forgejo e2e fixtures do the
-  download/checksum path) or set `HARNESS_FORGEJO_BINARY` /
-  `HARNESS_FORGEJO_RUNNER_BINARY` in `config/harness.env`.
+  download/checksum path) or set `TEMPER_FORGEJO_BINARY` /
+  `TEMPER_FORGEJO_RUNNER_BINARY` in `config/temper.env`.
 - A host that permits **host-mode** CI jobs (spawning child processes, binding a
   loopback port) — the runner executes steps directly on the host, no containers.
 - LLM agent auth — **one of**:
   - **ChatGPT login (preferred, no per-call cost):** `pi /login openai-codex`
     once, which populates `~/.pi/agent/auth.json`. This is the default
-    (`HARNESS_AGENTS_AUTH=chatgpt-oauth`).
+    (`TEMPER_AGENTS_AUTH=chatgpt-oauth`).
   - **Anthropic OAuth (opt-in):** `pi /login anthropic` once, then set
-    `HARNESS_AGENTS_AUTH=anthropic-oauth`.
+    `TEMPER_AGENTS_AUTH=anthropic-oauth`.
   - **DeepSeek key (fallback, bills per token):** set
-    `HARNESS_AGENTS_AUTH=deepseek` and provide `secrets/deepseek-api-key`.
+    `TEMPER_AGENTS_AUTH=deepseek` and provide `secrets/deepseek-api-key`.
 
 See `secrets/.env.example` for the options in detail.
 
@@ -75,9 +75,9 @@ examples/reference-delivery/
 ├── README.md            # this file
 ├── .gitignore           # ignores runtime run/, logs/, *.pid, *.log
 ├── config/
-│   ├── harness.env      # operator-editable knobs (no secrets)
+│   ├── temper.env      # operator-editable knobs (no secrets)
 │   ├── workflow.json    # the bundled workflow spec (tracks the canonical
-│   │                    #   fixture crates/harness-workflow/fixtures/
+│   │                    #   fixture crates/temper-workflow/fixtures/
 │   │                    #   reference-delivery.json — do not fork its semantics)
 │   └── ci.yml           # the host-mode CI workflow (commit-message marker)
 ├── secrets/             # gitignored except the templates + .gitignore
@@ -109,12 +109,12 @@ POLL_MS=120000 ./run.sh       # long-poll mode: webhooks wake workers promptly;
 ```
 
 Each start refreshes the development-profile workspace binaries (`cargo build -p
-harness-production`, usually a no-op when current) under `target/debug` and
+temper-production`, usually a no-op when current) under `target/debug` and
 expects the pinned Forgejo + `forgejo-runner` binaries under `.cache/forgejo/`
-(or set `HARNESS_FORGEJO_BINARY` / `HARNESS_FORGEJO_RUNNER_BINARY`). `run.sh
+(or set `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY`). `run.sh
 start` runs from a private snapshot under `run/`, so editing the launcher while a
 demo is running cannot corrupt the eventual teardown path. Edit
-`config/harness.env` for the repo set, endpoint, cadence, and auth knobs; any of
+`config/temper.env` for the repo set, endpoint, cadence, and auth knobs; any of
 those may also be overridden by exporting the matching env var before invoking
 the script (env wins over the file). The checked-in default is
 `REPOS="acme/service acme/service-canary"` with `CROSS_REPO_INTAKE=auto`, so the
@@ -139,21 +139,21 @@ ready code work should choose `no_action` rather than opening a PR. To validate 
 real implementation path, provide a clean checkout and command:
 
 ```sh
-export HARNESS_CODING_WORKSPACE_ROOT=/path/to/checkout
-export HARNESS_CODING_WORKSPACE_COMMAND='your-coder --context "$HARNESS_CODING_WORKSPACE_CONTEXT"'
-export HARNESS_CODING_WORKSPACE_REMOTE=origin
-export HARNESS_CODING_WORKSPACE_PUSH=1
+export TEMPER_CODING_WORKSPACE_ROOT=/path/to/checkout
+export TEMPER_CODING_WORKSPACE_COMMAND='your-coder --context "$TEMPER_CODING_WORKSPACE_CONTEXT"'
+export TEMPER_CODING_WORKSPACE_REMOTE=origin
+export TEMPER_CODING_WORKSPACE_PUSH=1
 ./run.sh start
 ```
 
-The command receives a JSON context path in `HARNESS_CODING_WORKSPACE_CONTEXT`.
-It must leave a meaningful non-`.harness*` product diff; the local-git provider
+The command receives a JSON context path in `TEMPER_CODING_WORKSPACE_CONTEXT`.
+It must leave a meaningful non-`.temper*` product diff; the local-git provider
 commits and pushes the branch, then the workflow opens the PR through `RoleTools`.
 Use these focused checks before a full demo run:
 
 ```sh
-cargo test -p harness-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
+cargo test -p temper-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing --test forgejo_workspace_pr -- --ignored --test-threads=1
 ```
 
 ## What it does
@@ -161,11 +161,11 @@ HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing --test forgejo_workspace_pr 
 Boots Forgejo + a host-mode `forgejo-runner`, starts the local webhook trigger,
 provisions each configured repo with labels, CI, and a webhook, then seeds the
 source repo with one cross-repo parent intake issue by default. It launches
-exactly one `harness-worker` per role-with-an-agent plus one mechanical
+exactly one `temper-worker` per role-with-an-agent plus one mechanical
 reconciler. Workers still use wall-clock polling as the liveness backstop;
 webhooks only wake them early.
 
-With quarantined reference-delivery test fixtures (the gated `harness-testing`
+With quarantined reference-delivery test fixtures (the gated `temper-testing`
 e2e), the source intake issue then flows through the cross-repo workflow as
 below. The production launcher uses generic manifest-driven agents, so steps that
 require fixed child-issue fan-out or real code/PR-head creation must come from
@@ -258,15 +258,15 @@ The default, hermetic multi-repo topology smoke is the ignored filesystem proces
 rehearsal:
 
 ```sh
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored
 ```
 
 The live Forgejo/webhook smoke is explicitly gated because it boots Forgejo and a
 host-mode runner:
 
 ```sh
-HARNESS_FORGEJO_E2E=1 \
-  cargo test -p harness-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 \
+  cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
 ```
 
 That live test validates the repo-hinted wake path. The cross-repo fan-out
@@ -291,9 +291,9 @@ than reasserting Forge state.
   worker's log for auth/backend setup errors. Polling will still recover at the
   next `POLL_MS` deadline, but the accelerator is not working for that worker.
 - **`provision binary is stale or incompatible` or `worker binary is stale or
-  incompatible`:** rerun without `HARNESS_SKIP_BUILD=1`, or rebuild the
-  development binaries manually with `cargo build -p harness-production`.
-  `HARNESS_SKIP_BUILD=1` assumes `target/debug` and any `HARNESS_*_BIN`
+  incompatible`:** rerun without `TEMPER_SKIP_BUILD=1`, or rebuild the
+  development binaries manually with `cargo build -p temper-production`.
+  `TEMPER_SKIP_BUILD=1` assumes `target/debug` and any `TEMPER_*_BIN`
   overrides are already current.
 - **Wake consumed with `actions=0`:** the wake path worked; that worker simply
   had no active queue item after re-reading Forge state. Workers batch queued
@@ -307,7 +307,7 @@ than reasserting Forge state.
   Forgejo helpers and are not by themselves proof of active work. Also remember
   that `ps %CPU` is a lifetime average; use `top`, `pidstat`, or two `/proc/PID/stat`
   samples to see whether CPU dropped after stopping workers. The demo caps
-  `GOMAXPROCS` for Forgejo/runner; lower `HARNESS_FORGEJO_GOMAXPROCS` if you
+  `GOMAXPROCS` for Forgejo/runner; lower `TEMPER_FORGEJO_GOMAXPROCS` if you
   need a tighter local CPU ceiling.
 - **`Forgejo already responds` on start:** an orphaned or separately started
   server is still bound to `BASE_URL`. Run `./run.sh stop`; if pid files were
@@ -317,7 +317,7 @@ than reasserting Forge state.
 
 `./run.sh stop` (or a `SIGINT`/`SIGTERM` to the running script) kills every spawned
 process and removes the throwaway data dirs. If a run is force-killed, clean up
-orphans with `pkill -f forgejo` / `pkill -f harness-worker` and remove
+orphans with `pkill -f forgejo` / `pkill -f temper-worker` and remove
 the run/data dirs.
 
 ## Point it at your own Forgejo

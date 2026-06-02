@@ -27,5 +27,5 @@ Forgejo commit API rather than trusting `github.event.head_commit.message`.
 ## Where this is now documented
 
 - `examples/reference-delivery/config/ci.yml`
-- `crates/harness-production/src/provision.rs`
-- `crates/harness-testing/src/forgejo_server/provision.rs`
+- `crates/temper-production/src/provision.rs`
+- `crates/temper-testing/src/forgejo_server/provision.rs`

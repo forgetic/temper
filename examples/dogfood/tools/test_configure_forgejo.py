@@ -42,7 +42,7 @@ class ConfigureForgejoTests(unittest.TestCase):
             configure_forgejo.ensure_repo_label(
                 forgejo,
                 "ai",
-                "harness",
+                "temper",
                 configure_forgejo.PRODUCT_LABEL_NAME,
                 configure_forgejo.PRODUCT_LABEL_COLOR,
                 configure_forgejo.PRODUCT_LABEL_DESCRIPTION,
@@ -58,7 +58,7 @@ class ConfigureForgejoTests(unittest.TestCase):
             configure_forgejo.ensure_repo_label(
                 forgejo,
                 "ai",
-                "harness",
+                "temper",
                 configure_forgejo.PRODUCT_LABEL_NAME,
                 configure_forgejo.PRODUCT_LABEL_COLOR,
                 configure_forgejo.PRODUCT_LABEL_DESCRIPTION,

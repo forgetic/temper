@@ -10,7 +10,7 @@ repository still does **not** implement the web app itself.
 2. Read:
    - `plans/product-manager-chat/README.md`
    - Phase 3 product-chat core and binary
-   - `crates/harness-production/src/trigger.rs` / `trigger_args.rs` for simple
+   - `crates/temper-production/src/trigger.rs` / `trigger_args.rs` for simple
      production HTTP server style, if useful
    - `docs/README.md` to choose where to place API docs
 3. Keep this repo focused on integration/protocol. Do not add frontend assets,
@@ -21,10 +21,10 @@ repository still does **not** implement the web app itself.
 Add a `serve` mode to the product-manager chat binary:
 
 ```sh
-harness-product-manager-chat serve \
+temper-product-manager-chat serve \
   --bind 127.0.0.1:39200 \
   --base-url https://git.ekanayaka.io \
-  --repo ai/harness \
+  --repo ai/temper \
   --auth chatgpt-oauth
 ```
 
@@ -57,7 +57,7 @@ JSON shapes should be stable and documented. Example `POST /messages` response:
   "drafts": [
     { "slug": "matrix-adapter", "title": "...", "body": "..." }
   ],
-  "transcript_url": "https://git.ekanayaka.io/ai/harness/issues/3"
+  "transcript_url": "https://git.ekanayaka.io/ai/temper/issues/3"
 }
 ```
 
@@ -72,7 +72,7 @@ simple guard:
 - bind to `127.0.0.1` by default;
 - allow non-loopback bind only with an explicit flag;
 - support an optional bearer token env such as
-  `HARNESS_PRODUCT_CHAT_SERVICE_TOKEN` and require it when binding outside
+  `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN` and require it when binding outside
   loopback;
 - never expose Forgejo/LLM tokens to clients;
 - keep product-manager filing behind the explicit file endpoint.
@@ -131,7 +131,7 @@ Run:
 
 ```sh
 cargo fmt --all
-cargo test -p harness-production product_chat
+cargo test -p temper-production product_chat
 cargo dev-check
 ```
 

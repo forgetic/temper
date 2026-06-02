@@ -17,7 +17,7 @@ not already prove.
 CI was modeled as an *external-signal gate* (ADR 0010): an adapter observed the
 provider CI result and projected it into a portable `ci` state dimension backed
 by `ci-pending`/`ci-passed`/`ci-failed` labels, and `ci_gate` was a
-`state_equals { dimension: ci, state: passed }` condition. But `harness-forge`
+`state_equals { dimension: ci, state: passed }` condition. But `temper-forge`
 already exposes a portable, native CI model — `list_ci_jobs`, `CiJob`,
 `CiJobStatus`, `CiJobConclusion` — so the adapter-projected labels are a second,
 redundant representation of a fact the Forge already owns. The roadmap
@@ -88,7 +88,7 @@ do not merge before CI has run). The executor computes the signal from
 backend records one) and threads it into `plan_transition_with`. Issues get an
 empty signal because they carry no CI.
 
-### Why not extend `harness-forge`
+### Why not extend `temper-forge`
 
 The portable CI model already carries everything the pass rule needs (per-job
 name, status, conclusion, and PR/commit association). Phase A *reuses* it and

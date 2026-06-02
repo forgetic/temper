@@ -53,7 +53,7 @@ not add those binaries; it leaves the split as an additive step.
    - vary poll intervals to prove level polling eventually observes missed edge
      hints.
 5. Future production adapters remain isolated behind existing traits:
-   - `harness-forge-forgejo` implements `Forge` for Forgejo.
+   - `temper-forge-forgejo` implements `Forge` for Forgejo.
    - an LLM adapter implements `Agent` and uses `RoleTools`.
    - a webhook adapter emits `ChangeHint`s through a future `ChangeSource`; the
      poll loop stays the correctness backstop from ADR 0009.

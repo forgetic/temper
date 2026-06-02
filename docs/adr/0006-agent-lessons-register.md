@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Harness is intended to be developed by autonomous agents over many sessions. Human steering and agent mistakes can be lost if they only appear in chat history.
+Temper is intended to be developed by autonomous agents over many sessions. Human steering and agent mistakes can be lost if they only appear in chat history.
 
 Future agents need a compact way to discover past lessons without loading every document or repeating known mistakes.
 

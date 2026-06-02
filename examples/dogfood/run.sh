@@ -1,13 +1,13 @@
 #!/bin/sh
-# Dogfood Harness against the live Forgejo repository at git.ekanayaka.io.
+# Dogfood Temper against the live Forgejo repository at git.ekanayaka.io.
 # Secrets are read from ~/Documents/personal/forgejo-rhi and emitted only into
 # gitignored examples/dogfood/secrets/roles.env. Tokens/passwords travel via env,
 # never on argv; product-chat authorship fails closed when the human token is missing.
 
 set -eu
 
-if [ -n "${HARNESS_DOGFOOD_SCRIPT_DIR:-}" ]; then
-    SCRIPT_DIR=$HARNESS_DOGFOOD_SCRIPT_DIR
+if [ -n "${TEMPER_DOGFOOD_SCRIPT_DIR:-}" ]; then
+    SCRIPT_DIR=$TEMPER_DOGFOOD_SCRIPT_DIR
 else
     SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 fi
@@ -31,21 +31,21 @@ WAKE_DIR="$RUN_DIR/wake"
 log() { printf '[dogfood] %s\n' "$*"; }
 die() { printf '[dogfood] error: %s\n' "$*" >&2; exit 1; }
 
-DISPLAY_SCRIPT=${HARNESS_DOGFOOD_ORIGINAL:-$SCRIPT_DIR/run.sh}
+DISPLAY_SCRIPT=${TEMPER_DOGFOOD_ORIGINAL:-$SCRIPT_DIR/run.sh}
 
 # Snapshot long-running starts so edits to this ignored script cannot corrupt a
 # running teardown path (same rationale as examples/reference-delivery).
-if [ "${HARNESS_DOGFOOD_SNAPSHOT:-0}" != "1" ]; then
+if [ "${TEMPER_DOGFOOD_SNAPSHOT:-0}" != "1" ]; then
     case "${1:-start}" in
         start | "" | product-chat)
             mkdir -p "$RUN_DIR"
             _snapshot="$RUN_DIR/run.sh.snapshot.$$"
             cp "$SCRIPT_DIR/run.sh" "$_snapshot"
             chmod 700 "$_snapshot"
-            HARNESS_DOGFOOD_SNAPSHOT=1 \
-            HARNESS_DOGFOOD_SCRIPT_DIR="$SCRIPT_DIR" \
-            HARNESS_DOGFOOD_ORIGINAL="$DISPLAY_SCRIPT" \
-            HARNESS_DOGFOOD_SNAPSHOT_FILE="$_snapshot" \
+            TEMPER_DOGFOOD_SNAPSHOT=1 \
+            TEMPER_DOGFOOD_SCRIPT_DIR="$SCRIPT_DIR" \
+            TEMPER_DOGFOOD_ORIGINAL="$DISPLAY_SCRIPT" \
+            TEMPER_DOGFOOD_SNAPSHOT_FILE="$_snapshot" \
                 exec /bin/sh "$_snapshot" "$@"
             ;;
     esac
@@ -68,7 +68,7 @@ usage: $DISPLAY_SCRIPT [start|preflight|product-chat|stop|status|help]
   status           show local process/log locations.
   help             show this message.
 
-File new work in: ${BASE_URL:-https://git.ekanayaka.io}/${REPO:-ai/harness}/issues
+File new work in: ${BASE_URL:-https://git.ekanayaka.io}/${REPO:-ai/temper}/issues
 EOF
 }
 
@@ -122,7 +122,7 @@ load_config() {
     . "$CONFIG_FILE"
 
     BASE_URL=${BASE_URL:-https://git.ekanayaka.io}
-    REPO=${REPO:-ai/harness}
+    REPO=${REPO:-ai/temper}
     SECRETS_SOURCE=${SECRETS_SOURCE:-$HOME/Documents/personal/forgejo-rhi}
     SSH_HOST=${SSH_HOST:-rhi}
     LOCAL_TRIGGER_BIND=${LOCAL_TRIGGER_BIND:-127.0.0.1:39080}
@@ -131,10 +131,10 @@ load_config() {
     WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:39080/forgejo/webhook}
     WEBHOOKS=${WEBHOOKS:-1}
     POLL_MS=${POLL_MS:-120000}
-    HARNESS_AGENTS_AUTH=${HARNESS_AGENTS_AUTH:-chatgpt-oauth}
-    HARNESS_AGENTS_CODEX_MODEL=${HARNESS_AGENTS_CODEX_MODEL:-}
-    HARNESS_AGENTS_AUTH_FILE=${HARNESS_AGENTS_AUTH_FILE:-}
-    HARNESS_AGENTS_ANTHROPIC_MODEL=${HARNESS_AGENTS_ANTHROPIC_MODEL:-}
+    TEMPER_AGENTS_AUTH=${TEMPER_AGENTS_AUTH:-chatgpt-oauth}
+    TEMPER_AGENTS_CODEX_MODEL=${TEMPER_AGENTS_CODEX_MODEL:-}
+    TEMPER_AGENTS_AUTH_FILE=${TEMPER_AGENTS_AUTH_FILE:-}
+    TEMPER_AGENTS_ANTHROPIC_MODEL=${TEMPER_AGENTS_ANTHROPIC_MODEL:-}
     DOGFOOD_HUMAN_USER=${DOGFOOD_HUMAN_USER:-bot}
     DOGFOOD_PRODUCT_CHAT_HUMAN_USER=${DOGFOOD_PRODUCT_CHAT_HUMAN_USER:-}
     DOGFOOD_MECHANICAL_USER=${DOGFOOD_MECHANICAL_USER:-bot}
@@ -145,16 +145,16 @@ load_config() {
     DOGFOOD_PR_DIFF_GUARD=${DOGFOOD_PR_DIFF_GUARD:-1}
     DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR=${DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR:-0}
     DOGFOOD_PREFLIGHT_QUERY_ISSUES=${DOGFOOD_PREFLIGHT_QUERY_ISSUES:-1}
-    HARNESS_CODING_WORKSPACE_ROOT=${HARNESS_CODING_WORKSPACE_ROOT:-}
-    HARNESS_CODING_WORKSPACE_COMMAND=${HARNESS_CODING_WORKSPACE_COMMAND:-}
-    HARNESS_CODING_WORKSPACE_REMOTE=${HARNESS_CODING_WORKSPACE_REMOTE:-origin}
-    HARNESS_CODING_WORKSPACE_PUSH=${HARNESS_CODING_WORKSPACE_PUSH:-1}
-    HARNESS_CODING_WORKSPACE_PR_LABELS=${HARNESS_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
-    HARNESS_WORKER_BIN=${HARNESS_WORKER_BIN:-}
-    HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
-    HARNESS_PRODUCT_CHAT_BIN=${HARNESS_PRODUCT_CHAT_BIN:-}
-    HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
-    HARNESS_FORGEJO_RUNNER_BINARY=${HARNESS_FORGEJO_RUNNER_BINARY:-}
+    TEMPER_CODING_WORKSPACE_ROOT=${TEMPER_CODING_WORKSPACE_ROOT:-}
+    TEMPER_CODING_WORKSPACE_COMMAND=${TEMPER_CODING_WORKSPACE_COMMAND:-}
+    TEMPER_CODING_WORKSPACE_REMOTE=${TEMPER_CODING_WORKSPACE_REMOTE:-origin}
+    TEMPER_CODING_WORKSPACE_PUSH=${TEMPER_CODING_WORKSPACE_PUSH:-1}
+    TEMPER_CODING_WORKSPACE_PR_LABELS=${TEMPER_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
+    TEMPER_WORKER_BIN=${TEMPER_WORKER_BIN:-}
+    TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
+    TEMPER_PRODUCT_CHAT_BIN=${TEMPER_PRODUCT_CHAT_BIN:-}
+    TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
+    TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
     DOGFOOD_RUNNER=${DOGFOOD_RUNNER:-1}
     DOGFOOD_DEFAULT_BRANCH=${DOGFOOD_DEFAULT_BRANCH:-main}
     DOGFOOD_REMOTE_FORGEJO_BIN=${DOGFOOD_REMOTE_FORGEJO_BIN:-/opt/forgejo/forgejo}
@@ -181,12 +181,12 @@ ensure_secret_file() {
 }
 
 resolve_binaries() {
-    WORKER_BIN=${HARNESS_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/harness-worker}
-    TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/harness-trigger-forgejo}
-    RUNNER_BIN=${HARNESS_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-3.5.1-linux-amd64}
-    if [ "${HARNESS_SKIP_BUILD:-0}" != "1" ]; then
-        log "ensuring development-profile binaries are current (cargo build -p $HARNESS_BUILD_PACKAGE)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$HARNESS_BUILD_PACKAGE" ) || die 'cargo build failed'
+    WORKER_BIN=${TEMPER_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/temper-worker}
+    TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/temper-trigger-forgejo}
+    RUNNER_BIN=${TEMPER_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-3.5.1-linux-amd64}
+    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring development-profile binaries are current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) || die 'cargo build failed'
     fi
     [ -x "$WORKER_BIN" ] || die "worker binary not found: $WORKER_BIN"
     [ -x "$TRIGGER_BIN" ] || die "trigger binary not found: $TRIGGER_BIN"
@@ -196,10 +196,10 @@ resolve_binaries() {
 }
 
 resolve_product_chat_binary() {
-    PRODUCT_CHAT_BIN=${HARNESS_PRODUCT_CHAT_BIN:-$WORKSPACE_ROOT/target/debug/harness-product-manager-chat}
-    if [ "${HARNESS_SKIP_BUILD:-0}" != "1" ]; then
-        log "ensuring product-chat binary is current (cargo build -p $HARNESS_BUILD_PACKAGE --bin harness-product-manager-chat)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$HARNESS_BUILD_PACKAGE" --bin harness-product-manager-chat ) || die 'cargo build failed'
+    PRODUCT_CHAT_BIN=${TEMPER_PRODUCT_CHAT_BIN:-$WORKSPACE_ROOT/target/debug/temper-product-manager-chat}
+    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring product-chat binary is current (cargo build -p $TEMPER_BUILD_PACKAGE --bin temper-product-manager-chat)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" --bin temper-product-manager-chat ) || die 'cargo build failed'
     fi
     [ -x "$PRODUCT_CHAT_BIN" ] || die "product-chat binary not found: $PRODUCT_CHAT_BIN"
 }
@@ -213,14 +213,14 @@ dogfood_preflight() {
     # _strict_args/_query_args are generated flags and intentionally word-split.
     # shellcheck disable=SC2086
     python3 "$TOOLS_DIR/preflight.py" \
-        --workflow-file "$WORKSPACE_ROOT/crates/harness-workflow/fixtures/reference-delivery.json" \
+        --workflow-file "$WORKSPACE_ROOT/crates/temper-workflow/fixtures/reference-delivery.json" \
         --roles-env "$ROLES_ENV" \
         --base-url "$BASE_URL" \
         --owner "$OWNER" \
         --repo "$NAME" \
         --enable-engineer-automation "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" \
-        --workspace-root "$HARNESS_CODING_WORKSPACE_ROOT" \
-        --workspace-command "$HARNESS_CODING_WORKSPACE_COMMAND" \
+        --workspace-root "$TEMPER_CODING_WORKSPACE_ROOT" \
+        --workspace-command "$TEMPER_CODING_WORKSPACE_COMMAND" \
         --pr-diff-guard "$DOGFOOD_PR_DIFF_GUARD" \
         --allow-bookkeeping-only-pr "$DOGFOOD_ALLOW_BOOKKEEPING_ONLY_PR" \
         $_query_args $_strict_args
@@ -229,38 +229,38 @@ dogfood_preflight() {
 check_coding_workspace() {
     dogfood_preflight 1 || die 'engineer automation preflight failed'
     if [ "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" = "1" ]; then
-        log "coding workspace: $HARNESS_CODING_WORKSPACE_ROOT (local-git provider)"
+        log "coding workspace: $TEMPER_CODING_WORKSPACE_ROOT (local-git provider)"
     fi
 }
 
 check_auth() {
     CODEX_MODEL_ARG=
     AUTH_FILE_ARG=
-    case "$HARNESS_AGENTS_AUTH" in
+    case "$TEMPER_AGENTS_AUTH" in
         chatgpt-oauth)
-            _auth_file=${HARNESS_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
+            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
             [ -f "$_auth_file" ] || die "ChatGPT OAuth selected but $_auth_file is missing; run: pi /login openai-codex"
             grep -q 'openai-codex' "$_auth_file" 2>/dev/null || die "no openai-codex entry in $_auth_file; run: pi /login openai-codex"
             AUTH_FLAG=chatgpt-oauth
-            [ -n "$HARNESS_AGENTS_CODEX_MODEL" ] && CODEX_MODEL_ARG="--codex-model $HARNESS_AGENTS_CODEX_MODEL"
-            [ -n "$HARNESS_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $HARNESS_AGENTS_AUTH_FILE"
+            [ -n "$TEMPER_AGENTS_CODEX_MODEL" ] && CODEX_MODEL_ARG="--codex-model $TEMPER_AGENTS_CODEX_MODEL"
+            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
             log "auth: ChatGPT OAuth ($_auth_file)"
             ;;
         anthropic-oauth)
-            _auth_file=${HARNESS_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
+            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
             [ -f "$_auth_file" ] || die "Anthropic OAuth selected but $_auth_file is missing; run: pi /login anthropic"
             grep -q '"anthropic"' "$_auth_file" 2>/dev/null || die "no anthropic entry in $_auth_file; run: pi /login anthropic"
             AUTH_FLAG=anthropic-oauth
-            [ -n "$HARNESS_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $HARNESS_AGENTS_AUTH_FILE"
-            [ -n "$HARNESS_AGENTS_ANTHROPIC_MODEL" ] && export HARNESS_AGENTS_ANTHROPIC_MODEL
+            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
+            [ -n "$TEMPER_AGENTS_ANTHROPIC_MODEL" ] && export TEMPER_AGENTS_ANTHROPIC_MODEL
             log "auth: Anthropic OAuth ($_auth_file)"
             ;;
         deepseek)
-            [ -n "${HARNESS_DEEPSEEK_API_KEY:-}" ] || [ -n "${HARNESS_DEEPSEEK_API_KEY_PATH:-}" ] || die 'DeepSeek selected; set HARNESS_DEEPSEEK_API_KEY or HARNESS_DEEPSEEK_API_KEY_PATH'
+            [ -n "${TEMPER_DEEPSEEK_API_KEY:-}" ] || [ -n "${TEMPER_DEEPSEEK_API_KEY_PATH:-}" ] || die 'DeepSeek selected; set TEMPER_DEEPSEEK_API_KEY or TEMPER_DEEPSEEK_API_KEY_PATH'
             AUTH_FLAG=deepseek
             log 'auth: DeepSeek'
             ;;
-        *) die "unknown HARNESS_AGENTS_AUTH '$HARNESS_AGENTS_AUTH'" ;;
+        *) die "unknown TEMPER_AGENTS_AUTH '$TEMPER_AGENTS_AUTH'" ;;
     esac
 }
 
@@ -419,9 +419,9 @@ role_env_key() {
 launch_role_worker() {
     _role=$1
     _key=$(role_env_key "$_role")
-    eval "_user=\${HARNESS_FORGEJO_USER_${_key}:-}"
-    eval "_token=\${HARNESS_FORGEJO_TOKEN_${_key}:-}"
-    eval "_password=\${HARNESS_FORGEJO_PASSWORD_${_key}:-}"
+    eval "_user=\${TEMPER_FORGEJO_USER_${_key}:-}"
+    eval "_token=\${TEMPER_FORGEJO_TOKEN_${_key}:-}"
+    eval "_password=\${TEMPER_FORGEJO_PASSWORD_${_key}:-}"
     if [ -z "$_token" ]; then
         log "skipping role:$_role (no token in $ROLES_ENV)"
         return 0
@@ -444,14 +444,14 @@ launch_role_worker() {
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     # shellcheck disable=SC2086
-    HARNESS_FORGEJO_TOKEN="$_token" \
-    HARNESS_FORGEJO_USERNAME="$_user" \
-    HARNESS_FORGEJO_PASSWORD="$_password" \
-    HARNESS_CODING_WORKSPACE_ROOT="$HARNESS_CODING_WORKSPACE_ROOT" \
-    HARNESS_CODING_WORKSPACE_COMMAND="$HARNESS_CODING_WORKSPACE_COMMAND" \
-    HARNESS_CODING_WORKSPACE_REMOTE="$HARNESS_CODING_WORKSPACE_REMOTE" \
-    HARNESS_CODING_WORKSPACE_PUSH="$HARNESS_CODING_WORKSPACE_PUSH" \
-    HARNESS_CODING_WORKSPACE_PR_LABELS="$HARNESS_CODING_WORKSPACE_PR_LABELS" \
+    TEMPER_FORGEJO_TOKEN="$_token" \
+    TEMPER_FORGEJO_USERNAME="$_user" \
+    TEMPER_FORGEJO_PASSWORD="$_password" \
+    TEMPER_CODING_WORKSPACE_ROOT="$TEMPER_CODING_WORKSPACE_ROOT" \
+    TEMPER_CODING_WORKSPACE_COMMAND="$TEMPER_CODING_WORKSPACE_COMMAND" \
+    TEMPER_CODING_WORKSPACE_REMOTE="$TEMPER_CODING_WORKSPACE_REMOTE" \
+    TEMPER_CODING_WORKSPACE_PUSH="$TEMPER_CODING_WORKSPACE_PUSH" \
+    TEMPER_CODING_WORKSPACE_PR_LABELS="$TEMPER_CODING_WORKSPACE_PR_LABELS" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$REPO" \
         --kind role --role "$_role" --user "$_user" \
@@ -467,7 +467,7 @@ launch_role_worker() {
 
 launch_intake_labeler() {
     _token=${DOGFOOD_MECHANICAL_TOKEN:-$ADMIN_TOKEN}
-    HARNESS_FORGEJO_TOKEN="$_token" \
+    TEMPER_FORGEJO_TOKEN="$_token" \
         python3 "$TOOLS_DIR/label_intake.py" \
         --base-url "$BASE_URL" \
         --owner "$OWNER" \
@@ -491,9 +491,9 @@ launch_mechanical_worker() {
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     # shellcheck disable=SC2086
-    HARNESS_FORGEJO_TOKEN="$_token" \
-    HARNESS_FORGEJO_USERNAME="$_user" \
-    HARNESS_FORGEJO_PASSWORD="$_password" \
+    TEMPER_FORGEJO_TOKEN="$_token" \
+    TEMPER_FORGEJO_USERNAME="$_user" \
+    TEMPER_FORGEJO_PASSWORD="$_password" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$REPO" \
         --kind mechanical \
@@ -519,7 +519,7 @@ launch_workers() {
 }
 
 cleanup_product_chat_snapshot() {
-    [ -n "${HARNESS_DOGFOOD_SNAPSHOT_FILE:-}" ] && rm -f "$HARNESS_DOGFOOD_SNAPSHOT_FILE" 2>/dev/null || true
+    [ -n "${TEMPER_DOGFOOD_SNAPSHOT_FILE:-}" ] && rm -f "$TEMPER_DOGFOOD_SNAPSHOT_FILE" 2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
 }
 
@@ -561,18 +561,18 @@ cmd_product_chat() {
     resolve_product_chat_binary
     parse_live_secrets
 
-    _pm_token=${HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER:-}
-    [ -n "$_pm_token" ] || die "product-chat requires HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER in $ROLES_ENV"
+    _pm_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER:-}
+    [ -n "$_pm_token" ] || die "product-chat requires TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER in $ROLES_ENV"
 
     [ -n "$DOGFOOD_PRODUCT_CHAT_HUMAN_USER" ] || die 'product-chat requires DOGFOOD_PRODUCT_CHAT_HUMAN_USER in config/dogfood.env'
-    _human_token=${HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN:-}
+    _human_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN:-}
     [ -n "$_human_token" ] || die "product-chat requires a token for DOGFOOD_PRODUCT_CHAT_HUMAN_USER=$DOGFOOD_PRODUCT_CHAT_HUMAN_USER in $ROLES_ENV"
 
     # CODEX_MODEL_ARG/AUTH_FILE_ARG are generated from config by check_auth and
     # intentionally word-split, matching role-worker launch style.
     # shellcheck disable=SC2086
-    HARNESS_PRODUCT_CHAT_HUMAN_TOKEN="$_human_token" \
-    HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN="$_pm_token" \
+    TEMPER_PRODUCT_CHAT_HUMAN_TOKEN="$_human_token" \
+    TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN="$_pm_token" \
         "$PRODUCT_CHAT_BIN" repl \
         --base-url "$BASE_URL" --repo "$REPO" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \

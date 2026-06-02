@@ -1,0 +1,46 @@
+[package]
+name = "temper-testing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Reusable non-production testing machinery shared across Temper crates."
+
+[[bin]]
+name = "temper-testing-worker"
+path = "src/bin/temper-testing-worker.rs"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+temper-agents = { path = "../temper-agents" }
+temper-production = { path = "../temper-production" }
+temper-forge = { path = "../temper-forge" }
+temper-forge-filesystem = { path = "../temper-forge-filesystem" }
+temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forge-memory = { path = "../temper-forge-memory" }
+temper-runner = { path = "../temper-runner" }
+temper-workflow = { path = "../temper-workflow" }
+# Forgejo end-to-end fixture (env-gated, #[ignore]d): a blocking HTTP client to
+# download the pinned server binary, verify its checksum, and poll readiness.
+# `reqwest` is already in the workspace tree via `temper-forge-forgejo`; the
+# `blocking` feature adds the sync API the one-shot download/boot fixture uses,
+# while the async API drives REST provisioning under a Tokio reactor (Phase 2).
+reqwest = { workspace = true, features = ["blocking", "json"] }
+sha2 = "0.10"
+# Phase 2 provisioning commits workflow file(s) via the Forgejo contents API,
+# which accepts base64-encoded bodies. Also used by the env-gated runner smoke
+# test (a dev-dependency there too; a normal dependency here for provision.rs).
+base64 = "0.22"
+# The Forgejo backend (`ForgejoForge`) is async and its futures park on real
+# network IO, so the `--backend forgejo` worker path (Phase 3) cannot use the
+# crate's no-op `block_on`; it drives the poll loop on a current-thread Tokio
+# runtime instead. The filesystem path keeps using `block_on`. This is a normal
+# dependency (not dev-only) because the production binary needs the reactor; the
+# `#[tokio::test]` provisioning tests reuse it via the `macros` feature.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

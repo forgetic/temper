@@ -2,11 +2,11 @@
 
 The Forge interface is the backend-agnostic contract implemented by local files, Forgejo, GitHub, and other collaboration systems.
 
-Rust definition: `crates/harness-forge/src/forge.rs`.
+Rust definition: `crates/temper-forge/src/forge.rs`.
 
 ## Contract summary
 
-The `harness_forge::Forge` trait exposes operations for:
+The `temper_forge::Forge` trait exposes operations for:
 
 - current user identity
 - repositories
@@ -24,7 +24,7 @@ All methods are asynchronous because remote providers are expected. Local implem
 ## Companion change hints
 
 `ChangeHint`, `ChangeKind`, `ChangeSource`, and `ChangeSourceEvent` are portable
-companion types in `harness-forge`, but they are deliberately **not** methods on
+companion types in `temper-forge`, but they are deliberately **not** methods on
 the `Forge` trait. A hint source is an optional latency accelerator for runners:
 it may be lossy, duplicate, stale, broad, reordered, or closed. Consumers must
 use hints only to wake the normal poll path, then re-read Forge state through the
@@ -230,7 +230,7 @@ update. A real forge can satisfy the precondition with an `ETag`/`If-Match` pair
 (the version is the artifact's ETag) or another single atomic claim; the trait
 exposes only `Version` and `ForgeError::Conflict`, never provider specifics.
 
-This is the primitive `harness-workflow`'s `LeaseManager` uses to close the
+This is the primitive `temper-workflow`'s `LeaseManager` uses to close the
 lease-acquisition lost-update window: it captures the version at load and writes
 the lease conditionally, so two acquirers over the same "no lease" snapshot
 cannot both win. See `docs/reference/robustness-guarantees.md`.

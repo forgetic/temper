@@ -1,0 +1,31 @@
+[package]
+name = "temper-agents"
+version = "0.1.0"
+# This crate is the ONE place the LLM SDK (`pi_agent_rust`) lives. The SDK
+# requires `edition = 2024` / `rust-version = 1.85`, so this crate pins its own
+# floor above the workspace root (2021 / 1.76); the installed toolchain (1.93.1)
+# satisfies it. Every other crate inherits the unchanged workspace values.
+edition = "2024"
+rust-version = "1.85"
+license.workspace = true
+description = "Real, in-process LLM role agents for Temper (DeepSeek via pi_agent_rust)."
+
+[dependencies]
+async-trait.workspace = true
+temper-forge = { path = "../temper-forge" }
+temper-runner = { path = "../temper-runner" }
+temper-workflow = { path = "../temper-workflow" }
+pi_agent_rust = "0.1.13"
+serde = { workspace = true }
+serde_json.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+chrono.workspace = true
+temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forge-memory = { path = "../temper-forge-memory" }
+temper-testing = { path = "../temper-testing" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

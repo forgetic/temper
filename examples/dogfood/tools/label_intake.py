@@ -112,9 +112,9 @@ def main() -> int:
     parser.add_argument("--poll-secs", type=float, default=5.0)
     args = parser.parse_args()
 
-    token = os.environ.get("HARNESS_FORGEJO_TOKEN", "").strip()
+    token = os.environ.get("TEMPER_FORGEJO_TOKEN", "").strip()
     if not token:
-        raise SystemExit("HARNESS_FORGEJO_TOKEN is required")
+        raise SystemExit("TEMPER_FORGEJO_TOKEN is required")
 
     started_at = parse_time(args.started_at)
     stop_file = Path(args.stop_file)

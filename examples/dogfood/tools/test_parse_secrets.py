@@ -84,16 +84,16 @@ class ParseSecretsTests(unittest.TestCase):
     def test_emits_product_manager_and_permission_user_when_present(self) -> None:
         env = self.run_parser(REQUIRED_NOTE + PRODUCT_MANAGER_NOTE)
 
-        self.assertEqual("product-manager", env["HARNESS_FORGEJO_USER_PRODUCT_MANAGER"])
-        self.assertEqual("pm-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER"])
-        self.assertEqual("pm-pw", env["HARNESS_FORGEJO_PASSWORD_PRODUCT_MANAGER"])
+        self.assertEqual("product-manager", env["TEMPER_FORGEJO_USER_PRODUCT_MANAGER"])
+        self.assertEqual("pm-token", env["TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER"])
+        self.assertEqual("pm-pw", env["TEMPER_FORGEJO_PASSWORD_PRODUCT_MANAGER"])
         self.assertIn("product-manager", env["DOGFOOD_PERMISSION_USERS"].split())
 
     def test_aliases_product_manager_from_configured_source_user(self) -> None:
         env = self.run_parser(REQUIRED_NOTE + PRODUCT_MANAGER_SOURCE_NOTE, product_manager_user="pm-bot")
 
-        self.assertEqual("pm-bot", env["HARNESS_FORGEJO_USER_PRODUCT_MANAGER"])
-        self.assertEqual("pm-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER"])
+        self.assertEqual("pm-bot", env["TEMPER_FORGEJO_USER_PRODUCT_MANAGER"])
+        self.assertEqual("pm-token", env["TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER"])
         self.assertIn("pm-bot", env["DOGFOOD_PERMISSION_USERS"].split())
 
     def test_aliases_product_chat_human_separately_from_workflow_human(self) -> None:
@@ -102,10 +102,10 @@ class ParseSecretsTests(unittest.TestCase):
             product_chat_human_user="free",
         )
 
-        self.assertEqual("bot", env["HARNESS_FORGEJO_USER_HUMAN"])
-        self.assertEqual("bot-token", env["HARNESS_FORGEJO_TOKEN_HUMAN"])
-        self.assertEqual("free", env["HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
-        self.assertEqual("free-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"])
+        self.assertEqual("bot", env["TEMPER_FORGEJO_USER_HUMAN"])
+        self.assertEqual("bot-token", env["TEMPER_FORGEJO_TOKEN_HUMAN"])
+        self.assertEqual("free", env["TEMPER_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
+        self.assertEqual("free-token", env["TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"])
         self.assertIn("free", env["DOGFOOD_PERMISSION_USERS"].split())
 
     def test_uses_admin_token_only_when_product_chat_human_is_admin_user(self) -> None:
@@ -115,25 +115,25 @@ class ParseSecretsTests(unittest.TestCase):
             product_chat_human_user="free",
         )
 
-        self.assertEqual("free", env["HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
+        self.assertEqual("free", env["TEMPER_FORGEJO_USER_PRODUCT_CHAT_HUMAN"])
         self.assertEqual(
-            "free-admin-token", env["HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"]
+            "free-admin-token", env["TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN"]
         )
-        self.assertEqual("free-pw", env["HARNESS_FORGEJO_PASSWORD_PRODUCT_CHAT_HUMAN"])
+        self.assertEqual("free-pw", env["TEMPER_FORGEJO_PASSWORD_PRODUCT_CHAT_HUMAN"])
 
         mismatch = self.run_parser(
             "admin user: root\npw: root-pw\ngitnex api token: root-admin-token\n"
             + REQUIRED_NOTE,
             product_chat_human_user="free",
         )
-        self.assertNotIn("HARNESS_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN", mismatch)
+        self.assertNotIn("TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN", mismatch)
 
     def test_succeeds_without_product_manager_credentials(self) -> None:
         env = self.run_parser(REQUIRED_NOTE)
 
-        self.assertNotIn("HARNESS_FORGEJO_USER_PRODUCT_MANAGER", env)
-        self.assertNotIn("HARNESS_FORGEJO_TOKEN_PRODUCT_MANAGER", env)
-        self.assertNotIn("HARNESS_FORGEJO_USER_PRODUCT_CHAT_HUMAN", env)
+        self.assertNotIn("TEMPER_FORGEJO_USER_PRODUCT_MANAGER", env)
+        self.assertNotIn("TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER", env)
+        self.assertNotIn("TEMPER_FORGEJO_USER_PRODUCT_CHAT_HUMAN", env)
         self.assertNotIn("product-manager", env["DOGFOOD_PERMISSION_USERS"].split())
 
 

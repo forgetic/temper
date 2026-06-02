@@ -6,14 +6,14 @@
 #   2. a host-mode forgejo-runner producing real CI,
 #   3. admin bootstrap + the production provision/seed binary
 #      (org/users/tokens/repo/labels/CI workflow + one cross-repo intake issue),
-#   4. one fixed harness-worker pool (one process per workflow role, plus one
+#   4. one fixed temper-worker pool (one process per workflow role, plus one
 #      mechanical reconciler) scanning every configured repo — all against
 #      Forgejo with real LLM agents and wall time,
 # then tears them all down cleanly on Ctrl-C / signal / `./run.sh stop`.
 #
-# This script targets the operator-facing entry points from harness-production
-# rather than the harness-testing entry points. By default it builds/uses the
-# development-profile binaries under target/debug; override HARNESS_*_BIN if you
+# This script targets the operator-facing entry points from temper-production
+# rather than the temper-testing entry points. By default it builds/uses the
+# development-profile binaries under target/debug; override TEMPER_*_BIN if you
 # want prebuilt or release artifacts.
 #
 # Usage:
@@ -27,8 +27,8 @@
 # trap guards do not fire; clean up survivors by hand with:
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
-#       pkill -f harness-worker
-#       pkill -f harness-trigger-forgejo
+#       pkill -f temper-worker
+#       pkill -f temper-trigger-forgejo
 #       rm -rf examples/reference-delivery/run
 #
 # POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
@@ -37,8 +37,8 @@
 set -eu
 
 # --- Locations ----------------------------------------------------------------
-if [ -n "${HARNESS_REFERENCE_DELIVERY_SCRIPT_DIR:-}" ]; then
-    SCRIPT_DIR=$HARNESS_REFERENCE_DELIVERY_SCRIPT_DIR
+if [ -n "${TEMPER_REFERENCE_DELIVERY_SCRIPT_DIR:-}" ]; then
+    SCRIPT_DIR=$TEMPER_REFERENCE_DELIVERY_SCRIPT_DIR
 else
     SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 fi
@@ -78,22 +78,22 @@ sleep_short() {
     sleep 0.2 2>/dev/null || sleep 1
 }
 
-DISPLAY_SCRIPT=${HARNESS_REFERENCE_DELIVERY_ORIGINAL:-$SCRIPT_DIR/run.sh}
+DISPLAY_SCRIPT=${TEMPER_REFERENCE_DELIVERY_ORIGINAL:-$SCRIPT_DIR/run.sh}
 
 # Dash reads long-running scripts lazily. If this file is edited while the demo
 # is sleeping in monitor(), the running shell may parse a half-new tail and fail
 # during teardown. Run starts from a private snapshot so source edits/rebuilds do
 # not affect the already-running launcher.
-if [ "${HARNESS_REFERENCE_DELIVERY_SNAPSHOT:-0}" != "1" ]; then
+if [ "${TEMPER_REFERENCE_DELIVERY_SNAPSHOT:-0}" != "1" ]; then
     case "${1:-start}" in
         start | "")
             mkdir -p "$RUN_DIR"
             _snapshot="$RUN_DIR/run.sh.snapshot.$$"
             cp "$SCRIPT_DIR/run.sh" "$_snapshot"
             chmod 700 "$_snapshot"
-            HARNESS_REFERENCE_DELIVERY_SNAPSHOT=1 \
-            HARNESS_REFERENCE_DELIVERY_SCRIPT_DIR="$SCRIPT_DIR" \
-            HARNESS_REFERENCE_DELIVERY_ORIGINAL="$DISPLAY_SCRIPT" \
+            TEMPER_REFERENCE_DELIVERY_SNAPSHOT=1 \
+            TEMPER_REFERENCE_DELIVERY_SCRIPT_DIR="$SCRIPT_DIR" \
+            TEMPER_REFERENCE_DELIVERY_ORIGINAL="$DISPLAY_SCRIPT" \
                 exec /bin/sh "$_snapshot" "$@"
             ;;
     esac
@@ -113,8 +113,8 @@ usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|smoke-webhoo
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
-Configuration is read from config/harness.env (no secrets). Auth selection is
-HARNESS_AGENTS_AUTH (default chatgpt-oauth); see secrets/.env.example.
+Configuration is read from config/temper.env (no secrets). Auth selection is
+TEMPER_AGENTS_AUTH (default chatgpt-oauth); see secrets/.env.example.
 EOF
 }
 
@@ -173,16 +173,16 @@ cmd_stop() {
 # --- Config + secrets ---------------------------------------------------------
 
 # Config knobs whose pre-existing environment value should win over the file
-# (precedence: CLI/env > config/harness.env > built-in default). The file is
+# (precedence: CLI/env > config/temper.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
-HARNESS_AGENTS_AUTH HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL \
-HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
-HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
-HARNESS_TRIGGER_BIN HARNESS_BUILD_PACKAGE \
-HARNESS_CODING_WORKSPACE_ROOT HARNESS_CODING_WORKSPACE_COMMAND \
-HARNESS_CODING_WORKSPACE_REMOTE HARNESS_CODING_WORKSPACE_PUSH \
-HARNESS_CODING_WORKSPACE_PR_LABELS"
+TEMPER_AGENTS_AUTH TEMPER_AGENTS_CODEX_MODEL TEMPER_AGENTS_ANTHROPIC_MODEL \
+TEMPER_AGENTS_AUTH_FILE TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY \
+TEMPER_FORGEJO_RUNNER_BINARY TEMPER_WORKER_BIN TEMPER_PROVISION_BIN \
+TEMPER_TRIGGER_BIN TEMPER_BUILD_PACKAGE \
+TEMPER_CODING_WORKSPACE_ROOT TEMPER_CODING_WORKSPACE_COMMAND \
+TEMPER_CODING_WORKSPACE_REMOTE TEMPER_CODING_WORKSPACE_PUSH \
+TEMPER_CODING_WORKSPACE_PR_LABELS"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -200,7 +200,7 @@ validate_repo_path() {
 }
 
 load_config() {
-    [ -f "$CONFIG_DIR/harness.env" ] || die "missing $CONFIG_DIR/harness.env"
+    [ -f "$CONFIG_DIR/temper.env" ] || die "missing $CONFIG_DIR/temper.env"
     # Snapshot any pre-existing env values so they survive the file sourcing.
     # REPOS is special: an intentionally empty `REPOS=` selects legacy
     # OWNER/NAME mode, so presence matters even when the value is empty.
@@ -210,7 +210,7 @@ load_config() {
         eval "_pre_$_k=\${$_k:-}"
     done
     # shellcheck disable=SC1090
-    . "$CONFIG_DIR/harness.env"
+    . "$CONFIG_DIR/temper.env"
     # Optional operator secret overrides (gitignored).
     if [ -f "$SECRETS_DIR/.env" ]; then
         # shellcheck disable=SC1090
@@ -236,22 +236,22 @@ load_config() {
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
     WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:38080/forgejo/webhook}
-    HARNESS_AGENTS_AUTH=${HARNESS_AGENTS_AUTH:-chatgpt-oauth}
-    HARNESS_AGENTS_CODEX_MODEL=${HARNESS_AGENTS_CODEX_MODEL:-}
-    HARNESS_AGENTS_ANTHROPIC_MODEL=${HARNESS_AGENTS_ANTHROPIC_MODEL:-}
-    HARNESS_AGENTS_AUTH_FILE=${HARNESS_AGENTS_AUTH_FILE:-}
-    HARNESS_FORGEJO_GOMAXPROCS=${HARNESS_FORGEJO_GOMAXPROCS:-2}
-    HARNESS_FORGEJO_BINARY=${HARNESS_FORGEJO_BINARY:-}
-    HARNESS_FORGEJO_RUNNER_BINARY=${HARNESS_FORGEJO_RUNNER_BINARY:-}
-    HARNESS_WORKER_BIN=${HARNESS_WORKER_BIN:-}
-    HARNESS_PROVISION_BIN=${HARNESS_PROVISION_BIN:-}
-    HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
-    HARNESS_BUILD_PACKAGE=${HARNESS_BUILD_PACKAGE:-harness-production}
-    HARNESS_CODING_WORKSPACE_ROOT=${HARNESS_CODING_WORKSPACE_ROOT:-}
-    HARNESS_CODING_WORKSPACE_COMMAND=${HARNESS_CODING_WORKSPACE_COMMAND:-}
-    HARNESS_CODING_WORKSPACE_REMOTE=${HARNESS_CODING_WORKSPACE_REMOTE:-origin}
-    HARNESS_CODING_WORKSPACE_PUSH=${HARNESS_CODING_WORKSPACE_PUSH:-1}
-    HARNESS_CODING_WORKSPACE_PR_LABELS=${HARNESS_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
+    TEMPER_AGENTS_AUTH=${TEMPER_AGENTS_AUTH:-chatgpt-oauth}
+    TEMPER_AGENTS_CODEX_MODEL=${TEMPER_AGENTS_CODEX_MODEL:-}
+    TEMPER_AGENTS_ANTHROPIC_MODEL=${TEMPER_AGENTS_ANTHROPIC_MODEL:-}
+    TEMPER_AGENTS_AUTH_FILE=${TEMPER_AGENTS_AUTH_FILE:-}
+    TEMPER_FORGEJO_GOMAXPROCS=${TEMPER_FORGEJO_GOMAXPROCS:-2}
+    TEMPER_FORGEJO_BINARY=${TEMPER_FORGEJO_BINARY:-}
+    TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
+    TEMPER_WORKER_BIN=${TEMPER_WORKER_BIN:-}
+    TEMPER_PROVISION_BIN=${TEMPER_PROVISION_BIN:-}
+    TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
+    TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
+    TEMPER_CODING_WORKSPACE_ROOT=${TEMPER_CODING_WORKSPACE_ROOT:-}
+    TEMPER_CODING_WORKSPACE_COMMAND=${TEMPER_CODING_WORKSPACE_COMMAND:-}
+    TEMPER_CODING_WORKSPACE_REMOTE=${TEMPER_CODING_WORKSPACE_REMOTE:-origin}
+    TEMPER_CODING_WORKSPACE_PUSH=${TEMPER_CODING_WORKSPACE_PUSH:-1}
+    TEMPER_CODING_WORKSPACE_PR_LABELS=${TEMPER_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
 
     _raw_repos=${REPOS:-$OWNER/$NAME}
     CONFIGURED_REPOS=
@@ -281,8 +281,8 @@ load_config() {
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
     # Exported so both Go processes inherit it; harmless for the Rust workers.
-    if [ -n "$HARNESS_FORGEJO_GOMAXPROCS" ]; then
-        export GOMAXPROCS="$HARNESS_FORGEJO_GOMAXPROCS"
+    if [ -n "$TEMPER_FORGEJO_GOMAXPROCS" ]; then
+        export GOMAXPROCS="$TEMPER_FORGEJO_GOMAXPROCS"
     fi
 
     # Derive host/port from BASE_URL (http://host:port).
@@ -302,25 +302,25 @@ load_config() {
 CODEX_MODEL_ARG=
 AUTH_FILE_ARG=
 check_auth() {
-    case "$HARNESS_AGENTS_AUTH" in
+    case "$TEMPER_AGENTS_AUTH" in
         chatgpt-oauth)
-            _auth_file=${HARNESS_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
+            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
             if [ ! -f "$_auth_file" ]; then
                 die "ChatGPT OAuth selected but $_auth_file is missing.
        Log in once:  pi /login openai-codex
-       (or set HARNESS_AGENTS_AUTH=deepseek to use a DeepSeek key instead)"
+       (or set TEMPER_AGENTS_AUTH=deepseek to use a DeepSeek key instead)"
             fi
             if ! grep -q 'openai-codex' "$_auth_file" 2>/dev/null; then
                 die "no 'openai-codex' entry in $_auth_file.
        Log in once:  pi /login openai-codex"
             fi
             AUTH_FLAG=chatgpt-oauth
-            [ -n "$HARNESS_AGENTS_CODEX_MODEL" ] && CODEX_MODEL_ARG="--codex-model $HARNESS_AGENTS_CODEX_MODEL"
-            [ -n "$HARNESS_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $HARNESS_AGENTS_AUTH_FILE"
+            [ -n "$TEMPER_AGENTS_CODEX_MODEL" ] && CODEX_MODEL_ARG="--codex-model $TEMPER_AGENTS_CODEX_MODEL"
+            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
             log "auth: ChatGPT OAuth (reads $_auth_file)"
             ;;
         anthropic-oauth)
-            _auth_file=${HARNESS_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
+            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
             if [ ! -f "$_auth_file" ]; then
                 die "Anthropic OAuth selected but $_auth_file is missing.
        Log in once:  pi /login anthropic"
@@ -330,24 +330,24 @@ check_auth() {
        Log in once:  pi /login anthropic"
             fi
             AUTH_FLAG=anthropic-oauth
-            [ -n "$HARNESS_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $HARNESS_AGENTS_AUTH_FILE"
+            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
             # Anthropic model selection is env-only in the worker/provider seam.
-            [ -n "$HARNESS_AGENTS_ANTHROPIC_MODEL" ] && export HARNESS_AGENTS_ANTHROPIC_MODEL
-            log "auth: Anthropic OAuth (reads $_auth_file; model ${HARNESS_AGENTS_ANTHROPIC_MODEL:-claude-opus-4-8})"
+            [ -n "$TEMPER_AGENTS_ANTHROPIC_MODEL" ] && export TEMPER_AGENTS_ANTHROPIC_MODEL
+            log "auth: Anthropic OAuth (reads $_auth_file; model ${TEMPER_AGENTS_ANTHROPIC_MODEL:-claude-opus-4-8})"
             ;;
         deepseek)
             _key_file="$SECRETS_DIR/deepseek-api-key"
             [ -f "$_key_file" ] || die "DeepSeek selected but $_key_file is missing.
        Create it with your key (see secrets/deepseek-api-key.example),
-       or set HARNESS_AGENTS_AUTH=chatgpt-oauth to use a ChatGPT login."
+       or set TEMPER_AGENTS_AUTH=chatgpt-oauth to use a ChatGPT login."
             # Exported so every worker child resolves the key from the file;
             # the key value never appears on argv.
-            export HARNESS_DEEPSEEK_API_KEY_PATH="$_key_file"
+            export TEMPER_DEEPSEEK_API_KEY_PATH="$_key_file"
             AUTH_FLAG=deepseek
             log "auth: DeepSeek (key file $_key_file)"
             ;;
         *)
-            die "unknown HARNESS_AGENTS_AUTH '$HARNESS_AGENTS_AUTH' (expected chatgpt-oauth|deepseek|anthropic-oauth)"
+            die "unknown TEMPER_AGENTS_AUTH '$TEMPER_AGENTS_AUTH' (expected chatgpt-oauth|deepseek|anthropic-oauth)"
             ;;
     esac
 }
@@ -355,16 +355,16 @@ check_auth() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    WORKER_BIN=${HARNESS_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/harness-worker}
-    PROVISION_BIN=${HARNESS_PROVISION_BIN:-$WORKSPACE_ROOT/target/debug/harness-provision-forgejo}
-    TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/harness-trigger-forgejo}
+    WORKER_BIN=${TEMPER_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/temper-worker}
+    PROVISION_BIN=${TEMPER_PROVISION_BIN:-$WORKSPACE_ROOT/target/debug/temper-provision-forgejo}
+    TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/temper-trigger-forgejo}
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
     # this is an explicit operator choice for prebuilt/current binaries.
-    if [ "${HARNESS_SKIP_BUILD:-0}" != "1" ]; then
-        log "ensuring development binaries are current (cargo build -p $HARNESS_BUILD_PACKAGE)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$HARNESS_BUILD_PACKAGE" ) \
+    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring development binaries are current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) \
             || die 'cargo build failed'
     fi
 
@@ -375,16 +375,16 @@ resolve_binaries() {
     _provision_help=$("$PROVISION_BIN" --help 2>&1 || true)
     case "$_provision_help" in
         *--seed-intake*--intake-title*--intake-body-file*) ;;
-        *) die "provision binary is stale or incompatible: $PROVISION_BIN does not advertise --seed-intake/--intake-title/--intake-body-file. Re-run without HARNESS_SKIP_BUILD=1 or rebuild harness-production with cargo build -p $HARNESS_BUILD_PACKAGE." ;;
+        *) die "provision binary is stale or incompatible: $PROVISION_BIN does not advertise --seed-intake/--intake-title/--intake-body-file. Re-run without TEMPER_SKIP_BUILD=1 or rebuild temper-production with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
     # Pinned Forgejo + runner: env override, else the cached pinned path.
-    FORGEJO_BIN=${HARNESS_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
-    RUNNER_BIN=${HARNESS_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64}
+    FORGEJO_BIN=${TEMPER_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
+    RUNNER_BIN=${TEMPER_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64}
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN
-       Set HARNESS_FORGEJO_BINARY, or pre-stage the pinned binary in .cache/forgejo/
+       Set TEMPER_FORGEJO_BINARY, or pre-stage the pinned binary in .cache/forgejo/
        (running the gated forgejo_multiprocess test once downloads + checksums it)."
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN
-       Set HARNESS_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/."
+       Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/."
 }
 
 # --- Forgejo server -----------------------------------------------------------
@@ -596,14 +596,14 @@ bootstrap_and_provision() {
             # _webhook_args intentionally word-split: POSIX sh has no arrays and the
             # example paths above are controlled by this script/config.
             # shellcheck disable=SC2086
-            _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+            _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
                 --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
                 $_webhook_args --seed-intake no) \
                 || die "provisioning $_repo failed"
         elif [ "$CROSS_REPO_ENABLED" = "1" ]; then
             log "provisioning $_repo (labels + CI + cross-repo parent intake) ..."
             # shellcheck disable=SC2086
-            _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+            _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
                 --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
                 $_webhook_args --intake-title "$CROSS_REPO_INTAKE_TITLE" \
                 --intake-body-file "$_cross_body") \
@@ -611,7 +611,7 @@ bootstrap_and_provision() {
         else
             log "provisioning $_repo (labels + CI + seeded intake issue) ..."
             # shellcheck disable=SC2086
-            _status=$(HARNESS_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
+            _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
                 --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
                 $_webhook_args) \
                 || die "provisioning $_repo failed"
@@ -653,9 +653,9 @@ role_env_key() {
 launch_role_worker() {
     _role=$1
     _key=$(role_env_key "$_role")
-    eval "_user=\${HARNESS_FORGEJO_USER_${_key}:-}"
-    eval "_token=\${HARNESS_FORGEJO_TOKEN_${_key}:-}"
-    eval "_password=\${HARNESS_FORGEJO_PASSWORD_${_key}:-}"
+    eval "_user=\${TEMPER_FORGEJO_USER_${_key}:-}"
+    eval "_token=\${TEMPER_FORGEJO_TOKEN_${_key}:-}"
+    eval "_password=\${TEMPER_FORGEJO_PASSWORD_${_key}:-}"
     [ -n "$_token" ] || die "no token for role '$_role' in $ROLES_ENV"
 
     _wake_args=
@@ -669,14 +669,14 @@ launch_role_worker() {
     # WORKER_REPO_ARGS / CODEX_MODEL_ARG / AUTH_FILE_ARG / _wake_args intentionally
     # word-split (POSIX has no arrays); repo values are owner/name with no spaces.
     # shellcheck disable=SC2086
-    HARNESS_FORGEJO_TOKEN="$_token" \
-    HARNESS_FORGEJO_USERNAME="$_user" \
-    HARNESS_FORGEJO_PASSWORD="$_password" \
-    HARNESS_CODING_WORKSPACE_ROOT="$HARNESS_CODING_WORKSPACE_ROOT" \
-    HARNESS_CODING_WORKSPACE_COMMAND="$HARNESS_CODING_WORKSPACE_COMMAND" \
-    HARNESS_CODING_WORKSPACE_REMOTE="$HARNESS_CODING_WORKSPACE_REMOTE" \
-    HARNESS_CODING_WORKSPACE_PUSH="$HARNESS_CODING_WORKSPACE_PUSH" \
-    HARNESS_CODING_WORKSPACE_PR_LABELS="$HARNESS_CODING_WORKSPACE_PR_LABELS" \
+    TEMPER_FORGEJO_TOKEN="$_token" \
+    TEMPER_FORGEJO_USERNAME="$_user" \
+    TEMPER_FORGEJO_PASSWORD="$_password" \
+    TEMPER_CODING_WORKSPACE_ROOT="$TEMPER_CODING_WORKSPACE_ROOT" \
+    TEMPER_CODING_WORKSPACE_COMMAND="$TEMPER_CODING_WORKSPACE_COMMAND" \
+    TEMPER_CODING_WORKSPACE_REMOTE="$TEMPER_CODING_WORKSPACE_REMOTE" \
+    TEMPER_CODING_WORKSPACE_PUSH="$TEMPER_CODING_WORKSPACE_PUSH" \
+    TEMPER_CODING_WORKSPACE_PR_LABELS="$TEMPER_CODING_WORKSPACE_PR_LABELS" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
         --kind role --role "$_role" --user "$_user" \
@@ -694,10 +694,10 @@ launch_role_worker() {
 
 launch_workers() {
     : >"$WORKERS_PID_FILE"
-    # Derive the role list from the provisioned secrets file (one HARNESS_FORGEJO_
+    # Derive the role list from the provisioned secrets file (one TEMPER_FORGEJO_
     # USER_<KEY>=<role> per role binding) — never hardcoded. The value is both the
     # role id and the user handle (the Forgejo id==handle requirement).
-    _roles=$(sed -n "s/^HARNESS_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" "$ROLES_ENV")
+    _roles=$(sed -n "s/^TEMPER_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" "$ROLES_ENV")
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
 
     log 'launching role workers (production binary, real agents) ...'
@@ -721,7 +721,7 @@ launch_workers() {
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     # shellcheck disable=SC2086
-    HARNESS_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
+    TEMPER_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
         --kind mechanical \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
@@ -789,7 +789,7 @@ validate_repo_specific_logs() {
         _worker_mentioned=0
         for _log in "$LOG_DIR"/*.log; do
             [ -f "$_log" ] || continue
-            grep -q 'harness-worker:' "$_log" 2>/dev/null || continue
+            grep -q 'temper-worker:' "$_log" 2>/dev/null || continue
             if grep -F -q "$_repo" "$_log" 2>/dev/null; then
                 _worker_mentioned=1
             fi
@@ -841,7 +841,7 @@ cmd_validate_webhooks() {
     _wake_no_work=0
     for _log in "$LOG_DIR"/*.log; do
         [ -f "$_log" ] || continue
-        grep -q 'harness-worker:' "$_log" 2>/dev/null || continue
+        grep -q 'temper-worker:' "$_log" 2>/dev/null || continue
         _workers=$((_workers + 1))
         _name=${_log##*/}
         if grep -q 'consumed authenticated wake' "$_log" 2>/dev/null; then
@@ -868,7 +868,7 @@ cmd_validate_webhooks() {
     done
 
     if [ "$_workers" -eq 0 ]; then
-        log 'missing: no harness-worker logs found'
+        log 'missing: no temper-worker logs found'
         _ok=1
     fi
     if [ "$_wake_progress" -eq 0 ]; then

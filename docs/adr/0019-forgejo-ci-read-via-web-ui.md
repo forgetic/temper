@@ -85,8 +85,8 @@ portable `ForgeError`; the path never guesses a pass/fail verdict.
 - CI is readable on Forgejo 7.0.x despite the missing REST endpoints, using the
   same technique the production tooling relies on; the real `forgejo-runner`
   remains the producer.
-- `harness-forge` stays backend-agnostic: this is entirely inside
-  `harness-forge-forgejo`, behind the unchanged `list_ci_jobs`/`get_ci_job`
+- `temper-forge` stays backend-agnostic: this is entirely inside
+  `temper-forge-forgejo`, behind the unchanged `list_ci_jobs`/`get_ci_job`
   signatures. The web-UI requests bypass `build_request` (no `/api/v1` prefix, no
   token header, cookie auth, form bodies) through the raw `HttpClient` seam.
 - A new credential requirement: CI reads on a REST-less server need the web-UI
@@ -94,7 +94,7 @@ portable `ForgeError`; the path never guesses a pass/fail verdict.
   `docs/reference/forgejo-backend.md`.
 - Offline contract tests cover the login handshake (CSRF extraction, cookie
   storage, re-login on bounce), the live-view JSON → `CiJob` mapping, and the
-  REST-first/UI-fallback decision. An `#[ignore]`d, `HARNESS_FORGEJO_E2E=1`-gated
+  REST-first/UI-fallback decision. An `#[ignore]`d, `TEMPER_FORGEJO_E2E=1`-gated
   e2e test reads a real runner-produced `Failure` verdict through the web UI.
 
 ## Alternatives considered

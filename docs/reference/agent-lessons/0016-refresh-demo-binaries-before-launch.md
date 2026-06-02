@@ -7,7 +7,7 @@
 ## Trigger
 
 The reference-delivery demo failed during provisioning with
-`harness-provision-forgejo: unrecognized argument '--intake-title'` even though
+`temper-provision-forgejo: unrecognized argument '--intake-title'` even though
 current source supported that flag.
 
 ## What went wrong
@@ -21,13 +21,13 @@ Forgejo and failed later inside provisioning.
 
 Operator launch scripts that depend on local workspace binaries should either
 refresh them before starting long-lived processes or fail early with an explicit
-CLI compatibility check. `HARNESS_SKIP_BUILD=1` is an expert mode: assume all
+CLI compatibility check. `TEMPER_SKIP_BUILD=1` is an expert mode: assume all
 binary paths and overrides are current, and validate stale-binary errors before
 starting servers.
 
 ## Where this is now documented
 
-`examples/reference-delivery/run.sh` refreshes `harness-production` in the
+`examples/reference-delivery/run.sh` refreshes `temper-production` in the
 Cargo development profile by default and checks the provision binary for the
 cross-repo intake flags before booting Forgejo. `examples/reference-delivery/README.md`
 documents the default refresh and the stale-binary troubleshooting path.

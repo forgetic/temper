@@ -1,7 +1,7 @@
 # Product-manager conversations — implementation plan
 
 This plan starts the product-discussion flow we just dogfooded in Forgejo issue
-[#3](https://git.ekanayaka.io/ai/harness/issues/3), with two corrections that
+[#3](https://git.ekanayaka.io/ai/temper/issues/3), with two corrections that
 shape the design:
 
 1. the conversational role is a new **`product-manager`** agent, not the existing
@@ -15,7 +15,7 @@ phase should land green and update this README's status.
 
 ## Goal
 
-A human can discuss product ideas with a Harness product-manager agent, have the
+A human can discuss product ideas with a Temper product-manager agent, have the
 conversation mirrored into Forgejo, and explicitly ask the agent to file normal
 workflow intake issues on the human's behalf.
 
@@ -30,7 +30,7 @@ Start with the dogfood safety rails and a terminal MVP:
 1. make `product` transcript issues safe while dogfood workers/labelers are
    running (no accidental `untriaged` relabeling);
 2. add a non-workflow `product-manager` identity and LLM prompt/adapter; then
-3. ship a `harness-product-manager-chat` REPL plus
+3. ship a `temper-product-manager-chat` REPL plus
    `examples/dogfood/run.sh product-chat` wrapper.
 
 That gives the smallest feedback loop: type in a terminal, see product-manager
@@ -66,7 +66,7 @@ $ cd examples/dogfood
 $ ./run.sh product-chat
 
 Opened product conversation:
-  https://git.ekanayaka.io/ai/harness/issues/NN
+  https://git.ekanayaka.io/ai/temper/issues/NN
 
 you> I want a way to talk to the product manager from my phone.
 
@@ -80,7 +80,7 @@ Drafts:
 you> /file 1
 
 product-manager> Filed intake issue:
-  https://git.ekanayaka.io/ai/harness/issues/MM
+  https://git.ekanayaka.io/ai/temper/issues/MM
 ```
 
 Forgejo state:
@@ -135,36 +135,36 @@ Status legend: ☐ pending · ☑ done
 2. ☑ **Phase 2 — Product-manager conversational agent.**
    `prompts/phase-2-product-manager-agent.md`
 
-   Done: `harness-agents` exposes a non-workflow product-manager adapter and
+   Done: `temper-agents` exposes a non-workflow product-manager adapter and
    prompt that run one LLM turn over a transcript and return structured `reply`
    plus draft intake issues with deterministic slugs. It is not a
-   `harness_runner::Agent`, registers no SDK tools, and performs no Forge
+   `temper_runner::Agent`, registers no SDK tools, and performs no Forge
    mutation. Validation run: `cargo fmt --all`,
-   `cargo test -p harness-agents product_manager`, `cargo dev-clippy`, and
+   `cargo test -p temper-agents product_manager`, `cargo dev-clippy`, and
    `cargo dev-check`.
 
 3. ☑ **Phase 3 — CLI REPL MVP + Forgejo transcript/filing core.**
    `prompts/phase-3-cli-mvp.md`
 
-   Done: `harness-production` ships `harness-product-manager-chat repl` plus a
+   Done: `temper-production` ships `temper-product-manager-chat repl` plus a
    reusable product-chat core for transcript create/resume, human/product-manager
    comments, latest drafts, and idempotent `/file <n>` intake creation. The
    dogfood wrapper exposes `./run.sh product-chat`, reads human/product-manager
    tokens from env/parsed secrets, and keeps the MVP terminal-only with no web
    assets. Validation run: `cargo fmt --all`,
-   `cargo test -p harness-production product_chat`, `cargo dev-clippy`, and
+   `cargo test -p temper-production product_chat`, `cargo dev-clippy`, and
    `cargo dev-check`.
 
 4. ☑ **Phase 4 — Local service API for external frontends.**
    `prompts/phase-4-service-api.md`
 
-   Done: `harness-product-manager-chat serve` exposes the existing
+   Done: `temper-product-manager-chat serve` exposes the existing
    product-chat core over a small loopback JSON API for creating/resuming
    sessions, sending messages, reading latest drafts, and explicitly filing a
    draft idempotently as workflow intake. The API binds to loopback by default,
    requires an opt-in plus bearer token for non-loopback binds, and is documented
    in `docs/reference/product-manager-chat-api.md`. Validation run:
-   `cargo fmt --all`, `cargo test -p harness-production product_chat`,
+   `cargo fmt --all`, `cargo test -p temper-production product_chat`,
    `cargo dev-clippy`, and `cargo dev-check`.
 
 5. ☐ **Phase 5 — Optional Matrix/mobile text adapter.**
@@ -203,11 +203,11 @@ Status legend: ☐ pending · ☑ done
 - `examples/dogfood/tools/label_intake.py`
 - `examples/dogfood/tools/parse_secrets.py`
 - `examples/dogfood/tools/configure_forgejo.py`
-- `crates/harness-agents/src/decision.rs`
-- `crates/harness-agents/src/prompts/`
-- `crates/harness-agents/src/registry.rs` (for contrast: do **not** register the
+- `crates/temper-agents/src/decision.rs`
+- `crates/temper-agents/src/prompts/`
+- `crates/temper-agents/src/registry.rs` (for contrast: do **not** register the
   product-manager as a workflow role)
-- `crates/harness-production/src/bin/`
-- `crates/harness-production/src/forgejo_rest.rs`
-- `crates/harness-production/src/provision.rs`
-- `crates/harness-workflow/src/execute/ensure.rs` (correlation-key pattern)
+- `crates/temper-production/src/bin/`
+- `crates/temper-production/src/forgejo_rest.rs`
+- `crates/temper-production/src/provision.rs`
+- `crates/temper-workflow/src/execute/ensure.rs` (correlation-key pattern)

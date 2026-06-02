@@ -3,16 +3,16 @@
 This guide runs the **true one-process-per-part** rehearsal of the
 reference-delivery workflow. Unlike the in-process `MultiProcessStage` sketch —
 which still runs every worker inside one OS process — these tests spawn the
-`harness-testing-worker` binary once per moving part and let the parts
+`temper-testing-worker` binary once per moving part and let the parts
 coordinate only through a shared on-disk `FilesystemForge` store.
 
 ## Command
 
 ```sh
-cargo test -p harness-testing --test multiprocess -- --ignored
+cargo test -p temper-testing --test multiprocess -- --ignored
 ```
 
-The single-repo scenario tests live in `crates/harness-testing/tests/multiprocess.rs`.
+The single-repo scenario tests live in `crates/temper-testing/tests/multiprocess.rs`.
 They are `#[ignore]`d, so the default `cargo test` skips them; the `--ignored`
 flag opts in.
 
@@ -21,7 +21,7 @@ flag opts in.
 Phase 4 of the multi-repo worker plan adds a focused two-repository rehearsal:
 
 ```sh
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored
 ```
 
 That test provisions `acme/service-alpha` and `acme/service-beta` in one shared
@@ -32,10 +32,10 @@ it reports the stalled repository path next to the last scenario assertion error
 ## Scenarios
 
 All five reference-delivery scenarios run across real processes. Each reuses its
-**exact** in-process seed/assert closures (`harness_testing::scenarios`); only
-the spawned worker *behavior* differs, selected with `harness-testing-worker`
+**exact** in-process seed/assert closures (`temper_testing::scenarios`); only
+the spawned worker *behavior* differs, selected with `temper-testing-worker`
 flags that mirror the in-process registry wiring in
-`harness-runner/tests/end_to_end.rs`:
+`temper-runner/tests/end_to_end.rs`:
 
 | Scenario | `--architect` | `--reviewer` | `--ci` |
 | --- | --- | --- | --- |
@@ -58,7 +58,7 @@ Each scenario test (`run_variant`):
    through the same library code and the **exact** scenario seed closure the
    in-process scenarios use.
 3. Spawns one OS process per moving part via
-   `Command::new(env!("CARGO_BIN_EXE_harness-testing-worker"))`:
+   `Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"))`:
    - one `--kind role` worker for each role-with-an-agent (derived from the
      compiled workflow ∩ registered fake agents ∩ `RunnerConfig` bindings — never
      a hardcoded list), each carrying the scenario's `--architect`/`--reviewer`
@@ -110,14 +110,14 @@ The Forgejo multi-process e2e (`plans/forgejo-e2e/`) executed the **backend** an
 (`tests/forgejo_multiprocess.rs`) is the **same** rehearsal as this one, reusing
 the **exact** scenario seed/assert closures, with these two pieces made real:
 
-- **Backend handle factory — ✅ done.** The `harness-testing-worker`
+- **Backend handle factory — ✅ done.** The `temper-testing-worker`
   `--backend forgejo` path builds a `ForgejoForge` from `--base-url` plus a
-  per-role token (env `HARNESS_FORGEJO_TOKEN`) instead of `FilesystemForge`.
+  per-role token (env `TEMPER_FORGEJO_TOKEN`) instead of `FilesystemForge`.
   Nothing above changed because it is all `dyn Forge`. (`worker_bin/forgejo.rs`.)
 - **CI — ✅ done.** A real host-mode `forgejo-runner` is the CI producer; the
   `--kind ci` fake worker is **dropped** on Forgejo. The engine reads real
   verdicts through `list_ci_jobs`, which falls back to a **password/web-UI client**
-  on Forgejo 7.0.x (`HARNESS_FORGEJO_USERNAME`/`PASSWORD`; ADR 0019).
+  on Forgejo 7.0.x (`TEMPER_FORGEJO_USERNAME`/`PASSWORD`; ADR 0019).
 - **Clock — ✅ done (for that test).** Forgejo workers run `--clock wall`; the
   deterministic `ManualClock` seam (which keeps `owner_alignment`'s `max_age`
   from mis-firing against epoch-based logical timestamps) is filesystem-only.
@@ -127,10 +127,10 @@ the **exact** scenario seed/assert closures, with these two pieces made real:
 
 - **Agents — ✅ done (Forgejo topology, `--agents real`).** Production workers
   register generic manifest-driven LLM agents from compiled role manifests. The
-  historical `harness-testing-worker --agents real` topology uses quarantined
-  reference-delivery LLM fixtures under `harness-testing` so the old gated e2e
+  historical `temper-testing-worker --agents real` topology uses quarantined
+  reference-delivery LLM fixtures under `temper-testing` so the old gated e2e
   scenarios remain available without shipping checked-in workflow-role prompts
-  in production `harness-agents` (ChatGPT OAuth default, DeepSeek or Anthropic
+  in production `temper-agents` (ChatGPT OAuth default, DeepSeek or Anthropic
   OAuth opt-in).
 
 **Still on fakes — pending:**

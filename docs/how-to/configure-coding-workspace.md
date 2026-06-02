@@ -32,26 +32,26 @@ prompt/context until a runner binds them.
 
 ## 2. Bind the production local-git provider
 
-`harness-worker` binds `coding_workspace` when these environment variables are
+`temper-worker` binds `coding_workspace` when these environment variables are
 present:
 
 ```sh
-export HARNESS_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
-export HARNESS_CODING_WORKSPACE_COMMAND='your-coder --context "$HARNESS_CODING_WORKSPACE_CONTEXT"'
-export HARNESS_CODING_WORKSPACE_REMOTE=origin        # default
-export HARNESS_CODING_WORKSPACE_PUSH=1              # default; set 0 for local tests
-export HARNESS_CODING_WORKSPACE_PR_LABELS=implementation,needs-reviewer,needs-merge
+export TEMPER_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
+export TEMPER_CODING_WORKSPACE_COMMAND='your-coder --context "$TEMPER_CODING_WORKSPACE_CONTEXT"'
+export TEMPER_CODING_WORKSPACE_REMOTE=origin        # default
+export TEMPER_CODING_WORKSPACE_PUSH=1              # default; set 0 for local tests
+export TEMPER_CODING_WORKSPACE_PR_LABELS=implementation,needs-reviewer,needs-merge
 ```
 
 The command runs in the checkout. It receives the work item and user guidance in
-`HARNESS_CODING_WORKSPACE_CONTEXT` (JSON), plus branch/base/correlation env vars.
+`TEMPER_CODING_WORKSPACE_CONTEXT` (JSON), plus branch/base/correlation env vars.
 The LLM does not receive shell or file tools; it can only choose the authorized
 workflow action, after which the runner invokes this configured provider.
 
 ## 3. Safety behavior
 
 The workspace must leave a real non-bookkeeping diff. Production rejects empty or
-synthetic-only changes such as `.harness-pr-prep/`, `.harness-ci/`, or the demo CI
+synthetic-only changes such as `.temper-pr-prep/`, `.temper-ci/`, or the demo CI
 workflow file. The worker then commits and pushes the branch and opens the PR via
 `RoleTools`, so Forge/workflow mutation stays behind the normal authority
 boundary.

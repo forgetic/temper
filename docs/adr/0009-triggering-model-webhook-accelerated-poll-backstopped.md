@@ -8,23 +8,23 @@ Accepted
 
 The workflow runtime is pull-based by construction: queues are queries over
 Forge state, and the executor re-loads fresh state before every transition (see
-`docs/explanation/agentic-workflows.md` and `crates/harness-workflow/src/execute.rs`).
+`docs/explanation/agentic-workflows.md` and `crates/temper-workflow/src/execute.rs`).
 Nothing in the runtime trusts a value it was handed; it always re-reads.
 
 What the codebase does *not* specify is the *cadence* of that querying. The
-`harness-forge` trait is a request/response query+mutation contract; it has no
+`temper-forge` trait is a request/response query+mutation contract; it has no
 notion of change notification. The "agent runner" layer that would decide when
 to scan a queue does not exist yet.
 
 The intended real-world Forgejo deployment wants low latency between one agent
 delivering work and the next agent reacting to it. Forgejo webhooks can deliver
 that. The open question this ADR settles: should webhook triggering (and the
-periodic-poll fallback) live in the `harness-forge` interface, or outside it as
+periodic-poll fallback) live in the `temper-forge` interface, or outside it as
 an implementation detail?
 
 ## Decision
 
-Keep triggering — webhooks and the poll fallback — **outside the `harness-forge`
+Keep triggering — webhooks and the poll fallback — **outside the `temper-forge`
 trait**. The trait stays a clean query/mutation contract.
 
 Adopt a **level-triggered / edge-triggered** model (the Kubernetes-controller
@@ -37,7 +37,7 @@ pattern):
   reordered — so they are a **latency optimization**, never a source of truth.
 
 Both trigger sources feed the *same* reaction path: pull fresh state → classify
-→ plan → execute → reconcile, which already lives in `harness-workflow`. The
+→ plan → execute → reconcile, which already lives in `temper-workflow`. The
 trigger source is pluggable; the reaction is the one real thing.
 
 ### Layering
@@ -49,7 +49,7 @@ Forgejo HTTP POST ─► forgejo webhook adapter   (provider-specific: HTTP, ver
                     trigger scheduler / runner ◄── periodic resync timer (backstop)
                        │  coalesce + debounce bursts, decide which queue(s) to scan
                        ▼
-                    harness-workflow Executor / Reconciler
+                    temper-workflow Executor / Reconciler
                        │
                        ▼
                     Forge query + mutation methods   (existing trait, unchanged)
@@ -66,7 +66,7 @@ type:
    type so the scheduler stays backend-agnostic, but it does **not** belong on
    the `Forge` trait.
 3. **The coalescing trigger loop**: backend-agnostic, but depends on queues and
-   the executor, so it sits in the workflow/runner layer above `harness-forge`.
+   the executor, so it sits in the workflow/runner layer above `temper-forge`.
 
 ### Portable push, if ever needed
 
@@ -80,7 +80,7 @@ runner exists and the need is concrete.
 
 ## Consequences
 
-- `harness-forge` stays request/response and backend-agnostic; the filesystem
+- `temper-forge` stays request/response and backend-agnostic; the filesystem
   and memory reference backends are not forced to fake a webhook contract.
 - Webhooks are safe to bolt on **because of** the existing design: the executor
   re-loads fresh state and trusts nothing, so a duplicated/stale/forged hint can

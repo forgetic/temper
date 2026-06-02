@@ -7,7 +7,7 @@ Accepted
 ## Context
 
 Lease acquisition had a lost-update window. `LeaseManager::acquire` (see
-`crates/harness-workflow/src/lease.rs`) loads the artifact, sees "no lease",
+`crates/temper-workflow/src/lease.rs`) loads the artifact, sees "no lease",
 plans a grant, then writes the lease into the metadata block with an
 unconditional body update. Two workers that both read "no lease" before either
 writes both grant themselves the lease; last write wins, and two workers believe
@@ -32,7 +32,7 @@ Add **optimistic concurrency** to the `Forge` interface as a portable conditiona
 write, modelled as a row-version / ETag precondition rather than a new method:
 
 1. **A dedicated monotonic `Version` token on `Issue` and `PullRequest`.**
-   `harness_forge::Version` is an opaque `u64` newtype. A backend assigns
+   `temper_forge::Version` is an opaque `u64` newtype. A backend assigns
    `Version::INITIAL` on create and advances it on **every** successful mutation
    of the artifact record (`update_*` and `merge_pull_request`). Adding a comment
    does not change the artifact record, so it does not advance the version.

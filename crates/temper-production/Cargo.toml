@@ -1,0 +1,45 @@
+[package]
+name = "temper-production"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Production-owned Temper worker and Forgejo provisioning binaries."
+
+[[bin]]
+name = "temper-worker"
+path = "src/bin/temper-worker.rs"
+
+[[bin]]
+name = "temper-provision-forgejo"
+path = "src/bin/temper-provision-forgejo.rs"
+
+[[bin]]
+name = "temper-trigger-forgejo"
+path = "src/bin/temper-trigger-forgejo.rs"
+
+[[bin]]
+name = "temper-product-manager-chat"
+path = "src/bin/temper-product-manager-chat.rs"
+
+[dependencies]
+async-trait.workspace = true
+base64 = "0.22"
+chrono.workspace = true
+hmac = "0.12"
+temper-agents = { path = "../temper-agents" }
+temper-forge = { path = "../temper-forge" }
+temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-runner = { path = "../temper-runner" }
+temper-workflow = { path = "../temper-workflow" }
+reqwest = { workspace = true, features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+temper-forge-memory = { path = "../temper-forge-memory" }
+
+[lints]
+workspace = true

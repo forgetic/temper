@@ -1,10 +1,10 @@
 # Documentation
 
-Harness documentation follows Diátaxis so that each document has a clear job and agents can load only the context relevant to their task.
+Temper documentation follows Diátaxis so that each document has a clear job and agents can load only the context relevant to their task.
 
 ## Tutorials
 
-Learning-oriented, step-by-step introductions. Use these when the reader wants to acquire the basic skill of using or extending the harness.
+Learning-oriented, step-by-step introductions. Use these when the reader wants to acquire the basic skill of using or extending Temper.
 
 See `tutorials/`.
 

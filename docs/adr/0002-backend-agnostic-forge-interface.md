@@ -6,13 +6,13 @@ Accepted
 
 ## Context
 
-Harness workflows should run against Forgejo, GitHub, local files, and future Forge-like systems. Binding workflow logic directly to one provider would make agents harder to test and harder to migrate.
+Temper workflows should run against Forgejo, GitHub, local files, and future Forge-like systems. Binding workflow logic directly to one provider would make agents harder to test and harder to migrate.
 
 ## Decision
 
-Define the collaboration contract in `harness-forge` as a provider-neutral async Rust trait named `Forge`. Concrete backends implement this trait and translate provider-specific behavior into portable domain types and error categories.
+Define the collaboration contract in `temper-forge` as a provider-neutral async Rust trait named `Forge`. Concrete backends implement this trait and translate provider-specific behavior into portable domain types and error categories.
 
-Reserve a separate workflow crate for workflow and orchestration logic built on top of Forge abstractions. ADR 0007 names that crate `harness-workflow`.
+Reserve a separate workflow crate for workflow and orchestration logic built on top of Forge abstractions. ADR 0007 names that crate `temper-workflow`.
 
 The first concrete backend is a filesystem backend for deterministic local development and tests.
 

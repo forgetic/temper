@@ -24,4 +24,4 @@ unless the spec needs to distinguish pending from completed states explicitly.
 
 The reference delivery fixture uses the post-merge `alignment` label for the
 owner's holistic review queue in
-`crates/harness-workflow/fixtures/reference-delivery.json`.
+`crates/temper-workflow/fixtures/reference-delivery.json`.

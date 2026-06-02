@@ -1,0 +1,21 @@
+[package]
+name = "temper-workflow"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Workflow and orchestration logic for Temper."
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+temper-forge = { path = "../temper-forge" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+temper-forge-filesystem = { path = "../temper-forge-filesystem" }
+temper-forge-memory = { path = "../temper-forge-memory" }
+
+[lints]
+workspace = true

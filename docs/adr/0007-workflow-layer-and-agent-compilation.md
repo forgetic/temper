@@ -6,18 +6,18 @@ Accepted
 
 ## Context
 
-Harness needs to support evolving agentic workflows instead of one hard-coded process.
+Temper needs to support evolving agentic workflows instead of one hard-coded process.
 A starting workflow uses roles such as architect, engineer, reviewer, and owner, but future workflows may add more roles, parallel workers, richer gates, or different escalation paths.
 
-The existing Forge layer is intentionally backend-agnostic and should remain focused on collaboration primitives. The crate scaffolded as `harness-core` had a name too vague for the next layer, whose purpose is workflow orchestration.
+The existing Forge layer is intentionally backend-agnostic and should remain focused on collaboration primitives. The crate scaffolded as `temper-core` had a name too vague for the next layer, whose purpose is workflow orchestration.
 
 Workflows must also be robust when agents crash, repeat tool calls, or resume after partial side effects.
 
 ## Decision
 
-Rename `harness-core` to `harness-workflow` when implementation begins. This rename has been carried out; the crate is now `harness-workflow`, still a minimal placeholder with no workflow functionality yet.
+Rename `temper-core` to `temper-workflow` when implementation begins. This rename has been carried out; the crate is now `temper-workflow`, still a minimal placeholder with no workflow functionality yet.
 
-Define the workflow layer as a deterministic state-machine and compilation layer on top of `harness-forge`. It owns:
+Define the workflow layer as a deterministic state-machine and compilation layer on top of `temper-forge`. It owns:
 
 - declarative workflow specifications
 - static workflow validation
@@ -61,6 +61,6 @@ Required runtime principles:
 
 ## Consequences
 
-`harness-workflow` may depend on `harness-forge`; `harness-forge` must not depend on workflow or agent crates.
+`temper-workflow` may depend on `temper-forge`; `temper-forge` must not depend on workflow or agent crates.
 
 The first implementation should be phased: rename the crate, add typed spec primitives, add validation, add compilation outputs, then add runtime execution and recovery. Agent execution remains a compiled consumer of workflow manifests, not part of the initial workflow crate.

@@ -1,0 +1,22 @@
+[package]
+name = "temper-runner"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Reusable backend-agnostic runner primitives for Temper."
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+temper-forge = { path = "../temper-forge" }
+temper-workflow = { path = "../temper-workflow" }
+
+[dev-dependencies]
+temper-forge-filesystem = { path = "../temper-forge-filesystem" }
+temper-forge-memory = { path = "../temper-forge-memory" }
+temper-testing = { path = "../temper-testing" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

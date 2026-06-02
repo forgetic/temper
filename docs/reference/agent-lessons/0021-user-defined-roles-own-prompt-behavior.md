@@ -6,7 +6,7 @@
 
 ## Trigger
 
-A dogfood investigation found that `harness-agents` shipped checked-in
+A dogfood investigation found that `temper-agents` shipped checked-in
 engineer/architect/reviewer/owner/human prompts and role-specific adapters on the
 production worker path. A human clarified that workflow roles are user-defined,
 so production code should not carry hard-coded role behavior.

@@ -16,7 +16,7 @@ Claude opus 4.8 access worked fine and suspected the implementation.
 The 429 was **not** a real quota limit. Anthropic's Claude **subscription
 OAuth** path rejects any `/v1/messages` request whose **first `system` block is
 not exactly** `You are Claude Code, Anthropic's official CLI for Claude.` —
-regardless of `anthropic-beta` flags. `harness-agents` sent only the role prompt
+regardless of `anthropic-beta` flags. `temper-agents` sent only the role prompt
 as `system`, so every call 429'd. Auth routing was fine (the `sk-ant-oat…` token
 is correctly sent as `Authorization: Bearer`).
 
@@ -46,10 +46,10 @@ and concatenating into one string does not satisfy the check.
 
 ## Where this is now documented
 
-- `crates/harness-agents/src/provider/anthropic_oauth.rs`
+- `crates/temper-agents/src/provider/anthropic_oauth.rs`
   (`CLAUDE_CODE_SYSTEM_IDENTITY` doc comment).
-- `crates/harness-agents/src/provider.rs`
+- `crates/temper-agents/src/provider.rs`
   (`ProviderConfig::required_system_identity`).
-- `crates/harness-agents/src/decision.rs` (`run_decision` system/user split).
-- Proven by `crates/harness-agents/tests/anthropic_oauth_live.rs`
-  (`HARNESS_ANTHROPIC_OAUTH=1`).
+- `crates/temper-agents/src/decision.rs` (`run_decision` system/user split).
+- Proven by `crates/temper-agents/tests/anthropic_oauth_live.rs`
+  (`TEMPER_ANTHROPIC_OAUTH=1`).

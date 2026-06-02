@@ -44,7 +44,7 @@ Status legend: ☐ pending · ☑ done
    the backend-agnostic wake driver/scheduler seam needed by later phases and
    prove that a second worker reacts to a mutation without waiting for a long
    poll interval. Done: portable hint types and the sync `ChangeSource`
-   companion live in `harness-forge`; `harness-runner` re-exports hints and adds
+   companion live in `temper-forge`; `temper-runner` re-exports hints and adds
    `WakeablePollLoop`; `MemoryForge::subscribe_hints()` publishes best-effort
    in-process hints for successful mutations.
 
@@ -76,7 +76,7 @@ Status legend: ☐ pending · ☑ done
    `prompts/phase-4-forgejo-e2e.md`
 
    Add a gated real-Forgejo end-to-end regression with `POLL_MS` set very high.
-   Done: `harness-testing/tests/forgejo_webhook_wakeup.rs` boots real Forgejo +
+   Done: `temper-testing/tests/forgejo_webhook_wakeup.rs` boots real Forgejo +
    real `forgejo-runner`, registers the production Forgejo webhook trigger,
    launches fake-agent Forgejo workers with authenticated wake sockets and
    `--poll-ms 120000`, waits until they have completed their initial no-work
@@ -112,9 +112,9 @@ Status legend: ☐ pending · ☑ done
 
 - `docs/adr/0009-triggering-model-webhook-accelerated-poll-backstopped.md`
 - `docs/explanation/agentic-workflows.md` (Triggering model)
-- `crates/harness-runner/src/trigger.rs`
-- `crates/harness-runner/src/driver.rs`
-- `crates/harness-forge-memory/`
-- `crates/harness-forge-filesystem/`
-- `crates/harness-production/src/{trigger,wake,worker}.rs`
+- `crates/temper-runner/src/trigger.rs`
+- `crates/temper-runner/src/driver.rs`
+- `crates/temper-forge-memory/`
+- `crates/temper-forge-filesystem/`
+- `crates/temper-production/src/{trigger,wake,worker}.rs`
 - `examples/reference-delivery/run.sh`

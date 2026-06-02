@@ -3,13 +3,13 @@
 This roadmap sequences the work to add a **true multi-process**, filesystem-backed
 end-to-end rehearsal of the reference-delivery workflow. It is distinct from the
 existing `MultiProcessStage` sketch, which still runs every worker in one OS
-process (see its doc comment in `crates/harness-runner/src/stage.rs`). The goal
+process (see its doc comment in `crates/temper-runner/src/stage.rs`). The goal
 here is **one OS process per moving part** — each role worker, the mechanical
 worker, and the fake CI producer — coordinating only through a shared
 `FilesystemForge` store.
 
 It deliberately stays on fakes (filesystem backend, fake agents, fake CI) so that
-swapping in real-world pieces (the `harness-forge-forgejo` backend, LLM agents,
+swapping in real-world pieces (the `temper-forge-forgejo` backend, LLM agents,
 provider CI) is **wiring, not redesign**. The "swap to real" list in Phase 5 is
 the durable record of exactly what that wiring is.
 
@@ -22,12 +22,12 @@ scenarios already prove the workflow logic; this proves the *topology*.
 
 ## Where the testing machinery lives
 
-Reusable, non-production testing machinery lands in a new **`harness-testing`**
+Reusable, non-production testing machinery lands in a new **`temper-testing`**
 crate. The maintainer rule: testing machinery reused across crates goes there;
 crate-specific test helpers stay local (for example `CrashForge` stays in
-`harness-workflow` tests, the Forgejo mock HTTP seam stays in
-`harness-forge-forgejo`, and `harness-runner`'s narrow primitive tests keep their
-inline fakes). `harness-testing` is **never a normal dependency of a production
+`temper-workflow` tests, the Forgejo mock HTTP seam stays in
+`temper-forge-forgejo`, and `temper-runner`'s narrow primitive tests keep their
+inline fakes). `temper-testing` is **never a normal dependency of a production
 crate** — only a dev-dependency or a dependency of other test crates.
 
 ## Conventions for every phase
@@ -60,19 +60,19 @@ Status legend: ☐ pending · ☑ done.
   in `in-memory-backend.md` that cross-process safety is N/A for the
   single-process backend). Runs by default. Independent and mergeable.
 
-- ☑ **2 — `harness-testing` crate; promote reusable fakes.**
-  Create `crates/harness-testing` (lib). Move the reusable reference-delivery
-  machinery out of `harness-runner/tests/support` into `harness-testing/src`:
+- ☑ **2 — `temper-testing` crate; promote reusable fakes.**
+  Create `crates/temper-testing` (lib). Move the reusable reference-delivery
+  machinery out of `temper-runner/tests/support` into `temper-testing/src`:
   the fake agents, CI policies and filesystem/memory CI sinks, the `Scenario`
   seed/assert definitions, the `RunnerConfig` builder plus repo/user helpers and
-  the fixture loader, and `block_on`. `harness-runner` gains a dev-dependency on
-  `harness-testing`; its integration tests `use harness_testing::…` and drop
+  the fixture loader, and `block_on`. `temper-runner` gains a dev-dependency on
+  `temper-testing`; its integration tests `use temper_testing::…` and drop
   `mod support`. (A dev-dependency cycle is allowed; if it causes resolution
-  trouble, relocate the broad reference-world tests into `harness-testing`
+  trouble, relocate the broad reference-world tests into `temper-testing`
   instead.) No behavior change: all existing tests pass unchanged.
 
-- ☑ **3 — `harness-testing-worker` binary.**
-  Add `[[bin]] harness-testing-worker` to `harness-testing`: a fake worker
+- ☑ **3 — `temper-testing-worker` binary.**
+  Add `[[bin]] temper-testing-worker` to `temper-testing`: a fake worker
   process dispatching on `--kind` (`provision` | `role` | `mechanical` | `ci`).
   It builds a `FilesystemForge::new(--root)` handle (`.as_user` for `role`),
   resolves the repository by path, constructs the matching runner worker
@@ -88,10 +88,10 @@ Status legend: ☐ pending · ☑ done.
   file nears 600 lines.
 
 - ☑ **4 — Multi-process happy-path e2e (`#[ignore]`d) + how-to.**
-  `harness-testing/tests/multiprocess.rs`: create a temp root → provision repo
+  `temper-testing/tests/multiprocess.rs`: create a temp root → provision repo
   and labels → seed via the existing `happy_path()` seed closure → spawn one
   worker **process** per role-with-an-agent plus `mechanical` plus `ci` via
-  `Command::new(env!("CARGO_BIN_EXE_harness-testing-worker"))` behind a
+  `Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"))` behind a
   kill-on-drop guard → poll the `happy_path()` assert closure in-process until it
   passes or a generous timeout → write the stop sentinel → join children and
   assert exit 0 → run the assert once more for a clean message. Mark `#[ignore]`.
@@ -115,15 +115,15 @@ Status legend: ☐ pending · ☑ done.
 
 ## Done definition (complete)
 
-All five phases are ☑. `harness-testing` houses the reusable reference-delivery
-fakes; the `harness-testing-worker` binary exists with `--architect`/`--reviewer`/
+All five phases are ☑. `temper-testing` houses the reusable reference-delivery
+fakes; the `temper-testing-worker` binary exists with `--architect`/`--reviewer`/
 `--ci` behavior flags and `--clock deterministic|wall`; and the `#[ignore]`d
 `tests/multiprocess.rs` converges all four reference-delivery scenarios (happy
 path, changes-requested return routing, CI fail/recover, and cross-process
 mechanical dependency unblock) to their asserted end states across real OS
 processes sharing one `FilesystemForge` store. The default suite stays green and
 deterministic. Run the rehearsal with
-`cargo test -p harness-testing --test multiprocess -- --ignored`; see
+`cargo test -p temper-testing --test multiprocess -- --ignored`; see
 `docs/how-to/run-multiprocess-e2e.md` for how to run it and exactly what to
 change to swap in real pieces.
 

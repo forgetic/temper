@@ -1,0 +1,213 @@
+//! Runtime-supplied gate signals for the planner.
+//!
+//! Some gate conditions ask about facts the pure planner must not derive
+//! itself: whether prerequisite work has landed (`dependencies_resolved`),
+//! whether native CI passed or failed (`ci_passed`/`ci_failed`), and whether
+//! native reviews approve or request changes. Those facts are read fresh from
+//! the Forge by the runtime and supplied to the planner as a small signal
+//! bundle.
+//!
+//! [`GateSignals`] bundles every runtime signal a transition plan may consult.
+//! Bundling (rather than threading one parameter per gate) keeps adding signals
+//! from re-threading every planner call site, and gives one obvious place to
+//! construct "the facts the runtime read before planning". The [`Planner`] only
+//! reads the bundle; it never lists jobs, reviews, or talks to a Forge.
+//!
+//! [`Planner`]: super::Planner
+
+use super::DependencyStatus;
+use std::collections::HashMap;
+use temper_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
+
+/// Runtime-supplied aggregate state for an artifact's native CI.
+///
+/// `ci_passed` asks whether the artifact's CI is green; `ci_failed` asks
+/// whether the current CI run settled red. Like the dependency signal, the
+/// verdict is decided by the runtime — never derived inside the pure planner —
+/// and supplied here as a small value the planner only reads. Build it from
+/// fresh [`CiJob`]s with [`CiStatus::from_jobs`], which is the documented place
+/// the aggregation rule lives.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CiStatus {
+    state: CiState,
+}
+
+/// Portable aggregate state for the latest native CI jobs on an artifact.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CiState {
+    /// CI has not run yet, is still running, or has no terminal aggregate.
+    #[default]
+    Pending,
+    /// The latest job per name all completed successfully.
+    Passed,
+    /// The latest job per name all completed and at least one was non-success.
+    Failed,
+}
+
+impl CiStatus {
+    /// A status whose CI is pending/unknown (the default, conservative verdict).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A status whose CI has passed.
+    pub fn passed() -> Self {
+        Self {
+            state: CiState::Passed,
+        }
+    }
+
+    /// A status whose CI has failed.
+    pub fn failed() -> Self {
+        Self {
+            state: CiState::Failed,
+        }
+    }
+
+    /// Builds a status directly from a pass verdict.
+    pub fn with_passed(passed: bool) -> Self {
+        if passed {
+            Self::passed()
+        } else {
+            Self::new()
+        }
+    }
+
+    /// Builds a status directly from an aggregate CI state.
+    pub fn with_state(state: CiState) -> Self {
+        Self { state }
+    }
+
+    /// Returns the aggregate CI state.
+    pub fn state(&self) -> CiState {
+        self.state
+    }
+
+    /// Returns whether CI has passed.
+    pub fn is_passed(&self) -> bool {
+        self.state == CiState::Passed
+    }
+
+    /// Returns whether CI has failed.
+    pub fn is_failed(&self) -> bool {
+        self.state == CiState::Failed
+    }
+
+    /// Computes the CI verdict from a set of CI jobs.
+    ///
+    /// The jobs are reduced to the latest job per name (by `created_at`). CI is
+    /// *passed* when that set is non-empty and every latest-per-name job has
+    /// status [`CiJobStatus::Completed`] with conclusion
+    /// [`CiJobConclusion::Success`]. CI is *failed* when that set is non-empty,
+    /// every latest-per-name job is completed, and at least one latest job has a
+    /// non-success conclusion. Otherwise CI is pending/unknown: no jobs, queued
+    /// jobs, or running jobs neither pass nor fail. See ADR 0014 and ADR 0017.
+    pub fn from_jobs(jobs: &[CiJob]) -> Self {
+        let mut latest: HashMap<&str, &CiJob> = HashMap::new();
+        for job in jobs {
+            latest
+                .entry(job.name.as_str())
+                .and_modify(|current| {
+                    if job.created_at >= current.created_at {
+                        *current = job;
+                    }
+                })
+                .or_insert(job);
+        }
+        if latest.is_empty()
+            || latest
+                .values()
+                .any(|job| job.status != CiJobStatus::Completed)
+        {
+            return Self::new();
+        }
+        if latest
+            .values()
+            .all(|job| job.conclusion == Some(CiJobConclusion::Success))
+        {
+            Self::passed()
+        } else {
+            Self::failed()
+        }
+    }
+}
+
+/// Runtime-supplied verdict for a pull request's native review state.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ReviewStatus {
+    approved: bool,
+    changes_requested: bool,
+}
+
+impl ReviewStatus {
+    /// Builds a review status from explicit aggregate booleans.
+    pub fn new(approved: bool, changes_requested: bool) -> Self {
+        Self {
+            approved,
+            changes_requested,
+        }
+    }
+
+    /// Builds a status from the Forge aggregate review model.
+    pub fn from_aggregate(status: &PullRequestReviewStatus) -> Self {
+        Self::new(status.is_approved(), status.has_changes_requested())
+    }
+
+    /// Returns whether the native review aggregate is approved.
+    pub fn is_approved(&self) -> bool {
+        self.approved
+    }
+
+    /// Returns whether a latest native review decision requests changes.
+    pub fn has_changes_requested(&self) -> bool {
+        self.changes_requested
+    }
+}
+
+/// The runtime signals a transition plan may consult.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GateSignals {
+    dependencies: DependencyStatus,
+    ci: CiStatus,
+    review: ReviewStatus,
+}
+
+impl GateSignals {
+    /// An empty bundle: nothing landed and CI pending/unknown.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the dependency status.
+    pub fn with_dependencies(mut self, dependencies: DependencyStatus) -> Self {
+        self.dependencies = dependencies;
+        self
+    }
+
+    /// Sets the CI status.
+    pub fn with_ci(mut self, ci: CiStatus) -> Self {
+        self.ci = ci;
+        self
+    }
+
+    /// Sets the review status.
+    pub fn with_review(mut self, review: ReviewStatus) -> Self {
+        self.review = review;
+        self
+    }
+
+    /// Returns the dependency status.
+    pub fn dependencies(&self) -> &DependencyStatus {
+        &self.dependencies
+    }
+
+    /// Returns the CI status.
+    pub fn ci(&self) -> &CiStatus {
+        &self.ci
+    }
+
+    /// Returns the review status.
+    pub fn review(&self) -> &ReviewStatus {
+        &self.review
+    }
+}

@@ -4,7 +4,7 @@ This roadmap promotes workflow facts from **workflow-owned labels / metadata**
 into **native Forge state the workflow observes**. It is a
 distinct backlog from `reference-workflow-roadmap.md` because it changes what
 state the workflow treats as native Forge-owned state; later phases also extend
-the `harness-forge` interface.
+the `temper-forge` interface.
 
 ## Terminology this backlog sharpens
 
@@ -65,7 +65,7 @@ Status legend: ☐ pending · ☑ done.
   adapter labels. Prompt: `native-forge-state-phase-A-merge-gate.md`.
 
 - ☑ **B — Native dependency links (ADR 0015).** Added a portable
-  `depends_on` artifact-link concept to `harness-forge` (multiple links, the
+  `depends_on` artifact-link concept to `temper-forge` (multiple links, the
   intersection both Forgejo and GitHub support). Classification reads native
   links; `DependencyStatus` is derived from the Forge instead of runtime-supplied
   metadata. The metadata `dependencies` field is a compatibility fallback.
@@ -75,7 +75,7 @@ Status legend: ☐ pending · ☑ done.
   `native-forge-state-phase-B-dependencies.md`.
 
 - ☑ **C — Native review model (ADR 0016).** Added a minimal portable review
-  concept to `harness-forge`: request reviewers, list reviews, per-reviewer
+  concept to `temper-forge`: request reviewers, list reviews, per-reviewer
   decision (`approved`/`changes_requested`/`commented`/`pending`), and a
   portable aggregate. Added `review_approved` / `review_changes_requested` gate
   conditions fed by a runtime review signal. Retired the `review-approved` /

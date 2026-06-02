@@ -2,7 +2,7 @@
 
 You are implementing Phase 3 of `plans/user-defined-role-agents/README.md`.
 Phases 1–2 should be complete: role prompts are compiled from workflow specs and
-`harness-agents` has a generic manifest-driven role agent.
+`temper-agents` has a generic manifest-driven role agent.
 
 The goal is to remove hard-coded workflow role prompts/ids from the production
 worker path. Reference-delivery behavior needed for tests may move to test-level
@@ -10,19 +10,19 @@ fixtures, but production wiring must be user-role driven.
 
 ## Session bootstrap
 
-1. Confirm you are in `/home/free/src/rust/harness`.
+1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `AGENTS.md`, `plans/user-defined-role-agents/README.md`, and the Phase 1
    and Phase 2 diffs.
 3. Read:
-   - `crates/harness-agents/src/registry.rs`
+   - `crates/temper-agents/src/registry.rs`
    - the new generic role-agent module from Phase 2
-   - `crates/harness-production/src/worker.rs`
-   - `crates/harness-production/src/worker_args.rs`
-   - `crates/harness-testing/src/worker_bin/`
-   - `crates/harness-testing/tests/forgejo_multiprocess.rs`
+   - `crates/temper-production/src/worker.rs`
+   - `crates/temper-production/src/worker_args.rs`
+   - `crates/temper-testing/src/worker_bin/`
+   - `crates/temper-testing/tests/forgejo_multiprocess.rs`
 4. Read the current reference-delivery workflow fixture and any prompt-extension
    data added in Phase 1:
-   `crates/harness-workflow/fixtures/reference-delivery.json`.
+   `crates/temper-workflow/fixtures/reference-delivery.json`.
 
 ## Task
 
@@ -33,7 +33,7 @@ Switch real production role-worker registration to compiled workflow manifests.
    and registers one generic LLM role agent per compiled role. The role ids must
    come from the workflow, not from a hard-coded list.
 
-2. **Production worker wiring.** Update `harness-production` so `--agents real`
+2. **Production worker wiring.** Update `temper-production` so `--agents real`
    builds the registry from the workflow manifests. Remove production dependence
    on `ENGINEER_SYSTEM_PROMPT`, `ARCHITECT_SYSTEM_PROMPT`, etc. The product
    manager conversational prompt is not a workflow-role prompt; do not mix that
@@ -41,7 +41,7 @@ Switch real production role-worker registration to compiled workflow manifests.
 
 3. **Reference fixtures.** Move any reference-delivery role guidance needed by
    real-agent tests into workflow config or test/demo fixture data. Do not keep
-   reference workflow judgment in `harness-agents/src/prompts/` for production
+   reference workflow judgment in `temper-agents/src/prompts/` for production
    role workers.
 
 4. **Compatibility.** Keep deterministic fake agents and existing fake-agent e2e
@@ -83,13 +83,13 @@ cargo fmt --all
 cargo test --workspace --all-targets
 cargo dev-clippy
 cargo dev-check
-cargo test -p harness-testing --test multiprocess -- --ignored --test-threads=1
-cargo test -p harness-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 cargo test -p harness-testing -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-HARNESS_FORGEJO_E2E=1 HARNESS_FORGEJO_AGENTS=1 \
-  cargo test -p harness-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
+cargo test -p temper-testing --test multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored --test-threads=1
 ```
 
 Run configured live provider gates when available. Follow

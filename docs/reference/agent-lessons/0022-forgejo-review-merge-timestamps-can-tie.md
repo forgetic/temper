@@ -18,4 +18,4 @@ When asserting ordered Forgejo events that can happen back-to-back, treat equal 
 
 ## Where this is now documented
 
-- `crates/harness-testing/src/scenarios.rs` allows equal approval/merge timestamps and only rejects strictly earlier merges.
+- `crates/temper-testing/src/scenarios.rs` allows equal approval/merge timestamps and only rejects strictly earlier merges.

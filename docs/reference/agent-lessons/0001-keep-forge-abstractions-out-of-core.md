@@ -6,7 +6,7 @@
 
 ## Trigger
 
-The initial scaffold put the Forge domain model and `Forge` trait in `harness-core`. Human steering clarified that `harness-core` should be reserved for workflow and orchestration logic to be defined later.
+The initial scaffold put the Forge domain model and `Forge` trait in `temper-core`. Human steering clarified that `temper-core` should be reserved for workflow and orchestration logic to be defined later.
 
 ## What went wrong
 
@@ -14,9 +14,9 @@ The crate name `core` was treated as a general home for foundational abstraction
 
 ## Steering for future agents
 
-Put provider-neutral Forge types and traits in `harness-forge`. Backend crates such as `harness-forge-filesystem` and `harness-forge-memory` should depend on `harness-forge`, not the workflow crate.
+Put provider-neutral Forge types and traits in `temper-forge`. Backend crates such as `temper-forge-filesystem` and `temper-forge-memory` should depend on `temper-forge`, not the workflow crate.
 
-Only add dependencies from `harness-workflow` to `harness-forge` when implementing actual workflow/orchestration logic that needs Forge operations. The placeholder crate was originally named `harness-core`; per ADR 0007 it has been renamed to `harness-workflow`.
+Only add dependencies from `temper-workflow` to `temper-forge` when implementing actual workflow/orchestration logic that needs Forge operations. The placeholder crate was originally named `temper-core`; per ADR 0007 it has been renamed to `temper-workflow`.
 
 ## Where this is now documented
 

@@ -1,6 +1,6 @@
 # Use OAuth auth modes for the LLM agents
 
-The real, in-process LLM agents (`harness-agents`) can authenticate with a
+The real, in-process LLM agents (`temper-agents`) can authenticate with a
 DeepSeek **API key** (pay-per-token), ChatGPT (OpenAI Codex) **OAuth** (a flat
 subscription, no per-call cost), or opt-in Anthropic **OAuth**. This guide
 covers the ChatGPT default and notes the Anthropic OAuth selection surface. See
@@ -21,9 +21,9 @@ once to populate the shared auth file (`~/.pi/agent/auth.json`):
 pi /login openai-codex
 ```
 
-Either the nodejs `pi-coding-agent` or the Rust pi works — the harness reads
-both on-disk schemas. The login writes an `openai-codex` OAuth entry; the
-harness refreshes the short-lived access token itself when it nears expiry.
+Either the nodejs `pi-coding-agent` or the Rust pi works — Temper reads
+both on-disk schemas. The login writes an `openai-codex` OAuth entry; Temper
+refreshes the short-lived access token itself when it nears expiry.
 
 ## 2. Select the OAuth mode
 
@@ -32,7 +32,7 @@ Precedence is **CLI flag > config/env > default**.
 ### Via the worker CLI
 
 ```sh
-harness-testing-worker --kind role --role engineer --user engineer \
+temper-testing-worker --kind role --role engineer --user engineer \
   --agents real --auth chatgpt-oauth \
   --backend forgejo --base-url http://127.0.0.1:3000 --clock wall \
   --repo acme/service --root /tmp/unused
@@ -47,16 +47,16 @@ Overrides:
 ### Via a config file / env (the launch-script bridge)
 
 The launch script sources a config file (e.g. the example's
-`config/harness.env`) that exports the env vars the worker reads:
+`config/temper.env`) that exports the env vars the worker reads:
 
 ```sh
-HARNESS_AGENTS_AUTH=chatgpt-oauth        # deepseek | chatgpt-oauth | anthropic-oauth
-HARNESS_AGENTS_CODEX_MODEL=gpt-5.5 # optional Codex override (default)
-HARNESS_AGENTS_AUTH_FILE=/path/auth.json # optional shared auth-file override
+TEMPER_AGENTS_AUTH=chatgpt-oauth        # deepseek | chatgpt-oauth | anthropic-oauth
+TEMPER_AGENTS_CODEX_MODEL=gpt-5.5 # optional Codex override (default)
+TEMPER_AGENTS_AUTH_FILE=/path/auth.json # optional shared auth-file override
 ```
 
 A CLI flag overrides the matching env var; absent both, the test/dev default is
-`chatgpt-oauth`. (The `harness-agents` **library** default stays `deepseek` so
+`chatgpt-oauth`. (The `temper-agents` **library** default stays `deepseek` so
 production wiring is explicit.)
 
 ## 3. Anthropic OAuth opt-in
@@ -70,8 +70,8 @@ pi /login anthropic
 Then select it explicitly:
 
 ```sh
-HARNESS_AGENTS_AUTH=anthropic-oauth
-HARNESS_AGENTS_ANTHROPIC_MODEL=claude-opus-4-8 # optional; this is the default
+TEMPER_AGENTS_AUTH=anthropic-oauth
+TEMPER_AGENTS_ANTHROPIC_MODEL=claude-opus-4-8 # optional; this is the default
 ```
 
 It reads the `anthropic` entry from the same shared auth file, tolerates both pi
@@ -88,20 +88,20 @@ naming `openai-codex` or `anthropic` and pointing you back at the matching
 
 ## 5. Verify
 
-- **Gated live check (A3):** `HARNESS_CHATGPT_OAUTH=1 cargo test -p harness-agents
+- **Gated live check (A3):** `TEMPER_CHATGPT_OAUTH=1 cargo test -p temper-agents
   --test chatgpt_oauth_live -- --ignored` runs one real decision against the
   Codex endpoint and a near-expiry refresh check.
-- **Anthropic gated live check:** `HARNESS_ANTHROPIC_OAUTH=1 cargo test -p
-  harness-agents --test anthropic_oauth_live -- --ignored` runs one real decision
+- **Anthropic gated live check:** `TEMPER_ANTHROPIC_OAUTH=1 cargo test -p
+  temper-agents --test anthropic_oauth_live -- --ignored` runs one real decision
   against the Anthropic endpoint.
 - **End-to-end:** run the example from Track B (`examples/reference-delivery`) or
   the gated Forgejo multi-process test with `--agents real` and
-  `HARNESS_AGENTS_AUTH=chatgpt-oauth` (or explicit `anthropic-oauth`).
+  `TEMPER_AGENTS_AUTH=chatgpt-oauth` (or explicit `anthropic-oauth`).
 
 ## Limits
 
 - ChatGPT/Codex or Anthropic **subscription rate limits** apply.
-- OAuth access tokens are **short-lived**; the harness refreshes them
+- OAuth access tokens are **short-lived**; Temper refreshes them
   automatically. A `401`/`403` means the login expired or lacks provider access —
   re-run the matching `pi /login ...`.
 - No token is ever logged or placed in an error.

@@ -8,17 +8,17 @@ agent, not a workflow queue worker.
 1. Follow the normal session bootstrap in `AGENTS.md`.
 2. Read:
    - `plans/product-manager-chat/README.md`
-   - `crates/harness-agents/src/decision.rs`
-   - `crates/harness-agents/src/provider.rs`
-   - `crates/harness-agents/src/owner.rs` and `src/prompts/owner.md` for contrast
-   - `crates/harness-agents/src/registry.rs` for contrast only
+   - `crates/temper-agents/src/decision.rs`
+   - `crates/temper-agents/src/provider.rs`
+   - `crates/temper-agents/src/owner.rs` and `src/prompts/owner.md` for contrast
+   - `crates/temper-agents/src/registry.rs` for contrast only
    - `docs/reference/workflow-layer.md` section on agent authority boundaries
-3. Do not register product-manager as a `harness_runner::Agent` or add it to
+3. Do not register product-manager as a `temper_runner::Agent` or add it to
    `reference-delivery.json`.
 
 ## Goal
 
-Expose a reusable `harness-agents` product-manager component that can run one
+Expose a reusable `temper-agents` product-manager component that can run one
 LLM turn over a conversation transcript and return:
 
 - a conversational reply; and
@@ -29,7 +29,7 @@ integration layer added in Phase 3.
 
 ## API shape
 
-Add a focused module, for example `crates/harness-agents/src/product_manager.rs`,
+Add a focused module, for example `crates/temper-agents/src/product_manager.rs`,
 with public types similar to:
 
 ```rust
@@ -119,25 +119,25 @@ Add offline unit tests covering:
 - prompt export is wired through `prompts.rs`.
 
 Do **not** add a default live LLM test. If you add a live smoke later, gate it
-behind an env var and `#[ignore]` like existing `harness-agents` live tests.
+behind an env var and `#[ignore]` like existing `temper-agents` live tests.
 
 Run:
 
 ```sh
 cargo fmt --all
-cargo test -p harness-agents product_manager
+cargo test -p temper-agents product_manager
 cargo dev-check
 ```
 
 ## Documentation updates
 
-- Update `crates/harness-agents/src/lib.rs` module docs to mention the
+- Update `crates/temper-agents/src/lib.rs` module docs to mention the
   product-manager conversational adapter as non-workflow.
 - Update `plans/product-manager-chat/README.md` phase status when complete.
 
 ## Acceptance criteria
 
-- `harness-agents` exposes a product-manager conversation adapter.
+- `temper-agents` exposes a product-manager conversation adapter.
 - The adapter is not a workflow role and performs no Forge mutation.
 - It returns structured reply + draft intake issues.
 - Default tests remain hermetic.

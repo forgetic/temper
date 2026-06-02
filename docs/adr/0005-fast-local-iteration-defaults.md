@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Harness is currently in early design and implementation. Agents need short feedback loops more than optimized production artifacts.
+Temper is currently in early design and implementation. Agents need short feedback loops more than optimized production artifacts.
 
 ## Decision
 

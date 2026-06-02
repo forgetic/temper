@@ -1,8 +1,8 @@
 # LLM agents reference
 
-`crates/harness-agents` is the production home for real, in-process LLM role
-agents. It is the only crate that depends on `pi_agent_rust`; `harness-forge`,
-`harness-workflow`, and `harness-runner` stay LLM-agnostic.
+`crates/temper-agents` is the production home for real, in-process LLM role
+agents. It is the only crate that depends on `pi_agent_rust`; `temper-forge`,
+`temper-workflow`, and `temper-runner` stay LLM-agnostic.
 
 ## Runtime boundary
 
@@ -13,9 +13,9 @@ agents. It is the only crate that depends on `pi_agent_rust`; `harness-forge`,
 - Implementation PR creation may invoke a declared-and-bound `coding_workspace`
   provider, but the LLM only sees the narrow tool metadata; the provider receives
   work-item context and returns a committed branch/head.
-- Manifest-driven role agents are the production path. `harness-agents` does not
+- Manifest-driven role agents are the production path. `temper-agents` does not
   ship checked-in workflow-role prompts or role-specific production adapters;
-  fixed reference-delivery LLM fixtures, when needed, live in `harness-testing`.
+  fixed reference-delivery LLM fixtures, when needed, live in `temper-testing`.
 
 ## Auth modes
 
@@ -34,7 +34,7 @@ login, env, and verification commands.
 
 ## Rust and dependency notes
 
-`harness-agents` pins its own `edition = "2024"` and `rust-version = "1.85"`
+`temper-agents` pins its own `edition = "2024"` and `rust-version = "1.85"`
 because of the SDK floor; the workspace root stays on the broader workspace
 settings.
 

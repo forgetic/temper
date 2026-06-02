@@ -19,7 +19,7 @@ def main() -> int:
     args = parser.parse_args()
 
     payload = json.dumps({
-        "name": f"harness-dogfood-{int(time.time())}",
+        "name": f"temper-dogfood-{int(time.time())}",
         "scopes": ["all"],
     }).encode()
     basic = base64.b64encode(f"{args.user}:{args.password}".encode()).decode()

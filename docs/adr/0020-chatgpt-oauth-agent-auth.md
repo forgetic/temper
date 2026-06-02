@@ -6,15 +6,15 @@ Accepted.
 
 ## Context
 
-`harness-agents` originally authenticated its in-process LLM agents one way: a
+`temper-agents` originally authenticated its in-process LLM agents one way: a
 DeepSeek **API key** carried as the per-request bearer through the SDK's
 OpenAI-compatible completions route (`src/provider.rs`). DeepSeek bills
 **per token**.
 
 The operator driving our own tests and local development pays a **flat ChatGPT
 subscription** (no per-call cost). Spending DeepSeek tokens on every gated
-real-agent run (the `harness-testing` Forgejo multi-process variants, the
-`harness-agents` e2e, the example validation) is pure avoidable cost. The
+real-agent run (the `temper-testing` Forgejo multi-process variants, the
+`temper-agents` e2e, the example validation) is pure avoidable cost. The
 mechanism to use a ChatGPT subscription already exists in **both** the nodejs
 `pi-coding-agent` and the Rust SDK we depend on (`pi_agent_rust`): provider id
 `openai-codex` routes to the Codex Responses provider, and the OAuth **access
@@ -68,15 +68,15 @@ HTTP status.
 
 `ProviderConfig::from_auth(choice, codex_model, auth_file)` is the selection
 entry point. The codex model id and auth-file path each resolve **CLI override >
-env var (`HARNESS_AGENTS_CODEX_MODEL` / `HARNESS_AGENTS_AUTH_FILE`) > built-in
+env var (`TEMPER_AGENTS_CODEX_MODEL` / `TEMPER_AGENTS_AUTH_FILE`) > built-in
 default**. `from_auth` runs an **eager credential preflight** so a missing
 DeepSeek key or a missing ChatGPT login fails at setup — before any worker tick —
 mirroring the existing DeepSeek "key unavailable" behavior; the OAuth error
 points the operator at `pi /login openai-codex`.
 
-The `harness-testing-worker` exposes this as `--auth deepseek|chatgpt-oauth`
+The `temper-testing-worker` exposes this as `--auth deepseek|chatgpt-oauth`
 (later extended with `anthropic-oauth`), `--codex-model <id>`, `--auth-file
-<path>`, with `HARNESS_AGENTS_AUTH` as the
+<path>`, with `TEMPER_AGENTS_AUTH` as the
 config-file bridge (precedence CLI > env > default). The **library default stays
 `deepseek`** (production wiring is explicit and unchanged), but the **test/dev
 surfaces default to `chatgpt-oauth`** per the cost policy, so our own runs never
@@ -87,7 +87,7 @@ the bring-your-own-key option for operators without a ChatGPT subscription.
 
 - A ChatGPT subscriber can drive the agents with no per-call cost, reading the
   shared `auth.json` either pi CLI populates.
-- The LLM SDK stays confined to `harness-agents`: the worker selects an auth mode
+- The LLM SDK stays confined to `temper-agents`: the worker selects an auth mode
   by flag/value and never imports SDK auth types.
 - New limits to keep visible: ChatGPT/Codex **subscription rate limits** apply,
   the OAuth access token is **short-lived** (refreshed automatically), and a
@@ -97,7 +97,7 @@ the bring-your-own-key option for operators without a ChatGPT subscription.
 - Offline unit tests cover the dual-schema tolerant reader, schema-preserving
   write-back, the model/auth-file override resolution, and the eager preflight.
   The live path (a real decision against the Codex endpoint + a near-expiry
-  refresh) is `#[ignore]`d and gated (`HARNESS_CHATGPT_OAUTH=1`), matching the
+  refresh) is `#[ignore]`d and gated (`TEMPER_CHATGPT_OAUTH=1`), matching the
   DeepSeek e2e precedent (validated in A3).
 
 ## Alternatives considered
@@ -105,7 +105,7 @@ the bring-your-own-key option for operators without a ChatGPT subscription.
 - **Use the Rust SDK's `AuthStorage` directly.** Rejected: it deserializes only
   the Rust schema, so a nodejs-written login (what this machine has) would not
   load. The tolerant reader accepts both.
-- **Reimplement the OAuth login/PKCE flow in `harness-agents`.** Rejected: both
+- **Reimplement the OAuth login/PKCE flow in `temper-agents`.** Rejected: both
   pi CLIs already provide it; we consume the stored result and only refresh.
 - **Default tests/dev to DeepSeek.** Rejected on cost: it bills per token for
   runs a flat subscription already covers.

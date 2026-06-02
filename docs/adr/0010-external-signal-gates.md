@@ -15,7 +15,7 @@ Some gates are driven by systems outside the role workflow. CI is the motivating
 case in the reference delivery workflow: a backend or runner adapter observes
 the Forge CI result and projects it into portable workflow state (`ci = passed`,
 backed by the `ci-passed` label). No agent role should run a fake CI transition,
-and `harness-forge` must not grow provider-specific CI-gate semantics.
+and `temper-forge` must not grow provider-specific CI-gate semantics.
 
 The fixture previously used zero-role adapter transitions
 (`record_ci_pass`/`record_ci_failure`) only so `ci_gate` could name a
@@ -34,7 +34,7 @@ Add an external-signal gate condition to the workflow spec. A gate may still use
   occupies the declared state in that dimension.
 
 The condition is evaluated on the same classified artifact as the guarded
-transition. For CI, adapters originally remained outside `harness-forge`: they observed the
+transition. For CI, adapters originally remained outside `temper-forge`: they observed the
 provider-specific CI result and projected it into labels/state that the workflow
 already knew how to classify. ADR 0014 supersedes that CI-specific projection by
 adding a native `ci_passed` gate condition fed from portable `CiJob` conclusions;

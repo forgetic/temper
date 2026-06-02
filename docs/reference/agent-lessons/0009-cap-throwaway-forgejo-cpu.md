@@ -12,7 +12,7 @@ small dev box. They asked future runs to detect a recurrence and work around it.
 
 ## What went wrong
 
-The throwaway Forgejo web server (`harness_testing::forgejo_server`) — a Go
+The throwaway Forgejo web server (`temper_testing::forgejo_server`) — a Go
 program — can drive the host to **2+ cores of sustained CPU** under busy
 multi-process workloads (many role workers + actions + git). It is often the
 *server* that spins, not the runner. Two traps:
@@ -30,10 +30,10 @@ multi-process workloads (many role workers + actions + git). It is often the
 
 ## Steering for future agents
 
-- The harness now caps `GOMAXPROCS` (default `2`) on the spawned Forgejo **and**
+- Temper now caps `GOMAXPROCS` (default `2`) on the spawned Forgejo **and**
   `forgejo-runner` (`forgejo_server/mod.rs::apply_cpu_cap`). Keep that cap; it
   bounds the Go runtime at the source. Override per-run with
-  `HARNESS_FORGEJO_GOMAXPROCS` (empty string opts out).
+  `TEMPER_FORGEJO_GOMAXPROCS` (empty string opts out).
 - Run the gated Forgejo e2e tests **serially** (`--test-threads=1`): each boots
   its own ~2-core Forgejo, so parallel tests multiply the load.
 - When monitoring, sample `ps`/`taskset -acp` (all threads) to pin forgejo to a
@@ -43,15 +43,15 @@ multi-process workloads (many role workers + actions + git). It is often the
   draining stale notifications rather than discovering new work; batching should
   collapse those into one follow-up scan per worker.
 - After any force-kill, clean up orphans: `pkill -f forgejo`,
-  `pkill -f harness-testing-worker`, and `rm -rf /tmp/harness-forgejo-*`.
+  `pkill -f temper-testing-worker`, and `rm -rf /tmp/temper-forgejo-*`.
 - `ps pcpu` is a **lifetime average**, not instantaneous — it lags; treat a
   steadily climbing average toward N×100% as a sustained-load signal.
 
 ## Where this is now documented
 
-- `crates/harness-testing/src/forgejo_server/mod.rs` (`apply_cpu_cap`,
+- `crates/temper-testing/src/forgejo_server/mod.rs` (`apply_cpu_cap`,
   `forgejo_gomaxprocs`, `DEFAULT_FORGEJO_GOMAXPROCS`) + `runner.rs`.
-- `crates/harness-production/src/worker.rs` (`WAKE_DEBOUNCE` and
+- `crates/temper-production/src/worker.rs` (`WAKE_DEBOUNCE` and
   `drain_wake_batch`) debounces/coalesces the production demo's queued
   Unix-datagram wakes before a tick.
 - `docs/how-to/run-forgejo-multiprocess-e2e.md` ("Real LLM agents" / "CPU note").

@@ -152,21 +152,21 @@ def evaluate(config: PreflightConfig, env: dict[str, str] | None = None) -> Pref
     root = Path(os.path.expanduser(root_text)) if root_text else None
     report.checks.append(
         Check(
-            "HARNESS_CODING_WORKSPACE_ROOT",
+            "TEMPER_CODING_WORKSPACE_ROOT",
             bool(root and root.is_dir()),
             f"directory exists: {root}" if root_text else "not set",
         )
     )
     report.checks.append(
         Check(
-            "HARNESS_CODING_WORKSPACE_ROOT git worktree",
+            "TEMPER_CODING_WORKSPACE_ROOT git worktree",
             bool(root and root.is_dir() and is_git_worktree(root)),
             "workspace root must be a clean git checkout",
         )
     )
     report.checks.append(
         Check(
-            "HARNESS_CODING_WORKSPACE_COMMAND",
+            "TEMPER_CODING_WORKSPACE_COMMAND",
             bool(command_text),
             "operator-configured coding provider command is present"
             if command_text
@@ -190,22 +190,22 @@ def evaluate(config: PreflightConfig, env: dict[str, str] | None = None) -> Pref
     )
     report.checks.append(
         Check(
-            "HARNESS_FORGEJO_TOKEN_ENGINEER",
-            bool(env.get("HARNESS_FORGEJO_TOKEN_ENGINEER")),
+            "TEMPER_FORGEJO_TOKEN_ENGINEER",
+            bool(env.get("TEMPER_FORGEJO_TOKEN_ENGINEER")),
             "engineer token present in roles.env",
         )
     )
     report.checks.append(
         Check(
-            "HARNESS_FORGEJO_TOKEN_OWNER",
-            bool(env.get("HARNESS_FORGEJO_TOKEN_OWNER")),
+            "TEMPER_FORGEJO_TOKEN_OWNER",
+            bool(env.get("TEMPER_FORGEJO_TOKEN_OWNER")),
             "owner token present in roles.env for the paired auto-merge worker",
         )
     )
 
     if config.query_issues:
         token = (
-            env.get("HARNESS_FORGEJO_TOKEN_ENGINEER")
+            env.get("TEMPER_FORGEJO_TOKEN_ENGINEER")
             or env.get("DOGFOOD_MECHANICAL_TOKEN")
             or env.get("DOGFOOD_ADMIN_TOKEN")
         )

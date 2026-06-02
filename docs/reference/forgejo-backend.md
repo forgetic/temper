@@ -1,12 +1,12 @@
 # Forgejo backend reference
 
-The `harness-forge-forgejo` crate adapts `harness_forge::Forge` to Forgejo's
+The `temper-forge-forgejo` crate adapts `temper_forge::Forge` to Forgejo's
 HTTP API. It is a **best-effort, offline-tested** backend: the provider is
 reached through a mockable HTTP seam, every contract test runs without a
 network, and provider semantics that cannot be verified live (notably
 conditional writes and merge payload shapes) are documented as best-effort.
 
-Rust type: `harness_forge_forgejo::ForgejoForge<C>`, where `C` is the HTTP
+Rust type: `temper_forge_forgejo::ForgejoForge<C>`, where `C` is the HTTP
 client. Production uses `ReqwestHttpClient`; tests inject a recording mock.
 
 ## Configuration and transport
@@ -51,9 +51,9 @@ token authenticates every REST operation; the web-UI password is needed only for
 CI reads on a server that does not serve the Actions REST endpoints.
 
 The optional live smoke tests (`tests/live.rs`) read three more gates so a plain
-`cargo test` never touches the network: `HARNESS_FORGEJO_LIVE=1` enables them
+`cargo test` never touches the network: `TEMPER_FORGEJO_LIVE=1` enables them
 (alongside the three variables above), and the single mutating test additionally
-requires `HARNESS_FORGEJO_LIVE_MUTATE=1`. Every live test is also `#[ignore]`d,
+requires `TEMPER_FORGEJO_LIVE_MUTATE=1`. Every live test is also `#[ignore]`d,
 so it runs only under `cargo test -- --ignored`.
 
 ## Identifier scheme
@@ -72,9 +72,9 @@ opaque and never parse them.
 
 ## Trait implementation
 
-`ForgejoForge<C>` implements the **full** `harness_forge::Forge` trait (see
+`ForgejoForge<C>` implements the **full** `temper_forge::Forge` trait (see
 `src/forge_impl.rs`), so it is a drop-in backend for the workflow runner:
-`harness_workflow::Executor::new(&workflow, &forge)` accepts it in both the
+`temper_workflow::Executor::new(&workflow, &forge)` accepts it in both the
 concrete `ForgejoForge<C>` and the erased `&dyn Forge` forms. The trait impl is
 a thin one-line delegation to the inherent method of the same name and
 signature; the inherent methods remain the single source of truth and the

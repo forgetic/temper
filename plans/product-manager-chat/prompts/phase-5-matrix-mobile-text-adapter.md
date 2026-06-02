@@ -43,7 +43,7 @@ Prefer making Matrix a thin adapter over the Phase 4 API rather than another
 copy of the Forgejo/LLM logic. That keeps external UIs, CLI, and Matrix aligned.
 
 Decide whether the Matrix adapter belongs in this repo or another repo at phase
-start. If it only consumes the Phase 4 API and has no Harness-internal coupling,
+start. If it only consumes the Phase 4 API and has no Temper-internal coupling,
 it may belong outside this repository.
 
 ## Acceptance criteria

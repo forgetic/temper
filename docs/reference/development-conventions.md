@@ -1,6 +1,6 @@
 # Development conventions
 
-This page holds stable contribution rules for Harness. Use it with the
+This page holds stable contribution rules for Temper. Use it with the
 session-start and session-closeout how-to guides.
 
 ## General rules
@@ -15,13 +15,13 @@ session-start and session-closeout how-to guides.
 ## Crate boundaries
 
 - Keep the Forge interface backend-agnostic. Do not leak Forgejo, GitHub, or
-  filesystem-specific concepts into `harness-forge` unless they are modeled as
+  filesystem-specific concepts into `temper-forge` unless they are modeled as
   portable concepts.
-- Keep `harness-forge` free of concrete backend dependencies.
-- Keep `harness-workflow` focused on workflow and orchestration logic.
-- Keep LLM SDK usage inside `harness-agents`; workflow state mutations still go
+- Keep `temper-forge` free of concrete backend dependencies.
+- Keep `temper-workflow` focused on workflow and orchestration logic.
+- Keep LLM SDK usage inside `temper-agents`; workflow state mutations still go
   through runner tools such as `RoleTools`.
-- Keep `harness-testing` out of production dependency graphs. It is test support
+- Keep `temper-testing` out of production dependency graphs. It is test support
   and may be a dev-dependency or a dependency of test-only crates.
 
 ## Rust conventions

@@ -5,8 +5,8 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
-/.harness-pr-prep/
-/.harness-ci/
+/.temper-pr-prep/
+/.temper-ci/
 # Ignore ad-hoc local plans by default; tracked implementation plans opt in.
 /plans/*
 !/plans/user-defined-role-agents/
