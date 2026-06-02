@@ -141,17 +141,18 @@ impl<F: Forge + ?Sized> Agent<F> for ForgejoEngineer {
     }
 }
 
-/// The Forgejo [`harness_agents::EngineerPrep`] for the **real** LLM engineer.
+/// The Forgejo [`crate::legacy_llm::EngineerPrep`] for the test-only legacy LLM
+/// engineer.
 ///
-/// The real [`LlmEngineer`](harness_agents::LlmEngineer) is backend-agnostic and
-/// takes an injected prep hook for the side effects a real Forge needs before a
-/// PR opens / a CI failure is addressed. This adapter performs exactly the same
+/// The quarantined legacy [`LlmEngineer`](crate::legacy_llm::LlmEngineer) takes
+/// an injected prep hook for the side effects a real Forge needs before a PR
+/// opens / a CI failure is addressed. This adapter performs exactly the same
 /// side effects as [`ForgejoEngineer`]'s `EnginePrep` impl above —
 /// [`prepare_pull_request_head`] (real head branch + differing commit) and
 /// [`commit_ci_sentinel`] (the `[ci-pass]` / `ci-ok` marker the committed workflow
-/// gates on) — but bridges to the `harness-agents` trait instead of the testing
-/// crate's, so the `--agents real` Forgejo worker drives the LLM engineer while
-/// keeping the real-PR/real-CI mechanics. Idempotent across re-attempts.
+/// gates on) — while keeping fixed reference-delivery behavior in
+/// `harness-testing`, not production `harness-agents`. Idempotent across
+/// re-attempts.
 ///
 /// `sentinel` mirrors the fake path: `Present` seeds `ci-ok` at PR-open (the PR
 /// passes immediately), `Deferred` withholds it so the first run fails and the
@@ -200,7 +201,7 @@ impl ForgejoLlmPrep {
 }
 
 #[async_trait]
-impl<F: Forge + ?Sized> harness_agents::EngineerPrep<F> for ForgejoLlmPrep {
+impl<F: Forge + ?Sized> crate::legacy_llm::EngineerPrep<F> for ForgejoLlmPrep {
     async fn before_open_pr(
         &self,
         tools: &RoleTools<'_, F>,

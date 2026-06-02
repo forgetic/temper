@@ -7,13 +7,13 @@
 //! in-process two-worker world:
 //!
 //! - a **fake** architect (triages `untriaged` → `code` + `ready`), and
-//! - the legacy reference-delivery **real** [`LlmEngineer`] test adapter
-//!   (decides via the selected LLM auth mode; acts through [`RoleTools`]).
+//! - the quarantined reference-delivery **real** [`LlmEngineer`] test fixture
+//!   from `harness-testing` (decides via the selected LLM auth mode; acts through
+//!   [`RoleTools`]).
 //!
-//! Production workers now use compiled role manifests. This e2e intentionally
-//! keeps the legacy engineer as a test-level binding because opening a real PR
-//! still needs PR-head/coding-workspace behavior that is not expressible as a
-//! pure manifest transition decision until the external-tool phases land.
+//! Production workers use compiled role manifests. This e2e intentionally keeps
+//! the fixed legacy engineer under `harness-testing` so production
+//! `harness-agents` does not ship hard-coded workflow-role prompts.
 //!
 //! It ticks until the engineer has opened the implementation PR (parented to the
 //! triaged code issue) through the idempotent `open_pull_request` seam — the
@@ -48,8 +48,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use harness_agents::engineer::EngineerPrep;
-use harness_agents::{AuthChoice, LlmEngineer, ProviderConfig};
+use harness_agents::{AuthChoice, ProviderConfig};
 use harness_forge::{CreateIssue, CreatePullRequest, Forge, PullRequestQuery, RepositoryId};
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use harness_runner::{Agent, AgentError, RoleTools, RoleWorker, Worker};
@@ -58,6 +57,7 @@ use harness_testing::forgejo_server::{
     ForgejoRunner, ForgejoServer, Provisioned, commit_ci_sentinel, prepare_pull_request_head,
     provision,
 };
+use harness_testing::legacy_llm::{EngineerPrep, LlmEngineer};
 use harness_testing::{runner_config, workflow};
 use harness_workflow::{RoleId, parse_metadata_block};
 

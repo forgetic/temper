@@ -15,15 +15,16 @@ use async_trait::async_trait;
 use harness_forge::{CreateIssue, Forge, RepositoryId};
 use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
 use harness_workflow::{
-    ArtifactKindId, ArtifactRef, ArtifactSource, WorkflowMetadata, global_child_correlation_key,
-    parse_metadata_block, render_metadata_block,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactKindId,
+    ArtifactRef, ArtifactSource, WorkflowMetadata,
 };
 use serde::Deserialize;
 
-use crate::common::{build_context, run_or_ignore_stale};
-use crate::decision::{DecisionError, run_decision};
-use crate::prompts::ARCHITECT_SYSTEM_PROMPT;
-use crate::provider::ProviderConfig;
+use harness_agents::decision::{run_decision, DecisionError};
+use harness_agents::ProviderConfig;
+
+use super::common::{build_context, run_or_ignore_stale};
+use super::prompts::ARCHITECT_SYSTEM_PROMPT;
 
 /// The action the LLM chose for an architect work item.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

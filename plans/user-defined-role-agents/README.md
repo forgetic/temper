@@ -141,7 +141,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    enabled until a real dogfood issue is implemented by the workspace path and
    the PR diff guard passes.
 
-7. ☐ **Phase 7 — Remove legacy surfaces and document the model.**
+7. ☑ **Phase 7 — Remove legacy surfaces and document the model.**
    `prompts/phase-7-remove-legacy-surfaces.md`
 
    Delete or make test-only any remaining hard-coded workflow-role prompt files

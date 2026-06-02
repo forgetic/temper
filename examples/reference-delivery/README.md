@@ -165,11 +165,12 @@ exactly one `harness-worker` per role-with-an-agent plus one mechanical
 reconciler. Workers still use wall-clock polling as the liveness backstop;
 webhooks only wake them early.
 
-With legacy reference-delivery test adapters (the gated `harness-testing` e2e),
-the source intake issue then flows through the cross-repo workflow as below. The
-production launcher now uses generic manifest-driven agents, so steps that require
-child-issue fan-out or real code/PR-head creation wait for future external-tool
-bindings rather than synthetic production behavior:
+With quarantined reference-delivery test fixtures (the gated `harness-testing`
+e2e), the source intake issue then flows through the cross-repo workflow as
+below. The production launcher uses generic manifest-driven agents, so steps that
+require fixed child-issue fan-out or real code/PR-head creation must come from
+workflow configuration, declared external tools, and runner bindings rather than
+synthetic production behavior:
 
 1. **architect** fans the parent intake out into one child `code` issue per
    configured repo and blocks the parent on those children;
@@ -178,11 +179,10 @@ bindings rather than synthetic production behavior:
 3. the **`forgejo-runner`** runs real CI on each PR head;
 4. **reviewer** approves each PR;
 5. **owner** merges once each PR's CI + review gates are green;
-6. post-merge, the **architect** closes the produced code issue and clears its
-   `in-progress` label (enabled by the demo's
-   `ARCHITECT_CLOSE_PRODUCED_ISSUES=1`), the **architect/owner** reconcile
-   routing labels, and dependency aggregation unblocks the parent only after
-   every child issue has closed.
+6. post-merge, test fixture adapters close produced code issues and clear their
+   `in-progress` labels; production generic agents require that behavior to be
+   modeled in workflow/user configuration or external tooling before dependency
+   aggregation can unblock the parent.
 
 The **mechanical** worker runs the controller plane (lease expiry, partial-
 transition repair, dependency unblock) without an agent. See

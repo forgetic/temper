@@ -443,9 +443,6 @@ launch_role_worker() {
         _wake_socket="$WAKE_DIR/$_role.sock"
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
-    _architect_args=
-    [ "$_role" = "architect" ] && _architect_args="--architect-close-produced-issues" || _architect_args=
-
     # shellcheck disable=SC2086
     HARNESS_FORGEJO_TOKEN="$_token" \
     HARNESS_FORGEJO_USERNAME="$_user" \
@@ -460,7 +457,7 @@ launch_role_worker() {
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" \
-        $_wake_args $_architect_args \
+        $_wake_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
     _pid=$!
     echo "$_pid" >>"$WORKERS_PID_FILE"

@@ -10,10 +10,11 @@ use harness_forge::Forge;
 use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
 use serde::Deserialize;
 
-use crate::common::{build_context, run_or_ignore_stale};
-use crate::decision::{DecisionError, run_decision};
-use crate::prompts::HUMAN_SYSTEM_PROMPT;
-use crate::provider::ProviderConfig;
+use harness_agents::decision::{run_decision, DecisionError};
+use harness_agents::ProviderConfig;
+
+use super::common::{build_context, run_or_ignore_stale};
+use super::prompts::HUMAN_SYSTEM_PROMPT;
 
 /// The action the LLM chose for a human work item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

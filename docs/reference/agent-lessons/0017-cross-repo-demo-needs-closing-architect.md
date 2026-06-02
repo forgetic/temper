@@ -20,10 +20,9 @@ issue dependencies, so open child issues keep the parent blocked forever.
 ## Steering for future agents
 
 When a demo or test expects dependency unblocking through produced code issues,
-launch the architect in the closing mode (production flag
-`--architect-close-produced-issues`, demo knob
-`ARCHITECT_CLOSE_PRODUCED_ISSUES=1`). Do not assume merging a PR automatically
-closes its parent issue.
+ensure that issue closure is modeled or supplied by an explicit test fixture. Do
+not assume merging a PR automatically closes its parent issue; production generic
+role agents no longer expose a hard-coded closing-architect flag.
 
 ## Where this is now documented
 

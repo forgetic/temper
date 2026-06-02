@@ -23,43 +23,31 @@
 //! - [`role`] — a manifest-driven workflow role agent that uses a compiled
 //!   [`harness_workflow::RoleManifest`] prompt/tool surface, declared-and-bound
 //!   external-tool metadata, and an injectable decision seam.
-//! - [`prompts`] — legacy workflow-role prompts plus the non-workflow
-//!   conversational prompt embedded as data. Production workflow-role workers no
-//!   longer use the legacy role prompt constants; the product-manager prompt is a
-//!   separate conversational path.
-//! - [`engineer`], [`architect`], [`reviewer`], [`owner`], [`human`] — legacy
-//!   reference-delivery role agents kept for compatibility tests until the
-//!   cleanup phase. Production workflow roles use [`role::LlmRoleAgent`].
+//! - [`prompts`] — the non-workflow product-manager conversational prompt
+//!   embedded as data. Production workflow-role prompts are generated from role
+//!   manifests; checked-in workflow-role prompt files do not live here.
 //! - [`product_manager`] — a non-workflow conversational adapter: no
 //!   [`harness_runner::Agent`] implementation, no workflow tools, and no Forge
 //!   mutation; it returns a reply plus draft intake issues for an integration
 //!   layer to file only after explicit human command.
 //! - [`registry`] — production builders that validate external-tool bindings and
-//!   register one generic agent per compiled workflow role, plus legacy
-//!   reference-delivery builders for tests.
+//!   register one generic agent per compiled workflow role.
 //!
-//! New workflow roles use [`role::LlmRoleAgent`] with a compiled manifest; no
-//! production role worker should import a checked-in workflow-role prompt.
+//! New workflow roles use [`role::LlmRoleAgent`] with a compiled manifest.
+//! Generated prompts carry mechanics, user workflow config carries role
+//! behavior, and external tools are visible only after explicit workflow
+//! declarations plus runner bindings.
 
 #![allow(clippy::result_large_err)]
 
-pub mod architect;
 mod common;
 pub mod decision;
-pub mod engineer;
-pub mod human;
-pub mod owner;
 pub mod product_manager;
 pub mod prompts;
 pub mod provider;
 pub mod registry;
-pub mod reviewer;
 pub mod role;
 
-pub use architect::{ArchitectDecision, LlmArchitect};
-pub use engineer::{EngineerDecision, EngineerPrep, LlmEngineer, NoPrep};
-pub use human::{HumanDecision, LlmHuman};
-pub use owner::{LlmOwner, OwnerDecision};
 pub use product_manager::{
     ProductManagerAgent, ProductManagerAuthor, ProductManagerConversationTurn,
     ProductManagerDraftIssue, ProductManagerError, ProductManagerRequest, ProductManagerResponse,
@@ -70,10 +58,7 @@ pub use provider::{
     default_auth_path,
 };
 pub use registry::{
-    RealRegistryConfig, real_registry, real_registry_from_compiled,
-    real_registry_from_compiled_with_external_tool_executors,
+    real_registry_from_compiled, real_registry_from_compiled_with_external_tool_executors,
     real_registry_from_compiled_with_external_tools, real_registry_from_workflow,
-    real_registry_with,
 };
-pub use reviewer::{LlmReviewer, ReviewerDecision};
 pub use role::{LlmRoleAgent, ProviderRoleDecisionEngine, RoleDecision, RoleDecisionEngine};

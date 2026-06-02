@@ -125,14 +125,13 @@ the **exact** scenario seed/assert closures, with these two pieces made real:
   per role and feeds each worker its own, so `current_user` matches the
   role-to-user map the executor authorizes against.
 
-- **Agents — ✅ done (Forgejo topology, `--agents real`).** The fake
-  `AgentRegistry` entries (`registry_for`) have a real counterpart
-  (`real_registry_for` → `harness-agents`): LLM agents for every role
-  implementing the same `Agent<F>` trait, mutating workflow state only through
-  `RoleTools` (ChatGPT OAuth default, DeepSeek or Anthropic OAuth opt-in).
-  Selected by the worker's `--agents real|fake` flag (default `fake`). The
-  double-gated real-agent variants of `forgejo_multiprocess.rs`
-  converge all five scenarios with real agents (`plans/forgejo-e2e/` Phase B2).
+- **Agents — ✅ done (Forgejo topology, `--agents real`).** Production workers
+  register generic manifest-driven LLM agents from compiled role manifests. The
+  historical `harness-testing-worker --agents real` topology uses quarantined
+  reference-delivery LLM fixtures under `harness-testing` so the old gated e2e
+  scenarios remain available without shipping checked-in workflow-role prompts
+  in production `harness-agents` (ChatGPT OAuth default, DeepSeek or Anthropic
+  OAuth opt-in).
 
 **Still on fakes — pending:**
 

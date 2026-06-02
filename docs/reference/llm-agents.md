@@ -13,8 +13,9 @@ agents. It is the only crate that depends on `pi_agent_rust`; `harness-forge`,
 - Implementation PR creation may invoke a declared-and-bound `coding_workspace`
   provider, but the LLM only sees the narrow tool metadata; the provider receives
   work-item context and returns a committed branch/head.
-- Manifest-driven role agents are the production path; legacy reference-delivery
-  adapters remain test/dev support for gated e2e scenarios.
+- Manifest-driven role agents are the production path. `harness-agents` does not
+  ship checked-in workflow-role prompts or role-specific production adapters;
+  fixed reference-delivery LLM fixtures, when needed, live in `harness-testing`.
 
 ## Auth modes
 

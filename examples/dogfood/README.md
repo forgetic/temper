@@ -87,8 +87,9 @@ The generated role prompt contains workflow mechanics and authorized actions.
 Reference-delivery behavior (how to implement, when to use `coding_workspace`,
 and why bookkeeping-only PRs are forbidden) comes from the workflow fixture's
 `charter`, `prompt.guidance`, `prompt.tool_guidance`, and `external_tools`
-entries. The LLM never receives shell/file tools; it can only choose a workflow
-action, after which the runner invokes the bound workspace provider.
+entries, not from production checked-in engineer/reviewer/owner prompts. The LLM
+never receives shell/file tools; it can only choose a workflow action, after
+which the runner invokes an explicitly declared and bound workspace provider.
 
 Focused validation commands:
 

@@ -196,12 +196,11 @@ fn run_role(
     let config = runner_config();
     let role_id = RoleId::new(role);
 
-    // The filesystem backend needs no engineer prep (no real git refs / CI), so
-    // `--agents real` here uses the LLM agents with `NoPrep`. `--agents fake`
-    // (the default) is unchanged.
+    // `--agents real` here uses quarantined legacy LLM fixtures from
+    // `harness-testing`; production workers use compiled role manifests.
     let registry = match args.agents {
         AgentsKind::Fake => registry_for(behavior),
-        AgentsKind::Real => real_registry_for(args, behavior, Arc::new(harness_agents::NoPrep))?,
+        AgentsKind::Real => real_registry_for(args, behavior, Arc::new(crate::legacy_llm::NoPrep))?,
     };
     let agent = registry
         .get(&role_id)
@@ -265,21 +264,14 @@ pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
     }
 }
 
-/// Builds the legacy reference-delivery **real** (LLM-backed) registry whose
-/// architect/reviewer variants match `behavior` and whose engineer carries
-/// `engineer_prep`.
+/// Builds the test-only legacy reference-delivery **real** (LLM-backed)
+/// registry whose architect/reviewer variants match `behavior` and whose
+/// engineer carries `engineer_prep`.
 ///
 /// This is the `--agents real` counterpart of [`registry_for`] used by the
-/// existing reference-delivery e2e tests: it constructs the shared
-/// [`ProviderConfig`](harness_agents::ProviderConfig) once for the selected auth
-/// mode (DeepSeek key or ChatGPT OAuth login, resolved at runtime and never
-/// logged) and maps every role to its legacy LLM test adapter through
-/// [`harness_agents::real_registry_with`]. Production workers now use compiled
-/// workflow manifests instead; this compatibility fixture remains until the
-/// external coding-workspace phase can express the engineer's PR-head work.
-/// `engineer_prep` carries the backend-specific PR-head/CI side effects:
-/// `NoPrep` on filesystem, the Forgejo prep on the real backend (see
-/// [`super::forgejo`]).
+/// historical reference-delivery e2e tests. The fixed prompts and role-specific
+/// adapters live in [`crate::legacy_llm`], not in production `harness-agents`.
+/// Production workers use compiled workflow manifests instead.
 ///
 /// The provider is built with [`provider_for`], which resolves the auth mode,
 /// codex model, and auth-file path from `args` (precedence CLI > env > default)
@@ -288,10 +280,10 @@ pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
 pub(super) fn real_registry_for(
     args: &WorkerArgs,
     behavior: RoleBehavior,
-    engineer_prep: Arc<dyn harness_agents::EngineerPrep<dyn Forge>>,
+    engineer_prep: Arc<dyn crate::legacy_llm::EngineerPrep<dyn Forge>>,
 ) -> Result<AgentRegistry<dyn Forge>, RunError> {
     let provider = provider_for(args)?;
-    let config = harness_agents::RealRegistryConfig {
+    let config = crate::legacy_llm::LegacyRealRegistryConfig {
         architect_closing: matches!(behavior.architect, ArchitectKind::Closing),
         reviewer_request_changes_then_approve: matches!(
             behavior.reviewer,
@@ -299,7 +291,9 @@ pub(super) fn real_registry_for(
         ),
         engineer_prep,
     };
-    Ok(harness_agents::real_registry_with(provider, config))
+    Ok(crate::legacy_llm::legacy_real_registry_with(
+        provider, config,
+    ))
 }
 
 /// Builds the shared [`ProviderConfig`](harness_agents::ProviderConfig) for the

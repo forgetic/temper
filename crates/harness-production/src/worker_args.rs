@@ -18,7 +18,6 @@ pub const USAGE: &str = concat!(
     "[--codex-model <id>] [--auth-file <path>] ",
     "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>] ",
-    "[--architect-close-produced-issues] [--allow-synthetic-pr-prep] ",
     "[--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from HARNESS_FORGEJO_TOKEN; optional web UI credentials ",
     "come from HARNESS_FORGEJO_USERNAME/HARNESS_FORGEJO_PASSWORD"
@@ -82,14 +81,6 @@ pub struct WorkerArgs {
     pub auth_file: Option<PathBuf>,
     pub wake_socket: Option<PathBuf>,
     pub wake_secret_file: Option<PathBuf>,
-    /// Retained for CLI compatibility with the legacy reference-delivery demo.
-    /// Manifest-driven production role agents do not consume this role-specific
-    /// behavior flag.
-    pub architect_close_produced_issues: bool,
-    /// Retained for CLI compatibility with legacy synthetic demos. Manifest-driven
-    /// production role agents do not create synthetic `.harness-*` PR prep; real
-    /// engineer automation waits for the external coding-workspace phases.
-    pub allow_synthetic_pr_prep: bool,
     /// Allows reviewer/owner agents to approve or merge a PR whose changed files
     /// are only Harness bookkeeping paths. Intended only with synthetic demos.
     pub allow_bookkeeping_only_pr: bool,
@@ -150,8 +141,6 @@ struct RawArgs {
     auth_file: Option<String>,
     wake_socket: Option<String>,
     wake_secret_file: Option<String>,
-    architect_close_produced_issues: bool,
-    allow_synthetic_pr_prep: bool,
     allow_bookkeeping_only_pr: bool,
 }
 
@@ -180,8 +169,6 @@ impl RawArgs {
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
                 "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
-                "--architect-close-produced-issues" => raw.architect_close_produced_issues = true,
-                "--allow-synthetic-pr-prep" => raw.allow_synthetic_pr_prep = true,
                 "--allow-bookkeeping-only-pr" => raw.allow_bookkeeping_only_pr = true,
                 other => {
                     return Err(ArgsError::new(format!(
@@ -244,8 +231,6 @@ impl RawArgs {
             auth_file: non_empty(self.auth_file).map(PathBuf::from),
             wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
-            architect_close_produced_issues: self.architect_close_produced_issues,
-            allow_synthetic_pr_prep: self.allow_synthetic_pr_prep,
             allow_bookkeeping_only_pr: self.allow_bookkeeping_only_pr,
         })
     }

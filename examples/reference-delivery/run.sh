@@ -176,7 +176,6 @@ cmd_stop() {
 # (precedence: CLI/env > config/harness.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
-ARCHITECT_CLOSE_PRODUCED_ISSUES \
 HARNESS_AGENTS_AUTH HARNESS_AGENTS_CODEX_MODEL HARNESS_AGENTS_ANTHROPIC_MODEL \
 HARNESS_AGENTS_AUTH_FILE HARNESS_FORGEJO_GOMAXPROCS HARNESS_FORGEJO_BINARY \
 HARNESS_FORGEJO_RUNNER_BINARY HARNESS_WORKER_BIN HARNESS_PROVISION_BIN \
@@ -237,7 +236,6 @@ load_config() {
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
     WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:38080/forgejo/webhook}
-    ARCHITECT_CLOSE_PRODUCED_ISSUES=${ARCHITECT_CLOSE_PRODUCED_ISSUES:-1}
     HARNESS_AGENTS_AUTH=${HARNESS_AGENTS_AUTH:-chatgpt-oauth}
     HARNESS_AGENTS_CODEX_MODEL=${HARNESS_AGENTS_CODEX_MODEL:-}
     HARNESS_AGENTS_ANTHROPIC_MODEL=${HARNESS_AGENTS_ANTHROPIC_MODEL:-}
@@ -379,12 +377,6 @@ resolve_binaries() {
         *--seed-intake*--intake-title*--intake-body-file*) ;;
         *) die "provision binary is stale or incompatible: $PROVISION_BIN does not advertise --seed-intake/--intake-title/--intake-body-file. Re-run without HARNESS_SKIP_BUILD=1 or rebuild harness-production with cargo build -p $HARNESS_BUILD_PACKAGE." ;;
     esac
-    _worker_help=$("$WORKER_BIN" --help 2>&1 || true)
-    case "$_worker_help" in
-        *--architect-close-produced-issues*) ;;
-        *) die "worker binary is stale or incompatible: $WORKER_BIN does not advertise --architect-close-produced-issues. Re-run without HARNESS_SKIP_BUILD=1 or rebuild harness-production with cargo build -p $HARNESS_BUILD_PACKAGE." ;;
-    esac
-
     # Pinned Forgejo + runner: env override, else the cached pinned path.
     FORGEJO_BIN=${HARNESS_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
     RUNNER_BIN=${HARNESS_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64}
@@ -672,11 +664,6 @@ launch_role_worker() {
         _wake_socket="$WAKE_DIR/$_role.sock"
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
-    _architect_args=
-    if [ "$_role" = "architect" ] && [ "$ARCHITECT_CLOSE_PRODUCED_ISSUES" = "1" ]; then
-        _architect_args="--architect-close-produced-issues"
-    fi
-
     # Per-role secrets are literal env-assignment prefixes (never on argv). The
     # auth-mode env (DeepSeek key path) is exported globally by check_auth.
     # WORKER_REPO_ARGS / CODEX_MODEL_ARG / AUTH_FILE_ARG / _wake_args intentionally
@@ -695,7 +682,7 @@ launch_role_worker() {
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
-        $_wake_args $_architect_args \
+        $_wake_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
     _pid=$!
     echo "$_pid" >>"$WORKERS_PID_FILE"

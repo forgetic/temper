@@ -17,7 +17,7 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | `crates/harness-workflow/` | Workflow definitions and runtime logic: validation, classification, compilation, planning/execution, leases, reconciliation, and recovery. |
 | `crates/harness-runner/` | Backend-agnostic worker runtime: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and external-tool seams such as `coding_workspace`. |
 | `crates/harness-testing/` | Non-production fakes, fixtures, scenario drivers, CI sinks, the testing worker binary, and gated e2e rehearsals. |
-| `crates/harness-agents/` | Real in-process LLM role agents and provider/auth wiring; keep pi SDK usage here. |
+| `crates/harness-agents/` | Real in-process manifest-driven LLM role agents and provider/auth wiring; keep pi SDK usage here and keep workflow-role behavior in user config, not checked-in prompts. |
 | `crates/harness-production/` | Deployable Forgejo binaries: workers, provisioning, webhook trigger, product-manager chat, and production external-tool bindings. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo and launch scripts. |
 | `plans/` | Roadmaps and findings; promote stable behavior into `docs/` before relying on it. |

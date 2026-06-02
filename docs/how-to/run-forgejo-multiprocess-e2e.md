@@ -4,8 +4,9 @@
 > real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
-> swapped to real**. With `--agents real` (Phase B2) every role also runs a real
-> LLM agent (ChatGPT OAuth by default), so **agents are swapped to real too**. The
+> swapped to real**. With `--agents real` every role runs a real LLM through
+> quarantined `harness-testing` reference-delivery fixtures (ChatGPT OAuth by
+> default), while production workers use generic manifest-driven agents. The
 > production reference-delivery demo now carries the ADR 0009 webhook trigger;
 > the separate long-poll wakeup regression covers that path. The design rationale
 > (topology, real CI, per-token identity, webhook wakeups) lives in
@@ -36,7 +37,8 @@ to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
 The command above runs the deterministic **fake** agents. To run the **same**
 scenarios with real agents in every role (`--agents real`), set a second gate.
 The end state and the seed/assert closures are identical — only *who decides*
-changes.
+changes. These fixed reference-delivery adapters are test fixtures, not
+production `harness-agents` prompt/adaptor surfaces.
 
 Per the cost policy these runs default to **ChatGPT OAuth** (a flat subscription,
 not pay-per-token DeepSeek), reading the shared `~/.pi/agent/auth.json`. Log in

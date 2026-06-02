@@ -26,10 +26,11 @@ use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
 use harness_workflow::ArtifactSource;
 use serde::Deserialize;
 
-use crate::common::stale_execution;
-use crate::decision::{DecisionError, run_decision};
-use crate::prompts::REVIEWER_SYSTEM_PROMPT;
-use crate::provider::ProviderConfig;
+use harness_agents::decision::{run_decision, DecisionError};
+use harness_agents::ProviderConfig;
+
+use super::common::stale_execution;
+use super::prompts::REVIEWER_SYSTEM_PROMPT;
 
 /// The action the LLM chose for a reviewer work item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

@@ -40,8 +40,6 @@ fn parses_role_worker_and_redacts_token_in_debug() {
     );
     assert!(format!("{:?}", args.forgejo).contains("<redacted>"));
     assert!(!format!("{:?}", args.forgejo).contains("secret-token"));
-    assert!(!args.architect_close_produced_issues);
-    assert!(!args.allow_synthetic_pr_prep);
     assert!(!args.allow_bookkeeping_only_pr);
 }
 
@@ -61,8 +59,6 @@ fn parses_production_safety_flags() {
             "architect",
             "--user",
             "architect",
-            "--architect-close-produced-issues",
-            "--allow-synthetic-pr-prep",
             "--allow-bookkeeping-only-pr",
         ]
         .into_iter()
@@ -73,8 +69,6 @@ fn parses_production_safety_flags() {
     let ParseOutcome::Run(args) = outcome else {
         panic!("expected run")
     };
-    assert!(args.architect_close_produced_issues);
-    assert!(args.allow_synthetic_pr_prep);
     assert!(args.allow_bookkeeping_only_pr);
 }
 
