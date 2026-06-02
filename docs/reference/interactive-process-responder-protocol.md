@@ -6,6 +6,18 @@ pi SDK, provider-auth, Forgejo, production, workflow, or runner dependency.
 
 ## Invocation
 
+Deployments select an external responder process explicitly in their transport or
+service configuration. For the product-manager binary this is
+`--responder-command` or `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`, with matching
+args, cwd, env allow-list, and timeout options. If no process responder is
+configured, the current product-manager command may use its transitional
+in-process responder.
+
+Frontends must not invoke the responder process directly. They call Temper's
+interaction service (`/conversations`, Matrix adapter, mobile adapter, etc.);
+Temper owns transcripts, validation, proposal acceptance, and all Forge/workflow
+mutation.
+
 `ProcessResponder` is configured with:
 
 - program path and argument vector;

@@ -5,8 +5,9 @@ This page defines the target contract for Temper's generic interaction plane.
 typed conversation/profile/proposal ids, participants, turns, wire-serializable
 requests/replies, inert proposals, deterministic proposal-id validation, the
 object-safe responder adapter trait, the provider-neutral process responder
-adapter, Forge-backed transcript/session helpers, and explicit idempotent
-issue-proposal acceptance. Transport API generalization remains a later phase.
+adapter, Forge-backed transcript/session helpers, explicit idempotent
+issue-proposal acceptance, and transport-facing command/event types with a small
+in-process event log for adapters.
 
 ## Scope
 
@@ -61,9 +62,40 @@ is the process protocol using the same serialized request/reply types; see
   plus built-in issue payloads before the interaction service persists anything.
 - **Interaction service**: transport-neutral orchestration for create/resume,
   append human turn, run a responder adapter, persist reply/proposals, cache
-  current proposals, and accept a proposal.
+  current proposals, emit conversation events, and accept a proposal.
 - **Transport adapter**: maps REPL, HTTP/SSE, Matrix, web/mobile, or voice events
   to service commands and renders responses. It owns protocol details only.
+
+## Transport command and event contract
+
+`temper-interaction::transport` defines profile-neutral commands and DTOs for:
+
+- opening a conversation, optionally resuming a transcript issue;
+- sending one human turn and receiving one `ConversationReply`;
+- listing latest inert proposals;
+- accepting a proposal by stable `ProposalId`;
+- replaying conversation events for transcript and proposal changes.
+
+The production local HTTP adapter currently exposes one configured profile with
+these generic routes:
+
+```text
+POST /conversations
+GET  /conversations/{id}
+POST /conversations/{id}/turns
+GET  /conversations/{id}/proposals
+GET  /conversations/{id}/events
+POST /conversations/{id}/proposals/{proposal_id}/accept
+```
+
+`POST /conversations` accepts an optional `profile_id` and optional
+`transcript_issue`; single-profile deployments reject any unconfigured profile.
+`POST /conversations/{id}/turns` accepts `{ "body": "..." }` and returns a
+reply object plus the latest proposals. Event replay returns JSON events with a
+monotonic in-process sequence, `kind`, timestamp, conversation id, and typed
+payload. SSE is not yet enabled by the local adapter; `GET .../events` returns a
+snapshot with `streaming:false` so web, Matrix, mobile, and voice adapters can be
+written against the event schema before a streaming implementation lands.
 
 ## Invariants
 

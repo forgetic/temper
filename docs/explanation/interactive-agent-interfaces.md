@@ -7,10 +7,11 @@ this idea, but it is not the abstraction itself.
 
 The generic interaction-plane contract now lives in `temper-interaction` for
 responder requests, replies, participants, inert proposals, Forge-backed
-transcripts/sessions, explicit idempotent issue-proposal acceptance, and the
-provider-neutral process responder adapter. Later phases will add generic
-transport APIs and a fuller recast of compatibility product-manager endpoints
-behind profile names.
+transcripts/sessions, explicit idempotent issue-proposal acceptance,
+transport-facing commands/events, a replayable in-process event seam, and the
+provider-neutral process responder adapter. The local product-manager HTTP
+service now exposes generic `/conversations` routes while keeping the historical
+product-manager aliases.
 
 ## Shape
 
@@ -19,7 +20,7 @@ web / REPL / Matrix / mobile / voice
         │
         ▼
 transport adapter
-        │ live turns and explicit commands
+        │ live turns, event replay, and explicit commands
         ▼
 interaction plane
         │ transcript store + responder dispatch + proposal acceptance

@@ -193,15 +193,20 @@ Status legend: ☐ pending · ☑ done
    `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
    `cargo dev-check`.
 
-5. ☐ **Phase 5 — Generalize the local transport API and realtime adapter seam.**
+5. ☑ **Phase 5 — Generalize the local transport API and realtime adapter seam.**
    `prompts/phase-5-transport-api-and-events.md`
 
-   Introduce generic conversation endpoints and an event/stream contract suitable
-   for web/PWA, Matrix, or voice adapters. Preserve existing product-manager API
-   aliases. Transports talk only to the interaction service; they do not call the
-   process responder directly and do not receive Forge mutation authority. Add
-   docs showing product-manager as one configured profile and explaining where
-   external frontends and external responder processes plug in.
+   Done: `temper-interaction` now includes profile-neutral transport commands,
+   snapshots, acceptance targets, typed conversation events, and an in-process
+   replayable event log. The local product-manager HTTP service exposes generic
+   `/conversations` create/read/turn/proposals/events/accept routes, keeps the
+   `/sessions` and draft-file routes as compatibility aliases, sanitizes
+   responder failures in API responses, preserves loopback/auth safety, and emits
+   replayable events for transcript/proposal changes. Docs describe the generic
+   API, the product-manager alias status, external frontend adapters, and
+   responder-process configuration. Validation run: `cargo fmt --all`;
+   `cargo test -p temper-interaction`; `cargo test -p temper-production product_chat`;
+   `cargo dev-clippy`; `cargo dev-check`.
 
 ## Follow-up extraction path
 

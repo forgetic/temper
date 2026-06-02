@@ -1,26 +1,38 @@
 //! Loopback HTTP transport for the product-manager interactive profile.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temper_agents::{AuthChoice, ProductManagerDraftIssue, ProviderConfig};
+use temper_agents::{AuthChoice, ProviderConfig};
 use temper_forge::{Forge, Issue, ItemNumber, RepositoryPath};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_interaction::InteractiveResponder;
+use temper_interaction::{
+    AcceptedProposalTarget, ConversationEventLog, ConversationEventPayload, ConversationId,
+    ConversationProfileId, ConversationReply, ConversationTranscriptRef, ConversationTurn,
+    InteractiveResponder, Participant, Proposal, ProposalId,
+};
 use tokio::sync::Mutex;
 
 use crate::product_chat::{
     build_product_profile_responder, ProductChatError, ProductChatOpenOptions, ProductChatSession,
+    PRODUCT_PROFILE_ID,
+};
+use crate::product_chat_api::{
+    parse_json, AcceptProposalResponse, ApiError, ConversationEventsResponse, ConversationResponse,
+    ConversationTurnOutcome, CreateConversationRequest, CreateSessionRequest, FileDraftResponse,
+    FiledIssueResponse, MessageResponse, ProposalsResponse, SendMessageRequest, SendTurnRequest,
+    SessionResponse, TranscriptResponse, TurnResponse,
 };
 use crate::product_chat_args::{AuthKind, ProductChatServeArgs};
 use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
+pub(crate) use crate::product_chat_http::{HttpRequest, HttpResponse};
 
-const MAX_REQUEST_BYTES: usize = 1_048_576;
+const STREAMING_EVENTS_ENABLED: bool = false;
+
 type DynSession = ProductChatSession<dyn Forge, dyn Forge, dyn InteractiveResponder>;
 
 #[derive(Debug)]
@@ -144,10 +156,12 @@ fn handle_connection(
 pub struct ProductChatService {
     base_url: String,
     repo_path: RepositoryPath,
+    profile_id: ConversationProfileId,
     human_forge: Arc<dyn Forge>,
     product_forge: Arc<dyn Forge>,
     responder: Arc<dyn InteractiveResponder>,
     sessions: Mutex<HashMap<String, DynSession>>,
+    events: ConversationEventLog,
 }
 
 impl ProductChatService {
@@ -161,17 +175,22 @@ impl ProductChatService {
         Self {
             base_url,
             repo_path,
+            profile_id: ConversationProfileId::new(PRODUCT_PROFILE_ID)
+                .expect("product profile id is valid"),
             human_forge,
             product_forge,
             responder,
             sessions: Mutex::new(HashMap::new()),
+            events: ConversationEventLog::new(),
         }
     }
 
-    async fn create_session(
+    async fn create_conversation(
         &self,
+        profile_id: Option<ConversationProfileId>,
         transcript_issue: Option<u64>,
-    ) -> Result<SessionResponse, ProductChatError> {
+    ) -> Result<ConversationResponse, ApiError> {
+        self.ensure_profile(profile_id.as_ref())?;
         let session = ProductChatSession::open(
             Arc::clone(&self.human_forge),
             Arc::clone(&self.product_forge),
@@ -183,12 +202,97 @@ impl ProductChatService {
             },
         )
         .await?;
-        let response = session_response(&session);
+        let response = conversation_response(&session, &self.profile_id);
+        self.events.record(
+            session.conversation_id().clone(),
+            ConversationEventPayload::ConversationOpened {
+                profile_id: self.profile_id.clone(),
+                transcript: Some(transcript_ref(&response.transcript)),
+            },
+        );
         self.sessions
             .lock()
             .await
             .insert(response.id.clone(), session);
         Ok(response)
+    }
+
+    async fn get_conversation(&self, id: &str) -> Result<ConversationResponse, ApiError> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(id)
+            .ok_or_else(|| ApiError::not_found("conversation not found"))?;
+        Ok(conversation_response(session, &self.profile_id))
+    }
+
+    async fn latest_proposals(&self, id: &str) -> Result<ProposalsResponse, ApiError> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(id)
+            .ok_or_else(|| ApiError::not_found("conversation not found"))?;
+        Ok(ProposalsResponse {
+            proposals: session.latest_proposals().to_vec(),
+        })
+    }
+
+    async fn send_turn(&self, id: &str, body: String) -> Result<ConversationTurnOutcome, ApiError> {
+        if body.trim().is_empty() {
+            return Err(ApiError::bad_request("body must not be empty"));
+        }
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(id)
+            .ok_or_else(|| ApiError::not_found("conversation not found"))?;
+        let conversation_id = session.conversation_id().clone();
+        let reply = session.send_conversation_turn(&body).await?;
+        let response = TurnResponse {
+            reply: reply.clone(),
+            transcript: transcript_response(session),
+            latest_proposals: session.latest_proposals().to_vec(),
+        };
+        let drafts = session.latest_drafts().to_vec();
+        self.record_turn_events(conversation_id, body, &reply, &response.latest_proposals);
+        Ok(ConversationTurnOutcome { response, drafts })
+    }
+
+    async fn accept_proposal(
+        &self,
+        id: &str,
+        proposal_id: ProposalId,
+    ) -> Result<AcceptProposalResponse, ApiError> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(id)
+            .ok_or_else(|| ApiError::not_found("conversation not found"))?;
+        let conversation_id = session.conversation_id().clone();
+        let outcome = session.accept_proposal(&proposal_id).await?;
+        let response = accept_response(session, proposal_id, outcome.created, &outcome.issue);
+        self.record_accept_event(conversation_id, &response);
+        Ok(response)
+    }
+
+    async fn conversation_events(&self, id: &str) -> Result<ConversationEventsResponse, ApiError> {
+        let conversation_id = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(id)
+                .ok_or_else(|| ApiError::not_found("conversation not found"))?
+                .conversation_id()
+                .clone()
+        };
+        Ok(ConversationEventsResponse {
+            streaming: STREAMING_EVENTS_ENABLED,
+            events: self.events.list(&conversation_id),
+        })
+    }
+
+    async fn create_session(
+        &self,
+        transcript_issue: Option<u64>,
+    ) -> Result<SessionResponse, ApiError> {
+        self.create_conversation(None, transcript_issue)
+            .await
+            .map(SessionResponse::from)
     }
 
     async fn get_session(&self, id: &str) -> Result<SessionResponse, ApiError> {
@@ -203,18 +307,20 @@ impl ProductChatService {
         if message.trim().is_empty() {
             return Err(ApiError::bad_request("message must not be empty"));
         }
-        let mut sessions = self.sessions.lock().await;
-        let session = sessions
-            .get_mut(id)
-            .ok_or_else(|| ApiError::not_found("session not found"))?;
-        if let Some(command) = ProductChatCommand::parse(&message) {
-            return handle_local_message_command(session, command);
+        {
+            let mut sessions = self.sessions.lock().await;
+            let session = sessions
+                .get_mut(id)
+                .ok_or_else(|| ApiError::not_found("session not found"))?;
+            if let Some(command) = ProductChatCommand::parse(&message) {
+                return handle_local_message_command(session, command);
+            }
         }
-        let response = session.send_human_turn(&message).await?;
+        let outcome = self.send_turn(id, message).await?;
         Ok(MessageResponse {
-            reply: response.reply,
-            drafts: response.drafts,
-            transcript_url: session.transcript_url(),
+            reply: outcome.response.reply.message,
+            drafts: outcome.drafts,
+            transcript_url: outcome.response.transcript.url,
         })
     }
 
@@ -223,15 +329,68 @@ impl ProductChatService {
         let session = sessions
             .get(id)
             .ok_or_else(|| ApiError::not_found("session not found"))?;
+        let conversation_id = session.conversation_id().clone();
         let outcome = session.file_draft_slug(slug).await?;
-        Ok(FileDraftResponse {
-            created: outcome.created,
-            issue: filed_issue_response(
-                &outcome.issue,
-                session.issue_url_for(outcome.issue.number),
-            ),
-            transcript_url: session.transcript_url(),
-        })
+        let proposal_id = ProposalId::new(slug.to_string())
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        let response = accept_response(session, proposal_id, outcome.created, &outcome.issue);
+        self.record_accept_event(conversation_id, &response);
+        Ok(FileDraftResponse::from(response))
+    }
+
+    fn ensure_profile(&self, requested: Option<&ConversationProfileId>) -> Result<(), ApiError> {
+        if let Some(requested) = requested.filter(|requested| *requested != &self.profile_id) {
+            return Err(ApiError::bad_request(format!(
+                "profile `{requested}` is not configured for this service"
+            )));
+        }
+        Ok(())
+    }
+
+    fn record_turn_events(
+        &self,
+        conversation_id: ConversationId,
+        body: String,
+        reply: &ConversationReply,
+        proposals: &[Proposal],
+    ) {
+        self.events.record(
+            conversation_id.clone(),
+            ConversationEventPayload::HumanTurnAppended {
+                turn: ConversationTurn::new(Participant::human("human"), body),
+            },
+        );
+        self.events.record(
+            conversation_id.clone(),
+            ConversationEventPayload::AgentReplyAppended {
+                reply: reply.clone(),
+            },
+        );
+        self.events.record(
+            conversation_id,
+            ConversationEventPayload::ProposalsUpdated {
+                proposals: proposals.to_vec(),
+            },
+        );
+    }
+
+    fn record_accept_event(
+        &self,
+        conversation_id: ConversationId,
+        response: &AcceptProposalResponse,
+    ) {
+        self.events.record(
+            conversation_id,
+            ConversationEventPayload::ProposalAccepted {
+                proposal_id: response.proposal_id.clone(),
+                created: response.created,
+                target: Some(AcceptedProposalTarget::issue(
+                    response.target.number,
+                    response.target.url.clone(),
+                    response.target.title.clone(),
+                )),
+            },
+        );
     }
 }
 
@@ -290,13 +449,52 @@ impl ProductChatHttpApp {
         if request.method == "GET" && path == "/health" {
             return Ok(HttpResponse::json(200, &json!({ "ok": true })));
         }
+        if request.method == "POST" && path == "/conversations" {
+            let body = parse_json::<CreateConversationRequest>(&request)?;
+            let response = self
+                .service
+                .create_conversation(body.profile_id, body.transcript_issue)
+                .await?;
+            return Ok(HttpResponse::json(201, &response));
+        }
         if request.method == "POST" && path == "/sessions" {
             let body = parse_json::<CreateSessionRequest>(&request)?;
             let response = self.service.create_session(body.transcript_issue).await?;
             return Ok(HttpResponse::json(201, &response));
         }
-        let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+        let segments: Vec<&str> = path
+            .trim_matches('/')
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
         match (request.method.as_str(), segments.as_slice()) {
+            ("GET", ["conversations", id]) => Ok(HttpResponse::json(
+                200,
+                &self.service.get_conversation(id).await?,
+            )),
+            ("POST", ["conversations", id, "turns"]) => {
+                let body = parse_json::<SendTurnRequest>(&request)?.into_body()?;
+                Ok(HttpResponse::json(
+                    200,
+                    &self.service.send_turn(id, body).await?.response,
+                ))
+            }
+            ("GET", ["conversations", id, "proposals"]) => Ok(HttpResponse::json(
+                200,
+                &self.service.latest_proposals(id).await?,
+            )),
+            ("GET", ["conversations", id, "events"]) => Ok(HttpResponse::json(
+                200,
+                &self.service.conversation_events(id).await?,
+            )),
+            ("POST", ["conversations", id, "proposals", proposal_id, "accept"]) => {
+                let proposal_id = ProposalId::new((*proposal_id).to_string())
+                    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+                Ok(HttpResponse::json(
+                    200,
+                    &self.service.accept_proposal(id, proposal_id).await?,
+                ))
+            }
             ("GET", ["sessions", id]) => Ok(HttpResponse::json(
                 200,
                 &self.service.get_session(id).await?,
@@ -332,199 +530,16 @@ impl ProductChatHttpApp {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct HttpRequest {
-    method: String,
-    path: String,
-    headers: BTreeMap<String, String>,
-    body: Vec<u8>,
-}
-
-impl HttpRequest {
-    #[cfg(test)]
-    pub(crate) fn new(method: &str, path: &str, body: impl Into<Vec<u8>>) -> Self {
-        Self {
-            method: method.to_string(),
-            path: path.to_string(),
-            headers: BTreeMap::new(),
-            body: body.into(),
-        }
+fn conversation_response(
+    session: &DynSession,
+    profile_id: &ConversationProfileId,
+) -> ConversationResponse {
+    ConversationResponse {
+        id: session.session_key().to_string(),
+        profile_id: profile_id.to_string(),
+        transcript: transcript_response(session),
+        latest_proposals: session.latest_proposals().to_vec(),
     }
-
-    #[cfg(test)]
-    pub(crate) fn with_header(mut self, name: &str, value: &str) -> Self {
-        self.headers
-            .insert(name.to_ascii_lowercase(), value.to_string());
-        self
-    }
-
-    fn read_from(stream: &mut TcpStream) -> Result<Self, ProductChatServiceError> {
-        let mut raw = Vec::new();
-        let mut buf = [0_u8; 4096];
-        loop {
-            let n = stream.read(&mut buf)?;
-            if n == 0 {
-                break;
-            }
-            raw.extend_from_slice(&buf[..n]);
-            if raw.len() > MAX_REQUEST_BYTES {
-                return Err(ProductChatError::Runtime("HTTP request is too large".into()).into());
-            }
-            if let Some(header_end) = find_header_end(&raw) {
-                let (method, path, headers) = parse_headers(&raw[..header_end])?;
-                let body_start = header_end + 4;
-                let content_len = header(&headers, "content-length")
-                    .and_then(|raw| raw.parse::<usize>().ok())
-                    .unwrap_or(0);
-                if body_start + content_len > MAX_REQUEST_BYTES {
-                    return Err(
-                        ProductChatError::Runtime("HTTP request is too large".into()).into(),
-                    );
-                }
-                while raw.len() < body_start + content_len {
-                    let n = stream.read(&mut buf)?;
-                    if n == 0 {
-                        break;
-                    }
-                    raw.extend_from_slice(&buf[..n]);
-                }
-                if raw.len() < body_start + content_len {
-                    return Err(ProductChatError::Runtime("incomplete HTTP request".into()).into());
-                }
-                return Ok(Self {
-                    method,
-                    path,
-                    headers,
-                    body: raw[body_start..body_start + content_len].to_vec(),
-                });
-            }
-        }
-        Err(ProductChatError::Runtime("incomplete HTTP request".into()).into())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct HttpResponse {
-    status: u16,
-    body: String,
-}
-
-impl HttpResponse {
-    #[cfg(test)]
-    pub(crate) fn status(&self) -> u16 {
-        self.status
-    }
-
-    #[cfg(test)]
-    pub(crate) fn body(&self) -> &str {
-        &self.body
-    }
-
-    fn json<T: Serialize + ?Sized>(status: u16, value: &T) -> Self {
-        let body = serde_json::to_string(value).expect("serializing API response succeeds");
-        Self { status, body }
-    }
-
-    fn to_http(&self) -> String {
-        format!(
-            "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            self.status,
-            reason(self.status),
-            self.body.len(),
-            self.body
-        )
-    }
-}
-
-#[derive(Debug)]
-struct ApiError {
-    status: u16,
-    message: String,
-}
-
-impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: 400,
-            message: message.into(),
-        }
-    }
-
-    fn unauthorized(message: impl Into<String>) -> Self {
-        Self {
-            status: 401,
-            message: message.into(),
-        }
-    }
-
-    fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: 404,
-            message: message.into(),
-        }
-    }
-
-    fn into_response(self) -> HttpResponse {
-        HttpResponse::json(self.status, &json!({ "error": self.message }))
-    }
-}
-
-impl From<ProductChatError> for ApiError {
-    fn from(error: ProductChatError) -> Self {
-        match error {
-            ProductChatError::TranscriptNotFound { .. }
-            | ProductChatError::DraftNotFound { .. } => ApiError::not_found(error.to_string()),
-            ProductChatError::InvalidDraftNumber { .. }
-            | ProductChatError::TranscriptNotProduct { .. }
-            | ProductChatError::RepositoryNotFound { .. } => {
-                ApiError::bad_request(error.to_string())
-            }
-            other => ApiError {
-                status: 500,
-                message: other.to_string(),
-            },
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct CreateSessionRequest {
-    #[serde(default)]
-    transcript_issue: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct SendMessageRequest {
-    message: String,
-}
-
-#[derive(Serialize)]
-struct SessionResponse {
-    id: String,
-    transcript_issue: u64,
-    transcript_url: String,
-    drafts: Vec<ProductManagerDraftIssue>,
-}
-
-#[derive(Serialize)]
-struct MessageResponse {
-    reply: String,
-    drafts: Vec<ProductManagerDraftIssue>,
-    transcript_url: String,
-}
-
-#[derive(Serialize)]
-struct FileDraftResponse {
-    created: bool,
-    issue: FiledIssueResponse,
-    transcript_url: String,
-}
-
-#[derive(Serialize)]
-struct FiledIssueResponse {
-    number: u64,
-    url: String,
-    title: String,
 }
 
 fn session_response(session: &DynSession) -> SessionResponse {
@@ -536,60 +551,35 @@ fn session_response(session: &DynSession) -> SessionResponse {
     }
 }
 
+fn transcript_response(session: &DynSession) -> TranscriptResponse {
+    TranscriptResponse {
+        issue_number: session.transcript_issue().number.get(),
+        url: session.transcript_url(),
+    }
+}
+
+fn transcript_ref(response: &TranscriptResponse) -> ConversationTranscriptRef {
+    ConversationTranscriptRef::forge_issue(response.issue_number, response.url.clone())
+}
+
+fn accept_response(
+    session: &DynSession,
+    proposal_id: ProposalId,
+    created: bool,
+    issue: &Issue,
+) -> AcceptProposalResponse {
+    AcceptProposalResponse {
+        proposal_id,
+        created,
+        target: filed_issue_response(issue, session.issue_url_for(issue.number)),
+        transcript: transcript_response(session),
+    }
+}
+
 fn filed_issue_response(issue: &Issue, url: String) -> FiledIssueResponse {
     FiledIssueResponse {
         number: issue.number.get(),
         url,
         title: issue.title.clone(),
-    }
-}
-
-fn parse_json<T: for<'de> Deserialize<'de>>(request: &HttpRequest) -> Result<T, ApiError> {
-    if request.body.is_empty() {
-        serde_json::from_str("{}").map_err(|error| ApiError::bad_request(error.to_string()))
-    } else {
-        serde_json::from_slice(&request.body)
-            .map_err(|error| ApiError::bad_request(format!("invalid JSON body: {error}")))
-    }
-}
-
-fn find_header_end(raw: &[u8]) -> Option<usize> {
-    raw.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn parse_headers(
-    raw: &[u8],
-) -> Result<(String, String, BTreeMap<String, String>), ProductChatError> {
-    let text = std::str::from_utf8(raw)
-        .map_err(|_| ProductChatError::Runtime("HTTP headers are not UTF-8".into()))?;
-    let mut lines = text.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| ProductChatError::Runtime("missing request line".into()))?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_string();
-    let path = parts.next().unwrap_or_default().to_string();
-    let mut headers = BTreeMap::new();
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-        }
-    }
-    Ok((method, path, headers))
-}
-
-fn header<'a>(headers: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    headers.get(name).map(String::as_str)
-}
-
-fn reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        201 => "Created",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "OK",
     }
 }

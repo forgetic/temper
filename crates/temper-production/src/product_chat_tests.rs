@@ -13,7 +13,8 @@ use temper_interaction::{
 
 use crate::product_chat::{
     parse_transcript_session_key, render_filing_marker, render_transcript_marker, ProductChatError,
-    ProductChatOpenOptions, ProductChatSession, PRODUCT_LABEL, WORKFLOW_INTAKE_LABEL,
+    ProductChatOpenOptions, ProductChatSession, PRODUCT_LABEL, PRODUCT_PROFILE_ID,
+    WORKFLOW_INTAKE_LABEL,
 };
 use crate::product_chat_args::{
     parse_with_env, ParseOutcome, DEFAULT_SERVICE_BIND, HUMAN_TOKEN_ENV, PRODUCT_MANAGER_TOKEN_ENV,
@@ -137,6 +138,18 @@ fn response_json(response: &crate::product_chat_service::HttpResponse) -> serde_
 async fn create_service_session(app: &ProductChatHttpApp) -> String {
     let response = app
         .handle_http_request(json_request("POST", "/sessions", serde_json::json!({})))
+        .await;
+    assert_eq!(response.status(), 201);
+    response_json(&response)["id"].as_str().unwrap().to_string()
+}
+
+async fn create_service_conversation(app: &ProductChatHttpApp) -> String {
+    let response = app
+        .handle_http_request(json_request(
+            "POST",
+            "/conversations",
+            serde_json::json!({ "profile_id": PRODUCT_PROFILE_ID }),
+        ))
         .await;
     assert_eq!(response.status(), 201);
     response_json(&response)["id"].as_str().unwrap().to_string()
@@ -314,6 +327,15 @@ async fn product_chat_service_rejects_unauthenticated_request_when_token_configu
     assert_eq!(response.status(), 401);
 
     let response = app
+        .handle_http_request(json_request(
+            "POST",
+            "/conversations",
+            serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(response.status(), 401);
+
+    let response = app
         .handle_http_request(
             HttpRequest::new("GET", "/health", Vec::<u8>::new())
                 .with_header("authorization", "Bearer service-secret"),
@@ -416,4 +438,108 @@ async fn product_chat_service_file_draft_returns_existing_issue_on_repeated_call
         first["issue"]["url"].as_str(),
         Some("https://git.example.test/ai/temper/issues/2")
     );
+}
+
+#[tokio::test]
+async fn product_chat_service_generic_routes_emit_events_and_accept_idempotently() {
+    let app = fake_service_app(None).await;
+    let conversation_id = create_service_conversation(&app).await;
+
+    let conversation = app
+        .handle_http_request(HttpRequest::new(
+            "GET",
+            &format!("/conversations/{conversation_id}"),
+            Vec::<u8>::new(),
+        ))
+        .await;
+    assert_eq!(conversation.status(), 200);
+    let conversation = response_json(&conversation);
+    assert_eq!(
+        conversation["profile_id"].as_str(),
+        Some(PRODUCT_PROFILE_ID)
+    );
+    assert_eq!(conversation["transcript"]["issue_number"].as_u64(), Some(1));
+
+    let turn = app
+        .handle_http_request(json_request(
+            "POST",
+            &format!("/conversations/{conversation_id}/turns"),
+            serde_json::json!({ "body": "I want a chat MVP." }),
+        ))
+        .await;
+    assert_eq!(turn.status(), 200);
+    let turn = response_json(&turn);
+    assert_eq!(
+        turn["reply"]["message"].as_str(),
+        Some("Let's file a small MVP.")
+    );
+    assert_eq!(
+        turn["latest_proposals"][0]["id"].as_str(),
+        Some("terminal-chat-mvp")
+    );
+
+    let proposals = app
+        .handle_http_request(HttpRequest::new(
+            "GET",
+            &format!("/conversations/{conversation_id}/proposals"),
+            Vec::<u8>::new(),
+        ))
+        .await;
+    assert_eq!(proposals.status(), 200);
+    assert_eq!(
+        response_json(&proposals)["proposals"][0]["id"].as_str(),
+        Some("terminal-chat-mvp")
+    );
+
+    let accept_path =
+        format!("/conversations/{conversation_id}/proposals/terminal-chat-mvp/accept");
+    let first = app
+        .handle_http_request(HttpRequest::new("POST", &accept_path, Vec::<u8>::new()))
+        .await;
+    let second = app
+        .handle_http_request(HttpRequest::new("POST", &accept_path, Vec::<u8>::new()))
+        .await;
+    assert_eq!(first.status(), 200);
+    assert_eq!(second.status(), 200);
+    let first = response_json(&first);
+    let second = response_json(&second);
+    assert_eq!(first["created"].as_bool(), Some(true));
+    assert_eq!(second["created"].as_bool(), Some(false));
+    assert_eq!(first["target"]["number"], second["target"]["number"]);
+
+    let events = app
+        .handle_http_request(HttpRequest::new(
+            "GET",
+            &format!("/conversations/{conversation_id}/events"),
+            Vec::<u8>::new(),
+        ))
+        .await;
+    assert_eq!(events.status(), 200);
+    let events = response_json(&events);
+    assert_eq!(events["streaming"].as_bool(), Some(false));
+    let kinds = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"conversation_opened"));
+    assert!(kinds.contains(&"human_turn_appended"));
+    assert!(kinds.contains(&"agent_reply_appended"));
+    assert!(kinds.contains(&"proposals_updated"));
+    assert!(kinds.contains(&"proposal_accepted"));
+}
+
+#[tokio::test]
+async fn product_chat_service_generic_route_rejects_unconfigured_profile() {
+    let app = fake_service_app(None).await;
+    let response = app
+        .handle_http_request(json_request(
+            "POST",
+            "/conversations",
+            serde_json::json!({ "profile_id": "other-profile" }),
+        ))
+        .await;
+
+    assert_eq!(response.status(), 400);
 }

@@ -20,10 +20,11 @@ use temper_interaction::{
     find_issue_by_marker as find_interaction_issue_by_marker,
     parse_transcript_session_key as parse_interaction_transcript_session_key,
     render_filing_marker as render_interaction_filing_marker,
-    render_transcript_marker as render_interaction_transcript_marker, ConversationProfileId,
-    ConversationReply, ForgeInteractionSession, ForgeSessionConfig, ForgeSessionOpenOptions,
-    ForgeTranscriptConfig, InteractionError, InteractiveResponder, IssueIntakeAcceptanceConfig,
-    Participant, ProcessResponder, ProcessResponderConfig, ProposalId,
+    render_transcript_marker as render_interaction_transcript_marker, ConversationId,
+    ConversationProfileId, ConversationReply, ForgeInteractionSession, ForgeSessionConfig,
+    ForgeSessionOpenOptions, ForgeTranscriptConfig, InteractionError, InteractiveResponder,
+    IssueIntakeAcceptanceConfig, Participant, ProcessResponder, ProcessResponderConfig, Proposal,
+    ProposalId,
 };
 
 pub const PRODUCT_LABEL: &str = "product";
@@ -276,18 +277,37 @@ where
         self.inner.conversation_id().as_str()
     }
 
+    pub fn conversation_id(&self) -> &ConversationId {
+        self.inner.conversation_id()
+    }
+
     pub fn latest_drafts(&self) -> &[ProductManagerDraftIssue] {
         &self.latest_drafts
+    }
+
+    pub fn latest_proposals(&self) -> &[Proposal] {
+        self.inner.latest_proposals()
+    }
+
+    pub async fn send_conversation_turn(
+        &mut self,
+        body: &str,
+    ) -> Result<ConversationReply, ProductChatError> {
+        let reply = self.inner.send_human_turn(body).await?;
+        let response = product_response_from_reply(&reply)?;
+        self.latest_drafts = response.drafts;
+        Ok(reply)
     }
 
     pub async fn send_human_turn(
         &mut self,
         body: &str,
     ) -> Result<ProductManagerResponse, ProductChatError> {
-        let reply = self.inner.send_human_turn(body).await?;
-        let response = product_response_from_reply(&reply)?;
-        self.latest_drafts = response.drafts.clone();
-        Ok(response)
+        let reply = self.send_conversation_turn(body).await?;
+        Ok(ProductManagerResponse {
+            reply: reply.message,
+            drafts: self.latest_drafts.clone(),
+        })
     }
 
     pub async fn file_draft(&self, number: usize) -> Result<FileDraftOutcome, ProductChatError> {
@@ -316,16 +336,23 @@ where
         self.file_draft_issue(draft).await
     }
 
+    pub async fn accept_proposal(
+        &self,
+        proposal_id: &ProposalId,
+    ) -> Result<FileDraftOutcome, ProductChatError> {
+        let outcome = self.inner.accept_issue_proposal(proposal_id).await?;
+        Ok(FileDraftOutcome {
+            issue: outcome.issue,
+            created: outcome.created,
+        })
+    }
+
     async fn file_draft_issue(
         &self,
         draft: &ProductManagerDraftIssue,
     ) -> Result<FileDraftOutcome, ProductChatError> {
         let id = ProposalId::new(draft.slug.clone())?;
-        let outcome = self.inner.accept_issue_proposal(&id).await?;
-        Ok(FileDraftOutcome {
-            issue: outcome.issue,
-            created: outcome.created,
-        })
+        self.accept_proposal(&id).await
     }
 }
 

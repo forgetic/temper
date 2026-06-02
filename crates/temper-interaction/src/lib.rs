@@ -18,6 +18,7 @@ pub mod session;
 #[cfg(test)]
 mod tests;
 pub mod transcript;
+pub mod transport;
 pub mod types;
 
 pub use agent::InteractiveResponder;
@@ -36,6 +37,12 @@ pub use transcript::{
     append_marker, issue_url, parse_marker_value, parse_transcript_session_key,
     render_filing_marker, render_transcript_marker, validate_marker_namespace, ForgeTranscript,
     ForgeTranscriptConfig, ForgeTranscriptOpenOptions, DEFAULT_RECENT_TURN_LIMIT,
+};
+pub use transport::{
+    AcceptProposalCommand, AcceptedProposalTarget, ConversationEvent, ConversationEventKind,
+    ConversationEventLog, ConversationEventPayload, ConversationSnapshot,
+    ConversationTranscriptRef, ListLatestProposalsCommand, OpenConversationCommand,
+    SendHumanTurnCommand, SendHumanTurnResult,
 };
 pub use types::{
     is_valid_deterministic_slug, is_valid_proposal_slug, validate_deterministic_slug,

@@ -14,15 +14,14 @@ surface**: Forgejo transcripts, product-manager responder turns, draft issue
 proposals, and explicit filing into the normal workflow. Product-manager draft
 intake issues are one proposal type: they are inert until a human explicitly
 accepts one for filing. External web, mobile, Matrix, and voice frontends should
-eventually target the generic interaction API and select `product-manager` as a
-profile. Concrete product-manager responder implementations, including
-pi-SDK-backed ones, can
-live out of process behind the
+target the generic interaction API and select `product-manager` as a profile.
+Concrete product-manager responder implementations, including pi-SDK-backed
+ones, can live out of process behind the
 [generic responder protocol](interactive-process-responder-protocol.md);
-frontends should still talk to Temper's interaction service rather than directly
-to that responder process. Until the generic transport API exists, external
-repositories may consume this local profile-specific API. This repository does
-not ship those frontends.
+frontends still talk to Temper's interaction service rather than directly to that
+responder process. The `/sessions` and `/drafts/{slug}/file` routes below are
+compatibility aliases for the product-manager profile. This repository does not
+ship external frontends.
 
 ## Command
 
@@ -74,7 +73,26 @@ Authorization: Bearer <token>
 
 Forgejo and LLM credentials are never returned in API responses.
 
-## Endpoints
+## Generic endpoints
+
+The preferred local API is the profile-neutral conversation surface documented in
+[Interactive conversation interface](interactive-conversation-interface.md):
+
+```text
+POST /conversations
+GET  /conversations/{id}
+POST /conversations/{id}/turns
+GET  /conversations/{id}/proposals
+GET  /conversations/{id}/events
+POST /conversations/{id}/proposals/{proposal_id}/accept
+```
+
+`POST /conversations` accepts optional `profile_id` (defaulting to the configured
+profile, currently `product-manager`) and optional `transcript_issue`. Turns use
+`{ "body": "..." }`. Events currently return a replay snapshot with
+`streaming:false`; SSE remains a transport follow-up.
+
+## Product-manager compatibility endpoints
 
 ### `GET /health`
 
@@ -173,11 +191,14 @@ Errors return JSON:
 ```
 
 Common statuses are `400` for malformed input, `401` for missing/invalid bearer,
-`404` for unknown sessions/drafts, and `500` for Forgejo or LLM failures.
+`404` for unknown conversations/sessions/proposals/drafts, and `500` for Forgejo
+or responder failures. Transport `500` bodies are sanitized and do not include
+raw model, process, credential, or environment details.
 
 ## Safety and concurrency
 
-The API is intended for a trusted local frontend and binds to loopback by
+The generic and compatibility APIs are intended for trusted local frontends and
+bind to loopback by
 default. It runs requests sequentially in the current implementation and may hold
 one active request per session. Product transcript issues remain labeled
 `product`; workflow intake is created only through the explicit file endpoint.
