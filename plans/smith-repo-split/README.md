@@ -116,11 +116,15 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    `TEMPER_WORKER_ROLE_DECISION_*` configuration while preserving defaults when
    unset.
 
-3. ☐ **Phase 3 — Bootstrap `~/src/rust/smith` and move provider core.**
+3. ☑ **Phase 3 — Bootstrap `~/src/rust/smith` and move provider core.**
    `prompts/phase-3-bootstrap-smith-provider-core.md`
 
-   Create the Smith workspace, move/copy pi-SDK provider/auth/decision code, and
-   preserve unit/live-provider tests there before removing anything from Temper.
+   Done: created the Smith workspace at `~/src/rust/smith`, copied the
+   Temper-specific pi-SDK provider/auth/decision core into
+   `crates/smith-temper-agent`, added a small credential-preflight CLI, duplicated
+   provider unit tests and ignored/env-gated ChatGPT/Anthropic OAuth live tests,
+   documented auth/test commands in Smith's README, and kept all `temper-agents`
+   code/tests in place for later phases.
 
 4. ☐ **Phase 4 — Smith interactive product-manager responder.**
    `prompts/phase-4-smith-interactive-product-manager.md`

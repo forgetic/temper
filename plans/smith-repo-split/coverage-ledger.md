@@ -54,10 +54,18 @@ Temper test; until then the current command must remain runnable.
 | Workflow role decision process adapter | `cargo test -p temper-runner role_decision_process` uses hermetic fake decision processes for valid action execution, env allow-listing, timeout, nonzero exit, malformed/duplicate/unknown reply fields, version mismatch, unauthorized action no-op, and coding-workspace PR action handoff through `RoleTools`. | Replaces Temper-side generic role-agent action validation/execution coverage from `cargo test -p temper-agents role`; Smith still owns provider/model decision quality later. |
 | Production worker process selection | `cargo test -p temper-production worker_args` covers `--role-decision-*` flags, `TEMPER_WORKER_ROLE_DECISION_*` env fallbacks, redacted debug output, and default in-process behavior when unset. | Preserves worker defaults while letting operators point role workers at a future Smith binary. |
 
+## Smith provider-core coverage added in Phase 3
+
+| Smith path / command | Covers | Temper status |
+| --- | --- | --- |
+| `~/src/rust/smith/crates/smith-temper-agent/src/provider*.rs` plus `cargo test provider oauth anthropic_oauth` | DeepSeek route, ChatGPT/Anthropic OAuth auth-file parsing, write-back, headers, model knobs, preflight, and redaction. | Duplicates `temper-agents` provider coverage; Temper originals remain until the removal phase. |
+| `~/src/rust/smith/crates/smith-temper-agent/src/decision.rs` plus `cargo test decision` | One-turn pi-SDK decision parsing and tolerant JSON extraction. | Duplicates `temper-agents` decision parsing; Temper process protocol validation remains in `temper-runner`. |
+| `TEMPER_CHATGPT_OAUTH=1 cargo test --test chatgpt_oauth_live -- --ignored --nocapture` | Live ChatGPT/OpenAI Codex OAuth smoke, generic role-prompt decision, and near-expiry refresh/write-back. | Duplicates the ignored Temper live test; no credentials are committed. |
+| `TEMPER_ANTHROPIC_OAUTH=1 cargo test --test anthropic_oauth_live -- --ignored --nocapture` | Live Anthropic OAuth generic role-prompt decision with Claude Code identity handling. | Duplicates the ignored Temper live test; no credentials are committed. |
+
 ## Coverage still waiting for Smith
 
-- Provider/auth/OAuth unit and live-provider tests remain in Temper until Phase 3.
 - Concrete product-manager responder behavior and prompt tests remain in Temper until Phase 4.
 - Real workflow-role model decision behavior, real-agent Forgejo e2e, and Smith
   workflow-role binaries remain pending until Phase 5.
-- Phase 2 did not delete or move any `temper-agents` tests.
+- Phases 2 and 3 did not delete or move any `temper-agents` tests.
