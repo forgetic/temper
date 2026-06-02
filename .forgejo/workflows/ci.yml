@@ -1,0 +1,28 @@
+name: dogfood-ci
+
+on:
+  push:
+    branches:
+      - main
+      - agent/**
+  pull_request:
+
+jobs:
+  dev-check:
+    runs-on: host
+    steps:
+      - name: checkout without external actions
+        run: |
+          set -eu
+          mkdir -p "$GITHUB_WORKSPACE/repo"
+          cd "$GITHUB_WORKSPACE/repo"
+          git init
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git -c http.extraheader="AUTHORIZATION: token $GITHUB_TOKEN" \
+            fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: cargo dev-check
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/repo"
+          cargo dev-check
