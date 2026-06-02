@@ -139,6 +139,11 @@ load_config() {
     DOGFOOD_REPO_PERMISSION=${DOGFOOD_REPO_PERMISSION:-write}
     DOGFOOD_CONFIGURE_CI=${DOGFOOD_CONFIGURE_CI:-0}
     DOGFOOD_ENABLE_ENGINEER_AUTOMATION=${DOGFOOD_ENABLE_ENGINEER_AUTOMATION:-0}
+    HARNESS_CODING_WORKSPACE_ROOT=${HARNESS_CODING_WORKSPACE_ROOT:-}
+    HARNESS_CODING_WORKSPACE_COMMAND=${HARNESS_CODING_WORKSPACE_COMMAND:-}
+    HARNESS_CODING_WORKSPACE_REMOTE=${HARNESS_CODING_WORKSPACE_REMOTE:-origin}
+    HARNESS_CODING_WORKSPACE_PUSH=${HARNESS_CODING_WORKSPACE_PUSH:-1}
+    HARNESS_CODING_WORKSPACE_PR_LABELS=${HARNESS_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
     HARNESS_WORKER_BIN=${HARNESS_WORKER_BIN:-}
     HARNESS_TRIGGER_BIN=${HARNESS_TRIGGER_BIN:-}
     HARNESS_PRODUCT_CHAT_BIN=${HARNESS_PRODUCT_CHAT_BIN:-}
@@ -191,6 +196,14 @@ resolve_product_chat_binary() {
         ( cd "$WORKSPACE_ROOT" && cargo build -p "$HARNESS_BUILD_PACKAGE" --bin harness-product-manager-chat ) || die 'cargo build failed'
     fi
     [ -x "$PRODUCT_CHAT_BIN" ] || die "product-chat binary not found: $PRODUCT_CHAT_BIN"
+}
+
+check_coding_workspace() {
+    [ "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" = "1" ] || return 0
+    [ -n "$HARNESS_CODING_WORKSPACE_ROOT" ] || die 'DOGFOOD_ENABLE_ENGINEER_AUTOMATION=1 requires HARNESS_CODING_WORKSPACE_ROOT'
+    [ -n "$HARNESS_CODING_WORKSPACE_COMMAND" ] || die 'DOGFOOD_ENABLE_ENGINEER_AUTOMATION=1 requires HARNESS_CODING_WORKSPACE_COMMAND'
+    [ -d "$HARNESS_CODING_WORKSPACE_ROOT" ] || die "coding workspace root not found: $HARNESS_CODING_WORKSPACE_ROOT"
+    log "coding workspace: $HARNESS_CODING_WORKSPACE_ROOT (local-git provider)"
 }
 
 check_auth() {
@@ -388,7 +401,7 @@ launch_role_worker() {
     fi
     if [ "$DOGFOOD_ENABLE_ENGINEER_AUTOMATION" != "1" ]; then
         if [ "$_role" = "engineer" ]; then
-            log 'skipping role:engineer (DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0; no real coding seam enabled)'
+            log 'skipping role:engineer (DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0; coding workspace not enabled)'
             return 0
         fi
         if [ "$_role" = "owner" ]; then
@@ -410,6 +423,11 @@ launch_role_worker() {
     HARNESS_FORGEJO_TOKEN="$_token" \
     HARNESS_FORGEJO_USERNAME="$_user" \
     HARNESS_FORGEJO_PASSWORD="$_password" \
+    HARNESS_CODING_WORKSPACE_ROOT="$HARNESS_CODING_WORKSPACE_ROOT" \
+    HARNESS_CODING_WORKSPACE_COMMAND="$HARNESS_CODING_WORKSPACE_COMMAND" \
+    HARNESS_CODING_WORKSPACE_REMOTE="$HARNESS_CODING_WORKSPACE_REMOTE" \
+    HARNESS_CODING_WORKSPACE_PUSH="$HARNESS_CODING_WORKSPACE_PUSH" \
+    HARNESS_CODING_WORKSPACE_PR_LABELS="$HARNESS_CODING_WORKSPACE_PR_LABELS" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$REPO" \
         --kind role --role "$_role" --user "$_user" \
@@ -532,6 +550,7 @@ cmd_start() {
     rm -f "$STOP_FILE"
     RUN_STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     check_auth
+    check_coding_workspace
     resolve_binaries
     parse_live_secrets
 

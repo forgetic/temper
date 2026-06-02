@@ -4,8 +4,9 @@ Reference documentation defines exact contracts and invariants.
 
 Current reference pages:
 
+- [Development conventions](development-conventions.md)
+- [LLM agents](llm-agents.md)
 - [Agent lessons register](agent-lessons/README.md)
-- [Workspace layout](workspace-layout.md)
 - [Forge interface](forge-interface.md)
 - [Filesystem backend](filesystem-backend.md)
 - [In-memory backend](in-memory-backend.md)

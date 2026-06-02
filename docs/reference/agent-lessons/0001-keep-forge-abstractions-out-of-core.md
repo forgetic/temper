@@ -21,7 +21,7 @@ Only add dependencies from `harness-workflow` to `harness-forge` when implementi
 ## Where this is now documented
 
 - `README.md`
-- `AGENTS.md`
+- `docs/reference/development-conventions.md`
 - `docs/adr/0003-separate-forge-and-core-crates.md`
 - `docs/adr/0007-workflow-layer-and-agent-compilation.md`
 - `docs/reference/forge-interface.md`

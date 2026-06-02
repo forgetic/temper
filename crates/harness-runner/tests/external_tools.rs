@@ -1,5 +1,11 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use harness_forge::CreateRepository;
-use harness_runner::{ExternalToolBindingError, RunnerConfig};
+use harness_runner::{
+    CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
+    ExternalToolBindingError, ExternalToolExecutors, RunnerConfig,
+};
 use harness_workflow::{CompiledWorkflow, ExternalToolId, RawWorkflowSpec, RoleId};
 
 fn repo_input() -> CreateRepository {
@@ -50,6 +56,18 @@ fn role_id() -> RoleId {
 
 fn tool_id(id: &str) -> ExternalToolId {
     ExternalToolId::new(id)
+}
+
+struct DummyWorkspace;
+
+#[async_trait]
+impl CodingWorkspace for DummyWorkspace {
+    async fn produce_head(
+        &self,
+        _request: CodingWorkspaceRequest,
+    ) -> Result<CodingWorkspaceOutput, CodingWorkspaceError> {
+        Err(CodingWorkspaceError::new("not used in runner config tests"))
+    }
 }
 
 #[test]
@@ -161,4 +179,46 @@ fn external_tool_binding_for_unknown_role_fails() {
             role: RoleId::new("ghost"),
         }
     );
+}
+
+#[test]
+fn executable_tool_provider_requires_runner_metadata_binding() {
+    let compiled = compiled_workflow(false);
+    let config = RunnerConfig::new(repo_input());
+    let executors = ExternalToolExecutors::new().with_coding_workspace(
+        role_id(),
+        tool_id("coding_workspace"),
+        Arc::new(DummyWorkspace),
+    );
+
+    let error = executors
+        .validate(&compiled, &config)
+        .expect_err("executable provider without binding must fail");
+
+    assert_eq!(
+        error,
+        ExternalToolBindingError::ExecutableWithoutBinding {
+            role: role_id(),
+            tool: tool_id("coding_workspace"),
+        }
+    );
+}
+
+#[test]
+fn executable_tool_provider_validates_when_declared_and_bound() {
+    let compiled = compiled_workflow(false);
+    let config = RunnerConfig::new(repo_input()).with_external_tool_binding(
+        role_id(),
+        tool_id("coding_workspace"),
+        "workspace-local",
+    );
+    let executors = ExternalToolExecutors::new().with_coding_workspace(
+        role_id(),
+        tool_id("coding_workspace"),
+        Arc::new(DummyWorkspace),
+    );
+
+    executors
+        .validate(&compiled, &config)
+        .expect("declared, bound executable validates");
 }

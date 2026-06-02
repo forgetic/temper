@@ -71,6 +71,7 @@ pub use provider::{
 };
 pub use registry::{
     RealRegistryConfig, real_registry, real_registry_from_compiled,
+    real_registry_from_compiled_with_external_tool_executors,
     real_registry_from_compiled_with_external_tools, real_registry_from_workflow,
     real_registry_with,
 };

@@ -168,11 +168,16 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 WorkflowEffect::CreatePullRequest { correlation_key } => {
                     let effect_index = pull_request_create_index;
                     pull_request_create_index += 1;
-                    let correlation_key = correlation_key.clone().ok_or_else(|| {
-                        ExecutionError::MissingCorrelationKey {
+                    let correlation_key = correlation_key
+                        .clone()
+                        .or_else(|| {
+                            self.context
+                                .pull_request_correlation_key(&plan.transition, effect_index)
+                                .map(str::to_string)
+                        })
+                        .ok_or_else(|| ExecutionError::MissingCorrelationKey {
                             effect: effect.clone(),
-                        }
-                    })?;
+                        })?;
                     let input = self
                         .context
                         .pull_request_create(&plan.transition, effect_index)

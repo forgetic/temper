@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use harness_forge::Forge;
 use harness_runner::{
-    Agent, AgentRegistry, BoundExternalTool, ExternalToolBindingError, RunnerConfig,
+    Agent, AgentRegistry, BoundExternalTool, ExternalToolBindingError, ExternalToolExecutors,
+    RunnerConfig,
 };
 use harness_workflow::{CompiledWorkflow, RoleId, RoleManifest, ValidatedWorkflow};
 
@@ -84,29 +85,55 @@ pub fn real_registry_from_compiled_with_external_tools<F>(
 where
     F: Forge + ?Sized + 'static,
 {
+    real_registry_from_compiled_with_external_tool_executors(
+        provider,
+        compiled,
+        config,
+        ExternalToolExecutors::new(),
+    )
+}
+
+/// Builds the production registry with runner-bound external tool metadata and
+/// executable provider objects such as coding workspaces.
+pub fn real_registry_from_compiled_with_external_tool_executors<F>(
+    provider: ProviderConfig,
+    compiled: &CompiledWorkflow,
+    config: &RunnerConfig,
+    executors: ExternalToolExecutors,
+) -> Result<AgentRegistry<F>, ExternalToolBindingError>
+where
+    F: Forge + ?Sized + 'static,
+{
     config.validate_external_tool_bindings(compiled)?;
+    executors.validate(compiled, config)?;
     register_compiled_roles(provider, compiled, |role| {
-        config.bound_external_tools_for(role)
+        Ok((config.bound_external_tools_for(role)?, executors.clone()))
     })
 }
 
 fn register_compiled_roles<F>(
     provider: ProviderConfig,
     compiled: &CompiledWorkflow,
-    bound_tools_for: impl Fn(&RoleManifest) -> Result<Vec<BoundExternalTool>, ExternalToolBindingError>,
+    bound_tools_for: impl Fn(
+        &RoleManifest,
+    ) -> Result<
+        (Vec<BoundExternalTool>, ExternalToolExecutors),
+        ExternalToolBindingError,
+    >,
 ) -> Result<AgentRegistry<F>, ExternalToolBindingError>
 where
     F: Forge + ?Sized + 'static,
 {
     let mut registry = AgentRegistry::new();
     for role in compiled.roles() {
-        let bound_tools = bound_tools_for(role)?;
+        let (bound_tools, executors) = bound_tools_for(role)?;
         registry.insert(
             role.id.clone(),
-            Arc::new(LlmRoleAgent::with_bound_external_tools(
+            Arc::new(LlmRoleAgent::with_bound_external_tools_and_executors(
                 role.clone(),
                 provider.clone(),
                 bound_tools,
+                executors,
             )) as Arc<dyn Agent<F>>,
         );
     }
@@ -115,14 +142,14 @@ where
 
 fn no_bound_external_tools(
     role: &RoleManifest,
-) -> Result<Vec<BoundExternalTool>, ExternalToolBindingError> {
+) -> Result<(Vec<BoundExternalTool>, ExternalToolExecutors), ExternalToolBindingError> {
     if let Some(tool) = role.external_tools.iter().find(|tool| tool.required) {
         return Err(ExternalToolBindingError::MissingRequired {
             role: role.id.clone(),
             tool: tool.id.clone(),
         });
     }
-    Ok(Vec::new())
+    Ok((Vec::new(), ExternalToolExecutors::new()))
 }
 
 /// Validates the common "compile once, then register roles" production shape.

@@ -85,6 +85,10 @@ pub enum ExternalToolBindingError {
     UndeclaredTool { role: RoleId, tool: ExternalToolId },
     /// More than one binding targets the same role/tool pair.
     DuplicateBinding { role: RoleId, tool: ExternalToolId },
+    /// An executable provider was registered without the corresponding runner
+    /// metadata binding, so the prompt/context would not have declared it
+    /// available.
+    ExecutableWithoutBinding { role: RoleId, tool: ExternalToolId },
 }
 
 impl fmt::Display for ExternalToolBindingError {
@@ -105,6 +109,10 @@ impl fmt::Display for ExternalToolBindingError {
             ExternalToolBindingError::DuplicateBinding { role, tool } => write!(
                 formatter,
                 "external tool `{tool}` for role `{role}` has multiple runner bindings"
+            ),
+            ExternalToolBindingError::ExecutableWithoutBinding { role, tool } => write!(
+                formatter,
+                "executable external tool `{tool}` for role `{role}` has no runner binding"
             ),
         }
     }
@@ -220,6 +228,13 @@ impl RunnerConfig {
             provider: provider.into(),
         });
         self
+    }
+
+    /// Returns whether `role`/`tool` has a runner metadata binding.
+    pub fn has_external_tool_binding(&self, role: &RoleId, tool: &ExternalToolId) -> bool {
+        self.external_tools
+            .iter()
+            .any(|binding| &binding.role == role && &binding.tool == tool)
     }
 
     /// Validates and returns bound external tools for one role manifest.

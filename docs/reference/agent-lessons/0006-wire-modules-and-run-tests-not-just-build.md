@@ -38,7 +38,7 @@ model).
 
 ## Where this is now documented
 
-- `AGENTS.md` ("Fast local iteration" already says to use `cargo dev-check`).
+- `docs/how-to/fast-local-iteration.md` (use `cargo dev-check` for the default loop).
 - `docs/how-to/end-a-development-session.md` (run the fast validation loop and
   task-specific tests before handoff).
 - The reimplemented CI lives in `crates/harness-forge-forgejo/src/ci.rs`,

@@ -59,6 +59,7 @@
 //! journal surviving a restart.
 
 pub mod agent;
+pub mod coding_workspace;
 pub mod config;
 pub mod driver;
 pub mod multi_repo;
@@ -69,6 +70,11 @@ pub mod trigger;
 pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
+pub use coding_workspace::{
+    CodingWorkspace, CodingWorkspaceError, CodingWorkspaceGuidance, CodingWorkspaceOutput,
+    CodingWorkspaceRepository, CodingWorkspaceRequest, CodingWorkspaceWorkItem,
+    ExternalToolExecutors, CODING_WORKSPACE_TOOL_ID,
+};
 pub use config::{
     BoundExternalTool, ExternalToolBinding, ExternalToolBindingError, PullRequestCreateBinding,
     RoleBinding, RunnerConfig,

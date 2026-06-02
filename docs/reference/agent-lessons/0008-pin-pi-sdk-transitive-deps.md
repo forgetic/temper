@@ -41,5 +41,5 @@ patch.
 ## Where this is now documented
 
 - `plans/forgejo-e2e/findings-phase-b.md` (the "CRITICAL gotcha" section).
-- `AGENTS.md` current-state entry for `harness-agents` ("Critical build fact").
+- `docs/reference/llm-agents.md` (the dependency note for `harness-agents`).
 - The pin itself lives in the workspace `Cargo.lock`.

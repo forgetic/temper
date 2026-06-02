@@ -104,7 +104,7 @@ Status legend: ☐ pending · ☑ done.
   `ci_fails_then_passes`, and `dependency_chain_mechanically_unblocked` via worker
   behavior flags (`--reviewer`, `--ci`, `--architect`) plus scenario selection,
   each reusing its in-process seed/assert closures verbatim. Updated `README.md`,
-  `AGENTS.md` current state, and cross-referenced
+  the repository map docs, and cross-referenced
   `run-reference-delivery-end-to-end.md`. Added the explicit **"to swap fakes for
   real, change only this"** list to `run-multiprocess-e2e.md`: replace the
   `FilesystemForge` handle factory with a `ForgejoForge` one; replace fake agents

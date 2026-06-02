@@ -75,14 +75,17 @@ impl From<ForgeError> for AgentError {
 /// Role-scoped facade an [`Agent`] uses to observe and change workflow state.
 ///
 /// The facade is intentionally narrower than [`Forge`]: agents can run
-/// workflow transitions, use the documented idempotent pull-request creation
-/// seam, perform read-only lookups, and close an issue when a workflow-specific
+/// workflow transitions, supply runtime PR-create inputs for authorized
+/// transitions, use the documented idempotent pull-request creation seam,
+/// perform read-only lookups, and close an issue when a workflow-specific
 /// adapter needs to project a native lifecycle fact that is not modeled as a
 /// workflow label transition.
 pub struct RoleTools<'a, F: Forge + ?Sized> {
+    workflow: &'a ValidatedWorkflow,
     repo: &'a RepositoryId,
     role: RoleId,
     forge: &'a F,
+    context: ExecutionContext,
     executor: Executor<'a, F>,
 }
 
@@ -97,9 +100,11 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         context: ExecutionContext,
     ) -> Self {
         Self {
+            workflow,
             repo,
             role,
             forge,
+            context: context.clone(),
             executor: Executor::with_context(workflow, forge, context),
         }
     }
@@ -125,6 +130,28 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         transition: &TransitionId,
     ) -> Result<ExecutionReport, ExecutionError> {
         self.executor
+            .execute(self.repo, target, transition, &self.role)
+            .await
+    }
+
+    /// Runs a workflow transition with a runtime pull-request create input and
+    /// correlation key for one `CreatePullRequest` effect.
+    pub async fn run_with_pull_request_create_at(
+        &self,
+        target: ArtifactSource,
+        transition: &TransitionId,
+        effect_index: usize,
+        correlation_key: impl Into<String>,
+        input: CreatePullRequest,
+    ) -> Result<ExecutionReport, ExecutionError> {
+        let mut context = self.context.clone();
+        context.set_pull_request_create_at(transition.clone(), effect_index, input);
+        context.set_pull_request_correlation_key_at(
+            transition.clone(),
+            effect_index,
+            correlation_key,
+        );
+        Executor::with_context(self.workflow, self.forge, context)
             .execute(self.repo, target, transition, &self.role)
             .await
     }

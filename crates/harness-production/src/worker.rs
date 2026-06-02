@@ -19,6 +19,7 @@ use harness_workflow::{
 use crate::pr_diff_guard::{GuardRole, PullRequestDiffGuard};
 use crate::wake::{WakeConfig, WakeError, WakeListener};
 use crate::worker_args::{AuthKind, ForgejoArgs, WorkerArgs, WorkerKind};
+use crate::worker_external_tools::configure_external_tool_executors;
 use crate::{runner_config, workflow};
 
 #[derive(Debug)]
@@ -87,11 +88,16 @@ async fn run_role(
 ) -> Result<RunReport, RunError> {
     let workflow = workflow();
     let compiled = workflow.compile();
-    let config = runner_config();
+    let mut config = runner_config();
+    let external_tool_executors =
+        configure_external_tool_executors(&compiled, &mut config).map_err(RunError::Backend)?;
     let role_id = RoleId::new(role);
     let provider = provider_for(args)?;
-    let registry = harness_agents::real_registry_from_compiled_with_external_tools(
-        provider, &compiled, &config,
+    let registry = harness_agents::real_registry_from_compiled_with_external_tool_executors(
+        provider,
+        &compiled,
+        &config,
+        external_tool_executors,
     )
     .map_err(|error| RunError::Backend(error.to_string()))?;
     let role_manifest = compiled

@@ -30,7 +30,9 @@ Use `docs/reference/agent-lessons/template.md` for new entries. Keep the lesson 
 
 If the lesson changes expected behavior, also update the canonical doc:
 
-- `AGENTS.md` for agent operating rules
+- `docs/how-to/start-a-development-session.md` for session flow
+- `docs/reference/development-conventions.md` for development rules
+- `AGENTS.md` only when the top-level orientation map changes
 - reference docs for API contracts
 - how-to guides for workflows
 - explanation docs for rationale

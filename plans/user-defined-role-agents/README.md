@@ -119,7 +119,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    registered with the LLM SDK. This phase may expose no executable external
    tools yet; it establishes the authority and prompt contract.
 
-5. ☐ **Phase 5 — Coding workspace seam for engineering roles.**
+5. ☑ **Phase 5 — Coding workspace seam for engineering roles.**
    `prompts/phase-5-coding-workspace-seam.md`
 
    Add the first real external tool provider: a coding workspace/coder seam that

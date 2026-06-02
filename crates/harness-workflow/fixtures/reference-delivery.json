@@ -18,8 +18,21 @@
       "id": "engineer",
       "charter": "Claim ready code issues, implement them, open PRs, and address failed review or CI gates.",
       "prompt": {
-        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. Use address_review_changes for PRs with changes requested and address_ci_failure for PRs whose CI failed. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work."
+        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. For ready code, use open_pr after the coding workspace has produced a real product diff; do not use claim_code by itself unless another tool has already handled PR creation. Use address_review_changes for PRs with changes requested and address_ci_failure for PRs whose CI failed. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work.",
+        "tool_guidance": "The coding_workspace tool must prepare a real implementation branch before open_pr. Do not open implementation PRs from .harness-pr-prep, .harness-ci, or other bookkeeping-only diffs."
       },
+      "external_tools": [
+        {
+          "id": "coding_workspace",
+          "description": "Prepare a checked-out repository workspace, make or delegate code edits, commit a PR head branch, and report changed files plus a short summary.",
+          "required": false,
+          "constraints": [
+            "Only touch the checked-out repository workspace.",
+            "Do not create bookkeeping-only diffs such as .harness-pr-prep or .harness-ci changes."
+          ],
+          "guidance": "Use this before open_pr for ready code issues. If it is not bound, choose no_action for code implementation work."
+        }
+      ],
       "concurrency": 3,
       "queues": [
         "code_ready",
@@ -534,6 +547,18 @@
         "engineer"
       ],
       "effects": [
+        {
+          "kind": "remove_label",
+          "label": "ready"
+        },
+        {
+          "kind": "add_label",
+          "label": "in-progress"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "engineer"
+        },
         {
           "kind": "create_pull_request"
         }

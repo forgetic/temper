@@ -375,28 +375,6 @@ fn reference_metadata_relations_classify_to_declared_kinds() {
     );
 }
 
-#[test]
-fn engineer_open_pr_expresses_pr_creation() {
-    let workflow = fixture_workflow();
-    let planner = workflow.planner();
-    let artifact = classify_issue(&workflow, 43, &["code", "in-progress"]);
-
-    let plan = planner
-        .plan_transition(
-            &TransitionId::new("open_pr"),
-            &RoleId::new("engineer"),
-            &artifact,
-        )
-        .expect("engineer can request PR creation from in-progress code");
-    assert_eq!(
-        plan.effects,
-        vec![WorkflowEffect::CreatePullRequest {
-            correlation_key: None,
-        }]
-    );
-    assert!(plan.postconditions.is_empty());
-}
-
 fn classify_blocked_code(
     workflow: &ValidatedWorkflow,
     number: u64,

@@ -4,6 +4,7 @@ How-to guides are focused recipes for specific tasks.
 
 Current guides:
 
+- [Start a development session](start-a-development-session.md)
 - [Iterate quickly during local development](fast-local-iteration.md)
 - [End a development session cleanly](end-a-development-session.md)
 - [Record an agent lesson](record-agent-lesson.md)
@@ -13,6 +14,7 @@ Current guides:
 - [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)
 - [Run the Forgejo multi-process end-to-end harness](run-forgejo-multiprocess-e2e.md)
 - [Use OAuth auth modes for the LLM agents](use-chatgpt-oauth-auth.md)
+- [Configure a coding workspace external tool](configure-coding-workspace.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — now wired
   to the planned production binary names; see its
   [README](../../examples/reference-delivery/README.md) and

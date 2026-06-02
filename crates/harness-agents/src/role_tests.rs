@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use harness_forge::{CreateIssue, CreateRepository, Forge, Issue, ItemNumber, RepositoryId};
 use harness_forge_memory::MemoryForge;
-use harness_runner::{BoundExternalTool, RoleTools, WorkItem};
+use harness_runner::{RoleTools, WorkItem};
 use harness_workflow::{
-    ArtifactKindId, ArtifactSource, ExecutionContext, ExternalToolId, QueueId, RawWorkflowSpec,
-    RoleId, ValidatedWorkflow,
+    ArtifactKindId, ArtifactSource, ExecutionContext, QueueId, RawWorkflowSpec, RoleId,
+    ValidatedWorkflow,
 };
 
 use crate::provider::ProviderError;
@@ -169,43 +169,6 @@ fn workflow() -> ValidatedWorkflow {
     )
 }
 
-fn workflow_with_external_tool(required: bool) -> ValidatedWorkflow {
-    let required = if required { "true" } else { "false" };
-    parse_workflow(&format!(
-        r#"{{
-            "name": "generic-agent-test",
-            "roles": [{{
-                "id": "banana",
-                "prompt": {{"guidance": "Prefer generic manifest actions."}},
-                "external_tools": [{{
-                    "id": "coding_workspace",
-                    "description": "Edit and commit repository code.",
-                    "required": {required},
-                    "constraints": ["Only touch the checked-out repository."],
-                    "guidance": "Use before opening implementation PRs."
-                }}],
-                "queues": ["todo"]
-            }}],
-            "labels": [{{"id": "task"}}, {{"id": "todo"}}, {{"id": "done"}}],
-            "artifact_kinds": [{{
-                "id": "task",
-                "target": "issue",
-                "identifying_labels": ["task"]
-            }}],
-            "queues": [{{"id": "todo", "artifact": "task", "labels": ["todo"]}}],
-            "transitions": [{{
-                "id": "advance",
-                "artifact": "task",
-                "roles": ["banana"],
-                "effects": [
-                    {{"kind": "remove_label", "label": "todo"}},
-                    {{"kind": "add_label", "label": "done"}}
-                ]
-            }}]
-        }}"#,
-    ))
-}
-
 fn parse_workflow(json: &str) -> ValidatedWorkflow {
     let spec: RawWorkflowSpec = serde_json::from_str(json).expect("workflow json parses");
     spec.validate().expect("workflow validates")
@@ -213,40 +176,6 @@ fn parse_workflow(json: &str) -> ValidatedWorkflow {
 
 fn agent_with(manifest: RoleManifest, engine: Arc<ScriptedDecisionEngine>) -> LlmRoleAgent {
     LlmRoleAgent::with_decision_engine(manifest, engine as Arc<dyn RoleDecisionEngine>)
-}
-
-fn agent_with_external_tools(
-    manifest: RoleManifest,
-    engine: Arc<ScriptedDecisionEngine>,
-    tools: Vec<BoundExternalTool>,
-) -> LlmRoleAgent {
-    LlmRoleAgent::with_decision_engine_and_external_tools(
-        manifest,
-        engine as Arc<dyn RoleDecisionEngine>,
-        tools,
-    )
-}
-
-fn bound_coding_workspace() -> BoundExternalTool {
-    BoundExternalTool {
-        id: ExternalToolId::new("coding_workspace"),
-        description: "Edit and commit repository code.".to_string(),
-        required: true,
-        constraints: vec!["Only touch the checked-out repository.".to_string()],
-        guidance: Some("Use before opening implementation PRs.".to_string()),
-        provider: "workspace-local".to_string(),
-    }
-}
-
-fn undeclared_shell() -> BoundExternalTool {
-    BoundExternalTool {
-        id: ExternalToolId::new("shell"),
-        description: "Run arbitrary shell commands.".to_string(),
-        required: false,
-        constraints: Vec::new(),
-        guidance: None,
-        provider: "shell-provider".to_string(),
-    }
 }
 
 fn tools<'a>(fixture: &'a Fixture) -> RoleTools<'a, MemoryForge> {
@@ -451,108 +380,5 @@ async fn decision_engine_receives_compiled_manifest_prompt_and_authorized_action
     assert_eq!(
         user_context["authorized_actions"][0]["transition"],
         "advance"
-    );
-}
-
-#[tokio::test]
-async fn optional_unbound_external_tool_is_not_available_in_runtime_prompt_or_context() {
-    let fixture =
-        fixture_from_workflow(&["task", "todo"], workflow_with_external_tool(false)).await;
-    let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-        RoleDecision::no_action("inspect external tools"),
-    )));
-    let agent = agent_with(fixture.manifest.clone(), Arc::clone(&engine));
-
-    agent
-        .service(&fixture.item, &tools(&fixture))
-        .await
-        .expect("service succeeds");
-
-    let calls = engine.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(!calls[0].system_prompt.contains("coding_workspace via"));
-    assert!(
-        calls[0]
-            .system_prompt
-            .contains("no external tools are bound")
-    );
-    let user_context: serde_json::Value =
-        serde_json::from_str(&calls[0].user_context).expect("user context is json");
-    assert_eq!(
-        user_context["available_external_tools"],
-        serde_json::json!([])
-    );
-}
-
-#[tokio::test]
-async fn bound_declared_external_tool_appears_in_prompt_and_context_not_actions() {
-    let fixture = fixture_from_workflow(&["task", "todo"], workflow_with_external_tool(true)).await;
-    assert_eq!(
-        fixture.manifest.external_tools[0].id.as_str(),
-        "coding_workspace"
-    );
-    let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-        RoleDecision::no_action("inspect bound external tools"),
-    )));
-    let agent = agent_with_external_tools(
-        fixture.manifest.clone(),
-        Arc::clone(&engine),
-        vec![bound_coding_workspace()],
-    );
-
-    agent
-        .service(&fixture.item, &tools(&fixture))
-        .await
-        .expect("service succeeds");
-
-    let calls = engine.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(
-        calls[0]
-            .system_prompt
-            .contains("coding_workspace via workspace-local")
-    );
-    let user_context: serde_json::Value =
-        serde_json::from_str(&calls[0].user_context).expect("user context is json");
-    assert_eq!(
-        user_context["available_external_tools"][0]["id"],
-        "coding_workspace"
-    );
-    assert_eq!(
-        user_context["available_external_tools"][0]["provider"],
-        "workspace-local"
-    );
-    assert_eq!(
-        user_context["allowed_actions"],
-        serde_json::json!(["no_action", "advance"])
-    );
-}
-
-#[tokio::test]
-async fn undeclared_bound_external_tool_is_filtered_before_prompt_context() {
-    let fixture = fixture(&["task", "todo"]).await;
-    let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-        RoleDecision::no_action("inspect undeclared"),
-    )));
-    let agent = agent_with_external_tools(
-        fixture.manifest.clone(),
-        Arc::clone(&engine),
-        vec![undeclared_shell()],
-    );
-
-    agent
-        .service(&fixture.item, &tools(&fixture))
-        .await
-        .expect("service succeeds");
-
-    assert!(agent.bound_external_tools().is_empty());
-    let calls = engine.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(!calls[0].system_prompt.contains("shell-provider"));
-    let user_context: serde_json::Value =
-        serde_json::from_str(&calls[0].user_context).expect("user context is json");
-    assert_eq!(
-        user_context["available_external_tools"],
-        serde_json::json!([])
     );
 }

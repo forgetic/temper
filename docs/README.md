@@ -14,6 +14,7 @@ Task-oriented recipes. Use these when the reader already understands the basics 
 
 Start with:
 
+- `how-to/start-a-development-session.md`
 - `how-to/fast-local-iteration.md`
 - `how-to/end-a-development-session.md`
 
@@ -23,7 +24,7 @@ See `how-to/` for the full index.
 
 Precise contracts and factual details. Use these to define APIs, invariants, schemas, compatibility requirements, and the agent lessons register.
 
-Start with `reference/agent-lessons/README.md` during session bootstrap, then read task-relevant reference pages.
+Start with `reference/development-conventions.md` and `reference/agent-lessons/README.md` during session bootstrap, then read task-relevant reference pages.
 
 See `reference/`.
 

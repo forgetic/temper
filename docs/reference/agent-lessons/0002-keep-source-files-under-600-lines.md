@@ -24,5 +24,5 @@ find crates -type f -name '*.rs' -print0 | xargs -0 wc -l | sort -n
 
 ## Where this is now documented
 
-- `AGENTS.md`
+- `docs/reference/development-conventions.md`
 - `docs/how-to/end-a-development-session.md`

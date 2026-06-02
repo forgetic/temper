@@ -34,7 +34,7 @@ Ordered smallest-blast-radius first:
 
 ## Conventions for every phase
 
-- Follow `AGENTS.md` session bootstrap and `end-a-development-session.md`.
+- Follow `docs/how-to/start-a-development-session.md` and `docs/how-to/end-a-development-session.md`.
 - Each phase writes its ADR **first** (it extends a primitive or the Forge
   interface), then implements.
 - Any Forge-interface change updates `docs/reference/forge-interface.md`, both

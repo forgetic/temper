@@ -1,6 +1,6 @@
 # Implement the workflow layer in phases
 
-Use this plan to split `harness-workflow` implementation across fresh agent sessions. Each phase should begin with the normal session bootstrap in `AGENTS.md` and end with `cargo fmt --all` and `cargo dev-check`.
+Use this plan to split `harness-workflow` implementation across fresh agent sessions. Each phase should begin with `docs/how-to/start-a-development-session.md` and end with `cargo fmt --all` and `cargo dev-check`.
 
 Read first:
 

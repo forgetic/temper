@@ -21,8 +21,25 @@ const PR_CREATE_WORKFLOW: &str = r#"{
     ]}]
 }"#;
 
+const DYNAMIC_PR_CREATE_WORKFLOW: &str = r#"{
+    "name": "dynamic-pr-create",
+    "roles": [{"id": "engineer"}],
+    "labels": [{"id": "code"}],
+    "artifact_kinds": [
+        {"id": "code", "target": "issue", "identifying_labels": ["code"]}
+    ],
+    "transitions": [{"id": "open_pr", "artifact": "code", "roles": ["engineer"], "effects": [
+        {"kind": "create_pull_request"}
+    ]}]
+}"#;
 fn pr_create_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec = serde_json::from_str(PR_CREATE_WORKFLOW).expect("json parses");
+    spec.validate().expect("workflow validates")
+}
+
+fn dynamic_pr_create_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(DYNAMIC_PR_CREATE_WORKFLOW).expect("json parses");
     spec.validate().expect("workflow validates")
 }
 
@@ -111,4 +128,39 @@ fn create_pull_request_effect_uses_idempotent_ensure_path() {
         .expect("metadata parses")
         .expect("metadata exists");
     assert_eq!(metadata.correlation_key.as_deref(), Some("pr-code-42"));
+}
+
+#[test]
+fn create_pull_request_effect_accepts_runtime_correlation_key() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = dynamic_pr_create_workflow();
+    let repo = new_repo(&forge);
+    let issue = create_issue(&forge, &repo, &["code"], "Implement login.");
+    let context = ExecutionContext::new()
+        .with_pull_request_create(TransitionId::new("open_pr"), pr_input(&repo))
+        .with_pull_request_correlation_key_at(TransitionId::new("open_pr"), 0, "pr-code-99");
+    let executor = workflow.executor_with_context(&forge, context);
+
+    let report = block_on(executor.execute(
+        &repo,
+        ArtifactSource::Issue { number: issue },
+        &TransitionId::new("open_pr"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("create_pull_request executes with runtime key");
+    assert_eq!(
+        report.applied,
+        vec![WorkflowEffect::CreatePullRequest {
+            correlation_key: None,
+        }]
+    );
+
+    let pull_requests = block_on(forge.list_pull_requests(&repo, PullRequestQuery::default()))
+        .expect("pull requests list");
+    assert_eq!(pull_requests.len(), 1);
+    let metadata = parse_metadata_block(&pull_requests[0].body)
+        .expect("metadata parses")
+        .expect("metadata exists");
+    assert_eq!(metadata.correlation_key.as_deref(), Some("pr-code-99"));
 }

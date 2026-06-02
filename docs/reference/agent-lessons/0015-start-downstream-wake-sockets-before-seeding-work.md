@@ -31,5 +31,3 @@ no-work readiness tick.
   the mechanical worker first, waits for their sockets, then launches architect.
 - `examples/reference-delivery/README.md` troubleshooting explains persistent
   `wake_delivery outcome=no_sockets` as a worker startup/socket race.
-- `AGENTS.md` records the example launch ordering in the current repository
-  state.

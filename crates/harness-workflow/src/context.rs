@@ -7,9 +7,10 @@
 //! for this execution. [`ExecutionContext`] carries that mapping.
 //!
 //! Pull-request creation also needs runtime data that deliberately stays out of
-//! the portable workflow spec: branch refs, title, body, labels, and assignees.
-//! A `CreatePullRequest` effect only carries its idempotency correlation key;
-//! the matching [`harness_forge::CreatePullRequest`] input is supplied here.
+//! the portable workflow spec: branch refs, title, body, labels, assignees, and
+//! sometimes a per-work-item idempotency correlation key. A `CreatePullRequest`
+//! effect may carry a static correlation key; when it does not, the matching
+//! runtime key and [`harness_forge::CreatePullRequest`] input are supplied here.
 //!
 //! Keeping these bindings out of the spec and planner preserves the layering:
 //! the spec and plan stay portable and backend-agnostic, while concrete
@@ -24,14 +25,15 @@ use std::collections::BTreeMap;
 /// Runtime context for a transition execution.
 ///
 /// It resolves assignee roles to Forge users and supplies concrete
-/// pull-request create inputs for `CreatePullRequest` effects. Pull-request
-/// create inputs are keyed by transition id and a zero-based index among that
-/// transition's create-PR effects; [`ExecutionContext::with_pull_request_create`]
+/// pull-request create inputs/correlation keys for `CreatePullRequest` effects.
+/// Pull-request create inputs are keyed by transition id and a zero-based index
+/// among that transition's create-PR effects; [`ExecutionContext::with_pull_request_create`]
 /// is the convenience for the common single-create transition.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ExecutionContext {
     assignees: BTreeMap<RoleId, UserId>,
     pull_request_creates: BTreeMap<(TransitionId, usize), CreatePullRequest>,
+    pull_request_correlation_keys: BTreeMap<(TransitionId, usize), String>,
 }
 
 impl ExecutionContext {
@@ -101,6 +103,31 @@ impl ExecutionContext {
         self
     }
 
+    /// Binds the `index`-th `CreatePullRequest` effect in `transition` to a
+    /// runtime correlation key, returning `self` for chaining.
+    pub fn with_pull_request_correlation_key_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> Self {
+        self.set_pull_request_correlation_key_at(transition, index, correlation_key);
+        self
+    }
+
+    /// Binds the `index`-th `CreatePullRequest` effect in `transition` to a
+    /// runtime correlation key.
+    pub fn set_pull_request_correlation_key_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> &mut Self {
+        self.pull_request_correlation_keys
+            .insert((transition, index), correlation_key.into());
+        self
+    }
+
     /// Resolves the create input bound for the `index`-th `CreatePullRequest`
     /// effect in `transition`, if any.
     pub fn pull_request_create(
@@ -109,5 +136,17 @@ impl ExecutionContext {
         index: usize,
     ) -> Option<&CreatePullRequest> {
         self.pull_request_creates.get(&(transition.clone(), index))
+    }
+
+    /// Resolves the runtime correlation key bound for the `index`-th
+    /// `CreatePullRequest` effect in `transition`, if any.
+    pub fn pull_request_correlation_key(
+        &self,
+        transition: &TransitionId,
+        index: usize,
+    ) -> Option<&str> {
+        self.pull_request_correlation_keys
+            .get(&(transition.clone(), index))
+            .map(String::as_str)
     }
 }

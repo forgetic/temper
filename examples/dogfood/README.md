@@ -27,7 +27,8 @@ The script:
 7. starts a tiny dogfood-only intake labeler so newly filed issues get the
    workflow's `untriaged` label automatically; and
 8. launches reviewer, human, architect, and mechanical workers; engineer and
-   owner auto-merge workers stay skipped until real coding automation is enabled.
+   owner auto-merge workers stay skipped until a coding workspace binding is
+   configured and intentionally enabled.
 
 Then file workflow intake issues in `https://git.ekanayaka.io/ai/harness/issues`
 without adding labels by hand. Issues labeled `product` are treated as product
@@ -75,6 +76,7 @@ Resume an existing product transcript with:
 - LLM auth defaults to ChatGPT/Codex OAuth from `~/.pi/agent/auth.json` with
   `HARNESS_AGENTS_CODEX_MODEL=gpt-5.5`; run `pi /login openai-codex` if needed.
 - The engineer and owner auto-merge workers are skipped while
-  `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0` because the current engineer does not
-  yet run a coding tool against this checkout. Do not enable them for live
-  dogfood until a real coding workspace seam is wired.
+  `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0`. To enable them, configure
+  `HARNESS_CODING_WORKSPACE_ROOT` and `HARNESS_CODING_WORKSPACE_COMMAND`; the
+  workspace must commit a meaningful product diff, and the PR diff guard still
+  rejects bookkeeping-only changes such as `.harness-pr-prep` or `.harness-ci`.

@@ -3,6 +3,7 @@
 //! This crate owns deployable process code. It composes the reusable runner,
 //! real LLM agents, and Forgejo backend without depending on `harness-testing`.
 
+pub mod coding_workspace;
 pub mod forgejo_prep;
 pub mod forgejo_rest;
 pub mod pr_diff_guard;
@@ -18,6 +19,7 @@ pub mod trigger_args;
 pub mod wake;
 pub mod worker;
 pub mod worker_args;
+mod worker_external_tools;
 
 #[cfg(test)]
 mod product_chat_tests;

@@ -233,4 +233,20 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn accepts_fixture_docs_change_even_with_internal_files() {
+        assert_eq!(
+            safety_for_files(vec![
+                ".harness-ci/agent-pr-for-code-5.txt".into(),
+                "docs/how-to/configure-coding-workspace.md".into(),
+            ]),
+            DiffSafety::Meaningful {
+                files: vec![
+                    ".harness-ci/agent-pr-for-code-5.txt".into(),
+                    "docs/how-to/configure-coding-workspace.md".into(),
+                ]
+            }
+        );
+    }
 }
