@@ -35,8 +35,9 @@
 //! requests into typed workflow artifacts ([`classify`]).
 //!
 //! Phase 4 added compilation ([`compile`]) of a `ValidatedWorkflow` into role,
-//! prompt, tool, queue, and label manifests plus a runtime transition table. No
-//! transition is executed; compilation only projects the validated model.
+//! prompt, workflow-tool, external-tool, queue, and label manifests plus a
+//! runtime transition table. No transition is executed; compilation only
+//! projects the validated model.
 //!
 //! Phase 5 added pure queue evaluation and transition planning ([`plan`]): a
 //! [`Planner`] matches classified artifacts against queues and plans transitions
@@ -97,6 +98,7 @@ pub mod recover;
 pub mod relation;
 pub mod spec;
 pub mod validate;
+mod validate_build;
 pub mod validated;
 
 pub use artifact::{ArtifactRef, ArtifactTarget};
@@ -105,14 +107,15 @@ pub use classify::{
     ClassifiedRelation, Classifier,
 };
 pub use compile::{
-    compile, CompiledWorkflow, LabelManifest, LabelSpec, LabelUsage, PromptManifest, PromptSection,
-    QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
+    compile, CompiledWorkflow, ExternalToolManifest, LabelManifest, LabelSpec, LabelUsage,
+    PromptManifest, PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
 };
 pub use context::ExecutionContext;
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use execute::{EnsureOutcome, ExecutionError, ExecutionReport, Executor};
 pub use ids::{
-    ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
+    ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
+    TransitionId,
 };
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,
@@ -136,13 +139,13 @@ pub use reconcile::{
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
-    RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawQueueLabelSet,
-    RawRelation, RawRole, RawRolePrompt, RawState, RawStateDimension, RawTransition,
-    RawWorkflowSpec,
+    RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawLabel, RawQueue,
+    RawQueueLabelSet, RawRelation, RawRole, RawRolePrompt, RawState, RawStateDimension,
+    RawTransition, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedArtifactKind,
-    ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole, ValidatedState,
-    ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, ExternalToolDeclaration, GateCondition, QueueLabelSet, RolePromptExtension,
+    ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole,
+    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };

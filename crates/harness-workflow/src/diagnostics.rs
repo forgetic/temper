@@ -136,6 +136,8 @@ pub enum Diagnostic {
     DuplicateId { kind: SymbolKind, id: String },
     /// Two or more states within one dimension share an id.
     DuplicateState { dimension: String, id: String },
+    /// Two or more external tool declarations within one role share an id.
+    DuplicateRoleExternalTool { role: String, id: String },
     /// A reference points at a symbol that was never declared.
     UndeclaredReference {
         expected: SymbolKind,
@@ -152,6 +154,7 @@ impl Diagnostic {
         match self {
             Diagnostic::DuplicateId { .. }
             | Diagnostic::DuplicateState { .. }
+            | Diagnostic::DuplicateRoleExternalTool { .. }
             | Diagnostic::UndeclaredReference { .. }
             | Diagnostic::EmptyQueueArtifacts { .. } => Severity::Error,
         }
@@ -167,6 +170,10 @@ impl fmt::Display for Diagnostic {
             Diagnostic::DuplicateState { dimension, id } => write!(
                 formatter,
                 "duplicate state id `{id}` in dimension `{dimension}`"
+            ),
+            Diagnostic::DuplicateRoleExternalTool { role, id } => write!(
+                formatter,
+                "role `{role}` declares duplicate external tool id `{id}`"
             ),
             Diagnostic::UndeclaredReference { expected, id, site } => {
                 write!(formatter, "{site} references undeclared {expected} `{id}`")

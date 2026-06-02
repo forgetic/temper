@@ -9,7 +9,13 @@
 
 use chrono::Duration;
 use harness_forge::{CreatePullRequest, CreateRepository, User};
-use harness_workflow::{ExecutionContext, RoleId, TransitionId};
+use harness_workflow::{
+    CompiledWorkflow, ExecutionContext, ExternalToolId, ExternalToolManifest, RoleId, RoleManifest,
+    TransitionId,
+};
+use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt;
 
 /// A workflow role and the Forge user that acts for it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +39,79 @@ pub struct PullRequestCreateBinding {
     pub input: CreatePullRequest,
 }
 
+/// Runner metadata binding for one declared external tool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalToolBinding {
+    /// Workflow role whose worker may receive this external tool.
+    pub role: RoleId,
+    /// Declared role-level external tool id.
+    pub tool: ExternalToolId,
+    /// Provider/binding name selected by the runner, such as `workspace-local`.
+    pub provider: String,
+}
+
+/// External tool metadata that survived declaration + runner binding validation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundExternalTool {
+    pub id: ExternalToolId,
+    pub description: String,
+    pub required: bool,
+    pub constraints: Vec<String>,
+    pub guidance: Option<String>,
+    pub provider: String,
+}
+
+impl BoundExternalTool {
+    fn from_manifest(manifest: &ExternalToolManifest, binding: &ExternalToolBinding) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            description: manifest.description.clone(),
+            required: manifest.required,
+            constraints: manifest.constraints.clone(),
+            guidance: manifest.guidance.clone(),
+            provider: binding.provider.clone(),
+        }
+    }
+}
+
+/// Error returned when runner external-tool bindings exceed workflow authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExternalToolBindingError {
+    /// A required tool declaration has no matching runner binding.
+    MissingRequired { role: RoleId, tool: ExternalToolId },
+    /// A binding names a role absent from the compiled workflow.
+    UnknownRole { role: RoleId },
+    /// A binding names a tool the workflow role did not declare.
+    UndeclaredTool { role: RoleId, tool: ExternalToolId },
+    /// More than one binding targets the same role/tool pair.
+    DuplicateBinding { role: RoleId, tool: ExternalToolId },
+}
+
+impl fmt::Display for ExternalToolBindingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExternalToolBindingError::MissingRequired { role, tool } => write!(
+                formatter,
+                "role `{role}` requires external tool `{tool}`, but no runner binding was configured"
+            ),
+            ExternalToolBindingError::UnknownRole { role } => write!(
+                formatter,
+                "external tool binding references undeclared role `{role}`"
+            ),
+            ExternalToolBindingError::UndeclaredTool { role, tool } => write!(
+                formatter,
+                "external tool binding `{tool}` for role `{role}` is not declared by the workflow"
+            ),
+            ExternalToolBindingError::DuplicateBinding { role, tool } => write!(
+                formatter,
+                "external tool `{tool}` for role `{role}` has multiple runner bindings"
+            ),
+        }
+    }
+}
+
+impl Error for ExternalToolBindingError {}
+
 /// Configuration shared by every runner topology.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunnerConfig {
@@ -42,6 +121,8 @@ pub struct RunnerConfig {
     pub role_bindings: Vec<RoleBinding>,
     /// Runtime pull-request create inputs, keyed by role and transition.
     pub pull_request_creates: Vec<PullRequestCreateBinding>,
+    /// Runtime bindings for user-declared external tools.
+    pub external_tools: Vec<ExternalToolBinding>,
     /// Lease time-to-live used by mechanical recovery.
     pub lease_ttl: Duration,
     /// Poll cadence used by the later production poll loop.
@@ -55,6 +136,7 @@ impl RunnerConfig {
             repository,
             role_bindings: Vec::new(),
             pull_request_creates: Vec::new(),
+            external_tools: Vec::new(),
             lease_ttl: Duration::minutes(30),
             poll_interval: Duration::seconds(30),
         }
@@ -112,6 +194,102 @@ impl RunnerConfig {
             input,
         });
         self
+    }
+
+    /// Adds an external tool binding for `role` and `tool`.
+    pub fn with_external_tool_binding(
+        mut self,
+        role: RoleId,
+        tool: ExternalToolId,
+        provider: impl Into<String>,
+    ) -> Self {
+        self.set_external_tool_binding(role, tool, provider);
+        self
+    }
+
+    /// Adds an external tool binding for `role` and `tool`.
+    pub fn set_external_tool_binding(
+        &mut self,
+        role: RoleId,
+        tool: ExternalToolId,
+        provider: impl Into<String>,
+    ) -> &mut Self {
+        self.external_tools.push(ExternalToolBinding {
+            role,
+            tool,
+            provider: provider.into(),
+        });
+        self
+    }
+
+    /// Validates and returns bound external tools for one role manifest.
+    ///
+    /// Results follow the workflow declaration order. Optional unbound tools are
+    /// omitted; required unbound tools fail fast before a real worker starts.
+    pub fn bound_external_tools_for(
+        &self,
+        role: &RoleManifest,
+    ) -> Result<Vec<BoundExternalTool>, ExternalToolBindingError> {
+        let role_bindings = self
+            .external_tools
+            .iter()
+            .filter(|binding| binding.role == role.id)
+            .collect::<Vec<_>>();
+        let mut seen = BTreeSet::new();
+        for binding in &role_bindings {
+            if !role
+                .external_tools
+                .iter()
+                .any(|manifest| manifest.id == binding.tool)
+            {
+                return Err(ExternalToolBindingError::UndeclaredTool {
+                    role: binding.role.clone(),
+                    tool: binding.tool.clone(),
+                });
+            }
+            if !seen.insert(binding.tool.clone()) {
+                return Err(ExternalToolBindingError::DuplicateBinding {
+                    role: binding.role.clone(),
+                    tool: binding.tool.clone(),
+                });
+            }
+        }
+
+        role.external_tools
+            .iter()
+            .filter_map(|manifest| {
+                role_bindings
+                    .iter()
+                    .find(|binding| binding.tool == manifest.id)
+                    .map(|binding| Ok(BoundExternalTool::from_manifest(manifest, binding)))
+                    .or_else(|| {
+                        manifest.required.then(|| {
+                            Err(ExternalToolBindingError::MissingRequired {
+                                role: role.id.clone(),
+                                tool: manifest.id.clone(),
+                            })
+                        })
+                    })
+            })
+            .collect()
+    }
+
+    /// Validates all external tool bindings against a compiled workflow.
+    pub fn validate_external_tool_bindings(
+        &self,
+        compiled: &CompiledWorkflow,
+    ) -> Result<(), ExternalToolBindingError> {
+        for binding in &self.external_tools {
+            if compiled.role(&binding.role).is_none() {
+                return Err(ExternalToolBindingError::UnknownRole {
+                    role: binding.role.clone(),
+                });
+            }
+        }
+        for role in compiled.roles() {
+            self.bound_external_tools_for(role)?;
+        }
+        Ok(())
     }
 
     /// Sets the lease TTL.

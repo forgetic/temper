@@ -8,7 +8,8 @@
 
 use crate::artifact::ArtifactTarget;
 use crate::ids::{
-    ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
+    ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
+    TransitionId,
 };
 use crate::relation::RelationKind;
 use chrono::Duration;
@@ -119,6 +120,8 @@ pub struct ValidatedRole {
     pub charter: Option<String>,
     /// Structured user-authored prompt extension for this role.
     pub prompt: RolePromptExtension,
+    /// User-declared non-workflow tools, in declaration order.
+    pub external_tools: Vec<ExternalToolDeclaration>,
     /// Concurrency hint: how many artifacts the role may hold at once, or
     /// `None` for no declared limit.
     pub concurrency: Option<u32>,
@@ -134,6 +137,21 @@ pub struct RolePromptExtension {
     /// User guidance for using declared tools. It is advisory only; executable
     /// authority still comes from the compiled tool manifest.
     pub tool_guidance: Option<String>,
+}
+
+/// A validated external tool declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalToolDeclaration {
+    /// Tool id local to this role.
+    pub id: ExternalToolId,
+    /// Human-facing capability summary.
+    pub description: String,
+    /// Whether a matching runner binding is required before a real worker starts.
+    pub required: bool,
+    /// User-authored constraints on the external provider's use.
+    pub constraints: Vec<String>,
+    /// Optional prompt guidance for this tool.
+    pub guidance: Option<String>,
 }
 
 /// A validated artifact kind with typed label references.

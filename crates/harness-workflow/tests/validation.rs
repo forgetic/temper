@@ -44,6 +44,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 id: "engineer".to_string(),
                 charter: Some("implements code issues".to_string()),
                 prompt: Default::default(),
+                external_tools: Vec::new(),
                 concurrency: Some(2),
                 queues: vec!["code_ready".to_string()],
             },
@@ -51,6 +52,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 id: "reviewer".to_string(),
                 charter: None,
                 prompt: Default::default(),
+                external_tools: Vec::new(),
                 concurrency: None,
                 queues: vec!["needs_review".to_string()],
             },
@@ -175,6 +177,7 @@ fn duplicate_role_id_is_diagnosed() {
         id: "engineer".to_string(),
         charter: None,
         prompt: Default::default(),
+        external_tools: Vec::new(),
         concurrency: None,
         queues: Vec::new(),
     });
@@ -480,6 +483,7 @@ fn validation_collects_multiple_diagnostics_at_once() {
         id: "engineer".to_string(),
         charter: None,
         prompt: Default::default(),
+        external_tools: Vec::new(),
         concurrency: None,
         queues: vec!["absent_queue".to_string()],
     });

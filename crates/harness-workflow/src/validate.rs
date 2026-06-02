@@ -6,17 +6,10 @@
 //! checks (contradictory effects, unsatisfiable gates, tool-authority limits).
 
 use crate::diagnostics::{Diagnostic, ReferenceSite, SymbolKind};
-use crate::ids::{
-    ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
-};
 use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
-use crate::validated::{
-    Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedArtifactKind,
-    ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole, ValidatedState,
-    ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
-};
+use crate::validate_build::build_validated;
+use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
-use chrono::Duration;
 use std::collections::HashSet;
 
 /// Validates a raw workflow spec, collecting all diagnostics.
@@ -80,6 +73,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     );
 
     check_state_dimensions(spec, &labels, &artifacts, &mut diagnostics);
+    check_role_external_tools(spec, &mut diagnostics);
 
     if diagnostics.is_empty() {
         Ok(build_validated(spec))
@@ -413,6 +407,21 @@ fn check_state_dimensions(
     }
 }
 
+/// Checks duplicate external tool ids within each role declaration.
+fn check_role_external_tools(spec: &RawWorkflowSpec, diagnostics: &mut Vec<Diagnostic>) {
+    for role in &spec.roles {
+        let mut seen = HashSet::new();
+        for tool in &role.external_tools {
+            if !seen.insert(tool.id.clone()) {
+                diagnostics.push(Diagnostic::DuplicateRoleExternalTool {
+                    role: role.id.clone(),
+                    id: tool.id.clone(),
+                });
+            }
+        }
+    }
+}
+
 /// Returns the label id referenced by a raw effect, if any.
 fn effect_label(effect: &RawEffect) -> Option<&str> {
     match effect {
@@ -438,161 +447,5 @@ fn effect_roles(effect: &RawEffect) -> Vec<&str> {
         | RawEffect::CreatePullRequest { .. }
         | RawEffect::SubmitReview { .. }
         | RawEffect::MergePullRequest => Vec::new(),
-    }
-}
-
-/// Converts a checked spec into the typed validated model.
-fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
-    let roles = spec
-        .roles
-        .iter()
-        .map(|role| ValidatedRole {
-            id: RoleId::new(&role.id),
-            charter: role.charter.clone(),
-            prompt: RolePromptExtension {
-                guidance: role.prompt.guidance.clone(),
-                tool_guidance: role.prompt.tool_guidance.clone(),
-            },
-            concurrency: role.concurrency,
-            queues: role.queues.iter().map(QueueId::new).collect(),
-        })
-        .collect();
-
-    let labels = spec.labels.iter().map(|l| LabelId::new(&l.id)).collect();
-
-    let artifact_kinds = spec
-        .artifact_kinds
-        .iter()
-        .map(|artifact| ValidatedArtifactKind {
-            id: ArtifactKindId::new(&artifact.id),
-            target: artifact.target,
-            identifying_labels: artifact
-                .identifying_labels
-                .iter()
-                .map(LabelId::new)
-                .collect(),
-        })
-        .collect();
-
-    let state_dimensions = spec
-        .state_dimensions
-        .iter()
-        .map(|dimension| ValidatedStateDimension {
-            id: StateDimensionId::new(&dimension.id),
-            exclusive: dimension.exclusive,
-            states: dimension
-                .states
-                .iter()
-                .map(|state| ValidatedState {
-                    id: StateId::new(&state.id),
-                    label: state.label.as_ref().map(LabelId::new),
-                    artifacts: state.artifacts.iter().map(ArtifactKindId::new).collect(),
-                })
-                .collect(),
-        })
-        .collect();
-
-    let queues = spec
-        .queues
-        .iter()
-        .map(|queue| ValidatedQueue {
-            id: QueueId::new(&queue.id),
-            artifacts: queue.artifacts.iter().map(ArtifactKindId::new).collect(),
-            labels: queue.labels.iter().map(LabelId::new).collect(),
-            any_of: queue
-                .any_of
-                .iter()
-                .map(|label_set| QueueLabelSet {
-                    labels: label_set.labels.iter().map(LabelId::new).collect(),
-                })
-                .collect(),
-            min_depth: queue.min_depth,
-            max_age: queue
-                .max_age
-                .map(|seconds| Duration::seconds(i64::from(seconds))),
-            condition: queue.condition.as_ref().map(build_gate_condition),
-        })
-        .collect();
-
-    let transitions = spec
-        .transitions
-        .iter()
-        .map(|transition| ValidatedTransition {
-            id: TransitionId::new(&transition.id),
-            artifact: ArtifactKindId::new(&transition.artifact),
-            roles: transition.roles.iter().map(RoleId::new).collect(),
-            requires_gates: transition.requires_gates.iter().map(GateId::new).collect(),
-            effects: transition.effects.iter().map(build_effect).collect(),
-        })
-        .collect();
-
-    let gates = spec
-        .gates
-        .iter()
-        .map(|gate| ValidatedGate {
-            id: GateId::new(&gate.id),
-            satisfied_by: gate.satisfied_by.iter().map(TransitionId::new).collect(),
-            condition: gate.condition.as_ref().map(build_gate_condition),
-        })
-        .collect();
-
-    let relations = spec
-        .relations
-        .iter()
-        .map(|relation| ValidatedRelation {
-            kind: relation.kind,
-            source: ArtifactKindId::new(&relation.source),
-            target: ArtifactKindId::new(&relation.target),
-        })
-        .collect();
-
-    ValidatedWorkflow::new(
-        spec.name.clone(),
-        roles,
-        labels,
-        artifact_kinds,
-        state_dimensions,
-        queues,
-        transitions,
-        gates,
-        relations,
-    )
-}
-
-fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
-    match condition {
-        RawGateCondition::LabelPresent { label } => {
-            GateCondition::LabelPresent(LabelId::new(label))
-        }
-        RawGateCondition::DependenciesResolved => GateCondition::DependenciesResolved,
-        RawGateCondition::CiPassed => GateCondition::CiPassed,
-        RawGateCondition::CiFailed => GateCondition::CiFailed,
-        RawGateCondition::ReviewApproved => GateCondition::ReviewApproved,
-        RawGateCondition::ReviewChangesRequested => GateCondition::ReviewChangesRequested,
-        RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {
-            dimension: StateDimensionId::new(dimension),
-            state: StateId::new(state),
-        },
-    }
-}
-
-/// Converts a raw effect into a typed effect.
-fn build_effect(effect: &RawEffect) -> Effect {
-    match effect {
-        RawEffect::AddLabel { label } => Effect::AddLabel(LabelId::new(label)),
-        RawEffect::RemoveLabel { label } => Effect::RemoveLabel(LabelId::new(label)),
-        RawEffect::SetAssignee { role } => Effect::SetAssignee(RoleId::new(role)),
-        RawEffect::RemoveAssignee { role } => Effect::RemoveAssignee(RoleId::new(role)),
-        RawEffect::CreateComment { body } => Effect::CreateComment { body: body.clone() },
-        RawEffect::CreatePullRequest { correlation_key } => Effect::CreatePullRequest {
-            correlation_key: correlation_key.clone(),
-        },
-        RawEffect::RequestReviewers { roles } => Effect::RequestReviewers {
-            roles: roles.iter().map(RoleId::new).collect(),
-        },
-        RawEffect::SubmitReview { decision } => Effect::SubmitReview {
-            decision: *decision,
-        },
-        RawEffect::MergePullRequest => Effect::MergePullRequest,
     }
 }

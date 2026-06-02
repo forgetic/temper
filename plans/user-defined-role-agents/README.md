@@ -108,7 +108,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    directory. Update live OAuth smoke tests to exercise the generic agent with a
    fixture role instead of importing `ARCHITECT_SYSTEM_PROMPT`.
 
-4. ☐ **Phase 4 — User-declared non-workflow tool manifests.**
+4. ☑ **Phase 4 — User-declared non-workflow tool manifests.**
    `prompts/phase-4-user-declared-tool-manifests.md`
 
    Extend role manifests with user-declared non-workflow tool metadata: id,

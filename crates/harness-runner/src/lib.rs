@@ -26,8 +26,8 @@
 //!
 //! The crate now provides:
 //!
-//! - [`RunnerConfig`], which keeps repository, identity, PR-create, lease, and
-//!   polling settings independent of process topology.
+//! - [`RunnerConfig`], which keeps repository, identity, PR-create, external-tool
+//!   binding, lease, and polling settings independent of process topology.
 //! - [`scan`], which reads fresh Forge state and turns active queue members into
 //!   role-addressed [`WorkItem`]s without mutating anything.
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
@@ -69,7 +69,10 @@ pub mod trigger;
 pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
-pub use config::{PullRequestCreateBinding, RoleBinding, RunnerConfig};
+pub use config::{
+    BoundExternalTool, ExternalToolBinding, ExternalToolBindingError, PullRequestCreateBinding,
+    RoleBinding, RunnerConfig,
+};
 pub use driver::{
     DriveError, FixpointDriver, ManualClock, PollLoop, RunReport, WakeablePollLoop, WorkerRunReport,
 };

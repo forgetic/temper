@@ -5,7 +5,7 @@
 //! role behavior is carried separately as prompt guidance and rendered only in
 //! the user sections below.
 
-use crate::compile::{QueueManifest, ToolManifest};
+use crate::compile::{ExternalToolManifest, QueueManifest, ToolManifest};
 use crate::ids::{ArtifactKindId, GateId, LabelId, RoleId};
 use crate::validated::ValidatedRole;
 
@@ -20,6 +20,11 @@ impl PromptManifest {
     /// Returns the section with the given heading, if present.
     pub fn section(&self, heading: &str) -> Option<&PromptSection> {
         self.sections.iter().find(|s| s.heading == heading)
+    }
+
+    /// Returns the mutable section with the given heading, if present.
+    pub fn section_mut(&mut self, heading: &str) -> Option<&mut PromptSection> {
+        self.sections.iter_mut().find(|s| s.heading == heading)
     }
 
     /// Renders the sections into a stable plain-text prompt.
@@ -53,12 +58,14 @@ pub(crate) fn build_prompt(
     role: &ValidatedRole,
     queues: &[QueueManifest],
     tools: &[ToolManifest],
+    external_tools: &[ExternalToolManifest],
 ) -> PromptManifest {
     let mut sections = vec![
         role_identity(workflow_name, role),
         work_item_context(),
         subscribed_queues(role, queues),
         authorized_actions(tools),
+        declared_external_tools(external_tools),
         decision_output(tools),
         user_guidance(role),
     ];
@@ -132,6 +139,35 @@ fn authorized_actions(tools: &[ToolManifest]) -> PromptSection {
     }
     PromptSection {
         heading: "Authorized workflow actions".to_string(),
+        lines,
+    }
+}
+
+fn declared_external_tools(external_tools: &[ExternalToolManifest]) -> PromptSection {
+    let mut lines = vec![
+        "External tools are non-workflow capabilities declared by the user.".to_string(),
+        "A declaration is not executable unless the runner binds a matching provider.".to_string(),
+        "The runtime context lists the external tools available for this run; undeclared or unbound tools are unavailable.".to_string(),
+    ];
+    if external_tools.is_empty() {
+        lines.push("(no user-declared external tools)".to_string());
+    } else {
+        for tool in external_tools {
+            lines.push(describe_external_tool(tool));
+            if !tool.constraints.is_empty() {
+                lines.push(format!(
+                    "{} constraints: {}",
+                    tool.id,
+                    tool.constraints.join("; ")
+                ));
+            }
+            if let Some(guidance) = &tool.guidance {
+                lines.push(format!("{} guidance: {guidance}", tool.id));
+            }
+        }
+    }
+    PromptSection {
+        heading: "User-declared external tools".to_string(),
         lines,
     }
 }
@@ -229,6 +265,15 @@ fn describe_tool(tool: &ToolManifest) -> String {
         join_strs(tool.requires_gates.iter().map(GateId::as_str))
     };
     format!("{}: acts on {} ({})", tool.name, tool.artifact, gates)
+}
+
+fn describe_external_tool(tool: &ExternalToolManifest) -> String {
+    let requirement = if tool.required {
+        "required"
+    } else {
+        "optional"
+    };
+    format!("{}: {requirement} - {}", tool.id, tool.description)
 }
 
 fn join_strs<'a>(items: impl Iterator<Item = &'a str>) -> String {

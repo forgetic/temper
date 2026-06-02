@@ -90,7 +90,10 @@ async fn run_role(
     let config = runner_config();
     let role_id = RoleId::new(role);
     let provider = provider_for(args)?;
-    let registry = harness_agents::real_registry_from_compiled(provider, &compiled);
+    let registry = harness_agents::real_registry_from_compiled_with_external_tools(
+        provider, &compiled, &config,
+    )
+    .map_err(|error| RunError::Backend(error.to_string()))?;
     let role_manifest = compiled
         .role(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?;

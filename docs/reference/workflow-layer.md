@@ -32,9 +32,9 @@ Validation errors should be diagnostic collections so users can fix multiple spe
 
 Phase 2 implemented the spec and validation foundations:
 
-- `spec::RawWorkflowSpec` and its raw child structs (`RawRole`, `RawRolePrompt`, `RawLabel`, `RawArtifactKind`, `RawRelation`, `RawStateDimension`, `RawState`, `RawQueue`, `RawTransition`, `RawEffect`, `RawGate`, `RawGateCondition`) load from serde input.
+- `spec::RawWorkflowSpec` and its raw child structs (`RawRole`, `RawRolePrompt`, `RawExternalTool`, `RawLabel`, `RawArtifactKind`, `RawRelation`, `RawStateDimension`, `RawState`, `RawQueue`, `RawTransition`, `RawEffect`, `RawGate`, `RawGateCondition`) load from serde input.
 - `validated::ValidatedWorkflow` is the normalized model. It has no public constructor; the only way to build one is `RawWorkflowSpec::validate` / `validate::validate`, so compiler and runtime APIs added later can require it by type.
-- `ids` provides typed ids: `RoleId`, `LabelId`, `ArtifactKindId`, `StateDimensionId`, `StateId`, `QueueId`, `TransitionId`, `GateId`.
+- `ids` provides typed ids: `RoleId`, `ExternalToolId`, `LabelId`, `ArtifactKindId`, `StateDimensionId`, `StateId`, `QueueId`, `TransitionId`, `GateId`.
 - `diagnostics` provides `Diagnostic`, `Severity`, `SymbolKind`, `ReferenceSite`, and the `ValidationErrors` collection.
 
 Phase 3 added artifact/Forge mapping, metadata blocks, and classification:
@@ -52,11 +52,11 @@ Gate/transition wiring is modeled in both directions for role actions: a transit
 Phase 4 added compilation:
 
 - `compile::compile` (also `ValidatedWorkflow::compile`) projects a validated workflow into a `CompiledWorkflow`. Compilation is infallible because it consumes an already-validated workflow.
-- `RoleManifest` carries role id, legacy charter text, structured prompt extension, concurrency hint, subscribed queues, transition `authority`, role-specific `tools`, and a `PromptManifest`.
-- `ToolManifest` is an intent-level operation (named after its transition) carrying artifact, required gates, and effects. Tools are derived from the transitions a role is authorized for, so a role can never see a tool outside its authority.
+- `RoleManifest` carries role id, legacy charter text, structured prompt extension, declared external-tool metadata, concurrency hint, subscribed queues, transition `authority`, role-specific workflow `tools`, and a `PromptManifest`.
+- `ToolManifest` is an intent-level workflow operation (named after its transition) carrying artifact, required gates, and effects. Tools are derived from the transitions a role is authorized for, so a role can never see a workflow tool outside its authority. `ExternalToolManifest` carries user-declared non-workflow tool metadata only; it is not executable unless the runner binds a provider.
 - `QueueManifest` adds `subscribers`, multi-kind/disjunctive matching, and activation policy to each queue; `TransitionManifest` is the runtime transition table; `LabelManifest`/`LabelSpec`/`LabelUsage` enumerate every label a workflow site needs and why.
-- `PromptManifest`/`PromptSection` hold deterministic prompt sections (`Role and workflow`, `Work item context`, `Subscribed queues`, `Authorized workflow actions`, `User guidance`, and optional `User tool guidance`) with a stable `render` method. Generated sections describe workflow mechanics and authority boundaries only; user-authored behavior comes from `charter` and `prompt`.
-- Roles now carry an optional `concurrency` hint (`RawRole`/`ValidatedRole`) and a structured prompt extension (`prompt.guidance` plus `prompt.tool_guidance`), compiled into the role manifest.
+- `PromptManifest`/`PromptSection` hold deterministic prompt sections (`Role and workflow`, `Work item context`, `Subscribed queues`, `Authorized workflow actions`, `User-declared external tools`, `User guidance`, and optional `User tool guidance`) with a stable `render` method. Generated sections describe workflow mechanics and authority boundaries only; user-authored behavior comes from `charter` and `prompt`.
+- Roles now carry an optional `concurrency` hint (`RawRole`/`ValidatedRole`), a structured prompt extension (`prompt.guidance` plus `prompt.tool_guidance`), and `external_tools` declarations (`id`, `description`, `required`, `constraints`, and `guidance`), compiled into the role manifest.
 
 Not yet implemented from compilation: generated tool bodies and optional generated Rust code.
 
@@ -137,7 +137,7 @@ A workflow spec contains these logical primitives.
 
 | Primitive | Meaning |
 | --- | --- |
-| `role` | Actor authority, queues, concurrency limits, legacy prose charter, and structured prompt guidance |
+| `role` | Actor authority, queues, concurrency limits, legacy prose charter, structured prompt guidance, and declared non-workflow external tools |
 | `artifact_kind` | Logical item with a Forge `target` (issue or PR) and `identifying_labels` |
 | `state_dimension` | Named state group with an `exclusive` flag, projected as labels; states may restrict legal artifact kinds |
 | `queue` | Query that selects artifacts needing attention by artifact kind(s), label filters, optional native/projected condition, and optional read-side activation policy |
@@ -155,19 +155,21 @@ The `reference-delivery.json` fixture transcribes the reference delivery design 
 
 A role may supply `prompt.guidance` and `prompt.tool_guidance`; the legacy `charter` field is still accepted and rendered as user guidance. These fields are user-authored prose. They guide behavior but do not grant workflow authority, Forge permissions, or tool access.
 
-Generated prompt prose is mechanical and role-id agnostic. The compiler renders workflow/role identity, concurrency, the work-item context contract, subscribed queues, authorized workflow actions, and the authority boundary that executable mutations come only from the compiled tool manifest. Role-specific judgment such as engineering standards, review criteria, or owner values belongs in the user prompt fields or fixtures, not in compiler code.
+A role may also declare `external_tools`: each entry has an `id`, `description`, optional `required` flag, optional `constraints`, and optional `guidance`. A declaration is metadata and authority intent only. A real runner must bind a matching provider before the LLM runtime prompt/context may list the tool as available; required declarations fail worker preflight when unbound, optional unbound declarations are omitted or marked unavailable, and undeclared bindings are rejected.
+
+Generated prompt prose is mechanical and role-id agnostic. The compiler renders workflow/role identity, concurrency, the work-item context contract, subscribed queues, authorized workflow actions, declared external-tool availability rules, and the authority boundary that executable workflow mutations come only from the compiled workflow tool manifest. Role-specific judgment such as engineering standards, review criteria, or owner values belongs in the user prompt fields or fixtures, not in compiler code.
 
 ## Static validation
 
 Validation must reject or diagnose:
 
-- duplicate role, label, artifact, state-dimension, queue, transition, or gate IDs (implemented; state ids are checked for uniqueness within each dimension)
+- duplicate role, label, artifact, state-dimension, queue, transition, or gate IDs (implemented; state ids are checked for uniqueness within each dimension, and external-tool ids are checked within each role)
 - empty queue artifact-kind lists (implemented)
 - references to undeclared roles, labels, artifact kinds, queues, transitions, gates, relation endpoints, or gate-condition labels/states (implemented)
 - transitions whose effects contradict declared mutually exclusive dimensions (planned)
 - gates that cannot be satisfied by any declared transition or external condition (planned)
 - role tool declarations that exceed the role's transition authority (planned)
-- unknown workflow or prompt-extension fields at load time through serde `deny_unknown_fields` (implemented)
+- unknown workflow, prompt-extension, or external-tool fields at load time through serde `deny_unknown_fields` (implemented)
 - artifact mappings that cannot be represented by the Forge interface (planned)
 
 Validation should also warn about unreachable queues, terminal states with no explanation, and labels that are declared but unused (planned).
@@ -311,7 +313,7 @@ Every mutating action loads fresh state and applies at most once, so re-running 
 
 `compile::compile` produces a `CompiledWorkflow` with:
 
-- `RoleManifest` per role, embedding its `PromptManifest`, user prompt extension, and role-specific `tools`
+- `RoleManifest` per role, embedding its `PromptManifest`, user prompt extension, declared `ExternalToolManifest` entries, and role-specific workflow `tools`
 - `ToolManifest` entries (intent-level, one per authorized transition)
 - `QueueManifest` entries with subscribers, multi-kind/disjunctive filters, and activation policy, for runtime queue evaluation
 - `LabelManifest` (a list of `LabelSpec` with `LabelUsage` annotations) for Forge label setup

@@ -224,6 +224,7 @@ fn prompt_sections_are_deterministic() {
             "Work item context",
             "Subscribed queues",
             "Authorized workflow actions",
+            "User-declared external tools",
             "Decision output",
             "User guidance"
         ]
@@ -288,6 +289,13 @@ fn role_with_no_authority_renders_empty_action_section() {
     assert!(watcher.prompt.section("Role and workflow").is_some());
     assert!(watcher.prompt.section("Work item context").is_some());
     assert!(watcher.prompt.section("Subscribed queues").is_some());
+    let external_tools = watcher
+        .prompt
+        .section("User-declared external tools")
+        .expect("external-tools section present");
+    assert!(external_tools
+        .lines
+        .contains(&"(no user-declared external tools)".to_string()));
     let decision_output = watcher
         .prompt
         .section("Decision output")
@@ -372,6 +380,7 @@ fn user_prompt_extension_renders_in_dedicated_sections() {
             "Work item context",
             "Subscribed queues",
             "Authorized workflow actions",
+            "User-declared external tools",
             "Decision output",
             "User guidance",
             "User tool guidance"

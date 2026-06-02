@@ -18,7 +18,8 @@
 //! snapshot-style assertions.
 
 use crate::ids::{
-    ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
+    ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
+    TransitionId,
 };
 use crate::prompt::build_prompt;
 use crate::validated::{
@@ -87,8 +88,10 @@ pub struct RoleManifest {
     pub queues: Vec<QueueId>,
     /// Transitions the role is authorized to perform.
     pub authority: Vec<TransitionId>,
-    /// Intent-level tools, one per authorized transition.
+    /// Intent-level workflow tools, one per authorized transition.
     pub tools: Vec<ToolManifest>,
+    /// User-declared non-workflow tools, one per role declaration.
+    pub external_tools: Vec<ExternalToolManifest>,
     /// Deterministic prompt sections for the role.
     pub prompt: PromptManifest,
 }
@@ -111,6 +114,19 @@ pub struct ToolManifest {
     pub requires_gates: Vec<GateId>,
     /// Effects the tool applies when it runs.
     pub effects: Vec<Effect>,
+}
+
+/// User-declared non-workflow tool metadata.
+///
+/// These entries grant no executable authority by themselves. A runner must bind
+/// a matching provider before an LLM role worker may see the tool as available.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalToolManifest {
+    pub id: ExternalToolId,
+    pub description: String,
+    pub required: bool,
+    pub constraints: Vec<String>,
+    pub guidance: Option<String>,
 }
 
 /// A queue projected for runtime evaluation, with filters, subscribers, and activation.
@@ -279,7 +295,18 @@ fn compile_role(
         })
         .collect();
 
-    let prompt = build_prompt(workflow.name(), role, queues, &tools);
+    let external_tools: Vec<ExternalToolManifest> = role
+        .external_tools
+        .iter()
+        .map(|tool| ExternalToolManifest {
+            id: tool.id.clone(),
+            description: tool.description.clone(),
+            required: tool.required,
+            constraints: tool.constraints.clone(),
+            guidance: tool.guidance.clone(),
+        })
+        .collect();
+    let prompt = build_prompt(workflow.name(), role, queues, &tools, &external_tools);
 
     RoleManifest {
         id: role.id.clone(),
@@ -289,6 +316,7 @@ fn compile_role(
         queues: role.queues.clone(),
         authority,
         tools,
+        external_tools,
         prompt,
     }
 }

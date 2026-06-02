@@ -65,3 +65,7 @@ define_spec_id!(StateId, "Identifier for a state within a state dimension.");
 define_spec_id!(QueueId, "Identifier for a workflow queue.");
 define_spec_id!(TransitionId, "Identifier for a workflow transition.");
 define_spec_id!(GateId, "Identifier for a workflow gate.");
+define_spec_id!(
+    ExternalToolId,
+    "Identifier for a user-declared external tool."
+);

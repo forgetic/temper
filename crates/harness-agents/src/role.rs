@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use harness_forge::Forge;
-use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
+use harness_runner::{Agent, AgentError, BoundExternalTool, RoleTools, WorkItem};
 use harness_workflow::{RoleManifest, TransitionId};
 use serde::Deserialize;
 
@@ -20,6 +20,7 @@ use crate::decision::{DecisionError, run_decision};
 use crate::provider::ProviderConfig;
 
 const NO_ACTION: &str = "no_action";
+const EXTERNAL_TOOL_SECTION: &str = "User-declared external tools";
 
 /// Generic workflow-role decision returned by a model or injected test seam.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -87,15 +88,26 @@ impl RoleDecisionEngine for ProviderRoleDecisionEngine {
 /// Generic LLM agent for one compiled workflow role.
 pub struct LlmRoleAgent {
     manifest: RoleManifest,
+    bound_external_tools: Vec<BoundExternalTool>,
     decision_engine: Arc<dyn RoleDecisionEngine>,
 }
 
 impl LlmRoleAgent {
     /// Builds a provider-backed agent for `manifest`.
     pub fn new(manifest: RoleManifest, provider: ProviderConfig) -> Self {
-        Self::with_decision_engine(
+        Self::with_bound_external_tools(manifest, provider, Vec::new())
+    }
+
+    /// Builds a provider-backed agent with external tools validated by the runner.
+    pub fn with_bound_external_tools(
+        manifest: RoleManifest,
+        provider: ProviderConfig,
+        bound_external_tools: Vec<BoundExternalTool>,
+    ) -> Self {
+        Self::with_decision_engine_and_external_tools(
             manifest,
             Arc::new(ProviderRoleDecisionEngine::new(provider)) as Arc<dyn RoleDecisionEngine>,
+            bound_external_tools,
         )
     }
 
@@ -105,8 +117,19 @@ impl LlmRoleAgent {
         manifest: RoleManifest,
         decision_engine: Arc<dyn RoleDecisionEngine>,
     ) -> Self {
+        Self::with_decision_engine_and_external_tools(manifest, decision_engine, Vec::new())
+    }
+
+    /// Builds an agent with an injected decision engine and runner-bound tools.
+    pub fn with_decision_engine_and_external_tools(
+        manifest: RoleManifest,
+        decision_engine: Arc<dyn RoleDecisionEngine>,
+        bound_external_tools: Vec<BoundExternalTool>,
+    ) -> Self {
+        let bound_external_tools = declared_bound_tools(&manifest, bound_external_tools);
         Self {
             manifest,
+            bound_external_tools,
             decision_engine,
         }
     }
@@ -116,8 +139,13 @@ impl LlmRoleAgent {
         &self.manifest
     }
 
+    /// Returns the declared-and-bound external tools visible to the model.
+    pub fn bound_external_tools(&self) -> &[BoundExternalTool] {
+        &self.bound_external_tools
+    }
+
     async fn decide(&self, item: &WorkItem, context: &str) -> Result<RoleDecision, AgentError> {
-        let system_prompt = self.manifest.prompt.render();
+        let system_prompt = self.runtime_system_prompt();
         match self.decision_engine.decide(&system_prompt, context).await {
             Ok(decision) => Ok(decision),
             Err(DecisionError::Provider(error)) => Err(AgentError::message(error.to_string())),
@@ -139,6 +167,17 @@ impl LlmRoleAgent {
             .iter()
             .find(|tool| tool.name == action)
             .map(|tool| &tool.transition)
+    }
+
+    fn runtime_system_prompt(&self) -> String {
+        if self.manifest.external_tools.is_empty() {
+            return self.manifest.prompt.render();
+        }
+        let mut prompt = self.manifest.prompt.clone();
+        if let Some(section) = prompt.section_mut(EXTERNAL_TOOL_SECTION) {
+            section.lines = runtime_external_tool_lines(&self.bound_external_tools);
+        }
+        prompt.render()
     }
 
     fn user_context(&self, work_item_context: &str) -> String {
@@ -164,13 +203,74 @@ impl LlmRoleAgent {
                 })
             })
             .collect::<Vec<_>>();
+        let available_external_tools = self
+            .bound_external_tools
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "id": tool.id.as_str(),
+                    "provider": tool.provider.as_str(),
+                    "description": tool.description.as_str(),
+                    "required": tool.required,
+                    "constraints": &tool.constraints,
+                    "guidance": tool.guidance.as_deref(),
+                })
+            })
+            .collect::<Vec<_>>();
         let context = serde_json::json!({
             "work_item": work_item,
             "allowed_actions": allowed_actions,
             "authorized_actions": authorized_actions,
+            "available_external_tools": available_external_tools,
         });
         serde_json::to_string_pretty(&context).unwrap_or_else(|_| context.to_string())
     }
+}
+
+fn declared_bound_tools(
+    manifest: &RoleManifest,
+    bound_external_tools: Vec<BoundExternalTool>,
+) -> Vec<BoundExternalTool> {
+    manifest
+        .external_tools
+        .iter()
+        .filter_map(|declared| {
+            bound_external_tools
+                .iter()
+                .find(|tool| tool.id == declared.id)
+                .cloned()
+        })
+        .collect()
+}
+
+fn runtime_external_tool_lines(tools: &[BoundExternalTool]) -> Vec<String> {
+    let mut lines = vec![
+        "Only the external tools listed in this section are bound and available for this run."
+            .to_string(),
+        "Declared tools not listed here are unavailable; do not claim to use them.".to_string(),
+        "External tools do not grant workflow or Forge mutation authority beyond the authorized workflow actions above.".to_string(),
+    ];
+    if tools.is_empty() {
+        lines.push("(no external tools are bound for this run)".to_string());
+    } else {
+        for tool in tools {
+            lines.push(format!(
+                "{} via {}: {}",
+                tool.id, tool.provider, tool.description
+            ));
+            if !tool.constraints.is_empty() {
+                lines.push(format!(
+                    "{} constraints: {}",
+                    tool.id,
+                    tool.constraints.join("; ")
+                ));
+            }
+            if let Some(guidance) = &tool.guidance {
+                lines.push(format!("{} guidance: {guidance}", tool.id));
+            }
+        }
+    }
+    lines
 }
 
 #[async_trait]
@@ -197,380 +297,5 @@ impl<F: Forge + ?Sized> Agent<F> for LlmRoleAgent {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
-
-    use harness_forge::{CreateIssue, CreateRepository, Forge, Issue, ItemNumber, RepositoryId};
-    use harness_forge_memory::MemoryForge;
-    use harness_runner::WorkItem;
-    use harness_workflow::{
-        ArtifactKindId, ArtifactSource, ExecutionContext, QueueId, RawWorkflowSpec, RoleId,
-        ValidatedWorkflow,
-    };
-
-    use crate::provider::ProviderError;
-
-    #[derive(Debug)]
-    enum ScriptedOutcome {
-        Decision(RoleDecision),
-        Error(DecisionError),
-    }
-
-    #[derive(Debug, Default)]
-    struct CapturedCall {
-        system_prompt: String,
-        user_context: String,
-    }
-
-    #[derive(Debug)]
-    struct ScriptedDecisionEngine {
-        outcomes: Mutex<VecDeque<ScriptedOutcome>>,
-        calls: Mutex<Vec<CapturedCall>>,
-    }
-
-    impl ScriptedDecisionEngine {
-        fn new(outcome: ScriptedOutcome) -> Self {
-            Self {
-                outcomes: Mutex::new(VecDeque::from([outcome])),
-                calls: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn calls(&self) -> Vec<CapturedCall> {
-            self.calls
-                .lock()
-                .expect("call mutex is not poisoned")
-                .iter()
-                .map(|call| CapturedCall {
-                    system_prompt: call.system_prompt.clone(),
-                    user_context: call.user_context.clone(),
-                })
-                .collect()
-        }
-    }
-
-    #[async_trait]
-    impl RoleDecisionEngine for ScriptedDecisionEngine {
-        async fn decide(
-            &self,
-            system_prompt: &str,
-            user_context: &str,
-        ) -> Result<RoleDecision, DecisionError> {
-            self.calls
-                .lock()
-                .expect("call mutex is not poisoned")
-                .push(CapturedCall {
-                    system_prompt: system_prompt.to_string(),
-                    user_context: user_context.to_string(),
-                });
-            match self
-                .outcomes
-                .lock()
-                .expect("outcome mutex is not poisoned")
-                .pop_front()
-                .expect("scripted outcome exists")
-            {
-                ScriptedOutcome::Decision(decision) => Ok(decision),
-                ScriptedOutcome::Error(error) => Err(error),
-            }
-        }
-    }
-
-    struct Fixture {
-        forge: MemoryForge,
-        repo: RepositoryId,
-        workflow: ValidatedWorkflow,
-        manifest: RoleManifest,
-        item: WorkItem,
-        issue: Issue,
-    }
-
-    async fn fixture(labels: &[&str]) -> Fixture {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(CreateRepository {
-                owner: "acme".to_string(),
-                name: "service".to_string(),
-                default_branch: "main".to_string(),
-                description: None,
-            })
-            .await
-            .expect("repo is created")
-            .id;
-        let workflow = workflow();
-        let manifest = workflow
-            .compile()
-            .role(&RoleId::new("banana"))
-            .expect("banana role manifest")
-            .clone();
-        let issue = forge
-            .create_issue(
-                &repo,
-                CreateIssue {
-                    title: "generic work".to_string(),
-                    body: "Do the generic thing.".to_string(),
-                    labels: labels.iter().map(|label| (*label).to_string()).collect(),
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("issue is created");
-        let item = WorkItem {
-            queue: QueueId::new("todo"),
-            role: RoleId::new("banana"),
-            target: ArtifactSource::Issue {
-                number: issue.number,
-            },
-            kind: ArtifactKindId::new("task"),
-        };
-        Fixture {
-            forge,
-            repo,
-            workflow,
-            manifest,
-            item,
-            issue,
-        }
-    }
-
-    fn workflow() -> ValidatedWorkflow {
-        let json = r#"{
-            "name": "generic-agent-test",
-            "roles": [{
-                "id": "banana",
-                "prompt": {"guidance": "Prefer generic manifest actions."},
-                "queues": ["todo"]
-            }],
-            "labels": [{"id": "task"}, {"id": "todo"}, {"id": "done"}],
-            "artifact_kinds": [{
-                "id": "task",
-                "target": "issue",
-                "identifying_labels": ["task"]
-            }],
-            "queues": [{"id": "todo", "artifact": "task", "labels": ["todo"]}],
-            "transitions": [{
-                "id": "advance",
-                "artifact": "task",
-                "roles": ["banana"],
-                "effects": [
-                    {"kind": "remove_label", "label": "todo"},
-                    {"kind": "add_label", "label": "done"}
-                ]
-            }]
-        }"#;
-        let spec: RawWorkflowSpec = serde_json::from_str(json).expect("workflow json parses");
-        spec.validate().expect("workflow validates")
-    }
-
-    fn agent_with(manifest: RoleManifest, engine: Arc<ScriptedDecisionEngine>) -> LlmRoleAgent {
-        LlmRoleAgent::with_decision_engine(manifest, engine as Arc<dyn RoleDecisionEngine>)
-    }
-
-    fn tools<'a>(fixture: &'a Fixture) -> RoleTools<'a, MemoryForge> {
-        RoleTools::new(
-            &fixture.workflow,
-            &fixture.forge,
-            &fixture.repo,
-            RoleId::new("banana"),
-            ExecutionContext::new(),
-        )
-    }
-
-    async fn labels(fixture: &Fixture) -> Vec<String> {
-        let mut labels = fixture
-            .forge
-            .get_issue_by_number(&fixture.repo, fixture.issue.number)
-            .await
-            .expect("issue lookup succeeds")
-            .expect("issue exists")
-            .labels;
-        labels.sort();
-        labels
-    }
-
-    #[tokio::test]
-    async fn authorized_transition_is_executed() {
-        let fixture = fixture(&["task", "todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::action("advance", "ready to advance"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), Arc::clone(&engine));
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("service succeeds");
-
-        assert!(changed);
-        assert_eq!(labels(&fixture).await, vec!["done", "task"]);
-    }
-
-    #[tokio::test]
-    async fn no_action_makes_no_mutation() {
-        let fixture = fixture(&["task", "todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::no_action("not enough context"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("service succeeds");
-
-        assert!(!changed);
-        assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
-    }
-
-    #[tokio::test]
-    async fn unknown_action_is_rejected_without_running_transition() {
-        let fixture = fixture(&["task", "todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::action("delete_everything", "not authorized"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("service succeeds");
-
-        assert!(!changed);
-        assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
-    }
-
-    #[tokio::test]
-    async fn stale_precondition_errors_return_no_progress() {
-        let fixture = fixture(&["task"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::action("advance", "stale but authorized"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("stale precondition is ignored");
-
-        assert!(!changed);
-        assert_eq!(labels(&fixture).await, vec!["task"]);
-    }
-
-    #[tokio::test]
-    async fn classification_errors_return_no_progress() {
-        let fixture = fixture(&["todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::action("advance", "unclassified but authorized"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("classification error is ignored");
-
-        assert!(!changed);
-        assert_eq!(labels(&fixture).await, vec!["todo"]);
-    }
-
-    #[tokio::test]
-    async fn target_missing_errors_return_no_progress() {
-        let mut fixture = fixture(&["task", "todo"]).await;
-        fixture.item.target = ArtifactSource::Issue {
-            number: ItemNumber::new(999),
-        };
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::action("advance", "missing but authorized"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("missing target is ignored");
-
-        assert!(!changed);
-        assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
-    }
-
-    #[tokio::test]
-    async fn decision_parse_failure_degrades_to_no_action() {
-        let fixture = fixture(&["task", "todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Error(
-            DecisionError::Parse {
-                snippet: "not json".to_string(),
-                error: "expected value".to_string(),
-            },
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("parse failure is no-action");
-
-        assert!(!changed);
-        assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
-    }
-
-    #[tokio::test]
-    async fn provider_setup_failure_is_agent_error() {
-        let fixture = fixture(&["task", "todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Error(
-            DecisionError::Provider(ProviderError::Build("bad model".to_string())),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), engine);
-
-        let error = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect_err("provider setup failure is real error");
-
-        assert!(matches!(error, AgentError::Message(message) if message.contains("bad model")));
-        assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
-    }
-
-    #[tokio::test]
-    async fn decision_engine_receives_compiled_manifest_prompt_and_authorized_actions_context() {
-        let fixture = fixture(&["task", "todo"]).await;
-        let engine = Arc::new(ScriptedDecisionEngine::new(ScriptedOutcome::Decision(
-            RoleDecision::no_action("inspect prompt"),
-        )));
-        let agent = agent_with(fixture.manifest.clone(), Arc::clone(&engine));
-
-        let changed = agent
-            .service(&fixture.item, &tools(&fixture))
-            .await
-            .expect("service succeeds");
-
-        assert!(!changed);
-        let calls = engine.calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].system_prompt, fixture.manifest.prompt.render());
-        assert!(calls[0].system_prompt.contains("Role: banana"));
-        assert!(
-            calls[0]
-                .system_prompt
-                .contains("Workflow: generic-agent-test")
-        );
-        assert!(
-            calls[0]
-                .system_prompt
-                .contains("Prefer generic manifest actions.")
-        );
-        let user_context: serde_json::Value =
-            serde_json::from_str(&calls[0].user_context).expect("user context is json");
-        assert_eq!(
-            user_context["allowed_actions"],
-            serde_json::json!(["no_action", "advance"])
-        );
-        assert_eq!(user_context["work_item"]["artifact"]["number"], 1);
-        assert_eq!(
-            user_context["authorized_actions"][0]["transition"],
-            "advance"
-        );
-    }
-}
+#[path = "role_tests.rs"]
+mod role_tests;

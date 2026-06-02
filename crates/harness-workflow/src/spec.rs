@@ -64,6 +64,10 @@ pub struct RawRole {
     /// stay separate from this prose and do not infer behavior from the role id.
     #[serde(default)]
     pub prompt: RawRolePrompt,
+    /// User-declared non-workflow tools this role may use only if the runner
+    /// binds matching providers at runtime.
+    #[serde(default)]
+    pub external_tools: Vec<RawExternalTool>,
     /// Optional concurrency hint: how many artifacts the role may hold at once.
     /// Compiled into the role manifest for runtime claim limits; `None` means
     /// no declared limit.
@@ -84,6 +88,29 @@ pub struct RawRolePrompt {
     /// Guidance for how this role should use tools declared for it.
     #[serde(default)]
     pub tool_guidance: Option<String>,
+}
+
+/// User-declared metadata for a non-workflow tool.
+///
+/// A declaration grants no executable authority by itself. The runner must bind
+/// a matching provider for the tool before a real role worker may present it as
+/// available to an LLM.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawExternalTool {
+    /// Tool id local to this role, such as `coding_workspace`.
+    pub id: String,
+    /// Human-facing capability summary.
+    pub description: String,
+    /// Whether a real role worker must have a runner binding before starting.
+    #[serde(default)]
+    pub required: bool,
+    /// User-authored constraints that narrow how the bound provider may be used.
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    /// Optional prompt guidance for when and how to use the tool.
+    #[serde(default)]
+    pub guidance: Option<String>,
 }
 
 /// Label declaration. Labels are the public Forge projection of workflow state.

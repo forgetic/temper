@@ -21,8 +21,8 @@
 //! - [`decision`] — runs a one-shot LLM turn through the SDK and parses the
 //!   reply into a structured decision.
 //! - [`role`] — a manifest-driven workflow role agent that uses a compiled
-//!   [`harness_workflow::RoleManifest`] prompt/tool surface and an injectable
-//!   decision seam.
+//!   [`harness_workflow::RoleManifest`] prompt/tool surface, declared-and-bound
+//!   external-tool metadata, and an injectable decision seam.
 //! - [`prompts`] — legacy workflow-role prompts plus the non-workflow
 //!   conversational prompt embedded as data. Production workflow-role workers no
 //!   longer use the legacy role prompt constants; the product-manager prompt is a
@@ -34,8 +34,9 @@
 //!   [`harness_runner::Agent`] implementation, no workflow tools, and no Forge
 //!   mutation; it returns a reply plus draft intake issues for an integration
 //!   layer to file only after explicit human command.
-//! - [`registry`] — production builders that register one generic agent per
-//!   compiled workflow role, plus legacy reference-delivery builders for tests.
+//! - [`registry`] — production builders that validate external-tool bindings and
+//!   register one generic agent per compiled workflow role, plus legacy
+//!   reference-delivery builders for tests.
 //!
 //! New workflow roles use [`role::LlmRoleAgent`] with a compiled manifest; no
 //! production role worker should import a checked-in workflow-role prompt.
@@ -69,7 +70,8 @@ pub use provider::{
     default_auth_path,
 };
 pub use registry::{
-    RealRegistryConfig, real_registry, real_registry_from_compiled, real_registry_from_workflow,
+    RealRegistryConfig, real_registry, real_registry_from_compiled,
+    real_registry_from_compiled_with_external_tools, real_registry_from_workflow,
     real_registry_with,
 };
 pub use reviewer::{LlmReviewer, ReviewerDecision};
