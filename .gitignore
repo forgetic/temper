@@ -1,8 +1,11 @@
 /target/
 /.cache/
 **/*.rs.bk
+__pycache__/
 .DS_Store
 .idea/
 .vscode/
 plans/
-/examples/dogfood/
+/examples/dogfood/logs/
+/examples/dogfood/run/
+/examples/dogfood/secrets/
