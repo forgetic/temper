@@ -4,6 +4,9 @@
     {
       "id": "architect",
       "charter": "Turn requests into epics, design issues, and ready code issues; resolve needs-architect items; reconcile landed PRs.",
+      "prompt": {
+        "guidance": "Use triage_to_code for untriaged intake that can become one ready code issue. Use triage_to_design when more design is needed. Use reconcile_landed for landed implementation PRs. Do not invent child issues or repository fan-out without an explicit user-authored plan or external tool binding."
+      },
       "concurrency": 1,
       "queues": [
         "design_triage",
@@ -14,6 +17,9 @@
     {
       "id": "engineer",
       "charter": "Claim ready code issues, implement them, open PRs, and address failed review or CI gates.",
+      "prompt": {
+        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. Use address_review_changes for PRs with changes requested and address_ci_failure for PRs whose CI failed. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work."
+      },
       "concurrency": 3,
       "queues": [
         "code_ready",
@@ -24,6 +30,9 @@
     {
       "id": "reviewer",
       "charter": "Statically review PRs against the contract catalog; approve or request changes.",
+      "prompt": {
+        "guidance": "Use approve_review only when the PR satisfies the stated contract and has a meaningful implementation diff. Use request_changes when the PR is incomplete, unsafe, or bookkeeping-only."
+      },
       "concurrency": 2,
       "queues": [
         "pr_needs_review"
@@ -32,6 +41,9 @@
     {
       "id": "owner",
       "charter": "Resolve needs-owner items and run holistic alignment review of landed cohorts; escalate to humans when needed.",
+      "prompt": {
+        "guidance": "Use approve_merge only for implementation PRs whose native CI and review gates are satisfied and whose diff is meaningful. Use review_alignment for landed PR alignment follow-up. Use request_human_input when owner judgment needs explicit human input."
+      },
       "concurrency": 1,
       "queues": [
         "needs_owner",
@@ -42,6 +54,9 @@
     {
       "id": "human",
       "charter": "Resolve needs-human items that require non-agent judgment.",
+      "prompt": {
+        "guidance": "Use clear_human_flag only after the needed human judgment has been supplied in the artifact context; otherwise choose no_action."
+      },
       "concurrency": 1,
       "queues": [
         "needs_human"

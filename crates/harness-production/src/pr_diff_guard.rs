@@ -1,16 +1,16 @@
 //! Production Forgejo PR-diff guardrails.
 //!
 //! These checks stay out of `harness-forge`: changed-file inspection is a
-//! provider-specific Forgejo REST concern. The guard wraps reviewer/owner agents
-//! in production dogfood so they cannot approve or merge PRs that contain only
-//! Harness bookkeeping files.
+//! provider-specific Forgejo REST concern. The production worker derives which
+//! roles need the guard from compiled review/merge effects, so agents cannot
+//! approve or merge PRs that contain only Harness bookkeeping files.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use harness_forge::Forge;
 use harness_runner::{Agent, AgentError, RoleTools, WorkItem};
-use harness_workflow::{ArtifactSource, TransitionId};
+use harness_workflow::{ArtifactSource, QueueId, TransitionId};
 
 use crate::forgejo_rest::{self, RestError};
 
@@ -51,10 +51,15 @@ pub fn is_ignored_internal_path(path: &str) -> bool {
         || IGNORED_PATHS.contains(&path)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GuardRole {
-    Reviewer,
-    Owner,
+    Reviewer {
+        request_changes: TransitionId,
+        queues: Vec<QueueId>,
+    },
+    Owner {
+        queues: Vec<QueueId>,
+    },
 }
 
 pub struct PullRequestDiffGuard<F: Forge + ?Sized> {
@@ -75,10 +80,10 @@ impl<F: Forge + ?Sized> PullRequestDiffGuard<F> {
     }
 
     fn should_guard(&self, item: &WorkItem) -> bool {
-        match self.role {
-            GuardRole::Reviewer => item.queue.as_str() == "pr_needs_review",
-            GuardRole::Owner => item.queue.as_str() == "merge_ready",
-        }
+        let queues = match &self.role {
+            GuardRole::Reviewer { queues, .. } | GuardRole::Owner { queues } => queues,
+        };
+        queues.iter().any(|queue| queue == &item.queue)
     }
 
     async fn inspect(&self, owner: &str, name: &str, number: u64) -> Result<DiffSafety, RestError> {
@@ -115,7 +120,7 @@ impl<F: Forge + ?Sized> PullRequestDiffGuard<F> {
         if comments.iter().any(|body| body.contains(COMMENT_MARKER)) {
             return Ok(false);
         }
-        let body = guard_comment_body(self.role, safety.files());
+        let body = guard_comment_body(&self.role, safety.files());
         forgejo_rest::create_issue_comment(
             &client,
             &self.base_url,
@@ -159,22 +164,22 @@ impl<F: Forge + ?Sized> Agent<F> for PullRequestDiffGuard<F> {
             .map_err(|error| {
                 AgentError::message(format!("PR diff guard comment failed: {error}"))
             })?;
-        match self.role {
-            GuardRole::Reviewer => {
-                tools
-                    .run(item.target, &TransitionId::new("request_changes"))
-                    .await?;
+        match &self.role {
+            GuardRole::Reviewer {
+                request_changes, ..
+            } => {
+                tools.run(item.target, request_changes).await?;
                 Ok(true)
             }
-            GuardRole::Owner => Ok(commented),
+            GuardRole::Owner { .. } => Ok(commented),
         }
     }
 }
 
-fn guard_comment_body(role: GuardRole, files: &[String]) -> String {
+fn guard_comment_body(role: &GuardRole, files: &[String]) -> String {
     let action = match role {
-        GuardRole::Reviewer => "requesting changes",
-        GuardRole::Owner => "refusing to merge",
+        GuardRole::Reviewer { .. } => "requesting changes",
+        GuardRole::Owner { .. } => "refusing to merge",
     };
     let mut body = format!(
         "{COMMENT_MARKER}\nHarness dogfood safety guard is {action}: this PR has no meaningful product diff after excluding internal Harness bookkeeping paths."

@@ -190,7 +190,11 @@ async fn assert_changes_requested_then_approved(
         .merge
         .as_ref()
         .ok_or_else(|| boxed_error("merged pull request is missing merge record"))?;
-    if merge.merged_at <= latest_review.submitted_at {
+    // Forgejo stores review and merge timestamps at second precision, so a
+    // review immediately followed by a merge may compare equal even though the
+    // merge gate observed the approval first. Only a strictly earlier merge is a
+    // premature merge.
+    if merge.merged_at < latest_review.submitted_at {
         return Err(boxed_error(
             "pull request merged before the approving review was recorded",
         ));

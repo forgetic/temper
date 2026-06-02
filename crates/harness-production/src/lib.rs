@@ -25,7 +25,7 @@ mod product_chat_tests;
 use chrono::Duration;
 use harness_forge::{CreateRepository, User, UserId};
 use harness_runner::RunnerConfig;
-use harness_workflow::{RawWorkflowSpec, RoleId};
+use harness_workflow::RawWorkflowSpec;
 
 const FIXTURE: &str = include_str!("../../harness-workflow/fixtures/reference-delivery.json");
 
@@ -55,14 +55,18 @@ pub fn actor_user(role: &str) -> User {
     }
 }
 
-/// Reference-delivery runner config shared by both production binaries.
+/// Runner config shared by the production binaries.
+///
+/// Role bindings are derived from the workflow roles so adding a user-defined
+/// role to the spec does not require adding another Rust hard-coded id. The
+/// demo provisioning convention keeps Forge user id == role id.
 pub fn runner_config() -> RunnerConfig {
-    RunnerConfig::new(repo_input())
-        .with_role_binding(RoleId::new("architect"), actor_user("architect"))
-        .with_role_binding(RoleId::new("engineer"), actor_user("engineer"))
-        .with_role_binding(RoleId::new("reviewer"), actor_user("reviewer"))
-        .with_role_binding(RoleId::new("owner"), actor_user("owner"))
-        .with_role_binding(RoleId::new("human"), actor_user("human"))
+    let workflow = workflow();
+    let mut config = RunnerConfig::new(repo_input())
         .with_lease_ttl(Duration::minutes(30))
-        .with_poll_interval(Duration::seconds(1))
+        .with_poll_interval(Duration::seconds(1));
+    for role in workflow.roles() {
+        config.set_role_binding(role.id.clone(), actor_user(role.id.as_str()));
+    }
+    config
 }

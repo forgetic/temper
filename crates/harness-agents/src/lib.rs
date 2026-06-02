@@ -23,22 +23,22 @@
 //! - [`role`] — a manifest-driven workflow role agent that uses a compiled
 //!   [`harness_workflow::RoleManifest`] prompt/tool surface and an injectable
 //!   decision seam.
-//! - [`prompts`] — legacy role and conversational system prompts embedded as
-//!   data; workflow-role production wiring is being migrated away from these.
-//! - [`engineer`], [`architect`], [`reviewer`], [`owner`], [`human`] — the legacy
-//!   role agents: the model decides, [`harness_runner::RoleTools`] mutates. Each
-//!   is a thin adapter (prompt + decision enum + mapping); the [`common`],
-//!   [`decision`], and [`provider`] plumbing is shared.
+//! - [`prompts`] — legacy workflow-role prompts plus the non-workflow
+//!   conversational prompt embedded as data. Production workflow-role workers no
+//!   longer use the legacy role prompt constants; the product-manager prompt is a
+//!   separate conversational path.
+//! - [`engineer`], [`architect`], [`reviewer`], [`owner`], [`human`] — legacy
+//!   reference-delivery role agents kept for compatibility tests until the
+//!   cleanup phase. Production workflow roles use [`role::LlmRoleAgent`].
 //! - [`product_manager`] — a non-workflow conversational adapter: no
 //!   [`harness_runner::Agent`] implementation, no workflow tools, and no Forge
 //!   mutation; it returns a reply plus draft intake issues for an integration
 //!   layer to file only after explicit human command.
-//! - [`registry`] — the [`registry::real_registry`] builder mapping every role to
-//!   its LLM agent, mirroring the testing crate's `fake_registry`.
+//! - [`registry`] — production builders that register one generic agent per
+//!   compiled workflow role, plus legacy reference-delivery builders for tests.
 //!
-//! New workflow roles should use [`role::LlmRoleAgent`] with a compiled manifest;
-//! the hard-coded role adapters remain only for the existing production wiring
-//! until the next migration phase.
+//! New workflow roles use [`role::LlmRoleAgent`] with a compiled manifest; no
+//! production role worker should import a checked-in workflow-role prompt.
 
 #![allow(clippy::result_large_err)]
 
@@ -68,6 +68,9 @@ pub use provider::{
     ANTHROPIC_MODEL_ENV, AuthChoice, DEFAULT_ANTHROPIC_MODEL, ProviderConfig, ProviderError,
     default_auth_path,
 };
-pub use registry::{RealRegistryConfig, real_registry, real_registry_with};
+pub use registry::{
+    RealRegistryConfig, real_registry, real_registry_from_compiled, real_registry_from_workflow,
+    real_registry_with,
+};
 pub use reviewer::{LlmReviewer, ReviewerDecision};
 pub use role::{LlmRoleAgent, ProviderRoleDecisionEngine, RoleDecision, RoleDecisionEngine};

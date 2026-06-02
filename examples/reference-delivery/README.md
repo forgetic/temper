@@ -3,17 +3,17 @@
 A **self-contained operator demo** of the harness's production topology: a
 Forgejo server, a `forgejo-runner` producing real CI, and one LLM-backed worker
 per workflow role scanning a configured repository set, all coordinating through
-the Forge to drive the bundled reference-delivery workflow from intake issues to
-merged, reconciled PRs.
+the Forge.
 
 > **Status:** this example is wired to production-owned binary names
 > (`harness-worker`, `harness-provision-forgejo`, and
 > `harness-trigger-forgejo`) from the `harness-production` crate instead of the
-> `harness-testing` binaries. The single-repo happy path has been **revalidated
-> live end-to-end** (merged, reconciled PR against the bundled Forgejo + real CI,
-> driven by real LLM agents on Anthropic OAuth). The multi-repo worker-pool and
-> cross-repo fan-out paths are validated by gated Forgejo e2e coverage and by
-> this launcher's repo-specific log validator. See
+> `harness-testing` binaries. After the user-defined-role migration, production
+> workers register generic agents from compiled workflow manifests and no longer
+> carry the synthetic reference-delivery engineer/architect behavior needed to
+> drive bookkeeping-only demo PRs. Full intake-to-merged-PR convergence is still
+> validated by the gated `harness-testing` Forgejo e2e fixtures; revalidating this
+> launcher with real coding-workspace bindings is a later phase. See
 > [`plans/production-binaries/`](../../plans/production-binaries/README.md) and
 > [`plans/multi-repo-workers/`](../../plans/multi-repo-workers/README.md).
 
@@ -28,11 +28,10 @@ This is a **demo**, not a turnkey production deployment:
   alone. To target a **real** Forgejo you change `BASE_URL` + tokens and drop the
   bundled server/runner + provisioning — the same "swap to real" story as
   [`docs/how-to/run-forgejo-multiprocess-e2e.md`](../../docs/how-to/run-forgejo-multiprocess-e2e.md).
-- CI converges because the bundled `config/ci.yml` gates on a simple
-  **commit-message marker** the engineer emits — there is no real
-  toolchain/checkout. The launcher passes the worker's explicit synthetic-prep
-  and bookkeeping-PR allowances for this throwaway demo only. A real project
-  swaps in its real CI and a real coding agent.
+- The bundled `config/ci.yml` still demonstrates the old commit-message marker
+  shape, but production role workers no longer synthesize PR-head commits. A real
+  project must bind a real coding workspace before engineer automation can open
+  meaningful PRs.
 - It is the operator-facing, shell-driven version of the same topology covered
   by the gated Forgejo multi-process tests — not new workflow behavior.
 - Cross-repo fan-out is planning and aggregation only. It does **not** add atomic
@@ -136,10 +135,11 @@ exactly one `harness-worker` per role-with-an-agent plus one mechanical
 reconciler. Workers still use wall-clock polling as the liveness backstop;
 webhooks only wake them early.
 
-The source intake issue then flows through the cross-repo reference-delivery
-workflow, driven by role workers whose LLMs **decide** and then mutate workflow
-state **only through `RoleTools`** (the same narrow boundary the deterministic
-fakes use):
+With legacy reference-delivery test adapters (the gated `harness-testing` e2e),
+the source intake issue then flows through the cross-repo workflow as below. The
+production launcher now uses generic manifest-driven agents, so steps that require
+child-issue fan-out or real code/PR-head creation wait for future external-tool
+bindings rather than synthetic production behavior:
 
 1. **architect** fans the parent intake out into one child `code` issue per
    configured repo and blocks the parent on those children;

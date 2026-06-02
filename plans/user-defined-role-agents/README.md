@@ -97,7 +97,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    mockable decision seam so unit tests do not call an LLM. Keep stale-work
    handling and provider-error behavior equivalent to the current adapters.
 
-3. ☐ **Phase 3 — Production registry uses user-defined roles.**
+3. ☑ **Phase 3 — Production registry uses user-defined roles.**
    `prompts/phase-3-production-registry-user-defined-roles.md`
 
    Replace `real_registry_with` production wiring with a builder that registers

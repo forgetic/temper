@@ -25,6 +25,65 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
+fn production_real_registry_uses_compiled_manifests_not_prompt_constants() {
+    let worker_source = include_str!("worker.rs");
+    assert!(worker_source.contains("real_registry_from_compiled"));
+    assert!(!worker_source.contains("real_registry_with("));
+    for prompt_constant in [
+        "ENGINEER_SYSTEM_PROMPT",
+        "ARCHITECT_SYSTEM_PROMPT",
+        "REVIEWER_SYSTEM_PROMPT",
+        "OWNER_SYSTEM_PROMPT",
+        "HUMAN_SYSTEM_PROMPT",
+    ] {
+        assert!(
+            !worker_source.contains(prompt_constant),
+            "production worker must not reference {prompt_constant}"
+        );
+    }
+}
+
+#[test]
+fn pr_diff_guard_targets_are_derived_from_role_manifests() {
+    let compiled = crate::workflow().compile();
+
+    let reviewer = guard_role_for_manifest(
+        &compiled,
+        compiled
+            .role(&RoleId::new("reviewer"))
+            .expect("reviewer manifest exists"),
+    )
+    .expect("reviewer gets a guard");
+    assert!(matches!(
+        reviewer,
+        GuardRole::Reviewer {
+            ref request_changes,
+            ref queues
+        } if request_changes.as_str() == "request_changes"
+            && queues.iter().any(|queue| queue.as_str() == "pr_needs_review")
+    ));
+
+    let owner = guard_role_for_manifest(
+        &compiled,
+        compiled
+            .role(&RoleId::new("owner"))
+            .expect("owner manifest exists"),
+    )
+    .expect("owner gets a guard");
+    assert!(matches!(
+        owner,
+        GuardRole::Owner { ref queues }
+            if queues.iter().any(|queue| queue.as_str() == "merge_ready")
+                && !queues.iter().any(|queue| queue.as_str() == "owner_alignment")
+    ));
+
+    let engineer = compiled
+        .role(&RoleId::new("engineer"))
+        .expect("engineer manifest exists");
+    assert!(guard_role_for_manifest(&compiled, engineer).is_none());
+}
+
+#[test]
 fn resolves_multiple_repositories_and_reports_missing_without_secret() {
     let forge = MemoryForge::new();
     let runtime = runtime();

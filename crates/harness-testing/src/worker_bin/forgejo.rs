@@ -72,8 +72,9 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
             let role_id = RoleId::new(role);
 
             // `--agents fake` (default) keeps the deterministic fakes with the
-            // Forgejo-aware engineer; `--agents real` swaps in the LLM agents from
-            // `harness-agents`, the engineer carrying the Forgejo prep hook.
+            // Forgejo-aware engineer; `--agents real` swaps in the legacy
+            // reference-delivery LLM test adapters from `harness-agents`, the
+            // engineer carrying the Forgejo prep hook.
             let registry = match args.agents {
                 AgentsKind::Fake => registry_with_forgejo_engineer(forgejo, *behavior),
                 AgentsKind::Real => real_registry_with_forgejo_prep(forgejo, args, *behavior)?,
@@ -205,16 +206,16 @@ fn registry_with_forgejo_engineer(
     registry
 }
 
-/// Builds the **real** (LLM) registry for the Forgejo backend, with the engineer
-/// carrying a Forgejo [`ForgejoLlmPrep`] hook (real PR head + CI sentinel commit).
+/// Builds the legacy reference-delivery **real** (LLM) registry for the Forgejo
+/// backend, with the engineer carrying a Forgejo [`ForgejoLlmPrep`] hook (real PR
+/// head + CI sentinel commit).
 ///
 /// Mirrors [`registry_with_forgejo_engineer`] but for `--agents real`: the
-/// architect/reviewer variants and engineer prep come from
-/// [`real_registry_for`], so every role is an LLM agent (DeepSeek or ChatGPT
-/// OAuth, per `--auth`) while the engineer keeps the real-PR/real-CI side
-/// effects. The credential is resolved at runtime by `real_registry_for`; a
-/// missing key or login fails as a `Backend` setup error before any worker
-/// ticks.
+/// architect/reviewer variants and engineer prep come from [`real_registry_for`],
+/// so every role is a legacy LLM test adapter (DeepSeek or ChatGPT OAuth, per
+/// `--auth`) while the engineer keeps the real-PR/real-CI side effects. The
+/// credential is resolved at runtime by `real_registry_for`; a missing key or
+/// login fails as a `Backend` setup error before any worker ticks.
 fn real_registry_with_forgejo_prep(
     forgejo: &ForgejoArgs,
     args: &WorkerArgs,

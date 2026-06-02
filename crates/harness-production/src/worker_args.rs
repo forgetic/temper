@@ -82,12 +82,13 @@ pub struct WorkerArgs {
     pub auth_file: Option<PathBuf>,
     pub wake_socket: Option<PathBuf>,
     pub wake_secret_file: Option<PathBuf>,
-    /// When true, the architect closes parent code issues after reconciling a
-    /// landed implementation PR. Cross-repo dependency aggregation relies on
-    /// issue closure as the portable "landed" signal for issue dependencies.
+    /// Retained for CLI compatibility with the legacy reference-delivery demo.
+    /// Manifest-driven production role agents do not consume this role-specific
+    /// behavior flag.
     pub architect_close_produced_issues: bool,
-    /// Allows the Forgejo engineer prep hook to create synthetic `.harness-*`
-    /// commits. Intended only for throwaway demos/tests without a real coder.
+    /// Retained for CLI compatibility with legacy synthetic demos. Manifest-driven
+    /// production role agents do not create synthetic `.harness-*` PR prep; real
+    /// engineer automation waits for the external coding-workspace phases.
     pub allow_synthetic_pr_prep: bool,
     /// Allows reviewer/owner agents to approve or merge a PR whose changed files
     /// are only Harness bookkeeping paths. Intended only with synthetic demos.

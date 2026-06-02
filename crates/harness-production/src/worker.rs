@@ -5,15 +5,17 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
-use harness_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
+use harness_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, ReviewDecision, UpsertLabel};
 use harness_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use harness_runner::{
     Agent, MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
     RepositoryTarget, RunReport, Worker, WorkerError, WorkerRunReport,
 };
-use harness_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
+use harness_workflow::{
+    CommandJournal, CompiledWorkflow, Effect, InMemoryJournal, LeasePolicy, QueueId, RoleId,
+    RoleManifest, ToolManifest,
+};
 
-use crate::forgejo_prep::ForgejoLlmPrep;
 use crate::pr_diff_guard::{GuardRole, PullRequestDiffGuard};
 use crate::wake::{WakeConfig, WakeError, WakeListener};
 use crate::worker_args::{AuthKind, ForgejoArgs, WorkerArgs, WorkerKind};
@@ -88,24 +90,15 @@ async fn run_role(
     let config = runner_config();
     let role_id = RoleId::new(role);
     let provider = provider_for(args)?;
-    let prep = Arc::new(ForgejoLlmPrep::new(
-        args.forgejo.base_url.clone(),
-        args.forgejo.token.clone(),
-        args.allow_synthetic_pr_prep,
-    )) as Arc<dyn harness_agents::EngineerPrep<dyn Forge>>;
-    let registry = harness_agents::real_registry_with(
-        provider,
-        harness_agents::RealRegistryConfig {
-            engineer_prep: prep,
-            architect_closing: args.architect_close_produced_issues,
-            ..Default::default()
-        },
-    );
+    let registry = harness_agents::real_registry_from_compiled(provider, &compiled);
+    let role_manifest = compiled
+        .role(&role_id)
+        .ok_or_else(|| RunError::UnknownRole { role: role.into() })?;
     let agent = registry
         .get(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
         .clone();
-    let agent = guard_agent_if_needed(args, role, agent);
+    let agent = guard_agent_if_needed(args, &compiled, role_manifest, agent);
     let repositories = resolve_repositories(forge, &args.repositories).await?;
     ensure_workflow_labels(forge, &repositories, &compiled).await?;
     log_repository_set("role", role, &repositories);
@@ -123,16 +116,15 @@ async fn run_role(
 
 fn guard_agent_if_needed(
     args: &WorkerArgs,
-    role: &str,
+    compiled: &CompiledWorkflow,
+    role: &RoleManifest,
     agent: Arc<dyn Agent<dyn Forge>>,
 ) -> Arc<dyn Agent<dyn Forge>> {
     if args.allow_bookkeeping_only_pr {
         return agent;
     }
-    let guard_role = match role {
-        "reviewer" => GuardRole::Reviewer,
-        "owner" => GuardRole::Owner,
-        _ => return agent,
+    let Some(guard_role) = guard_role_for_manifest(compiled, role) else {
+        return agent;
     };
     Arc::new(PullRequestDiffGuard::new(
         agent,
@@ -140,6 +132,80 @@ fn guard_agent_if_needed(
         args.forgejo.base_url.clone(),
         args.forgejo.token.clone(),
     )) as Arc<dyn Agent<dyn Forge>>
+}
+
+fn guard_role_for_manifest(compiled: &CompiledWorkflow, role: &RoleManifest) -> Option<GuardRole> {
+    let approval_tool = role.tools.iter().find(|tool| {
+        tool.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::SubmitReview {
+                    decision: ReviewDecision::Approved
+                }
+            )
+        })
+    });
+    let request_changes_tool = role.tools.iter().find(|tool| {
+        tool.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::SubmitReview {
+                    decision: ReviewDecision::ChangesRequested
+                }
+            )
+        })
+    });
+    if let (Some(approval), Some(request_changes)) = (approval_tool, request_changes_tool) {
+        let queues = guard_queues_for_tool(compiled, role, approval);
+        if !queues.is_empty() {
+            return Some(GuardRole::Reviewer {
+                request_changes: request_changes.transition.clone(),
+                queues,
+            });
+        }
+    }
+
+    let merge_tool = role.tools.iter().find(|tool| {
+        tool.effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::MergePullRequest))
+    });
+    merge_tool
+        .map(|tool| guard_queues_for_tool(compiled, role, tool))
+        .filter(|queues| !queues.is_empty())
+        .map(|queues| GuardRole::Owner { queues })
+}
+
+fn guard_queues_for_tool(
+    compiled: &CompiledWorkflow,
+    role: &RoleManifest,
+    tool: &ToolManifest,
+) -> Vec<QueueId> {
+    let removed_labels = tool
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::RemoveLabel(label) => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    compiled
+        .queues()
+        .iter()
+        .filter(|queue| role.queues.contains(&queue.id))
+        .filter(|queue| queue.artifacts.contains(&tool.artifact))
+        .filter(|queue| {
+            removed_labels.iter().any(|label| {
+                queue.labels.contains(label)
+                    || queue
+                        .any_of
+                        .iter()
+                        .any(|label_set| label_set.labels.contains(label))
+            })
+        })
+        .map(|queue| queue.id.clone())
+        .collect()
 }
 
 async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {

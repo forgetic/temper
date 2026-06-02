@@ -211,10 +211,6 @@ mod tests {
         ValidatedWorkflow,
     };
 
-    use crate::prompts::{
-        ARCHITECT_SYSTEM_PROMPT, ENGINEER_SYSTEM_PROMPT, HUMAN_SYSTEM_PROMPT, OWNER_SYSTEM_PROMPT,
-        REVIEWER_SYSTEM_PROMPT,
-    };
     use crate::provider::ProviderError;
 
     #[derive(Debug)]
@@ -555,15 +551,16 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].system_prompt, fixture.manifest.prompt.render());
         assert!(calls[0].system_prompt.contains("Role: banana"));
-        for checked_in_prompt in [
-            ARCHITECT_SYSTEM_PROMPT,
-            ENGINEER_SYSTEM_PROMPT,
-            REVIEWER_SYSTEM_PROMPT,
-            OWNER_SYSTEM_PROMPT,
-            HUMAN_SYSTEM_PROMPT,
-        ] {
-            assert_ne!(calls[0].system_prompt, checked_in_prompt);
-        }
+        assert!(
+            calls[0]
+                .system_prompt
+                .contains("Workflow: generic-agent-test")
+        );
+        assert!(
+            calls[0]
+                .system_prompt
+                .contains("Prefer generic manifest actions.")
+        );
         let user_context: serde_json::Value =
             serde_json::from_str(&calls[0].user_context).expect("user context is json");
         assert_eq!(

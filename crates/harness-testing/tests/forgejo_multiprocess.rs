@@ -165,8 +165,11 @@ fn cross_repo_fanout_converges_against_real_forgejo() {
 
 // ---------------------------------------------------------------------------
 // Real-agent topology (Phase B2). Same scenarios, same seed/assert closures, but
-// every role worker runs an in-process LLM agent (ChatGPT OAuth by default; `--agents
-// real`) instead of the deterministic fakes. Double-gated behind
+// every role worker runs the legacy reference-delivery LLM test adapter
+// (ChatGPT OAuth by default; `--agents real`) instead of the deterministic fakes.
+// Production workers use compiled workflow manifests; this e2e keeps the legacy
+// adapter as the smallest test-level binding for PR-head and child-issue behavior
+// that is not yet expressible as a pure manifest transition decision. Double-gated behind
 // HARNESS_FORGEJO_E2E=1 **and** HARNESS_FORGEJO_AGENTS=1.
 //
 // The **happy path** is B2's bar (it must converge). The harder scenarios are

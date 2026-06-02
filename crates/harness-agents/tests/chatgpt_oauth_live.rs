@@ -1,6 +1,7 @@
 //! Phase A3 live validation: prove the ChatGPT (OpenAI Codex) OAuth path
 //! actually talks to the Codex endpoint, refreshes a near-expiry token in place,
-//! and drives a real role decision — all against the human's real subscription.
+//! and drives a generic compiled-role decision — all against the human's real
+//! subscription.
 //!
 //! Per the plan's cost policy, this runs on **ChatGPT OAuth** (a flat
 //! subscription, not pay-per-token DeepSeek); **no DeepSeek tokens are spent**.
@@ -23,8 +24,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use harness_agents::decision::run_decision;
-use harness_agents::prompts::ARCHITECT_SYSTEM_PROMPT;
-use harness_agents::{ArchitectDecision, AuthChoice, ProviderConfig, default_auth_path};
+use harness_agents::{
+    AuthChoice, ProviderConfig, ProviderRoleDecisionEngine, RoleDecisionEngine, default_auth_path,
+};
+use harness_workflow::{RawWorkflowSpec, RoleId, RoleManifest};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -70,44 +73,89 @@ fn chatgpt_oauth_validation() {
     assert_eq!(pong.reply.trim().to_lowercase(), "pong");
     eprintln!("[a3] smoke decision latency: {smoke_latency:?}");
 
-    // Step 2 — a real role decision: drive the architect's *actual* system prompt
-    // with a triage work item and confirm the model returns a parseable, correct
-    // ArchitectDecision. This proves a real role agent works on OAuth, not just
-    // the trivial run_decision shape.
-    let triage_context = serde_json::json!({
-        "repository": "forgejo:acme/service",
-        "queue": "design_triage",
-        "kind": "intake",
-        "artifact": {
-            "type": "issue",
-            "number": 1,
-            "title": "Add a configurable timeout to the client",
-            "body": "A human asks the team to make the request timeout configurable.",
-            "labels": ["untriaged"],
-            "state": "Open",
-        }
-    })
-    .to_string();
+    // Step 2 — a real generic workflow-role decision: drive a compiled fixture
+    // role prompt through the same `RoleDecisionEngine` used by `LlmRoleAgent`.
+    // This proves the OAuth path handles user-defined role prompts without
+    // importing any checked-in reference-delivery prompt constant.
+    let role = fixture_role_manifest();
+    let role_context = fixture_role_context(&role);
     let role_start = Instant::now();
-    let decision: ArchitectDecision = runtime
-        .block_on(run_decision(
-            &provider,
-            ARCHITECT_SYSTEM_PROMPT,
-            &triage_context,
-        ))
-        .expect("ChatGPT OAuth architect decision succeeds and parses");
+    let decision_engine = ProviderRoleDecisionEngine::new(provider.clone());
+    let decision = runtime
+        .block_on(decision_engine.decide(&role.prompt.render(), &role_context))
+        .expect("ChatGPT OAuth generic role decision succeeds and parses");
     let role_latency = role_start.elapsed();
-    eprintln!("[a3] architect decision: {decision:?} (latency: {role_latency:?})");
-    assert!(
-        matches!(decision, ArchitectDecision::TriageToCode { .. }),
-        "architect should triage a design_triage intake issue to code"
-    );
+    eprintln!("[a3] generic role decision: {decision:?} (latency: {role_latency:?})");
+    assert_eq!(decision.action, "advance");
 
     // Step 3 — refresh path: copy the real auth file, force its codex entry to
     // near-expiry, then run a decision through the copy. `resolve_bearer` must
     // refresh against the real token endpoint, the decision must still succeed,
     // and the rewritten copy must stay in its original (nodejs) on-disk schema.
     validate_refresh(&runtime);
+}
+
+fn fixture_role_manifest() -> RoleManifest {
+    let json = r#"{
+        "name": "oauth-generic-role-smoke",
+        "roles": [{
+            "id": "banana",
+            "prompt": {
+                "guidance": "When the work item is a task in the todo queue with the todo label, choose the advance action."
+            },
+            "queues": ["todo"]
+        }],
+        "labels": [{"id": "task"}, {"id": "todo"}, {"id": "done"}],
+        "artifact_kinds": [{
+            "id": "task",
+            "target": "issue",
+            "identifying_labels": ["task"]
+        }],
+        "queues": [{"id": "todo", "artifact": "task", "labels": ["todo"]}],
+        "transitions": [{
+            "id": "advance",
+            "artifact": "task",
+            "roles": ["banana"],
+            "effects": [
+                {"kind": "remove_label", "label": "todo"},
+                {"kind": "add_label", "label": "done"}
+            ]
+        }]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("workflow json parses");
+    spec.validate()
+        .expect("workflow validates")
+        .compile()
+        .role(&RoleId::new("banana"))
+        .expect("banana role manifest exists")
+        .clone()
+}
+
+fn fixture_role_context(role: &RoleManifest) -> String {
+    let context = serde_json::json!({
+        "work_item": {
+            "repository": "forgejo:acme/service",
+            "queue": "todo",
+            "role": role.id.as_str(),
+            "kind": "task",
+            "artifact": {
+                "type": "issue",
+                "number": 1,
+                "title": "Advance a generic task",
+                "body": "This synthetic task is ready for the generic action.",
+                "labels": ["task", "todo"],
+                "state": "Open"
+            }
+        },
+        "allowed_actions": ["no_action", "advance"],
+        "authorized_actions": [{
+            "action": "advance",
+            "transition": "advance",
+            "artifact": "task",
+            "requires_gates": []
+        }]
+    });
+    serde_json::to_string_pretty(&context).expect("context serializes")
 }
 
 /// Exercises the near-expiry refresh path on a throwaway copy of the real auth

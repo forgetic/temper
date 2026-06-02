@@ -7,8 +7,13 @@
 //! in-process two-worker world:
 //!
 //! - a **fake** architect (triages `untriaged` → `code` + `ready`), and
-//! - the **real** [`LlmEngineer`] (decides via the selected LLM auth mode; acts
-//!   through [`RoleTools`]).
+//! - the legacy reference-delivery **real** [`LlmEngineer`] test adapter
+//!   (decides via the selected LLM auth mode; acts through [`RoleTools`]).
+//!
+//! Production workers now use compiled role manifests. This e2e intentionally
+//! keeps the legacy engineer as a test-level binding because opening a real PR
+//! still needs PR-head/coding-workspace behavior that is not expressible as a
+//! pure manifest transition decision until the external-tool phases land.
 //!
 //! It ticks until the engineer has opened the implementation PR (parented to the
 //! triaged code issue) through the idempotent `open_pull_request` seam — the
