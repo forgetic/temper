@@ -132,12 +132,16 @@ Status legend: ☐ pending · ☑ done
    `python3 -m unittest discover examples/dogfood/tools`, `cargo fmt --all`,
    `cargo dev-clippy`, and `cargo dev-check`.
 
-2. ☐ **Phase 2 — Product-manager conversational agent.**
+2. ☑ **Phase 2 — Product-manager conversational agent.**
    `prompts/phase-2-product-manager-agent.md`
 
-   Add a `harness-agents` product-manager adapter that runs one LLM turn over
-   conversation context and returns structured `reply` plus draft intake issues.
-   It is not a `harness_runner::Agent` and does not mutate Forge state.
+   Done: `harness-agents` exposes a non-workflow product-manager adapter and
+   prompt that run one LLM turn over a transcript and return structured `reply`
+   plus draft intake issues with deterministic slugs. It is not a
+   `harness_runner::Agent`, registers no SDK tools, and performs no Forge
+   mutation. Validation run: `cargo fmt --all`,
+   `cargo test -p harness-agents product_manager`, `cargo dev-clippy`, and
+   `cargo dev-check`.
 
 3. ☐ **Phase 3 — CLI REPL MVP + Forgejo transcript/filing core.**
    `prompts/phase-3-cli-mvp.md`

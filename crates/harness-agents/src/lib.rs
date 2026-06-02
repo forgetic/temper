@@ -2,8 +2,10 @@
 //!
 //! This crate is the **only** place the LLM SDK (`pi_agent_rust`, imported as
 //! `pi`) lives. `harness-forge`, `harness-runner`, and `harness-workflow` stay
-//! LLM-agnostic; a real agent is just a different [`harness_runner::Agent`]
-//! implementation, selected like any other.
+//! LLM-agnostic; a real workflow role agent is just a different
+//! [`harness_runner::Agent`] implementation, selected like any other. The crate
+//! also exposes a non-workflow product-manager conversational adapter that runs
+//! one LLM turn and returns draft intake issues without mutating Forge state.
 //!
 //! ## Layout
 //!
@@ -18,11 +20,15 @@
 //!   headers). Swap the model, backend, or credential here.
 //! - [`decision`] — runs a one-shot LLM turn through the SDK and parses the
 //!   reply into a structured decision.
-//! - [`prompts`] — role system prompts embedded as data.
+//! - [`prompts`] — role and conversational system prompts embedded as data.
 //! - [`engineer`], [`architect`], [`reviewer`], [`owner`], [`human`] — the role
 //!   agents: the model decides, [`harness_runner::RoleTools`] mutates. Each is a
 //!   thin adapter (prompt + decision enum + mapping); the [`common`],
 //!   [`decision`], and [`provider`] plumbing is shared.
+//! - [`product_manager`] — a non-workflow conversational adapter: no
+//!   [`harness_runner::Agent`] implementation, no workflow tools, and no Forge
+//!   mutation; it returns a reply plus draft intake issues for an integration
+//!   layer to file only after explicit human command.
 //! - [`registry`] — the [`registry::real_registry`] builder mapping every role to
 //!   its LLM agent, mirroring the testing crate's `fake_registry`.
 //!
@@ -37,6 +43,7 @@ pub mod decision;
 pub mod engineer;
 pub mod human;
 pub mod owner;
+pub mod product_manager;
 pub mod prompts;
 pub mod provider;
 pub mod registry;
@@ -46,6 +53,11 @@ pub use architect::{ArchitectDecision, LlmArchitect};
 pub use engineer::{EngineerDecision, EngineerPrep, LlmEngineer, NoPrep};
 pub use human::{HumanDecision, LlmHuman};
 pub use owner::{LlmOwner, OwnerDecision};
+pub use product_manager::{
+    ProductManagerAgent, ProductManagerAuthor, ProductManagerConversationTurn,
+    ProductManagerDraftIssue, ProductManagerError, ProductManagerRequest, ProductManagerResponse,
+    is_valid_draft_slug,
+};
 pub use provider::{
     ANTHROPIC_MODEL_ENV, AuthChoice, DEFAULT_ANTHROPIC_MODEL, ProviderConfig, ProviderError,
     default_auth_path,
