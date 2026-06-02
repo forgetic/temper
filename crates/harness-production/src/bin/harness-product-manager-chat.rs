@@ -12,6 +12,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Ok(ParseOutcome::Serve(chat_args)) => {
+            if let Err(error) = harness_production::product_chat_service::run_serve(&chat_args) {
+                eprintln!("harness-product-manager-chat: {error}");
+                std::process::exit(1);
+            }
+        }
         Err(error) => {
             eprintln!("harness-product-manager-chat: {error}");
             std::process::exit(2);

@@ -1,6 +1,7 @@
 //! Terminal REPL for product-manager chat.
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use harness_agents::{AuthChoice, ProductManagerAgent, ProductManagerDraftIssue, ProviderConfig};
 use harness_forge::{Forge, ItemNumber};
@@ -25,13 +26,13 @@ async fn run_repl_async(args: &ProductChatArgs) -> Result<(), ProductChatError> 
         args.codex_model.clone(),
         args.auth_file.clone(),
     )?;
-    let agent = ProductManagerAgent::new(provider);
-    let human_forge = build_forge(&args.base_url, &args.human_token);
-    let product_forge = build_forge(&args.base_url, &args.product_manager_token);
+    let agent = Arc::new(ProductManagerAgent::new(provider));
+    let human_forge = Arc::new(build_forge(&args.base_url, &args.human_token));
+    let product_forge = Arc::new(build_forge(&args.base_url, &args.product_manager_token));
     let mut session = ProductChatSession::open(
-        &human_forge,
-        &product_forge,
-        &agent,
+        human_forge,
+        product_forge,
+        agent,
         ProductChatOpenOptions {
             base_url: args.base_url.clone(),
             repo_path: args.repo.clone(),
@@ -60,7 +61,7 @@ fn auth_choice(auth: AuthKind) -> AuthChoice {
 }
 
 async fn repl_loop<H, P, R>(
-    session: &mut ProductChatSession<'_, H, P, R>,
+    session: &mut ProductChatSession<H, P, R>,
 ) -> Result<(), ProductChatError>
 where
     H: Forge + ?Sized,
@@ -101,7 +102,7 @@ where
 }
 
 async fn handle_file_command<H, P, R>(
-    session: &ProductChatSession<'_, H, P, R>,
+    session: &ProductChatSession<H, P, R>,
     raw: &str,
 ) -> Result<(), ProductChatError>
 where

@@ -1,25 +1,34 @@
 //! Argument parsing for `harness-product-manager-chat`.
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use harness_forge::RepositoryPath;
 
 pub const HUMAN_TOKEN_ENV: &str = "HARNESS_PRODUCT_CHAT_HUMAN_TOKEN";
 pub const PRODUCT_MANAGER_TOKEN_ENV: &str = "HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN";
+pub const SERVICE_TOKEN_ENV: &str = "HARNESS_PRODUCT_CHAT_SERVICE_TOKEN";
 pub const AGENTS_AUTH_ENV: &str = "HARNESS_AGENTS_AUTH";
+pub const DEFAULT_SERVICE_BIND: &str = "127.0.0.1:39200";
 
 pub const USAGE: &str = concat!(
     "harness-product-manager-chat repl --base-url <url> --repo <owner/name> ",
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
     "[--codex-model <id>] [--auth-file <path>] [--transcript-issue <n>]\n",
+    "harness-product-manager-chat serve --base-url <url> --repo <owner/name> ",
+    "[--bind <addr:port>] [--allow-non-loopback] ",
+    "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
+    "[--codex-model <id>] [--auth-file <path>]\n",
     "  Forgejo tokens come from HARNESS_PRODUCT_CHAT_HUMAN_TOKEN and ",
-    "HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN; no secrets on argv"
+    "HARNESS_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN; optional API bearer comes from ",
+    "HARNESS_PRODUCT_CHAT_SERVICE_TOKEN; no secrets on argv"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ParseOutcome {
     Repl(Box<ProductChatArgs>),
+    Serve(Box<ProductChatServeArgs>),
     Help,
 }
 
@@ -58,6 +67,41 @@ impl fmt::Debug for ProductChatArgs {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct ProductChatServeArgs {
+    pub bind: SocketAddr,
+    pub allow_non_loopback: bool,
+    pub base_url: String,
+    pub repo: RepositoryPath,
+    pub human_token: String,
+    pub product_manager_token: String,
+    pub service_token: Option<String>,
+    pub auth: AuthKind,
+    pub codex_model: Option<String>,
+    pub auth_file: Option<PathBuf>,
+}
+
+impl fmt::Debug for ProductChatServeArgs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProductChatServeArgs")
+            .field("bind", &self.bind)
+            .field("allow_non_loopback", &self.allow_non_loopback)
+            .field("base_url", &self.base_url)
+            .field("repo", &self.repo)
+            .field("human_token", &"<redacted>")
+            .field("product_manager_token", &"<redacted>")
+            .field(
+                "service_token",
+                &self.service_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("auth", &self.auth)
+            .field("codex_model", &self.codex_model)
+            .field("auth_file", &self.auth_file)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArgsError(String);
 
@@ -90,7 +134,7 @@ where
     let mut iter = args.into_iter();
     let Some(command) = iter.next() else {
         return Err(ArgsError::new(format!(
-            "missing required subcommand 'repl'\nusage: {USAGE}"
+            "missing required subcommand 'repl' or 'serve'\nusage: {USAGE}"
         )));
     };
     match command.as_str() {
@@ -104,8 +148,17 @@ where
                     .map(|args| ParseOutcome::Repl(Box::new(args)))
             }
         }
+        "serve" => {
+            let raw = RawServeArgs::collect(iter)?;
+            if raw.help {
+                Ok(ParseOutcome::Help)
+            } else {
+                raw.into_args(&env)
+                    .map(|args| ParseOutcome::Serve(Box::new(args)))
+            }
+        }
         other => Err(ArgsError::new(format!(
-            "unknown subcommand '{other}'; expected repl\nusage: {USAGE}"
+            "unknown subcommand '{other}'; expected repl or serve\nusage: {USAGE}"
         ))),
     }
 }
@@ -167,6 +220,70 @@ impl RawReplArgs {
     }
 }
 
+#[derive(Default)]
+struct RawServeArgs {
+    help: bool,
+    bind: Option<String>,
+    allow_non_loopback: bool,
+    base_url: Option<String>,
+    repo: Option<String>,
+    auth: Option<String>,
+    codex_model: Option<String>,
+    auth_file: Option<String>,
+}
+
+impl RawServeArgs {
+    fn collect<I>(args: I) -> Result<Self, ArgsError>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut raw = RawServeArgs::default();
+        let mut iter = args.into_iter();
+        while let Some(flag) = iter.next() {
+            match flag.as_str() {
+                "--help" | "-h" => raw.help = true,
+                "--bind" => raw.bind = Some(value_for(&flag, &mut iter)?),
+                "--allow-non-loopback" => raw.allow_non_loopback = true,
+                "--base-url" => raw.base_url = Some(value_for(&flag, &mut iter)?),
+                "--repo" => raw.repo = Some(value_for(&flag, &mut iter)?),
+                "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
+                "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
+                "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
+                other => {
+                    return Err(ArgsError::new(format!(
+                        "unrecognized argument '{other}'\nusage: {USAGE}"
+                    )))
+                }
+            }
+        }
+        Ok(raw)
+    }
+
+    fn into_args<E>(self, env: &E) -> Result<ProductChatServeArgs, ArgsError>
+    where
+        E: Fn(&str) -> Option<String>,
+    {
+        let bind = parse_bind(
+            self.bind.as_deref().unwrap_or(DEFAULT_SERVICE_BIND),
+            "--bind",
+        )?;
+        let service_token = non_empty_env(env, SERVICE_TOKEN_ENV);
+        validate_bind(bind, self.allow_non_loopback, service_token.as_deref())?;
+        Ok(ProductChatServeArgs {
+            bind,
+            allow_non_loopback: self.allow_non_loopback,
+            base_url: require(self.base_url, "--base-url")?,
+            repo: parse_repo(&require(self.repo, "--repo")?)?,
+            human_token: require_env(env, HUMAN_TOKEN_ENV)?,
+            product_manager_token: require_env(env, PRODUCT_MANAGER_TOKEN_ENV)?,
+            service_token,
+            auth: parse_auth(self.auth.as_deref(), env)?,
+            codex_model: non_empty(self.codex_model),
+            auth_file: non_empty(self.auth_file).map(PathBuf::from),
+        })
+    }
+}
+
 fn value_for<I>(flag: &str, iter: &mut I) -> Result<String, ArgsError>
 where
     I: Iterator<Item = String>,
@@ -215,6 +332,32 @@ where
             "unknown --auth '{other}'; expected deepseek|chatgpt-oauth|anthropic-oauth"
         ))),
     }
+}
+
+fn parse_bind(raw: &str, flag: &str) -> Result<SocketAddr, ArgsError> {
+    raw.parse()
+        .map_err(|_| ArgsError::new(format!("{flag} must be addr:port, got '{raw}'")))
+}
+
+fn validate_bind(
+    bind: SocketAddr,
+    allow_non_loopback: bool,
+    service_token: Option<&str>,
+) -> Result<(), ArgsError> {
+    if bind.ip().is_loopback() {
+        return Ok(());
+    }
+    if !allow_non_loopback {
+        return Err(ArgsError::new(
+            "non-loopback --bind requires explicit --allow-non-loopback",
+        ));
+    }
+    if service_token.is_none() {
+        return Err(ArgsError::new(format!(
+            "non-loopback --bind requires environment variable {SERVICE_TOKEN_ENV}"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_repo(repo: &str) -> Result<RepositoryPath, ArgsError> {

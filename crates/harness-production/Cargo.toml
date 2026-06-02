@@ -33,9 +33,10 @@ harness-forge-forgejo = { path = "../harness-forge-forgejo" }
 harness-runner = { path = "../harness-runner" }
 harness-workflow = { path = "../harness-workflow" }
 reqwest = { workspace = true, features = ["json"] }
+serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
 
 [dev-dependencies]
 harness-forge-memory = { path = "../harness-forge-memory" }

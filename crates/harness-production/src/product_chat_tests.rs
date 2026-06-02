@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use harness_agents::{
     ProductManagerDraftIssue, ProductManagerError, ProductManagerRequest, ProductManagerResponse,
@@ -12,6 +14,11 @@ use crate::product_chat::{
     ProductChatOpenOptions, ProductChatSession, ProductManagerResponder, PRODUCT_LABEL,
     WORKFLOW_INTAKE_LABEL,
 };
+use crate::product_chat_args::{
+    parse_with_env, ParseOutcome, DEFAULT_SERVICE_BIND, HUMAN_TOKEN_ENV, PRODUCT_MANAGER_TOKEN_ENV,
+    SERVICE_TOKEN_ENV,
+};
+use crate::product_chat_service::{HttpRequest, ProductChatHttpApp, ProductChatService};
 
 struct FakeResponder {
     response: ProductManagerResponse,
@@ -78,6 +85,43 @@ fn fake_responder() -> FakeResponder {
     }
 }
 
+fn product_chat_env(key: &str) -> Option<String> {
+    match key {
+        HUMAN_TOKEN_ENV => Some("human-secret".into()),
+        PRODUCT_MANAGER_TOKEN_ENV => Some("pm-secret".into()),
+        _ => None,
+    }
+}
+
+async fn fake_service_app(service_token: Option<&str>) -> ProductChatHttpApp {
+    let (human, product_manager, _repo) = seeded().await;
+    let service = ProductChatService::new(
+        "https://git.example.test".into(),
+        RepositoryPath::new("ai", "harness"),
+        Arc::new(human) as Arc<dyn Forge>,
+        Arc::new(product_manager) as Arc<dyn Forge>,
+        Arc::new(fake_responder()) as Arc<dyn ProductManagerResponder>,
+    );
+    ProductChatHttpApp::new(service, service_token.map(str::to_string))
+}
+
+fn json_request(method: &str, path: &str, body: serde_json::Value) -> HttpRequest {
+    HttpRequest::new(method, path, serde_json::to_vec(&body).unwrap())
+        .with_header("content-type", "application/json")
+}
+
+fn response_json(response: &crate::product_chat_service::HttpResponse) -> serde_json::Value {
+    serde_json::from_str(response.body()).unwrap()
+}
+
+async fn create_service_session(app: &ProductChatHttpApp) -> String {
+    let response = app
+        .handle_http_request(json_request("POST", "/sessions", serde_json::json!({})))
+        .await;
+    assert_eq!(response.status(), 201);
+    response_json(&response)["id"].as_str().unwrap().to_string()
+}
+
 #[test]
 fn product_chat_markers_render_and_parse() {
     let marker = render_transcript_marker("pc-abc");
@@ -92,11 +136,13 @@ fn product_chat_markers_render_and_parse() {
 #[tokio::test]
 async fn product_chat_core_drives_transcript_and_idempotent_filing() {
     let (human, product_manager, _repo) = seeded().await;
-    let responder = fake_responder();
+    let responder = Arc::new(fake_responder());
+    let human_session = Arc::new(human.clone());
+    let product_session = Arc::new(product_manager);
     let mut session = ProductChatSession::open(
-        &human,
-        &product_manager,
-        &responder,
+        human_session,
+        product_session,
+        responder,
         ProductChatOpenOptions {
             base_url: "https://git.example.test".into(),
             repo_path: RepositoryPath::new("ai", "harness"),
@@ -136,11 +182,11 @@ async fn product_chat_core_drives_transcript_and_idempotent_filing() {
 #[tokio::test]
 async fn product_chat_file_refuses_invalid_draft_numbers() {
     let (human, product_manager, _repo) = seeded().await;
-    let responder = fake_responder();
+    let responder = Arc::new(fake_responder());
     let session = ProductChatSession::open(
-        &human,
-        &product_manager,
-        &responder,
+        Arc::new(human),
+        Arc::new(product_manager),
+        responder,
         ProductChatOpenOptions {
             base_url: "https://git.example.test".into(),
             repo_path: RepositoryPath::new("ai", "harness"),
@@ -153,4 +199,180 @@ async fn product_chat_file_refuses_invalid_draft_numbers() {
         session.file_draft(1).await,
         Err(ProductChatError::InvalidDraftNumber { .. })
     ));
+}
+
+#[test]
+fn product_chat_serve_args_default_to_loopback_bind() {
+    let outcome = parse_with_env(
+        [
+            "serve",
+            "--base-url",
+            "https://git.example.test",
+            "--repo",
+            "ai/harness",
+        ]
+        .into_iter()
+        .map(String::from),
+        product_chat_env,
+    )
+    .expect("parses");
+    let ParseOutcome::Serve(args) = outcome else {
+        panic!("expected serve")
+    };
+    assert_eq!(args.bind.to_string(), DEFAULT_SERVICE_BIND);
+    assert!(args.bind.ip().is_loopback());
+}
+
+#[test]
+fn product_chat_non_loopback_bind_requires_opt_in_and_service_token() {
+    let error = parse_with_env(
+        [
+            "serve",
+            "--bind",
+            "0.0.0.0:39200",
+            "--base-url",
+            "https://git.example.test",
+            "--repo",
+            "ai/harness",
+        ]
+        .into_iter()
+        .map(String::from),
+        product_chat_env,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("--allow-non-loopback"));
+
+    let error = parse_with_env(
+        [
+            "serve",
+            "--bind",
+            "0.0.0.0:39200",
+            "--allow-non-loopback",
+            "--base-url",
+            "https://git.example.test",
+            "--repo",
+            "ai/harness",
+        ]
+        .into_iter()
+        .map(String::from),
+        product_chat_env,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains(SERVICE_TOKEN_ENV));
+
+    let outcome = parse_with_env(
+        [
+            "serve",
+            "--bind",
+            "0.0.0.0:39200",
+            "--allow-non-loopback",
+            "--base-url",
+            "https://git.example.test",
+            "--repo",
+            "ai/harness",
+        ]
+        .into_iter()
+        .map(String::from),
+        |key| match key {
+            SERVICE_TOKEN_ENV => Some("service-secret".into()),
+            other => product_chat_env(other),
+        },
+    )
+    .expect("non-loopback is explicit and authenticated");
+    let ParseOutcome::Serve(args) = outcome else {
+        panic!("expected serve")
+    };
+    assert_eq!(args.service_token.as_deref(), Some("service-secret"));
+}
+
+#[tokio::test]
+async fn product_chat_service_rejects_unauthenticated_request_when_token_configured() {
+    let app = fake_service_app(Some("service-secret")).await;
+    let response = app
+        .handle_http_request(HttpRequest::new("GET", "/health", Vec::<u8>::new()))
+        .await;
+    assert_eq!(response.status(), 401);
+
+    let response = app
+        .handle_http_request(
+            HttpRequest::new("GET", "/health", Vec::<u8>::new())
+                .with_header("authorization", "Bearer service-secret"),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn product_chat_service_post_sessions_creates_session_response() {
+    let app = fake_service_app(None).await;
+    let response = app
+        .handle_http_request(json_request("POST", "/sessions", serde_json::json!({})))
+        .await;
+    assert_eq!(response.status(), 201);
+    let body = response_json(&response);
+    assert!(body["id"].as_str().unwrap().starts_with("pc-"));
+    assert_eq!(body["transcript_issue"].as_u64(), Some(1));
+    assert_eq!(
+        body["transcript_url"].as_str(),
+        Some("https://git.example.test/ai/harness/issues/1")
+    );
+}
+
+#[tokio::test]
+async fn product_chat_service_post_messages_returns_reply_and_drafts() {
+    let app = fake_service_app(None).await;
+    let session_id = create_service_session(&app).await;
+
+    let response = app
+        .handle_http_request(json_request(
+            "POST",
+            &format!("/sessions/{session_id}/messages"),
+            serde_json::json!({ "message": "I want a chat MVP." }),
+        ))
+        .await;
+
+    assert_eq!(response.status(), 200);
+    let body = response_json(&response);
+    assert_eq!(body["reply"].as_str(), Some("Let's file a small MVP."));
+    assert_eq!(
+        body["drafts"][0]["slug"].as_str(),
+        Some("terminal-chat-mvp")
+    );
+    assert_eq!(
+        body["transcript_url"].as_str(),
+        Some("https://git.example.test/ai/harness/issues/1")
+    );
+}
+
+#[tokio::test]
+async fn product_chat_service_file_draft_returns_existing_issue_on_repeated_calls() {
+    let app = fake_service_app(None).await;
+    let session_id = create_service_session(&app).await;
+    let message_path = format!("/sessions/{session_id}/messages");
+    app.handle_http_request(json_request(
+        "POST",
+        &message_path,
+        serde_json::json!({ "message": "I want a chat MVP." }),
+    ))
+    .await;
+    let file_path = format!("/sessions/{session_id}/drafts/terminal-chat-mvp/file");
+
+    let first = app
+        .handle_http_request(HttpRequest::new("POST", &file_path, Vec::<u8>::new()))
+        .await;
+    let second = app
+        .handle_http_request(HttpRequest::new("POST", &file_path, Vec::<u8>::new()))
+        .await;
+
+    assert_eq!(first.status(), 200);
+    assert_eq!(second.status(), 200);
+    let first = response_json(&first);
+    let second = response_json(&second);
+    assert_eq!(first["created"].as_bool(), Some(true));
+    assert_eq!(second["created"].as_bool(), Some(false));
+    assert_eq!(first["issue"]["number"], second["issue"]["number"]);
+    assert_eq!(
+        first["issue"]["url"].as_str(),
+        Some("https://git.example.test/ai/harness/issues/2")
+    );
 }

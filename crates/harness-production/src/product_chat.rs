@@ -6,6 +6,7 @@
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -46,10 +47,25 @@ pub enum ProductChatError {
     Forge(ForgeError),
     ProductManager(ProductManagerError),
     Provider(ProviderError),
-    RepositoryNotFound { owner: String, name: String },
-    TranscriptNotFound { number: u64 },
-    TranscriptNotProduct { number: u64, labels: Vec<String> },
-    InvalidDraftNumber { requested: usize, available: usize },
+    RepositoryNotFound {
+        owner: String,
+        name: String,
+    },
+    TranscriptNotFound {
+        number: u64,
+    },
+    TranscriptNotProduct {
+        number: u64,
+        labels: Vec<String>,
+    },
+    InvalidDraftNumber {
+        requested: usize,
+        available: usize,
+    },
+    DraftNotFound {
+        slug: String,
+        available: Vec<String>,
+    },
     Runtime(String),
     Io(io::Error),
 }
@@ -82,6 +98,10 @@ impl fmt::Display for ProductChatError {
                 formatter,
                 "draft #{requested} is not available; latest draft count is {available}"
             ),
+            ProductChatError::DraftNotFound { slug, available } => write!(
+                formatter,
+                "draft slug `{slug}` is not available; latest draft slugs are {available:?}"
+            ),
             ProductChatError::Runtime(message) => {
                 write!(formatter, "runtime setup failed: {message}")
             }
@@ -101,6 +121,7 @@ impl Error for ProductChatError {
             | ProductChatError::TranscriptNotFound { .. }
             | ProductChatError::TranscriptNotProduct { .. }
             | ProductChatError::InvalidDraftNumber { .. }
+            | ProductChatError::DraftNotFound { .. }
             | ProductChatError::Runtime(_) => None,
         }
     }
@@ -144,14 +165,13 @@ pub struct FileDraftOutcome {
 }
 
 pub struct ProductChatSession<
-    'a,
     H: Forge + ?Sized,
     P: Forge + ?Sized,
     R: ProductManagerResponder + ?Sized,
 > {
-    human_forge: &'a H,
-    product_forge: &'a P,
-    responder: &'a R,
+    human_forge: Arc<H>,
+    product_forge: Arc<P>,
+    responder: Arc<R>,
     base_url: String,
     repo_path: RepositoryPath,
     repository: Repository,
@@ -162,16 +182,16 @@ pub struct ProductChatSession<
     latest_drafts: Vec<ProductManagerDraftIssue>,
 }
 
-impl<'a, H, P, R> ProductChatSession<'a, H, P, R>
+impl<H, P, R> ProductChatSession<H, P, R>
 where
     H: Forge + ?Sized,
     P: Forge + ?Sized,
     R: ProductManagerResponder + ?Sized,
 {
     pub async fn open(
-        human_forge: &'a H,
-        product_forge: &'a P,
-        responder: &'a R,
+        human_forge: Arc<H>,
+        product_forge: Arc<P>,
+        responder: Arc<R>,
         options: ProductChatOpenOptions,
     ) -> Result<Self, ProductChatError> {
         let repository = human_forge
@@ -185,11 +205,23 @@ where
         let product_user = product_forge.current_user().await?;
         let (transcript, session_key) = match options.transcript_issue {
             Some(number) => {
-                resume_transcript(human_forge, &repository, number, &options.repo_path).await?
+                resume_transcript(
+                    human_forge.as_ref(),
+                    &repository,
+                    number,
+                    &options.repo_path,
+                )
+                .await?
             }
-            None => create_transcript(human_forge, &repository).await?,
+            None => create_transcript(human_forge.as_ref(), &repository).await?,
         };
-        let turns = load_recent_turns(human_forge, &transcript, &human_user, &product_user).await?;
+        let turns = load_recent_turns(
+            human_forge.as_ref(),
+            &transcript,
+            &human_user,
+            &product_user,
+        )
+        .await?;
         Ok(Self {
             human_forge,
             product_forge,
@@ -268,10 +300,32 @@ where
                 available: self.latest_drafts.len(),
             });
         }
-        let draft = &self.latest_drafts[number - 1];
+        self.file_draft_issue(&self.latest_drafts[number - 1]).await
+    }
+
+    pub async fn file_draft_slug(&self, slug: &str) -> Result<FileDraftOutcome, ProductChatError> {
+        let draft = self
+            .latest_drafts
+            .iter()
+            .find(|draft| draft.slug == slug)
+            .ok_or_else(|| ProductChatError::DraftNotFound {
+                slug: slug.to_string(),
+                available: self
+                    .latest_drafts
+                    .iter()
+                    .map(|draft| draft.slug.clone())
+                    .collect(),
+            })?;
+        self.file_draft_issue(draft).await
+    }
+
+    async fn file_draft_issue(
+        &self,
+        draft: &ProductManagerDraftIssue,
+    ) -> Result<FileDraftOutcome, ProductChatError> {
         let marker = render_filing_marker(&self.session_key, &draft.slug);
         if let Some(existing) =
-            find_issue_by_marker(self.product_forge, &self.repository, &marker).await?
+            find_issue_by_marker(self.product_forge.as_ref(), &self.repository, &marker).await?
         {
             return Ok(FileDraftOutcome {
                 issue: existing,
@@ -497,9 +551,8 @@ fn issue_url(base_url: &str, repo: &RepositoryPath, number: ItemNumber) -> Strin
 }
 
 fn new_session_key() -> String {
-    format!(
-        "pc-{}-{}",
-        Utc::now().format("%Y%m%d%H%M%S"),
-        std::process::id()
-    )
+    let timestamp = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000);
+    format!("pc-{timestamp}-{}", std::process::id())
 }

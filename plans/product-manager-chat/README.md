@@ -155,12 +155,17 @@ Status legend: ☐ pending · ☑ done
    `cargo test -p harness-production product_chat`, `cargo dev-clippy`, and
    `cargo dev-check`.
 
-4. ☐ **Phase 4 — Local service API for external frontends.**
+4. ☑ **Phase 4 — Local service API for external frontends.**
    `prompts/phase-4-service-api.md`
 
-   Add a `serve` mode exposing the same conversation core over loopback HTTP
-   JSON plus streaming events. The external web/PWA repo consumes this API; this
-   repo still ships no frontend assets beyond API docs/examples.
+   Done: `harness-product-manager-chat serve` exposes the existing
+   product-chat core over a small loopback JSON API for creating/resuming
+   sessions, sending messages, reading latest drafts, and explicitly filing a
+   draft idempotently as workflow intake. The API binds to loopback by default,
+   requires an opt-in plus bearer token for non-loopback binds, and is documented
+   in `docs/reference/product-manager-chat-api.md`. Validation run:
+   `cargo fmt --all`, `cargo test -p harness-production product_chat`,
+   `cargo dev-clippy`, and `cargo dev-check`.
 
 5. ☐ **Phase 5 — Optional Matrix/mobile text adapter.**
    `prompts/phase-5-matrix-mobile-text-adapter.md`

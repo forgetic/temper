@@ -8,6 +8,7 @@ pub mod forgejo_rest;
 pub mod product_chat;
 pub mod product_chat_args;
 pub mod product_chat_repl;
+pub mod product_chat_service;
 pub mod provision;
 pub mod provision_args;
 pub mod trigger;

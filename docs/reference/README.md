@@ -12,4 +12,5 @@ Current reference pages:
 - [Forgejo backend](forgejo-backend.md)
 - [Workflow layer](workflow-layer.md)
 - [Cross-repository workflow contracts](cross-repo-workflows.md)
+- [Product-manager chat local API](product-manager-chat-api.md)
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)
