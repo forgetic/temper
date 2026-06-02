@@ -8,9 +8,15 @@ description = "Provider-neutral interactive conversation primitives for Temper."
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+temper-forge = { path = "../temper-forge" }
 thiserror.workspace = true
+
+[dev-dependencies]
+temper-forge-memory = { path = "../temper-forge-memory" }
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

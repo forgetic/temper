@@ -1,12 +1,13 @@
 # Interactive conversation interface
 
 This page defines the target contract for Temper's generic interaction plane.
-`crates/temper-interaction` contains the domain-only portion of this contract:
+`crates/temper-interaction` contains the reusable core of this contract:
 typed conversation/profile/proposal ids, participants, turns, wire-serializable
-requests/replies, inert proposals, deterministic proposal-id validation, and the
-object-safe responder adapter trait. Transcript storage, proposal acceptance,
-transport adapters, process-responder wiring, and product-manager compatibility
-extraction remain later phases.
+requests/replies, inert proposals, deterministic proposal-id validation, the
+object-safe responder adapter trait, Forge-backed transcript/session helpers,
+and explicit idempotent issue-proposal acceptance. Transport adapters,
+process-responder wiring, and full product-manager profile recasting remain
+later phases.
 
 ## Scope
 
@@ -22,9 +23,9 @@ authoritative for workflow state.
 
 `temper-interaction` should remain provider-neutral and have no dependency on
 `temper-agents`, `temper-runner`, `temper-workflow`, `temper-production`, or any
-LLM SDK. Its domain layer should model responder input/output only; responders
-receive no Forge handle and proposals are data until an acceptance service acts
-on them.
+LLM SDK. It may use the portable `temper-forge` trait for transcript and
+acceptance storage. Responders still receive no Forge handle, and proposals are
+data until the interaction runtime's acceptance path acts on them.
 
 The Rust trait is an adapter interface. The preferred public extension boundary
 is a process protocol using the same serialized request/reply types.
@@ -44,19 +45,21 @@ is a process protocol using the same serialized request/reply types.
   external implementations the same contract should be exposed as a process
   request/reply protocol.
 - **Transcript store**: creates or resumes conversations, appends ordered turns,
-  and reads a transcript view suitable for a responder. A Forge-backed store may
-  use issues and comments; any in-memory session registry is only a cache.
+  and reads a transcript view suitable for a responder. The current Forge-backed
+  store uses transcript issues plus comments; any in-memory session registry is
+  only a cache.
 - **Proposal**: a typed, serializable suggested action with stable identity,
   display text, and profile-specific payload. Proposals are inert until accepted.
 - **Proposal acceptance**: a narrow command that records explicit acceptance,
   reloads current durable state, validates the proposal against profile policy,
-  and applies the allowed mutation idempotently.
+  and applies the allowed mutation idempotently. Issue-intake acceptance searches
+  for a hidden marker before creating a labeled workflow intake issue.
 - **Process responder adapter**: provider-neutral glue that invokes an external
   command/service with a serialized `ConversationRequest`, reads one serialized
   `ConversationReply`, enforces timeouts and parse errors, and validates
   proposals before the interaction service persists anything.
 - **Interaction service**: transport-neutral orchestration for create/resume,
-  append human turn, run a responder adapter, persist reply/proposals, list
+  append human turn, run a responder adapter, persist reply/proposals, cache
   current proposals, and accept a proposal.
 - **Transport adapter**: maps REPL, HTTP/SSE, Matrix, web/mobile, or voice events
   to service commands and renders responses. It owns protocol details only.

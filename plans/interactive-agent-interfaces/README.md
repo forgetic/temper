@@ -162,16 +162,19 @@ Status legend: ☐ pending · ☑ done
    `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
    `cargo dev-check`.
 
-3. ☐ **Phase 3 — Extract Forge-backed transcript and issue-proposal core.**
+3. ☑ **Phase 3 — Extract Forge-backed transcript and issue-proposal core.**
    `prompts/phase-3-forge-transcript-core.md`
 
-   Move the reusable pieces of `product_chat.rs` into `temper-interaction`:
-   create/resume transcript issue, load recent turns, append human/agent turns,
-   render/parse markers, and idempotently accept an issue-intake proposal.
-   Product-manager-specific labels/prompts stay out of the generic code and come
-   from profile config. Keep responder invocation abstract: session/runtime code
-   may call an `InteractiveResponder` adapter, but it must not depend on
-   `temper-agents`, pi SDKs, or an in-process product-manager implementation.
+   Done: `temper-interaction` now owns Forge-backed transcript creation/resume,
+   configurable marker/label/title/participant policy, recent-turn loading by
+   Forge author identity, generic session dispatch through `InteractiveResponder`,
+   durable agent replies, latest-proposal caching, and idempotent issue-intake
+   acceptance with transcript backlink/requested-by markers. `product_chat.rs`
+   is a compatibility wrapper that maps product-manager drafts onto generic
+   issue proposals while preserving product labels, markers, and tests.
+   Validation run: `cargo fmt --all`; `cargo test -p temper-interaction`;
+   `cargo test -p temper-agents product_manager`; `cargo test -p temper-production product_chat`;
+   `cargo dev-clippy`; `cargo dev-check`.
 
 4. ☐ **Phase 4 — Add responder adapters and recast product-manager as a profile.**
    `prompts/phase-4-product-manager-profile.md`

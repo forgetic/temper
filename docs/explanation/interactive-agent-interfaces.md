@@ -5,11 +5,11 @@ human-facing tools to agents while still recording durable state in the Forge.
 The current product-manager chat service is the first concrete profile using
 this idea, but it is not the abstraction itself.
 
-The generic interaction-plane contract now starts in the
-`temper-interaction` domain crate for responder requests, replies, participants,
-and inert proposals. Later phases will extract transcript storage, proposal
-acceptance, transports, and the current product-manager-specific implementation
-behind these names.
+The generic interaction-plane contract now lives in `temper-interaction` for
+responder requests, replies, participants, inert proposals, Forge-backed
+transcripts/sessions, and explicit idempotent issue-proposal acceptance. Later
+phases will add process responder adapters, transport APIs, and a fuller recast
+of the current product-manager-specific implementation behind profile names.
 
 ## Shape
 
@@ -63,8 +63,9 @@ They may propose work, but they do not directly claim workflow authority.
 
 When an accepted proposal creates or updates a workflow artifact, that mutation
 is performed by the interaction runtime through a narrow, idempotent acceptance
-path. The resulting issue, pull request, label, or comment is then ordinary Forge
-state for the workflow runtime to observe.
+path. The current issue-intake path records a hidden marker, transcript backlink,
+and requested-by field when available. The resulting issue is then ordinary
+Forge state for the workflow runtime to observe.
 
 This keeps the human conversation interface reusable without adding chat, mobile,
 voice, or concrete LLM SDK concerns to `temper-forge`, `temper-workflow`, or

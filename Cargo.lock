@@ -5885,9 +5885,13 @@ name = "temper-interaction"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
+ "temper-forge",
+ "temper-forge-memory",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -5906,6 +5910,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-interaction",
  "temper-runner",
  "temper-workflow",
  "tokio",

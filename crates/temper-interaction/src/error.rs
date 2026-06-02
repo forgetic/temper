@@ -1,10 +1,11 @@
 use std::error::Error;
 
+use temper_forge::ForgeError;
 use thiserror::Error;
 
-use crate::types::ProposalId;
+use crate::types::{ProposalId, ProposalKind};
 
-/// Errors produced by the provider-neutral interaction domain layer.
+/// Errors produced by the provider-neutral interaction layer.
 ///
 /// The `Profile` and `Provider` variants are intentionally source-preserving so
 /// concrete responders can adapt their own error types without this crate taking
@@ -21,15 +22,74 @@ pub enum InteractionError {
         /// The slug rule that was violated.
         reason: &'static str,
     },
+    /// A marker namespace cannot be represented safely in a hidden Forge marker.
+    #[error("invalid marker namespace `{value}`: {reason}")]
+    InvalidMarkerNamespace {
+        /// The rejected marker namespace.
+        value: String,
+        /// The namespace rule that was violated.
+        reason: &'static str,
+    },
     /// A responder returned two proposals with the same stable id.
     #[error("duplicate proposal id `{id}`")]
     DuplicateProposalId {
         /// The repeated proposal id.
         id: ProposalId,
     },
+    /// A proposal acceptance path only supports issue proposals.
+    #[error("proposal `{id}` has kind `{kind}`, expected `issue`")]
+    UnsupportedProposalKind {
+        /// Proposal being accepted.
+        id: ProposalId,
+        /// Actual proposal kind.
+        kind: ProposalKind,
+    },
+    /// A proposal id was not present in the latest cached responder reply.
+    #[error("proposal `{id}` is not available; latest proposal ids are {available:?}")]
+    ProposalNotFound {
+        /// Requested proposal id.
+        id: ProposalId,
+        /// Currently cached proposal ids.
+        available: Vec<ProposalId>,
+    },
+    /// Configuration supplied to the generic interaction runtime is invalid.
+    #[error("invalid interaction config field `{field}`: {message}")]
+    InvalidConfig {
+        /// Configuration field name.
+        field: &'static str,
+        /// Explanation of the invalid value.
+        message: String,
+    },
     /// Serializing or deserializing profile-specific JSON payload failed.
     #[error("interaction JSON payload failed: {0}")]
     Json(#[from] serde_json::Error),
+    /// A Forge operation failed while loading transcripts or accepting proposals.
+    #[error("forge operation failed: {0}")]
+    Forge(#[from] ForgeError),
+    /// The configured repository was not visible to the Forge handle.
+    #[error("repository {owner}/{name} not found or not readable by the interaction token")]
+    RepositoryNotFound {
+        /// Repository owner.
+        owner: String,
+        /// Repository name.
+        name: String,
+    },
+    /// A requested transcript issue number was not found.
+    #[error("transcript issue #{number} was not found")]
+    TranscriptNotFound {
+        /// Repository-scoped issue number.
+        number: u64,
+    },
+    /// The issue requested for resume does not match the transcript label policy.
+    #[error("issue #{number} is not a transcript with only label `{expected_label}`: {labels:?}")]
+    TranscriptLabelMismatch {
+        /// Repository-scoped issue number.
+        number: u64,
+        /// Required transcript label.
+        expected_label: String,
+        /// Labels found on the issue.
+        labels: Vec<String>,
+    },
     /// A responder failed without exposing a structured source error.
     #[error("interactive responder failed: {message}")]
     Responder {
