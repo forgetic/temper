@@ -298,8 +298,8 @@ impl ProviderConfig {
     /// The reasoning effort for this mode. API-key and Anthropic OAuth requests
     /// leave it unset; the codex reasoning models read effort from this field,
     /// so Codex OAuth requests the **lowest supported** effort to keep one-shot
-    /// JSON decisions fast and cheap. A3 live validation: `gpt-5.3-codex`
-    /// rejects `minimal` (supported values are `none`/`low`/`medium`/`high`/
+    /// JSON decisions fast and cheap. Live validation found Codex models reject
+    /// `minimal` (supported values are `none`/`low`/`medium`/`high`/
     /// `xhigh`), so Codex OAuth uses [`ThinkingLevel::Low`], not `Minimal`.
     pub(crate) fn thinking_level(&self) -> Option<ThinkingLevel> {
         match &self.auth {

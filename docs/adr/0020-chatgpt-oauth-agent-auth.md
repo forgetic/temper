@@ -57,10 +57,10 @@ The access token is short-lived, so `ChatGptOAuth` resolves the bearer (load →
 refresh-if-near-expiry → access token) **each time a decision runs**, rather than
 baking it into the provider object. Codex models are reasoning models, so this
 mode leaves temperature unset and requests the lowest supported reasoning effort
-(`low`), where the DeepSeek path pins `temperature = 0.0`. (A3 live validation:
-the default codex model is `gpt-5.3-codex` — a ChatGPT account 400s the older
-`gpt-5.x-codex` ids — and `gpt-5.3-codex` rejects `minimal` effort, so `low` is
-the floor; both are overridable.) No token is ever logged, formatted, or
+(`low`), where the DeepSeek path pins `temperature = 0.0`. (Live validation:
+the default codex model is `gpt-5.5` — ChatGPT's served model ids move over
+time — and Codex rejects `minimal` effort, so `low` is the floor; both are
+overridable.) No token is ever logged, formatted, or
 placed in an error; failures carry only the provider/path and (for refresh) an
 HTTP status.
 

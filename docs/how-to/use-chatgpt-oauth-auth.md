@@ -40,9 +40,8 @@ harness-testing-worker --kind role --role engineer --user engineer \
 
 Overrides:
 
-- `--codex-model <id>` — the Codex model id (default `gpt-5.3-codex`, the id A3
-  live-validated a ChatGPT account serves; others returned `model is not
-  supported when using Codex with a ChatGPT account`).
+- `--codex-model <id>` — the Codex model id (default `gpt-5.5`; override this
+  when ChatGPT's catalog changes).
 - `--auth-file <path>` — a non-default auth-file location.
 
 ### Via a config file / env (the launch-script bridge)
@@ -52,7 +51,7 @@ The launch script sources a config file (e.g. the example's
 
 ```sh
 HARNESS_AGENTS_AUTH=chatgpt-oauth        # deepseek | chatgpt-oauth | anthropic-oauth
-HARNESS_AGENTS_CODEX_MODEL=gpt-5.3-codex # optional Codex override (default)
+HARNESS_AGENTS_CODEX_MODEL=gpt-5.5 # optional Codex override (default)
 HARNESS_AGENTS_AUTH_FILE=/path/auth.json # optional shared auth-file override
 ```
 

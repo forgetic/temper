@@ -34,12 +34,11 @@ const TOKEN_URL_ENV: &str = "HARNESS_AGENTS_CODEX_TOKEN_URL";
 /// Default codex model the ChatGPT subscription serves (overridable). Listed by
 /// the SDK's `openai-codex` route; the route ignores `model.api`.
 ///
-/// A3 live validation against a real ChatGPT account: the Codex endpoint rejects
-/// `gpt-5-codex`/`gpt-5.1-codex`/`gpt-5.2-codex` with "model is not supported when
-/// using Codex with a ChatGPT account" — `gpt-5.3-codex` is the one that is
-/// served. Keep this an id the subscription accepts; override via
+/// Live validation against a real ChatGPT account: the Codex endpoint rejects
+/// older `*-codex` ids with "model is not supported when using Codex with a
+/// ChatGPT account". Keep this an id the subscription accepts; override via
 /// [`CODEX_MODEL_ENV`] when ChatGPT's catalog moves on.
-pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.3-codex";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 /// Provider key under which the codex credential lives in the auth file.
 const PROVIDER_KEY: &str = "openai-codex";
 /// Compiled-in OpenAI Codex OAuth token endpoint + public client id (the same
