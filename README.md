@@ -1,56 +1,175 @@
-# Harness — issue-tracker-native orchestration for AI software delivery
+# Harness
 
-Harness is a Rust workflow runtime that lets AI agents and humans deliver software through the same source-control issue tracker. It turns Forgejo-style issues, pull requests, labels, comments, dependency links, reviews, CI jobs, and merges into a durable state machine: workers get role-scoped queues and tools, every mutation is checked against the declared workflow, and the Forge remains the shared source of truth.
+**Issue-tracker-native execution engine for agentic workflows.**
+
+*Run agentic workflows on top of your Forge.*
+
+Harness is a workflow runtime that executes agentic workflows using your Forge as the source of truth.
+
+Issues, pull requests, labels, reviews, CI status, comments, and dependency links become workflow state. Harness evaluates that state against a declared workflow and dispatches work to agents while enforcing valid transitions.
+
+The Forge remains authoritative. There is no separate workflow database, no hidden workflow state, and no requirement to adopt a specific delivery process.
+
+Define a workflow as a state machine. Harness executes it.
 
 [Docs](docs/README.md) · [Agentic workflows](docs/explanation/agentic-workflows.md) · [Workflow contract](docs/reference/workflow-layer.md) · [Forge interface](docs/reference/forge-interface.md) · [Reference demo](examples/reference-delivery/README.md)
 
-## The idea
+---
 
-AI coding is easier to trust when it behaves like a teammate, not like a hidden automation script. Harness keeps autonomous work inside normal project artifacts:
+## Why
 
-- an issue describes the work;
-- labels and metadata classify its workflow state;
-- a role claims it with a lease;
-- a pull request carries the implementation;
-- CI and native review decisions are gates;
-- merges, dependency unblocks, and recovery happen only when the workflow allows them.
+Most workflow systems keep their state in a separate orchestration service.
 
-Humans can open the Forge UI and see what happened. Agents can restart, repeat a tool call, or lose context without owning durable truth outside the tracker.
+Issues are inputs. Pull requests are outputs. The actual workflow lives somewhere else.
+
+Harness takes the opposite approach.
+
+The Forge already contains the artifacts that software teams use to coordinate work:
+
+* issues
+* pull requests
+* labels
+* reviews
+* CI results
+* dependency links
+* comments
+
+Harness treats those artifacts as workflow state.
+
+A workflow is defined as a state machine over Forge artifacts. Workers inspect Forge state, perform authorized actions, and advance work through declared transitions. If an agent crashes, loses context, or restarts, workflow state remains intact because it lives in the Forge itself.
+
+Humans and agents participate through the same interface and observe the same source of truth.
+
+---
+
+## Core ideas
+
+### The Forge is authoritative
+
+Harness does not maintain a separate workflow database.
+
+Current workflow state is derived from the Forge itself:
+
+* labels
+* metadata
+* dependencies
+* reviews
+* CI status
+* pull requests
+* merge state
+
+Polling is the correctness backstop. Webhooks are wake-up hints.
+
+Every transition reloads current Forge state before mutating anything.
+
+### Workflows are state machines
+
+Harness does not prescribe a software delivery process.
+
+Users define workflows as state machines with:
+
+* roles
+* queues
+* transitions
+* gates
+* dependency rules
+* recovery behavior
+
+Harness validates and executes those workflows.
+
+Whether the process is simple or complex is entirely up to the workflow definition.
+
+### Agents operate through workflow contracts
+
+Agents do not receive broad permission to manipulate repositories.
+
+Instead, Harness derives role-specific capabilities from the workflow definition.
+
+An agent can only perform actions that are valid for:
+
+* its role
+* the current state
+* the current transition
+
+This keeps autonomous behavior aligned with declared workflow rules.
+
+### Durable execution
+
+Workflow state survives:
+
+* agent crashes
+* process restarts
+* context loss
+* partial transitions
+* expired leases
+* infrastructure failures
+
+Because the durable state already exists in the Forge.
+
+Harness continuously reconciles observed state against workflow expectations and repairs drift when possible.
+
+---
 
 ## What Harness does
 
-Harness watches configured repositories and repeatedly asks:
+Given a set of repositories and workflow definitions, Harness repeatedly asks:
 
-- Which issues or pull requests match an active workflow queue?
-- Which role is allowed to act on them?
-- Which transition is legal from the current labels, metadata, dependencies, CI, and review state?
-- Is the next step judgment work for an agent, or mechanical controller work?
-- Did a crash, expired lease, partial transition, or cross-repo dependency require repair?
+* Which artifacts match an active queue?
+* Which role is eligible to act on them?
+* Which transitions are legal from the current state?
+* Which work requires agent judgment?
+* Which work can be handled mechanically?
+* Has anything stalled, expired, or drifted from the workflow?
 
-The answers come from a validated workflow spec and fresh Forge state. Agents do not receive generic permission to mutate labels or merge PRs; they receive narrow workflow tools derived from the transitions their role is authorized to run.
+The answers come from the workflow specification and current Forge state.
 
-## A two-minute example
+Harness then dispatches work, executes transitions, and keeps the workflow moving forward.
 
-A human files:
+---
+
+## A simple example
+
+A team defines a workflow with the following roles:
+
+```text
+architect
+engineer
+reviewer
+owner
+controller
+```
+
+A new issue is created:
 
 ```text
 Add password reset
 ```
 
-A reference workflow can move it like this:
+The workflow might define transitions like:
 
 ```text
-architect  -> turns intake into ready engineering work
-engineer   -> claims the code issue and opens an implementation PR
-CI         -> reports pass/fail on the PR head
-reviewer   -> approves or requests changes through native PR review
-owner      -> merges only after CI and review gates are both green
-controller -> repairs partial work, expires stale leases, and unblocks dependencies
+architect  -> prepare implementation work
+engineer   -> implement and open PR
+reviewer   -> approve or request changes
+owner      -> merge after required gates pass
+controller -> repair, recover, and unblock work
 ```
 
-If CI fails or review requests changes, the PR routes back to the engineer. If a prerequisite issue lands, dependency resolution can unblock the next issue mechanically. If one intake fans out across repositories, the parent stays blocked until every child work item lands in its own repository.
+Harness does not hard-code this process.
 
-## Architecture at a glance
+It simply evaluates the workflow definition, observes Forge state, and executes valid transitions.
+
+If review requests changes, the workflow may route back to engineering.
+
+If CI fails, the workflow may block progress.
+
+If dependencies are resolved, the workflow may automatically unblock waiting work.
+
+The behavior comes from the workflow definition, not from Harness itself.
+
+---
+
+## Architecture
 
 ```text
 Forge plane
@@ -61,28 +180,52 @@ harness-forge
   provider-neutral Forge trait and domain model
         ↑
 harness-workflow
-  validate specs · classify artifacts · evaluate queues/gates · plan/execute
-  transitions · enforce idempotency · manage leases · reconcile drift
+  workflow validation
+  queue evaluation
+  transition execution
+  gate enforcement
+  lease management
+  drift reconciliation
         ↑
 harness-runner
-  scan repositories · dispatch role workers · run mechanical workers · bind
-  external tools such as coding workspaces
+  repository scanning
+  role dispatch
+  mechanical workers
+  external tool integration
         ↑
 harness-agents / harness-production
-  real LLM role agents, Forgejo wiring, provisioners, webhook trigger, workers
+  LLM agents
+  Forge integrations
+  provisioners
+  webhook triggers
 ```
 
-The key invariant is simple: **the Forge is authoritative**. Polling is the correctness backstop; webhooks are only wake-up hints. Every transition reloads current state before mutating.
+The key invariant is simple:
 
-## Current shape
+> The Forge is the source of truth.
 
-Harness is an active Rust workspace, not just a README sketch. The core workflow runtime is implemented and tested against reference backends; Forgejo support, production worker wiring, LLM agents, webhook wakeups, cross-repo workflow modeling, and reference-delivery rehearsals live in this repository. The operator demo is useful for topology and behavior, but read its README for current caveats before treating it as a turnkey deployment.
+Everything else can be restarted, replaced, or recovered from current Forge state.
 
-## Start here
+---
 
-- New to the concepts: read [`docs/explanation/agentic-workflows.md`](docs/explanation/agentic-workflows.md).
-- Need exact runtime behavior: read [`docs/reference/workflow-layer.md`](docs/reference/workflow-layer.md).
-- Need the backend contract: read [`docs/reference/forge-interface.md`](docs/reference/forge-interface.md).
-- Want the reference workflow: read [`docs/explanation/reference-workflow.md`](docs/explanation/reference-workflow.md).
-- Want to run deterministic scenarios: `cargo test -p harness-runner --test end_to_end`.
-- Coding agent starting a session: read [`AGENTS.md`](AGENTS.md) after this file.
+## What Harness is not
+
+Harness is not:
+
+* an issue tracker
+* a project management tool
+* a coding agent
+* a workflow definition language tied to a single process
+* a hidden automation layer that owns workflow state
+
+Harness is an execution engine.
+
+It runs agentic workflows whose durable state lives in the Forge.
+
+---
+
+## Status
+
+Harness is under active development.
+
+The current implementation is opinionated toward agentic software-delivery workflows and includes support for running role-specific agents directly. The underlying workflow engine, however, is designed around a more general model: state-machine workflows executed against Forge artifacts as the authoritative source of truth.
