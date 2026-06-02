@@ -1,8 +1,11 @@
 # LLM agents reference
 
-`crates/temper-agents` is the production home for real, in-process LLM role
-agents. It is the only crate that depends on `pi_agent_rust`; `temper-forge`,
-`temper-workflow`, and `temper-runner` stay LLM-agnostic.
+`crates/temper-agents` is the current in-repo home for real, in-process LLM role
+agents. It is the only crate in this repository that depends on
+`pi_agent_rust`; `temper-forge`, `temper-workflow`, `temper-runner`, and
+`temper-interaction` stay LLM-agnostic. The interactive-agent plan is moving the
+public profile-responder boundary toward a process protocol so pi-SDK-backed
+responders can live in an external repository later.
 
 ## Runtime boundary
 

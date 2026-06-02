@@ -1,8 +1,16 @@
-# Phase 2 prompt — add `temper-interaction` domain traits and types
+# Phase 2 prompt — resume `temper-interaction` domain traits and types
 
-You are implementing Phase 2 of `plans/interactive-agent-interfaces/README.md`.
-Assume Phase 1 is done. Do not start extraction from product-chat yet except for
-small compile wiring needed by the new crate.
+You are implementing or resuming Phase 2 of
+`plans/interactive-agent-interfaces/README.md`. Assume Phase 1 is done. Do not
+start extraction from product-chat yet except for small compile wiring needed by
+the new crate.
+
+Phase 2 was previously interrupted with uncommitted work in the tree. Before
+editing, inspect `git status`, `git diff`, and any untracked
+`crates/temper-interaction/` files. You may keep, adjust, or discard the
+interrupted work. Keeping it is fine if it matches this prompt; discarding it is
+fine if a cleaner implementation is preferable. Make the choice explicit in the
+handoff and update the plan status only after validation.
 
 ## Read first
 
@@ -21,7 +29,10 @@ small compile wiring needed by the new crate.
 ## Goal
 
 Introduce a provider-neutral crate for interactive conversation primitives so the
-framework interface is no longer named after product-manager.
+framework interface is no longer named after product-manager. Treat the domain
+request/reply/proposal types as the future wire contract for an external
+responder process, even though this phase should not implement the process
+adapter yet.
 
 ## Tasks
 
@@ -48,7 +59,8 @@ framework interface is no longer named after product-manager.
    Keep names product-neutral. If you need a draft issue shape, call it an
    `IssueProposal` or similar, not `ProductManagerDraftIssue`.
 
-4. Define an object-safe responder trait, for example:
+4. Define an object-safe responder trait as the in-process adapter interface,
+   for example:
 
    ```rust
    #[async_trait]
@@ -61,15 +73,20 @@ framework interface is no longer named after product-manager.
    ```
 
    The exact error shape is up to you, but it must be able to wrap/adapt
-   profile-specific/provider errors in later phases.
+   profile-specific/provider errors in later phases. Do not make this trait the
+   only public extension story; the same request/reply/proposal types must be
+   cleanly serializable for a process boundary.
 
 5. Add validation helpers for deterministic proposal ids/slugs, adapting the
    existing product-manager slug rule if appropriate.
 
 6. Add hermetic unit tests for serialization, validation, duplicate proposal ids,
-   and trait object usability where possible.
+   and trait object usability where possible. Include at least one test that
+   round-trips the process-boundary-shaped request/reply JSON.
 
 7. Update workspace `Cargo.toml`, docs, and Phase 2 status in the plan README.
+   If you keep the interrupted AGENTS/docs updates, verify they still describe
+   the final crate accurately. If you discard the crate, remove those updates.
 
 ## Constraints
 
@@ -77,6 +94,8 @@ framework interface is no longer named after product-manager.
 - Do not alter the public product-manager API unless unavoidable.
 - Keep source files under 600 lines.
 - Avoid over-modeling transport details in this phase; transports come later.
+- Do not implement the external process responder adapter yet unless the plan is
+  explicitly updated; Phase 2 is the domain/wire-shape foundation.
 
 ## Validation
 

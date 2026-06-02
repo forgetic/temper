@@ -21,6 +21,8 @@ beyond compatibility adapters needed to keep tests passing.
 
 Move reusable conversation persistence and explicit proposal acceptance out of
 product-manager-specific production code into the generic interaction crate.
+Keep responder execution abstract so this phase works with both in-process and
+future process-backed responders.
 
 ## Tasks
 
@@ -29,8 +31,9 @@ product-manager-specific production code into the generic interaction crate.
 
    - `transcript.rs`: transcript open/create/resume, marker rendering/parsing,
      recent-turn loading.
-   - `session.rs`: append human turn, call `InteractiveResponder`, append agent
-     reply, cache latest proposals.
+   - `session.rs`: append human turn, call an `InteractiveResponder` adapter,
+     validate the returned `ConversationReply`, append agent reply, cache latest
+     proposals.
    - `proposal.rs`: idempotent acceptance helpers for issue-intake proposals.
    - `error.rs`: generic interaction/transcript/proposal errors.
 
@@ -58,9 +61,16 @@ product-manager-specific production code into the generic interaction crate.
 
 5. Keep `temper-production/src/product_chat.rs` compiling by delegating to the
    generic crate where possible, but do not spend this phase renaming all
-   product-manager types.
+   product-manager types. The production wrapper may still use the existing
+   in-process product-manager responder while the generic session code depends
+   only on the trait/request/reply contract.
 
-6. Update docs and Phase 3 status in the plan README.
+6. Preserve the process-boundary shape: transcript/session code owns durable
+   state and acceptance, while responders only return replies and inert
+   proposals. Do not pass Forge handles, workflow tools, or transport-specific
+   accounts into responder requests.
+
+7. Update docs and Phase 3 status in the plan README.
 
 ## Constraints
 
@@ -70,6 +80,8 @@ product-manager-specific production code into the generic interaction crate.
 - Do not add new methods to the `Forge` trait unless you prove a portable gap and
   update `docs/reference/forge-interface.md`.
 - Keep files under 600 lines by splitting modules before they grow.
+- Do not add concrete pi-SDK/provider dependencies or assume the product-manager
+  responder must remain in-process.
 
 ## Validation
 

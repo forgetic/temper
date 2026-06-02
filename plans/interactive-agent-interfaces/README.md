@@ -9,6 +9,16 @@ interfaces to agents.
 Hand the prompt files to implementation agents **one phase at a time, in order**.
 Each phase should land green and update this README's status.
 
+## Responder boundary direction
+
+The public extension boundary for interactive responders should be a
+**process-level request/reply protocol**. A Rust `InteractiveResponder` trait
+remains useful as an internal adapter interface, but external/profile
+implementations should be able to run out of process by receiving a serialized
+`ConversationRequest` and returning a serialized `ConversationReply` with inert
+proposals. Temper keeps ownership of transcripts, proposal validation, explicit
+acceptance, transport auth, and all Forge/workflow mutation.
+
 ## Problem statement
 
 The current implementation already separates the product-manager from workflow
@@ -81,8 +91,11 @@ not own workflow state.
 
 Preferred new crate: `crates/temper-interaction/`.
 
-The crate should depend on `temper-forge` but not on `temper-agents`,
-`temper-runner`, or provider SDK crates. Suggested modules:
+The crate should stay provider-neutral and must not depend on `temper-agents`,
+`temper-runner`, `temper-workflow`, `temper-production`, or provider SDK crates.
+Phase 2's domain-only surface does not need `temper-forge`; later transcript or
+acceptance modules may add it when public Forge identifiers become necessary.
+Suggested modules:
 
 - `types`: `ConversationId`, `ConversationProfileId`, `Participant`,
   `ConversationTurn`, `ConversationRequest`, `ConversationReply`, `Proposal`.
@@ -92,9 +105,21 @@ The crate should depend on `temper-forge` but not on `temper-agents`,
   filing as one reusable implementation.
 - `service`: in-memory active-session registry and transport-neutral commands.
 
-`temper-agents` should implement responders for concrete profiles, starting with
-product-manager. `temper-production` should contain deployable binaries and
-transport adapters, not the core conversation abstractions.
+`InteractiveResponder` is an in-process adapter trait, not the only extension
+boundary. The preferred public boundary is a process responder protocol: Temper
+sends a wire-serialized `ConversationRequest`, the responder returns one
+wire-serialized `ConversationReply`, and Temper validates proposal ids/kinds
+before persisting or accepting anything. A reusable process adapter may live in
+`temper-interaction` if it stays provider-neutral, or in `temper-production` if
+it is mostly deployable wiring; document the choice when implementing it.
+
+Concrete pi-SDK responders, including the product-manager profile, should be
+movable to a separate repository that consumes the process protocol. While the
+current in-repo `temper-agents` implementation exists, it is a transitional
+in-process implementation, not the required integration shape.
+
+`temper-production` should contain deployable binaries and transport adapters,
+not the core conversation abstractions or concrete provider SDK coupling.
 
 ## Compatibility rule
 
@@ -123,12 +148,19 @@ Status legend: ☐ pending · ☑ done
    product-manager as a profile/API instance rather than the framework
    abstraction. Markdown-only, so no Rust tests were required.
 
-2. ☐ **Phase 2 — Add `temper-interaction` domain traits and types.**
+2. ☑ **Phase 2 — Add `temper-interaction` domain traits and types.**
    `prompts/phase-2-interaction-crate.md`
 
-   Introduce the new crate with provider-neutral conversation and proposal
-   types plus an object-safe responder trait. Keep it LLM-agnostic and
-   workflow-agnostic. Add hermetic unit tests for validation/idempotency helpers.
+   Done: kept and tightened the interrupted domain-crate work after inspecting
+   the uncommitted diff. The crate now provides provider-neutral conversation
+   ids, participants, turns, wire-serializable requests/replies, inert proposals,
+   issue-proposal payloads, an object-safe `InteractiveResponder`, deterministic
+   proposal slug validation, duplicate-id checks, workspace/docs wiring, and
+   hermetic tests including a process-boundary JSON round trip. Validation run:
+   `cargo fmt --all`; `cargo test -p temper-interaction`;
+   `cargo test -p temper-agents product_manager`;
+   `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
+   `cargo dev-check`.
 
 3. ☐ **Phase 3 — Extract Forge-backed transcript and issue-proposal core.**
    `prompts/phase-3-forge-transcript-core.md`
@@ -137,23 +169,39 @@ Status legend: ☐ pending · ☑ done
    create/resume transcript issue, load recent turns, append human/agent turns,
    render/parse markers, and idempotently accept an issue-intake proposal.
    Product-manager-specific labels/prompts stay out of the generic code and come
-   from profile config.
+   from profile config. Keep responder invocation abstract: session/runtime code
+   may call an `InteractiveResponder` adapter, but it must not depend on
+   `temper-agents`, pi SDKs, or an in-process product-manager implementation.
 
-4. ☐ **Phase 4 — Recast product-manager as a profile on the generic interface.**
+4. ☐ **Phase 4 — Add responder adapters and recast product-manager as a profile.**
    `prompts/phase-4-product-manager-profile.md`
 
-   Make `ProductManagerAgent` implement the generic responder interface or adapt
-   through a thin mapper. Keep its prompt and product-specific draft semantics,
-   but make production product-chat modules thin profile wiring over the generic
-   session/runtime.
+   Add the process responder adapter/protocol and wire product-manager as one
+   configured profile over the generic session/runtime. An in-process
+   `ProductManagerAgent` adapter may remain as a transitional compatibility
+   path, but the plan should not require concrete pi-SDK code to live in this
+   repository. Product-specific draft semantics remain profile mapping; filing
+   still happens only through explicit proposal acceptance.
 
 5. ☐ **Phase 5 — Generalize the local transport API and realtime adapter seam.**
    `prompts/phase-5-transport-api-and-events.md`
 
    Introduce generic conversation endpoints and an event/stream contract suitable
    for web/PWA, Matrix, or voice adapters. Preserve existing product-manager API
-   aliases. Add docs showing product-manager as one configured profile and
-   explaining where external frontends should plug in.
+   aliases. Transports talk only to the interaction service; they do not call the
+   process responder directly and do not receive Forge mutation authority. Add
+   docs showing product-manager as one configured profile and explaining where
+   external frontends and external responder processes plug in.
+
+## Follow-up extraction path
+
+After this plan lands, a separate extraction task can move the pi-SDK-backed
+product-manager/profile responder and any workflow-role LLM implementation into
+an external repository. That external project should consume Temper's
+process-responder protocol or, for tighter first-party builds, optionally expose
+a Rust crate that implements `InteractiveResponder`/`temper_runner::Agent`. The
+core Temper repository should remain usable with fake responders and process
+adapters without depending on the pi SDK.
 
 ## Acceptance criteria
 
@@ -161,12 +209,16 @@ Status legend: ☐ pending · ☑ done
   product-manager use case.
 - `product-manager` appears as a profile/example, not as the framework layer.
 - `temper-forge`, `temper-workflow`, and `temper-runner` stay free of chat UI and
-  LLM-provider dependencies.
+  LLM-provider dependencies; `temper-interaction` stays free of concrete LLM
+  provider/SDK dependencies.
+- Interactive responder requests/replies/proposals are wire-serializable for a
+  process boundary.
 - Interactive responders cannot mutate Forge or workflow state directly.
 - Proposal acceptance is explicit and idempotent.
 - Existing product-manager dogfood commands and tests remain green.
-- New docs answer: "How do I connect a chat-like frontend to an agent?" and
-  "How is that different from a workflow role agent?"
+- New docs answer: "How do I connect a chat-like frontend to an agent?", "How do
+  I plug in an external responder process?", and "How is that different from a
+  workflow role agent?"
 
 ## Validation expectations for code phases
 

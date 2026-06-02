@@ -2,6 +2,7 @@
 members = [
     "crates/temper-workflow",
     "crates/temper-forge",
+    "crates/temper-interaction",
     "crates/temper-forge-filesystem",
     "crates/temper-forge-memory",
     "crates/temper-forge-forgejo",

@@ -1,9 +1,12 @@
 # Interactive conversation interface
 
 This page defines the target contract for Temper's generic interaction plane.
-The current implementation is still product-manager-specific; later phases will
-extract code that follows this contract. Treat names here as intended API roles,
-not as a promise that exact Rust items already exist.
+`crates/temper-interaction` contains the domain-only portion of this contract:
+typed conversation/profile/proposal ids, participants, turns, wire-serializable
+requests/replies, inert proposals, deterministic proposal-id validation, and the
+object-safe responder adapter trait. Transcript storage, proposal acceptance,
+transport adapters, process-responder wiring, and product-manager compatibility
+extraction remain later phases.
 
 ## Scope
 
@@ -12,20 +15,34 @@ stored in the Forge. It is transport-neutral, profile-neutral, LLM-provider
 agnostic, and separate from workflow role execution.
 
 It does not add realtime methods to the `Forge` trait, expose broad Forge tools
-to responders, or make chat transports authoritative for workflow state.
+to responders, require responders to run in-process, or make chat transports
+authoritative for workflow state.
+
+## Domain crate boundary
+
+`temper-interaction` should remain provider-neutral and have no dependency on
+`temper-agents`, `temper-runner`, `temper-workflow`, `temper-production`, or any
+LLM SDK. Its domain layer should model responder input/output only; responders
+receive no Forge handle and proposals are data until an acceptance service acts
+on them.
+
+The Rust trait is an adapter interface. The preferred public extension boundary
+is a process protocol using the same serialized request/reply types.
 
 ## Intended API roles
 
 - **Conversation identifiers and participants**: typed ids for conversations,
-  profiles, turns, participants, and proposals. Public APIs should avoid raw
-  string status values when the domain has a fixed meaning.
+  profiles, turns, and proposals. Public APIs should avoid raw string status
+  values when the domain has a fixed meaning.
 - **Interactive profile**: configuration that names the responder behavior,
   transcript policy, proposal kinds, and acceptance rules for one conversational
   use case. `product-manager` is one profile instance.
-- **Interactive responder**: an object-safe one-turn interface. Given an
-  immutable request containing the profile id, transcript view, latest human
-  turn, and profile context, it returns a reply and zero or more proposals. It
-  receives no Forge handle and cannot perform mutations.
+- **Interactive responder**: a one-turn interface. Given an immutable request
+  containing the profile id, transcript view, latest human turn, and profile
+  context, it returns a reply and zero or more proposals. It receives no Forge
+  handle and cannot perform mutations. In Rust this is an object-safe trait; for
+  external implementations the same contract should be exposed as a process
+  request/reply protocol.
 - **Transcript store**: creates or resumes conversations, appends ordered turns,
   and reads a transcript view suitable for a responder. A Forge-backed store may
   use issues and comments; any in-memory session registry is only a cache.
@@ -34,9 +51,13 @@ to responders, or make chat transports authoritative for workflow state.
 - **Proposal acceptance**: a narrow command that records explicit acceptance,
   reloads current durable state, validates the proposal against profile policy,
   and applies the allowed mutation idempotently.
+- **Process responder adapter**: provider-neutral glue that invokes an external
+  command/service with a serialized `ConversationRequest`, reads one serialized
+  `ConversationReply`, enforces timeouts and parse errors, and validates
+  proposals before the interaction service persists anything.
 - **Interaction service**: transport-neutral orchestration for create/resume,
-  append human turn, run responder, persist reply/proposals, list current
-  proposals, and accept a proposal.
+  append human turn, run a responder adapter, persist reply/proposals, list
+  current proposals, and accept a proposal.
 - **Transport adapter**: maps REPL, HTTP/SSE, Matrix, web/mobile, or voice events
   to service commands and renders responses. It owns protocol details only.
 
@@ -45,6 +66,8 @@ to responders, or make chat transports authoritative for workflow state.
 - The Forge-backed transcript is the durable conversation record.
 - Responders are pure with respect to Forge and workflow state: they produce
   replies and proposals, not mutations.
+- Responder requests and replies remain JSON-serializable so an implementation
+  can run out of process without weakening Temper's authority boundary.
 - A proposal is never applied without explicit human acceptance.
 - Proposal acceptance is idempotent and uses stable correlation markers where it
   creates Forge artifacts.
@@ -54,6 +77,8 @@ to responders, or make chat transports authoritative for workflow state.
   into workflow queues unless the user explicitly defines such a workflow role.
 - Transports are replaceable adapters; losing a transport process must not lose
   accepted workflow state or transcript history.
+- Losing or restarting an external responder process must not lose transcript
+  history or accepted workflow state.
 - Secrets and provider credentials stay out of transcripts and API responses.
 
 ## Authority boundaries
@@ -67,8 +92,10 @@ transitions, role tools, gates, and recovery. The interaction plane may create a
 normal intake issue after acceptance, but the workflow runtime decides what that
 issue means next.
 
-`temper-agents` may implement concrete responders for profiles. Provider SDKs
-and prompts stay there, not in the generic interaction contract.
+`temper-agents` may implement concrete in-process responders for profiles while
+this repository still carries provider code. Provider SDKs and prompts stay out
+of the generic interaction contract, and concrete pi-SDK responders should be
+movable to an external repository that implements the process protocol.
 
 `temper-production` may host deployable binaries and adapters, including the
 existing product-manager commands. Those commands can become compatibility

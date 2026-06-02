@@ -3,18 +3,24 @@
 This API is the current `product-manager` profile instance of Temper's broader
 interaction-plane target. The generic interactive conversation contract is
 specified in
-[Interactive conversation interface](interactive-conversation-interface.md), but
-it has not been extracted into code yet; do not treat the product-manager
-binary, endpoints, or type names as the framework abstraction.
+[Interactive conversation interface](interactive-conversation-interface.md), and
+its domain request/reply/proposal types now live in `temper-interaction`. The
+product-manager transcript, transport, and filing implementation has not been
+extracted yet; do not treat the product-manager binary, endpoints, or type names
+as the framework abstraction.
 
 Temper currently provides the product-manager conversation **integration
 surface**: Forgejo transcripts, product-manager LLM turns, draft issue proposals,
 and explicit filing into the normal workflow. Product-manager draft intake issues
 are one proposal type: they are inert until a human explicitly accepts one for
 filing. External web, mobile, Matrix, and voice frontends should eventually target
-the generic interaction API and select `product-manager` as a profile. Until that
-API exists, external repositories may consume this local profile-specific API.
-This repository does not ship those frontends.
+the generic interaction API and select `product-manager` as a profile. Concrete
+product-manager responder implementations, including pi-SDK-backed ones, should
+be able to live out of process behind the generic responder protocol; frontends
+should still talk to Temper's interaction service rather than directly to that
+responder process. Until the generic API exists, external repositories may
+consume this local profile-specific API. This repository does not ship those
+frontends.
 
 ## Command
 

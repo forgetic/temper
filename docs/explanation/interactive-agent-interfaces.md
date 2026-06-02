@@ -5,8 +5,10 @@ human-facing tools to agents while still recording durable state in the Forge.
 The current product-manager chat service is the first concrete profile using
 this idea, but it is not the abstraction itself.
 
-The generic interaction-plane contract is documented before it exists in code;
-later phases will extract the current product-manager-specific implementation
+The generic interaction-plane contract now starts in the
+`temper-interaction` domain crate for responder requests, replies, participants,
+and inert proposals. Later phases will extract transcript storage, proposal
+acceptance, transports, and the current product-manager-specific implementation
 behind these names.
 
 ## Shape
@@ -20,16 +22,16 @@ transport adapter
         ▼
 interaction plane
         │ transcript store + responder dispatch + proposal acceptance
-        ▼
-interactive agent profile
-        │ one-turn reply plus inert proposals
+        ├──────────────► interactive responder process
+        │                  serialized request/reply, inert proposals only
         ▼
 Forge transcript and normal workflow artifacts
 ```
 
 The Forge remains the durable source of truth. Services may keep active-session
-caches for latency, and transports may keep UI state, but either can be rebuilt
-from Forge-backed transcripts and accepted workflow artifacts.
+caches for latency, transports may keep UI state, and responder processes may be
+restarted independently, but all of them can be rebuilt or retried from
+Forge-backed transcripts and accepted workflow artifacts.
 
 ## Vocabulary
 
@@ -42,6 +44,8 @@ from Forge-backed transcripts and accepted workflow artifacts.
 - **Interactive responder**: the one-turn agent interface. It receives a
   transcript view and profile context, then returns a reply plus optional
   proposals. It receives no Forge handles and does not mutate workflow state.
+  A Rust trait can adapt in-process responders, but the preferred public
+  extension boundary is a process that exchanges serialized requests/replies.
 - **Transcript store**: durable conversation persistence. The first backing
   store uses Forge issues and comments; transports should treat it as the
   recoverable record, not as a UI cache.
@@ -63,4 +67,5 @@ path. The resulting issue, pull request, label, or comment is then ordinary Forg
 state for the workflow runtime to observe.
 
 This keeps the human conversation interface reusable without adding chat, mobile,
-or voice concerns to `temper-forge`, `temper-workflow`, or `temper-runner`.
+voice, or concrete LLM SDK concerns to `temper-forge`, `temper-workflow`, or
+`temper-runner`.

@@ -20,7 +20,9 @@ Assume Phases 1-4 are done.
 
 Expose a generic transport-facing conversation API and event contract so external
 frontends can connect to interactive agents without depending on product-manager
-names. Keep product-manager endpoints as compatibility aliases.
+names. Keep product-manager endpoints as compatibility aliases. Transports talk
+to Temper's interaction service, not directly to concrete LLMs or external
+responder processes.
 
 ## Tasks
 
@@ -48,7 +50,9 @@ names. Keep product-manager endpoints as compatibility aliases.
    ```
 
    Preserve the existing `/sessions` and `/drafts/{slug}/file` routes as
-   product-manager compatibility aliases until a later deprecation decision.
+   product-manager compatibility aliases until a later deprecation decision. The
+   service should dispatch through the configured `InteractiveResponder` adapter
+   from Phase 4, whether that adapter is in-process or process-backed.
 
 3. Add an event/stream contract suitable for real-time clients.
 
@@ -63,7 +67,9 @@ names. Keep product-manager endpoints as compatibility aliases.
    - make `docs/reference/product-manager-chat-api.md` a product-manager profile
      specialization and alias note;
    - mention Matrix/web/mobile/voice adapters as external consumers of the
-     generic API, not code this repo must ship.
+     generic API, not code this repo must ship;
+   - document how a deployment selects/configures an external responder process,
+     while making clear that frontends should not bypass the interaction service.
 
 5. Add tests for generic routing, alias routing, auth behavior, proposal
    acceptance idempotency, and event emission if implemented.
@@ -76,6 +82,8 @@ names. Keep product-manager endpoints as compatibility aliases.
 - Keep the service safe by default: loopback bind unless explicitly allowed, and
   bearer auth for non-loopback binds.
 - Do not remove existing product-manager operator commands.
+- Do not expose process-responder credentials, environment details, or raw model
+  errors through transport responses.
 - Avoid broad web-framework dependencies unless justified; the current service is
   intentionally small.
 
