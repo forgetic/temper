@@ -23,6 +23,7 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 chrono.workspace = true
 harness-forge-forgejo = { path = "../harness-forge-forgejo" }
+harness-forge-memory = { path = "../harness-forge-memory" }
 harness-testing = { path = "../harness-testing" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 

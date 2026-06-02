@@ -87,7 +87,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    and related explanation docs. Add compiler tests proving no role-specific
    prose is generated and user extensions render deterministically.
 
-2. ☐ **Phase 2 — Manifest-driven LLM role agent.**
+2. ☑ **Phase 2 — Manifest-driven LLM role agent.**
    `prompts/phase-2-manifest-driven-llm-role-agent.md`
 
    Introduce a generic role agent in `harness-agents` that takes a compiled

@@ -20,10 +20,14 @@
 //!   headers). Swap the model, backend, or credential here.
 //! - [`decision`] — runs a one-shot LLM turn through the SDK and parses the
 //!   reply into a structured decision.
-//! - [`prompts`] — role and conversational system prompts embedded as data.
-//! - [`engineer`], [`architect`], [`reviewer`], [`owner`], [`human`] — the role
-//!   agents: the model decides, [`harness_runner::RoleTools`] mutates. Each is a
-//!   thin adapter (prompt + decision enum + mapping); the [`common`],
+//! - [`role`] — a manifest-driven workflow role agent that uses a compiled
+//!   [`harness_workflow::RoleManifest`] prompt/tool surface and an injectable
+//!   decision seam.
+//! - [`prompts`] — legacy role and conversational system prompts embedded as
+//!   data; workflow-role production wiring is being migrated away from these.
+//! - [`engineer`], [`architect`], [`reviewer`], [`owner`], [`human`] — the legacy
+//!   role agents: the model decides, [`harness_runner::RoleTools`] mutates. Each
+//!   is a thin adapter (prompt + decision enum + mapping); the [`common`],
 //!   [`decision`], and [`provider`] plumbing is shared.
 //! - [`product_manager`] — a non-workflow conversational adapter: no
 //!   [`harness_runner::Agent`] implementation, no workflow tools, and no Forge
@@ -32,8 +36,9 @@
 //! - [`registry`] — the [`registry::real_registry`] builder mapping every role to
 //!   its LLM agent, mirroring the testing crate's `fake_registry`.
 //!
-//! Adding a role means a new prompt file, a decision enum, and an `impl Agent`
-//! adapter; the provider/decision plumbing is shared.
+//! New workflow roles should use [`role::LlmRoleAgent`] with a compiled manifest;
+//! the hard-coded role adapters remain only for the existing production wiring
+//! until the next migration phase.
 
 #![allow(clippy::result_large_err)]
 
@@ -48,6 +53,7 @@ pub mod prompts;
 pub mod provider;
 pub mod registry;
 pub mod reviewer;
+pub mod role;
 
 pub use architect::{ArchitectDecision, LlmArchitect};
 pub use engineer::{EngineerDecision, EngineerPrep, LlmEngineer, NoPrep};
@@ -64,3 +70,4 @@ pub use provider::{
 };
 pub use registry::{RealRegistryConfig, real_registry, real_registry_with};
 pub use reviewer::{LlmReviewer, ReviewerDecision};
+pub use role::{LlmRoleAgent, ProviderRoleDecisionEngine, RoleDecision, RoleDecisionEngine};
