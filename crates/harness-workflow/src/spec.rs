@@ -56,9 +56,14 @@ impl RawWorkflowSpec {
 #[serde(deny_unknown_fields)]
 pub struct RawRole {
     pub id: String,
-    /// Prose charter that guides judgment-heavy behavior for the role.
+    /// Legacy prose charter that guides judgment-heavy behavior for the role.
+    /// Kept for backwards compatibility and rendered as user guidance.
     #[serde(default)]
     pub charter: Option<String>,
+    /// User-authored prompt extension for this role. Generated prompt mechanics
+    /// stay separate from this prose and do not infer behavior from the role id.
+    #[serde(default)]
+    pub prompt: RawRolePrompt,
     /// Optional concurrency hint: how many artifacts the role may hold at once.
     /// Compiled into the role manifest for runtime claim limits; `None` means
     /// no declared limit.
@@ -67,6 +72,18 @@ pub struct RawRole {
     /// Queues the role draws work from. Each entry references a queue id.
     #[serde(default)]
     pub queues: Vec<String>,
+}
+
+/// User-authored prompt prose for a role.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawRolePrompt {
+    /// Behavioral guidance for how this role should make workflow decisions.
+    #[serde(default)]
+    pub guidance: Option<String>,
+    /// Guidance for how this role should use tools declared for it.
+    #[serde(default)]
+    pub tool_guidance: Option<String>,
 }
 
 /// Label declaration. Labels are the public Forge projection of workflow state.

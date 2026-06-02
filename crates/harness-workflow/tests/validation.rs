@@ -43,12 +43,14 @@ fn valid_spec() -> RawWorkflowSpec {
             RawRole {
                 id: "engineer".to_string(),
                 charter: Some("implements code issues".to_string()),
+                prompt: Default::default(),
                 concurrency: Some(2),
                 queues: vec!["code_ready".to_string()],
             },
             RawRole {
                 id: "reviewer".to_string(),
                 charter: None,
+                prompt: Default::default(),
                 concurrency: None,
                 queues: vec!["needs_review".to_string()],
             },
@@ -172,6 +174,7 @@ fn duplicate_role_id_is_diagnosed() {
     spec.roles.push(RawRole {
         id: "engineer".to_string(),
         charter: None,
+        prompt: Default::default(),
         concurrency: None,
         queues: Vec::new(),
     });
@@ -476,6 +479,7 @@ fn validation_collects_multiple_diagnostics_at_once() {
     spec.roles.push(RawRole {
         id: "engineer".to_string(),
         charter: None,
+        prompt: Default::default(),
         concurrency: None,
         queues: vec!["absent_queue".to_string()],
     });

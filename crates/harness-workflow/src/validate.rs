@@ -11,9 +11,9 @@ use crate::ids::{
 };
 use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
 use crate::validated::{
-    Effect, GateCondition, QueueLabelSet, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
-    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
-    ValidatedWorkflow,
+    Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedArtifactKind,
+    ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole, ValidatedState,
+    ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
 use crate::ValidationErrors;
 use chrono::Duration;
@@ -449,6 +449,10 @@ fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         .map(|role| ValidatedRole {
             id: RoleId::new(&role.id),
             charter: role.charter.clone(),
+            prompt: RolePromptExtension {
+                guidance: role.prompt.guidance.clone(),
+                tool_guidance: role.prompt.tool_guidance.clone(),
+            },
             concurrency: role.concurrency,
             queues: role.queues.iter().map(QueueId::new).collect(),
         })

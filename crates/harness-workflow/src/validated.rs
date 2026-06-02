@@ -115,11 +115,25 @@ impl ValidatedWorkflow {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedRole {
     pub id: RoleId,
+    /// Legacy user guidance carried from `RawRole::charter`.
     pub charter: Option<String>,
+    /// Structured user-authored prompt extension for this role.
+    pub prompt: RolePromptExtension,
     /// Concurrency hint: how many artifacts the role may hold at once, or
     /// `None` for no declared limit.
     pub concurrency: Option<u32>,
     pub queues: Vec<QueueId>,
+}
+
+/// User-authored prompt prose attached to a role.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RolePromptExtension {
+    /// Behavioral guidance for role judgment. It is rendered separately from
+    /// generated workflow mechanics and grants no authority by itself.
+    pub guidance: Option<String>,
+    /// User guidance for using declared tools. It is advisory only; executable
+    /// authority still comes from the compiled tool manifest.
+    pub tool_guidance: Option<String>,
 }
 
 /// A validated artifact kind with typed label references.

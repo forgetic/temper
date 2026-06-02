@@ -7,8 +7,12 @@ __pycache__/
 .vscode/
 /.harness-pr-prep/
 /.harness-ci/
-# Ignore ad-hoc local plans
+# Ignore ad-hoc local plans by default; tracked implementation plans opt in.
 /plans/*
+!/plans/user-defined-role-agents/
+!/plans/user-defined-role-agents/README.md
+!/plans/user-defined-role-agents/prompts/
+!/plans/user-defined-role-agents/prompts/*.md
 /examples/dogfood/logs/
 /examples/dogfood/run/
 /examples/dogfood/secrets/

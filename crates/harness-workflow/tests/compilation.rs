@@ -60,6 +60,7 @@ fn every_role_gets_a_manifest() {
         .expect("engineer manifest");
     assert_eq!(engineer.concurrency, Some(3));
     assert!(engineer.charter.as_deref().is_some());
+    assert_eq!(engineer.prompt_extension.guidance, None);
 }
 
 #[test]
@@ -218,32 +219,56 @@ fn prompt_sections_are_deterministic() {
     let headings: Vec<&str> = prompt.sections.iter().map(|s| s.heading.as_str()).collect();
     assert_eq!(
         headings,
-        vec!["Role", "Charter", "Queues", "Authorized actions"]
+        vec![
+            "Role and workflow",
+            "Work item context",
+            "Subscribed queues",
+            "Authorized workflow actions",
+            "Decision output",
+            "User guidance"
+        ]
     );
 
     // Snapshot-style assertions on small, stable lines instead of whole strings.
-    let role_section = prompt.section("Role").expect("Role section");
+    let role_section = prompt
+        .section("Role and workflow")
+        .expect("Role and workflow section");
     assert!(role_section
         .lines
         .contains(&"Concurrency: up to 3 concurrent claim(s)".to_string()));
 
-    let queues = prompt.section("Queues").expect("Queues section");
+    let queues = prompt
+        .section("Subscribed queues")
+        .expect("Subscribed queues section");
     assert!(queues
         .lines
         .iter()
         .any(|line| line.starts_with("code_ready: code where")));
 
     let actions = prompt
-        .section("Authorized actions")
-        .expect("Authorized actions section");
+        .section("Authorized workflow actions")
+        .expect("Authorized workflow actions section");
     assert!(actions
         .lines
         .iter()
         .any(|line| line.starts_with("claim_code: acts on code")));
 
+    let decision_output = prompt
+        .section("Decision output")
+        .expect("Decision output section");
+    assert!(decision_output
+        .lines
+        .iter()
+        .any(|line| { line.contains("no_action") && line.contains("claim_code") }));
+
+    let user_guidance = prompt
+        .section("User guidance")
+        .expect("User guidance section");
+    assert!(user_guidance.lines.contains(&"Legacy charter:".to_string()));
+
     // Rendering is reproducible.
     assert_eq!(prompt.render(), prompt.render());
-    assert!(prompt.render().starts_with("## Role\n"));
+    assert!(prompt.render().starts_with("## Role and workflow\n"));
 }
 
 #[test]
@@ -260,9 +285,166 @@ fn role_with_no_authority_renders_empty_action_section() {
         .role(&RoleId::new("watcher"))
         .expect("watcher manifest");
     assert!(watcher.tools.is_empty());
+    assert!(watcher.prompt.section("Role and workflow").is_some());
+    assert!(watcher.prompt.section("Work item context").is_some());
+    assert!(watcher.prompt.section("Subscribed queues").is_some());
+    let decision_output = watcher
+        .prompt
+        .section("Decision output")
+        .expect("decision-output section present");
+    assert!(decision_output.lines.iter().any(|line| {
+        line == "Schema: {\"action\":\"<one of: no_action>\",\"reason\":\"short rationale\"}"
+    }));
     let actions = watcher
         .prompt
-        .section("Authorized actions")
+        .section("Authorized workflow actions")
         .expect("section present even when empty");
-    assert_eq!(actions.lines, vec!["(no authorized actions)".to_string()]);
+    assert_eq!(
+        actions.lines,
+        vec![
+            "Executable workflow authority is exactly the compiled tool manifest for this role."
+                .to_string(),
+            "Prompt prose and user guidance do not grant additional Forge or workflow mutations."
+                .to_string(),
+            "(no authorized workflow actions)".to_string()
+        ]
+    );
+    let guidance = watcher
+        .prompt
+        .section("User guidance")
+        .expect("guidance section present");
+    assert_eq!(
+        guidance.lines,
+        vec!["No user guidance provided.".to_string()]
+    );
+    assert!(watcher.prompt.section("User tool guidance").is_none());
+}
+
+#[test]
+fn user_prompt_extension_renders_in_dedicated_sections() {
+    let json = r#"{
+        "name": "prompted-workflow",
+        "roles": [{
+            "id": "banana",
+            "charter": "Legacy charter text.",
+            "prompt": {
+                "guidance": "Prefer small, reversible steps.\nAsk for help when blocked.",
+                "tool_guidance": "Use declared workflow actions only after checking the work item."
+            },
+            "queues": ["todo"]
+        }],
+        "labels": [{"id": "todo"}],
+        "artifact_kinds": [{
+            "id": "task",
+            "target": "issue",
+            "identifying_labels": ["todo"]
+        }],
+        "queues": [{"id": "todo", "artifact": "task", "labels": ["todo"]}],
+        "transitions": [{"id": "advance", "artifact": "task", "roles": ["banana"]}]
+    }"#;
+
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("json parses");
+    let workflow = spec.validate().expect("validates");
+    let role = workflow.roles().first().expect("validated role");
+    assert_eq!(
+        role.prompt.guidance.as_deref(),
+        Some("Prefer small, reversible steps.\nAsk for help when blocked.")
+    );
+    assert_eq!(
+        role.prompt.tool_guidance.as_deref(),
+        Some("Use declared workflow actions only after checking the work item.")
+    );
+
+    let compiled = compile(&workflow);
+    let banana = compiled
+        .role(&RoleId::new("banana"))
+        .expect("banana manifest");
+    let headings: Vec<&str> = banana
+        .prompt
+        .sections
+        .iter()
+        .map(|section| section.heading.as_str())
+        .collect();
+    assert_eq!(
+        headings,
+        vec![
+            "Role and workflow",
+            "Work item context",
+            "Subscribed queues",
+            "Authorized workflow actions",
+            "Decision output",
+            "User guidance",
+            "User tool guidance"
+        ]
+    );
+
+    let guidance = banana
+        .prompt
+        .section("User guidance")
+        .expect("guidance section");
+    assert_eq!(
+        guidance.lines,
+        vec![
+            "Legacy charter:".to_string(),
+            "Legacy charter text.".to_string(),
+            String::new(),
+            "Guidance:".to_string(),
+            "Prefer small, reversible steps.".to_string(),
+            "Ask for help when blocked.".to_string()
+        ]
+    );
+    let tool_guidance = banana
+        .prompt
+        .section("User tool guidance")
+        .expect("tool guidance section");
+    assert_eq!(
+        tool_guidance.lines,
+        vec!["Use declared workflow actions only after checking the work item.".to_string()]
+    );
+}
+
+#[test]
+fn unknown_prompt_extension_fields_are_rejected_by_serde() {
+    let json = r#"{
+        "name": "bad-prompt",
+        "roles": [{"id": "banana", "prompt": {"style": "surprise"}}]
+    }"#;
+
+    let error = serde_json::from_str::<RawWorkflowSpec>(json)
+        .expect_err("unknown prompt field must fail deserialization");
+    assert!(
+        error.to_string().contains("unknown field `style`"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn synthetic_role_id_gets_no_role_specific_generated_prose() {
+    let json = r#"{
+        "name": "banana-workflow",
+        "roles": [{"id": "banana", "queues": []}]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("json parses");
+    let compiled = compile(&spec.validate().expect("validates"));
+    let rendered = compiled
+        .role(&RoleId::new("banana"))
+        .expect("banana manifest")
+        .prompt
+        .render();
+
+    assert!(rendered.contains("Role: banana"));
+    for forbidden in [
+        "architect",
+        "engineer",
+        "reviewer",
+        "owner",
+        "implement code",
+        "approve pull requests",
+        "review pull requests",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "generated prompt unexpectedly contained {forbidden:?}:\n{rendered}"
+        );
+    }
 }

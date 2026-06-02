@@ -20,10 +20,14 @@
 use crate::ids::{
     ArtifactKindId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId, TransitionId,
 };
+use crate::prompt::build_prompt;
 use crate::validated::{
-    Effect, GateCondition, QueueLabelSet, ValidatedRole, ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedRole, ValidatedTransition,
+    ValidatedWorkflow,
 };
 use chrono::Duration;
+
+pub use crate::prompt::{PromptManifest, PromptSection};
 
 /// A validated workflow projected into manifests for agents and runtime setup.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,13 +71,16 @@ impl CompiledWorkflow {
     }
 }
 
-/// Everything a single role's agent runner needs: identity, charter,
+/// Everything a single role's agent runner needs: identity, user guidance,
 /// concurrency hint, subscribed queues, transition authority, the intent-level
 /// tools that authority compiles into, and a deterministic prompt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleManifest {
     pub id: RoleId,
+    /// Legacy user guidance carried from `RawRole::charter`.
     pub charter: Option<String>,
+    /// Structured user-authored prompt extension for this role.
+    pub prompt_extension: RolePromptExtension,
     /// How many artifacts the role may hold at once, or `None` for no limit.
     pub concurrency: Option<u32>,
     /// Queues the role draws work from.
@@ -181,45 +188,6 @@ pub enum LabelUsage {
     GateCondition { gate: GateId },
 }
 
-/// Deterministic prompt sections for one role.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PromptManifest {
-    pub role: RoleId,
-    pub sections: Vec<PromptSection>,
-}
-
-impl PromptManifest {
-    /// Returns the section with the given heading, if present.
-    pub fn section(&self, heading: &str) -> Option<&PromptSection> {
-        self.sections.iter().find(|s| s.heading == heading)
-    }
-
-    /// Renders the sections into a stable plain-text prompt.
-    pub fn render(&self) -> String {
-        let mut out = String::new();
-        for (index, section) in self.sections.iter().enumerate() {
-            if index > 0 {
-                out.push('\n');
-            }
-            out.push_str("## ");
-            out.push_str(&section.heading);
-            out.push('\n');
-            for line in &section.lines {
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-        out
-    }
-}
-
-/// One headed block of a prompt.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PromptSection {
-    pub heading: String,
-    pub lines: Vec<String>,
-}
-
 /// Compiles a validated workflow into manifests for agents and runtime setup.
 ///
 /// Compilation cannot fail: a [`ValidatedWorkflow`] is already internally
@@ -316,124 +284,13 @@ fn compile_role(
     RoleManifest {
         id: role.id.clone(),
         charter: role.charter.clone(),
+        prompt_extension: role.prompt.clone(),
         concurrency: role.concurrency,
         queues: role.queues.clone(),
         authority,
         tools,
         prompt,
     }
-}
-
-fn build_prompt(
-    workflow_name: &str,
-    role: &ValidatedRole,
-    queues: &[QueueManifest],
-    tools: &[ToolManifest],
-) -> PromptManifest {
-    let concurrency = match role.concurrency {
-        Some(limit) => format!("Concurrency: up to {limit} concurrent claim(s)"),
-        None => "Concurrency: no declared limit".to_string(),
-    };
-    let overview = PromptSection {
-        heading: "Role".to_string(),
-        lines: vec![
-            format!("Workflow: {workflow_name}"),
-            format!("Role: {}", role.id),
-            concurrency,
-        ],
-    };
-
-    let charter = PromptSection {
-        heading: "Charter".to_string(),
-        lines: vec![role
-            .charter
-            .clone()
-            .unwrap_or_else(|| "No charter provided.".to_string())],
-    };
-
-    let queue_lines = if role.queues.is_empty() {
-        vec!["(no subscribed queues)".to_string()]
-    } else {
-        role.queues
-            .iter()
-            .filter_map(|id| queues.iter().find(|q| &q.id == id))
-            .map(describe_queue)
-            .collect()
-    };
-    let queues_section = PromptSection {
-        heading: "Queues".to_string(),
-        lines: queue_lines,
-    };
-
-    let tool_lines = if tools.is_empty() {
-        vec!["(no authorized actions)".to_string()]
-    } else {
-        tools.iter().map(describe_tool).collect()
-    };
-    let actions = PromptSection {
-        heading: "Authorized actions".to_string(),
-        lines: tool_lines,
-    };
-
-    PromptManifest {
-        role: role.id.clone(),
-        sections: vec![overview, charter, queues_section, actions],
-    }
-}
-
-fn describe_queue(queue: &QueueManifest) -> String {
-    let artifacts = join_strs(queue.artifacts.iter().map(ArtifactKindId::as_str));
-    format!(
-        "{}: {} where {}",
-        queue.id,
-        artifacts,
-        describe_queue_filter(queue)
-    )
-}
-
-fn describe_queue_filter(queue: &QueueManifest) -> String {
-    let common = describe_labels(&queue.labels);
-    let labels = if queue.any_of.is_empty() {
-        common
-    } else {
-        let alternatives = queue
-            .any_of
-            .iter()
-            .map(|label_set| describe_labels(&label_set.labels))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        if queue.labels.is_empty() {
-            alternatives
-        } else {
-            format!("{common} AND ({alternatives})")
-        }
-    };
-    if let Some(condition) = &queue.condition {
-        format!("{labels} AND {condition:?}")
-    } else {
-        labels
-    }
-}
-
-fn describe_labels(labels: &[LabelId]) -> String {
-    if labels.is_empty() {
-        "no extra labels".to_string()
-    } else {
-        join_strs(labels.iter().map(LabelId::as_str))
-    }
-}
-
-fn describe_tool(tool: &ToolManifest) -> String {
-    let gates = if tool.requires_gates.is_empty() {
-        "no gates".to_string()
-    } else {
-        join_strs(tool.requires_gates.iter().map(GateId::as_str))
-    };
-    format!("{}: acts on {} ({})", tool.name, tool.artifact, gates)
-}
-
-fn join_strs<'a>(items: impl Iterator<Item = &'a str>) -> String {
-    items.collect::<Vec<_>>().join(", ")
 }
 
 fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {

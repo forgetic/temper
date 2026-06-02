@@ -11,7 +11,7 @@ The intended stack is:
 2. `harness-workflow`: workflow specifications, validation, compilation, runtime transitions, and recovery.
 3. agent runners: LLM or human workers using generated prompts and tools.
 
-This separation keeps provider details out of workflow policy and keeps agent prompts focused on the authority each role actually has. For where these layers run as processes once a real backend exists, see [End-to-end big picture](end-to-end-big-picture.md).
+This separation keeps provider details out of workflow policy and keeps generated agent prompts focused on workflow mechanics and the authority each role actually has. Role behavior is user configuration: a role may provide prompt guidance and tool guidance, but that prose does not create tools or permissions. For where these layers run as processes once a real backend exists, see [End-to-end big picture](end-to-end-big-picture.md).
 
 ## Workflow concepts
 
@@ -22,6 +22,8 @@ A state dimension is a named group of states, often projected as labels. For exa
 A queue is a query over artifacts, such as `code + ready` issues or PRs whose native CI status is failed.
 
 A transition is an authorized state change with preconditions and effects. Generated tools should map to transitions instead of exposing generic label mutation.
+
+A role prompt has two parts: generated mechanics from the workflow compiler and optional user-authored guidance from the workflow spec. The generated part is role-id agnostic; it lists identity, context, subscribed queues, and authorized workflow actions. Judgment such as how to implement, review, or escalate belongs in user guidance.
 
 A gate is a condition that unlocks a transition. For example, a PR may be mergeable only when native CI and review gates both succeed. A gate may be satisfied by a workflow transition, by Forge-projected labels/state, or by a native signal such as CI job conclusions or dependency target state.
 

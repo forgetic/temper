@@ -91,6 +91,7 @@ pub mod journal;
 pub mod lease;
 pub mod metadata;
 pub mod plan;
+mod prompt;
 pub mod reconcile;
 pub mod recover;
 pub mod relation;
@@ -136,11 +137,12 @@ pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
     RawArtifactKind, RawEffect, RawGate, RawGateCondition, RawLabel, RawQueue, RawQueueLabelSet,
-    RawRelation, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
+    RawRelation, RawRole, RawRolePrompt, RawState, RawStateDimension, RawTransition,
+    RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, GateCondition, QueueLabelSet, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
-    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
-    ValidatedWorkflow,
+    Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedArtifactKind,
+    ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole, ValidatedState,
+    ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
