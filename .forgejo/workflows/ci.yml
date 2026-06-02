@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - agent/**
-  pull_request:
 
 jobs:
   dev-check:
@@ -25,4 +24,5 @@ jobs:
         run: |
           set -eu
           cd "$GITHUB_WORKSPACE/repo"
+          export CARGO_TARGET_DIR="$HOME/src/rust/harness/target/dogfood-ci"
           cargo dev-check
