@@ -1,8 +1,8 @@
 # Agent entry point
 
-This file is the first stop for coding agents working in Harness. It should be changed only if the codebase map changes.
+This file is the first stop for coding agents working in Harness. It should be changed only if the codebase map or documentation map changes.
 Keep it as an orientation map only; stable process rules and detailed status live in the linked docs.
-For every session, read `README.md` first and docs/README.md next.
+For every session, read `README.md` first and then open the task-relevant docs below.
 
 ## Codebase map
 
@@ -21,3 +21,12 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | `crates/harness-production/` | Deployable Forgejo binaries: workers, provisioning, webhook trigger, product-manager chat, and production external-tool bindings. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo and launch scripts. |
 | `plans/` | Roadmaps and findings; promote stable behavior into `docs/` before relying on it. |
+
+## Documentation map
+
+- Start here for process: `docs/how-to/start-a-development-session.md`
+- Development rules and validation: `docs/reference/development-conventions.md`, `docs/how-to/fast-local-iteration.md`, and `docs/how-to/end-a-development-session.md`.
+- Contracts: `docs/reference/forge-interface.md`, `docs/reference/in-memory-backend.md`, `docs/reference/filesystem-backend.md`, `docs/reference/forgejo-backend.md`, `docs/reference/workflow-layer.md`, `docs/reference/cross-repo-workflows.md`, and `docs/reference/robustness-guarantees.md`.
+- Concepts: `docs/explanation/agentic-workflows.md`, `docs/explanation/domain-model.md`, `docs/explanation/cross-repo-workflows.md`, `docs/explanation/reference-workflow.md`, and `docs/explanation/forgejo-e2e-topology.md`.
+- LLM agent details: `docs/reference/llm-agents.md`, `docs/how-to/use-chatgpt-oauth-auth.md`, and `docs/how-to/configure-coding-workspace.md`.
+- Significant decisions: `docs/adr/README.md`. The full documentation index is `docs/README.md`.
