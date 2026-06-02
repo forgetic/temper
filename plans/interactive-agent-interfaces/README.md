@@ -176,15 +176,22 @@ Status legend: ☐ pending · ☑ done
    `cargo test -p temper-agents product_manager`; `cargo test -p temper-production product_chat`;
    `cargo dev-clippy`; `cargo dev-check`.
 
-4. ☐ **Phase 4 — Add responder adapters and recast product-manager as a profile.**
+4. ☑ **Phase 4 — Add responder adapters and recast product-manager as a profile.**
    `prompts/phase-4-product-manager-profile.md`
 
-   Add the process responder adapter/protocol and wire product-manager as one
-   configured profile over the generic session/runtime. An in-process
-   `ProductManagerAgent` adapter may remain as a transitional compatibility
-   path, but the plan should not require concrete pi-SDK code to live in this
-   repository. Product-specific draft semantics remain profile mapping; filing
-   still happens only through explicit proposal acceptance.
+   Done: `temper-interaction` now owns a provider-neutral `ProcessResponder`
+   protocol/adapter that sends one JSON `ConversationRequest` on stdin, reads one
+   JSON `ConversationReply` from stdout, clears ambient env except allow-listed
+   names, validates proposals, and reports timeout/exit/JSON/duplicate-id
+   failures. `ProductManagerAgent` implements `InteractiveResponder` as a
+   transitional in-process profile; product-chat wrappers now take generic
+   responders, select the process responder only when configured, and keep
+   `ProductManagerDraftIssue` as a compatibility DTO around generic issue
+   proposals. Public docs describe product-manager as one profile and document
+   the process protocol. Validation run: `cargo fmt --all`;
+   `cargo test -p temper-interaction`; `cargo test -p temper-agents product_manager`;
+   `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
+   `cargo dev-check`.
 
 5. ☐ **Phase 5 — Generalize the local transport API and realtime adapter seam.**
    `prompts/phase-5-transport-api-and-events.md`

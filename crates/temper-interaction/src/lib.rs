@@ -2,13 +2,17 @@
 //!
 //! This crate defines the reusable interaction-plane core: typed conversation
 //! ids, responder request/reply types, inert proposals, Forge-backed transcript
-//! sessions, and explicit idempotent issue-proposal acceptance. Responder
-//! requests and replies remain serializable for future process protocols, while
-//! transcript and acceptance code owns durable Forge state. This crate has no
-//! workflow, runner, production, or LLM-provider dependencies.
+//! sessions, explicit idempotent issue-proposal acceptance, and a provider-neutral
+//! process responder adapter. Responder processes exchange the same serialized
+//! request/reply types while transcript and acceptance code own durable Forge
+//! state. This crate has no workflow, runner, production, or LLM-provider
+//! dependencies.
 
 pub mod agent;
 mod error;
+pub mod process;
+#[cfg(test)]
+mod process_tests;
 pub mod proposal;
 pub mod session;
 #[cfg(test)]
@@ -18,10 +22,11 @@ pub mod types;
 
 pub use agent::InteractiveResponder;
 pub use error::InteractionError;
+pub use process::{ProcessResponder, ProcessResponderConfig};
 pub use proposal::{
     accept_issue_intake_proposal, find_issue_by_marker, render_filed_issue_body,
-    validate_proposal_ids, IssueAcceptanceOutcome, IssueIntakeAcceptanceConfig, IssueProposal,
-    Proposal,
+    validate_proposal_ids, validate_proposals, IssueAcceptanceOutcome, IssueIntakeAcceptanceConfig,
+    IssueProposal, Proposal,
 };
 pub use session::{
     render_agent_reply_comment, ForgeInteractionSession, ForgeSessionConfig,

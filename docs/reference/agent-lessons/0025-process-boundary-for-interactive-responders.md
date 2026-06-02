@@ -32,3 +32,4 @@ explicit acceptance, and all Forge/workflow mutation.
 - `plans/interactive-agent-interfaces/README.md`
 - `plans/interactive-agent-interfaces/prompts/phase-4-product-manager-profile.md`
 - `docs/reference/interactive-conversation-interface.md`
+- `docs/reference/interactive-process-responder-protocol.md`

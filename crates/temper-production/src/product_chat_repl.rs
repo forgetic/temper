@@ -1,14 +1,15 @@
-//! Terminal REPL for product-manager chat.
+//! Terminal REPL transport for the product-manager interactive profile.
 
 use std::io::{self, Write};
 use std::sync::Arc;
 
-use temper_agents::{AuthChoice, ProductManagerAgent, ProductManagerDraftIssue, ProviderConfig};
+use temper_agents::{AuthChoice, ProductManagerDraftIssue, ProviderConfig};
 use temper_forge::{Forge, ItemNumber};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_interaction::InteractiveResponder;
 
 use crate::product_chat::{
-    ProductChatError, ProductChatOpenOptions, ProductChatSession, ProductManagerResponder,
+    build_product_profile_responder, ProductChatError, ProductChatOpenOptions, ProductChatSession,
 };
 use crate::product_chat_args::{AuthKind, ProductChatArgs};
 use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
@@ -22,18 +23,19 @@ pub fn run_repl(args: &ProductChatArgs) -> Result<(), ProductChatError> {
 }
 
 async fn run_repl_async(args: &ProductChatArgs) -> Result<(), ProductChatError> {
-    let provider = ProviderConfig::from_auth(
-        auth_choice(args.auth),
-        args.codex_model.clone(),
-        args.auth_file.clone(),
-    )?;
-    let agent = Arc::new(ProductManagerAgent::new(provider));
+    let responder = build_product_profile_responder(args.process_responder.clone(), || {
+        ProviderConfig::from_auth(
+            auth_choice(args.auth),
+            args.codex_model.clone(),
+            args.auth_file.clone(),
+        )
+    })?;
     let human_forge = Arc::new(build_forge(&args.base_url, &args.human_token));
     let product_forge = Arc::new(build_forge(&args.base_url, &args.product_manager_token));
     let mut session = ProductChatSession::open(
         human_forge,
         product_forge,
-        agent,
+        responder,
         ProductChatOpenOptions {
             base_url: args.base_url.clone(),
             repo_path: args.repo.clone(),
@@ -67,7 +69,7 @@ async fn repl_loop<H, P, R>(
 where
     H: Forge + ?Sized,
     P: Forge + ?Sized,
-    R: ProductManagerResponder + ?Sized,
+    R: InteractiveResponder + ?Sized,
 {
     let stdin = io::stdin();
     loop {
@@ -106,7 +108,7 @@ async fn handle_file_command<H, P, R>(
 where
     H: Forge + ?Sized,
     P: Forge + ?Sized,
-    R: ProductManagerResponder + ?Sized,
+    R: InteractiveResponder + ?Sized,
 {
     let number = raw
         .parse::<usize>()

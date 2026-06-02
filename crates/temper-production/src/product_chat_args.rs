@@ -1,25 +1,38 @@
-//! Argument parsing for `temper-product-manager-chat`.
+//! Argument parsing for the product-manager interactive-profile wrapper.
 
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use temper_forge::RepositoryPath;
+use temper_interaction::ProcessResponderConfig;
 
 pub const HUMAN_TOKEN_ENV: &str = "TEMPER_PRODUCT_CHAT_HUMAN_TOKEN";
 pub const PRODUCT_MANAGER_TOKEN_ENV: &str = "TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN";
 pub const SERVICE_TOKEN_ENV: &str = "TEMPER_PRODUCT_CHAT_SERVICE_TOKEN";
 pub const AGENTS_AUTH_ENV: &str = "TEMPER_AGENTS_AUTH";
+pub const PROCESS_RESPONDER_COMMAND_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND";
+pub const PROCESS_RESPONDER_ARGS_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON";
+pub const PROCESS_RESPONDER_CWD_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_CWD";
+pub const PROCESS_RESPONDER_ENV_ALLOWLIST_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_ENV_ALLOWLIST";
+pub const PROCESS_RESPONDER_TIMEOUT_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_TIMEOUT_SECS";
 pub const DEFAULT_SERVICE_BIND: &str = "127.0.0.1:39200";
 
 pub const USAGE: &str = concat!(
     "temper-product-manager-chat repl --base-url <url> --repo <owner/name> ",
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
-    "[--codex-model <id>] [--auth-file <path>] [--transcript-issue <n>]\n",
+    "[--codex-model <id>] [--auth-file <path>] [--transcript-issue <n>] ",
+    "[--responder-command <path>] [--responder-arg <arg>] ",
+    "[--responder-env <name>] [--responder-cwd <path>] ",
+    "[--responder-timeout-secs <n>]\n",
     "temper-product-manager-chat serve --base-url <url> --repo <owner/name> ",
     "[--bind <addr:port>] [--allow-non-loopback] ",
     "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
-    "[--codex-model <id>] [--auth-file <path>]\n",
+    "[--codex-model <id>] [--auth-file <path>] ",
+    "[--responder-command <path>] [--responder-arg <arg>] ",
+    "[--responder-env <name>] [--responder-cwd <path>] ",
+    "[--responder-timeout-secs <n>]\n",
     "  Forgejo tokens come from TEMPER_PRODUCT_CHAT_HUMAN_TOKEN and ",
     "TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN; optional API bearer comes from ",
     "TEMPER_PRODUCT_CHAT_SERVICE_TOKEN; no secrets on argv"
@@ -49,6 +62,7 @@ pub struct ProductChatArgs {
     pub codex_model: Option<String>,
     pub auth_file: Option<PathBuf>,
     pub transcript_issue: Option<u64>,
+    pub process_responder: Option<ProcessResponderConfig>,
 }
 
 impl fmt::Debug for ProductChatArgs {
@@ -63,6 +77,10 @@ impl fmt::Debug for ProductChatArgs {
             .field("codex_model", &self.codex_model)
             .field("auth_file", &self.auth_file)
             .field("transcript_issue", &self.transcript_issue)
+            .field(
+                "process_responder",
+                &self.process_responder.as_ref().map(|_| "<configured>"),
+            )
             .finish()
     }
 }
@@ -79,6 +97,7 @@ pub struct ProductChatServeArgs {
     pub auth: AuthKind,
     pub codex_model: Option<String>,
     pub auth_file: Option<PathBuf>,
+    pub process_responder: Option<ProcessResponderConfig>,
 }
 
 impl fmt::Debug for ProductChatServeArgs {
@@ -98,6 +117,10 @@ impl fmt::Debug for ProductChatServeArgs {
             .field("auth", &self.auth)
             .field("codex_model", &self.codex_model)
             .field("auth_file", &self.auth_file)
+            .field(
+                "process_responder",
+                &self.process_responder.as_ref().map(|_| "<configured>"),
+            )
             .finish()
     }
 }
@@ -172,6 +195,7 @@ struct RawReplArgs {
     codex_model: Option<String>,
     auth_file: Option<String>,
     transcript_issue: Option<String>,
+    responder: RawProcessResponderArgs,
 }
 
 impl RawReplArgs {
@@ -190,6 +214,16 @@ impl RawReplArgs {
                 "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--transcript-issue" => raw.transcript_issue = Some(value_for(&flag, &mut iter)?),
+                "--responder-command" => raw.responder.command = Some(value_for(&flag, &mut iter)?),
+                "--responder-arg" => raw.responder.args.push(value_for(&flag, &mut iter)?),
+                "--responder-cwd" => raw.responder.cwd = Some(value_for(&flag, &mut iter)?),
+                "--responder-env" => raw
+                    .responder
+                    .env_allowlist
+                    .push(value_for(&flag, &mut iter)?),
+                "--responder-timeout-secs" => {
+                    raw.responder.timeout_secs = Some(value_for(&flag, &mut iter)?)
+                }
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -216,6 +250,7 @@ impl RawReplArgs {
                 .transcript_issue
                 .map(|raw| parse_issue_number(&raw, "--transcript-issue"))
                 .transpose()?,
+            process_responder: self.responder.into_config(env)?,
         })
     }
 }
@@ -230,6 +265,7 @@ struct RawServeArgs {
     auth: Option<String>,
     codex_model: Option<String>,
     auth_file: Option<String>,
+    responder: RawProcessResponderArgs,
 }
 
 impl RawServeArgs {
@@ -249,6 +285,16 @@ impl RawServeArgs {
                 "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
                 "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
                 "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
+                "--responder-command" => raw.responder.command = Some(value_for(&flag, &mut iter)?),
+                "--responder-arg" => raw.responder.args.push(value_for(&flag, &mut iter)?),
+                "--responder-cwd" => raw.responder.cwd = Some(value_for(&flag, &mut iter)?),
+                "--responder-env" => raw
+                    .responder
+                    .env_allowlist
+                    .push(value_for(&flag, &mut iter)?),
+                "--responder-timeout-secs" => {
+                    raw.responder.timeout_secs = Some(value_for(&flag, &mut iter)?)
+                }
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
@@ -280,7 +326,56 @@ impl RawServeArgs {
             auth: parse_auth(self.auth.as_deref(), env)?,
             codex_model: non_empty(self.codex_model),
             auth_file: non_empty(self.auth_file).map(PathBuf::from),
+            process_responder: self.responder.into_config(env)?,
         })
+    }
+}
+
+#[derive(Default)]
+struct RawProcessResponderArgs {
+    command: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    env_allowlist: Vec<String>,
+    timeout_secs: Option<String>,
+}
+
+impl RawProcessResponderArgs {
+    fn into_config<E>(self, env: &E) -> Result<Option<ProcessResponderConfig>, ArgsError>
+    where
+        E: Fn(&str) -> Option<String>,
+    {
+        let Some(command) =
+            non_empty(self.command).or_else(|| non_empty_env(env, PROCESS_RESPONDER_COMMAND_ENV))
+        else {
+            return Ok(None);
+        };
+        let args = if self.args.is_empty() {
+            parse_responder_args_json(non_empty_env(env, PROCESS_RESPONDER_ARGS_ENV))?
+        } else {
+            self.args
+        };
+        let cwd = non_empty(self.cwd).or_else(|| non_empty_env(env, PROCESS_RESPONDER_CWD_ENV));
+        let env_allowlist = if self.env_allowlist.is_empty() {
+            parse_env_allowlist(non_empty_env(env, PROCESS_RESPONDER_ENV_ALLOWLIST_ENV))
+        } else {
+            self.env_allowlist
+        };
+        let timeout_secs = match self
+            .timeout_secs
+            .or_else(|| non_empty_env(env, PROCESS_RESPONDER_TIMEOUT_ENV))
+        {
+            Some(raw) => parse_timeout_secs(&raw)?,
+            None => ProcessResponderConfig::DEFAULT_TIMEOUT.as_secs(),
+        };
+        let mut config = ProcessResponderConfig::new(command)
+            .with_args(args)
+            .with_env_allowlist(env_allowlist)
+            .with_timeout(Duration::from_secs(timeout_secs));
+        if let Some(cwd) = cwd {
+            config = config.with_working_dir(cwd);
+        }
+        Ok(Some(config))
     }
 }
 
@@ -334,6 +429,40 @@ where
     }
 }
 
+fn parse_responder_args_json(raw: Option<String>) -> Result<Vec<String>, ArgsError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str::<Vec<String>>(&raw).map_err(|error| {
+        ArgsError::new(format!(
+            "{PROCESS_RESPONDER_ARGS_ENV} must be a JSON array of strings: {error}"
+        ))
+    })
+}
+
+fn parse_env_allowlist(raw: Option<String>) -> Vec<String> {
+    raw.map(|raw| {
+        raw.split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn parse_timeout_secs(raw: &str) -> Result<u64, ArgsError> {
+    let value = raw.parse::<u64>().map_err(|_| {
+        ArgsError::new(format!(
+            "--responder-timeout-secs must be an integer, got '{raw}'"
+        ))
+    })?;
+    if value == 0 {
+        return Err(ArgsError::new("--responder-timeout-secs must be positive"));
+    }
+    Ok(value)
+}
+
 fn parse_bind(raw: &str, flag: &str) -> Result<SocketAddr, ArgsError> {
     raw.parse()
         .map_err(|_| ArgsError::new(format!("{flag} must be addr:port, got '{raw}'")))
@@ -380,96 +509,4 @@ fn parse_issue_number(raw: &str, flag: &str) -> Result<u64, ArgsError> {
         return Err(ArgsError::new(format!("{flag} must be positive, got 0")));
     }
     Ok(value)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn env(key: &str) -> Option<String> {
-        match key {
-            HUMAN_TOKEN_ENV => Some("human-secret".into()),
-            PRODUCT_MANAGER_TOKEN_ENV => Some("pm-secret".into()),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn product_chat_args_parse_repl_and_redact_tokens_in_debug() {
-        let outcome = parse_with_env(
-            [
-                "repl",
-                "--base-url",
-                "https://git.example.test",
-                "--repo",
-                "ai/temper",
-                "--auth",
-                "chatgpt-oauth",
-                "--codex-model",
-                "gpt-5.5",
-                "--auth-file",
-                "/tmp/auth.json",
-                "--transcript-issue",
-                "3",
-            ]
-            .into_iter()
-            .map(String::from),
-            env,
-        )
-        .expect("parses");
-        let ParseOutcome::Repl(args) = outcome else {
-            panic!("expected repl")
-        };
-        assert_eq!(args.repo, RepositoryPath::new("ai", "temper"));
-        assert_eq!(args.auth, AuthKind::ChatGptOAuth);
-        assert_eq!(args.transcript_issue, Some(3));
-        let debug = format!("{args:?}");
-        assert!(debug.contains("<redacted>"));
-        assert!(!debug.contains("human-secret"));
-        assert!(!debug.contains("pm-secret"));
-    }
-
-    #[test]
-    fn product_chat_args_default_auth_comes_from_env_then_chatgpt() {
-        let outcome = parse_with_env(
-            [
-                "repl",
-                "--base-url",
-                "https://git.example.test",
-                "--repo",
-                "ai/temper",
-            ]
-            .into_iter()
-            .map(String::from),
-            |key| match key {
-                HUMAN_TOKEN_ENV => Some("human-secret".into()),
-                PRODUCT_MANAGER_TOKEN_ENV => Some("pm-secret".into()),
-                AGENTS_AUTH_ENV => Some("anthropic-oauth".into()),
-                _ => None,
-            },
-        )
-        .expect("parses");
-        let ParseOutcome::Repl(args) = outcome else {
-            panic!("expected repl")
-        };
-        assert_eq!(args.auth, AuthKind::AnthropicOAuth);
-    }
-
-    #[test]
-    fn product_chat_args_reject_missing_tokens() {
-        let error = parse_with_env(
-            [
-                "repl",
-                "--base-url",
-                "https://git.example.test",
-                "--repo",
-                "ai/temper",
-            ]
-            .into_iter()
-            .map(String::from),
-            |_| None,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains(HUMAN_TOKEN_ENV));
-    }
 }

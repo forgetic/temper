@@ -13,6 +13,7 @@ description = "Real, in-process LLM role agents for Temper (DeepSeek via pi_agen
 [dependencies]
 async-trait.workspace = true
 temper-forge = { path = "../temper-forge" }
+temper-interaction = { path = "../temper-interaction" }
 temper-runner = { path = "../temper-runner" }
 temper-workflow = { path = "../temper-workflow" }
 pi_agent_rust = "0.1.13"

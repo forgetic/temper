@@ -1,4 +1,6 @@
 use std::error::Error;
+use std::io;
+use std::time::Duration;
 
 use temper_forge::ForgeError;
 use thiserror::Error;
@@ -95,6 +97,36 @@ pub enum InteractionError {
     Responder {
         /// User-facing failure summary.
         message: String,
+    },
+    /// Spawning, writing to, or waiting for a process responder failed.
+    #[error("process responder {operation} I/O failed: {source}")]
+    ProcessResponderIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Underlying I/O failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A process responder exceeded its one-turn timeout.
+    #[error("process responder timed out after {timeout:?}")]
+    ProcessResponderTimeout {
+        /// Configured timeout.
+        timeout: Duration,
+    },
+    /// A process responder exited unsuccessfully.
+    #[error("process responder exited unsuccessfully with status {status}: {stderr}")]
+    ProcessResponderExit {
+        /// Process exit status string.
+        status: String,
+        /// Stderr preview captured from the responder.
+        stderr: String,
+    },
+    /// A process responder did not return exactly one valid ConversationReply JSON value.
+    #[error("process responder returned malformed ConversationReply JSON: {source}")]
+    ProcessResponderMalformedJson {
+        /// JSON parse failure.
+        #[source]
+        source: serde_json::Error,
     },
     /// A profile-specific adapter failed and preserved its source error.
     #[error("interactive profile failed: {message}")]

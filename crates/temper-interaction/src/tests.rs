@@ -232,6 +232,22 @@ fn rejects_invalid_ids_during_deserialization() {
 }
 
 #[test]
+fn rejects_malformed_issue_proposal_payloads() {
+    let reply = ConversationReply {
+        message: "bad payload".to_string(),
+        proposals: vec![Proposal::custom(
+            proposal_id("bad-issue"),
+            ProposalKind::issue(),
+            "Bad issue",
+            None,
+            json!({}),
+        )],
+    };
+
+    assert!(matches!(reply.validate(), Err(InteractionError::Json(_))));
+}
+
+#[test]
 fn rejects_duplicate_proposal_ids() {
     let first = Proposal::custom(
         proposal_id("same-proposal"),

@@ -1,11 +1,12 @@
 //! Real, in-process LLM role agents for Temper.
 //!
 //! This crate is the **only** place the LLM SDK (`pi_agent_rust`, imported as
-//! `pi`) lives. `temper-forge`, `temper-runner`, and `temper-workflow` stay
-//! LLM-agnostic; a real workflow role agent is just a different
-//! [`temper_runner::Agent`] implementation, selected like any other. The crate
-//! also exposes a non-workflow product-manager conversational adapter that runs
-//! one LLM turn and returns draft intake issues without mutating Forge state.
+//! `pi`) lives. `temper-forge`, `temper-runner`, `temper-workflow`, and
+//! `temper-interaction` stay LLM-agnostic; a real workflow role agent is just a
+//! different [`temper_runner::Agent`] implementation, selected like any other.
+//! The crate also exposes a transitional in-process product-manager interactive
+//! profile responder that runs one LLM turn and returns draft intake issues without
+//! mutating Forge state.
 //!
 //! ## Layout
 //!
@@ -26,9 +27,9 @@
 //! - [`prompts`] — the non-workflow product-manager conversational prompt
 //!   embedded as data. Production workflow-role prompts are generated from role
 //!   manifests; checked-in workflow-role prompt files do not live here.
-//! - [`product_manager`] — a non-workflow conversational adapter: no
+//! - [`product_manager`] — a non-workflow interactive profile responder: no
 //!   [`temper_runner::Agent`] implementation, no workflow tools, and no Forge
-//!   mutation; it returns a reply plus draft intake issues for an integration
+//!   mutation; it returns a reply plus draft intake issues for the interaction
 //!   layer to file only after explicit human command.
 //! - [`registry`] — production builders that validate external-tool bindings and
 //!   register one generic agent per compiled workflow role.
@@ -49,9 +50,9 @@ pub mod registry;
 pub mod role;
 
 pub use product_manager::{
-    ProductManagerAgent, ProductManagerAuthor, ProductManagerConversationTurn,
-    ProductManagerDraftIssue, ProductManagerError, ProductManagerRequest, ProductManagerResponse,
-    is_valid_draft_slug,
+    PRODUCT_MANAGER_PROFILE_ID, ProductManagerAgent, ProductManagerAuthor,
+    ProductManagerConversationTurn, ProductManagerDraftIssue, ProductManagerError,
+    ProductManagerRequest, ProductManagerResponse, is_valid_draft_slug,
 };
 pub use provider::{
     ANTHROPIC_MODEL_ENV, AuthChoice, DEFAULT_ANTHROPIC_MODEL, ProviderConfig, ProviderError,

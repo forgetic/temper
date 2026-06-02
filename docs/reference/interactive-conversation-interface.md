@@ -4,10 +4,9 @@ This page defines the target contract for Temper's generic interaction plane.
 `crates/temper-interaction` contains the reusable core of this contract:
 typed conversation/profile/proposal ids, participants, turns, wire-serializable
 requests/replies, inert proposals, deterministic proposal-id validation, the
-object-safe responder adapter trait, Forge-backed transcript/session helpers,
-and explicit idempotent issue-proposal acceptance. Transport adapters,
-process-responder wiring, and full product-manager profile recasting remain
-later phases.
+object-safe responder adapter trait, the provider-neutral process responder
+adapter, Forge-backed transcript/session helpers, and explicit idempotent
+issue-proposal acceptance. Transport API generalization remains a later phase.
 
 ## Scope
 
@@ -28,7 +27,8 @@ acceptance storage. Responders still receive no Forge handle, and proposals are
 data until the interaction runtime's acceptance path acts on them.
 
 The Rust trait is an adapter interface. The preferred public extension boundary
-is a process protocol using the same serialized request/reply types.
+is the process protocol using the same serialized request/reply types; see
+[Interactive process responder protocol](interactive-process-responder-protocol.md).
 
 ## Intended API roles
 
@@ -54,10 +54,11 @@ is a process protocol using the same serialized request/reply types.
   reloads current durable state, validates the proposal against profile policy,
   and applies the allowed mutation idempotently. Issue-intake acceptance searches
   for a hidden marker before creating a labeled workflow intake issue.
-- **Process responder adapter**: provider-neutral glue that invokes an external
-  command/service with a serialized `ConversationRequest`, reads one serialized
-  `ConversationReply`, enforces timeouts and parse errors, and validates
-  proposals before the interaction service persists anything.
+- **Process responder adapter**: provider-neutral glue in `temper-interaction`
+  that invokes an external command with a serialized `ConversationRequest`,
+  reads one serialized `ConversationReply`, enforces timeout/exit/parse errors,
+  clears ambient env except allow-listed names, and validates proposal ids/kinds
+  plus built-in issue payloads before the interaction service persists anything.
 - **Interaction service**: transport-neutral orchestration for create/resume,
   append human turn, run a responder adapter, persist reply/proposals, cache
   current proposals, and accept a proposal.
@@ -101,5 +102,6 @@ of the generic interaction contract, and concrete pi-SDK responders should be
 movable to an external repository that implements the process protocol.
 
 `temper-production` may host deployable binaries and adapters, including the
-existing product-manager commands. Those commands can become compatibility
-wrappers over the generic interaction service once the implementation lands.
+existing product-manager commands. Those commands are compatibility wrappers over
+the generic interaction session/runtime while the generic transport API is still
+being introduced.

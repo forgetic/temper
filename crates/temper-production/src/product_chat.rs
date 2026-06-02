@@ -1,21 +1,19 @@
-//! Product-manager chat integration core.
+//! Product-manager interactive profile wiring.
 //!
-//! The product-manager LLM proposes replies and draft intake issues only. This
-//! module is now a compatibility wrapper over `temper-interaction`: the generic
-//! interaction layer owns Forge-backed transcripts and explicit idempotent issue
-//! acceptance, while this module maps product-manager request/response names.
+//! This module keeps the historical product-chat API names while layering the
+//! `product-manager` profile over `temper-interaction`'s generic session,
+//! transcript, responder, and proposal-acceptance runtime. The profile proposes
+//! replies and draft intake issues only; filing still happens through explicit
+//! issue-proposal acceptance.
 
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde_json::Value;
 use temper_agents::{
-    ProductManagerAgent, ProductManagerAuthor, ProductManagerConversationTurn,
-    ProductManagerDraftIssue, ProductManagerError, ProductManagerRequest, ProductManagerResponse,
-    ProviderError,
+    ProductManagerAgent, ProductManagerDraftIssue, ProductManagerError, ProductManagerResponse,
+    ProviderConfig, ProviderError, PRODUCT_MANAGER_PROFILE_ID,
 };
 use temper_forge::{Forge, ForgeError, Issue, ItemNumber, Repository, RepositoryPath};
 use temper_interaction::{
@@ -23,32 +21,44 @@ use temper_interaction::{
     parse_transcript_session_key as parse_interaction_transcript_session_key,
     render_filing_marker as render_interaction_filing_marker,
     render_transcript_marker as render_interaction_transcript_marker, ConversationProfileId,
-    ConversationReply, ConversationRequest, ForgeInteractionSession, ForgeSessionConfig,
-    ForgeSessionOpenOptions, ForgeTranscriptConfig, InteractionError, InteractiveResponder,
-    IssueIntakeAcceptanceConfig, IssueProposal, Participant, ParticipantKind, Proposal, ProposalId,
+    ConversationReply, ForgeInteractionSession, ForgeSessionConfig, ForgeSessionOpenOptions,
+    ForgeTranscriptConfig, InteractionError, InteractiveResponder, IssueIntakeAcceptanceConfig,
+    Participant, ProcessResponder, ProcessResponderConfig, ProposalId,
 };
 
 pub const PRODUCT_LABEL: &str = "product";
 pub const WORKFLOW_INTAKE_LABEL: &str = "untriaged";
 pub const PRODUCT_MARKER_NAMESPACE: &str = "product-chat";
-const PRODUCT_PROFILE_ID: &str = "product-manager";
-const PRODUCT_CONVERSATION_ID_PREFIX: &str = "pc";
+pub const PRODUCT_PROFILE_ID: &str = PRODUCT_MANAGER_PROFILE_ID;
+pub const PRODUCT_CONVERSATION_ID_PREFIX: &str = "pc";
 
-#[async_trait]
-pub trait ProductManagerResponder: Send + Sync {
-    async fn respond(
-        &self,
-        request: &ProductManagerRequest,
-    ) -> Result<ProductManagerResponse, ProductManagerError>;
+/// Product-manager profile policy over the generic interaction runtime.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductChatProfileConfig {
+    /// Generic interaction profile id.
+    pub profile_id: &'static str,
+    /// Sole label used for transcript issues.
+    pub transcript_label: &'static str,
+    /// Workflow intake label used when accepted issue proposals are filed.
+    pub workflow_intake_label: &'static str,
+    /// Prefix for newly-created transcript issue titles.
+    pub transcript_title_prefix: &'static str,
+    /// Hidden marker namespace for transcripts and accepted proposals.
+    pub marker_namespace: &'static str,
+    /// Prefix for generated conversation ids.
+    pub conversation_id_prefix: &'static str,
 }
 
-#[async_trait]
-impl ProductManagerResponder for ProductManagerAgent {
-    async fn respond(
-        &self,
-        request: &ProductManagerRequest,
-    ) -> Result<ProductManagerResponse, ProductManagerError> {
-        self.run_turn(request).await
+impl Default for ProductChatProfileConfig {
+    fn default() -> Self {
+        Self {
+            profile_id: PRODUCT_PROFILE_ID,
+            transcript_label: PRODUCT_LABEL,
+            workflow_intake_label: WORKFLOW_INTAKE_LABEL,
+            transcript_title_prefix: "Product conversation",
+            marker_namespace: PRODUCT_MARKER_NAMESPACE,
+            conversation_id_prefix: PRODUCT_CONVERSATION_ID_PREFIX,
+        }
     }
 }
 
@@ -182,6 +192,21 @@ impl From<io::Error> for ProductChatError {
     }
 }
 
+/// Builds the configured product-manager profile responder.
+///
+/// A process responder is selected only when configured; otherwise the in-repo
+/// in-process product-manager implementation remains as a compatibility path.
+pub fn build_product_profile_responder(
+    process: Option<ProcessResponderConfig>,
+    provider_config: impl FnOnce() -> Result<ProviderConfig, ProviderError>,
+) -> Result<Arc<dyn InteractiveResponder>, ProductChatError> {
+    if let Some(config) = process {
+        Ok(Arc::new(ProcessResponder::new(config)?) as Arc<dyn InteractiveResponder>)
+    } else {
+        Ok(Arc::new(ProductManagerAgent::new(provider_config()?)) as Arc<dyn InteractiveResponder>)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductChatOpenOptions {
     pub base_url: String,
@@ -198,9 +223,9 @@ pub struct FileDraftOutcome {
 pub struct ProductChatSession<
     H: Forge + ?Sized,
     P: Forge + ?Sized,
-    R: ProductManagerResponder + ?Sized,
+    R: InteractiveResponder + ?Sized,
 > {
-    inner: ForgeInteractionSession<H, P, ProductManagerInteractionAdapter<R>>,
+    inner: ForgeInteractionSession<H, P, R>,
     latest_drafts: Vec<ProductManagerDraftIssue>,
 }
 
@@ -208,7 +233,7 @@ impl<H, P, R> ProductChatSession<H, P, R>
 where
     H: Forge + ?Sized,
     P: Forge + ?Sized,
-    R: ProductManagerResponder + ?Sized,
+    R: InteractiveResponder + ?Sized,
 {
     pub async fn open(
         human_forge: Arc<H>,
@@ -216,11 +241,10 @@ where
         responder: Arc<R>,
         options: ProductChatOpenOptions,
     ) -> Result<Self, ProductChatError> {
-        let adapter = Arc::new(ProductManagerInteractionAdapter { inner: responder });
         let inner = ForgeInteractionSession::open(
             human_forge,
             product_forge,
-            adapter,
+            responder,
             product_session_config()?,
             ForgeSessionOpenOptions {
                 base_url: options.base_url,
@@ -305,100 +329,21 @@ where
     }
 }
 
-struct ProductManagerInteractionAdapter<R: ProductManagerResponder + ?Sized> {
-    inner: Arc<R>,
-}
-
-#[async_trait]
-impl<R> InteractiveResponder for ProductManagerInteractionAdapter<R>
-where
-    R: ProductManagerResponder + ?Sized,
-{
-    async fn respond(
-        &self,
-        request: &ConversationRequest,
-    ) -> Result<ConversationReply, InteractionError> {
-        let repository = request
-            .context
-            .get("repository")
-            .and_then(Value::as_str)
-            .ok_or_else(|| InteractionError::responder("missing repository context"))?
-            .to_string();
-        let transcript_url = request
-            .context
-            .get("transcript_url")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let turns = request
-            .turns
-            .iter()
-            .filter_map(|turn| {
-                let author = match turn.participant.kind {
-                    ParticipantKind::Human => ProductManagerAuthor::Human,
-                    ParticipantKind::Agent => ProductManagerAuthor::ProductManager,
-                    ParticipantKind::System => return None,
-                };
-                Some(ProductManagerConversationTurn {
-                    author,
-                    body: turn.body.clone(),
-                })
-            })
-            .collect();
-        let response = self
-            .inner
-            .respond(&ProductManagerRequest {
-                repository,
-                transcript_url,
-                turns,
-            })
-            .await
-            .map_err(|error| InteractionError::profile("product-manager failed", error))?;
-        response.validate().map_err(|error| {
-            InteractionError::profile("product-manager response invalid", error)
-        })?;
-        conversation_reply_from_product_response(&response)
-    }
-}
-
 fn product_session_config() -> Result<ForgeSessionConfig, ProductChatError> {
+    let profile = ProductChatProfileConfig::default();
     let transcript = ForgeTranscriptConfig::new(
-        ConversationProfileId::new(PRODUCT_PROFILE_ID)?,
-        PRODUCT_LABEL,
-        "Product conversation",
-        PRODUCT_MARKER_NAMESPACE,
-        PRODUCT_CONVERSATION_ID_PREFIX,
+        ConversationProfileId::new(profile.profile_id)?,
+        profile.transcript_label,
+        profile.transcript_title_prefix,
+        profile.marker_namespace,
+        profile.conversation_id_prefix,
         Participant::human("human"),
-        Participant::agent("product-manager"),
+        Participant::agent(profile.profile_id),
     )?;
     Ok(ForgeSessionConfig::new(
         transcript,
-        IssueIntakeAcceptanceConfig::new(PRODUCT_MARKER_NAMESPACE, WORKFLOW_INTAKE_LABEL)?,
+        IssueIntakeAcceptanceConfig::new(profile.marker_namespace, profile.workflow_intake_label)?,
     )?)
-}
-
-fn conversation_reply_from_product_response(
-    response: &ProductManagerResponse,
-) -> Result<ConversationReply, InteractionError> {
-    let proposals = response
-        .drafts
-        .iter()
-        .map(draft_to_proposal)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ConversationReply {
-        message: response.reply.clone(),
-        proposals,
-    })
-}
-
-fn draft_to_proposal(draft: &ProductManagerDraftIssue) -> Result<Proposal, InteractionError> {
-    Proposal::issue(
-        ProposalId::new(draft.slug.clone())?,
-        IssueProposal {
-            title: draft.title.clone(),
-            body: draft.body.clone(),
-            rationale: draft.rationale.clone(),
-        },
-    )
 }
 
 fn product_response_from_reply(
@@ -408,12 +353,10 @@ fn product_response_from_reply(
         .proposals
         .iter()
         .filter_map(|proposal| match proposal.issue_payload() {
-            Ok(Some(issue)) => Some(Ok(ProductManagerDraftIssue {
-                slug: proposal.id.to_string(),
-                title: issue.title,
-                body: issue.body,
-                rationale: issue.rationale,
-            })),
+            Ok(Some(issue)) => Some(Ok(ProductManagerDraftIssue::from_issue_proposal(
+                proposal.id.to_string(),
+                issue,
+            ))),
             Ok(None) => None,
             Err(error) => Some(Err(ProductChatError::from(error))),
         })

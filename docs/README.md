@@ -26,7 +26,7 @@ Precise contracts and factual details. Use these to define APIs, invariants, sch
 
 Start with `reference/development-conventions.md` and `reference/agent-lessons/README.md` during session bootstrap, then read task-relevant reference pages.
 
-See `reference/`, including the [interactive conversation interface](reference/interactive-conversation-interface.md).
+See `reference/`, including the [interactive conversation interface](reference/interactive-conversation-interface.md) and [interactive process responder protocol](reference/interactive-process-responder-protocol.md).
 
 ## Explanation
 

@@ -1,18 +1,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temper_agents::{
-    ProductManagerDraftIssue, ProductManagerError, ProductManagerRequest, ProductManagerResponse,
-};
+use temper_agents::{ProductManagerDraftIssue, ProductManagerResponse};
 use temper_forge::{
     CreateRepository, Forge, Repository, RepositoryPath, UpsertLabel, User, UserId,
 };
 use temper_forge_memory::MemoryForge;
 
+use temper_interaction::{
+    ConversationReply, ConversationRequest, InteractionError, InteractiveResponder,
+};
+
 use crate::product_chat::{
     parse_transcript_session_key, render_filing_marker, render_transcript_marker, ProductChatError,
-    ProductChatOpenOptions, ProductChatSession, ProductManagerResponder, PRODUCT_LABEL,
-    WORKFLOW_INTAKE_LABEL,
+    ProductChatOpenOptions, ProductChatSession, PRODUCT_LABEL, WORKFLOW_INTAKE_LABEL,
 };
 use crate::product_chat_args::{
     parse_with_env, ParseOutcome, DEFAULT_SERVICE_BIND, HUMAN_TOKEN_ENV, PRODUCT_MANAGER_TOKEN_ENV,
@@ -27,21 +28,21 @@ struct FakeResponder {
 struct NeverResponder;
 
 #[async_trait]
-impl ProductManagerResponder for FakeResponder {
+impl InteractiveResponder for FakeResponder {
     async fn respond(
         &self,
-        _request: &ProductManagerRequest,
-    ) -> Result<ProductManagerResponse, ProductManagerError> {
-        Ok(self.response.clone())
+        _request: &ConversationRequest,
+    ) -> Result<ConversationReply, InteractionError> {
+        self.response.to_conversation_reply()
     }
 }
 
 #[async_trait]
-impl ProductManagerResponder for NeverResponder {
+impl InteractiveResponder for NeverResponder {
     async fn respond(
         &self,
-        _request: &ProductManagerRequest,
-    ) -> Result<ProductManagerResponse, ProductManagerError> {
+        _request: &ConversationRequest,
+    ) -> Result<ConversationReply, InteractionError> {
         panic!("local product-chat command should not call the responder")
     }
 }
@@ -111,7 +112,7 @@ async fn fake_service_app(service_token: Option<&str>) -> ProductChatHttpApp {
 
 async fn service_app_with_responder(
     service_token: Option<&str>,
-    responder: Arc<dyn ProductManagerResponder>,
+    responder: Arc<dyn InteractiveResponder>,
 ) -> ProductChatHttpApp {
     let (human, product_manager, _repo) = seeded().await;
     let service = ProductChatService::new(

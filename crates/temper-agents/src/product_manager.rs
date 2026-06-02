@@ -1,26 +1,35 @@
-//! Conversational product-manager LLM adapter.
+//! Conversational product-manager interactive profile responder.
 //!
 //! [`ProductManagerAgent`] is deliberately **not** a workflow
 //! [`temper_runner::Agent`]. It runs one LLM turn over a conversation transcript
 //! and returns a conversational reply plus draft intake issues. It does not see
-//! Forge handles, register SDK tools, or mutate workflow state; Phase 3's
-//! integration layer owns transcript persistence and explicit issue filing.
+//! Forge handles, register SDK tools, or mutate workflow state; the interaction
+//! layer owns transcript persistence and explicit issue filing.
 
 use std::collections::HashSet;
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use temper_interaction::{
+    ConversationReply, ConversationRequest, InteractionError, InteractiveResponder, IssueProposal,
+    ParticipantKind, Proposal, ProposalId,
+};
 
 use crate::decision::{DecisionError, run_decision};
 use crate::prompts::PRODUCT_MANAGER_SYSTEM_PROMPT;
 use crate::provider::ProviderConfig;
 
-/// Non-workflow product-manager agent for one-turn conversation planning.
+/// Stable profile id used by the product-manager interactive profile.
+pub const PRODUCT_MANAGER_PROFILE_ID: &str = "product-manager";
+
+/// Non-workflow product-manager interactive profile for one-turn planning.
 pub struct ProductManagerAgent {
     provider: ProviderConfig,
 }
 
 impl ProductManagerAgent {
-    /// Builds a product-manager adapter using the shared LLM provider config.
+    /// Builds a product-manager responder using the shared LLM provider config.
     pub fn new(provider: ProviderConfig) -> Self {
         Self { provider }
     }
@@ -43,6 +52,29 @@ impl ProductManagerAgent {
         .await?;
         response.validate()?;
         Ok(response)
+    }
+}
+
+#[async_trait]
+impl InteractiveResponder for ProductManagerAgent {
+    async fn respond(
+        &self,
+        request: &ConversationRequest,
+    ) -> Result<ConversationReply, InteractionError> {
+        if request.profile_id.as_str() != PRODUCT_MANAGER_PROFILE_ID {
+            return Err(InteractionError::responder(format!(
+                "product-manager responder cannot serve profile `{}`",
+                request.profile_id
+            )));
+        }
+        let request = ProductManagerRequest::from_conversation_request(request)?;
+        let response = self
+            .run_turn(&request)
+            .await
+            .map_err(|error| InteractionError::profile("product-manager failed", error))?;
+        response
+            .to_conversation_reply()
+            .map_err(|error| InteractionError::profile("product-manager response invalid", error))
     }
 }
 
@@ -76,6 +108,45 @@ pub struct ProductManagerRequest {
     pub turns: Vec<ProductManagerConversationTurn>,
 }
 
+impl ProductManagerRequest {
+    /// Maps a generic interaction request into the product-manager profile input.
+    pub fn from_conversation_request(
+        request: &ConversationRequest,
+    ) -> Result<Self, InteractionError> {
+        let repository = request
+            .context
+            .get("repository")
+            .and_then(Value::as_str)
+            .ok_or_else(|| InteractionError::responder("missing repository context"))?
+            .to_string();
+        let transcript_url = request
+            .context
+            .get("transcript_url")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let turns = request
+            .turns
+            .iter()
+            .filter_map(|turn| {
+                let author = match turn.participant.kind {
+                    ParticipantKind::Human => ProductManagerAuthor::Human,
+                    ParticipantKind::Agent => ProductManagerAuthor::ProductManager,
+                    ParticipantKind::System => return None,
+                };
+                Some(ProductManagerConversationTurn {
+                    author,
+                    body: turn.body.clone(),
+                })
+            })
+            .collect();
+        Ok(Self {
+            repository,
+            transcript_url,
+            turns,
+        })
+    }
+}
+
 /// Structured result of one product-manager LLM turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductManagerResponse {
@@ -105,9 +176,22 @@ impl ProductManagerResponse {
         }
         Ok(())
     }
+
+    /// Maps this profile-specific response onto the generic interaction reply.
+    pub fn to_conversation_reply(&self) -> Result<ConversationReply, InteractionError> {
+        let proposals = self
+            .drafts
+            .iter()
+            .map(ProductManagerDraftIssue::to_proposal)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ConversationReply {
+            message: self.reply.clone(),
+            proposals,
+        })
+    }
 }
 
-/// One draft intake issue proposed by the product manager.
+/// One draft intake issue proposed by the product-manager profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductManagerDraftIssue {
     /// Stable deterministic identifier for explicit filing correlation keys.
@@ -118,6 +202,35 @@ pub struct ProductManagerDraftIssue {
     pub body: String,
     /// Optional reason this draft is worth filing.
     pub rationale: Option<String>,
+}
+
+impl ProductManagerDraftIssue {
+    /// Builds a product-manager draft from a generic issue proposal.
+    pub fn from_issue_proposal(slug: impl Into<String>, proposal: IssueProposal) -> Self {
+        Self {
+            slug: slug.into(),
+            title: proposal.title,
+            body: proposal.body,
+            rationale: proposal.rationale,
+        }
+    }
+
+    /// Maps this product-manager compatibility DTO to a generic issue proposal.
+    pub fn to_issue_proposal(&self) -> IssueProposal {
+        IssueProposal {
+            title: self.title.clone(),
+            body: self.body.clone(),
+            rationale: self.rationale.clone(),
+        }
+    }
+
+    /// Maps this draft to a generic inert proposal.
+    pub fn to_proposal(&self) -> Result<Proposal, InteractionError> {
+        Proposal::issue(
+            ProposalId::new(self.slug.clone())?,
+            self.to_issue_proposal(),
+        )
+    }
 }
 
 /// Returns whether `slug` is safe and deterministic-looking for draft filing.
@@ -147,7 +260,7 @@ pub fn is_valid_draft_slug(slug: &str) -> bool {
     true
 }
 
-/// Product-manager adapter failure.
+/// Product-manager profile responder failure.
 #[derive(Debug)]
 pub enum ProductManagerError {
     /// Building the provider, running the model, or parsing the model JSON
@@ -253,6 +366,57 @@ mod tests {
         assert_eq!(response.drafts.len(), 2);
         assert_eq!(response.drafts[0].slug, "matrix-text-adapter");
         assert_eq!(response.drafts[1].rationale, None);
+    }
+
+    #[test]
+    fn product_manager_maps_generic_interaction_request_and_reply() {
+        let request = ConversationRequest {
+            profile_id: temper_interaction::ConversationProfileId::new(PRODUCT_MANAGER_PROFILE_ID)
+                .expect("valid profile"),
+            conversation_id: temper_interaction::ConversationId::new("conversation-1")
+                .expect("valid conversation"),
+            turns: vec![
+                temper_interaction::ConversationTurn::new(
+                    temper_interaction::Participant::human("human"),
+                    "I want a mobile chat loop.",
+                ),
+                temper_interaction::ConversationTurn::new(
+                    temper_interaction::Participant::agent("product-manager"),
+                    "Let's keep it small.",
+                ),
+                temper_interaction::ConversationTurn::new(
+                    temper_interaction::Participant::new(ParticipantKind::System),
+                    "ignored runtime note",
+                ),
+            ],
+            context: serde_json::json!({
+                "repository": "ai/temper",
+                "transcript_url": "https://git.example.test/ai/temper/issues/1"
+            }),
+        };
+
+        let mapped = ProductManagerRequest::from_conversation_request(&request).unwrap();
+        assert_eq!(mapped.repository, "ai/temper");
+        assert_eq!(mapped.turns.len(), 2);
+        assert_eq!(mapped.turns[0].author, ProductManagerAuthor::Human);
+        assert_eq!(mapped.turns[1].author, ProductManagerAuthor::ProductManager);
+
+        let response = ProductManagerResponse {
+            reply: "File one small issue.".into(),
+            drafts: vec![ProductManagerDraftIssue {
+                slug: "mobile-chat-loop".into(),
+                title: "Add mobile chat loop".into(),
+                body: "Expose chat from a phone-friendly client.".into(),
+                rationale: Some("Dogfood from mobile.".into()),
+            }],
+        };
+        let reply = response.to_conversation_reply().unwrap();
+        assert_eq!(reply.message, "File one small issue.");
+        assert_eq!(reply.proposals[0].id.as_str(), "mobile-chat-loop");
+        assert_eq!(
+            reply.proposals[0].kind,
+            temper_interaction::ProposalKind::issue()
+        );
     }
 
     #[test]

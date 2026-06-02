@@ -4,23 +4,25 @@ This API is the current `product-manager` profile instance of Temper's broader
 interaction-plane target. The generic interactive conversation contract is
 specified in
 [Interactive conversation interface](interactive-conversation-interface.md), and
-its domain request/reply/proposal types now live in `temper-interaction`. The
-product-manager transcript, transport, and filing implementation has not been
-extracted yet; do not treat the product-manager binary, endpoints, or type names
-as the framework abstraction.
+its domain request/reply/proposal types and provider-neutral process responder
+adapter now live in `temper-interaction`. The product-manager binary and
+endpoints are compatibility profile wiring; do not treat their names as the
+framework abstraction.
 
 Temper currently provides the product-manager conversation **integration
-surface**: Forgejo transcripts, product-manager LLM turns, draft issue proposals,
-and explicit filing into the normal workflow. Product-manager draft intake issues
-are one proposal type: they are inert until a human explicitly accepts one for
-filing. External web, mobile, Matrix, and voice frontends should eventually target
-the generic interaction API and select `product-manager` as a profile. Concrete
-product-manager responder implementations, including pi-SDK-backed ones, should
-be able to live out of process behind the generic responder protocol; frontends
-should still talk to Temper's interaction service rather than directly to that
-responder process. Until the generic API exists, external repositories may
-consume this local profile-specific API. This repository does not ship those
-frontends.
+surface**: Forgejo transcripts, product-manager responder turns, draft issue
+proposals, and explicit filing into the normal workflow. Product-manager draft
+intake issues are one proposal type: they are inert until a human explicitly
+accepts one for filing. External web, mobile, Matrix, and voice frontends should
+eventually target the generic interaction API and select `product-manager` as a
+profile. Concrete product-manager responder implementations, including
+pi-SDK-backed ones, can
+live out of process behind the
+[generic responder protocol](interactive-process-responder-protocol.md);
+frontends should still talk to Temper's interaction service rather than directly
+to that responder process. Until the generic transport API exists, external
+repositories may consume this local profile-specific API. This repository does
+not ship those frontends.
 
 ## Command
 
@@ -33,7 +35,10 @@ temper-product-manager-chat serve \
 ```
 
 `--bind` defaults to `127.0.0.1:39200`. Non-loopback binds require both
-`--allow-non-loopback` and `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`.
+`--allow-non-loopback` and `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`. By default the
+binary uses the in-repo in-process product-manager responder; operators select a
+process responder explicitly with `--responder-command` or
+`TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`.
 
 Secrets come from env, never argv:
 
@@ -44,8 +49,20 @@ Secrets come from env, never argv:
   for non-loopback binds.
 - `TEMPER_AGENTS_AUTH`, `TEMPER_AGENTS_CODEX_MODEL`,
   `TEMPER_AGENTS_AUTH_FILE`, and provider-specific auth envs follow the normal
-  `temper-agents` rules. CLI `--auth`, `--codex-model`, and `--auth-file`
-  override the matching defaults.
+  `temper-agents` rules for the in-process fallback. CLI `--auth`,
+  `--codex-model`, and `--auth-file` override the matching defaults.
+- `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`: external responder program path.
+- `TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON`: optional JSON array of responder
+  arguments.
+- `TEMPER_PRODUCT_CHAT_RESPONDER_CWD`: optional responder working directory.
+- `TEMPER_PRODUCT_CHAT_RESPONDER_ENV_ALLOWLIST`: comma-separated env names copied
+  to the responder; the child inherits no other env.
+- `TEMPER_PRODUCT_CHAT_RESPONDER_TIMEOUT_SECS`: optional one-turn timeout
+  (default 60).
+
+Equivalent CLI flags are `--responder-command`, repeated `--responder-arg`,
+`--responder-cwd`, repeated `--responder-env`, and
+`--responder-timeout-secs`.
 
 ## Authentication
 
@@ -95,8 +112,8 @@ Returns the active in-memory session metadata and latest draft list.
 
 ### `POST /sessions/{id}/messages`
 
-Appends one human turn to the Forgejo transcript, runs one product-manager LLM
-turn, appends the product-manager reply, and stores the latest drafts.
+Appends one human turn to the Forgejo transcript, runs one product-manager
+responder turn, appends the product-manager reply, and stores the latest drafts.
 
 Request:
 
@@ -123,7 +140,7 @@ Response (`200`):
 
 Slash commands are handled locally before the LLM sees a turn. In particular,
 posting `{"message":"/help"}` returns the command list in `reply`; it is not
-mirrored to the transcript and does not call the product-manager model. Only
+mirrored to the transcript and does not call the product-manager responder. Only
 explicit acceptance through the file endpoint creates workflow intake issues.
 
 ### `POST /sessions/{id}/drafts/{slug}/file`

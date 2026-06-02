@@ -22,6 +22,8 @@ pub mod worker_args;
 mod worker_external_tools;
 
 #[cfg(test)]
+mod product_chat_args_tests;
+#[cfg(test)]
 mod product_chat_tests;
 
 use chrono::Duration;

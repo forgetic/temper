@@ -7,8 +7,8 @@ use crate::{ConversationReply, ConversationRequest, InteractionError};
 /// Responders receive an immutable transcript view and profile context. They
 /// return a conversational reply plus optional inert proposals; they do not
 /// receive Forge handles or mutate workflow state. This trait adapts in-process
-/// responders; external responders should exchange the same serializable
-/// request/reply/proposal types across a process boundary.
+/// responders; external responders use the same serializable request/reply and
+/// proposal types through [`crate::ProcessResponder`]'s process boundary.
 #[async_trait]
 pub trait InteractiveResponder: Send + Sync {
     /// Runs one interaction turn.

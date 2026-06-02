@@ -7,9 +7,10 @@ this idea, but it is not the abstraction itself.
 
 The generic interaction-plane contract now lives in `temper-interaction` for
 responder requests, replies, participants, inert proposals, Forge-backed
-transcripts/sessions, and explicit idempotent issue-proposal acceptance. Later
-phases will add process responder adapters, transport APIs, and a fuller recast
-of the current product-manager-specific implementation behind profile names.
+transcripts/sessions, explicit idempotent issue-proposal acceptance, and the
+provider-neutral process responder adapter. Later phases will add generic
+transport APIs and a fuller recast of compatibility product-manager endpoints
+behind profile names.
 
 ## Shape
 
@@ -45,7 +46,8 @@ Forge-backed transcripts and accepted workflow artifacts.
   transcript view and profile context, then returns a reply plus optional
   proposals. It receives no Forge handles and does not mutate workflow state.
   A Rust trait can adapt in-process responders, but the preferred public
-  extension boundary is a process that exchanges serialized requests/replies.
+  extension boundary is the documented process protocol that exchanges
+  serialized requests/replies.
 - **Transcript store**: durable conversation persistence. The first backing
   store uses Forge issues and comments; transports should treat it as the
   recoverable record, not as a UI cache.

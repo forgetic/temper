@@ -225,8 +225,19 @@ pub fn render_filed_issue_body(
 impl ConversationReply {
     /// Validates reply proposals for deterministic, unambiguous acceptance.
     pub fn validate(&self) -> Result<(), InteractionError> {
-        validate_proposal_ids(&self.proposals)
+        validate_proposals(&self.proposals)
     }
+}
+
+/// Validates proposal ids and built-in kind payloads in one responder reply.
+pub fn validate_proposals(proposals: &[Proposal]) -> Result<(), InteractionError> {
+    validate_proposal_ids(proposals)?;
+    for proposal in proposals {
+        if proposal.kind == ProposalKind::issue() {
+            proposal.issue_payload()?;
+        }
+    }
+    Ok(())
 }
 
 /// Rejects duplicate proposal ids in one responder reply.

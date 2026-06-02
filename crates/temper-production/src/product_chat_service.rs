@@ -1,4 +1,4 @@
-//! Loopback HTTP API for product-manager chat.
+//! Loopback HTTP transport for the product-manager interactive profile.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -8,21 +8,20 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temper_agents::{
-    AuthChoice, ProductManagerAgent, ProductManagerDraftIssue, ProviderConfig, ProviderError,
-};
+use temper_agents::{AuthChoice, ProductManagerDraftIssue, ProviderConfig};
 use temper_forge::{Forge, Issue, ItemNumber, RepositoryPath};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_interaction::InteractiveResponder;
 use tokio::sync::Mutex;
 
 use crate::product_chat::{
-    ProductChatError, ProductChatOpenOptions, ProductChatSession, ProductManagerResponder,
+    build_product_profile_responder, ProductChatError, ProductChatOpenOptions, ProductChatSession,
 };
 use crate::product_chat_args::{AuthKind, ProductChatServeArgs};
 use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
 
 const MAX_REQUEST_BYTES: usize = 1_048_576;
-type DynSession = ProductChatSession<dyn Forge, dyn Forge, dyn ProductManagerResponder>;
+type DynSession = ProductChatSession<dyn Forge, dyn Forge, dyn InteractiveResponder>;
 
 #[derive(Debug)]
 pub enum ProductChatServiceError {
@@ -47,12 +46,6 @@ impl From<ProductChatError> for ProductChatServiceError {
     }
 }
 
-impl From<ProviderError> for ProductChatServiceError {
-    fn from(error: ProviderError) -> Self {
-        Self::ProductChat(ProductChatError::Provider(error))
-    }
-}
-
 impl From<std::io::Error> for ProductChatServiceError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
@@ -65,17 +58,19 @@ pub fn run_serve(args: &ProductChatServeArgs) -> Result<(), ProductChatServiceEr
         .enable_all()
         .build()
         .map_err(|error| ProductChatError::Runtime(error.to_string()))?;
-    let provider = ProviderConfig::from_auth(
-        auth_choice(args.auth),
-        args.codex_model.clone(),
-        args.auth_file.clone(),
-    )?;
+    let responder = build_product_profile_responder(args.process_responder.clone(), || {
+        ProviderConfig::from_auth(
+            auth_choice(args.auth),
+            args.codex_model.clone(),
+            args.auth_file.clone(),
+        )
+    })?;
     let service = ProductChatService::new(
         args.base_url.clone(),
         args.repo.clone(),
         Arc::new(build_forge(&args.base_url, &args.human_token)) as Arc<dyn Forge>,
         Arc::new(build_forge(&args.base_url, &args.product_manager_token)) as Arc<dyn Forge>,
-        Arc::new(ProductManagerAgent::new(provider)) as Arc<dyn ProductManagerResponder>,
+        responder,
     );
     let app = ProductChatHttpApp::new(service, args.service_token.clone());
     run_http(args.bind, app, &runtime)
@@ -151,7 +146,7 @@ pub struct ProductChatService {
     repo_path: RepositoryPath,
     human_forge: Arc<dyn Forge>,
     product_forge: Arc<dyn Forge>,
-    responder: Arc<dyn ProductManagerResponder>,
+    responder: Arc<dyn InteractiveResponder>,
     sessions: Mutex<HashMap<String, DynSession>>,
 }
 
@@ -161,7 +156,7 @@ impl ProductChatService {
         repo_path: RepositoryPath,
         human_forge: Arc<dyn Forge>,
         product_forge: Arc<dyn Forge>,
-        responder: Arc<dyn ProductManagerResponder>,
+        responder: Arc<dyn InteractiveResponder>,
     ) -> Self {
         Self {
             base_url,

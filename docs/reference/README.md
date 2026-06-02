@@ -14,5 +14,6 @@ Current reference pages:
 - [Workflow layer](workflow-layer.md)
 - [Cross-repository workflow contracts](cross-repo-workflows.md)
 - [Interactive conversation interface](interactive-conversation-interface.md)
+- [Interactive process responder protocol](interactive-process-responder-protocol.md)
 - [Product-manager chat local API](product-manager-chat-api.md)
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)
