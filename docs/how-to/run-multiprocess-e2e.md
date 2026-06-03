@@ -71,9 +71,12 @@ Each scenario test (`run_variant`):
    behind a kill-on-drop guard so a panic never orphans a process.
 4. Detects convergence in-process by polling the **exact** scenario assert
    closure on a short interval until it passes or a generous (30s) wall-clock
-   timeout.
-5. Touches the stop sentinel, `wait()`s every child, asserts each exited `0`, and
-   runs the assert once more for a clean failure message.
+   timeout. The ignored tests serialize their worker fleets internally, so the
+   command above does not need `--test-threads=1` even though each test launches
+   many OS processes.
+5. Touches the stop sentinel, waits briefly for every child, kills any child
+   that does not observe shutdown, asserts each exited `0`, and runs the assert
+   once more for a clean failure message.
 
 ## What it proves
 

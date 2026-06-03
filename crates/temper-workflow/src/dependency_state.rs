@@ -54,12 +54,16 @@ async fn target_landed<F: Forge + ?Sized>(
     target: &ArtifactRef,
 ) -> Result<bool, ForgeError> {
     let target_repo = target.resolved_repository(repo_id);
-    if forge
+    // Forge providers use a single item-number namespace, but the reference
+    // backends keep issue and pull-request counters independently. If both an
+    // issue and a PR have the same number, prefer the issue: otherwise a native
+    // issue dependency could be falsely satisfied by its produced PR before the
+    // issue itself has been closed.
+    if let Some(issue) = forge
         .get_issue_by_number(&target_repo, target.number)
         .await?
-        .is_some_and(|issue| issue.state == IssueState::Closed)
     {
-        return Ok(true);
+        return Ok(issue.state == IssueState::Closed);
     }
     Ok(forge
         .get_pull_request_by_number(&target_repo, target.number)

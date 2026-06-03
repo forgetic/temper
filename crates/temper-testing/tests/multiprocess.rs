@@ -28,8 +28,9 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
@@ -51,6 +52,10 @@ const ASSERT_POLL: Duration = Duration::from_millis(100);
 const WORKER_POLL_MS: u64 = 20;
 /// Backstop run length for each child, in case the driver dies before stopping it.
 const WORKER_RUN_SECS: u64 = 120;
+/// How long to wait for workers to observe the stop sentinel before killing them.
+const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Serializes these ignored tests when Rust's test harness runs them in parallel.
+static MULTIPROCESS_E2E_LOCK: Mutex<()> = Mutex::new(());
 
 /// The worker behavior flags that distinguish one scenario's topology.
 ///
@@ -140,6 +145,15 @@ fn cross_repo_fanout_converges_across_one_fixed_worker_fleet() {
 /// Drives one scenario through the true multi-process topology and asserts it
 /// converges to the same end state the in-process scenario would.
 fn run_variant(variant: &Variant) {
+    // `cargo test -- --ignored` still runs ignored tests in parallel by default.
+    // Each scenario launches a whole worker fleet; running all fleets at once
+    // makes this wall-clock topology rehearsal oversubscribe the host and can
+    // leave a child slow to observe shutdown. The process-boundary property is
+    // covered within each fleet, so serialize scenarios inside this test binary.
+    let _guard = MULTIPROCESS_E2E_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     let root = TempRoot::new(variant.suite);
     let config = runner_config();
     let paths = scenario_paths(&config, variant.multi_repo);
@@ -173,10 +187,17 @@ fn run_variant(variant: &Variant) {
     }
 
     // Every worker must have exited cleanly.
-    for (label, status) in &exits {
+    for exit in &exits {
         assert!(
-            status.success(),
-            "worker '{label}' exited with {status:?}, expected success"
+            !exit.timed_out && exit.status.success(),
+            "worker '{}' {}exited with {:?}, expected success",
+            exit.label,
+            if exit.timed_out {
+                "did not stop within the shutdown timeout; "
+            } else {
+                ""
+            },
+            exit.status,
         );
     }
 
@@ -272,6 +293,13 @@ struct SpawnedWorker {
     child: Child,
 }
 
+/// A worker process's shutdown result.
+struct WorkerExit {
+    label: String,
+    status: ExitStatus,
+    timed_out: bool,
+}
+
 /// Owns every spawned worker process and kills any survivors on drop, so a panic
 /// in the driver never orphans a child.
 struct WorkerFleet {
@@ -314,16 +342,64 @@ impl WorkerFleet {
         Self { workers }
     }
 
-    /// Waits for every child and returns its (label, exit status).
-    fn wait_all(&mut self) -> Vec<(String, std::process::ExitStatus)> {
-        self.workers
-            .iter_mut()
-            .map(|worker| {
-                let status = worker.child.wait().unwrap_or_else(|error| {
-                    panic!("waiting on '{}' failed: {error}", worker.label)
+    /// Waits for every child, killing survivors after a short shutdown timeout.
+    fn wait_all(&mut self) -> Vec<WorkerExit> {
+        let mut exits: Vec<Option<WorkerExit>> = std::iter::repeat_with(|| None)
+            .take(self.workers.len())
+            .collect();
+        let mut remaining = self.workers.len();
+        let deadline = Instant::now() + WORKER_STOP_TIMEOUT;
+
+        while remaining > 0 && Instant::now() < deadline {
+            for (index, worker) in self.workers.iter_mut().enumerate() {
+                if exits[index].is_some() {
+                    continue;
+                }
+                let Some(status) = worker.child.try_wait().unwrap_or_else(|error| {
+                    panic!("polling '{}' exit failed: {error}", worker.label)
+                }) else {
+                    continue;
+                };
+                exits[index] = Some(WorkerExit {
+                    label: worker.label.clone(),
+                    status,
+                    timed_out: false,
                 });
-                (worker.label.clone(), status)
-            })
+                remaining -= 1;
+            }
+            if remaining > 0 {
+                sleep(Duration::from_millis(10));
+            }
+        }
+
+        for (index, worker) in self.workers.iter_mut().enumerate() {
+            if exits[index].is_some() {
+                continue;
+            }
+            let status = match worker.child.try_wait().unwrap_or_else(|error| {
+                panic!(
+                    "polling '{}' exit before kill failed: {error}",
+                    worker.label
+                )
+            }) {
+                Some(status) => status,
+                None => {
+                    let _ = worker.child.kill();
+                    worker.child.wait().unwrap_or_else(|error| {
+                        panic!("waiting on killed '{}' failed: {error}", worker.label)
+                    })
+                }
+            };
+            exits[index] = Some(WorkerExit {
+                label: worker.label.clone(),
+                status,
+                timed_out: true,
+            });
+        }
+
+        exits
+            .into_iter()
+            .map(|exit| exit.expect("every worker has an exit result"))
             .collect()
     }
 }

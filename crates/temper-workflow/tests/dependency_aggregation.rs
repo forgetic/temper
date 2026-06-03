@@ -97,6 +97,46 @@ fn cross_repo_pull_request_dependency_lands_when_merged_and_reports_read_failure
 }
 
 #[test]
+fn same_number_open_issue_prevents_pr_collision_from_satisfying_dependency() {
+    let forge = MemoryForge::new();
+    let workflow = support::workflow();
+    let policy = DefaultRecoveryPolicy;
+    let journal = InMemoryJournal::new();
+    let repo = create_repo(&forge, "repo");
+    let dependency_issue = create_issue(&forge, &repo, "dependency", &["code", "ready"], "");
+    let dependent_body = dependency_body(vec![ArtifactRef::same_repo(dependency_issue)]);
+    let dependent = create_issue(
+        &forge,
+        &repo,
+        "dependent",
+        &["code", "blocked"],
+        &dependent_body,
+    );
+    let colliding_pr = create_pull_request(&forge, &repo);
+    assert_eq!(
+        colliding_pr, dependency_issue,
+        "reference backends expose separate issue/PR counters, creating this collision"
+    );
+
+    merge_pull_request(&forge, &repo, colliding_pr);
+    let report = reconcile(&forge, &workflow, &policy, &repo, &journal);
+    assert!(
+        report.is_clean(),
+        "a same-number merged PR must not satisfy a dependency while the issue target is open"
+    );
+
+    close_issue(&forge, &repo, dependency_issue);
+    let report = reconcile(&forge, &workflow, &policy, &repo, &journal);
+    assert_eq!(
+        report.findings,
+        vec![ReconcileFinding::DependenciesResolved {
+            target: ArtifactSource::Issue { number: dependent },
+            transition: TransitionId::new("mark_code_ready"),
+        }]
+    );
+}
+
+#[test]
 fn transient_child_repo_read_failure_is_not_a_false_unblock() {
     let forge = MemoryForge::new();
     let workflow = support::workflow();

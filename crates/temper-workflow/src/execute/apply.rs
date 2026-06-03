@@ -1,7 +1,7 @@
 //! Effect application and postcondition verification for the [`Executor`].
 //!
 //! This child module holds the mutation half of the runtime loop: turning a
-//! plan's [`WorkflowEffect`]s into Forge calls and verifying the resulting
+//! plan's [`WorkflowEffect`]s into Forge calls and verifying the committed
 //! [`Postcondition`]s. It is split from the parent `execute` module to keep both
 //! files within the source-size budget; it accesses the parent's private
 //! [`Executor`] and [`Loaded`] items as a descendant module.
@@ -26,11 +26,10 @@ use temper_forge::{
 impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Applies a plan's effects, refusing partial application of the state flip.
     ///
-    /// First it validates *every* effect (rejecting unsupported effects,
-    /// missing create inputs, and assignee roles with no bound user) before any
-    /// mutation. Then it posts idempotent comments, ensures requested pull
-    /// requests, and finally folds labels and assignees into a single backend
-    /// update — the commit point that flips the artifact's state.
+    /// Validates effects before mutating, runs pre-commit idempotent effects,
+    /// then folds labels and assignees into one backend update. Postconditions
+    /// are checked against that update result, not a later reload that another
+    /// worker may already have advanced.
     pub(super) async fn apply(
         &self,
         repo_id: &RepositoryId,
@@ -48,11 +47,17 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         self.apply_reviews(loaded, &plan.transition, &prepared.reviews)
             .await?;
         self.apply_merge(loaded, prepared.merge).await?;
-        self.apply_update(loaded, prepared).await
+        let committed = self.apply_update(loaded, prepared).await?;
+        if let Some(state) = committed {
+            self.verify_state(&state, &plan.postconditions)?;
+        } else {
+            self.verify_current(repo_id, loaded.classified().source, &plan.postconditions)
+                .await?;
+        }
+        Ok(())
     }
 
-    /// Reloads fresh state and checks every postcondition holds.
-    pub(super) async fn verify(
+    async fn verify_current(
         &self,
         repo_id: &temper_forge::RepositoryId,
         target: ArtifactSource,
@@ -61,18 +66,32 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         if postconditions.is_empty() {
             return Ok(());
         }
-        let (labels, assignees) = self.current_state(repo_id, target).await?;
+        let state = self.current_state(repo_id, target).await?;
+        self.verify_state(&state, postconditions)
+    }
+
+    fn verify_state(
+        &self,
+        state: &AppliedState,
+        postconditions: &[Postcondition],
+    ) -> Result<(), ExecutionError> {
         for postcondition in postconditions {
             let satisfied = match postcondition {
-                Postcondition::LabelPresent(label) => labels.iter().any(|l| l == label.as_str()),
-                Postcondition::LabelAbsent(label) => labels.iter().all(|l| l != label.as_str()),
+                Postcondition::LabelPresent(label) => state
+                    .labels
+                    .iter()
+                    .any(|label_name| label_name == label.as_str()),
+                Postcondition::LabelAbsent(label) => state
+                    .labels
+                    .iter()
+                    .all(|label_name| label_name != label.as_str()),
                 Postcondition::AssigneePresent { role } => {
                     let user = self.resolve_assignee(role)?;
-                    assignees.contains(&user)
+                    state.assignees.contains(&user)
                 }
                 Postcondition::AssigneeAbsent { role } => {
                     let user = self.resolve_assignee(role)?;
-                    !assignees.contains(&user)
+                    !state.assignees.contains(&user)
                 }
             };
             if !satisfied {
@@ -87,15 +106,10 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Re-applies label effects against fresh state, idempotently.
     ///
     /// This is the reconciler applier's reuse of the executor's label-apply
-    /// path: it realizes a partial transition's still-pending labels or a
-    /// mechanical unblock's labels without re-running a full transition plan,
-    /// rather than hand-rolling a second mutation path. It loads fresh state,
-    /// keeps only the not-yet-realized label effects, folds them into the same
-    /// single [`apply_update`](Self::apply_update) call the executor uses, then
-    /// verifies the resulting labels. Non-label effects are rejected, mirroring
-    /// [`prepare_effects`](Self::prepare_effects)'s discipline. Returns the
-    /// effects it actually applied; an empty result means every label already
-    /// held, so a re-run is a clean no-op (it issues no backend update).
+    /// path for partial transitions and mechanical unblocks. It loads fresh
+    /// state, applies only missing label effects through the normal update path,
+    /// verifies labels, and returns the effects it actually applied. Non-label
+    /// effects are rejected.
     pub(crate) async fn apply_label_effects(
         &self,
         repo_id: &RepositoryId,
@@ -135,8 +149,13 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 }
             }
         }
-        self.apply_update(&loaded, prepared).await?;
-        self.verify(repo_id, target, &postconditions).await?;
+        let committed = self.apply_update(&loaded, prepared).await?;
+        if let Some(state) = committed {
+            self.verify_state(&state, &postconditions)?;
+        } else {
+            self.verify_current(repo_id, target, &postconditions)
+                .await?;
+        }
         Ok(applied)
     }
 
@@ -397,14 +416,16 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Folds the prepared labels and assignees into a single backend update.
     ///
     /// Skips the call entirely when there is nothing to change (for example a
-    /// comment-only transition), so it never issues an empty mutation.
+    /// comment-only transition), so it never issues an empty mutation. When it
+    /// does update, returns the backend's committed artifact state for
+    /// postcondition checks.
     async fn apply_update(
         &self,
         loaded: &Loaded,
         prepared: PreparedEffects,
-    ) -> Result<(), ExecutionError> {
+    ) -> Result<Option<AppliedState>, ExecutionError> {
         if !prepared.has_update() {
-            return Ok(());
+            return Ok(None);
         }
         match loaded {
             Loaded::Issue { id, .. } => {
@@ -415,7 +436,11 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     remove_assignees: prepared.remove_assignees,
                     ..UpdateIssue::default()
                 };
-                self.forge.update_issue(id, update).await?;
+                let issue = self.forge.update_issue(id, update).await?;
+                Ok(Some(AppliedState {
+                    labels: issue.labels,
+                    assignees: issue.assignees,
+                }))
             }
             Loaded::PullRequest { id, .. } => {
                 let update = UpdatePullRequest {
@@ -425,10 +450,13 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     remove_assignees: prepared.remove_assignees,
                     ..UpdatePullRequest::default()
                 };
-                self.forge.update_pull_request(id, update).await?;
+                let pull_request = self.forge.update_pull_request(id, update).await?;
+                Ok(Some(AppliedState {
+                    labels: pull_request.labels,
+                    assignees: pull_request.assignees,
+                }))
             }
         }
-        Ok(())
     }
 
     /// Reads the artifact's current labels and assignees from fresh Forge state.
@@ -436,7 +464,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         repo_id: &temper_forge::RepositoryId,
         target: ArtifactSource,
-    ) -> Result<(Vec<String>, Vec<UserId>), ExecutionError> {
+    ) -> Result<AppliedState, ExecutionError> {
         match target {
             ArtifactSource::Issue { number } => {
                 let issue = self
@@ -444,7 +472,10 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     .get_issue_by_number(repo_id, number)
                     .await?
                     .ok_or(ExecutionError::TargetMissing { target })?;
-                Ok((issue.labels, issue.assignees))
+                Ok(AppliedState {
+                    labels: issue.labels,
+                    assignees: issue.assignees,
+                })
             }
             ArtifactSource::PullRequest { number } => {
                 let pull_request = self
@@ -452,10 +483,19 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                     .get_pull_request_by_number(repo_id, number)
                     .await?
                     .ok_or(ExecutionError::TargetMissing { target })?;
-                Ok((pull_request.labels, pull_request.assignees))
+                Ok(AppliedState {
+                    labels: pull_request.labels,
+                    assignees: pull_request.assignees,
+                })
             }
         }
     }
+}
+
+/// Labels and assignees returned by the backend immediately after the commit update.
+struct AppliedState {
+    labels: Vec<String>,
+    assignees: Vec<UserId>,
 }
 
 /// Effects partitioned into a single backend update plus pre-commit effects.

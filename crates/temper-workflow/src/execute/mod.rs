@@ -10,7 +10,7 @@
 //! 2. classify it under the validated workflow,
 //! 3. re-check role authority and transition preconditions (via the planner),
 //! 4. apply the planned effects through the [`Forge`] trait,
-//! 5. verify the transition's postconditions against fresh state.
+//! 5. verify the transition's postconditions against the committed update result.
 //!
 //! # Non-label effects
 //!
@@ -345,9 +345,10 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
     ///
     /// Loads fresh state, classifies it, re-plans the transition (re-checking
     /// authority, preconditions, gates, and resulting states), applies the
-    /// planned effects, and verifies the postconditions. Returns an
-    /// [`ExecutionReport`] on success or a typed [`ExecutionError`] identifying
-    /// the failed stage. No mutation occurs unless planning succeeds.
+    /// planned effects, and verifies the postconditions against the committed
+    /// update result. Returns an [`ExecutionReport`] on success or a typed
+    /// [`ExecutionError`] identifying the failed stage. No mutation occurs
+    /// unless planning succeeds.
     pub async fn execute(
         &self,
         repo_id: &RepositoryId,
@@ -368,9 +369,10 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         // missing create inputs, and unbound assignee roles) before it mutates
         // anything, posts idempotent comments, ensures pull requests, then
         // folds labels and assignees into a single update. A transition
-        // therefore never partially applies its label/assignee flip.
+        // therefore never partially applies its label/assignee flip, and its
+        // committed update result is used for postcondition checks so a later
+        // worker cannot make this transition look unsuccessful.
         self.apply(repo_id, &loaded, &plan).await?;
-        self.verify(repo_id, target, &plan.postconditions).await?;
 
         Ok(ExecutionReport {
             transition: plan.transition,
