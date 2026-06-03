@@ -38,8 +38,8 @@ pub enum InteractionError {
         /// The repeated proposal id.
         id: ProposalId,
     },
-    /// A proposal acceptance path only supports issue proposals.
-    #[error("proposal `{id}` has kind `{kind}`, expected `issue`")]
+    /// A proposal acceptance path received an unsupported proposal kind.
+    #[error("proposal `{id}` has unsupported kind `{kind}`")]
     UnsupportedProposalKind {
         /// Proposal being accepted.
         id: ProposalId,
@@ -83,12 +83,12 @@ pub enum InteractionError {
         number: u64,
     },
     /// The issue requested for resume does not match the transcript label policy.
-    #[error("issue #{number} is not a transcript with only label `{expected_label}`: {labels:?}")]
+    #[error("issue #{number} is not a transcript with labels {expected_labels:?}: {labels:?}")]
     TranscriptLabelMismatch {
         /// Repository-scoped issue number.
         number: u64,
-        /// Required transcript label.
-        expected_label: String,
+        /// Required transcript labels.
+        expected_labels: Vec<String>,
         /// Labels found on the issue.
         labels: Vec<String>,
     },

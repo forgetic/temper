@@ -5,8 +5,9 @@ use serde_json::Value;
 use temper_forge::{CreateIssue, Forge, Issue, IssueQuery, Repository};
 
 use crate::error::InteractionError;
-use crate::transcript::render_filing_marker;
+use crate::transcript::{render_filing_marker, validate_marker_namespace};
 use crate::types::{ConversationId, ConversationReply, ProposalId, ProposalKind};
+use crate::validated::CreateIssueEffect;
 
 /// Draft shape for a proposal that can create a normal Forge issue when accepted.
 ///
@@ -105,31 +106,50 @@ impl Proposal {
 /// Profile configuration for filing issue-intake proposals.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IssueIntakeAcceptanceConfig {
-    /// Hidden marker namespace shared with the transcript config.
+    /// Hidden marker namespace used for idempotent issue creation.
     pub marker_namespace: String,
-    /// Workflow intake label applied to created issues.
-    pub workflow_intake_label: String,
+    /// Labels applied to created issues.
+    pub issue_labels: Vec<String>,
 }
 
 impl IssueIntakeAcceptanceConfig {
-    /// Builds issue-intake acceptance configuration.
+    /// Builds issue-intake acceptance configuration with one created-issue label.
     pub fn new(
         marker_namespace: impl Into<String>,
         workflow_intake_label: impl Into<String>,
     ) -> Result<Self, InteractionError> {
+        Self::with_issue_labels(marker_namespace, vec![workflow_intake_label.into()])
+    }
+
+    /// Builds issue-intake acceptance configuration with explicit issue labels.
+    pub fn with_issue_labels(
+        marker_namespace: impl Into<String>,
+        issue_labels: Vec<String>,
+    ) -> Result<Self, InteractionError> {
         let marker_namespace = marker_namespace.into();
-        crate::transcript::validate_marker_namespace(&marker_namespace)?;
-        let workflow_intake_label = workflow_intake_label.into();
-        if workflow_intake_label.trim().is_empty() {
+        validate_marker_namespace(&marker_namespace)?;
+        let issue_labels: Vec<String> = issue_labels
+            .into_iter()
+            .map(|label| label.trim().to_string())
+            .collect();
+        if issue_labels.is_empty() || issue_labels.iter().any(|label| label.is_empty()) {
             return Err(InteractionError::InvalidConfig {
-                field: "workflow_intake_label",
+                field: "issue_labels",
                 message: "must not be empty".into(),
             });
         }
         Ok(Self {
             marker_namespace,
-            workflow_intake_label,
+            issue_labels,
         })
+    }
+
+    /// Builds issue-intake acceptance configuration from a compiled create-issue effect.
+    pub fn from_create_issue_effect(effect: &CreateIssueEffect) -> Self {
+        Self {
+            marker_namespace: effect.marker_namespace().to_string(),
+            issue_labels: effect.labels().to_vec(),
+        }
     }
 }
 
@@ -181,7 +201,7 @@ pub async fn accept_issue_intake_proposal<F: Forge + ?Sized>(
             CreateIssue {
                 title: draft.title,
                 body,
-                labels: vec![config.workflow_intake_label.clone()],
+                labels: config.issue_labels.clone(),
                 assignees: Vec::new(),
             },
         )

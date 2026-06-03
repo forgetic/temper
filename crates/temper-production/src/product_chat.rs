@@ -18,48 +18,14 @@ use temper_interaction::{
     find_issue_by_marker as find_interaction_issue_by_marker,
     parse_transcript_session_key as parse_interaction_transcript_session_key,
     render_filing_marker as render_interaction_filing_marker,
-    render_transcript_marker as render_interaction_transcript_marker, ConversationId,
-    ConversationProfileId, ConversationReply, ForgeInteractionSession, ForgeSessionConfig,
-    ForgeSessionOpenOptions, ForgeTranscriptConfig, InteractionError, InteractiveResponder,
-    IssueIntakeAcceptanceConfig, IssueProposal, Participant, ProcessResponder,
-    ProcessResponderConfig, Proposal, ProposalId,
+    render_transcript_marker as render_interaction_transcript_marker, CompiledProfileManifest,
+    ConversationId, ConversationReply, ForgeInteractionSession, ForgeSessionConfig,
+    ForgeSessionOpenOptions, InteractionError, InteractiveResponder, IssueProposal,
+    ProcessResponder, ProcessResponderConfig, Proposal, ProposalId, RawInteractionSpec,
 };
 
-pub const PRODUCT_LABEL: &str = "product";
-pub const WORKFLOW_INTAKE_LABEL: &str = "untriaged";
-pub const PRODUCT_MARKER_NAMESPACE: &str = "product-chat";
-pub const PRODUCT_PROFILE_ID: &str = "product-manager";
-pub const PRODUCT_CONVERSATION_ID_PREFIX: &str = "pc";
-
-/// Product-manager profile policy over the generic interaction runtime.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductChatProfileConfig {
-    /// Generic interaction profile id.
-    pub profile_id: &'static str,
-    /// Sole label used for transcript issues.
-    pub transcript_label: &'static str,
-    /// Workflow intake label used when accepted issue proposals are filed.
-    pub workflow_intake_label: &'static str,
-    /// Prefix for newly-created transcript issue titles.
-    pub transcript_title_prefix: &'static str,
-    /// Hidden marker namespace for transcripts and accepted proposals.
-    pub marker_namespace: &'static str,
-    /// Prefix for generated conversation ids.
-    pub conversation_id_prefix: &'static str,
-}
-
-impl Default for ProductChatProfileConfig {
-    fn default() -> Self {
-        Self {
-            profile_id: PRODUCT_PROFILE_ID,
-            transcript_label: PRODUCT_LABEL,
-            workflow_intake_label: WORKFLOW_INTAKE_LABEL,
-            transcript_title_prefix: "Product conversation",
-            marker_namespace: PRODUCT_MARKER_NAMESPACE,
-            conversation_id_prefix: PRODUCT_CONVERSATION_ID_PREFIX,
-        }
-    }
-}
+const PRODUCT_INTERACTION_SPEC_FIXTURE: &str =
+    include_str!("../../temper-interaction/fixtures/product-manager-interaction-spec.json");
 
 /// Structured result of one product-manager profile turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,6 +279,29 @@ impl From<io::Error> for ProductChatError {
     }
 }
 
+/// Loads the compiled product-manager fixture profile manifest.
+pub fn product_profile_manifest() -> Result<CompiledProfileManifest, ProductChatError> {
+    let raw: RawInteractionSpec =
+        serde_json::from_str(PRODUCT_INTERACTION_SPEC_FIXTURE).map_err(|error| {
+            ProductChatError::Runtime(format!("product profile fixture JSON failed: {error}"))
+        })?;
+    let validated = raw.validate().map_err(|error| {
+        ProductChatError::Runtime(format!(
+            "product profile fixture validation failed: {error}"
+        ))
+    })?;
+    validated
+        .compile()
+        .profiles()
+        .first()
+        .cloned()
+        .ok_or_else(|| ProductChatError::Runtime("product profile fixture has no profiles".into()))
+}
+
+fn expect_product_profile_manifest() -> CompiledProfileManifest {
+    product_profile_manifest().expect("product-manager fixture manifest is valid")
+}
+
 /// Builds the configured product-manager profile responder.
 ///
 /// Product-manager behavior is now external to Temper. Operators must configure
@@ -348,6 +337,7 @@ pub struct ProductChatSession<
     R: InteractiveResponder + ?Sized,
 > {
     inner: ForgeInteractionSession<H, P, R>,
+    profile: CompiledProfileManifest,
     latest_drafts: Vec<ProductManagerDraftIssue>,
 }
 
@@ -363,11 +353,29 @@ where
         responder: Arc<R>,
         options: ProductChatOpenOptions,
     ) -> Result<Self, ProductChatError> {
+        Self::open_with_profile_manifest(
+            human_forge,
+            product_forge,
+            responder,
+            product_profile_manifest()?,
+            options,
+        )
+        .await
+    }
+
+    pub async fn open_with_profile_manifest(
+        human_forge: Arc<H>,
+        product_forge: Arc<P>,
+        responder: Arc<R>,
+        profile: CompiledProfileManifest,
+        options: ProductChatOpenOptions,
+    ) -> Result<Self, ProductChatError> {
+        let config = ForgeSessionConfig::from_profile_manifest(&profile)?;
         let inner = ForgeInteractionSession::open(
             human_forge,
             product_forge,
             responder,
-            product_session_config()?,
+            config,
             ForgeSessionOpenOptions {
                 base_url: options.base_url,
                 repo_path: options.repo_path,
@@ -378,8 +386,13 @@ where
         .await?;
         Ok(Self {
             inner,
+            profile,
             latest_drafts: Vec::new(),
         })
+    }
+
+    pub fn profile(&self) -> &CompiledProfileManifest {
+        &self.profile
     }
 
     pub fn transcript_url(&self) -> String {
@@ -477,23 +490,6 @@ where
     }
 }
 
-fn product_session_config() -> Result<ForgeSessionConfig, ProductChatError> {
-    let profile = ProductChatProfileConfig::default();
-    let transcript = ForgeTranscriptConfig::new(
-        ConversationProfileId::new(profile.profile_id)?,
-        profile.transcript_label,
-        profile.transcript_title_prefix,
-        profile.marker_namespace,
-        profile.conversation_id_prefix,
-        Participant::human("human"),
-        Participant::agent(profile.profile_id),
-    )?;
-    Ok(ForgeSessionConfig::new(
-        transcript,
-        IssueIntakeAcceptanceConfig::new(profile.marker_namespace, profile.workflow_intake_label)?,
-    )?)
-}
-
 fn product_response_from_reply(
     reply: &ConversationReply,
 ) -> Result<ProductManagerResponse, ProductChatError> {
@@ -526,13 +522,25 @@ pub async fn find_issue_by_marker<F: Forge + ?Sized>(
 }
 
 pub fn render_transcript_marker(session_key: &str) -> String {
-    render_interaction_transcript_marker(PRODUCT_MARKER_NAMESPACE, session_key)
+    let manifest = expect_product_profile_manifest();
+    render_interaction_transcript_marker(&manifest.transcript.marker_namespace, session_key)
 }
 
 pub fn parse_transcript_session_key(body: &str) -> Option<String> {
-    parse_interaction_transcript_session_key(PRODUCT_MARKER_NAMESPACE, body)
+    let manifest = expect_product_profile_manifest();
+    parse_interaction_transcript_session_key(&manifest.transcript.marker_namespace, body)
 }
 
 pub fn render_filing_marker(session_key: &str, draft_slug: &str) -> String {
-    render_interaction_filing_marker(PRODUCT_MARKER_NAMESPACE, session_key, draft_slug)
+    let manifest = expect_product_profile_manifest();
+    let marker_namespace = manifest
+        .acceptance_actions
+        .iter()
+        .flat_map(|action| action.effects.iter())
+        .map(|effect| match effect {
+            temper_interaction::AcceptanceEffect::CreateIssue(effect) => effect.marker_namespace(),
+        })
+        .next()
+        .unwrap_or(&manifest.transcript.marker_namespace);
+    render_interaction_filing_marker(marker_namespace, session_key, draft_slug)
 }

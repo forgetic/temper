@@ -116,8 +116,8 @@ requires the bearer token when service auth is configured.
 
 ### `POST /sessions`
 
-Creates a new product transcript issue, or resumes an existing product transcript
-when `transcript_issue` is supplied.
+Creates a new product transcript issue using the compiled fixture manifest, or
+resumes an existing product transcript when `transcript_issue` is supplied.
 
 Request:
 
@@ -129,7 +129,7 @@ Request:
 
 ```json
 {
-  "id": "pc-...",
+  "id": "product-manager-...",
   "transcript_issue": 3,
   "transcript_url": "https://git.ekanayaka.io/ai/temper/issues/3",
   "drafts": []
@@ -179,9 +179,9 @@ explicit acceptance through the file endpoint creates workflow intake issues.
 ### `POST /sessions/{id}/drafts/{slug}/file`
 
 Explicitly accepts and files the latest draft with the matching slug as a normal
-workflow intake issue labeled `untriaged`. The created issue body includes a
-transcript backlink and a hidden idempotency marker. Repeating the same request
-returns the existing issue.
+workflow intake issue using the fixture manifest's accepted-issue labels. The
+created issue body includes a transcript backlink and a hidden idempotency
+marker. Repeating the same request returns the existing issue.
 
 Response (`200`):
 

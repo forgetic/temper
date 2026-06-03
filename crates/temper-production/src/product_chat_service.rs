@@ -10,15 +10,15 @@ use serde_json::json;
 use temper_forge::{Forge, Issue, ItemNumber, RepositoryPath};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_interaction::{
-    AcceptedProposalTarget, ConversationEventLog, ConversationEventPayload, ConversationId,
-    ConversationProfileId, ConversationReply, ConversationTranscriptRef, ConversationTurn,
-    InteractiveResponder, Participant, Proposal, ProposalId,
+    AcceptedProposalTarget, CompiledProfileManifest, ConversationEventLog,
+    ConversationEventPayload, ConversationId, ConversationProfileId, ConversationReply,
+    ConversationTranscriptRef, ConversationTurn, InteractiveResponder, Proposal, ProposalId,
 };
 use tokio::sync::Mutex;
 
 use crate::product_chat::{
-    build_product_profile_responder, ProductChatError, ProductChatOpenOptions, ProductChatSession,
-    PRODUCT_PROFILE_ID,
+    build_product_profile_responder, product_profile_manifest, ProductChatError,
+    ProductChatOpenOptions, ProductChatSession,
 };
 use crate::product_chat_api::{
     parse_json, AcceptProposalResponse, ApiError, ConversationEventsResponse, ConversationResponse,
@@ -141,7 +141,7 @@ fn handle_connection(
 pub struct ProductChatService {
     base_url: String,
     repo_path: RepositoryPath,
-    profile_id: ConversationProfileId,
+    profile: CompiledProfileManifest,
     human_forge: Arc<dyn Forge>,
     product_forge: Arc<dyn Forge>,
     responder: Arc<dyn InteractiveResponder>,
@@ -160,8 +160,7 @@ impl ProductChatService {
         Self {
             base_url,
             repo_path,
-            profile_id: ConversationProfileId::new(PRODUCT_PROFILE_ID)
-                .expect("product profile id is valid"),
+            profile: product_profile_manifest().expect("product profile fixture manifest is valid"),
             human_forge,
             product_forge,
             responder,
@@ -176,10 +175,11 @@ impl ProductChatService {
         transcript_issue: Option<u64>,
     ) -> Result<ConversationResponse, ApiError> {
         self.ensure_profile(profile_id.as_ref())?;
-        let session = ProductChatSession::open(
+        let session = ProductChatSession::open_with_profile_manifest(
             Arc::clone(&self.human_forge),
             Arc::clone(&self.product_forge),
             Arc::clone(&self.responder),
+            self.profile.clone(),
             ProductChatOpenOptions {
                 base_url: self.base_url.clone(),
                 repo_path: self.repo_path.clone(),
@@ -187,11 +187,11 @@ impl ProductChatService {
             },
         )
         .await?;
-        let response = conversation_response(&session, &self.profile_id);
+        let response = conversation_response(&session);
         self.events.record(
             session.conversation_id().clone(),
             ConversationEventPayload::ConversationOpened {
-                profile_id: self.profile_id.clone(),
+                profile_id: self.profile.profile.id.clone(),
                 transcript: Some(transcript_ref(&response.transcript)),
             },
         );
@@ -207,7 +207,7 @@ impl ProductChatService {
         let session = sessions
             .get(id)
             .ok_or_else(|| ApiError::not_found("conversation not found"))?;
-        Ok(conversation_response(session, &self.profile_id))
+        Ok(conversation_response(session))
     }
 
     async fn latest_proposals(&self, id: &str) -> Result<ProposalsResponse, ApiError> {
@@ -324,7 +324,8 @@ impl ProductChatService {
     }
 
     fn ensure_profile(&self, requested: Option<&ConversationProfileId>) -> Result<(), ApiError> {
-        if let Some(requested) = requested.filter(|requested| *requested != &self.profile_id) {
+        let configured = &self.profile.profile.id;
+        if let Some(requested) = requested.filter(|requested| *requested != configured) {
             return Err(ApiError::bad_request(format!(
                 "profile `{requested}` is not configured for this service"
             )));
@@ -342,7 +343,7 @@ impl ProductChatService {
         self.events.record(
             conversation_id.clone(),
             ConversationEventPayload::HumanTurnAppended {
-                turn: ConversationTurn::new(Participant::human("human"), body),
+                turn: ConversationTurn::new(self.profile.profile.human_participant.clone(), body),
             },
         );
         self.events.record(
@@ -515,13 +516,10 @@ impl ProductChatHttpApp {
     }
 }
 
-fn conversation_response(
-    session: &DynSession,
-    profile_id: &ConversationProfileId,
-) -> ConversationResponse {
+fn conversation_response(session: &DynSession) -> ConversationResponse {
     ConversationResponse {
         id: session.session_key().to_string(),
-        profile_id: profile_id.to_string(),
+        profile_id: session.profile().profile.id.to_string(),
         transcript: transcript_response(session),
         latest_proposals: session.latest_proposals().to_vec(),
     }

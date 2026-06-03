@@ -1,15 +1,17 @@
 # Interaction profile spec
 
-`temper-interaction` now defines a user-authored interaction profile contract in
+`temper-interaction` defines a user-authored interaction profile contract in
 three phases:
 
 ```text
-RawInteractionSpec -> ValidatedInteractionSpec -> later compiled manifests
+RawInteractionSpec -> ValidatedInteractionSpec -> CompiledInteractionSpec
 ```
 
-Runtime or compiler APIs should consume `ValidatedInteractionSpec`, not a raw
-spec. The validated model has no public constructor; callers obtain one through
-`RawInteractionSpec::validate` or `validate_interaction_spec`.
+Runtime or compiler APIs should consume `ValidatedInteractionSpec` or a compiled
+manifest, not a raw spec. The validated model has no public constructor; callers
+obtain one through `RawInteractionSpec::validate` or `validate_interaction_spec`.
+Compilation is infallible after validation and preserves declaration order for
+deterministic runtime manifests.
 
 ## Raw spec scope
 
@@ -65,6 +67,26 @@ Validation returns `InteractionSpecValidationErrors`, a collection of
 
 Validation is profile-neutral: the literal id `product-manager` has no special
 meaning.
+
+## Compiled manifests
+
+`ValidatedInteractionSpec::compile` and `compile` project profiles into
+`CompiledInteractionSpec`. Each `CompiledProfileManifest` contains:
+
+- `ProfileManifest`: profile id, human/agent participants, recent-turn limit;
+- `TranscriptManifest`: Forge transcript target, exact labels, title prefix,
+  label policy, and marker namespace;
+- `ResponderManifest`: responder id, protocol, and required flag;
+- `ProposalManifest`: proposal kind ids plus payload validators such as
+  `IssueDraft`;
+- `CommandManifest`: command ids, aliases, and accept-proposal action mapping;
+- `AcceptanceManifest`: accepted-action id, proposal kind, explicit acceptance
+  policy, idempotency key template, and declared effects.
+
+Forge transcript/session configs can be built from a compiled profile manifest.
+The current issue-intake session path reads created-issue labels and marker
+namespace from the manifest's `create_issue` effect; generic effect execution is
+left to a later phase.
 
 ## Fixture
 

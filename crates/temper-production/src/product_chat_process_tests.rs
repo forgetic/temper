@@ -9,9 +9,7 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_interaction::{InteractiveResponder, ProcessResponder, ProcessResponderConfig};
 
-use crate::product_chat::{
-    ProductChatOpenOptions, ProductChatSession, PRODUCT_LABEL, WORKFLOW_INTAKE_LABEL,
-};
+use crate::product_chat::{product_profile_manifest, ProductChatOpenOptions, ProductChatSession};
 
 fn user(handle: &str) -> User {
     User {
@@ -20,6 +18,41 @@ fn user(handle: &str) -> User {
         display_name: None,
         email: None,
     }
+}
+
+fn product_transcript_labels() -> Vec<String> {
+    product_profile_manifest().unwrap().transcript.labels
+}
+
+fn product_issue_labels() -> Vec<String> {
+    product_profile_manifest()
+        .unwrap()
+        .acceptance_actions
+        .into_iter()
+        .flat_map(|action| action.effects)
+        .map(|effect| match effect {
+            temper_interaction::AcceptanceEffect::CreateIssue(effect) => effect.labels().to_vec(),
+        })
+        .next()
+        .unwrap()
+}
+
+fn product_human_handle() -> String {
+    product_profile_manifest()
+        .unwrap()
+        .profile
+        .human_participant
+        .display_name
+        .unwrap_or_else(|| "human".into())
+}
+
+fn product_agent_handle() -> String {
+    product_profile_manifest()
+        .unwrap()
+        .profile
+        .agent_participant
+        .display_name
+        .unwrap_or_else(|| "agent".into())
 }
 
 fn temp_path(name: &str) -> PathBuf {
@@ -35,7 +68,7 @@ fn temp_path(name: &str) -> PathBuf {
 
 async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
     let forge = MemoryForge::new();
-    let human = forge.as_user(user("human"));
+    let human = forge.as_user(user(&product_human_handle()));
     let repo = human
         .create_repository(CreateRepository {
             owner: "ai".into(),
@@ -45,12 +78,15 @@ async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
         })
         .await
         .unwrap();
-    for label in [PRODUCT_LABEL, WORKFLOW_INTAKE_LABEL] {
+    let labels = product_transcript_labels()
+        .into_iter()
+        .chain(product_issue_labels());
+    for label in labels {
         human
             .upsert_label(
                 &repo.id,
                 UpsertLabel {
-                    name: label.into(),
+                    name: label,
                     color: Some("ededed".into()),
                     description: None,
                 },
@@ -58,7 +94,7 @@ async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
             .await
             .unwrap();
     }
-    (human, forge.as_user(user("product-manager")), repo)
+    (human, forge.as_user(user(&product_agent_handle())), repo)
 }
 
 #[tokio::test]

@@ -4,8 +4,8 @@ use temper_forge::{
 };
 
 use crate::{
-    is_valid_deterministic_slug, validate_deterministic_slug, ConversationId,
-    ConversationProfileId, ConversationTurn, InteractionError, Participant,
+    is_valid_deterministic_slug, validate_deterministic_slug, CompiledProfileManifest,
+    ConversationId, ConversationProfileId, ConversationTurn, InteractionError, Participant,
 };
 
 /// Default number of recent Forge-backed turns supplied to a responder.
@@ -19,8 +19,8 @@ const MARKER_NAMESPACE_RULE: &str =
 pub struct ForgeTranscriptConfig {
     /// Profile id supplied to responder requests.
     pub profile_id: ConversationProfileId,
-    /// The sole label allowed on transcript issues.
-    pub transcript_label: String,
+    /// Exact labels allowed on transcript issues.
+    pub transcript_labels: Vec<String>,
     /// Prefix used for newly-created transcript issue titles.
     pub transcript_title_prefix: String,
     /// Namespace used in hidden transcript and proposal markers.
@@ -47,12 +47,7 @@ impl ForgeTranscriptConfig {
         agent_participant: Participant,
     ) -> Result<Self, InteractionError> {
         let transcript_label = transcript_label.into();
-        if transcript_label.trim().is_empty() {
-            return Err(InteractionError::InvalidConfig {
-                field: "transcript_label",
-                message: "must not be empty".into(),
-            });
-        }
+        let transcript_labels = normalize_labels(vec![transcript_label])?;
         let transcript_title_prefix = transcript_title_prefix.into();
         if transcript_title_prefix.trim().is_empty() {
             return Err(InteractionError::InvalidConfig {
@@ -66,7 +61,7 @@ impl ForgeTranscriptConfig {
         validate_deterministic_slug("conversation id prefix", &conversation_id_prefix)?;
         Ok(Self {
             profile_id,
-            transcript_label,
+            transcript_labels,
             transcript_title_prefix,
             marker_namespace,
             conversation_id_prefix,
@@ -76,11 +71,39 @@ impl ForgeTranscriptConfig {
         })
     }
 
+    /// Builds Forge transcript configuration from a compiled profile manifest.
+    pub fn from_profile_manifest(manifest: &CompiledProfileManifest) -> Self {
+        Self {
+            profile_id: manifest.profile.id.clone(),
+            transcript_labels: manifest.transcript.labels.clone(),
+            transcript_title_prefix: manifest.transcript.title_prefix.clone(),
+            marker_namespace: manifest.transcript.marker_namespace.clone(),
+            conversation_id_prefix: manifest.profile.id.as_str().to_string(),
+            human_participant: manifest.profile.human_participant.clone(),
+            agent_participant: manifest.profile.agent_participant.clone(),
+            recent_turn_limit: manifest.profile.recent_turn_limit,
+        }
+    }
+
     /// Overrides the recent-turn limit used when loading and dispatching turns.
     pub fn with_recent_turn_limit(mut self, limit: usize) -> Self {
         self.recent_turn_limit = limit;
         self
     }
+}
+
+fn normalize_labels(labels: Vec<String>) -> Result<Vec<String>, InteractionError> {
+    let labels: Vec<String> = labels
+        .into_iter()
+        .map(|label| label.trim().to_string())
+        .collect();
+    if labels.is_empty() || labels.iter().any(|label| label.is_empty()) {
+        return Err(InteractionError::InvalidConfig {
+            field: "transcript_labels",
+            message: "must not be empty".into(),
+        });
+    }
+    Ok(labels)
 }
 
 /// Repository and optional transcript issue selector for opening a transcript.
@@ -193,7 +216,7 @@ async fn create_transcript<F: Forge + ?Sized>(
             CreateIssue {
                 title,
                 body,
-                labels: vec![config.transcript_label.clone()],
+                labels: config.transcript_labels.clone(),
                 assignees: Vec::new(),
             },
         )
@@ -213,7 +236,7 @@ async fn resume_transcript<F: Forge + ?Sized>(
         .ok_or(InteractionError::TranscriptNotFound {
             number: number.get(),
         })?;
-    verify_transcript_labels(&issue, &config.transcript_label)?;
+    verify_transcript_labels(&issue, &config.transcript_labels)?;
     if let Some(session_key) = parse_transcript_session_key(&config.marker_namespace, &issue.body) {
         return Ok((issue, ConversationId::new(session_key)?));
     }
@@ -227,7 +250,7 @@ async fn resume_transcript<F: Forge + ?Sized>(
             &issue.id,
             UpdateIssue {
                 body: Some(body),
-                set_labels: Some(vec![config.transcript_label.clone()]),
+                set_labels: Some(config.transcript_labels.clone()),
                 expected_version: Some(issue.version),
                 ..UpdateIssue::default()
             },
@@ -236,16 +259,22 @@ async fn resume_transcript<F: Forge + ?Sized>(
     Ok((updated, conversation_id))
 }
 
-fn verify_transcript_labels(issue: &Issue, transcript_label: &str) -> Result<(), InteractionError> {
+fn verify_transcript_labels(
+    issue: &Issue,
+    transcript_labels: &[String],
+) -> Result<(), InteractionError> {
     let mut labels = issue.labels.clone();
     labels.sort();
     labels.dedup();
-    if labels == [transcript_label.to_string()] {
+    let mut expected = transcript_labels.to_vec();
+    expected.sort();
+    expected.dedup();
+    if labels == expected {
         Ok(())
     } else {
         Err(InteractionError::TranscriptLabelMismatch {
             number: issue.number.get(),
-            expected_label: transcript_label.to_string(),
+            expected_labels: transcript_labels.to_vec(),
             labels: issue.labels.clone(),
         })
     }

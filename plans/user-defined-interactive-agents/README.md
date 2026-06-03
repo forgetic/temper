@@ -160,14 +160,22 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
    `cargo dev-check`.
 
-2. ☐ **Phase 2 — Compile profiles to manifests and generic session config.**
+2. ☑ **Phase 2 — Compile profiles to manifests and generic session config.**
    `prompts/phase-2-compiled-profile-manifests.md`
 
-   Compile validated profiles into deterministic manifests consumed by the
-   runtime: transcript/session config, responder manifest, proposal validation
-   manifest, command manifest, and acceptance manifest. Refactor the current
-   product-chat session/service enough that product-manager behavior is supplied
-   by a compiled manifest instead of hard-coded constants.
+   Done: `temper-interaction` now compiles `ValidatedInteractionSpec` into
+   deterministic `CompiledInteractionSpec` profile manifests covering profile,
+   transcript, responder, proposal, command, and acceptance data. Forge
+   transcript/session configs can be built from compiled profile manifests,
+   transcript and accepted-issue label sets are manifest-driven, and the
+   product-chat compatibility path loads the checked-in product-manager fixture
+   manifest instead of runtime profile constants. Tests cover deterministic
+   compilation, arbitrary manifest-to-session config construction,
+   product-manager fixture compatibility, and absence of `product-manager` in
+   compiler/session implementation files. Validation run: `cargo fmt --all`;
+   `cargo test -p temper-interaction --all-targets`;
+   `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
+   `cargo dev-check`.
 
 3. ☐ **Phase 3 — Generic durable proposals and acceptance transactions.**
    `prompts/phase-3-generic-proposals-and-acceptance.md`

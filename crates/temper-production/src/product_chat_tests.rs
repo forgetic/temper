@@ -7,13 +7,14 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 
 use temper_interaction::{
-    ConversationReply, ConversationRequest, InteractionError, InteractiveResponder,
+    AcceptanceEffect, ConversationReply, ConversationRequest, CreateIssueEffect, InteractionError,
+    InteractiveResponder,
 };
 
 use crate::product_chat::{
-    parse_transcript_session_key, render_filing_marker, render_transcript_marker, ProductChatError,
-    ProductChatOpenOptions, ProductChatSession, ProductManagerDraftIssue, ProductManagerResponse,
-    PRODUCT_LABEL, PRODUCT_PROFILE_ID, WORKFLOW_INTAKE_LABEL,
+    parse_transcript_session_key, product_profile_manifest, render_filing_marker,
+    render_transcript_marker, ProductChatError, ProductChatOpenOptions, ProductChatSession,
+    ProductManagerDraftIssue, ProductManagerResponse,
 };
 use crate::product_chat_args::{
     parse_with_env, ParseOutcome, DEFAULT_SERVICE_BIND, HUMAN_TOKEN_ENV,
@@ -56,9 +57,50 @@ fn user(handle: &str) -> User {
     }
 }
 
+fn product_transcript_labels() -> Vec<String> {
+    product_profile_manifest().unwrap().transcript.labels
+}
+
+fn product_issue_effect() -> CreateIssueEffect {
+    let manifest = product_profile_manifest().unwrap();
+    let effect = manifest.acceptance_actions[0].effects[0].clone();
+    let AcceptanceEffect::CreateIssue(effect) = effect;
+    effect
+}
+
+fn product_issue_labels() -> Vec<String> {
+    product_issue_effect().labels().to_vec()
+}
+
+fn product_marker_namespace() -> String {
+    product_issue_effect().marker_namespace().to_string()
+}
+
+fn product_profile_id() -> String {
+    product_profile_manifest().unwrap().profile.id.to_string()
+}
+
+fn product_human_handle() -> String {
+    product_profile_manifest()
+        .unwrap()
+        .profile
+        .human_participant
+        .display_name
+        .unwrap_or_default()
+}
+
+fn product_agent_handle() -> String {
+    product_profile_manifest()
+        .unwrap()
+        .profile
+        .agent_participant
+        .display_name
+        .unwrap_or_default()
+}
+
 async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
     let forge = MemoryForge::new();
-    let human = forge.as_user(user("human"));
+    let human = forge.as_user(user(&product_human_handle()));
     let repo = human
         .create_repository(CreateRepository {
             owner: "ai".into(),
@@ -68,12 +110,15 @@ async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
         })
         .await
         .unwrap();
-    for label in [PRODUCT_LABEL, WORKFLOW_INTAKE_LABEL] {
+    let labels = product_transcript_labels()
+        .into_iter()
+        .chain(product_issue_labels());
+    for label in labels {
         human
             .upsert_label(
                 &repo.id,
                 UpsertLabel {
-                    name: label.into(),
+                    name: label,
                     color: Some("ededed".into()),
                     description: None,
                 },
@@ -81,7 +126,7 @@ async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
             .await
             .unwrap();
     }
-    (human, forge.as_user(user("product-manager")), repo)
+    (human, forge.as_user(user(&product_agent_handle())), repo)
 }
 
 fn fake_responder() -> FakeResponder {
@@ -148,7 +193,7 @@ async fn create_service_conversation(app: &ProductChatHttpApp) -> String {
         .handle_http_request(json_request(
             "POST",
             "/conversations",
-            serde_json::json!({ "profile_id": PRODUCT_PROFILE_ID }),
+            serde_json::json!({ "profile_id": product_profile_id() }),
         ))
         .await;
     assert_eq!(response.status(), 201);
@@ -162,7 +207,10 @@ fn product_chat_markers_render_and_parse() {
     assert_eq!(parse_transcript_session_key(&body), Some("pc-abc".into()));
     assert_eq!(
         render_filing_marker("pc-abc", "terminal-chat-mvp"),
-        "<!-- temper:product-chat-file=pc-abc:terminal-chat-mvp -->"
+        format!(
+            "<!-- temper:{}-file=pc-abc:terminal-chat-mvp -->",
+            product_marker_namespace()
+        )
     );
 }
 
@@ -186,7 +234,7 @@ async fn product_chat_core_drives_transcript_and_idempotent_filing() {
     .unwrap();
     assert_eq!(
         session.transcript_issue().labels,
-        vec![PRODUCT_LABEL.to_string()]
+        product_transcript_labels()
     );
 
     let response = session.send_human_turn("I want a chat MVP.").await.unwrap();
@@ -196,13 +244,16 @@ async fn product_chat_core_drives_transcript_and_idempotent_filing() {
         .await
         .unwrap();
     assert_eq!(comments.len(), 2);
-    assert_eq!(comments[0].author_id, UserId::new("human"));
-    assert_eq!(comments[1].author_id, UserId::new("product-manager"));
+    assert_eq!(comments[0].author_id, UserId::new(product_human_handle()));
+    assert_eq!(comments[1].author_id, UserId::new(product_agent_handle()));
 
     let filed = session.file_draft(1).await.unwrap();
     assert!(filed.created);
-    assert_eq!(filed.issue.labels, vec![WORKFLOW_INTAKE_LABEL.to_string()]);
-    assert!(filed.issue.body.contains("requested-by: human"));
+    assert_eq!(filed.issue.labels, product_issue_labels());
+    assert!(filed
+        .issue
+        .body
+        .contains(&format!("requested-by: {}", product_human_handle())));
     assert!(filed.issue.body.contains(&render_filing_marker(
         session.session_key(),
         "terminal-chat-mvp"
@@ -352,7 +403,10 @@ async fn product_chat_service_post_sessions_creates_session_response() {
         .await;
     assert_eq!(response.status(), 201);
     let body = response_json(&response);
-    assert!(body["id"].as_str().unwrap().starts_with("pc-"));
+    assert!(body["id"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("{}-", product_profile_id())));
     assert_eq!(body["transcript_issue"].as_u64(), Some(1));
     assert_eq!(
         body["transcript_url"].as_str(),
@@ -455,8 +509,8 @@ async fn product_chat_service_generic_routes_emit_events_and_accept_idempotently
     assert_eq!(conversation.status(), 200);
     let conversation = response_json(&conversation);
     assert_eq!(
-        conversation["profile_id"].as_str(),
-        Some(PRODUCT_PROFILE_ID)
+        conversation["profile_id"].as_str().map(str::to_string),
+        Some(product_profile_id())
     );
     assert_eq!(conversation["transcript"]["issue_number"].as_u64(), Some(1));
 

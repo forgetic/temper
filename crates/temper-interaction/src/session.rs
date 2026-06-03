@@ -11,7 +11,11 @@ use crate::transcript::{
     issue_url, open_forge_transcript, trim_turns, ForgeTranscript, ForgeTranscriptConfig,
     ForgeTranscriptOpenOptions,
 };
-use crate::types::{ConversationReply, ConversationRequest, ConversationTurn, ProposalId};
+use crate::types::{
+    ConversationReply, ConversationRequest, ConversationTurn, ProposalId, ProposalKind,
+};
+use crate::validated::AcceptanceEffect;
+use crate::CompiledProfileManifest;
 use crate::InteractionError;
 
 /// Open options for a Forge-backed interactive session.
@@ -57,16 +61,42 @@ impl ForgeSessionConfig {
         transcript: ForgeTranscriptConfig,
         issue_intake: IssueIntakeAcceptanceConfig,
     ) -> Result<Self, InteractionError> {
-        if transcript.transcript_label == issue_intake.workflow_intake_label {
+        if issue_intake
+            .issue_labels
+            .iter()
+            .any(|label| transcript.transcript_labels.contains(label))
+        {
             return Err(InteractionError::InvalidConfig {
-                field: "workflow_intake_label",
-                message: "must differ from transcript_label".into(),
+                field: "issue_labels",
+                message: "must differ from transcript_labels".into(),
             });
         }
         Ok(Self {
             transcript,
             issue_intake,
         })
+    }
+
+    /// Builds session configuration from a compiled profile manifest.
+    pub fn from_profile_manifest(
+        manifest: &CompiledProfileManifest,
+    ) -> Result<Self, InteractionError> {
+        let transcript = ForgeTranscriptConfig::from_profile_manifest(manifest);
+        let effect = manifest
+            .acceptance_actions
+            .iter()
+            .filter(|action| action.proposal_kind == ProposalKind::issue())
+            .flat_map(|action| action.effects.iter())
+            .map(|effect| match effect {
+                AcceptanceEffect::CreateIssue(effect) => effect,
+            })
+            .next()
+            .ok_or_else(|| InteractionError::InvalidConfig {
+                field: "acceptance_actions",
+                message: "must declare a create_issue effect for issue intake sessions".into(),
+            })?;
+        let issue_intake = IssueIntakeAcceptanceConfig::from_create_issue_effect(effect);
+        Self::new(transcript, issue_intake)
     }
 }
 

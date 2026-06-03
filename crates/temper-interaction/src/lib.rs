@@ -1,14 +1,18 @@
 //! Provider-neutral interactive conversation primitives for Temper.
 //!
 //! This crate defines the reusable interaction-plane core: typed conversation
-//! ids, responder request/reply types, inert proposals, Forge-backed transcript
-//! sessions, explicit idempotent issue-proposal acceptance, and a provider-neutral
-//! process responder adapter. Responder processes exchange the same serialized
+//! ids, responder request/reply types, inert proposals, user-defined profile
+//! validation/compilation, Forge-backed transcript sessions, explicit idempotent
+//! issue-proposal acceptance, and a provider-neutral process responder adapter.
+//! Responder processes exchange the same serialized
 //! request/reply types while transcript and acceptance code own durable Forge
 //! state. This crate has no workflow, runner, production, or LLM-provider
 //! dependencies.
 
 pub mod agent;
+pub mod compile;
+#[cfg(test)]
+mod compile_tests;
 mod error;
 pub mod ids;
 pub mod process;
@@ -28,6 +32,11 @@ pub mod validate;
 pub mod validated;
 
 pub use agent::InteractiveResponder;
+pub use compile::{
+    compile, AcceptanceManifest, CommandActionManifest, CommandManifest, CompiledInteractionSpec,
+    CompiledProfileManifest, ProfileManifest, ProposalManifest, ProposalPayloadValidator,
+    ResponderManifest, TranscriptManifest,
+};
 pub use error::InteractionError;
 pub use ids::{AcceptanceActionId, CommandId, InteractionSpecId, ResponderId};
 pub use process::{ProcessResponder, ProcessResponderConfig};

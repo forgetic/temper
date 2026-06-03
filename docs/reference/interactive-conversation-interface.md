@@ -4,8 +4,8 @@ This page defines the target contract for Temper's generic interaction plane.
 `crates/temper-interaction` contains the reusable core of this contract:
 typed conversation/profile/proposal ids, participants, turns, wire-serializable
 requests/replies, inert proposals, deterministic proposal-id validation,
-user-defined interaction profile spec validation, the object-safe responder
-adapter trait, the provider-neutral process responder adapter, Forge-backed
+user-defined interaction profile spec validation and compilation, the object-safe
+responder adapter trait, the provider-neutral process responder adapter, Forge-backed
 transcript/session helpers, explicit idempotent issue-proposal acceptance, and
 transport-facing command/event types with a small in-process event log for
 adapters. See [Interaction profile spec](interaction-profile-spec.md) for the
@@ -39,10 +39,10 @@ is the process protocol using the same serialized request/reply types; see
 - **Conversation identifiers and participants**: typed ids for conversations,
   profiles, turns, and proposals. Public APIs should avoid raw string status
   values when the domain has a fixed meaning.
-- **Interactive profile**: validated configuration that names the responder
-  behavior, transcript policy, proposal kinds, commands, and acceptance rules for
-  one conversational use case. `product-manager` is one fixture/profile instance,
-  not a production constant.
+- **Interactive profile**: validated configuration compiled into deterministic
+  manifests that name the responder behavior, transcript policy, proposal kinds,
+  commands, and acceptance rules for one conversational use case.
+  `product-manager` is one fixture/profile instance, not a production constant.
 - **Interactive responder**: a one-turn interface. Given an immutable request
   containing the profile id, transcript view, latest human turn, and profile
   context, it returns a reply and zero or more proposals. It receives no Forge
