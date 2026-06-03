@@ -57,6 +57,7 @@
               "body_template": "${proposal.payload.body}\n\n---\nTranscript: ${conversation.transcript_url}\nrequested-by: ${human.handle}\n\n${effect.marker}",
               "labels": ["untriaged"],
               "marker_namespace": "product-chat",
+              "marker_key": "file",
               "backlink": {
                 "label": "Transcript",
                 "url": "${conversation.transcript_url}"

@@ -3,17 +3,17 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use temper_forge::{CreateComment, Forge, Issue, ItemNumber, RepositoryPath, User};
 
-use crate::agent::InteractiveResponder;
-use crate::proposal::{
-    accept_issue_intake_proposal, IssueAcceptanceOutcome, IssueIntakeAcceptanceConfig, Proposal,
+use crate::acceptance::{
+    AcceptanceExecutor, AcceptanceRequest, AcceptedTarget, IssueAcceptanceOutcome,
 };
+use crate::agent::InteractiveResponder;
+use crate::proposal::Proposal;
+use crate::proposal_state::render_agent_reply_comment_with_proposals;
 use crate::transcript::{
     issue_url, open_forge_transcript, trim_turns, ForgeTranscript, ForgeTranscriptConfig,
     ForgeTranscriptOpenOptions,
 };
-use crate::types::{
-    ConversationReply, ConversationRequest, ConversationTurn, ProposalId, ProposalKind,
-};
+use crate::types::{ConversationReply, ConversationRequest, ConversationTurn, ProposalId};
 use crate::validated::AcceptanceEffect;
 use crate::CompiledProfileManifest;
 use crate::InteractionError;
@@ -51,29 +51,36 @@ impl ForgeSessionOpenOptions {
 pub struct ForgeSessionConfig {
     /// Transcript issue policy and responder profile settings.
     pub transcript: ForgeTranscriptConfig,
-    /// Issue-intake proposal acceptance policy.
-    pub issue_intake: IssueIntakeAcceptanceConfig,
+    /// Compiled profile manifest that declares proposal kinds, commands, and
+    /// explicit acceptance actions.
+    pub profile: CompiledProfileManifest,
 }
 
 impl ForgeSessionConfig {
-    /// Builds a validated session configuration.
+    /// Builds a validated session configuration from manifest data.
     pub fn new(
         transcript: ForgeTranscriptConfig,
-        issue_intake: IssueIntakeAcceptanceConfig,
+        profile: CompiledProfileManifest,
     ) -> Result<Self, InteractionError> {
-        if issue_intake
-            .issue_labels
-            .iter()
-            .any(|label| transcript.transcript_labels.contains(label))
-        {
-            return Err(InteractionError::InvalidConfig {
-                field: "issue_labels",
-                message: "must differ from transcript_labels".into(),
-            });
+        for action in &profile.acceptance_actions {
+            for effect in &action.effects {
+                if let AcceptanceEffect::CreateIssue(effect) = effect {
+                    if effect
+                        .labels()
+                        .iter()
+                        .any(|label| transcript.transcript_labels.contains(label))
+                    {
+                        return Err(InteractionError::InvalidConfig {
+                            field: "create_issue.labels",
+                            message: "must differ from transcript labels".into(),
+                        });
+                    }
+                }
+            }
         }
         Ok(Self {
             transcript,
-            issue_intake,
+            profile,
         })
     }
 
@@ -82,21 +89,7 @@ impl ForgeSessionConfig {
         manifest: &CompiledProfileManifest,
     ) -> Result<Self, InteractionError> {
         let transcript = ForgeTranscriptConfig::from_profile_manifest(manifest);
-        let effect = manifest
-            .acceptance_actions
-            .iter()
-            .filter(|action| action.proposal_kind == ProposalKind::issue())
-            .flat_map(|action| action.effects.iter())
-            .map(|effect| match effect {
-                AcceptanceEffect::CreateIssue(effect) => effect,
-            })
-            .next()
-            .ok_or_else(|| InteractionError::InvalidConfig {
-                field: "acceptance_actions",
-                message: "must declare a create_issue effect for issue intake sessions".into(),
-            })?;
-        let issue_intake = IssueIntakeAcceptanceConfig::from_create_issue_effect(effect);
-        Self::new(transcript, issue_intake)
+        Self::new(transcript, manifest.clone())
     }
 }
 
@@ -142,6 +135,7 @@ where
             &config.transcript,
         )
         .await?;
+        let latest_proposals = transcript.latest_proposals().to_vec();
         Ok(Self {
             human_forge,
             agent_forge,
@@ -151,7 +145,7 @@ where
             repo_path: options.repo_path,
             context: options.context,
             transcript,
-            latest_proposals: Vec::new(),
+            latest_proposals,
         })
     }
 
@@ -227,7 +221,10 @@ where
         };
         let reply = self.responder.respond(&request).await?;
         reply.validate()?;
-        let comment_body = render_agent_reply_comment(&reply);
+        let comment_body = render_agent_reply_comment_with_proposals(
+            &reply,
+            &self.config.transcript.marker_namespace,
+        )?;
         self.agent_forge
             .add_issue_comment(
                 &self.transcript.issue().id,
@@ -239,7 +236,10 @@ where
         self.transcript.push_turn(
             ConversationTurn::new(
                 self.config.transcript.agent_participant.clone(),
-                comment_body,
+                crate::proposal_state::strip_proposal_snapshot_marker(
+                    &self.config.transcript.marker_namespace,
+                    &comment_body,
+                ),
             ),
             self.config.transcript.recent_turn_limit,
         );
@@ -247,33 +247,29 @@ where
         Ok(reply)
     }
 
-    /// Idempotently accepts a cached issue proposal by id.
+    /// Idempotently accepts a cached proposal by id and returns the issue target.
     pub async fn accept_issue_proposal(
         &self,
         proposal_id: &ProposalId,
     ) -> Result<IssueAcceptanceOutcome, InteractionError> {
-        let proposal = self
-            .latest_proposals
-            .iter()
-            .find(|proposal| &proposal.id == proposal_id)
-            .ok_or_else(|| InteractionError::ProposalNotFound {
-                id: proposal_id.clone(),
-                available: self
-                    .latest_proposals
-                    .iter()
-                    .map(|proposal| proposal.id.clone())
-                    .collect(),
-            })?;
-        accept_issue_intake_proposal(
-            self.agent_forge.as_ref(),
-            self.transcript.repository(),
-            &self.config.issue_intake,
-            self.transcript.conversation_id(),
-            proposal,
-            &self.transcript_url(),
-            Some(&self.transcript.human_user().handle),
-        )
-        .await
+        let outcome = AcceptanceExecutor::new(self.agent_forge.as_ref())
+            .accept(AcceptanceRequest {
+                profile: &self.config.profile,
+                repository: self.transcript.repository(),
+                transcript_issue: self.transcript.issue(),
+                conversation_id: self.transcript.conversation_id(),
+                transcript_url: &self.transcript_url(),
+                requested_by: Some(self.transcript.human_user()),
+                proposals: &self.latest_proposals,
+                proposal_id,
+                acceptance_action: None,
+            })
+            .await?;
+        let AcceptedTarget::Issue(issue) = outcome.target;
+        Ok(IssueAcceptanceOutcome {
+            issue,
+            created: outcome.created,
+        })
     }
 
     fn request_context(&self) -> Value {
@@ -293,21 +289,4 @@ fn recent_turns(turns: &[ConversationTurn], limit: usize) -> Vec<ConversationTur
     let mut turns = turns.to_vec();
     trim_turns(&mut turns, limit);
     turns
-}
-
-/// Renders an agent reply plus proposal summaries for durable transcript comments.
-pub fn render_agent_reply_comment(reply: &ConversationReply) -> String {
-    let mut body = reply.message.trim().to_string();
-    if !reply.proposals.is_empty() {
-        body.push_str("\n\nProposals:\n");
-        for (index, proposal) in reply.proposals.iter().enumerate() {
-            body.push_str(&format!("[{}] {}\n", index + 1, proposal.title));
-            body.push_str(&format!("    id: {}\n", proposal.id));
-            body.push_str(&format!("    kind: {}\n", proposal.kind));
-            if let Some(summary) = proposal.summary.as_deref().filter(|text| !text.is_empty()) {
-                body.push_str(&format!("    summary: {summary}\n"));
-            }
-        }
-    }
-    body
 }

@@ -1,30 +1,18 @@
-//! Static validation from raw interaction specs to validated interaction specs.
-//!
-//! Validation is diagnostic-collecting: it walks the full spec, records every
-//! malformed id, duplicate declaration, dangling reference, and unsupported
-//! closed-contract value it can find, and only then decides whether a validated
-//! model can be produced.
-
+mod build;
 mod diagnostics;
+use build::build_validated;
 pub use diagnostics::{
     InteractionSpecDiagnostic, InteractionSpecReferenceSite, InteractionSpecSeverity,
     InteractionSpecSymbolKind, InteractionSpecValidationErrors,
 };
 
-use crate::ids::{AcceptanceActionId, CommandId, InteractionSpecId, ResponderId};
 use crate::spec::{
     RawAcceptanceActionDeclaration, RawAcceptanceEffect, RawInteractionSpec, RawInteractiveProfile,
-    RawParticipantDeclaration, RawTranscriptPolicy,
+    RawTranscriptPolicy,
 };
-use crate::types::{is_valid_deterministic_slug, ConversationProfileId, ParticipantKind};
-use crate::validated::{
-    AcceptanceEffect, AcceptancePolicy, BacklinkPolicy, CreateIssueEffect, ProposalPayloadContract,
-    ResponderProtocol, TranscriptLabelPolicy, TranscriptTargetKind, TransportCommandAction,
-    ValidatedAcceptanceActionDeclaration, ValidatedInteractionSpec, ValidatedInteractiveProfile,
-    ValidatedParticipants, ValidatedProposalKindDeclaration, ValidatedResponderDeclaration,
-    ValidatedTranscriptPolicy, ValidatedTransportCommandDeclaration,
-};
-use crate::{Participant, ProposalKind, DETERMINISTIC_SLUG_RULE};
+use crate::types::is_valid_deterministic_slug;
+use crate::validated::ValidatedInteractionSpec;
+use crate::DETERMINISTIC_SLUG_RULE;
 use std::collections::{HashMap, HashSet};
 
 const TRANSCRIPT_TARGET_ISSUE: &str = "issue";
@@ -33,6 +21,7 @@ const RESPONDER_PROTOCOL_PROCESS_V1: &str = "process-v1";
 const PAYLOAD_CONTRACT_ISSUE_DRAFT: &str = "issue_draft";
 const ACCEPTANCE_POLICY_EXPLICIT: &str = "explicit";
 const EFFECT_CREATE_ISSUE: &str = "create_issue";
+const EFFECT_ADD_TRANSCRIPT_COMMENT: &str = "add_transcript_comment";
 
 /// Validates a raw interaction spec into a normalized checked model.
 pub fn validate(
@@ -322,15 +311,17 @@ fn validate_effects(
     diagnostics: &mut Vec<InteractionSpecDiagnostic>,
 ) {
     for effect in &action.effects {
-        if effect.kind != EFFECT_CREATE_ISSUE {
-            diagnostics.push(InteractionSpecDiagnostic::UnsupportedEffectKind {
+        match effect.kind.as_str() {
+            EFFECT_CREATE_ISSUE => check_create_issue_effect(profile, action, effect, diagnostics),
+            EFFECT_ADD_TRANSCRIPT_COMMENT => {
+                check_transcript_comment_effect(profile, action, effect, diagnostics)
+            }
+            _ => diagnostics.push(InteractionSpecDiagnostic::UnsupportedEffectKind {
                 profile: profile.id.clone(),
                 acceptance_action: action.id.clone(),
                 kind: effect.kind.clone(),
-            });
-            continue;
+            }),
         }
-        check_create_issue_effect(profile, action, effect, diagnostics);
     }
 }
 
@@ -363,14 +354,59 @@ fn check_create_issue_effect(
             field: "labels",
         });
     }
-    let marker_namespace = effect.marker_namespace.trim();
-    if !marker_namespace.is_empty() {
-        check_slug(
-            InteractionSpecSymbolKind::MarkerNamespace,
-            Some(&profile.id),
-            marker_namespace,
-            diagnostics,
-        );
+    if effect
+        .assignees
+        .iter()
+        .any(|assignee| assignee.trim().is_empty())
+    {
+        diagnostics.push(InteractionSpecDiagnostic::EmptyAcceptanceField {
+            profile: profile.id.clone(),
+            acceptance_action: action.id.clone(),
+            field: "assignees",
+        });
+    }
+    check_effect_marker(profile, action, effect, diagnostics);
+}
+
+fn check_transcript_comment_effect(
+    profile: &RawInteractiveProfile,
+    action: &RawAcceptanceActionDeclaration,
+    effect: &RawAcceptanceEffect,
+    diagnostics: &mut Vec<InteractionSpecDiagnostic>,
+) {
+    for (field, empty) in [
+        ("body_template", effect.body_template.trim().is_empty()),
+        (
+            "marker_namespace",
+            effect.marker_namespace.trim().is_empty(),
+        ),
+    ] {
+        if empty {
+            diagnostics.push(InteractionSpecDiagnostic::EmptyAcceptanceField {
+                profile: profile.id.clone(),
+                acceptance_action: action.id.clone(),
+                field,
+            });
+        }
+    }
+    check_effect_marker(profile, action, effect, diagnostics);
+}
+
+fn check_effect_marker(
+    profile: &RawInteractiveProfile,
+    _action: &RawAcceptanceActionDeclaration,
+    effect: &RawAcceptanceEffect,
+    diagnostics: &mut Vec<InteractionSpecDiagnostic>,
+) {
+    for value in [effect.marker_namespace.trim(), effect.marker_key.trim()] {
+        if !value.is_empty() {
+            check_slug(
+                InteractionSpecSymbolKind::MarkerNamespace,
+                Some(&profile.id),
+                value,
+                diagnostics,
+            );
+        }
     }
 }
 
@@ -423,126 +459,4 @@ fn check_slug(
             reason: DETERMINISTIC_SLUG_RULE,
         });
     }
-}
-
-fn build_validated(spec: &RawInteractionSpec) -> ValidatedInteractionSpec {
-    ValidatedInteractionSpec {
-        id: InteractionSpecId::new(&spec.id),
-        responders: spec
-            .responders
-            .iter()
-            .map(|responder| ValidatedResponderDeclaration {
-                id: ResponderId::new(&responder.id),
-                protocol: ResponderProtocol::ProcessV1,
-                required: responder.required,
-            })
-            .collect(),
-        profiles: spec.profiles.iter().map(build_profile).collect(),
-    }
-}
-
-fn build_profile(profile: &RawInteractiveProfile) -> ValidatedInteractiveProfile {
-    ValidatedInteractiveProfile {
-        id: ConversationProfileId::new(&profile.id)
-            .expect("validated profile id should be a deterministic slug"),
-        transcript: build_transcript(&profile.transcript),
-        participants: ValidatedParticipants {
-            human: build_participant(ParticipantKind::Human, &profile.participants.human),
-            agent: build_participant(ParticipantKind::Agent, &profile.participants.agent),
-        },
-        responder: ResponderId::new(&profile.responder),
-        proposal_kinds: profile
-            .proposal_kinds
-            .iter()
-            .map(|proposal_kind| ValidatedProposalKindDeclaration {
-                id: ProposalKind::new(&proposal_kind.id)
-                    .expect("validated proposal kind should be a deterministic slug"),
-                payload: ProposalPayloadContract::IssueDraft,
-            })
-            .collect(),
-        commands: profile.commands.iter().map(build_command).collect(),
-        acceptance_actions: profile
-            .acceptance_actions
-            .iter()
-            .map(build_acceptance_action)
-            .collect(),
-    }
-}
-
-fn build_transcript(transcript: &RawTranscriptPolicy) -> ValidatedTranscriptPolicy {
-    ValidatedTranscriptPolicy {
-        target: TranscriptTargetKind::ForgeIssue,
-        title_prefix: transcript.title_prefix.trim().to_string(),
-        labels: trim_vec(&transcript.labels),
-        label_policy: TranscriptLabelPolicy::Exact,
-        marker_namespace: transcript.marker_namespace.trim().to_string(),
-        recent_turn_limit: transcript.recent_turn_limit,
-    }
-}
-
-fn build_participant(kind: ParticipantKind, raw: &RawParticipantDeclaration) -> Participant {
-    let display_name = raw.display_name.trim();
-    Participant {
-        kind,
-        display_name: (!display_name.is_empty()).then(|| display_name.to_string()),
-    }
-}
-
-fn build_command(
-    command: &crate::spec::RawTransportCommandDeclaration,
-) -> ValidatedTransportCommandDeclaration {
-    let action = &command.action.accept_proposal;
-    ValidatedTransportCommandDeclaration {
-        id: CommandId::new(&command.id),
-        aliases: command
-            .aliases
-            .iter()
-            .map(|alias| alias.trim().to_string())
-            .collect(),
-        action: TransportCommandAction::AcceptProposal {
-            kind: ProposalKind::new(&action.kind)
-                .expect("validated command proposal kind should be a deterministic slug"),
-            acceptance_action: AcceptanceActionId::new(&action.acceptance_action),
-        },
-    }
-}
-
-fn build_acceptance_action(
-    action: &RawAcceptanceActionDeclaration,
-) -> ValidatedAcceptanceActionDeclaration {
-    ValidatedAcceptanceActionDeclaration {
-        id: AcceptanceActionId::new(&action.id),
-        proposal_kind: ProposalKind::new(&action.proposal_kind)
-            .expect("validated acceptance proposal kind should be a deterministic slug"),
-        acceptance: AcceptancePolicy::Explicit {
-            commands: action
-                .acceptance
-                .commands
-                .iter()
-                .map(CommandId::new)
-                .collect(),
-        },
-        idempotency_key_template: action.idempotency_key.trim().to_string(),
-        effects: action.effects.iter().map(build_effect).collect(),
-    }
-}
-
-fn build_effect(effect: &RawAcceptanceEffect) -> AcceptanceEffect {
-    AcceptanceEffect::CreateIssue(CreateIssueEffect {
-        title: effect.title.trim().to_string(),
-        body_template: effect.body_template.trim().to_string(),
-        labels: trim_vec(&effect.labels),
-        marker_namespace: effect.marker_namespace.trim().to_string(),
-        backlink: effect.backlink.as_ref().map(|backlink| BacklinkPolicy {
-            label: backlink.label.trim().to_string(),
-            url: backlink.url.trim().to_string(),
-        }),
-    })
-}
-
-fn trim_vec(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .map(|value| value.trim().to_string())
-        .collect()
 }

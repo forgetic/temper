@@ -2,13 +2,17 @@
 //!
 //! This crate defines the reusable interaction-plane core: typed conversation
 //! ids, responder request/reply types, inert proposals, user-defined profile
-//! validation/compilation, Forge-backed transcript sessions, explicit idempotent
-//! issue-proposal acceptance, and a provider-neutral process responder adapter.
+//! validation/compilation, Forge-backed transcript sessions, durable proposal
+//! snapshots, manifest-driven acceptance, and a provider-neutral process
+//! responder adapter.
 //! Responder processes exchange the same serialized
 //! request/reply types while transcript and acceptance code own durable Forge
 //! state. This crate has no workflow, runner, production, or LLM-provider
 //! dependencies.
 
+pub mod acceptance;
+#[cfg(test)]
+mod acceptance_tests;
 pub mod agent;
 pub mod compile;
 #[cfg(test)]
@@ -19,6 +23,7 @@ pub mod process;
 #[cfg(test)]
 mod process_tests;
 pub mod proposal;
+pub mod proposal_state;
 pub mod session;
 pub mod spec;
 #[cfg(test)]
@@ -31,6 +36,10 @@ pub mod types;
 pub mod validate;
 pub mod validated;
 
+pub use acceptance::{
+    find_issue_by_marker, render_acceptance_marker, render_filed_issue_body, AcceptanceExecutor,
+    AcceptanceOutcome, AcceptanceRequest, AcceptedTarget, IssueAcceptanceOutcome,
+};
 pub use agent::InteractiveResponder;
 pub use compile::{
     compile, AcceptanceManifest, CommandActionManifest, CommandManifest, CompiledInteractionSpec,
@@ -41,14 +50,15 @@ pub use error::InteractionError;
 pub use ids::{AcceptanceActionId, CommandId, InteractionSpecId, ResponderId};
 pub use process::{ProcessResponder, ProcessResponderConfig};
 pub use proposal::{
-    accept_issue_intake_proposal, find_issue_by_marker, render_filed_issue_body,
-    validate_proposal_ids, validate_proposals, IssueAcceptanceOutcome, IssueIntakeAcceptanceConfig,
-    IssueProposal, Proposal,
+    accept_issue_intake_proposal, validate_proposal_ids, validate_proposals,
+    IssueIntakeAcceptanceConfig, IssueProposal, Proposal,
 };
-pub use session::{
-    render_agent_reply_comment, ForgeInteractionSession, ForgeSessionConfig,
-    ForgeSessionOpenOptions,
+pub use proposal_state::{
+    latest_proposals_from_turns, parse_proposal_snapshot_marker, render_agent_reply_comment,
+    render_agent_reply_comment_with_proposals, render_proposal_snapshot_marker,
+    strip_proposal_snapshot_marker,
 };
+pub use session::{ForgeInteractionSession, ForgeSessionConfig, ForgeSessionOpenOptions};
 pub use spec::{
     RawAcceptProposalCommandAction, RawAcceptanceActionDeclaration, RawAcceptanceEffect,
     RawAcceptancePolicy, RawBacklinkPolicy, RawInteractionSpec, RawInteractiveProfile,
@@ -78,9 +88,10 @@ pub use validate::{
     InteractionSpecSeverity, InteractionSpecSymbolKind, InteractionSpecValidationErrors,
 };
 pub use validated::{
-    AcceptanceEffect, AcceptancePolicy, BacklinkPolicy, CreateIssueEffect, ProposalPayloadContract,
-    ResponderProtocol, TranscriptLabelPolicy, TranscriptTargetKind, TransportCommandAction,
-    ValidatedAcceptanceActionDeclaration, ValidatedInteractionSpec, ValidatedInteractiveProfile,
-    ValidatedParticipants, ValidatedProposalKindDeclaration, ValidatedResponderDeclaration,
-    ValidatedTranscriptPolicy, ValidatedTransportCommandDeclaration,
+    AcceptanceEffect, AcceptancePolicy, AddTranscriptCommentEffect, BacklinkPolicy,
+    CreateIssueEffect, ProposalPayloadContract, ResponderProtocol, TranscriptLabelPolicy,
+    TranscriptTargetKind, TransportCommandAction, ValidatedAcceptanceActionDeclaration,
+    ValidatedInteractionSpec, ValidatedInteractiveProfile, ValidatedParticipants,
+    ValidatedProposalKindDeclaration, ValidatedResponderDeclaration, ValidatedTranscriptPolicy,
+    ValidatedTransportCommandDeclaration,
 };

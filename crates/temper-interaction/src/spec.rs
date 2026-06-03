@@ -193,20 +193,26 @@ pub struct RawAcceptancePolicy {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawAcceptanceEffect {
-    /// Effect kind. Phase 1 supports `create_issue`.
+    /// Effect kind. Phase 3 supports `create_issue` and `add_transcript_comment`.
     pub kind: String,
     /// Issue title template for `create_issue`.
     #[serde(default)]
     pub title: String,
-    /// Issue body template for `create_issue`.
+    /// Body template for `create_issue` or `add_transcript_comment`.
     #[serde(default)]
     pub body_template: String,
     /// Labels applied to created issues for `create_issue`.
     #[serde(default)]
     pub labels: Vec<String>,
-    /// Marker namespace used to make issue creation idempotent.
+    /// Assignee user ids applied to created issues for `create_issue`.
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    /// Marker namespace used to make effect execution idempotent.
     #[serde(default)]
     pub marker_namespace: String,
+    /// Optional marker key. Defaults to the acceptance action id.
+    #[serde(default)]
+    pub marker_key: String,
     /// Optional transcript backlink metadata for `create_issue`.
     #[serde(default)]
     pub backlink: Option<RawBacklinkPolicy>,

@@ -106,7 +106,9 @@ fn compilation_is_deterministic_and_structured() {
         CommandActionManifest::AcceptProposal { proposal_kind, acceptance_action }
             if proposal_kind.as_str() == "issue" && acceptance_action.as_str() == "accept-issue"
     ));
-    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions[0].effects[0];
+    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions[0].effects[0] else {
+        panic!("first generic effect creates an issue")
+    };
     assert_eq!(effect.labels(), ["support-intake", "needs-triage"]);
 }
 
@@ -144,11 +146,13 @@ fn session_configs_can_be_built_from_arbitrary_profile_manifests() {
 
     let session = ForgeSessionConfig::from_profile_manifest(profile).unwrap();
     assert_eq!(session.transcript, transcript);
-    assert_eq!(
-        session.issue_intake.issue_labels,
-        ["support-intake", "needs-triage"]
-    );
-    assert_eq!(session.issue_intake.marker_namespace, "support-chat");
+    assert_eq!(session.profile, profile.clone());
+    let AcceptanceEffect::CreateIssue(effect) = &session.profile.acceptance_actions[0].effects[0]
+    else {
+        panic!("first generic effect creates an issue")
+    };
+    assert_eq!(effect.labels(), ["support-intake", "needs-triage"]);
+    assert_eq!(effect.marker_namespace(), "support-chat");
 }
 
 #[test]
@@ -161,7 +165,9 @@ fn product_manager_fixture_compiles_to_manifest_data() {
     assert_eq!(profile.transcript.title_prefix, "Product conversation");
     assert_eq!(profile.transcript.marker_namespace, "product-chat");
     assert_eq!(profile.commands[0].aliases, ["/file"]);
-    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions[0].effects[0];
+    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions[0].effects[0] else {
+        panic!("product fixture first effect creates an issue")
+    };
     assert_eq!(effect.labels(), ["untriaged"]);
 }
 

@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
+use std::sync::Arc;
 use temper_forge::{
     CreateRepository, Forge, Repository, RepositoryPath, UpsertLabel, User, UserId,
 };
 use temper_forge_memory::MemoryForge;
-
 use temper_interaction::{
     AcceptanceEffect, ConversationReply, ConversationRequest, CreateIssueEffect, InteractionError,
     InteractiveResponder,
@@ -64,7 +62,9 @@ fn product_transcript_labels() -> Vec<String> {
 fn product_issue_effect() -> CreateIssueEffect {
     let manifest = product_profile_manifest().unwrap();
     let effect = manifest.acceptance_actions[0].effects[0].clone();
-    let AcceptanceEffect::CreateIssue(effect) = effect;
+    let AcceptanceEffect::CreateIssue(effect) = effect else {
+        panic!("create_issue")
+    };
     effect
 }
 

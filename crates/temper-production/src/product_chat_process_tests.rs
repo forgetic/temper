@@ -30,10 +30,12 @@ fn product_issue_labels() -> Vec<String> {
         .acceptance_actions
         .into_iter()
         .flat_map(|action| action.effects)
-        .map(|effect| match effect {
-            temper_interaction::AcceptanceEffect::CreateIssue(effect) => effect.labels().to_vec(),
+        .find_map(|effect| match effect {
+            temper_interaction::AcceptanceEffect::CreateIssue(effect) => {
+                Some(effect.labels().to_vec())
+            }
+            temper_interaction::AcceptanceEffect::AddTranscriptComment(_) => None,
         })
-        .next()
         .unwrap()
 }
 

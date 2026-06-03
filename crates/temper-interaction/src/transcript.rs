@@ -3,9 +3,11 @@ use temper_forge::{
     CreateIssue, Forge, Issue, ItemNumber, Repository, RepositoryPath, UpdateIssue, User,
 };
 
+use crate::proposal_state::{parse_proposal_snapshot_marker, strip_proposal_snapshot_marker};
 use crate::{
     is_valid_deterministic_slug, validate_deterministic_slug, CompiledProfileManifest,
     ConversationId, ConversationProfileId, ConversationTurn, InteractionError, Participant,
+    Proposal,
 };
 
 /// Default number of recent Forge-backed turns supplied to a responder.
@@ -124,6 +126,7 @@ pub struct ForgeTranscript {
     human_user: User,
     agent_user: User,
     turns: Vec<ConversationTurn>,
+    latest_proposals: Vec<Proposal>,
 }
 
 impl ForgeTranscript {
@@ -157,6 +160,11 @@ impl ForgeTranscript {
         &self.turns
     }
 
+    /// Latest durable proposals reconstructed from the newest agent reply marker.
+    pub fn latest_proposals(&self) -> &[Proposal] {
+        &self.latest_proposals
+    }
+
     pub(crate) fn push_turn(&mut self, turn: ConversationTurn, limit: usize) {
         self.turns.push(turn);
         trim_turns(&mut self.turns, limit);
@@ -187,7 +195,8 @@ where
         Some(number) => resume_transcript(human_forge, &repository, number, config).await?,
         None => create_transcript(human_forge, &repository, config).await?,
     };
-    let turns = load_recent_turns(human_forge, &issue, &human_user, &agent_user, config).await?;
+    let (turns, latest_proposals) =
+        load_recent_turns(human_forge, &issue, &human_user, &agent_user, config).await?;
     Ok(ForgeTranscript {
         repository,
         issue,
@@ -195,6 +204,7 @@ where
         human_user,
         agent_user,
         turns,
+        latest_proposals,
     })
 }
 
@@ -286,23 +296,32 @@ async fn load_recent_turns<F: Forge + ?Sized>(
     human: &User,
     agent: &User,
     config: &ForgeTranscriptConfig,
-) -> Result<Vec<ConversationTurn>, InteractionError> {
+) -> Result<(Vec<ConversationTurn>, Vec<Proposal>), InteractionError> {
     let comments = forge.list_issue_comments(&transcript.id).await?;
     let mut turns = Vec::new();
+    let mut latest_proposals = Vec::new();
     for comment in comments {
         let participant = if comment.author_id == human.id {
             Some(config.human_participant.clone())
         } else if comment.author_id == agent.id {
+            if let Some(proposals) =
+                parse_proposal_snapshot_marker(&config.marker_namespace, &comment.body)?
+            {
+                latest_proposals = proposals;
+            }
             Some(config.agent_participant.clone())
         } else {
             None
         };
         if let Some(participant) = participant {
-            turns.push(ConversationTurn::new(participant, comment.body));
+            turns.push(ConversationTurn::new(
+                participant,
+                strip_proposal_snapshot_marker(&config.marker_namespace, &comment.body),
+            ));
         }
     }
     trim_turns(&mut turns, config.recent_turn_limit);
-    Ok(turns)
+    Ok((turns, latest_proposals))
 }
 
 pub(crate) fn trim_turns(turns: &mut Vec<ConversationTurn>, limit: usize) {

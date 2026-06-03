@@ -17,7 +17,7 @@ use temper_forge::{Forge, ForgeError, Issue, ItemNumber, Repository, RepositoryP
 use temper_interaction::{
     find_issue_by_marker as find_interaction_issue_by_marker,
     parse_transcript_session_key as parse_interaction_transcript_session_key,
-    render_filing_marker as render_interaction_filing_marker,
+    render_acceptance_marker as render_interaction_acceptance_marker,
     render_transcript_marker as render_interaction_transcript_marker, CompiledProfileManifest,
     ConversationId, ConversationReply, ForgeInteractionSession, ForgeSessionConfig,
     ForgeSessionOpenOptions, InteractionError, InteractiveResponder, IssueProposal,
@@ -384,10 +384,11 @@ where
             },
         )
         .await?;
+        let latest_drafts = product_drafts_from_proposals(inner.latest_proposals())?;
         Ok(Self {
             inner,
             profile,
-            latest_drafts: Vec::new(),
+            latest_drafts,
         })
     }
 
@@ -493,8 +494,18 @@ where
 fn product_response_from_reply(
     reply: &ConversationReply,
 ) -> Result<ProductManagerResponse, ProductChatError> {
-    let drafts = reply
-        .proposals
+    let response = ProductManagerResponse {
+        reply: reply.message.clone(),
+        drafts: product_drafts_from_proposals(&reply.proposals)?,
+    };
+    response.validate()?;
+    Ok(response)
+}
+
+fn product_drafts_from_proposals(
+    proposals: &[Proposal],
+) -> Result<Vec<ProductManagerDraftIssue>, ProductChatError> {
+    proposals
         .iter()
         .filter_map(|proposal| match proposal.issue_payload() {
             Ok(Some(issue)) => Some(Ok(ProductManagerDraftIssue::from_issue_proposal(
@@ -504,13 +515,7 @@ fn product_response_from_reply(
             Ok(None) => None,
             Err(error) => Some(Err(ProductChatError::from(error))),
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let response = ProductManagerResponse {
-        reply: reply.message.clone(),
-        drafts,
-    };
-    response.validate()?;
-    Ok(response)
+        .collect()
 }
 
 pub async fn find_issue_by_marker<F: Forge + ?Sized>(
@@ -533,14 +538,26 @@ pub fn parse_transcript_session_key(body: &str) -> Option<String> {
 
 pub fn render_filing_marker(session_key: &str, draft_slug: &str) -> String {
     let manifest = expect_product_profile_manifest();
-    let marker_namespace = manifest
+    let (marker_namespace, marker_key) = manifest
         .acceptance_actions
         .iter()
-        .flat_map(|action| action.effects.iter())
-        .map(|effect| match effect {
-            temper_interaction::AcceptanceEffect::CreateIssue(effect) => effect.marker_namespace(),
+        .flat_map(|action| {
+            action
+                .effects
+                .iter()
+                .map(move |effect| (action.id.as_str(), effect))
         })
-        .next()
-        .unwrap_or(&manifest.transcript.marker_namespace);
-    render_interaction_filing_marker(marker_namespace, session_key, draft_slug)
+        .find_map(|(action_id, effect)| match effect {
+            temper_interaction::AcceptanceEffect::CreateIssue(effect) => Some((
+                effect.marker_namespace(),
+                effect.marker_key().unwrap_or(action_id),
+            )),
+            temper_interaction::AcceptanceEffect::AddTranscriptComment(_) => None,
+        })
+        .unwrap_or((&manifest.transcript.marker_namespace, "file"));
+    render_interaction_acceptance_marker(
+        marker_namespace,
+        marker_key,
+        &format!("{session_key}:{draft_slug}"),
+    )
 }

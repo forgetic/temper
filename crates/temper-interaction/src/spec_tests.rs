@@ -114,7 +114,10 @@ fn generic_non_product_profile_validates() {
         profile.proposal_kinds()[0].payload(),
         ProposalPayloadContract::IssueDraft
     );
-    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions()[0].effects()[0];
+    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions()[0].effects()[0]
+    else {
+        panic!("first generic effect creates an issue")
+    };
     assert_eq!(effect.labels(), &["support-intake".to_string()]);
     assert_eq!(effect.backlink().unwrap().label(), "Transcript");
 }
@@ -131,7 +134,10 @@ fn product_manager_fixture_validates() {
     assert_eq!(profile.transcript().labels(), &["product".to_string()]);
     assert_eq!(profile.transcript().marker_namespace(), "product-chat");
     assert_eq!(profile.commands()[0].aliases(), &["/file".to_string()]);
-    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions()[0].effects()[0];
+    let AcceptanceEffect::CreateIssue(effect) = &profile.acceptance_actions()[0].effects()[0]
+    else {
+        panic!("product fixture first effect creates an issue")
+    };
     assert_eq!(effect.labels(), &["untriaged".to_string()]);
 }
 

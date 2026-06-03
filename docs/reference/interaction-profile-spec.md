@@ -44,10 +44,20 @@ Each profile declares:
 - `acceptance_actions`: explicit proposal-acceptance policy, idempotency key
   template, and a closed effect list.
 
-Phase 1's closed effect set contains `create_issue`, with title/body templates,
-labels, marker namespace, and optional transcript backlink metadata. This can
-represent the current dogfood issue-filing behavior without making
-`product-manager` a production constant.
+The closed effect set contains:
+
+- `create_issue`: creates a Forge issue using title/body/label/assignee
+  templates, a marker namespace, optional marker key, and optional transcript
+  backlink metadata.
+- `add_transcript_comment`: appends an idempotent comment to the transcript using
+  a body template, marker namespace, and optional marker key.
+
+This can represent the current dogfood issue-filing behavior without making
+`product-manager` a production constant. Templates currently support
+`${conversation.id}`, `${conversation.transcript_url}`, `${proposal.id}`,
+`${proposal.kind}`, `${proposal.title}`, `${proposal.summary}`,
+`${proposal.payload.<field>}`, `${human.handle}`, `${acceptance.action_id}`,
+`${idempotency.key}`, and `${effect.marker}`.
 
 ## Validation contract
 
@@ -83,10 +93,23 @@ meaning.
 - `AcceptanceManifest`: accepted-action id, proposal kind, explicit acceptance
   policy, idempotency key template, and declared effects.
 
-Forge transcript/session configs can be built from a compiled profile manifest.
-The current issue-intake session path reads created-issue labels and marker
-namespace from the manifest's `create_issue` effect; generic effect execution is
-left to a later phase.
+Forge transcript/session configs are built from compiled profile manifests. The
+`AcceptanceExecutor` consumes a manifest, transcript state, selected proposal id,
+Forge handle, and durable proposal data. It reloads the repository and transcript
+issue before mutating, renders the declared idempotency key, searches for hidden
+markers before create/append operations, and returns a typed accepted target. If
+an effect omits `marker_key`, the acceptance action id is used; the product
+fixture declares `marker_key: "file"` to preserve its historical hidden marker.
+
+## Durable proposal state
+
+Agent transcript comments include a human-readable proposal summary plus a hidden
+`temper:<marker-namespace>-proposals-v1` marker containing a hex-encoded JSON
+proposal snapshot. On resume, the Forge-backed transcript loader reads the
+newest agent snapshot, validates proposal ids/payloads, strips the hidden marker
+from responder-facing turns, and repopulates the latest proposal list. A restarted
+service can therefore resume a transcript issue, list the latest proposals, and
+accept one without relying on the old process cache.
 
 ## Fixture
 
@@ -97,3 +120,5 @@ contract:
 
 It declares the `product` transcript label, `untriaged` filed-issue label,
 `/file` alias, `issue` proposal kind, and explicit issue-proposal acceptance.
+The `/file` text is transport alias data; acceptance executes the generic
+`accept_proposal` action and manifest effects.

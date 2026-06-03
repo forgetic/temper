@@ -6,10 +6,11 @@ typed conversation/profile/proposal ids, participants, turns, wire-serializable
 requests/replies, inert proposals, deterministic proposal-id validation,
 user-defined interaction profile spec validation and compilation, the object-safe
 responder adapter trait, the provider-neutral process responder adapter, Forge-backed
-transcript/session helpers, explicit idempotent issue-proposal acceptance, and
-transport-facing command/event types with a small in-process event log for
-adapters. See [Interaction profile spec](interaction-profile-spec.md) for the
-raw-to-validated profile contract.
+transcript/session helpers, durable proposal snapshots, manifest-driven explicit
+acceptance execution, and transport-facing command/event types with a small
+in-process event log for adapters. See
+[Interaction profile spec](interaction-profile-spec.md) for the raw-to-validated
+profile contract.
 
 ## Scope
 
@@ -55,10 +56,13 @@ is the process protocol using the same serialized request/reply types; see
   only a cache.
 - **Proposal**: a typed, serializable suggested action with stable identity,
   display text, and profile-specific payload. Proposals are inert until accepted.
+  Agent replies persist a hidden proposal snapshot in the transcript so latest
+  proposals can be reconstructed after restart.
 - **Proposal acceptance**: a narrow command that records explicit acceptance,
   reloads current durable state, validates the proposal against profile policy,
-  and applies the allowed mutation idempotently. Issue-intake acceptance searches
-  for a hidden marker before creating a labeled workflow intake issue.
+  and applies only declared manifest effects idempotently. Issue creation and
+  transcript acceptance comments search hidden markers before appending or
+  creating anything.
 - **Process responder adapter**: provider-neutral glue in `temper-interaction`
   that invokes an external command with a serialized `ConversationRequest`,
   reads one serialized `ConversationReply`, enforces timeout/exit/parse errors,
@@ -110,7 +114,7 @@ written against the event schema before a streaming implementation lands.
   can run out of process without weakening Temper's authority boundary.
 - A proposal is never applied without explicit human acceptance.
 - Proposal acceptance is idempotent and uses stable correlation markers where it
-  creates Forge artifacts.
+  creates Forge artifacts or appends transcript acceptance comments.
 - Acceptance reloads current Forge state before mutating, so stale transport or
   session-cache data cannot authorize changes.
 - Interactive profiles are not workflow roles by default and are not inserted

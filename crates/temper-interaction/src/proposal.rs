@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use temper_forge::{CreateIssue, Forge, Issue, IssueQuery, Repository};
 
+use crate::acceptance::IssueAcceptanceOutcome;
 use crate::error::InteractionError;
 use crate::transcript::{render_filing_marker, validate_marker_namespace};
 use crate::types::{ConversationId, ConversationReply, ProposalId, ProposalKind};
@@ -103,7 +104,8 @@ impl Proposal {
     }
 }
 
-/// Profile configuration for filing issue-intake proposals.
+/// Deprecated compatibility configuration for filing issue-intake proposals.
+/// Prefer compiled acceptance manifests with [`crate::AcceptanceExecutor`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IssueIntakeAcceptanceConfig {
     /// Hidden marker namespace used for idempotent issue creation.
@@ -153,20 +155,12 @@ impl IssueIntakeAcceptanceConfig {
     }
 }
 
-/// Result of accepting an issue proposal.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IssueAcceptanceOutcome {
-    /// Existing or newly-created issue.
-    pub issue: Issue,
-    /// Whether this acceptance call created the issue.
-    pub created: bool,
-}
-
-/// Idempotently files an issue proposal as a normal workflow intake issue.
+/// Deprecated compatibility helper that files an issue proposal as workflow intake.
 ///
 /// The helper searches for the hidden correlation marker before creating the
 /// issue. Repeating the same acceptance returns the existing issue instead of
-/// creating a duplicate.
+/// creating a duplicate. Prefer compiled acceptance manifests with
+/// [`crate::AcceptanceExecutor`].
 pub async fn accept_issue_intake_proposal<F: Forge + ?Sized>(
     forge: &F,
     repository: &Repository,

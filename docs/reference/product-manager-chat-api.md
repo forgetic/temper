@@ -137,7 +137,8 @@ Request:
 ```
 
 The session id is the transcript correlation key. Sessions are in-memory for the
-running service; after restart, resume by transcript issue number.
+running service; after restart, resume by transcript issue number. Latest draft
+proposals are reconstructed from the newest agent transcript marker.
 
 ### `GET /sessions/{id}`
 
@@ -173,8 +174,10 @@ Response (`200`):
 
 Slash commands are handled locally before the LLM sees a turn. In particular,
 posting `{"message":"/help"}` returns the command list in `reply`; it is not
-mirrored to the transcript and does not call the product-manager responder. Only
-explicit acceptance through the file endpoint creates workflow intake issues.
+mirrored to the transcript and does not call the product-manager responder. The
+`/file` text is the product profile's command-manifest alias for generic
+`accept_proposal`; only explicit acceptance through the file endpoint creates
+workflow intake issues.
 
 ### `POST /sessions/{id}/drafts/{slug}/file`
 

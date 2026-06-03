@@ -308,6 +308,8 @@ impl ValidatedAcceptanceActionDeclaration {
 pub enum AcceptanceEffect {
     /// Create a Forge issue from an accepted proposal.
     CreateIssue(CreateIssueEffect),
+    /// Add an idempotent comment to the transcript issue.
+    AddTranscriptComment(AddTranscriptCommentEffect),
 }
 
 /// Validated create-issue effect.
@@ -316,7 +318,9 @@ pub struct CreateIssueEffect {
     pub(crate) title: String,
     pub(crate) body_template: String,
     pub(crate) labels: Vec<String>,
+    pub(crate) assignees: Vec<String>,
     pub(crate) marker_namespace: String,
+    pub(crate) marker_key: Option<String>,
     pub(crate) backlink: Option<BacklinkPolicy>,
 }
 
@@ -336,14 +340,49 @@ impl CreateIssueEffect {
         &self.labels
     }
 
+    /// Returns assignee user ids applied to the created issue.
+    pub fn assignees(&self) -> &[String] {
+        &self.assignees
+    }
+
     /// Returns the marker namespace used for idempotency.
     pub fn marker_namespace(&self) -> &str {
         &self.marker_namespace
     }
 
+    /// Returns the optional marker key used for idempotency.
+    pub fn marker_key(&self) -> Option<&str> {
+        self.marker_key.as_deref()
+    }
+
     /// Returns optional backlink metadata.
     pub fn backlink(&self) -> Option<&BacklinkPolicy> {
         self.backlink.as_ref()
+    }
+}
+
+/// Validated transcript-comment effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddTranscriptCommentEffect {
+    pub(crate) body_template: String,
+    pub(crate) marker_namespace: String,
+    pub(crate) marker_key: Option<String>,
+}
+
+impl AddTranscriptCommentEffect {
+    /// Returns the transcript comment body template.
+    pub fn body_template(&self) -> &str {
+        &self.body_template
+    }
+
+    /// Returns the marker namespace used for comment idempotency.
+    pub fn marker_namespace(&self) -> &str {
+        &self.marker_namespace
+    }
+
+    /// Returns the optional marker key used for comment idempotency.
+    pub fn marker_key(&self) -> Option<&str> {
+        self.marker_key.as_deref()
     }
 }
 

@@ -28,11 +28,11 @@ fn product_chat_compatibility_config_comes_from_fixture_manifest() {
         config.transcript.recent_turn_limit,
         manifest.profile.recent_turn_limit
     );
+    assert_eq!(config.profile, manifest);
 
-    let AcceptanceEffect::CreateIssue(effect) = &manifest.acceptance_actions[0].effects[0];
-    assert_eq!(config.issue_intake.issue_labels, effect.labels());
-    assert_eq!(
-        config.issue_intake.marker_namespace,
-        effect.marker_namespace()
-    );
+    let AcceptanceEffect::CreateIssue(effect) = &manifest.acceptance_actions[0].effects[0] else {
+        panic!("product fixture first effect creates an issue")
+    };
+    assert_eq!(effect.labels(), ["untriaged"]);
+    assert_eq!(effect.marker_namespace(), "product-chat");
 }

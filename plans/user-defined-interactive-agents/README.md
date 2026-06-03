@@ -177,14 +177,20 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    `cargo test -p temper-production product_chat`; `cargo dev-clippy`;
    `cargo dev-check`.
 
-3. ☐ **Phase 3 — Generic durable proposals and acceptance transactions.**
+3. ☑ **Phase 3 — Generic durable proposals and acceptance transactions.**
    `prompts/phase-3-generic-proposals-and-acceptance.md`
 
-   Replace hard-coded issue-intake acceptance with a generic acceptance executor
-   over a closed effect set. Persist or reconstruct proposals durably from the
-   transcript so service restarts can still list/accept current proposals. Keep
-   issue creation as one declared effect, with labels/templates/idempotency coming
-   from the profile manifest.
+   Done: `temper-interaction` now has a manifest-driven `AcceptanceExecutor`, a
+   closed effect set for `create_issue` plus idempotent transcript acceptance
+   comments, template-rendered title/body/label/assignee fields, generic hidden
+   acceptance markers from declared idempotency keys, and typed accepted target
+   results. Agent replies persist hidden proposal snapshots in transcript
+   comments, so restart/resume can reconstruct latest proposals and accept them
+   without process cache. Product-chat compatibility routes now execute through
+   the generic manifest path while `/file` remains only the fixture command alias.
+   Validation run: `cargo fmt --all`; `cargo test -p temper-interaction
+   --all-targets`; `cargo test -p temper-production product_chat`;
+   `cargo dev-clippy`; `cargo dev-check`.
 
 4. ☐ **Phase 4 — Generic deployable interaction service and transport commands.**
    `prompts/phase-4-generic-service-and-transports.md`

@@ -9,11 +9,11 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 
 use crate::{
-    is_valid_proposal_slug, parse_transcript_session_key, render_filing_marker,
+    is_valid_proposal_slug, parse_transcript_session_key, render_acceptance_marker,
     render_transcript_marker, ConversationId, ConversationProfileId, ConversationReply,
     ConversationRequest, ConversationTurn, ForgeInteractionSession, ForgeSessionConfig,
-    ForgeSessionOpenOptions, ForgeTranscriptConfig, InteractionError, InteractiveResponder,
-    IssueIntakeAcceptanceConfig, IssueProposal, Participant, Proposal, ProposalId, ProposalKind,
+    ForgeSessionOpenOptions, InteractionError, InteractiveResponder, IssueProposal, Participant,
+    Proposal, ProposalId, ProposalKind, RawInteractionSpec,
 };
 
 const TRANSCRIPT_LABEL: &str = "product";
@@ -33,23 +33,38 @@ fn user(handle: &str) -> User {
     }
 }
 
+fn product_profile_manifest() -> crate::CompiledProfileManifest {
+    let raw: RawInteractionSpec = serde_json::from_str(include_str!(
+        "../fixtures/product-manager-interaction-spec.json"
+    ))
+    .expect("fixture deserializes");
+    raw.validate()
+        .expect("fixture validates")
+        .compile()
+        .profiles()[0]
+        .clone()
+}
+
 fn config() -> ForgeSessionConfig {
-    let transcript = ForgeTranscriptConfig::new(
-        ConversationProfileId::new("product-manager").expect("valid profile"),
-        TRANSCRIPT_LABEL,
-        "Product conversation",
+    ForgeSessionConfig::from_profile_manifest(&product_profile_manifest())
+        .expect("valid session config")
+}
+
+fn acceptance_marker(conversation_id: &str, proposal_id: &str) -> String {
+    let manifest = product_profile_manifest();
+    let marker_key = manifest.acceptance_actions[0]
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::AcceptanceEffect::CreateIssue(effect) => effect.marker_key(),
+            crate::AcceptanceEffect::AddTranscriptComment(_) => None,
+        })
+        .unwrap_or_else(|| manifest.acceptance_actions[0].id.as_str());
+    render_acceptance_marker(
         MARKER_NAMESPACE,
-        "pc",
-        Participant::human("human"),
-        Participant::agent("product-manager"),
+        marker_key,
+        &format!("{conversation_id}:{proposal_id}"),
     )
-    .expect("valid transcript config");
-    ForgeSessionConfig::new(
-        transcript,
-        IssueIntakeAcceptanceConfig::new(MARKER_NAMESPACE, INTAKE_LABEL)
-            .expect("valid intake config"),
-    )
-    .expect("valid session config")
 }
 
 async fn seeded() -> (MemoryForge, MemoryForge, Repository) {
@@ -290,7 +305,7 @@ fn forge_marker_render_and_parse() {
         Some("pc-abc".into())
     );
     assert_eq!(
-        render_filing_marker(MARKER_NAMESPACE, "pc-abc", "terminal-chat-mvp"),
+        acceptance_marker("pc-abc", "terminal-chat-mvp"),
         "<!-- temper:product-chat-file=pc-abc:terminal-chat-mvp -->"
     );
 }
@@ -329,8 +344,7 @@ async fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
     assert!(filed.created);
     assert_eq!(filed.issue.labels, vec![INTAKE_LABEL.to_string()]);
     assert!(filed.issue.body.contains("requested-by: human"));
-    assert!(filed.issue.body.contains(&render_filing_marker(
-        MARKER_NAMESPACE,
+    assert!(filed.issue.body.contains(&acceptance_marker(
         session.conversation_id().as_str(),
         "terminal-chat-mvp"
     )));
