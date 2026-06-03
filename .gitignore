@@ -21,6 +21,3 @@ __pycache__/
 !/plans/user-defined-interactive-agents/README.md
 !/plans/user-defined-interactive-agents/prompts/
 !/plans/user-defined-interactive-agents/prompts/*.md
-/examples/dogfood/logs/
-/examples/dogfood/run/
-/examples/dogfood/secrets/

@@ -6,23 +6,24 @@
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
 > swapped to real**. Temper's fixture workers use deterministic fake agents;
 > real LLM decisions live in Smith's process-responder e2e. The
-> production reference-delivery demo now carries the ADR 0009 webhook trigger;
-> the separate long-poll wakeup regression covers that path. The design rationale
+> `examples/reference-delivery` launcher uses the same fake-agent + real
+> Forgejo/runner shape and carries the webhook trigger; the separate long-poll
+> wakeup regression covers that path. The design rationale
 > (topology, real CI, per-token identity, webhook wakeups) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
 > [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
 
 This fixture runs a **real Forgejo** server locally so the reference-delivery
 workflow can be exercised against the `temper-forge-forgejo` backend instead of
-the in-memory/filesystem backends. Like the `temper-forge-forgejo` live tests,
-everything here is `#[ignore]`d **and** gated behind an environment variable, so
-a plain `cargo test` never downloads a binary or opens a socket.
+the in-memory/filesystem backends. Everything here is `#[ignore]`d, so a plain
+`cargo test` never opens a socket. No opt-in environment variable is required,
+but the pinned Forgejo binaries must already be cached under `.cache/forgejo/`
+or provided through `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY`.
 
 ## One-line command (the full test)
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
 This boots a Forgejo server **and** a host-mode `forgejo-runner`, provisions, and
@@ -30,6 +31,11 @@ converges all five reference-delivery scenarios across real OS processes. It
 spawns real processes and executes CI **on this host**, so run it only where that
 is acceptable. Budget several minutes. The per-phase smoke tests below build up
 to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
+If the binary cache is missing, first run:
+
+```sh
+cargo test -p temper-forgejo-fixture --test cache -- --ignored
+```
 
 ## Real LLM process proof
 
@@ -66,8 +72,7 @@ with `pkill -f forgejo` / `pkill -f temper-testing-worker` and
 ## Smoke test (Phase 1)
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_server -- --ignored
+cargo test -p temper-testing --test forgejo_server -- --ignored
 ```
 
 This boots a throwaway Forgejo on an ephemeral port against a fresh SQLite data
@@ -77,8 +82,7 @@ data dir on drop.
 ## Runner smoke test (Phase 1b)
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_runner -- --ignored
+cargo test -p temper-testing --test forgejo_runner -- --ignored
 ```
 
 CI is **real**: this boots the server plus a host-mode `forgejo-runner`
@@ -99,8 +103,7 @@ only where that is acceptable.
 ## Provisioning + identity (Phase 2)
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_provision -- --ignored
+cargo test -p temper-testing --test forgejo_provision -- --ignored
 ```
 
 `temper_testing::forgejo_server::provision(&server)` turns a freshly-booted
@@ -134,14 +137,14 @@ and provisioning errors carry only a status + body snippet.
 
 ### The CI fail→pass mechanism
 
-The committed workflow is host-mode (`runs-on: host`) and its `build` job runs
-`test -f ci-ok`. A PR head **without** the `ci-ok` sentinel file fails the job;
-the engineer's **fix commit** adds `ci-ok`, so the re-run on the new head SHA
-passes. Because a Forgejo commit status is keyed by SHA, the fail and the pass
-live on two different head SHAs — exactly the two verdicts the
-`ci_fails_then_passes` scenario asserts. Steps are trivial (`echo`, `test -f`);
-no toolchains. Creating the head branch + fix commit before opening the PR is
-Phase 2b.
+The committed workflow is host-mode (`runs-on: host`) and its `build` job reads
+the message of `GITHUB_SHA` through Forgejo's commit API. A PR head **without**
+the `[ci-pass]` marker fails the job; the engineer's **fix commit** carries the
+marker, so the re-run on the new head SHA passes. Because a Forgejo commit status
+is keyed by SHA, the fail and the pass live on two different head SHAs — exactly
+the two verdicts the `ci_fails_then_passes` scenario asserts. Steps are trivial
+(no toolchains and no checkout). Creating the head branch + fix commit before
+opening the PR is Phase 2b.
 
 Provisioning is async (`#[tokio::test]`) because the label upsert goes through
 the async backend. The server is booted on a blocking thread (`spawn_blocking`)
@@ -151,8 +154,7 @@ an async context" guard.
 ## PR-prep: making a head branch real before opening a PR (Phase 2b)
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_pr_prep -- --ignored
+cargo test -p temper-testing --test forgejo_pr_prep -- --ignored
 ```
 
 On the filesystem/memory backends the fake engineer opens a PR with a head
@@ -176,15 +178,14 @@ prep file (`422`) are tolerated as "already prepped", so a re-attempted worker
 tick does not error. The filesystem backend never calls it and keeps working
 unchanged (the `tests/multiprocess.rs` rehearsal is untouched).
 
-The gated test proves the full contract: without prep `create_pull_request` 404s;
+The ignored test proves the full contract: without prep `create_pull_request` 404s;
 after prep it succeeds and the PR becomes `mergeable` (Forgejo computes
 mergeability asynchronously, so the test polls); and re-running prep is a no-op.
 
 ## The multi-process test (Phase 4)
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
 This is the Forgejo twin of `tests/multiprocess.rs`: the **same** one-process-per-part
@@ -217,15 +218,13 @@ has no `actions/checkout` offline.
 Single repo:
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
 ```
 
 Multi repo, one fixed worker set:
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
 ```
 
 These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
@@ -245,16 +244,18 @@ reasons as the multi-process suite.
 
 This repository has **no in-repo CI config**, so there is no committed job to
 edit; instead, configure your CI system with a **dedicated job**, separate from
-the default hermetic suite (which must keep running without this gate). The
-default job runs plain `cargo test` (the Forgejo test is `#[ignore]`d **and**
-env-gated, so it never fires there). The dedicated job:
+the default hermetic suite. The default job runs plain `cargo test` (the Forgejo
+tests are `#[ignore]`d, so they never fire there). The dedicated job:
 
-1. **Provides the two pinned binaries.** Either let the first run download +
-   checksum them into `.cache/forgejo/` (needs network to Codeberg /
-   code.forgejo.org), or pre-stage them and point
+1. **Provides the two pinned binaries.** Either run the cache helper first
+   (needs network to Codeberg / code.forgejo.org) or pre-stage them and point
    `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY` at the absolute
    paths (the offline/sandboxed path — see [Environment knobs](#environment-knobs)).
    Cache `.cache/forgejo/` across runs to avoid re-downloading.
+
+   ```sh
+   cargo test -p temper-forgejo-fixture --test cache -- --ignored
+   ```
 2. **Runs on a host that allows host-mode jobs.** The `forgejo-runner` registers
    with `--labels host:host` and executes workflow steps **directly on the CI
    host** (no containers), so the job must run on a runner that permits spawning
@@ -263,8 +264,7 @@ env-gated, so it never fires there). The dedicated job:
 3. **Invokes exactly:**
 
    ```sh
-   TEMPER_FORGEJO_E2E=1 \
-     cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+   cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
    ```
 
    `--test-threads=1` keeps the five per-scenario servers from running at once.
@@ -276,9 +276,10 @@ the host can boot a server + runner before the full suite.
 
 ## The pinned binaries
 
-The first gated run downloads the pinned Forgejo **and** `forgejo-runner`
+The ignored cache helper downloads the pinned Forgejo **and** `forgejo-runner`
 binaries into `.cache/forgejo/` (gitignored) and verifies each SHA-256 before
-use; later runs reuse them.
+use. The regular ignored Forgejo tests require the cache (or explicit binary
+overrides) and fail with a cache-population hint when it is absent.
 
 | Binary | Version | SHA-256 | Source |
 | --- | --- | --- | --- |
@@ -294,12 +295,11 @@ The server uses the `TEMPER_FORGEJO_*` namespace; the runner mirrors it under
 
 | Variable | Effect |
 | --- | --- |
-| `TEMPER_FORGEJO_E2E=1` | opt in (required); without it the tests no-op |
-| `TEMPER_FORGEJO_BINARY` | absolute path to a pre-downloaded **server** binary; skips its download and checksum (operator vouches for it) |
+| `TEMPER_FORGEJO_BINARY` | absolute path to a pre-downloaded **server** binary; skips the cache lookup and checksum (operator vouches for it) |
 | `TEMPER_FORGEJO_VERSION` | override the pinned server version in the default download URL |
 | `TEMPER_FORGEJO_URL` | override the server download URL (checked only when paired with `TEMPER_FORGEJO_SHA256`) |
 | `TEMPER_FORGEJO_SHA256` | override the expected server checksum |
-| `TEMPER_FORGEJO_RUNNER_BINARY` | absolute path to a pre-downloaded **runner** binary; skips its download and checksum |
+| `TEMPER_FORGEJO_RUNNER_BINARY` | absolute path to a pre-downloaded **runner** binary; skips the cache lookup and checksum |
 | `TEMPER_FORGEJO_RUNNER_VERSION` | override the pinned runner version in the default download URL |
 | `TEMPER_FORGEJO_RUNNER_URL` | override the runner download URL (checked only when paired with `TEMPER_FORGEJO_RUNNER_SHA256`) |
 | `TEMPER_FORGEJO_RUNNER_SHA256` | override the expected runner checksum |
@@ -310,7 +310,7 @@ overrides at pre-downloaded binaries.
 
 ## Why blocking HTTP in Temper
 
-Temper downloads the binary and polls readiness with a **blocking**
-`reqwest` client. The async `temper-forge-forgejo` backend needs a Tokio
-reactor, so driving it against the live server happens in the multi-process test
-(under an async runtime), not in the Phase 1 lifecycle code.
+The cache helper downloads binaries and the fixture polls readiness with a
+**blocking** `reqwest` client. The async `temper-forge-forgejo` backend needs a
+Tokio reactor, so driving it against the live server happens in the e2e tests
+(under an async runtime), not in the lifecycle code itself.

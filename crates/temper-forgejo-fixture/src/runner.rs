@@ -1,4 +1,4 @@
-//! A throwaway, host-mode `forgejo-runner` for the env-gated CI fixture.
+//! A throwaway, host-mode `forgejo-runner` for the ignored CI fixture.
 //!
 //! [`ForgejoRunner::register`] takes a running [`ForgejoServer`], obtains a
 //! runner registration token via the server CLI, registers a **host-mode**
@@ -8,10 +8,8 @@
 //! never orphans a runner or leaks its working dir.
 //!
 //! Like [`ForgejoServer`], this is **never** reached by the default test suite:
-//! only an `#[ignore]`d, `TEMPER_FORGEJO_E2E=1`-gated test constructs one. CI
-//! is real here — the runner executes genuine jobs on this host (Phase 0b
-//! findings). Reading the verdict back is a later phase; this fixture only makes
-//! a real runner *run jobs*.
+//! only `#[ignore]`d tests construct one. CI is real here — the runner executes
+//! genuine jobs on this host.
 
 use super::download;
 use super::{ForgejoServer, ServerError};
@@ -82,7 +80,7 @@ impl ForgejoRunner {
     /// `.runner` file there), then spawns `forgejo-runner daemon` from that dir
     /// behind a kill-on-drop guard.
     pub fn register(server: &ForgejoServer) -> Result<Self, RunnerError> {
-        let binary = download::ensure_runner_binary()?;
+        let binary = download::require_runner_binary()?;
         let work_dir = unique_runner_dir();
         let _ = std::fs::remove_dir_all(&work_dir);
         std::fs::create_dir_all(&work_dir)?;

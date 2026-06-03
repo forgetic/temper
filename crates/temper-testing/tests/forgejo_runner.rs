@@ -1,13 +1,11 @@
 //! Phase 1b smoke test: a real host-mode `forgejo-runner` runs a real job.
 //!
-//! `#[ignore]`d **and** gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-//! `cargo test` never downloads a binary, opens a socket, or spawns a runner —
-//! exactly like the Phase 1 server smoke test and the `temper-forge-forgejo`
-//! live tests. Run it with:
+//! `#[ignore]`d, so the default `cargo test` never downloads a binary, opens a
+//! socket, or spawns a runner. No extra environment variable is required; run it
+//! with:
 //!
 //! ```sh
-//! TEMPER_FORGEJO_E2E=1 \
-//!   cargo test -p temper-testing --test forgejo_runner -- --ignored
+//! cargo test -p temper-testing --test forgejo_runner -- --ignored
 //! ```
 //!
 //! It boots a [`ForgejoServer`] + [`ForgejoRunner`] (host mode, no containers),
@@ -23,18 +21,6 @@
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer};
-
-/// Returns whether the env opt-in is present; prints a skip note when not.
-fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        return true;
-    }
-    eprintln!(
-        "skipping Forgejo runner e2e smoke test: set TEMPER_FORGEJO_E2E=1 to enable \
-         (downloads pinned Forgejo + forgejo-runner binaries and spawns a host-mode runner)"
-    );
-    false
-}
 
 const ADMIN_USER: &str = "temperadmin";
 const ADMIN_PASSWORD: &str = "Sup3rSecret-Phase1b!";
@@ -52,12 +38,8 @@ jobs:\n\
 \u{20}\u{20}\u{20}\u{20}\u{20}\u{20}- run: exit 1\n";
 
 #[test]
-#[ignore = "boots a real Forgejo + host-mode runner; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
 fn runner_runs_failing_job_and_reports_failure() {
-    if !enabled() {
-        return;
-    }
-
     let server = ForgejoServer::start().expect("forgejo server boots");
     let base = server.base_url().to_string();
 

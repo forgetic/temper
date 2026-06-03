@@ -94,8 +94,8 @@ portable `ForgeError`; the path never guesses a pass/fail verdict.
   `docs/reference/forgejo-backend.md`.
 - Offline contract tests cover the login handshake (CSRF extraction, cookie
   storage, re-login on bounce), the live-view JSON → `CiJob` mapping, and the
-  REST-first/UI-fallback decision. An `#[ignore]`d, `TEMPER_FORGEJO_E2E=1`-gated
-  e2e test reads a real runner-produced `Failure` verdict through the web UI.
+  REST-first/UI-fallback decision. An ignored local-Forgejo e2e test reads a
+  real runner-produced `Failure` verdict through the web UI.
 
 ## Alternatives considered
 

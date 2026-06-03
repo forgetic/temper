@@ -39,9 +39,9 @@ crate** — only a dev-dependency or a dependency of other test crates.
   workflow semantics here.** Derive the worker set from the compiled workflow and
   `RunnerConfig`; never hardcode role or queue names.
 - Determinism split (see "Default-run vs `#[ignore]`" rationale): deterministic
-  correctness stays in the default suite; the sleepy, process-spawning rehearsal
-  is `#[ignore]`d and run via a how-to / dedicated CI job, matching the existing
-  env-gated `#[ignore]`d Forgejo live-test precedent.
+  correctness stays first-line, but the fast filesystem process-spawning
+  rehearsal now also runs in the default suite. Slower real-Forgejo process
+  tests remain `#[ignore]`d and run via a how-to / dedicated CI job.
 
 ## Phases
 
@@ -117,13 +117,12 @@ Status legend: ☐ pending · ☑ done.
 
 All five phases are ☑. `temper-testing` houses the reusable reference-delivery
 fakes; the `temper-testing-worker` binary exists with `--architect`/`--reviewer`/
-`--ci` behavior flags and `--clock deterministic|wall`; and the `#[ignore]`d
-`tests/multiprocess.rs` converges all four reference-delivery scenarios (happy
-path, changes-requested return routing, CI fail/recover, and cross-process
-mechanical dependency unblock) to their asserted end states across real OS
-processes sharing one `FilesystemForge` store. The default suite stays green and
-deterministic. Run the rehearsal with
-`cargo test -p temper-testing --test multiprocess -- --ignored`; see
+`--ci` behavior flags and `--clock deterministic|wall`; and the default-suite
+`tests/multiprocess.rs` converges the reference-delivery scenarios (happy path,
+changes-requested return routing, CI fail/recover, cross-process mechanical
+dependency unblock, and cross-repo fan-out) to their asserted end states across
+real OS processes sharing one `FilesystemForge` store. Run the rehearsal with
+`cargo test -p temper-testing --test multiprocess`; see
 `docs/how-to/run-multiprocess-e2e.md` for how to run it and exactly what to
 change to swap in real pieces.
 

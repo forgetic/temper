@@ -27,7 +27,8 @@ starting servers.
 
 ## Where this is now documented
 
-`examples/reference-delivery/run.sh` refreshes `temper-production` in the
-Cargo development profile by default and checks the provision binary for the
-cross-repo intake flags before booting Forgejo. `examples/reference-delivery/README.md`
-documents the default refresh and the stale-binary troubleshooting path.
+`examples/reference-delivery/run.sh` refreshes the production helper binaries
+and the `temper-testing-worker` fake-agent binary in the Cargo development
+profile by default, then checks CLI compatibility before booting Forgejo.
+`examples/reference-delivery/README.md` documents the default refresh and the
+stale-binary troubleshooting path.

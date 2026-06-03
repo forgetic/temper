@@ -34,7 +34,7 @@ names. Dogfood's example product-manager profile generates that binding for you:
 cd ~/src/rust/smith
 cargo build -p smith-temper-agent-cli --bin smith-product-manager-responder
 
-cd ~/src/rust/temper/examples/dogfood
+cd ~/src/rust/smith/examples/dogfood
 ./run.sh product-chat
 ```
 

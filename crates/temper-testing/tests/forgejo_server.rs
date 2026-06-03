@@ -1,12 +1,10 @@
 //! Phase 1 smoke test for the throwaway Forgejo fixture.
 //!
-//! `#[ignore]`d **and** gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-//! `cargo test` never downloads a binary or opens a socket — exactly like the
-//! `temper-forge-forgejo` live tests. Run it with:
+//! `#[ignore]`d, so the default `cargo test` never downloads a binary or opens a
+//! socket. No extra environment variable is required; run it with:
 //!
 //! ```sh
-//! TEMPER_FORGEJO_E2E=1 \
-//!   cargo test -p temper-testing --test forgejo_server -- --ignored
+//! cargo test -p temper-testing --test forgejo_server -- --ignored
 //! ```
 //!
 //! The first run downloads the pinned Forgejo binary into `.cache/forgejo/`
@@ -22,25 +20,9 @@
 use std::time::Duration;
 use temper_testing::forgejo_server::ForgejoServer;
 
-/// Returns whether the env opt-in is present; prints a skip note when not.
-fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        return true;
-    }
-    eprintln!(
-        "skipping Forgejo e2e smoke test: set TEMPER_FORGEJO_E2E=1 to enable \
-         (downloads a pinned Forgejo binary into .cache/ on first run)"
-    );
-    false
-}
-
 #[test]
-#[ignore = "boots a real Forgejo server; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo server; run with --ignored"]
 fn server_boots_serves_version_and_tears_down() {
-    if !enabled() {
-        return;
-    }
-
     // Booting already polls `/api/v1/version` to readiness; reaching this line
     // proves download → migrate → web → ready all succeeded.
     let server = ForgejoServer::start().expect("forgejo server boots");

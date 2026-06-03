@@ -11,3 +11,5 @@ Use this checklist before editing.
 3. Read task-relevant reference, explanation, how-to, and ADR files before
    editing.
 4. Use `rg` to discover related code and docs.
+5. If the human explicitly asks whether you have questions, answer that before
+   editing. Clarify broad process or testing changes before implementation.

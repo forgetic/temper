@@ -1,38 +1,27 @@
 #!/bin/sh
 # Reference-delivery example — POSIX launcher / teardown.
 #
-# Boots EVERY process of the production topology from development-profile binaries:
-#   1. a throwaway Forgejo server (SQLite, Actions enabled),
-#   2. a host-mode forgejo-runner producing real CI,
-#   3. admin bootstrap + the production provision/seed binary
-#      (org/users/tokens/repo/labels/CI workflow + one cross-repo intake issue),
-#   4. one fixed temper-worker pool (one process per workflow role, plus one
-#      mechanical reconciler) scanning every configured repo — all against
-#      Forgejo with Smith process role decisions and wall time,
-# then tears them all down cleanly on Ctrl-C / signal / `./run.sh stop`.
-#
-# This script targets the operator-facing entry points from temper-production
-# rather than the temper-testing entry points. By default it builds/uses the
-# development-profile binaries under target/debug; override TEMPER_*_BIN if you
-# want prebuilt or release artifacts.
+# Boots a throwaway real Forgejo server, a real host-mode forgejo-runner, and
+# deterministic fake reference-delivery workers (`temper-testing-worker`) against
+# the Forgejo backend. This example intentionally has no Smith/LLM dependency;
+# Smith-backed operator examples live in the Smith checkout.
 #
 # Usage:
 #   ./run.sh [start]          boot everything and block until Ctrl-C / stop-file
 #   ./run.sh validate-webhooks inspect logs from a running/completed long-poll run
-#   ./run.sh validate-multi-repo inspect provisioning + wake logs for all configured repos
+#   ./run.sh validate-multi-repo inspect provisioning + wake logs and Forge state
 #   ./run.sh stop             tear down a previous run via the saved PIDs
 #   ./run.sh help             show this usage
 #
-# Orphan cleanup (lesson 0009) — if a run is force-killed (SIGKILL) the Drop/
-# trap guards do not fire; clean up survivors by hand with:
+# Orphan cleanup (lesson 0009) — if a run is force-killed (SIGKILL) the trap
+# guards do not fire; clean up survivors by hand with:
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
-#       pkill -f temper-worker
+#       pkill -f temper-testing-worker
 #       pkill -f temper-trigger-forgejo
 #       rm -rf examples/reference-delivery/run
 #
-# POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
-# Secrets travel by env or the sourced secrets files, NEVER on a command line.
+# POSIX sh only. Secrets travel by env or sourced secrets files, never argv.
 
 set -eu
 
@@ -61,12 +50,9 @@ ROLES_ENV="$SECRETS_DIR/roles.env"
 WEBHOOK_SECRET_FILE="$SECRETS_DIR/webhook-secret"
 WAKE_SECRET_FILE="$SECRETS_DIR/wake-secret"
 
-# Pinned versions for the bundled throwaway server/runner used by this example.
 FORGEJO_VERSION=7.0.12
 FORGEJO_RUNNER_VERSION=3.5.1
 
-# Throwaway admin identity (this server is killed + wiped on teardown; never a
-# credential that reaches anything real, and never echoed).
 ADMIN_USER=refadmin
 ADMIN_EMAIL=refadmin@example.invalid
 ADMIN_PASSWORD='Ref-Delivery-Admin-1!'
@@ -74,16 +60,12 @@ ADMIN_PASSWORD='Ref-Delivery-Admin-1!'
 log() { printf '[run.sh] %s\n' "$*"; }
 die() { printf '[run.sh] error: %s\n' "$*" >&2; exit 1; }
 
-sleep_short() {
-    sleep 0.2 2>/dev/null || sleep 1
-}
+sleep_short() { sleep 0.2 2>/dev/null || sleep 1; }
 
 DISPLAY_SCRIPT=${TEMPER_REFERENCE_DELIVERY_ORIGINAL:-$SCRIPT_DIR/run.sh}
 
-# Dash reads long-running scripts lazily. If this file is edited while the demo
-# is sleeping in monitor(), the running shell may parse a half-new tail and fail
-# during teardown. Run starts from a private snapshot so source edits/rebuilds do
-# not affect the already-running launcher.
+# Dash reads long-running scripts lazily. Run starts from a private snapshot so
+# source edits/rebuilds do not corrupt a sleeping launcher during teardown.
 if [ "${TEMPER_REFERENCE_DELIVERY_SNAPSHOT:-0}" != "1" ]; then
     case "${1:-start}" in
         start | "")
@@ -104,25 +86,21 @@ usage() {
 usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|smoke-webhooks|stop|help]
 
   start (default)      boot Forgejo + runner, provision every configured repo,
-                       seed the source intake issue, launch one fixed worker pool, then block until
-                       Ctrl-C or the stop-file.
-  validate-webhooks    inspect logs/ and report whether webhook wakes were
-                       registered, accepted, delivered, consumed, and acted on.
-  validate-multi-repo  additionally require every configured repo to appear in
-                       provisioning, trigger, worker startup logs, and the
-                       live Forge state for the cross-repo parent/children.
+                       seed intake work, launch fake-agent workers, then block.
+  validate-webhooks    inspect logs/ for webhook registration, delivery, wakes,
+                       and fake worker progress.
+  validate-multi-repo  additionally require every configured repo in logs and
+                       validate the cross-repo parent/children in live Forge state.
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
-Configuration is read from config/temper.env (no secrets). Concrete LLM
-provider/auth options are passed to Smith as opaque responder arguments; see
-Smith's README.
+Configuration is read from config/temper.env (no secrets). This Temper example
+uses deterministic fake agents and has no Smith/provider-auth dependency.
 EOF
 }
 
 # --- Teardown -----------------------------------------------------------------
 
-# Sends TERM, waits briefly, then KILL. Tolerates a dead/absent pid.
 stop_pid() {
     _pid=$1
     [ -n "$_pid" ] || return 0
@@ -130,13 +108,12 @@ stop_pid() {
     kill -TERM "$_pid" 2>/dev/null || true
     _i=0
     while kill -0 "$_pid" 2>/dev/null && [ "$_i" -lt 20 ]; do
-        sleep 0.2 2>/dev/null || sleep 1
+        sleep_short
         _i=$((_i + 1))
     done
     kill -KILL "$_pid" 2>/dev/null || true
 }
 
-# Stops every pid listed (one per line) in a pid file, then removes it.
 stop_pid_file() {
     _file=$1
     [ -f "$_file" ] || return 0
@@ -146,20 +123,15 @@ stop_pid_file() {
     rm -f "$_file"
 }
 
-# Tears down workers, runner, and server (in that order) and clears run state.
-# Idempotent: safe to call from the EXIT trap and from `./run.sh stop`.
 cleanup() {
     trap - EXIT INT TERM
     log 'tearing down...'
-    # Signal the workers to stop cooperatively first, then hard-stop survivors.
     [ -d "$RUN_DIR" ] && : >"$STOP_FILE" 2>/dev/null || true
     sleep 1
     stop_pid_file "$WORKERS_PID_FILE"
     stop_pid_file "$TRIGGER_PID_FILE"
     stop_pid_file "$RUNNER_PID_FILE"
     stop_pid_file "$SERVER_PID_FILE"
-    # Drop the throwaway server/runner data + sentinel so a re-run starts fresh;
-    # keep logs/ for inspection.
     rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$WAKE_DIR" "$STOP_FILE" \
         "$RUN_DIR/cross-repo-intake.md" "$RUN_DIR"/run.sh.snapshot.* \
         2>/dev/null || true
@@ -172,22 +144,12 @@ cmd_stop() {
     cleanup
 }
 
-# --- Config + secrets ---------------------------------------------------------
+# --- Config -------------------------------------------------------------------
 
-# Config knobs whose pre-existing environment value should win over the file
-# (precedence: CLI/env > config/temper.env > built-in default). The file is
-# the operator's edited config; a `VAR=x ./run.sh` still overrides it.
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
-TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY \
-TEMPER_FORGEJO_RUNNER_BINARY TEMPER_WORKER_BIN TEMPER_PROVISION_BIN \
-TEMPER_TRIGGER_BIN TEMPER_VALIDATE_BIN TEMPER_BUILD_PACKAGE \
-REFERENCE_DELIVERY_ROLE_DECISION SMITH_WORKSPACE_ROOT SMITH_BUILD_PACKAGE \
-SMITH_WORKFLOW_ROLE_DECISION_BIN SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON \
-SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST SMITH_WORKFLOW_ROLE_DECISION_CWD \
-SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS \
-TEMPER_CODING_WORKSPACE_ROOT TEMPER_CODING_WORKSPACE_COMMAND \
-TEMPER_CODING_WORKSPACE_REMOTE TEMPER_CODING_WORKSPACE_PUSH \
-TEMPER_CODING_WORKSPACE_PR_LABELS"
+TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
+TEMPER_TESTING_WORKER_BIN TEMPER_PROVISION_BIN TEMPER_TRIGGER_BIN TEMPER_VALIDATE_BIN \
+TEMPER_BUILD_PRODUCTION TEMPER_BUILD_TESTING FAKE_ARCHITECT FAKE_REVIEWER FAKE_CI_SENTINEL"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -206,9 +168,6 @@ validate_repo_path() {
 
 load_config() {
     [ -f "$CONFIG_DIR/temper.env" ] || die "missing $CONFIG_DIR/temper.env"
-    # Snapshot any pre-existing env values so they survive the file sourcing.
-    # REPOS is special: an intentionally empty `REPOS=` selects legacy
-    # OWNER/NAME mode, so presence matters even when the value is empty.
     _repos_was_set=${REPOS+x}
     _pre_REPOS_VALUE=${REPOS-}
     for _k in $CONFIG_KNOBS; do
@@ -216,12 +175,10 @@ load_config() {
     done
     # shellcheck disable=SC1090
     . "$CONFIG_DIR/temper.env"
-    # Optional operator secret overrides (gitignored).
     if [ -f "$SECRETS_DIR/.env" ]; then
         # shellcheck disable=SC1090
         . "$SECRETS_DIR/.env"
     fi
-    # Re-apply any non-empty pre-existing env value over the file's setting.
     for _k in $CONFIG_KNOBS; do
         eval "_p=\${_pre_$_k}"
         [ -n "$_p" ] && eval "$_k=\$_p"
@@ -236,7 +193,7 @@ load_config() {
     CROSS_REPO_INTAKE=${CROSS_REPO_INTAKE:-auto}
     CROSS_REPO_INTAKE_TITLE=${CROSS_REPO_INTAKE_TITLE:-Coordinate greeting across service and canary}
     BASE_URL=${BASE_URL:-http://127.0.0.1:3000}
-    POLL_MS=${POLL_MS:-2000}
+    POLL_MS=${POLL_MS:-120000}
     RUN_SECS=${RUN_SECS:-600}
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
@@ -244,27 +201,15 @@ load_config() {
     TEMPER_FORGEJO_GOMAXPROCS=${TEMPER_FORGEJO_GOMAXPROCS:-2}
     TEMPER_FORGEJO_BINARY=${TEMPER_FORGEJO_BINARY:-}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
-    TEMPER_WORKER_BIN=${TEMPER_WORKER_BIN:-}
+    TEMPER_TESTING_WORKER_BIN=${TEMPER_TESTING_WORKER_BIN:-}
     TEMPER_PROVISION_BIN=${TEMPER_PROVISION_BIN:-}
     TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
     TEMPER_VALIDATE_BIN=${TEMPER_VALIDATE_BIN:-}
-    TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
-    REFERENCE_DELIVERY_ROLE_DECISION=${REFERENCE_DELIVERY_ROLE_DECISION:-smith}
-    SMITH_WORKSPACE_ROOT=${SMITH_WORKSPACE_ROOT:-$HOME/src/rust/smith}
-    SMITH_BUILD_PACKAGE=${SMITH_BUILD_PACKAGE:-smith-temper-agent-cli}
-    SMITH_WORKFLOW_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-}
-    SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON=${SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON:-}
-    if [ -z "$SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON" ]; then
-        SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON='["--auth","chatgpt-oauth"]'
-    fi
-    SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST=${SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST:-}
-    SMITH_WORKFLOW_ROLE_DECISION_CWD=${SMITH_WORKFLOW_ROLE_DECISION_CWD:-}
-    SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS=${SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS:-}
-    TEMPER_CODING_WORKSPACE_ROOT=${TEMPER_CODING_WORKSPACE_ROOT:-}
-    TEMPER_CODING_WORKSPACE_COMMAND=${TEMPER_CODING_WORKSPACE_COMMAND:-}
-    TEMPER_CODING_WORKSPACE_REMOTE=${TEMPER_CODING_WORKSPACE_REMOTE:-origin}
-    TEMPER_CODING_WORKSPACE_PUSH=${TEMPER_CODING_WORKSPACE_PUSH:-1}
-    TEMPER_CODING_WORKSPACE_PR_LABELS=${TEMPER_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
+    TEMPER_BUILD_PRODUCTION=${TEMPER_BUILD_PRODUCTION:-temper-production}
+    TEMPER_BUILD_TESTING=${TEMPER_BUILD_TESTING:-temper-testing}
+    FAKE_ARCHITECT=${FAKE_ARCHITECT:-closing}
+    FAKE_REVIEWER=${FAKE_REVIEWER:-default}
+    FAKE_CI_SENTINEL=${FAKE_CI_SENTINEL:-present}
 
     _raw_repos=${REPOS:-$OWNER/$NAME}
     CONFIGURED_REPOS=
@@ -291,14 +236,14 @@ load_config() {
     if [ "$CROSS_REPO_ENABLED" = "1" ] && [ "$REPO_COUNT" -lt 2 ]; then
         die 'cross-repo intake requires at least two repos; add REPOS or set CROSS_REPO_INTAKE=0'
     fi
+    case "$FAKE_ARCHITECT" in default|closing) ;; *) die "FAKE_ARCHITECT must be default or closing" ;; esac
+    case "$FAKE_REVIEWER" in default|request-changes-then-approve) ;; *) die "FAKE_REVIEWER must be default or request-changes-then-approve" ;; esac
+    case "$FAKE_CI_SENTINEL" in present|deferred) ;; *) die "FAKE_CI_SENTINEL must be present or deferred" ;; esac
 
-    # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
-    # Exported so both Go processes inherit it; harmless for the Rust workers.
     if [ -n "$TEMPER_FORGEJO_GOMAXPROCS" ]; then
         export GOMAXPROCS="$TEMPER_FORGEJO_GOMAXPROCS"
     fi
 
-    # Derive host/port from BASE_URL (http://host:port).
     _hostport=${BASE_URL#*://}
     _hostport=${_hostport%%/*}
     HOST=${_hostport%%:*}
@@ -308,78 +253,59 @@ load_config() {
     esac
 }
 
-# Smith owns provider/auth validation for role decision responders.
-
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    WORKER_BIN=${TEMPER_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/temper-worker}
+    TESTING_WORKER_BIN=${TEMPER_TESTING_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/temper-testing-worker}
     PROVISION_BIN=${TEMPER_PROVISION_BIN:-$WORKSPACE_ROOT/target/debug/temper-provision-forgejo}
     TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/temper-trigger-forgejo}
     VALIDATOR_BIN=${TEMPER_VALIDATE_BIN:-$WORKSPACE_ROOT/target/debug/temper-validate-reference-delivery}
 
-    # Keep the demo entry point self-healing after source changes. Cargo is a
-    # cheap no-op when the development binaries are already current; skipping
-    # this is an explicit operator choice for prebuilt/current binaries.
     if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
-        log "ensuring development binaries are current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) \
-            || die 'cargo build failed'
+        log "ensuring production helper binaries are current (cargo build -p $TEMPER_BUILD_PRODUCTION)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PRODUCTION" ) || die 'cargo build failed'
+        log "ensuring fake worker binary is current (cargo build -p $TEMPER_BUILD_TESTING --bin temper-testing-worker)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_TESTING" --bin temper-testing-worker ) || die 'cargo build failed'
     fi
 
-    [ -x "$WORKER_BIN" ] || die "worker binary not found: $WORKER_BIN"
+    [ -x "$TESTING_WORKER_BIN" ] || die "fake worker binary not found: $TESTING_WORKER_BIN"
     [ -x "$PROVISION_BIN" ] || die "provision binary not found: $PROVISION_BIN"
     [ -x "$TRIGGER_BIN" ] || die "trigger binary not found: $TRIGGER_BIN"
     [ -x "$VALIDATOR_BIN" ] || die "reference-delivery validator binary not found: $VALIDATOR_BIN"
 
+    _worker_help=$("$TESTING_WORKER_BIN" --help 2>&1 || true)
+    case "$_worker_help" in
+        *--agents*fake*--backend*forgejo* | *--backend*forgejo*--agents*fake*) ;;
+        *) die "fake worker binary is stale or incompatible: $TESTING_WORKER_BIN" ;;
+    esac
     _provision_help=$("$PROVISION_BIN" --help 2>&1 || true)
     case "$_provision_help" in
         *--seed-intake*--intake-title*--intake-body-file*) ;;
-        *) die "provision binary is stale or incompatible: $PROVISION_BIN does not advertise --seed-intake/--intake-title/--intake-body-file. Re-run without TEMPER_SKIP_BUILD=1 or rebuild temper-production with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+        *) die "provision binary is stale or incompatible: $PROVISION_BIN" ;;
     esac
     _validator_help=$("$VALIDATOR_BIN" --help 2>&1 || true)
     case "$_validator_help" in
         *--parent-number*--expected-children*) ;;
-        *) die "reference-delivery validator binary is stale or incompatible: $VALIDATOR_BIN does not advertise --parent-number/--expected-children. Re-run without TEMPER_SKIP_BUILD=1 or rebuild temper-production with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+        *) die "reference-delivery validator binary is stale or incompatible: $VALIDATOR_BIN" ;;
     esac
-    # Pinned Forgejo + runner: env override, else the cached pinned path.
+
     FORGEJO_BIN=${TEMPER_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
     RUNNER_BIN=${TEMPER_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64}
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN
        Set TEMPER_FORGEJO_BINARY, or pre-stage the pinned binary in .cache/forgejo/
-       (running the gated forgejo_multiprocess test once downloads + checksums it)."
+       with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN
-       Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/."
-
-    ROLE_DECISION_ARGS=
-    case "$REFERENCE_DELIVERY_ROLE_DECISION" in
-        smith | "") resolve_smith_workflow_role_decision ;;
-        *) die "unknown REFERENCE_DELIVERY_ROLE_DECISION '$REFERENCE_DELIVERY_ROLE_DECISION' (expected smith)" ;;
-    esac
+       Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/
+       with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
 }
 
-resolve_smith_workflow_role_decision() {
-    SMITH_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-$SMITH_WORKSPACE_ROOT/target/debug/smith-workflow-role-decision}
-    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
-        log "ensuring Smith workflow-role decision responder is current (cargo build -p $SMITH_BUILD_PACKAGE --bin smith-workflow-role-decision)..."
-        ( cd "$SMITH_WORKSPACE_ROOT" && cargo build -p "$SMITH_BUILD_PACKAGE" --bin smith-workflow-role-decision ) \
-            || die 'Smith cargo build failed'
-    fi
-    [ -x "$SMITH_ROLE_DECISION_BIN" ] || die "Smith workflow-role decision binary not found: $SMITH_ROLE_DECISION_BIN"
-
-    ROLE_DECISION_ARGS="--role-decision-command $SMITH_ROLE_DECISION_BIN"
-    [ -n "$SMITH_WORKFLOW_ROLE_DECISION_CWD" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-cwd $SMITH_WORKFLOW_ROLE_DECISION_CWD"
-    [ -n "$SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-timeout-secs $SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS"
-    log "role decisions: Smith process responder ($SMITH_ROLE_DECISION_BIN)"
-}
-
-# --- Forgejo server -----------------------------------------------------------
+# --- Forgejo server + runner --------------------------------------------------
 
 write_app_ini() {
     mkdir -p "$FORGEJO_DATA/custom/conf" "$FORGEJO_DATA/data" \
         "$FORGEJO_DATA/log" "$FORGEJO_DATA/repos"
     cat >"$APP_INI" <<EOF
-APP_NAME = Reference Delivery Example
+APP_NAME = Reference Delivery Fake-Agent Example
 RUN_MODE = prod
 WORK_PATH = $FORGEJO_DATA
 
@@ -426,7 +352,6 @@ ENABLED = true
 EOF
 }
 
-# Runs a `forgejo` admin/CLI subcommand against the instance config.
 forgejo_cli() {
     GITEA_WORK_DIR="$FORGEJO_DATA" "$FORGEJO_BIN" --config "$APP_INI" "$@"
 }
@@ -447,11 +372,10 @@ boot_server() {
 
     _i=0
     until curl -fsS "$BASE_URL/api/v1/version" >/dev/null 2>&1; do
-        kill -0 "$SERVER_PID" 2>/dev/null \
-            || die "forgejo exited during startup (see logs/forgejo.log)"
+        kill -0 "$SERVER_PID" 2>/dev/null || die "forgejo exited during startup (see logs/forgejo.log)"
         _i=$((_i + 1))
         [ "$_i" -gt 300 ] && die "forgejo did not become ready (see logs/forgejo.log)"
-        sleep 0.2 2>/dev/null || sleep 1
+        sleep_short
     done
     log "Forgejo ready (pid $SERVER_PID)"
 }
@@ -544,9 +468,17 @@ write_cross_repo_intake_body() {
             _slug=$(repo_slug "$_repo")
             printf -- '- `%s` (`target_repo`: `forgejo:%s`, child `slug`: `%s`)\n' "$_repo" "$_repo" "$_slug"
         done
-        printf '\nArchitect guidance: triage this intake with one child code issue per repository listed above. '
-        printf 'Use the exact `target_repo` and stable `slug` values shown, and keep each child scoped to its repository. '
-        printf 'The parent issue should remain blocked until every child issue lands.\n\n'
+        printf '\nThe hidden architect plan below is for the deterministic fake architect.\n\n'
+        printf '<!-- temper:architect-plan\n'
+        printf '{"children":[\n'
+        _first=1
+        for _repo in $CONFIGURED_REPOS; do
+            _slug=$(repo_slug "$_repo")
+            [ "$_first" = "1" ] || printf ',\n'
+            _first=0
+            printf '  {"slug":"%s","target_repo":"forgejo:%s","title":"Implement greeting in %s","body":"Update this repository in the coordinated greeting demo."}' "$_slug" "$_repo" "$_repo"
+        done
+        printf '\n]}\n-->\n\n'
         printf 'Acceptance: each repository receives its own implementation PR, CI passes, review approves, and all child PRs merge before this parent resolves.\n'
     } >"$_body_file"
     printf '%s\n' "$_body_file"
@@ -554,9 +486,6 @@ write_cross_repo_intake_body() {
 
 bootstrap_and_provision() {
     log 'bootstrapping admin + provisioning every configured repo (org/users/tokens/repo/labels/CI/webhook) ...'
-    # Create the admin (tolerate a pre-existing one on a re-run), then mint an
-    # all-scoped token. The token stays in a shell variable; it is never echoed
-    # and reaches the provision step only via the environment.
     forgejo_cli admin user create --username "$ADMIN_USER" --password "$ADMIN_PASSWORD" \
         --email "$ADMIN_EMAIL" --admin --must-change-password=false \
         >"$LOG_DIR/admin-create.log" 2>&1 || true
@@ -579,28 +508,23 @@ bootstrap_and_provision() {
         _name=$(repo_name "$_repo")
         if [ "$CROSS_REPO_ENABLED" = "1" ] && [ "$_repo" != "$FIRST_CONFIGURED_REPO" ]; then
             log "provisioning $_repo (labels + CI + webhook; no separate intake) ..."
-            # _webhook_args intentionally word-split: POSIX sh has no arrays and the
-            # example paths above are controlled by this script/config.
             # shellcheck disable=SC2086
             _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
                 --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
-                $_webhook_args --seed-intake no) \
-                || die "provisioning $_repo failed"
+                $_webhook_args --seed-intake no) || die "provisioning $_repo failed"
         elif [ "$CROSS_REPO_ENABLED" = "1" ]; then
             log "provisioning $_repo (labels + CI + cross-repo parent intake) ..."
             # shellcheck disable=SC2086
             _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
                 --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
                 $_webhook_args --intake-title "$CROSS_REPO_INTAKE_TITLE" \
-                --intake-body-file "$_cross_body") \
-                || die "provisioning $_repo failed"
+                --intake-body-file "$_cross_body") || die "provisioning $_repo failed"
         else
             log "provisioning $_repo (labels + CI + seeded intake issue) ..."
             # shellcheck disable=SC2086
             _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$PROVISION_BIN" \
                 --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
-                $_webhook_args) \
-                || die "provisioning $_repo failed"
+                $_webhook_args) || die "provisioning $_repo failed"
         fi
         _issue=$(printf '%s\n' "$_status" | sed -n 's/.*intake issue #\([0-9][0-9]*\).*/\1/p')
         {
@@ -630,8 +554,6 @@ bootstrap_and_provision() {
 
 # --- Workers ------------------------------------------------------------------
 
-# Uppercases a role id and replaces non-alphanumerics with `_` (matching the
-# provision binary's env_role_key), yielding the secrets-file variable suffix.
 role_env_key() {
     printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_'
 }
@@ -650,27 +572,21 @@ launch_role_worker() {
         _wake_socket="$WAKE_DIR/$_role.sock"
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
-    # Per-role secrets are literal env-assignment prefixes (never on argv).
-    # WORKER_REPO_ARGS / ROLE_DECISION_ARGS / _wake_args intentionally word-split
-    # (POSIX has no arrays); repo values are owner/name with no spaces.
-    # shellcheck disable=SC2086
-    TEMPER_FORGEJO_TOKEN="$_token" \
-    TEMPER_FORGEJO_USERNAME="$_user" \
-    TEMPER_FORGEJO_PASSWORD="$_password" \
-    TEMPER_CODING_WORKSPACE_ROOT="$TEMPER_CODING_WORKSPACE_ROOT" \
-    TEMPER_CODING_WORKSPACE_COMMAND="$TEMPER_CODING_WORKSPACE_COMMAND" \
-    TEMPER_CODING_WORKSPACE_REMOTE="$TEMPER_CODING_WORKSPACE_REMOTE" \
-    TEMPER_CODING_WORKSPACE_PUSH="$TEMPER_CODING_WORKSPACE_PUSH" \
-    TEMPER_CODING_WORKSPACE_PR_LABELS="$TEMPER_CODING_WORKSPACE_PR_LABELS" \
-    TEMPER_WORKER_ROLE_DECISION_ARGS_JSON="$SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON" \
-    TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST="$SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST" \
-        "$WORKER_BIN" \
-        --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
-        --kind role --role "$_role" --user "$_user" \
-        $ROLE_DECISION_ARGS \
-        --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
-        $_wake_args \
-        >"$LOG_DIR/$_role.log" 2>&1 &
+    (
+        printf 'temper-testing-worker: role=%s user=%s repositories=%s\n' "$_role" "$_user" "$CONFIGURED_REPOS"
+        # shellcheck disable=SC2086
+        TEMPER_FORGEJO_TOKEN="$_token" \
+        TEMPER_FORGEJO_USERNAME="$_user" \
+        TEMPER_FORGEJO_PASSWORD="$_password" \
+            "$TESTING_WORKER_BIN" \
+            --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
+            --root "$RUN_DIR/unused-store" --clock wall \
+            --kind role --role "$_role" --user "$_user" \
+            --architect "$FAKE_ARCHITECT" --reviewer "$FAKE_REVIEWER" \
+            --ci-sentinel "$FAKE_CI_SENTINEL" --agents fake \
+            --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+            $_wake_args
+    ) >"$LOG_DIR/$_role.log" 2>&1 &
     _pid=$!
     echo "$_pid" >>"$WORKERS_PID_FILE"
     if [ "$WEBHOOKS" = "1" ]; then
@@ -681,16 +597,10 @@ launch_role_worker() {
 
 launch_workers() {
     : >"$WORKERS_PID_FILE"
-    # Derive the role list from the provisioned secrets file (one TEMPER_FORGEJO_
-    # USER_<KEY>=<role> per role binding) — never hardcoded. The value is both the
-    # role id and the user handle (the Forgejo id==handle requirement).
     _roles=$(sed -n "s/^TEMPER_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" "$ROLES_ENV")
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
 
-    log 'launching role workers (production binary, Smith process decisions) ...'
-    # The seeded intake issue is immediately available to the architect. Start
-    # every other wake listener first, then launch architect last, so the first
-    # role handoff webhook can find all downstream sockets even with a long poll.
+    log 'launching fake-agent role workers ...'
     _architect_role=
     for _r in $_roles; do
         if [ "$_r" = "architect" ]; then
@@ -700,20 +610,23 @@ launch_workers() {
         fi
     done
 
-    # One mechanical reconciler (controller plane; admin token, no agent).
     _wake_args=
     _wake_socket=
     if [ "$WEBHOOKS" = "1" ]; then
         _wake_socket="$WAKE_DIR/mechanical.sock"
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
-    # shellcheck disable=SC2086
-    TEMPER_FORGEJO_TOKEN="$ADMIN_TOKEN" "$WORKER_BIN" \
-        --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
-        --kind mechanical \
-        --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
-        $_wake_args \
-        >"$LOG_DIR/mechanical.log" 2>&1 &
+    (
+        printf 'temper-testing-worker: mechanical repositories=%s\n' "$CONFIGURED_REPOS"
+        # shellcheck disable=SC2086
+        TEMPER_FORGEJO_TOKEN="$ADMIN_TOKEN" \
+            "$TESTING_WORKER_BIN" \
+            --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
+            --root "$RUN_DIR/unused-store" --clock wall \
+            --kind mechanical \
+            --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+            $_wake_args
+    ) >"$LOG_DIR/mechanical.log" 2>&1 &
     _pid=$!
     echo "$_pid" >>"$WORKERS_PID_FILE"
     if [ "$WEBHOOKS" = "1" ]; then
@@ -726,7 +639,7 @@ launch_workers() {
     fi
 }
 
-# --- Webhook validation -------------------------------------------------------
+# --- Validation ---------------------------------------------------------------
 
 count_matches() {
     _pattern=$1
@@ -776,15 +689,15 @@ validate_repo_specific_logs() {
         _worker_mentioned=0
         for _log in "$LOG_DIR"/*.log; do
             [ -f "$_log" ] || continue
-            grep -q 'temper-worker:' "$_log" 2>/dev/null || continue
+            grep -q 'temper-testing-worker:' "$_log" 2>/dev/null || continue
             if grep -F -q "$_repo" "$_log" 2>/dev/null; then
                 _worker_mentioned=1
             fi
         done
         if [ "$_worker_mentioned" -eq 1 ]; then
-            log "ok: worker startup logs mention $_repo"
+            log "ok: fake worker startup logs mention $_repo"
         else
-            log "missing: no worker startup log mentions $_repo"
+            log "missing: no fake worker startup log mentions $_repo"
             _ok=1
         fi
     done
@@ -828,7 +741,6 @@ cmd_validate_reference_delivery_state() {
         _repo_args="$_repo_args --repo $_repo"
     done
     log "validating reference-delivery Forge state for parent $FIRST_CONFIGURED_REPO#$_parent"
-    # _repo_args intentionally word-split; repo values are validated owner/name.
     # shellcheck disable=SC2086
     if _output=$(TEMPER_FORGEJO_TOKEN="$_token" "$VALIDATOR_BIN" \
         --base-url "$BASE_URL" $_repo_args \
@@ -879,12 +791,12 @@ cmd_validate_webhooks() {
 
     _workers=0
     _consumed=0
-    _wake_ticks=0
-    _wake_progress=0
-    _wake_no_work=0
+    _ticks=0
+    _progress=0
+    _no_work=0
     for _log in "$LOG_DIR"/*.log; do
         [ -f "$_log" ] || continue
-        grep -q 'temper-worker:' "$_log" 2>/dev/null || continue
+        grep -q 'temper-testing-worker:' "$_log" 2>/dev/null || continue
         _workers=$((_workers + 1))
         _name=${_log##*/}
         if grep -q 'consumed authenticated wake' "$_log" 2>/dev/null; then
@@ -894,32 +806,31 @@ cmd_validate_webhooks() {
             _consumed_text=no
             _ok=1
         fi
-        if grep -q 'completed tick trigger=wake actions=' "$_log" 2>/dev/null; then
-            _wake_ticks=$((_wake_ticks + 1))
+        if grep -q 'completed tick actions=' "$_log" 2>/dev/null; then
+            _ticks=$((_ticks + 1))
             _tick_text=yes
         else
             _tick_text=no
             _ok=1
         fi
-        if grep -E -q 'completed tick trigger=wake actions=[1-9][0-9]*' "$_log" 2>/dev/null; then
-            _wake_progress=$((_wake_progress + 1))
+        if grep -E -q 'completed tick actions=[1-9][0-9]*' "$_log" 2>/dev/null; then
+            _progress=$((_progress + 1))
         fi
-        if grep -q 'completed tick trigger=wake actions=0' "$_log" 2>/dev/null; then
-            _wake_no_work=$((_wake_no_work + 1))
+        if grep -q 'completed tick actions=0' "$_log" 2>/dev/null; then
+            _no_work=$((_no_work + 1))
         fi
-        log "worker $_name: consumed_wake=$_consumed_text wake_tick=$_tick_text"
+        log "worker $_name: consumed_wake=$_consumed_text tick=$_tick_text"
     done
 
     if [ "$_workers" -eq 0 ]; then
-        log 'missing: no temper-worker logs found'
+        log 'missing: no temper-testing-worker logs found'
         _ok=1
     fi
-    if [ "$_wake_progress" -eq 0 ]; then
-        log 'missing: no wake-triggered worker tick reported actions>0'
+    if [ "$_progress" -eq 0 ]; then
+        log 'missing: no fake worker tick reported actions>0'
         _ok=1
     fi
-    log "worker summary: workers=$_workers consumed=$_consumed wake_ticks=$_wake_ticks wake_progress=$_wake_progress wake_no_work=$_wake_no_work"
-    log 'wake_no_work>0 means a worker woke, scanned fresh Forge state, and found no queue item.'
+    log "worker summary: workers=$_workers consumed=$_consumed ticks=$_ticks progress=$_progress no_work=$_no_work"
 
     if [ "$_ok" -eq 0 ]; then
         log 'webhook wake validation passed'
@@ -938,12 +849,10 @@ cmd_validate_multi_repo() {
 
 # --- Monitor ------------------------------------------------------------------
 
-# Blocks until the stop-file appears, the server dies, or RUN_SECS elapses, so
-# the EXIT/INT/TERM trap can tear everything down on Ctrl-C.
 monitor() {
     log ''
     log "Forgejo UI:    $BASE_URL  (log in as any provisioned role)"
-    log "Worker pool:   one worker per role scans: $CONFIGURED_REPOS"
+    log "Worker pool:   fake workers scan: $CONFIGURED_REPOS"
     if [ "$CROSS_REPO_ENABLED" = "1" ]; then
         log "Cross-repo:    one parent intake in $FIRST_CONFIGURED_REPO fans out across the repo set"
     fi
@@ -951,16 +860,7 @@ monitor() {
     for _repo in $CONFIGURED_REPOS; do
         log "  $_repo -> $BASE_URL/$_repo/issues"
     done
-    log "Worker logs:   $LOG_DIR/ (role logs include the resolved repo set)"
-    if [ "$CROSS_REPO_ENABLED" = "1" ]; then
-        log 'Watch the source intake issue create one child issue per repo; each child'
-        log 'should open its own PR, pass CI, receive review, merge, and then unblock'
-        log 'the parent aggregation issue.'
-    else
-        log 'Watch each repo independently: its intake issue should be triaged, a PR'
-        log 'should open, CI should run, review should land, and merge + reconcile labels'
-        log 'should move — all in the Forgejo UI above.'
-    fi
+    log "Worker logs:   $LOG_DIR/"
     log ''
     log "Press Ctrl-C (or run '$DISPLAY_SCRIPT stop') to tear everything down."
 
@@ -989,10 +889,9 @@ cmd_start() {
         die "a run appears active (run/server.pid). Stop it first: $DISPLAY_SCRIPT stop"
     fi
 
-    mkdir -p "$RUN_DIR" "$LOG_DIR"
+    mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
     rm -f "$STOP_FILE"
 
-    # From here on, tear everything down on any exit/interrupt.
     trap cleanup EXIT INT TERM
 
     boot_server
@@ -1001,10 +900,7 @@ cmd_start() {
     bootstrap_and_provision
     launch_workers
     monitor
-    # cleanup runs via the EXIT trap.
 }
-
-# --- Dispatch -----------------------------------------------------------------
 
 case "${1:-start}" in
     start | "") cmd_start ;;
@@ -1012,8 +908,5 @@ case "${1:-start}" in
     validate-multi-repo) cmd_validate_multi_repo ;;
     stop) cmd_stop ;;
     help | -h | --help) usage ;;
-    *)
-        usage >&2
-        exit 2
-        ;;
+    *) usage >&2; exit 2 ;;
 esac

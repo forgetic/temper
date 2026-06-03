@@ -128,7 +128,7 @@ The product-manager dogfood behavior is encoded as fixture/example data, not as
 the generic contract:
 
 - `crates/temper-interaction/fixtures/product-manager-interaction-spec.json`
-- `examples/dogfood/config/interaction-profiles/product-manager.json`
+- Smith checkout: `~/src/rust/smith/examples/dogfood/config/interaction-profiles/product-manager.json`
 
 They declare the `product` transcript label, `untriaged` filed-issue label,
 `/file` alias, `issue` proposal kind, and explicit issue-proposal acceptance.

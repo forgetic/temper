@@ -34,7 +34,7 @@ multi-process workloads (many role workers + actions + git). It is often the
   `forgejo-runner` (`forgejo_server/mod.rs::apply_cpu_cap`). Keep that cap; it
   bounds the Go runtime at the source. Override per-run with
   `TEMPER_FORGEJO_GOMAXPROCS` (empty string opts out).
-- Run the gated Forgejo e2e tests **serially** (`--test-threads=1`): each boots
+- Run the ignored Forgejo e2e tests **serially** (`--test-threads=1`): each boots
   its own ~2-core Forgejo, so parallel tests multiply the load.
 - When monitoring, sample `ps`/`taskset -acp` (all threads) to pin forgejo to a
   core subset and keep cores free; do not rely on `taskset -cp`.
@@ -49,7 +49,7 @@ multi-process workloads (many role workers + actions + git). It is often the
 
 ## Where this is now documented
 
-- `crates/temper-testing/src/forgejo_server/mod.rs` (`apply_cpu_cap`,
+- `crates/temper-forgejo-fixture/src/lib.rs` (`apply_cpu_cap`,
   `forgejo_gomaxprocs`, `DEFAULT_FORGEJO_GOMAXPROCS`) + `runner.rs`.
 - `crates/temper-production/src/worker.rs` (`WAKE_DEBOUNCE` and
   `drain_wake_batch`) debounces/coalesces the production demo's queued

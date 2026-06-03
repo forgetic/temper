@@ -56,18 +56,17 @@ scenarios from runner test support on:
 
 ## Multi-repo smoke
 
-To prove one fixed worker set scans multiple repositories, opt into the ignored
+To prove one fixed worker set scans multiple repositories, run the default
 process-level smoke:
 
 ```sh
-cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored
+cargo test -p temper-testing --test multi_repo_multiprocess
 ```
 
 For the live Forgejo + webhook variant, use:
 
 ```sh
-TEMPER_FORGEJO_E2E=1 \
-  cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
 ```
 
 These include the cross-repo fan-out scenario on the same fixed worker fleet;

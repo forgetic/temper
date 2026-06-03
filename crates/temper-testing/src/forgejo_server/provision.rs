@@ -1,4 +1,4 @@
-//! Provisioning + identity for the env-gated Forgejo end-to-end fixture.
+//! Provisioning + identity for the ignored Forgejo end-to-end fixture.
 //!
 //! This is the real-backend analogue of the filesystem `provision` step in
 //! `crate::worker_bin::run`: it makes a *running* [`ForgejoServer`] hold the

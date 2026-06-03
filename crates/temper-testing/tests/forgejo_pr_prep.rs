@@ -1,12 +1,11 @@
 //! Phase 2b PR-prep test against a real Forgejo.
 //!
-//! `#[ignore]`d **and** gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-//! `cargo test` never downloads a binary, opens a socket, or spawns a server —
-//! exactly like the Phase 1/1b/2 smoke tests. Run it with:
+//! `#[ignore]`d, so the default `cargo test` never downloads a binary, opens a
+//! socket, or spawns a server. No extra environment variable is required; run it
+//! with:
 //!
 //! ```sh
-//! TEMPER_FORGEJO_E2E=1 \
-//!   cargo test -p temper-testing --test forgejo_pr_prep -- --ignored
+//! cargo test -p temper-testing --test forgejo_pr_prep -- --ignored
 //! ```
 //!
 //! It boots a [`ForgejoServer`], provisions (Phase 2), then proves the Phase 2b
@@ -30,25 +29,9 @@ use temper_testing::forgejo_server::{prepare_pull_request_head, provision, Forge
 use temper_testing::pull_request_input;
 use temper_workflow::RoleId;
 
-/// Returns whether the env opt-in is present; prints a skip note when not.
-fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        return true;
-    }
-    eprintln!(
-        "skipping Forgejo PR-prep e2e test: set TEMPER_FORGEJO_E2E=1 to enable \
-         (downloads a pinned Forgejo binary and boots a throwaway server)"
-    );
-    false
-}
-
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "boots a real Forgejo server; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo server; run with --ignored"]
 async fn prep_makes_head_real_and_pr_is_mergeable() {
-    if !enabled() {
-        return;
-    }
-
     // `ForgejoServer::start` uses a *blocking* reqwest client for readiness; boot
     // it off-reactor so its nested blocking runtime lives and dies off the async
     // test thread (same pattern as the Phase 2 provisioning test).

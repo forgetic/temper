@@ -40,18 +40,6 @@ impl RepoTarget {
     }
 }
 
-pub fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        true
-    } else {
-        eprintln!(
-            "skipping Forgejo multi-repo webhook e2e: set TEMPER_FORGEJO_E2E=1 to enable \
-             (boots real Forgejo + forgejo-runner and opens local webhook/wake sockets)"
-        );
-        false
-    }
-}
-
 pub fn block_on_provision(server: &ForgejoServer) -> Provisioned {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

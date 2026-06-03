@@ -18,7 +18,7 @@ use temper_testing::runner_config;
 use temper_testing::scenarios::{cross_repo_fanout_converges, happy_path};
 
 #[test]
-#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with --ignored"]
 fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
     run_webhook_variant(WebhookVariant {
         second_repo: "service-beta",
@@ -29,7 +29,7 @@ fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
 }
 
 #[test]
-#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with --ignored"]
 fn cross_repo_fanout_converges_by_webhook_wake() {
     run_webhook_variant(WebhookVariant {
         second_repo: "service-canary",
@@ -53,10 +53,6 @@ enum SeedMode {
 }
 
 fn run_webhook_variant(variant: WebhookVariant) {
-    if !support::enabled() {
-        return;
-    }
-
     let server = ForgejoServer::start().expect("forgejo server boots");
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");

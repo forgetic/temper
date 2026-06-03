@@ -1002,11 +1002,13 @@ name = "temper-forge-forgejo"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
  "reqwest",
  "serde",
  "serde_json",
  "temper-forge",
+ "temper-forgejo-fixture",
  "temper-workflow",
  "thiserror",
  "tokio",
@@ -1019,6 +1021,14 @@ dependencies = [
  "async-trait",
  "chrono",
  "temper-forge",
+]
+
+[[package]]
+name = "temper-forgejo-fixture"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "sha2",
 ]
 
 [[package]]
@@ -1087,6 +1097,7 @@ dependencies = [
  "temper-forge-filesystem",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-forgejo-fixture",
  "temper-production",
  "temper-runner",
  "temper-workflow",

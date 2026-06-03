@@ -1,13 +1,12 @@
 //! Multi-repo process e2e: one fixed fake worker set scans two filesystem repos.
 //!
-//! This is the Phase 4 regression for `plans/multi-repo-workers/`: the driver
-//! provisions two repositories in one shared `FilesystemForge` store, starts one
-//! role worker per role, one mechanical worker, and one fake CI producer, and
-//! passes **both** `--repo` values to every child. There is no per-repo role or
-//! mechanical worker pool.
+//! This default-suite regression provisions two repositories in one shared
+//! `FilesystemForge` store, starts one role worker per role, one mechanical
+//! worker, and one fake CI producer, and passes **both** `--repo` values to every
+//! child. There is no per-repo role or mechanical worker pool.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -23,9 +22,9 @@ const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(45);
 const ASSERT_POLL: Duration = Duration::from_millis(100);
 const WORKER_POLL_MS: u64 = 20;
 const WORKER_RUN_SECS: u64 = 120;
+const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[test]
-#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
 fn one_fixed_worker_set_converges_two_filesystem_repos() {
     let root = TempRoot::new("multi-repo-multiprocess");
     let config = runner_config();
@@ -52,8 +51,18 @@ fn one_fixed_worker_set_converges_two_filesystem_repos() {
     if let Err(error) = converged {
         panic!("multi-repo filesystem process world did not converge: {error}");
     }
-    for (label, status) in &exits {
-        assert!(status.success(), "worker '{label}' exited with {status:?}");
+    for exit in &exits {
+        assert!(
+            !exit.timed_out && exit.status.success(),
+            "worker '{}' {}exited with {:?}, expected success",
+            exit.label,
+            if exit.timed_out {
+                "did not stop within the shutdown timeout; "
+            } else {
+                ""
+            },
+            exit.status,
+        );
     }
     for (path, repo) in paths.iter().zip(repos.iter()) {
         let forge = FilesystemForge::new(&root.path);
@@ -143,6 +152,12 @@ struct SpawnedWorker {
     child: Child,
 }
 
+struct WorkerExit {
+    label: String,
+    status: ExitStatus,
+    timed_out: bool,
+}
+
 struct WorkerFleet {
     workers: Vec<SpawnedWorker>,
 }
@@ -170,15 +185,63 @@ impl WorkerFleet {
         Self { workers }
     }
 
-    fn wait_all(&mut self) -> Vec<(String, std::process::ExitStatus)> {
-        self.workers
-            .iter_mut()
-            .map(|worker| {
-                let status = worker.child.wait().unwrap_or_else(|error| {
-                    panic!("waiting on '{}' failed: {error}", worker.label)
+    fn wait_all(&mut self) -> Vec<WorkerExit> {
+        let mut exits: Vec<Option<WorkerExit>> = std::iter::repeat_with(|| None)
+            .take(self.workers.len())
+            .collect();
+        let mut remaining = self.workers.len();
+        let deadline = Instant::now() + WORKER_STOP_TIMEOUT;
+
+        while remaining > 0 && Instant::now() < deadline {
+            for (index, worker) in self.workers.iter_mut().enumerate() {
+                if exits[index].is_some() {
+                    continue;
+                }
+                let Some(status) = worker.child.try_wait().unwrap_or_else(|error| {
+                    panic!("polling '{}' exit failed: {error}", worker.label)
+                }) else {
+                    continue;
+                };
+                exits[index] = Some(WorkerExit {
+                    label: worker.label.clone(),
+                    status,
+                    timed_out: false,
                 });
-                (worker.label.clone(), status)
-            })
+                remaining -= 1;
+            }
+            if remaining > 0 {
+                sleep(Duration::from_millis(10));
+            }
+        }
+
+        for (index, worker) in self.workers.iter_mut().enumerate() {
+            if exits[index].is_some() {
+                continue;
+            }
+            let status = match worker.child.try_wait().unwrap_or_else(|error| {
+                panic!(
+                    "polling '{}' exit before kill failed: {error}",
+                    worker.label
+                )
+            }) {
+                Some(status) => status,
+                None => {
+                    let _ = worker.child.kill();
+                    worker.child.wait().unwrap_or_else(|error| {
+                        panic!("waiting on killed '{}' failed: {error}", worker.label)
+                    })
+                }
+            };
+            exits[index] = Some(WorkerExit {
+                label: worker.label.clone(),
+                status,
+                timed_out: true,
+            });
+        }
+
+        exits
+            .into_iter()
+            .map(|exit| exit.expect("every worker has an exit result"))
             .collect()
     }
 }

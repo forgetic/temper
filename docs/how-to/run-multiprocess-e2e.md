@@ -9,19 +9,19 @@ coordinate only through a shared on-disk `FilesystemForge` store.
 ## Command
 
 ```sh
-cargo test -p temper-testing --test multiprocess -- --ignored
+cargo test -p temper-testing --test multiprocess
 ```
 
 The single-repo scenario tests live in `crates/temper-testing/tests/multiprocess.rs`.
-They are `#[ignore]`d, so the default `cargo test` skips them; the `--ignored`
-flag opts in.
+They are part of the default `cargo dev-test` suite because they are fast enough
+for normal local iteration.
 
 ## Multi-repo fixed worker set
 
 Phase 4 of the multi-repo worker plan adds a focused two-repository rehearsal:
 
 ```sh
-cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored
+cargo test -p temper-testing --test multi_repo_multiprocess
 ```
 
 That test provisions `acme/service-alpha` and `acme/service-beta` in one shared
@@ -71,9 +71,9 @@ Each scenario test (`run_variant`):
    behind a kill-on-drop guard so a panic never orphans a process.
 4. Detects convergence in-process by polling the **exact** scenario assert
    closure on a short interval until it passes or a generous (30s) wall-clock
-   timeout. The ignored tests serialize their worker fleets internally, so the
-   command above does not need `--test-threads=1` even though each test launches
-   many OS processes.
+   timeout. The tests serialize their worker fleets internally, so the command
+   above does not need `--test-threads=1` even though each test launches many OS
+   processes.
 5. Touches the stop sentinel, waits briefly for every child, kills any child
    that does not observe shutdown, asserts each exited `0`, and runs the assert
    once more for a clean failure message.
@@ -92,12 +92,11 @@ on one fixed two-repo worker fleet.
 
 ## Determinism caveat
 
-This is the one intentional non-deterministic test. It spawns real processes and
-detects convergence by wall-clock polling, so — like the env-gated Forgejo live
-smoke tests — it is `#[ignore]`d and excluded from the default suite. The
-deterministic in-process scenarios (see
-[run-reference-delivery-end-to-end.md](run-reference-delivery-end-to-end.md))
-remain the default coverage for the workflow logic; this test covers the
+This is intentional process-boundary coverage. It spawns real processes and
+detects convergence by wall-clock polling, but the filesystem backend and fake CI
+keep it fast enough for the default suite. The deterministic in-process scenarios
+(see [run-reference-delivery-end-to-end.md](run-reference-delivery-end-to-end.md))
+remain the first-line coverage for workflow logic; this test covers the
 *topology*.
 
 ## To swap fakes for real, change only this

@@ -31,5 +31,5 @@ runtime code.
 
 - `docs/explanation/interactive-agent-interfaces.md`
 - `docs/reference/interactive-conversation-interface.md`
-- `examples/dogfood/README.md`
+- Smith checkout: `~/src/rust/smith/examples/dogfood/README.md`
 - `plans/interactive-agent-interfaces/README.md`

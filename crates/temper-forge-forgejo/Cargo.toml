@@ -16,10 +16,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+base64 = "0.22"
+temper-forgejo-fixture = { path = "../temper-forgejo-fixture" }
 temper-workflow = { path = "../temper-workflow" }
-# Only the optional, env-gated live smoke tests (`tests/live.rs`) need a real
-# async runtime to drive `reqwest`; the offline tests use a hand-rolled poller.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+# Only the optional ignored live smoke tests (`tests/live.rs`) need a real async
+# runtime to drive `reqwest`; the offline tests use a hand-rolled poller.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true

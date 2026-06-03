@@ -1,133 +1,77 @@
-//! Optional, env-gated live smoke tests against a real Forgejo instance.
+//! Ignored live smoke suite against a throwaway local Forgejo.
 //!
-//! Every test here is `#[ignore]`d, so a plain `cargo test` never touches the
-//! network — the offline contract tests in the sibling files are the default
-//! coverage. These exist to let a human (or a later live-refinement session)
-//! sanity-check the backend against a real server with a single command:
+//! A plain `cargo test` stays hermetic because this file is `#[ignore]`d. When
+//! run with `--ignored`, the suite boots a local Forgejo plus a host-mode
+//! `forgejo-runner` from the shared `.cache/forgejo/` binary cache, provisions a
+//! fresh repository, exercises the Forgejo backend against it, and tears the
+//! processes down on drop. No credentials or opt-in environment variables are
+//! required; a missing binary cache fails with a hint pointing at the ignored
+//! cache-population helper.
 //!
 //! ```sh
-//! TEMPER_FORGEJO_LIVE=1 \
-//!   FORGEJO_URL=https://git.example.com \
-//!   FORGEJO_ACCESS_TOKEN=… \
-//!   FORGEJO_DEFAULT_REPO=owner/repo \
-//!   cargo test -p temper-forge-forgejo --test live -- --ignored
+//! cargo test -p temper-forge-forgejo --test live -- --ignored --test-threads=1
 //! ```
-//!
-//! The tests are **read-mostly**: they exercise `current_user`,
-//! `get_repository_by_path`, `list_labels`, `list_issues`,
-//! `list_pull_requests`, and `list_ci_jobs`. The only mutating test is
-//! additionally gated behind `TEMPER_FORGEJO_LIVE_MUTATE=1` and writes a
-//! uniquely-titled issue it immediately closes, so an accidental run leaves no
-//! durable open artifact.
-//!
-//! Two safety layers keep the default suite hermetic: the `#[ignore]` attribute
-//! (so the tests are skipped unless `--ignored` is passed) and the
-//! `TEMPER_FORGEJO_LIVE` gate checked inside each test (so even
-//! `cargo test -- --ignored` is a no-op without the opt-in environment).
 
+use base64::Engine;
+use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 use temper_forge::{
-    CiJobQuery, CreateIssue, IssueQuery, IssueState, PullRequestQuery, RepositoryId,
-    RepositoryPath, UpdateIssue,
+    CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, IssueQuery, IssueState,
+    PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ReqwestHttpClient};
+use temper_forgejo_fixture::{ForgejoRunner, ForgejoServer, ServerError};
 
-/// A configured live backend plus the default repository under test.
-struct Live {
+const ADMIN_USER: &str = "liveadmin";
+const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";
+const ADMIN_EMAIL: &str = "liveadmin@example.invalid";
+const REPO: &str = "forgejo-live-smoke";
+
+const CI_WORKFLOW: &str = r#"name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - run: echo temper forgejo live smoke
+"#;
+
+struct LiveWorld {
+    _server: ForgejoServer,
+    _runner: ForgejoRunner,
     forge: ForgejoForge<ReqwestHttpClient>,
+    repo_id: RepositoryId,
     repo_path: RepositoryPath,
 }
 
-/// Returns a live backend when the opt-in environment is present, else `None`.
-///
-/// Returning `None` (rather than panicking) lets a test invoked with
-/// `--ignored` but without the `TEMPER_FORGEJO_LIVE` opt-in complete as a
-/// harmless no-op instead of failing.
-fn live() -> Option<Live> {
-    if std::env::var("TEMPER_FORGEJO_LIVE").ok().as_deref() != Some("1") {
-        eprintln!(
-            "skipping live Forgejo test: set TEMPER_FORGEJO_LIVE=1 plus FORGEJO_URL, \
-             FORGEJO_ACCESS_TOKEN, and FORGEJO_DEFAULT_REPO to enable"
-        );
-        return None;
-    }
-    let config = ForgejoConfig::from_env().expect(
-        "TEMPER_FORGEJO_LIVE=1 requires FORGEJO_URL and FORGEJO_ACCESS_TOKEN \
-         (and FORGEJO_DEFAULT_REPO in owner/repo form)",
-    );
-    let owner = config
-        .default_owner
-        .clone()
-        .expect("live tests require FORGEJO_DEFAULT_REPO in owner/repo form");
-    let name = config
-        .default_name
-        .clone()
-        .expect("live tests require FORGEJO_DEFAULT_REPO in owner/repo form");
-    let repo_path = RepositoryPath::new(owner, name);
-    Some(Live {
-        forge: ForgejoForge::new(config),
-        repo_path,
-    })
-}
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "boots local Forgejo + host-mode forgejo-runner; run with --ignored"]
+async fn live_smoke_suite_against_throwaway_forgejo() {
+    let world = boot_world().await;
 
-/// Resolves the default repository's backend id, failing the test if absent.
-async fn resolve_repo_id(live: &Live) -> RepositoryId {
-    live.forge
-        .get_repository_by_path(&live.repo_path)
-        .await
-        .expect("get_repository_by_path should succeed")
-        .unwrap_or_else(|| {
-            panic!(
-                "FORGEJO_DEFAULT_REPO {}/{} not found on the server",
-                live.repo_path.owner, live.repo_path.name
-            )
-        })
-        .id
-}
-
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_current_user_returns_identity() {
-    let Some(live) = live() else {
-        return;
-    };
-    let user = live
+    let user = world
         .forge
         .current_user()
         .await
         .expect("current_user should succeed");
-    assert!(!user.handle.is_empty(), "token must map to a real login");
-}
+    assert_eq!(user.handle, ADMIN_USER);
 
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_get_repository_by_path_resolves_default_repo() {
-    let Some(live) = live() else {
-        return;
-    };
-    let repo = live
+    let repo = world
         .forge
-        .get_repository_by_path(&live.repo_path)
+        .get_repository_by_path(&world.repo_path)
         .await
         .expect("get_repository_by_path should succeed")
-        .expect("default repository should exist");
-    assert_eq!(repo.owner, live.repo_path.owner);
-    assert_eq!(repo.name, live.repo_path.name);
-    assert!(!repo.default_branch.is_empty());
-}
+        .expect("provisioned repository should exist");
+    assert_eq!(repo.id, world.repo_id);
+    assert_eq!(repo.owner, world.repo_path.owner);
+    assert_eq!(repo.name, world.repo_path.name);
+    assert_eq!(repo.default_branch, "main");
 
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_list_labels_succeeds() {
-    let Some(live) = live() else {
-        return;
-    };
-    let repo_id = resolve_repo_id(&live).await;
-    let labels = live
+    let labels = world
         .forge
-        .list_labels(&repo_id)
+        .list_labels(&world.repo_id)
         .await
         .expect("list_labels should succeed");
-    // The set may legitimately be empty; assert the call shape and determinism.
     let mut names: Vec<&str> = labels.iter().map(|label| label.name.as_str()).collect();
     let sorted = {
         let mut copy = names.clone();
@@ -136,94 +80,171 @@ async fn live_list_labels_succeeds() {
     };
     names.sort_unstable();
     assert_eq!(names, sorted, "labels should come back name-sorted");
-}
 
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_list_issues_succeeds() {
-    let Some(live) = live() else {
-        return;
-    };
-    let repo_id = resolve_repo_id(&live).await;
-    let issues = live
+    let issues = world
         .forge
-        .list_issues(&repo_id, IssueQuery::default())
+        .list_issues(&world.repo_id, IssueQuery::default())
         .await
         .expect("list_issues should succeed");
-    // No row returned through the issue surface may be a pull request.
-    assert!(
-        issues.iter().all(|issue| issue.repo_id == repo_id),
-        "every issue must belong to the queried repository"
-    );
-}
+    assert!(issues.iter().all(|issue| issue.repo_id == world.repo_id));
 
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_list_pull_requests_succeeds() {
-    let Some(live) = live() else {
-        return;
-    };
-    let repo_id = resolve_repo_id(&live).await;
-    let pulls = live
+    let pulls = world
         .forge
-        .list_pull_requests(&repo_id, PullRequestQuery::default())
+        .list_pull_requests(&world.repo_id, PullRequestQuery::default())
         .await
         .expect("list_pull_requests should succeed");
-    assert!(
-        pulls.iter().all(|pull| pull.repo_id == repo_id),
-        "every pull request must belong to the queried repository"
-    );
+    assert!(pulls.iter().all(|pull| pull.repo_id == world.repo_id));
+
+    create_and_close_issue(&world).await;
+    wait_for_ci_success(&world).await;
 }
 
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_list_ci_jobs_succeeds_or_reports_unavailable() {
-    let Some(live) = live() else {
-        return;
-    };
-    let repo_id = resolve_repo_id(&live).await;
-    // Actions may be disabled on the repo; the backend surfaces that as an error
-    // rather than an empty (falsely "passed") list. Either outcome is acceptable
-    // for a smoke test — we only assert the call does not panic and, on success,
-    // that every job is scoped to the repository.
-    match live
-        .forge
-        .list_ci_jobs(&repo_id, CiJobQuery::default())
+async fn boot_world() -> LiveWorld {
+    let server = tokio::task::spawn_blocking(ForgejoServer::start)
         .await
-    {
-        Ok(jobs) => assert!(jobs.iter().all(|job| job.repo_id == repo_id)),
-        Err(error) => eprintln!("list_ci_jobs reported Actions unavailable: {error}"),
+        .expect("server boot task joins")
+        .expect("Forgejo server boots");
+    let base = server.base_url().to_string();
+    let admin_token = bootstrap_admin(&server).expect("admin token bootstraps");
+
+    let mut runner = ForgejoRunner::register(&server).expect("forgejo-runner registers");
+    assert!(runner.is_running(), "runner daemon exited immediately");
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("reqwest client builds");
+    create_initialized_repo(&client, &base, &admin_token).await;
+    enable_repo_actions(&client, &base, &admin_token).await;
+    put_workflow_file(&client, &base, &admin_token).await;
+
+    let repo_path = RepositoryPath::new(ADMIN_USER, REPO);
+    let forge = ForgejoForge::new(
+        ForgejoConfig::new(&base, &admin_token)
+            .with_default_repo(ADMIN_USER, REPO)
+            .with_web_ui_credentials(ADMIN_USER, ADMIN_PASSWORD),
+    );
+    let repo_id = forge
+        .get_repository_by_path(&repo_path)
+        .await
+        .expect("repository lookup should succeed")
+        .expect("provisioned repository exists")
+        .id;
+
+    LiveWorld {
+        _server: server,
+        _runner: runner,
+        forge,
+        repo_id,
+        repo_path,
     }
 }
 
-#[tokio::test]
-#[ignore = "live: requires TEMPER_FORGEJO_LIVE=1 and Forgejo credentials"]
-async fn live_create_and_close_issue_roundtrip() {
-    let Some(live) = live() else {
-        return;
-    };
-    // A second, explicit opt-in: read-mostly live runs never mutate the server.
-    if std::env::var("TEMPER_FORGEJO_LIVE_MUTATE").ok().as_deref() != Some("1") {
-        eprintln!("skipping live mutation test: set TEMPER_FORGEJO_LIVE_MUTATE=1 to enable");
-        return;
+fn bootstrap_admin(server: &ForgejoServer) -> Result<String, ServerError> {
+    server.run_cli(&[
+        "admin",
+        "user",
+        "create",
+        "--username",
+        ADMIN_USER,
+        "--password",
+        ADMIN_PASSWORD,
+        "--email",
+        ADMIN_EMAIL,
+        "--admin",
+        "--must-change-password=false",
+    ])?;
+    let token = server.run_cli(&[
+        "admin",
+        "user",
+        "generate-access-token",
+        "--username",
+        ADMIN_USER,
+        "--scopes",
+        "all",
+        "--raw",
+    ])?;
+    Ok(token.trim().to_string())
+}
+
+async fn create_initialized_repo(client: &reqwest::Client, base: &str, token: &str) {
+    let response = client
+        .post(format!("{base}/api/v1/user/repos"))
+        .header("Authorization", format!("token {token}"))
+        .json(&json!({
+            "name": REPO,
+            "auto_init": true,
+            "default_branch": "main",
+            "private": false,
+        }))
+        .send()
+        .await
+        .expect("create repo request sends");
+    assert_success(response, "create repo").await;
+}
+
+async fn enable_repo_actions(client: &reqwest::Client, base: &str, token: &str) {
+    let response = client
+        .patch(format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"))
+        .header("Authorization", format!("token {token}"))
+        .json(&json!({ "has_actions": true }))
+        .send()
+        .await
+        .expect("enable actions request sends");
+    assert_success(response, "enable actions").await;
+}
+
+async fn put_workflow_file(client: &reqwest::Client, base: &str, token: &str) -> String {
+    let content = base64::engine::general_purpose::STANDARD.encode(CI_WORKFLOW);
+    let response = client
+        .post(format!(
+            "{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"
+        ))
+        .header("Authorization", format!("token {token}"))
+        .json(&json!({
+            "content": content,
+            "message": "add CI workflow",
+            "branch": "main",
+        }))
+        .send()
+        .await
+        .expect("put workflow request sends");
+    let body = assert_success_json(response, "put workflow").await;
+    body["commit"]["sha"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| panic!("no commit sha in contents response: {body}"))
+}
+
+async fn assert_success(response: reqwest::Response, what: &str) {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        panic!("{what} failed: {status} {body}");
     }
-    let repo_id = resolve_repo_id(&live).await;
+}
 
-    // A unique title keeps repeated runs from colliding and makes the artifact
-    // easy to identify and clean up by hand if a run is interrupted mid-test.
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock is after the unix epoch")
-        .as_millis();
-    let title = format!("temper-forge-forgejo live smoke {nonce}");
+async fn assert_success_json(response: reqwest::Response, what: &str) -> Value {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        panic!("{what} failed: {status} {body}");
+    }
+    response
+        .json()
+        .await
+        .unwrap_or_else(|error| panic!("{what} response should be json: {error}"))
+}
 
-    let created = live
+async fn create_and_close_issue(world: &LiveWorld) {
+    let title = "temper-forge-forgejo live smoke issue";
+    let created = world
         .forge
         .create_issue(
-            &repo_id,
+            &world.repo_id,
             CreateIssue {
-                title: title.clone(),
-                body: "Created by the temper-forge-forgejo live smoke test.".to_string(),
+                title: title.to_string(),
+                body: "Created by the throwaway live smoke suite.".to_string(),
                 labels: Vec::new(),
                 assignees: Vec::new(),
             },
@@ -232,8 +253,7 @@ async fn live_create_and_close_issue_roundtrip() {
         .expect("create_issue should succeed");
     assert_eq!(created.title, title);
 
-    // Immediately close it so the test leaves no open artifact behind.
-    let closed = live
+    let closed = world
         .forge
         .update_issue(
             &created.id,
@@ -245,4 +265,30 @@ async fn live_create_and_close_issue_roundtrip() {
         .await
         .expect("update_issue (close) should succeed");
     assert_eq!(closed.state, IssueState::Closed);
+}
+
+async fn wait_for_ci_success(world: &LiveWorld) {
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        let observation = match world
+            .forge
+            .list_ci_jobs(&world.repo_id, CiJobQuery::default())
+            .await
+        {
+            Ok(jobs) => {
+                if jobs.iter().any(|job| {
+                    job.status == CiJobStatus::Completed
+                        && job.conclusion == Some(CiJobConclusion::Success)
+                }) {
+                    return;
+                }
+                format!("jobs={jobs:?}")
+            }
+            Err(error) => error.to_string(),
+        };
+        if Instant::now() >= deadline {
+            panic!("CI success was not observed within 180s; last observation: {observation}");
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }

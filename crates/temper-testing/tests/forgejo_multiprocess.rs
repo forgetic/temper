@@ -23,13 +23,12 @@
 //! (`--backend forgejo`, `--base-url`, `--clock wall`, `--ci-sentinel`) and the
 //! secrets passed via env; the seed/assert closures are reused verbatim.
 //!
-//! `#[ignore]`d **and** gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-//! `cargo test` never downloads a binary, opens a socket, or spawns a server. Run
-//! it with:
+//! `#[ignore]`d, so the default `cargo test` never downloads a binary, opens a
+//! socket, or spawns a server. No extra environment variable is required; run it
+//! with:
 //!
 //! ```sh
-//! TEMPER_FORGEJO_E2E=1 \
-//!   cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
+//! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 //! ```
 //!
 //! A real host CI job takes seconds and provisioning + git + HTTP add up, so the
@@ -47,7 +46,7 @@ mod multi_repo_support;
 #[path = "support/forgejo_multiprocess.rs"]
 mod multiprocess_support;
 
-use multiprocess_support::{convergence_timeout, enabled, WorkerFleet};
+use multiprocess_support::{convergence_timeout, WorkerFleet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -86,8 +85,7 @@ struct Variant {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; \
-            run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn happy_path_converges_against_real_forgejo() {
     run_variant(&Variant {
         scenario: happy_path,
@@ -99,8 +97,7 @@ fn happy_path_converges_against_real_forgejo() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; \
-            run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn changes_requested_then_approved_converges_against_real_forgejo() {
     run_variant(&Variant {
         scenario: changes_requested_then_approved,
@@ -112,8 +109,7 @@ fn changes_requested_then_approved_converges_against_real_forgejo() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; \
-            run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn ci_fails_then_passes_converges_against_real_forgejo() {
     run_variant(&Variant {
         scenario: ci_fails_then_passes,
@@ -127,8 +123,7 @@ fn ci_fails_then_passes_converges_against_real_forgejo() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; \
-            run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
     run_variant(&Variant {
         scenario: dependency_chain_mechanically_unblocked,
@@ -140,8 +135,7 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
 }
 
 #[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; \
-            run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn cross_repo_fanout_converges_against_real_forgejo() {
     run_variant(&Variant {
         scenario: cross_repo_fanout_converges,
@@ -156,10 +150,6 @@ fn cross_repo_fanout_converges_against_real_forgejo() {
 /// Forgejo, asserting it converges to the same end state as the in-process
 /// scenario.
 fn run_variant(variant: &Variant) {
-    if !enabled() {
-        return;
-    }
-
     // Boot the server + runner. `ForgejoServer::start` polls readiness with a
     // *blocking* reqwest client whose nested runtime must live and die off any
     // async reactor — this driver is a plain `#[test]`, so there is no reactor to

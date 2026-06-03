@@ -70,8 +70,14 @@ Run the fast validation loop unless the task explicitly narrows it:
 cargo fmt --all
 cargo dev-clippy
 cargo dev-check
+cargo dev-test
 ```
 
-Run task-specific tests when behavior changed. See
-`docs/how-to/fast-local-iteration.md` and
-`docs/how-to/end-a-development-session.md`.
+The default `cargo dev-test` suite should stay fast (soft target: under about 10
+seconds on a warmed local checkout). Before ending a session, also run every
+non-default/ignored test that is self-contained for the checkout: this includes
+local Forgejo tests once `.cache/forgejo/` is populated, and excludes only tests
+that require real LLMs or external services. See
+`docs/how-to/fast-local-iteration.md`,
+`docs/how-to/end-a-development-session.md`, and
+`docs/how-to/run-forgejo-multiprocess-e2e.md`.

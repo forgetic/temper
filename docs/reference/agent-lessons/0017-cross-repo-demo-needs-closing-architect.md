@@ -21,8 +21,10 @@ issue dependencies, so open child issues keep the parent blocked forever.
 
 When a demo or test expects dependency unblocking through produced code issues,
 ensure that issue closure is modeled or supplied by an explicit test fixture. Do
-not assume merging a PR automatically closes its parent issue; production generic
-role agents no longer expose a hard-coded closing-architect flag.
+not assume merging a PR automatically closes its parent issue. The Temper
+reference-delivery launcher now uses deterministic fake agents and sets the
+closing fake architect by default for this reason; Smith-backed production-style
+responders must model the same behavior through configuration or tools.
 
 ## Where this is now documented
 

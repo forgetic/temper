@@ -19,19 +19,17 @@ temper-production = { path = "../temper-production" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forgejo-fixture = { path = "../temper-forgejo-fixture" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-runner = { path = "../temper-runner" }
 temper-workflow = { path = "../temper-workflow" }
-# Forgejo end-to-end fixture (env-gated, #[ignore]d): a blocking HTTP client to
-# download the pinned server binary, verify its checksum, and poll readiness.
-# `reqwest` is already in the workspace tree via `temper-forge-forgejo`; the
-# `blocking` feature adds the sync API the one-shot download/boot fixture uses,
-# while the async API drives REST provisioning under a Tokio reactor (Phase 2).
+# Forgejo provisioning uses async REST under a Tokio reactor; a shared fixture
+# crate owns the blocking server/runner lifecycle and cache management.
 reqwest = { workspace = true, features = ["blocking", "json"] }
 sha2 = "0.10"
 # Phase 2 provisioning commits workflow file(s) via the Forgejo contents API,
-# which accepts base64-encoded bodies. Also used by the env-gated runner smoke
-# test (a dev-dependency there too; a normal dependency here for provision.rs).
+# which accepts base64-encoded bodies. Also used by ignored Forgejo smoke tests
+# (a dev-dependency there too; a normal dependency here for provision.rs).
 base64 = "0.22"
 # The Forgejo backend (`ForgejoForge`) is async and its futures park on real
 # network IO, so the `--backend forgejo` worker path (Phase 3) cannot use the

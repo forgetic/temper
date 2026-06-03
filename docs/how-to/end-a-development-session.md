@@ -11,15 +11,32 @@ git diff --stat
 
 Use `git diff` for any file you edited. Confirm there are no accidental generated files, secrets, or unrelated changes.
 
-## 2. Run the fast validation loop
+## 2. Run validation
 
 ```sh
 cargo fmt --all
 cargo dev-clippy
 cargo dev-check
+cargo dev-test
 ```
 
-Clippy is installed in this environment; keep its output clean. Add task-specific tests when behavior changed. Run those tests before handoff.
+Clippy is installed in this environment; keep its output clean. The default test
+suite should remain fast (soft target: under about 10 seconds on a warmed local
+checkout).
+
+Then run the non-default tests that are self-contained for this checkout before
+handoff. They must be green; fix failures instead of handing them off. This means
+all ignored local-process/local-Forgejo tests, after populating `.cache/forgejo/`
+when needed. Exclude only tests that require real LLM credentials or external
+services outside the checkout.
+
+```sh
+# Only needed when .cache/forgejo/ is missing.
+cargo test -p temper-forgejo-fixture --test cache -- --ignored
+
+cargo test -p temper-forge-forgejo --test live -- --ignored --test-threads=1
+cargo test -p temper-testing -- --ignored --test-threads=1
+```
 
 ## 3. Review documentation from the top
 

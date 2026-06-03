@@ -11,19 +11,6 @@ use temper_workflow::RoleId;
 
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Returns whether the env opt-in is present; prints a skip note when not.
-pub fn enabled() -> bool {
-    let e2e = std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1");
-    if e2e {
-        return true;
-    }
-    eprintln!(
-        "skipping Forgejo multiprocess e2e test: set TEMPER_FORGEJO_E2E=1 to enable \
-         (downloads pinned Forgejo + forgejo-runner binaries and spawns a host-mode runner)"
-    );
-    false
-}
-
 pub fn convergence_timeout() -> Duration {
     CONVERGENCE_TIMEOUT
 }

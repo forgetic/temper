@@ -1,12 +1,11 @@
 //! Phase 3b e2e: read real CI status through the password/web-UI path.
 //!
-//! `#[ignore]`d **and** gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-//! `cargo test` never downloads a binary, opens a socket, or spawns a server —
-//! exactly like the Phase 1/1b/2 e2e tests. Run it with:
+//! `#[ignore]`d, so the default `cargo test` never downloads a binary, opens a
+//! socket, or spawns a server. No extra environment variable is required; run it
+//! with:
 //!
 //! ```sh
-//! TEMPER_FORGEJO_E2E=1 \
-//!   cargo test -p temper-testing --test forgejo_ci_web_ui -- --ignored
+//! cargo test -p temper-testing --test forgejo_ci_web_ui -- --ignored
 //! ```
 //!
 //! It boots a [`ForgejoServer`] + [`ForgejoRunner`] (host mode, no containers),
@@ -25,25 +24,9 @@ use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_server::{provision, ForgejoRunner, ForgejoServer};
 use temper_testing::runner_config;
 
-/// Returns whether the env opt-in is present; prints a skip note when not.
-fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        return true;
-    }
-    eprintln!(
-        "skipping Forgejo CI web-UI e2e test: set TEMPER_FORGEJO_E2E=1 to enable \
-         (downloads pinned Forgejo + forgejo-runner binaries and spawns a host-mode runner)"
-    );
-    false
-}
-
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "boots a real Forgejo + host-mode runner; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
 async fn list_ci_jobs_reads_failure_through_web_ui() {
-    if !enabled() {
-        return;
-    }
-
     // `ForgejoServer::start` uses a *blocking* reqwest client for its readiness
     // poll; boot it on a blocking thread so that nested runtime lives and dies
     // off-reactor (matching the Phase 2 provisioning test).

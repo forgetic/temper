@@ -28,3 +28,8 @@ Temper. External responders may receive authority-neutral observability/context
 fields for correlation, but they receive no Forge handle, Forge token, or
 workflow mutation tools. All mutations remain Temper `RoleTools` or explicit
 interaction acceptance executor actions after reply validation.
+
+Smith-backed operator/dogfood examples live in the sibling Smith checkout under
+`~/src/rust/smith/examples/`. Temper's checked-in `examples/reference-delivery/`
+launcher intentionally uses deterministic fake agents with a real throwaway
+Forgejo and real `forgejo-runner`.

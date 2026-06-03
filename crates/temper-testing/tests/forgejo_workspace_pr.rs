@@ -24,24 +24,9 @@ use temper_workflow::{
     WorkflowMetadata,
 };
 
-fn enabled() -> bool {
-    let enabled = std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1");
-    if !enabled {
-        eprintln!(
-            "skipping Forgejo workspace PR proof: set TEMPER_FORGEJO_E2E=1 \
-             (boots a real throwaway Forgejo)"
-        );
-    }
-    enabled
-}
-
 #[test]
-#[ignore = "boots a real Forgejo; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo; run with --ignored"]
 fn local_git_workspace_pushes_meaningful_pr_diff() {
-    if !enabled() {
-        return;
-    }
-
     let server = ForgejoServer::start().expect("forgejo server boots");
     let provisioned = block_on(provision(&server)).expect("provisioning succeeds");
     let engineer = provisioned

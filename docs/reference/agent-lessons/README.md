@@ -51,3 +51,4 @@ Use `template.md`. Keep each entry short and specific.
 | [0023](0023-keep-agents-md-as-orientation-map.md) | Keep `AGENTS.md` as an orientation map | docs, process, agents |
 | [0024](0024-product-manager-is-an-interactive-profile.md) | Treat product-manager as an interactive profile | architecture, agents, workflow, product-chat, interaction |
 | [0025](0025-process-boundary-for-interactive-responders.md) | Prefer process boundaries for interactive responders | architecture, agents, interaction, process-boundary, pi-sdk |
+| [0026](0026-answer-questions-before-implementation.md) | Answer questions before implementation | process, communication, testing |

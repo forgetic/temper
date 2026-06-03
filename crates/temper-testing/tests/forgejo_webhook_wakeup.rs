@@ -30,12 +30,8 @@ const ASSERT_POLL: Duration = Duration::from_secs(1);
 const WORKER_RUN_SECS: u64 = 180;
 
 #[test]
-#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with --ignored"]
 fn happy_path_progresses_by_webhook_wake_before_long_poll() {
-    if !enabled() {
-        return;
-    }
-
     let server = ForgejoServer::start().expect("forgejo server boots");
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
@@ -115,18 +111,6 @@ fn happy_path_progresses_by_webhook_wake_before_long_poll() {
     drop(workers);
     drop(runner);
     drop(server);
-}
-
-fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        true
-    } else {
-        eprintln!(
-            "skipping Forgejo webhook wakeup e2e: set TEMPER_FORGEJO_E2E=1 to enable \
-             (boots real Forgejo + forgejo-runner and opens local webhook/wake sockets)"
-        );
-        false
-    }
 }
 
 fn block_on_provision(server: &ForgejoServer) -> Provisioned {

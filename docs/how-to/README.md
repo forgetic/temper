@@ -14,10 +14,9 @@ Current guides:
 - [Run the Forgejo multi-process end-to-end fixture](run-forgejo-multiprocess-e2e.md)
 - [Configure Smith LLM responders from Temper](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
-- Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — now wired
-  to the planned production binary names; see its
-  [README](../../examples/reference-delivery/README.md) and
-  [production-binaries plan](../../plans/production-binaries/README.md).
+- Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — fake
+  agents against a real throwaway Forgejo plus real host-mode forgejo-runner;
+  see its [README](../../examples/reference-delivery/README.md).
 
 Planned guides:
 

@@ -1,13 +1,12 @@
 //! Phase 3 backend-seam test: a `--backend forgejo` worker ticks against a real
 //! server.
 //!
-//! `#[ignore]`d **and** gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-//! `cargo test` never downloads a binary, opens a socket, or spawns a server —
-//! exactly like the Phase 1/1b/2/2b smoke tests. Run it with:
+//! `#[ignore]`d, so the default `cargo test` never downloads a binary, opens a
+//! socket, or spawns a server. No extra environment variable is required; run it
+//! with:
 //!
 //! ```sh
-//! TEMPER_FORGEJO_E2E=1 \
-//!   cargo test -p temper-testing --test forgejo_worker -- --ignored
+//! cargo test -p temper-testing --test forgejo_worker -- --ignored
 //! ```
 //!
 //! It proves the Phase 3 contract: the worker library's backend seam constructs
@@ -38,25 +37,9 @@ use temper_testing::worker_bin::{
 };
 use temper_workflow::RoleId;
 
-/// Returns whether the env opt-in is present; prints a skip note when not.
-fn enabled() -> bool {
-    if std::env::var("TEMPER_FORGEJO_E2E").ok().as_deref() == Some("1") {
-        return true;
-    }
-    eprintln!(
-        "skipping Forgejo worker e2e test: set TEMPER_FORGEJO_E2E=1 to enable \
-         (downloads a pinned Forgejo binary and boots a throwaway server)"
-    );
-    false
-}
-
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "boots a real Forgejo server; run with TEMPER_FORGEJO_E2E=1 -- --ignored"]
+#[ignore = "boots a real Forgejo server; run with --ignored"]
 async fn forgejo_role_worker_ticks_against_a_running_server() {
-    if !enabled() {
-        return;
-    }
-
     // Boot off-reactor: `ForgejoServer::start` uses a blocking reqwest client for
     // its readiness poll, whose nested blocking runtime must live and die off the
     // async test thread (same pattern as the Phase 2/2b tests).
@@ -169,8 +152,8 @@ async fn forgejo_role_worker_ticks_against_a_running_server() {
 
 /// Sanity check that runs in the default suite (no server): the engineer role's
 /// behavior default is what a Phase 4 spawner would pass, and the parser still
-/// produces a Forgejo backend for it. Keeps the seam covered even when the
-/// env-gated server test is skipped.
+/// produces a Forgejo backend for it. Keeps the seam covered without booting a
+/// server in the default suite.
 #[test]
 fn role_behavior_default_is_stable() {
     assert_eq!(RoleBehavior::default(), RoleBehavior::default());

@@ -38,6 +38,6 @@ will hit when they provision identity and read CI.
 ## Where this is now documented
 
 - `crates/temper-testing/tests/forgejo_runner.rs` (`create_admin_token`) and
-  `crates/temper-testing/src/forgejo_server/runner.rs` (`registration_token`).
+  `crates/temper-forgejo-fixture/src/runner.rs` (`registration_token`).
 - `docs/how-to/run-forgejo-multiprocess-e2e.md` (Runner smoke test section).
 - `plans/forgejo-e2e/findings-phase-0b.md` (the original runner spike).

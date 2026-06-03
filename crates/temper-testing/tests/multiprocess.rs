@@ -17,15 +17,11 @@
 //! against the same end state as the deterministic scenarios — no forked
 //! assertion logic per topology.
 //!
-//! They are `#[ignore]`d on purpose: they spawn real processes and detect
-//! convergence by wall-clock polling, so they are the one intentional
-//! non-deterministic test, matching the env-gated Forgejo live-test precedent.
-//! The deterministic in-process scenarios remain the default coverage. Run them
-//! with:
-//!
-//! ```sh
-//! cargo test -p temper-testing --test multiprocess -- --ignored
-//! ```
+//! These filesystem-backed process-boundary tests are part of the default suite:
+//! they spawn real processes and detect convergence by wall-clock polling, but
+//! they are fast enough to run on every `cargo dev-test`. The deterministic
+//! in-process scenarios remain the first-line coverage; this file adds the
+//! process-boundary regression.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -54,7 +50,7 @@ const WORKER_POLL_MS: u64 = 20;
 const WORKER_RUN_SECS: u64 = 120;
 /// How long to wait for workers to observe the stop sentinel before killing them.
 const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Serializes these ignored tests when Rust's test harness runs them in parallel.
+/// Serializes these tests when Rust's test harness runs them in parallel.
 static MULTIPROCESS_E2E_LOCK: Mutex<()> = Mutex::new(());
 
 /// The worker behavior flags that distinguish one scenario's topology.
@@ -78,7 +74,6 @@ struct Variant {
 }
 
 #[test]
-#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
 fn happy_path_converges_across_real_processes() {
     run_variant(&Variant {
         suite: "multiprocess-happy-path",
@@ -91,7 +86,6 @@ fn happy_path_converges_across_real_processes() {
 }
 
 #[test]
-#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
 fn changes_requested_then_approved_converges_across_real_processes() {
     run_variant(&Variant {
         suite: "multiprocess-changes-requested",
@@ -104,7 +98,6 @@ fn changes_requested_then_approved_converges_across_real_processes() {
 }
 
 #[test]
-#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
 fn ci_fails_then_passes_converges_across_real_processes() {
     run_variant(&Variant {
         suite: "multiprocess-ci-fails",
@@ -117,7 +110,6 @@ fn ci_fails_then_passes_converges_across_real_processes() {
 }
 
 #[test]
-#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
 fn dependency_chain_mechanically_unblocked_across_real_processes() {
     run_variant(&Variant {
         suite: "multiprocess-dependency-chain",
@@ -130,7 +122,6 @@ fn dependency_chain_mechanically_unblocked_across_real_processes() {
 }
 
 #[test]
-#[ignore = "spawns OS processes and polls on wall-clock time; run with --ignored"]
 fn cross_repo_fanout_converges_across_one_fixed_worker_fleet() {
     run_variant(&Variant {
         suite: "multiprocess-cross-repo-fanout",
@@ -145,8 +136,8 @@ fn cross_repo_fanout_converges_across_one_fixed_worker_fleet() {
 /// Drives one scenario through the true multi-process topology and asserts it
 /// converges to the same end state the in-process scenario would.
 fn run_variant(variant: &Variant) {
-    // `cargo test -- --ignored` still runs ignored tests in parallel by default.
-    // Each scenario launches a whole worker fleet; running all fleets at once
+    // The Rust test harness runs tests in parallel by default. Each scenario
+    // launches a whole worker fleet; running all fleets at once
     // makes this wall-clock topology rehearsal oversubscribe the host and can
     // leave a child slow to observe shutdown. The process-boundary property is
     // covered within each fleet, so serialize scenarios inside this test binary.

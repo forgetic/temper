@@ -102,19 +102,21 @@ in `temper-forge-forgejo` (all behind the unchanged `Forge` signatures):
 - **`list_pull_request_reviews` keeps dismissed/stale verdicts** — history is
   preserved; the aggregate still takes the latest per reviewer.
 
-## Why it stays `#[ignore]`d + env-gated
+## Why it stays `#[ignore]`d
 
 It boots real OS processes (server, runner, N workers), executes CI **on the
 host**, and detects convergence by wall-clock polling — non-deterministic,
-network-bound, and host-mutating. Like the `temper-forge-forgejo` live tests it
-is `#[ignore]`d and gated behind `TEMPER_FORGEJO_E2E=1`, so the default
-`cargo test` stays hermetic and deterministic. The in-process scenarios remain
-the default coverage for workflow logic; this covers the real-backend topology.
+network-bound, and host-mutating. Like the `temper-forge-forgejo` live test it is
+`#[ignore]`d, so the default `cargo test` stays hermetic and deterministic. The
+ignored test requires the shared `.cache/forgejo/` binary cache (or explicit
+binary overrides) and fails with a cache-population hint when the cache is
+missing. The in-process scenarios remain the first-line coverage for workflow
+logic; this covers the real-backend topology.
 
 ## Triggering status
 
 The five-scenario Forgejo multi-process suite remains poll-driven so it can
-compare directly with the filesystem rehearsal. Separate gated long-poll
+compare directly with the filesystem rehearsal. Separate ignored long-poll
 regressions cover the real webhook accelerator: `forgejo_webhook_wakeup` for one
 repo, and `forgejo_multi_repo_webhook` for one fixed worker set scanning two
 repos. Real Forgejo posts to the production trigger, the trigger sends

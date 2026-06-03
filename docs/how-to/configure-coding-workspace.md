@@ -56,13 +56,13 @@ workflow file. The worker then commits and pushes the branch and opens the PR vi
 `RoleTools`, so Forge/workflow mutation stays behind the normal authority
 boundary.
 
-Dogfood keeps `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0` by default. Turning it on
-requires the workspace env above, the engineer role's `coding_workspace`
-declaration, active PR diff guard settings, and role credentials. Check the live
-setup with:
+The Smith-owned dogfood launcher keeps `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0`
+by default. Turning it on requires the workspace env above, the engineer role's
+`coding_workspace` declaration, active PR diff guard settings, and role
+credentials. Check that live setup from the Smith checkout:
 
 ```sh
-cd examples/dogfood
+cd ~/src/rust/smith/examples/dogfood
 ./run.sh preflight
 ```
 
