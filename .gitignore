@@ -21,3 +21,7 @@ __pycache__/
 !/plans/user-defined-interactive-agents/README.md
 !/plans/user-defined-interactive-agents/prompts/
 !/plans/user-defined-interactive-agents/prompts/*.md
+!/plans/scalable-scans-and-faster-forgejo-e2e/
+!/plans/scalable-scans-and-faster-forgejo-e2e/README.md
+!/plans/scalable-scans-and-faster-forgejo-e2e/prompts/
+!/plans/scalable-scans-and-faster-forgejo-e2e/prompts/*.md

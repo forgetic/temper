@@ -357,7 +357,10 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         role: &RoleId,
     ) -> Result<ExecutionReport, ExecutionError> {
         let loaded = self.load(repo_id, target).await?;
-        let signals = self.gate_signals(repo_id, &loaded).await?;
+        let needs = self.workflow.signal_needs_for_transition(transition);
+        let signals = self
+            .gate_signals_with_needs(repo_id, &loaded, needs)
+            .await?;
 
         let plan = self
             .workflow
@@ -398,7 +401,10 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         role: &RoleId,
     ) -> Result<TransitionPlan, ExecutionError> {
         let loaded = self.load(repo_id, target).await?;
-        let signals = self.gate_signals(repo_id, &loaded).await?;
+        let needs = self.workflow.signal_needs_for_transition(transition);
+        let signals = self
+            .gate_signals_with_needs(repo_id, &loaded, needs)
+            .await?;
         self.workflow
             .planner()
             .plan_transition_with(transition, role, loaded.classified(), &signals)

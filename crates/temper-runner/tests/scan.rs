@@ -1,18 +1,79 @@
 //! Integration tests for Forge-backed runner scans.
 
+mod support;
+
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
+use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
-    CreateRepository, Forge, ItemNumber, RepositoryId, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, IssueState, ItemNumber, RepositoryId,
+    RequestReviewers, ReviewDecision, UpdateIssue, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{scan, scan_role, WorkItem};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
+
+const REVIEW_ONLY_FIXTURE: &str = r#"
+{
+  "name": "review-only",
+  "roles": [
+    { "id": "review_watcher", "queues": ["review_changes"] }
+  ],
+  "labels": [
+    { "id": "implementation" }
+  ],
+  "artifact_kinds": [
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": ["implementation"]
+    }
+  ],
+  "queues": [
+    {
+      "id": "review_changes",
+      "artifact": "implementation_pr",
+      "condition": { "kind": "review_changes_requested" }
+    }
+  ]
+}
+"#;
+
+const DEPENDENCY_QUEUE_FIXTURE: &str = r#"
+{
+  "name": "dependency-queue",
+  "roles": [
+    { "id": "dependency_watcher", "queues": ["dependencies_clear"] }
+  ],
+  "labels": [
+    { "id": "code" },
+    { "id": "blocked" }
+  ],
+  "artifact_kinds": [
+    {
+      "id": "code",
+      "target": "issue",
+      "identifying_labels": ["code"]
+    }
+  ],
+  "relations": [
+    { "kind": "dependency", "source": "code", "target": "code" }
+  ],
+  "queues": [
+    {
+      "id": "dependencies_clear",
+      "artifact": "code",
+      "labels": ["blocked"],
+      "condition": { "kind": "dependencies_resolved" }
+    }
+  ]
+}
+"#;
 
 struct NoopWake;
 
@@ -35,8 +96,12 @@ fn ts(value: &str) -> DateTime<Utc> {
 }
 
 fn workflow() -> temper_workflow::ValidatedWorkflow {
-    let spec: RawWorkflowSpec = serde_json::from_str(FIXTURE).expect("fixture parses");
-    spec.validate().expect("reference fixture validates")
+    workflow_from_json(FIXTURE)
+}
+
+fn workflow_from_json(json: &str) -> temper_workflow::ValidatedWorkflow {
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("workflow parses");
+    spec.validate().expect("workflow validates")
 }
 
 fn new_repo(forge: &MemoryForge) -> RepositoryId {
@@ -112,6 +177,58 @@ fn seed_ci(
             updated_at: ts("2026-05-29T00:01:00Z"),
         }],
     );
+}
+
+fn submit_review(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    decision: ReviewDecision,
+) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    block_on(forge.request_pull_request_reviewers(
+        &pull_request.id,
+        RequestReviewers {
+            reviewers: vec![UserId::new("user-1")],
+        },
+    ))
+    .expect("reviewer requested");
+    block_on(forge.submit_pull_request_review(
+        &pull_request.id,
+        CreatePullRequestReview {
+            decision,
+            body: None,
+        },
+    ))
+    .expect("review submitted");
+}
+
+fn close_issue(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) {
+    let issue = block_on(forge.get_issue_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("issue exists");
+    block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            state: Some(IssueState::Closed),
+            ..UpdateIssue::default()
+        },
+    ))
+    .expect("issue closes");
+}
+
+fn add_issue_dependency(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    source: ItemNumber,
+    target: ItemNumber,
+) {
+    let issue = block_on(forge.get_issue_by_number(repo, source))
+        .expect("lookup succeeds")
+        .expect("issue exists");
+    block_on(forge.add_issue_dependency(&issue.id, target)).expect("dependency link added");
 }
 
 fn scan_repo(forge: &MemoryForge, repo: &RepositoryId) -> Vec<WorkItem> {
@@ -258,4 +375,123 @@ fn role_scan_returns_only_the_roles_subscribed_queues() {
             kind: ArtifactKindId::new("intake"),
         }]
     );
+}
+
+#[test]
+fn role_scan_without_ci_gated_queue_does_not_list_ci_jobs() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    create_pr(&forge, &repo, &["implementation"]);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    let items = block_on(scan_role(
+        &counting,
+        &repo,
+        &workflow,
+        &compiled,
+        ts("2026-05-29T00:00:00Z"),
+        &RoleId::new("architect"),
+    ))
+    .expect("scan succeeds");
+
+    assert!(items.is_empty());
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
+}
+
+#[test]
+fn ci_gated_queue_fetches_ci_and_matches() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pr(&forge, &repo, &["implementation", "needs-merge"]);
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    assert_eq!(
+        block_on(scan_role(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("owner"),
+        ))
+        .expect("scan succeeds"),
+        vec![WorkItem {
+            queue: QueueId::new("merge_ready"),
+            role: RoleId::new("owner"),
+            target: ArtifactSource::PullRequest { number },
+            kind: ArtifactKindId::new("implementation_pr"),
+        }]
+    );
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 1);
+    assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
+}
+
+#[test]
+fn review_gated_queue_fetches_reviews_but_not_ci() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pr(&forge, &repo, &["implementation"]);
+    submit_review(&forge, &repo, number, ReviewDecision::ChangesRequested);
+    let workflow = workflow_from_json(REVIEW_ONLY_FIXTURE);
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    assert_eq!(
+        block_on(scan_role(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("review_watcher"),
+        ))
+        .expect("scan succeeds"),
+        vec![WorkItem {
+            queue: QueueId::new("review_changes"),
+            role: RoleId::new("review_watcher"),
+            target: ArtifactSource::PullRequest { number },
+            kind: ArtifactKindId::new("implementation_pr"),
+        }]
+    );
+    assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 1);
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
+}
+
+#[test]
+fn dependency_gated_queue_fetches_dependency_state() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let dependency = create_issue(&forge, &repo, &["code"]);
+    close_issue(&forge, &repo, dependency);
+    let blocked = create_issue(&forge, &repo, &["code", "blocked"]);
+    add_issue_dependency(&forge, &repo, blocked, dependency);
+    let workflow = workflow_from_json(DEPENDENCY_QUEUE_FIXTURE);
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    assert_eq!(
+        block_on(scan_role(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("dependency_watcher"),
+        ))
+        .expect("scan succeeds"),
+        vec![WorkItem {
+            queue: QueueId::new("dependencies_clear"),
+            role: RoleId::new("dependency_watcher"),
+            target: ArtifactSource::Issue { number: blocked },
+            kind: ArtifactKindId::new("code"),
+        }]
+    );
+    assert!(counting.count(CountedForgeOp::GetIssueByNumber) >= 2);
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
+    assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
 }

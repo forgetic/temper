@@ -40,6 +40,8 @@ pub enum ForgeOp {
     UpdatePullRequest,
     GetPullRequestByNumber,
     ListPullRequests,
+    ListPullRequestReviews,
+    ListCiJobs,
     MergePullRequest,
 }
 
@@ -321,7 +323,11 @@ impl<F: Forge> Forge for CrashForge<F> {
         &self,
         id: &PullRequestId,
     ) -> ForgeResult<Vec<PullRequestReview>> {
-        self.inner.list_pull_request_reviews(id).await
+        let n = self.tick(ForgeOp::ListPullRequestReviews);
+        self.guard(ForgeOp::ListPullRequestReviews, n, FaultPoint::Before)?;
+        let result = self.inner.list_pull_request_reviews(id).await?;
+        self.guard(ForgeOp::ListPullRequestReviews, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn submit_pull_request_review(
@@ -361,7 +367,11 @@ impl<F: Forge> Forge for CrashForge<F> {
         repo_id: &RepositoryId,
         query: CiJobQuery,
     ) -> ForgeResult<Vec<CiJob>> {
-        self.inner.list_ci_jobs(repo_id, query).await
+        let n = self.tick(ForgeOp::ListCiJobs);
+        self.guard(ForgeOp::ListCiJobs, n, FaultPoint::Before)?;
+        let result = self.inner.list_ci_jobs(repo_id, query).await?;
+        self.guard(ForgeOp::ListCiJobs, n, FaultPoint::After)?;
+        Ok(result)
     }
 
     async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {

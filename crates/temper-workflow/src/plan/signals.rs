@@ -15,9 +15,112 @@
 //!
 //! [`Planner`]: super::Planner
 
-use super::DependencyStatus;
+use super::{queue::QueueQuery, DependencyStatus};
+use crate::ids::TransitionId;
+use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use std::collections::HashMap;
 use temper_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
+
+/// Runtime signal categories a queue or transition may need.
+///
+/// The planner can evaluate label and state conditions from a classified
+/// artifact alone. Dependency, CI, and review conditions require fresh Forge
+/// reads, so scanners and executors use this interest set to load only the
+/// signal families a candidate queue or transition can actually inspect.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SignalNeeds {
+    /// Whether dependency target state is needed.
+    pub dependencies: bool,
+    /// Whether native CI jobs are needed.
+    pub ci: bool,
+    /// Whether native pull-request reviews are needed.
+    pub review: bool,
+}
+
+impl SignalNeeds {
+    /// Builds an explicit interest set.
+    pub const fn new(dependencies: bool, ci: bool, review: bool) -> Self {
+        Self {
+            dependencies,
+            ci,
+            review,
+        }
+    }
+
+    /// No runtime signal families are needed.
+    pub const fn none() -> Self {
+        Self::new(false, false, false)
+    }
+
+    /// Every runtime signal family is needed.
+    pub const fn all() -> Self {
+        Self::new(true, true, true)
+    }
+
+    /// Returns whether no runtime signal families are requested.
+    pub const fn is_empty(self) -> bool {
+        !self.dependencies && !self.ci && !self.review
+    }
+
+    /// Returns the union of two interest sets.
+    pub const fn union(self, other: Self) -> Self {
+        Self::new(
+            self.dependencies || other.dependencies,
+            self.ci || other.ci,
+            self.review || other.review,
+        )
+    }
+
+    /// Returns the runtime signals needed to evaluate a gate/queue condition.
+    pub const fn for_condition(condition: &GateCondition) -> Self {
+        match condition {
+            GateCondition::DependenciesResolved => Self::new(true, false, false),
+            GateCondition::CiPassed | GateCondition::CiFailed => Self::new(false, true, false),
+            GateCondition::ReviewApproved | GateCondition::ReviewChangesRequested => {
+                Self::new(false, false, true)
+            }
+            GateCondition::LabelPresent(_) | GateCondition::StateEquals { .. } => Self::none(),
+        }
+    }
+
+    /// Returns the runtime signals needed to evaluate a queue's condition.
+    pub fn for_queue<Q: QueueQuery + ?Sized>(queue: &Q) -> Self {
+        queue
+            .queue_condition()
+            .map_or_else(Self::none, Self::for_condition)
+    }
+
+    /// Returns the runtime signals needed by a transition's required gates.
+    pub fn for_transition(workflow: &ValidatedWorkflow, transition: &ValidatedTransition) -> Self {
+        transition
+            .requires_gates
+            .iter()
+            .filter_map(|gate_id| workflow.gates().iter().find(|gate| &gate.id == gate_id))
+            .filter_map(|gate| gate.condition.as_ref())
+            .fold(Self::none(), |needs, condition| {
+                needs.union(Self::for_condition(condition))
+            })
+    }
+
+    /// Returns the runtime signals needed by a transition id, or none when the
+    /// workflow has no such transition.
+    pub fn for_transition_id(workflow: &ValidatedWorkflow, transition: &TransitionId) -> Self {
+        workflow
+            .transitions()
+            .iter()
+            .find(|candidate| &candidate.id == transition)
+            .map_or_else(Self::none, |candidate| {
+                Self::for_transition(workflow, candidate)
+            })
+    }
+}
+
+impl ValidatedWorkflow {
+    /// Returns the runtime signals needed by a transition's required gates.
+    pub fn signal_needs_for_transition(&self, transition: &TransitionId) -> SignalNeeds {
+        SignalNeeds::for_transition_id(self, transition)
+    }
+}
 
 /// Runtime-supplied aggregate state for an artifact's native CI.
 ///

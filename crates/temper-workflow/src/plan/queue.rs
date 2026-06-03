@@ -100,21 +100,24 @@ impl<T: QueueMember + ?Sized> QueueMember for &T {
 /// common label is present, and either no `any_of` clauses are declared or at
 /// least one clause's labels are all present. Queue activation policy is
 /// deliberately separate from matching.
-pub fn matches_queue<Q: QueueQuery>(query: &Q, artifact: &ClassifiedArtifact) -> bool {
+pub fn matches_queue<Q: QueueQuery + ?Sized>(query: &Q, artifact: &ClassifiedArtifact) -> bool {
     matches_queue_with(query, artifact, &GateSignals::default())
 }
 
-/// Returns `true` when a classified artifact matches a queue query and signals.
-pub fn matches_queue_with<Q: QueueQuery>(
+/// Returns `true` when a classified artifact passes a queue's kind and label filters.
+///
+/// This is the cheap first stage of queue matching: it deliberately ignores the
+/// optional queue condition so callers can decide whether any runtime signal
+/// reads are necessary before evaluating the condition.
+pub fn matches_queue_cheap<Q: QueueQuery + ?Sized>(
     query: &Q,
     artifact: &ClassifiedArtifact,
-    signals: &GateSignals,
 ) -> bool {
     if !query.queue_artifacts().contains(&artifact.kind) {
         return false;
     }
     let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
-    let label_match = query
+    query
         .queue_labels()
         .iter()
         .all(|label| labels.contains(label.as_str()))
@@ -124,11 +127,28 @@ pub fn matches_queue_with<Q: QueueQuery>(
                     .labels
                     .iter()
                     .all(|label| labels.contains(label.as_str()))
-            }));
-    label_match
-        && query.queue_condition().map_or(true, |condition| {
-            gate_condition_satisfied(condition, artifact, &labels, signals)
-        })
+            }))
+}
+
+/// Returns `true` when a classified artifact matches a queue's optional condition.
+pub fn matches_queue_condition<Q: QueueQuery + ?Sized>(
+    query: &Q,
+    artifact: &ClassifiedArtifact,
+    signals: &GateSignals,
+) -> bool {
+    let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
+    query.queue_condition().map_or(true, |condition| {
+        gate_condition_satisfied(condition, artifact, &labels, signals)
+    })
+}
+
+/// Returns `true` when a classified artifact matches a queue query and signals.
+pub fn matches_queue_with<Q: QueueQuery + ?Sized>(
+    query: &Q,
+    artifact: &ClassifiedArtifact,
+    signals: &GateSignals,
+) -> bool {
+    matches_queue_cheap(query, artifact) && matches_queue_condition(query, artifact, signals)
 }
 
 /// Returns `true` when matched members make a queue eligible for servicing.

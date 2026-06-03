@@ -21,6 +21,7 @@ use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId,
 };
+use crate::plan::SignalNeeds;
 use crate::prompt::build_prompt;
 use crate::validated::{
     Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedRole, ValidatedTransition,
@@ -69,6 +70,21 @@ impl CompiledWorkflow {
     /// Returns the label manifest used to set up Forge labels.
     pub fn labels(&self) -> &LabelManifest {
         &self.labels
+    }
+
+    /// Returns the runtime signals needed by the queues a role subscribes to.
+    ///
+    /// Unknown roles have no subscribed queues and therefore need no signals.
+    pub fn signal_needs_for_role(&self, id: &RoleId) -> SignalNeeds {
+        let Some(role) = self.role(id) else {
+            return SignalNeeds::none();
+        };
+        self.queues
+            .iter()
+            .filter(|queue| role.queues.contains(&queue.id))
+            .fold(SignalNeeds::none(), |needs, queue| {
+                needs.union(SignalNeeds::for_queue(queue))
+            })
     }
 }
 

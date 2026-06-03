@@ -128,9 +128,10 @@ pub use metadata::{
     replace_metadata_block, Lease, MetadataError, WorkflowMetadata, METADATA_BEGIN, METADATA_END,
 };
 pub use plan::{
-    matches_queue, queue_active, CiState, CiStatus, DependencyReadFailure, DependencyStatus,
-    GateSignals, MechanicalPlan, PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember,
-    QueueQuery, ReviewStatus, TransitionPlan, WorkflowEffect,
+    matches_queue, matches_queue_cheap, matches_queue_condition, queue_active, CiState, CiStatus,
+    DependencyReadFailure, DependencyStatus, GateSignals, MechanicalPlan, PlanDiagnostic,
+    PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus, SignalNeeds,
+    TransitionPlan, WorkflowEffect,
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,

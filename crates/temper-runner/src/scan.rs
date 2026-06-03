@@ -1,18 +1,18 @@
 //! Forge-backed queue scanning.
 //!
 //! A scan is read-only: it lists Forge artifacts, classifies what cleanly
-//! belongs to the workflow, reads runtime gate signals, and emits work for
-//! active queues. Classification failures are left to the workflow reconciler
-//! and do not fail the scan.
+//! belongs to the workflow, lazily reads runtime gate signals for cheap-matched
+//! queue candidates, and emits work for active queues. Classification failures
+//! are left to the workflow reconciler and do not fail the scan.
 
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
 use temper_forge::{Forge, ForgeError, IssueQuery, PullRequestQuery, RepositoryId};
-use temper_workflow::plan::matches_queue_with;
+use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     queue_active, ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
-    ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, ValidatedWorkflow,
+    ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow,
 };
 
 /// A role-addressed member of an active queue.
@@ -111,31 +111,43 @@ async fn scan_inner<F: Forge + ?Sized>(
         None => None,
     };
 
-    let artifacts = read_artifacts(forge, repo, workflow).await?;
-    Ok(work_items(compiled.queues(), &artifacts, now, role_filter))
+    let queues = queues_for_role(compiled, role_filter);
+    if queues.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let artifacts = read_artifacts(forge, repo, workflow, &queues).await?;
+    Ok(work_items(&queues, &artifacts, now, role_filter))
+}
+
+fn queues_for_role<'a>(
+    compiled: &'a CompiledWorkflow,
+    role_filter: Option<(&RoleId, &[QueueId])>,
+) -> Vec<&'a QueueManifest> {
+    compiled
+        .queues()
+        .iter()
+        .filter(|queue| match role_filter {
+            Some((_, queues)) => queues.contains(&queue.id),
+            None => true,
+        })
+        .collect()
 }
 
 async fn read_artifacts<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
+    queues: &[&QueueManifest],
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
-    let executor = workflow.executor(forge);
     let mut artifacts = Vec::new();
 
     for issue in forge.list_issues(repo, IssueQuery::default()).await? {
         let Ok(classified) = classifier.classify_issue(&issue) else {
             continue;
         };
-        match executor.read_gate_signals(repo, classified.source).await {
-            Ok(signals) => artifacts.push(ScannedArtifact {
-                classified,
-                signals,
-            }),
-            Err(ExecutionError::Classification(_)) => continue,
-            Err(error) => return Err(error.into()),
-        }
+        push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
     }
 
     for pull_request in forge
@@ -145,28 +157,67 @@ async fn read_artifacts<F: Forge + ?Sized>(
         let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
             continue;
         };
-        match executor.read_gate_signals(repo, classified.source).await {
-            Ok(signals) => artifacts.push(ScannedArtifact {
-                classified,
-                signals,
-            }),
-            Err(ExecutionError::Classification(_)) => continue,
-            Err(error) => return Err(error.into()),
-        }
+        push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
     }
 
     artifacts.sort_by_key(scanned_order_key);
     Ok(artifacts)
 }
 
+async fn push_candidate<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    queues: &[&QueueManifest],
+    classified: ClassifiedArtifact,
+    artifacts: &mut Vec<ScannedArtifact>,
+) -> Result<(), ScanError> {
+    let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
+        return Ok(());
+    };
+    let signals = if needs.is_empty() {
+        GateSignals::default()
+    } else {
+        match workflow
+            .executor(forge)
+            .read_gate_signals_with_needs(repo, classified.source, needs)
+            .await
+        {
+            Ok(signals) => signals,
+            Err(ExecutionError::Classification(_)) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+    };
+    artifacts.push(ScannedArtifact {
+        classified,
+        signals,
+    });
+    Ok(())
+}
+
+fn signal_needs_for_candidate(
+    queues: &[&QueueManifest],
+    artifact: &ClassifiedArtifact,
+) -> Option<SignalNeeds> {
+    let mut matched = false;
+    let mut needs = SignalNeeds::none();
+    for &queue in queues {
+        if matches_queue_cheap(queue, artifact) {
+            matched = true;
+            needs = needs.union(SignalNeeds::for_queue(queue));
+        }
+    }
+    matched.then_some(needs)
+}
+
 fn work_items(
-    queues: &[QueueManifest],
+    queues: &[&QueueManifest],
     artifacts: &[ScannedArtifact],
     now: DateTime<Utc>,
     role_filter: Option<(&RoleId, &[QueueId])>,
 ) -> Vec<WorkItem> {
     let mut items = Vec::new();
-    for queue in queues {
+    for &queue in queues {
         if role_filter.is_some_and(|(_, queues)| !queues.contains(&queue.id)) {
             continue;
         }

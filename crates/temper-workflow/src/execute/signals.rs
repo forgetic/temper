@@ -1,7 +1,7 @@
 use super::{ExecutionError, Executor, Loaded};
 use crate::classify::ArtifactSource;
 use crate::dependency_state;
-use crate::plan::{CiStatus, GateSignals, ReviewStatus};
+use crate::plan::{CiStatus, GateSignals, ReviewStatus, SignalNeeds};
 use temper_forge::{CiJobQuery, Forge, PullRequestReviewStatus, RepositoryId};
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
@@ -19,15 +19,44 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         self.gate_signals(repo_id, &loaded).await
     }
 
-    /// Reads runtime gate signals for the loaded artifact from fresh Forge state.
+    /// Reads only the requested runtime gate signals for a target from fresh Forge state.
+    ///
+    /// This preserves the load/classify freshness of [`read_gate_signals`](Self::read_gate_signals)
+    /// while letting scanners avoid unrelated dependency, CI, or review reads.
+    pub async fn read_gate_signals_with_needs(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        needs: SignalNeeds,
+    ) -> Result<GateSignals, ExecutionError> {
+        let loaded = self.load(repo_id, target).await?;
+        self.gate_signals_with_needs(repo_id, &loaded, needs).await
+    }
+
+    /// Reads every runtime gate signal for the loaded artifact from fresh Forge state.
     pub(super) async fn gate_signals(
         &self,
         repo_id: &RepositoryId,
         loaded: &Loaded,
     ) -> Result<GateSignals, ExecutionError> {
-        let dependencies =
-            dependency_state::status_for_artifact(self.forge, repo_id, loaded.classified()).await;
-        let signals = GateSignals::new().with_dependencies(dependencies);
+        self.gate_signals_with_needs(repo_id, loaded, SignalNeeds::all())
+            .await
+    }
+
+    /// Reads the requested runtime gate signals for the loaded artifact.
+    pub(super) async fn gate_signals_with_needs(
+        &self,
+        repo_id: &RepositoryId,
+        loaded: &Loaded,
+        needs: SignalNeeds,
+    ) -> Result<GateSignals, ExecutionError> {
+        let mut signals = GateSignals::new();
+        if needs.dependencies {
+            let dependencies =
+                dependency_state::status_for_artifact(self.forge, repo_id, loaded.classified())
+                    .await;
+            signals = signals.with_dependencies(dependencies);
+        }
 
         match loaded {
             Loaded::Issue { .. } => Ok(signals),
@@ -37,18 +66,22 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                 requested_reviewers,
                 ..
             } => {
-                let query = CiJobQuery {
-                    pull_request_id: Some(id.clone()),
-                    commit_sha: head_sha.clone(),
-                    ..CiJobQuery::default()
-                };
-                let jobs = self.forge.list_ci_jobs(repo_id, query).await?;
-                let reviews = self.forge.list_pull_request_reviews(id).await?;
-                let review_status =
-                    PullRequestReviewStatus::from_reviews(requested_reviewers, &reviews);
-                Ok(signals
-                    .with_ci(CiStatus::from_jobs(&jobs))
-                    .with_review(ReviewStatus::from_aggregate(&review_status)))
+                if needs.ci {
+                    let query = CiJobQuery {
+                        pull_request_id: Some(id.clone()),
+                        commit_sha: head_sha.clone(),
+                        ..CiJobQuery::default()
+                    };
+                    let jobs = self.forge.list_ci_jobs(repo_id, query).await?;
+                    signals = signals.with_ci(CiStatus::from_jobs(&jobs));
+                }
+                if needs.review {
+                    let reviews = self.forge.list_pull_request_reviews(id).await?;
+                    let review_status =
+                        PullRequestReviewStatus::from_reviews(requested_reviewers, &reviews);
+                    signals = signals.with_review(ReviewStatus::from_aggregate(&review_status));
+                }
+                Ok(signals)
             }
         }
     }
