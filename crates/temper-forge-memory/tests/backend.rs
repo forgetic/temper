@@ -12,8 +12,8 @@ use std::time::Duration;
 use temper_forge::{
     BranchRef, ChangeSource, ChangeSourceEvent, CiJob, CiJobQuery, CiJobStatus, CreateComment,
     CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueQuery, IssueState,
-    ItemNumber, MergeMethod, MergePullRequest, PullRequestState, RepositoryId, RepositoryPath,
-    UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
+    ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
+    RepositoryId, RepositoryPath, UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 
@@ -462,6 +462,15 @@ fn dependency_links_are_set_like_and_deterministic() {
 
     let listed = block_on(forge.list_issues(&repo, IssueQuery::default())).unwrap();
     assert_eq!(listed[0].dependencies, vec![second_target.number]);
+    let summaries = block_on(forge.list_issues(
+        &repo,
+        IssueQuery {
+            details: ItemListDetails::summary(),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(summaries[0].dependencies.is_empty());
 
     let pr = block_on(forge.create_pull_request(&repo, pr_input(&repo, &["implementation"])))
         .expect("pull request created");
@@ -469,6 +478,15 @@ fn dependency_links_are_set_like_and_deterministic() {
         block_on(forge.add_pull_request_dependency(&pr.id, second_target.number))
             .expect("pull request dependency added");
     assert_eq!(pr_with_dependency.dependencies, vec![second_target.number]);
+    let pr_summaries = block_on(forge.list_pull_requests(
+        &repo,
+        PullRequestQuery {
+            details: ItemListDetails::summary(),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(pr_summaries[0].dependencies.is_empty());
     let pr_without_dependency =
         block_on(forge.remove_pull_request_dependency(&pr.id, second_target.number))
             .expect("pull request dependency removed");

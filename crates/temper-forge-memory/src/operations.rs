@@ -146,6 +146,11 @@ impl Forge for MemoryForge {
             .into_iter()
             .filter(|issue| issue_matches_query(issue, &query))
             .collect::<Vec<_>>();
+        if !query.details.dependencies {
+            for issue in &mut issues {
+                issue.dependencies.clear();
+            }
+        }
         sort_issues(&mut issues, &query);
         Ok(issues)
     }
@@ -316,6 +321,11 @@ impl Forge for MemoryForge {
             .into_iter()
             .filter(|pull_request| pull_request_matches_query(pull_request, &query))
             .collect::<Vec<_>>();
+        if !query.details.dependencies {
+            for pull_request in &mut pull_requests {
+                pull_request.dependencies.clear();
+            }
+        }
         sort_pull_requests(&mut pull_requests, &query);
         Ok(pull_requests)
     }

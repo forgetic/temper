@@ -77,6 +77,42 @@ pub struct ItemSort {
     pub direction: SortDirection,
 }
 
+/// Detail flags for issue and pull-request list results.
+///
+/// Defaults preserve the full Forge contract. Callers that only need summary
+/// fields such as labels, body, state, and assignees may request
+/// [`Self::summary`] to let backends skip expensive enrichment.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ItemListDetails {
+    /// Whether native dependency links should be populated in list results.
+    #[serde(default = "default_include_dependencies")]
+    pub dependencies: bool,
+}
+
+impl ItemListDetails {
+    /// Full item detail, including native dependency links.
+    pub const fn full() -> Self {
+        Self { dependencies: true }
+    }
+
+    /// Summary item detail, omitting native dependency-link enrichment.
+    pub const fn summary() -> Self {
+        Self {
+            dependencies: false,
+        }
+    }
+}
+
+impl Default for ItemListDetails {
+    fn default() -> Self {
+        Self::full()
+    }
+}
+
+const fn default_include_dependencies() -> bool {
+    true
+}
+
 /// Issue listing query.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IssueQuery {
@@ -85,6 +121,8 @@ pub struct IssueQuery {
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
     pub sort: Option<ItemSort>,
+    #[serde(default)]
+    pub details: ItemListDetails,
 }
 
 /// Pull-request listing query.
@@ -95,6 +133,8 @@ pub struct PullRequestQuery {
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
     pub sort: Option<ItemSort>,
+    #[serde(default)]
+    pub details: ItemListDetails,
 }
 
 /// CI job field used for sorting CI job lists.

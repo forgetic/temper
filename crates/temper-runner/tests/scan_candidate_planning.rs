@@ -9,9 +9,9 @@ use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge,
-    IssueQuery, IssueState, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery,
-    PullRequestState, PullRequestUpdateState, RepositoryId, RequestReviewers, ReviewDecision,
-    UpdateIssue, UpdatePullRequest, UserId,
+    IssueQuery, IssueState, ItemListDetails, ItemNumber, MergeMethod, MergePullRequest,
+    PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId, RequestReviewers,
+    ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{candidate_query_plan, scan_role, ScanMode, WorkItem};
@@ -464,6 +464,7 @@ fn open_all_fallback_queues_still_find_open_unlabelled_candidates() {
         vec![PullRequestQuery {
             state: Some(PullRequestState::Open),
             labels: Vec::new(),
+            details: ItemListDetails::summary(),
             ..PullRequestQuery::default()
         }]
     );

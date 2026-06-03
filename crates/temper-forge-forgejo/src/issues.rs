@@ -57,11 +57,10 @@ impl<C: HttpClient> ForgejoForge<C> {
             .map(|dto| self.materialize_issue(&repo, dto, None))
             .collect();
         issues.retain(|issue| issue_matches_query(issue, &query));
-        // Enrich the matching issues with their dependency links. This is an
-        // N+1 read against the dependencies endpoint, acceptable for a first
-        // best-effort backend; the helper is shared with pull requests.
-        for issue in &mut issues {
-            issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
+        if query.details.dependencies {
+            for issue in &mut issues {
+                issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
+            }
         }
         issues.sort_by(|left, right| compare_issues(left, right, &query));
         Ok(issues)

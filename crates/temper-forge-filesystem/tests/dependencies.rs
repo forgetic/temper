@@ -1,7 +1,7 @@
 mod support;
 
 use support::{block_on, issue, pull_request, repository, TestRoot};
-use temper_forge::{Forge, ForgeError, IssueQuery, ItemNumber};
+use temper_forge::{Forge, ForgeError, IssueQuery, ItemListDetails, ItemNumber, PullRequestQuery};
 
 #[test]
 fn dependency_links_are_set_like_persisted_and_deterministic() {
@@ -39,6 +39,15 @@ fn dependency_links_are_set_like_persisted_and_deterministic() {
     let reopened = root.forge();
     let listed = block_on(reopened.list_issues(&repository.id, IssueQuery::default())).unwrap();
     assert_eq!(listed[0].dependencies, vec![second_target.number]);
+    let summaries = block_on(reopened.list_issues(
+        &repository.id,
+        IssueQuery {
+            details: ItemListDetails::summary(),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(summaries[0].dependencies.is_empty());
 
     let pr =
         block_on(forge.create_pull_request(&repository.id, pull_request(&repository.id, "PR")))
@@ -47,6 +56,15 @@ fn dependency_links_are_set_like_persisted_and_deterministic() {
         block_on(forge.add_pull_request_dependency(&pr.id, second_target.number))
             .expect("pull request dependency added");
     assert_eq!(pr_with_dependency.dependencies, vec![second_target.number]);
+    let pr_summaries = block_on(reopened.list_pull_requests(
+        &repository.id,
+        PullRequestQuery {
+            details: ItemListDetails::summary(),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(pr_summaries[0].dependencies.is_empty());
     let pr_without_dependency =
         block_on(forge.remove_pull_request_dependency(&pr.id, second_target.number))
             .expect("pull request dependency removed");

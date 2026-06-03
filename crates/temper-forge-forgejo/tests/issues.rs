@@ -9,8 +9,8 @@ use support::{
     block_on, body_json, forge, forge_with, issue_id, pull_id, repo_id, MockHttpClient, OWNER, REPO,
 };
 use temper_forge::{
-    CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemNumber, ItemSort,
-    ItemSortField, SortDirection, UpdateIssue, UserId, Version,
+    CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
+    ItemSort, ItemSortField, SortDirection, UpdateIssue, UserId, Version,
 };
 use temper_forge_forgejo::{CasMode, HttpMethod};
 
@@ -77,6 +77,43 @@ fn list_issues_constructs_request_excludes_pulls_and_maps() {
         .query
         .contains(&("labels".to_string(), "ready".to_string())));
     // The dependency lookup targets the surviving issue only.
+    assert_eq!(
+        client.last_request().unwrap().path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues/1/dependencies")
+    );
+}
+
+#[test]
+fn list_issues_dependency_detail_is_demand_driven() {
+    let client = MockHttpClient::new();
+    client.push_response(200, format!("[{}]", issue_json(1, "open", "[]", "")));
+    let forge = forge(client.clone());
+
+    let summary = block_on(forge.list_issues(
+        &repo_id(),
+        IssueQuery {
+            state: Some(IssueState::Open),
+            details: ItemListDetails::summary(),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(summary.len(), 1);
+    assert!(summary[0].dependencies.is_empty());
+    assert_eq!(client.call_count(), 1);
+
+    client.push_response(200, format!("[{}]", issue_json(1, "open", "[]", "")));
+    client.push_response(200, r#"[{"number": 3}]"#);
+    let detailed = block_on(forge.list_issues(
+        &repo_id(),
+        IssueQuery {
+            state: Some(IssueState::Open),
+            ..IssueQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(detailed[0].dependencies, vec![ItemNumber::new(3)]);
+    assert_eq!(client.call_count(), 3);
     assert_eq!(
         client.last_request().unwrap().path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/1/dependencies")

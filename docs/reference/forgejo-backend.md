@@ -182,12 +182,16 @@ every issue read path excludes pull requests: a row carrying a non-null
 
 `list_issues` calls `GET /repos/{owner}/{repo}/issues?state=...&type=issues`,
 adding `labels=<comma-separated>` when the query carries labels. The portable
-state filter maps `Open → open`, `Closed → closed`, `None → all`. Belt and
-suspenders against the provider ignoring `type=issues`, PR-as-issue rows are also
-dropped client-side. Author and assignee are filtered client-side after mapping
-(state and labels are filtered by the provider). Matching issues are enriched
-with their dependency links (an N+1 read, shared with pull requests), then sorted
-by the requested sort field, then by number, then by id for determinism.
+state filter maps `Open → open`, `Closed → closed`, `None → all`. Normal runner
+scan queries pass an explicit `open` state or labelled `closed` state; `all` is
+reserved for callers that ask for the portable default. Belt and suspenders
+against the provider ignoring `type=issues`, PR-as-issue rows are also dropped
+client-side. Author and assignee are filtered client-side after mapping (state
+and labels are filtered by the provider). When `details.dependencies=true` (the
+default), matching issues are enriched with their dependency links; summary list
+queries set `details.dependencies=false` and skip the dependency N+1, returning
+empty dependency vectors. Results are then sorted by the requested sort field,
+then by number, then by id for determinism.
 
 `get_issue`/`get_issue_by_number` call `GET /issues/{number}`; a `404` **or** a
 PR-as-issue row maps to `Ok(None)`. The match is enriched with dependency links.
@@ -213,12 +217,23 @@ time, then id).
 
 ## Pull requests
 
-`list_pull_requests` calls `GET /repos/{owner}/{repo}/pulls?state=...`. The
-portable state filter maps `Open → open` and both `Closed` and `Merged →
-closed`; `None → all`. Forgejo's `/pulls` endpoint has no label filter, so
-label, author, assignee, and the exact portable state filter are applied
-client-side after mapping. Results sort by the requested sort field, then by
-number, then by id for determinism.
+`list_pull_requests` uses two provider paths:
+
+- without labels, it calls `GET /repos/{owner}/{repo}/pulls?state=...`; and
+- with labels, it first calls
+  `GET /repos/{owner}/{repo}/issues?type=pulls&state=...&labels=...` to discover
+  candidate pull-request numbers, then fetches `GET /pulls/{number}` only for
+  those candidates.
+
+The portable state filter maps `Open → open`, both `Closed` and `Merged →
+closed`, and `None → all`; `Merged` is then re-checked client-side after the PR
+detail fetch. The labelled path deliberately does not fall back to
+`/pulls?state=all`, so provider-shape failures are explicit backend errors rather
+than silent broad scans. Author and assignee are filtered client-side after
+mapping. When `details.dependencies=true` (the default), matching pull requests
+are enriched with dependency links; summary list queries set
+`details.dependencies=false` and skip that dependency N+1. Results sort by the
+requested sort field, then by number, then by id for determinism.
 
 `get_pull_request`/`get_pull_request_by_number` call `GET /pulls/{number}`; a
 `404` maps to `Ok(None)`.
@@ -321,12 +336,13 @@ provider-specific adaptation. The endpoint shapes are isolated in
 - read: `GET /issues/{number}/dependencies` returns the items the source is
   blocked by; the backend maps each to its repository-scoped `ItemNumber` and
   returns them sorted and deduplicated. `Issue::dependencies` and
-  `PullRequest::dependencies` are populated this way during `get`/`list` reads
-  and by the dependency-link methods' returned source. A `404` on the read
-  (no dependencies, or an unsupported provider endpoint) yields an **empty**
-  list — a safe, documented behavior. List enrichment is an N+1 read against
-  the dependencies endpoint per matching item; this is accepted for a
-  first best-effort backend and the helper is isolated for later batching.
+  `PullRequest::dependencies` are populated this way during `get` reads, list
+  reads whose `details.dependencies` flag is true, and by the dependency-link
+  methods' returned source. A `404` on the read (no dependencies, or an
+  unsupported provider endpoint) yields an **empty** list — a safe, documented
+  behavior. Summary list calls set `details.dependencies=false` and skip this
+  enrichment entirely; dependency-gated workflow paths reload exact artifacts and
+  dependency targets when they need the links.
 - add: `POST /issues/{number}/dependencies` with a
   `{ "index": <target-number>, "owner": <owner>, "repo": <name> }` body (Gitea's
   `IssueMeta`). Forgejo 7.0.12 resolves the target by `(owner, repo, index)`, not
@@ -352,7 +368,7 @@ its `Version` through the validator cache (Forgejo bumps the artifact's
 `updated_at` on a dependency change). The mutation paths
 (`create`/`update`/`merge`/reviewer requests) deliberately do **not** re-read
 dependencies, so their returned artifacts may report empty dependencies; read
-the item through `get`/`list` for an enriched dependency view.
+the item through `get` or a full-detail list for an enriched dependency view.
 
 ## Optimistic concurrency (best-effort)
 

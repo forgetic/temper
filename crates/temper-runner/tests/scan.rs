@@ -9,8 +9,8 @@ use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, IssueState, ItemNumber, RepositoryId,
-    RequestReviewers, ReviewDecision, UpdateIssue, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, IssueState, ItemListDetails, ItemNumber,
+    RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{scan, scan_role, WorkItem};
@@ -398,6 +398,14 @@ fn role_scan_without_ci_gated_queue_does_not_list_ci_jobs() {
 
     assert!(items.is_empty());
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
+    assert!(counting
+        .issue_queries()
+        .iter()
+        .all(|query| query.details == ItemListDetails::summary()));
+    assert!(counting
+        .pull_request_queries()
+        .iter()
+        .all(|query| query.details == ItemListDetails::summary()));
 }
 
 #[test]
@@ -492,6 +500,10 @@ fn dependency_gated_queue_fetches_dependency_state() {
         }]
     );
     assert!(counting.count(CountedForgeOp::GetIssueByNumber) >= 2);
+    assert!(counting
+        .issue_queries()
+        .iter()
+        .all(|query| query.details == ItemListDetails::summary()));
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
     assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
 }

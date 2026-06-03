@@ -9,9 +9,9 @@ pub mod ids;
 pub mod model;
 
 pub use forge::{
-    CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueQuery, ItemSort,
-    ItemSortField, PullRequestQuery, RepositoryQuery, RepositorySort, RepositorySortField,
-    SortDirection,
+    CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueQuery,
+    ItemListDetails, ItemSort, ItemSortField, PullRequestQuery, RepositoryQuery, RepositorySort,
+    RepositorySortField, SortDirection,
 };
 pub use hint::*;
 pub use ids::*;

@@ -209,15 +209,15 @@ async fn push_candidate<F: Forge + ?Sized>(
     let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
         return Ok(());
     };
-    let signals = if needs.is_empty() {
-        GateSignals::default()
+    let (classified, signals) = if needs.is_empty() {
+        (classified, GateSignals::default())
     } else {
         match workflow
             .executor(forge)
-            .read_gate_signals_with_needs(repo, classified.source, needs)
+            .read_classified_gate_signals_with_needs(repo, classified.source, needs)
             .await
         {
-            Ok(signals) => signals,
+            Ok(fresh) => fresh,
             Err(ExecutionError::Classification(_)) => return Ok(()),
             Err(error) => return Err(error.into()),
         }

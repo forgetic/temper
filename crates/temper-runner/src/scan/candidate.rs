@@ -1,4 +1,4 @@
-use temper_forge::{IssueQuery, IssueState, PullRequestQuery, PullRequestState};
+use temper_forge::{IssueQuery, IssueState, ItemListDetails, PullRequestQuery, PullRequestState};
 use temper_workflow::{
     ArtifactTarget, CompiledWorkflow, LabelId, QueueManifest, RoleId, ValidatedWorkflow,
 };
@@ -249,6 +249,7 @@ fn issue_query(state: IssueState, labels: Vec<String>) -> IssueQuery {
     IssueQuery {
         state: Some(state),
         labels,
+        details: ItemListDetails::summary(),
         ..IssueQuery::default()
     }
 }
@@ -257,6 +258,7 @@ fn pull_request_query(state: PullRequestState, labels: Vec<String>) -> PullReque
     PullRequestQuery {
         state: Some(state),
         labels,
+        details: ItemListDetails::summary(),
         ..PullRequestQuery::default()
     }
 }

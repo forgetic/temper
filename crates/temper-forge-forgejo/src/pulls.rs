@@ -11,7 +11,7 @@ use crate::ids::{
     format_review_id, format_user_id, parse_pull_request_id, parse_repository_id, RepoCoord,
 };
 use crate::map::{map_pull_request, map_review, merge_method_token, review_event_token};
-use crate::types::{PullRequestDto, ReviewDto};
+use crate::types::{IssueDto, PullRequestDto, ReviewDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use chrono::Utc;
 use std::cmp::Ordering;
@@ -25,39 +25,107 @@ use temper_forge::{
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists pull requests in a repository, filtered and sorted per `query`.
     ///
-    /// Forgejo's `/pulls` endpoint does not filter by label, so the backend
-    /// fetches by state and applies label/author/assignee filters and the exact
-    /// portable state filter client-side after mapping.
+    /// Unlabelled queries use Forgejo's `/pulls` state filter. Labelled queries
+    /// first discover candidate pull-request numbers through the issue endpoint
+    /// (`type=pulls`, `state`, and `labels`) so they scale with the labelled
+    /// candidate set instead of total pull-request history, then fetch details
+    /// only for those candidates.
     pub async fn list_pull_requests(
         &self,
         repo_id: &RepositoryId,
         query: PullRequestQuery,
     ) -> ForgeResult<Vec<PullRequest>> {
         let repo = parse_repository_id(repo_id)?;
-        let state_param = match query.state {
-            None => "all",
-            Some(PullRequestState::Open) => "open",
-            Some(PullRequestState::Closed) | Some(PullRequestState::Merged) => "closed",
+        let mut pulls = if query.labels.is_empty() {
+            self.list_pull_requests_by_state(&repo, &query).await?
+        } else {
+            self.list_labeled_pull_requests(&repo, &query).await?
         };
-        let path = format!("/repos/{}/pulls", repo.path_segment());
-        let base_query = vec![("state".to_string(), state_param.to_string())];
-        let dtos: Vec<PullRequestDto> = self
-            .list_all("list pull requests", &path, base_query)
-            .await?;
-
-        let mut pulls: Vec<PullRequest> = dtos
-            .into_iter()
-            .map(|dto| self.materialize_pull_request(&repo, dto, None))
-            .collect();
-        pulls.retain(|pull| pull_matches_query(pull, &query));
-        // Enrich the matching pull requests with their dependency links. This is
-        // an N+1 read against the dependencies endpoint, acceptable for a first
-        // best-effort backend; the helper is isolated for later batching.
-        for pull in &mut pulls {
-            pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
+        if query.details.dependencies {
+            for pull in &mut pulls {
+                pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
+            }
         }
         pulls.sort_by(|left, right| compare_pull_requests(left, right, &query));
         Ok(pulls)
+    }
+
+    /// Lists pull requests through the `/pulls` endpoint for queries without a
+    /// label filter. Forgejo can narrow these by state provider-side.
+    async fn list_pull_requests_by_state(
+        &self,
+        repo: &RepoCoord,
+        query: &PullRequestQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        let path = format!("/repos/{}/pulls", repo.path_segment());
+        let base_query = vec![(
+            "state".to_string(),
+            pull_request_state_param(query.state).to_string(),
+        )];
+        let dtos: Vec<PullRequestDto> = self
+            .list_all("list pull requests", &path, base_query)
+            .await?;
+        let mut pulls: Vec<PullRequest> = dtos
+            .into_iter()
+            .map(|dto| self.materialize_pull_request(repo, dto, None))
+            .collect();
+        pulls.retain(|pull| pull_matches_query(pull, query));
+        Ok(pulls)
+    }
+
+    /// Lists labelled pull requests by first discovering labelled PR-as-issue
+    /// rows, then fetching `/pulls/{number}` only for those candidates.
+    async fn list_labeled_pull_requests(
+        &self,
+        repo: &RepoCoord,
+        query: &PullRequestQuery,
+    ) -> ForgeResult<Vec<PullRequest>> {
+        let numbers = self
+            .discover_labeled_pull_request_numbers(repo, query)
+            .await?;
+        let mut pulls = Vec::with_capacity(numbers.len());
+        for number in numbers {
+            let Some(pull) = self.fetch_pull_request(repo, number).await? else {
+                continue;
+            };
+            if pull_matches_query(&pull, query) {
+                pulls.push(pull);
+            }
+        }
+        Ok(pulls)
+    }
+
+    /// Uses Forgejo's issue endpoint as the provider-specific PR-label index.
+    /// Asks for `type=pulls`, state, and labels; no `/pulls?state=all` fallback,
+    /// so provider failures surface as diagnosable backend errors.
+    async fn discover_labeled_pull_request_numbers(
+        &self,
+        repo: &RepoCoord,
+        query: &PullRequestQuery,
+    ) -> ForgeResult<Vec<ItemNumber>> {
+        let path = format!("/repos/{}/issues", repo.path_segment());
+        let base_query = vec![
+            (
+                "state".to_string(),
+                pull_request_state_param(query.state).to_string(),
+            ),
+            ("type".to_string(), "pulls".to_string()),
+            ("labels".to_string(), query.labels.join(",")),
+        ];
+        let dtos: Vec<IssueDto> = self
+            .list_all("discover labeled pull requests", &path, base_query)
+            .await?;
+        let mut numbers = Vec::new();
+        for dto in dtos {
+            if !dto.is_pull_request() {
+                continue;
+            }
+            let number = ItemNumber::new(dto.number);
+            if !numbers.contains(&number) {
+                numbers.push(number);
+            }
+        }
+        Ok(numbers)
     }
 
     /// Looks up a pull request by stable backend identifier.
@@ -471,6 +539,14 @@ fn snippet(body: &str) -> String {
     }
     let snippet: String = trimmed.chars().take(200).collect();
     format!(": {snippet}")
+}
+
+fn pull_request_state_param(state: Option<PullRequestState>) -> &'static str {
+    match state {
+        None => "all",
+        Some(PullRequestState::Open) => "open",
+        Some(PullRequestState::Closed) | Some(PullRequestState::Merged) => "closed",
+    }
 }
 
 fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {

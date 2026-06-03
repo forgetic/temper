@@ -89,13 +89,18 @@ Status legend: ☐ pending · ☑ done
    unlabelled history pruning, merged `landed` PR discovery, and open-all
    condition queues.
 
-3. ☐ **Phase 3 — Forgejo scalable backend paths.**
+3. ☑ **Phase 3 — Forgejo scalable backend paths.**
    `prompts/phase-3-forgejo-scalable-backend-paths.md`
 
-   Make the Forgejo backend honor the new query shape efficiently, especially
-   labelled PR queries and dependency detail. Avoid the current `state=all` PR
-   fetch when a small labelled closed set is requested, and avoid N+1 dependency
-   enrichment unless the caller requested/needs dependency detail.
+   Added portable `ItemListDetails` for issue/PR list dependency enrichment,
+   with runner candidate scans requesting summaries and dependency-gated queues
+   reloading exact artifacts before evaluating dependency conditions. Forgejo
+   labelled PR list queries now use the issue endpoint (`type=pulls`, `state`,
+   `labels`) as a provider-specific label index and fetch `/pulls/{number}` only
+   for labelled candidates; the backend no longer falls back to broad
+   `/pulls?state=all` scans for labelled hot paths. Mock-contract tests cover
+   labelled PR discovery, summary-vs-full dependency detail, open scan state
+   narrowing, and non-CI summary reads staying off the web-UI CI path.
 
 4. ☐ **Phase 4 — Hint-narrowed multi-repo ticks.**
    `prompts/phase-4-hint-narrowed-ticks.md`

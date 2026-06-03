@@ -4,13 +4,32 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, pull_id, repo_id, MockHttpClient, OWNER, REPO};
+use support::{
+    block_on, body_json, forge, forge_with_web_ui, pull_id, repo_id, MockHttpClient, OWNER, REPO,
+};
 use temper_forge::{
-    BranchRef, CreateComment, CreatePullRequest, ItemNumber, ItemSort, ItemSortField,
-    PullRequestQuery, PullRequestState, PullRequestUpdateState, SortDirection, UpdatePullRequest,
-    UserId,
+    BranchRef, CreateComment, CreatePullRequest, ItemListDetails, ItemNumber, ItemSort,
+    ItemSortField, PullRequestQuery, PullRequestState, PullRequestUpdateState, SortDirection,
+    UpdatePullRequest, UserId,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
+
+/// Renders a PR-as-issue DTO JSON body used by labelled PR discovery.
+fn pr_issue_json(number: u64, state: &str, labels: &str) -> String {
+    format!(
+        r#"{{
+            "number": {number},
+            "title": "PR {number}",
+            "body": "body {number}",
+            "state": "{state}",
+            "user": {{"login": "author"}},
+            "labels": {labels},
+            "created_at": "2024-03-01T00:00:00Z",
+            "updated_at": "2024-03-02T00:00:00Z",
+            "pull_request": {{"url": "http://x/pulls/{number}"}}
+        }}"#
+    )
+}
 
 /// Renders a pull-request DTO JSON body with overridable fields.
 fn pr_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
@@ -33,45 +52,121 @@ fn pr_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
 }
 
 #[test]
-fn list_pull_requests_constructs_request_and_filters_by_label() {
+fn labelled_pull_request_query_uses_issue_label_index() {
     let client = MockHttpClient::new();
-    let body = format!(
-        "[{},{}]",
-        pr_json(1, "open", r#"[{"id":1,"name":"ready"}]"#, ""),
-        pr_json(2, "open", r#"[{"id":2,"name":"draft"}]"#, ""),
+    client.push_response(
+        200,
+        format!(
+            "[{}]",
+            pr_issue_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#)
+        ),
     );
-    client.push_response(200, body);
-    // Only the matching pull request is enriched with its dependency links.
-    client.push_response(200, "[]");
+    client.push_response(
+        200,
+        pr_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#, ""),
+    );
     let forge = forge(client.clone());
 
     let query = PullRequestQuery {
-        state: Some(PullRequestState::Open),
+        state: Some(PullRequestState::Closed),
         labels: vec!["ready".to_string()],
+        details: ItemListDetails::summary(),
         ..PullRequestQuery::default()
     };
     let pulls = block_on(forge.list_pull_requests(&repo_id(), query)).unwrap();
 
-    // Forgejo's /pulls endpoint has no label filter, so the label is applied
-    // client-side after mapping.
     assert_eq!(pulls.len(), 1);
     assert_eq!(pulls[0].number, ItemNumber::new(1));
     assert!(pulls[0].dependencies.is_empty());
 
-    // The first request is the /pulls list; dependency enrichment follows.
-    let request = &client.recorded()[0];
+    let requests = client.recorded();
+    let discovery = &requests[0];
+    assert_eq!(discovery.method, HttpMethod::Get);
+    assert_eq!(
+        discovery.path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues")
+    );
+    assert!(discovery
+        .query
+        .contains(&("state".to_string(), "closed".to_string())));
+    assert!(discovery
+        .query
+        .contains(&("type".to_string(), "pulls".to_string())));
+    assert!(discovery
+        .query
+        .contains(&("labels".to_string(), "ready".to_string())));
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/1")
+    );
+    assert!(!requests.iter().any(|request| {
+        request.path.ends_with("/pulls")
+            && request
+                .query
+                .contains(&("state".to_string(), "all".to_string()))
+    }));
+}
+
+#[test]
+fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
+    let client = MockHttpClient::new();
+    client.push_response(200, "[]");
+    let forge = forge_with_web_ui(client.clone());
+
+    let query = PullRequestQuery {
+        state: Some(PullRequestState::Open),
+        details: ItemListDetails::summary(),
+        ..PullRequestQuery::default()
+    };
+    let pulls = block_on(forge.list_pull_requests(&repo_id(), query)).unwrap();
+    assert!(pulls.is_empty());
+
+    let request = client.last_request().unwrap();
     assert_eq!(request.method, HttpMethod::Get);
     assert_eq!(request.path, format!("/api/v1/repos/{OWNER}/{REPO}/pulls"));
     assert!(request
         .query
         .contains(&("state".to_string(), "open".to_string())));
-    assert!(request
+    assert!(!request
         .query
-        .contains(&("limit".to_string(), "50".to_string())));
-    assert!(request
-        .query
-        .contains(&("page".to_string(), "1".to_string())));
-    // Exactly one dependency lookup for the single matching pull request.
+        .contains(&("state".to_string(), "all".to_string())));
+    assert!(!client
+        .recorded()
+        .iter()
+        .any(|request| request.path.contains("/user/login")));
+}
+
+#[test]
+fn list_pull_requests_dependency_detail_is_demand_driven() {
+    let client = MockHttpClient::new();
+    client.push_response(200, format!("[{}]", pr_json(1, "open", "[]", "")));
+    let forge = forge(client.clone());
+
+    let summary = block_on(forge.list_pull_requests(
+        &repo_id(),
+        PullRequestQuery {
+            state: Some(PullRequestState::Open),
+            details: ItemListDetails::summary(),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(summary.len(), 1);
+    assert!(summary[0].dependencies.is_empty());
+    assert_eq!(client.call_count(), 1);
+
+    client.push_response(200, format!("[{}]", pr_json(1, "open", "[]", "")));
+    client.push_response(200, r#"[{"number": 4}]"#);
+    let detailed = block_on(forge.list_pull_requests(
+        &repo_id(),
+        PullRequestQuery {
+            state: Some(PullRequestState::Open),
+            ..PullRequestQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(detailed[0].dependencies, vec![ItemNumber::new(4)]);
+    assert_eq!(client.call_count(), 3);
     assert_eq!(
         client.last_request().unwrap().path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/1/dependencies")
