@@ -77,7 +77,7 @@ fi
 async fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
     let timeout = ProcessResponder::new(
         ProcessResponderConfig::new("/bin/sh")
-            .with_args(["-c".to_string(), "sleep 1".to_string()])
+            .with_args(["-c".to_string(), "cat >/dev/null; sleep 1".to_string()])
             .with_timeout(Duration::from_millis(20)),
     )
     .expect("config validates")
@@ -91,7 +91,7 @@ async fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids
 
     let exit = ProcessResponder::new(ProcessResponderConfig::new("/bin/sh").with_args([
         "-c".to_string(),
-        "printf 'bad news' >&2; exit 7".to_string(),
+        "cat >/dev/null; printf 'bad news' >&2; exit 7".to_string(),
     ]))
     .expect("config validates")
     .respond(&basic_request())
@@ -106,7 +106,7 @@ async fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids
     let malformed = ProcessResponder::new(
         ProcessResponderConfig::new("/bin/sh").with_args([
             "-c".to_string(),
-            "printf '%s' '{\"message\":\"one\",\"proposals\":[]}{\"message\":\"two\",\"proposals\":[]}'".to_string(),
+            "cat >/dev/null; printf '%s' '{\"message\":\"one\",\"proposals\":[]}{\"message\":\"two\",\"proposals\":[]}'".to_string(),
         ]),
     )
     .expect("config validates")
@@ -121,7 +121,7 @@ async fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids
     let duplicate = ProcessResponder::new(
         ProcessResponderConfig::new("/bin/sh").with_args([
             "-c".to_string(),
-            "printf '%s' '{\"message\":\"dup\",\"proposals\":[{\"id\":\"same\",\"kind\":\"issue\",\"title\":\"First\",\"payload\":{}},{\"id\":\"same\",\"kind\":\"issue\",\"title\":\"Second\",\"payload\":{}}]}'".to_string(),
+            "cat >/dev/null; printf '%s' '{\"message\":\"dup\",\"proposals\":[{\"id\":\"same\",\"kind\":\"issue\",\"title\":\"First\",\"payload\":{}},{\"id\":\"same\",\"kind\":\"issue\",\"title\":\"Second\",\"payload\":{}}]}'".to_string(),
         ]),
     )
     .expect("config validates")

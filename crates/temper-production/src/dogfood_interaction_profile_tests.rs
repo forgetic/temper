@@ -12,7 +12,7 @@ use temper_interaction::{
 };
 
 const DOGFOOD_PRODUCT_MANAGER_SPEC: &str =
-    include_str!("../../../examples/dogfood/config/interaction-profiles/product-manager.json");
+    include_str!("../../temper-interaction/fixtures/product-manager-interaction-spec.json");
 
 struct FixtureResponder;
 
@@ -37,7 +37,7 @@ impl InteractiveResponder for FixtureResponder {
 }
 
 #[test]
-fn dogfood_example_product_manager_profile_validates_and_compiles() {
+fn dogfood_fixture_product_manager_profile_validates_and_compiles() {
     let profile = compiled_profile();
 
     assert_eq!(profile.profile.id.as_str(), "product-manager");
