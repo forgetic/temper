@@ -86,14 +86,14 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    `actions=N` is supplemented by per-work-item decision, action, transition,
    stale/no-op, and outcome diagnostics.
 
-3. ☐ **Phase 3 — Reconciliation invariants and Forge-state validator.**
+3. ☑ **Phase 3 — Reconciliation invariants and Forge-state validator.**
    `prompts/phase-3-reconciliation-invariants-and-validator.md`
 
    Make blocked-without-dependencies and missing cross-repo fan-out explicit
    diagnostics. Extend `examples/reference-delivery/run.sh validate-multi-repo`
    to inspect Forge state, not only process logs.
 
-4. ☐ **Phase 4 — Operator docs and observability smoke proof.**
+4. ☑ **Phase 4 — Operator docs and observability smoke proof.**
    `prompts/phase-4-operator-docs-and-smoke-proof.md`
 
    Document the observability story, wire it into the reference-delivery how-to,
@@ -112,6 +112,11 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
 - Logs and captures are redacted and bounded.
 - Default tests remain hermetic; live Forgejo/provider checks stay explicitly
   env-gated.
+
+Status (2026-06-03): complete. The hermetic smoke proof is
+`cargo test -p temper-testing --test observability_smoke`; the live demo
+validator path remains `examples/reference-delivery/run.sh validate-multi-repo`
+while the throwaway Forgejo run is still active.
 
 ## Relevant starting points
 

@@ -19,6 +19,10 @@ name = "temper-trigger-forgejo"
 path = "src/bin/temper-trigger-forgejo.rs"
 
 [[bin]]
+name = "temper-validate-reference-delivery"
+path = "src/bin/temper-validate-reference-delivery.rs"
+
+[[bin]]
 name = "temper-product-manager-chat"
 path = "src/bin/temper-product-manager-chat.rs"
 

@@ -34,8 +34,7 @@ A request contains:
 - the compiled `role_manifest` Temper is enforcing;
 - fresh `work_item_context` JSON, including an optional nested
   `observability` object with provider-neutral work item and decision identity
-  fields such as repo, role, queue, artifact type/number/kind, `work_item_id`,
-  and `decision_id`;
+  fields;
 - compact `authorized_actions` derived from the manifest;
 - `available_external_tools` metadata that survived declaration and runner
   binding validation.
@@ -45,6 +44,18 @@ A reply contains:
 - `protocol_version`;
 - `action`, either one authorized action name or `no_action`;
 - `reason`, a short diagnostic string.
+
+## Authority-neutral observability fields
+
+`work_item_context.observability` may include any Temper-known subset of:
+`run_id`, `tick_id`, `work_item_id`, `decision_id`, `repo`, `role`, `queue`,
+`artifact_type`, `artifact_number`, and `artifact_kind`. The sibling
+`work_item_context.repository`, `role`, `queue`, `kind`, and `artifact` fields
+remain the ordinary work description.
+
+These fields are correlation metadata only. Smith or another responder may log
+or capture them, with bounded/redacted output, and must tolerate missing fields.
+They do not grant Forge authority and are not tool definitions.
 
 ## Authority and secrets
 

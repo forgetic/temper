@@ -24,6 +24,9 @@ Temper keeps only provider-neutral contracts and adapters:
 
 Provider selection, OAuth/API-key handling, model ids, prompt implementation, and
 live provider smoke tests are Smith-owned concerns documented in the Smith repo
-(`~/src/rust/smith/docs/`). Pass Smith arguments through Temper's `*_ARGS_JSON` /
-repeated CLI arg flags and use the corresponding env allow-list only for names
-that the responder must read.
+(`~/src/rust/smith/docs/`). Smith may log or capture the authority-neutral
+`work_item_context.observability` fields Temper sends for correlation, but it
+still receives no Forge handle, Forge token, or workflow mutation tools; all
+mutations remain Temper `RoleTools`/executor actions after reply validation. Pass
+Smith arguments through Temper's `*_ARGS_JSON` / repeated CLI arg flags and use
+the corresponding env allow-list only for names that the responder must read.

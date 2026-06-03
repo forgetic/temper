@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use temper_workflow::{ExecutionError, PlanDiagnostic, TransitionId, WorkflowEffect};
+use temper_forge::RepositoryId;
+use temper_workflow::{
+    ArtifactSource, ExecutionError, PlanDiagnostic, ReconcileFinding, RecoveryAction, TransitionId,
+    WorkflowEffect,
+};
 
 use super::{redacted_preview, StructuredEvent, WorkItemIdentity};
 
@@ -12,6 +16,24 @@ pub struct RoleDecisionRequestEvent<'a> {
     pub workflow_id: &'a str,
     pub authorized_actions: &'a [String],
     pub available_external_tools: &'a [String],
+}
+
+/// Render input for a role scan summary event.
+pub struct ScanSummaryEvent<'a> {
+    pub tick_id: Option<&'a str>,
+    pub worker_kind: &'a str,
+    pub worker: &'a str,
+    pub repo: &'a RepositoryId,
+    pub workflow_id: &'a str,
+    pub role: Option<&'a str>,
+    pub work_item_count: usize,
+}
+
+/// Render input for a role scan work-item selection event.
+pub struct WorkItemSelectedEvent<'a> {
+    pub identity: &'a WorkItemIdentity,
+    pub workflow_id: &'a str,
+    pub worker: &'a str,
 }
 
 /// Render input for a role-decision reply event.
@@ -49,6 +71,14 @@ pub struct TransitionExecutionEvent<'a> {
     pub postcondition_outcome: &'a str,
 }
 
+/// Render input for a mechanical reconciler finding/action pair.
+pub struct MechanicalReconciliationEvent<'a> {
+    pub worker: &'a str,
+    pub repo: &'a RepositoryId,
+    pub finding: &'a ReconcileFinding,
+    pub action: &'a RecoveryAction,
+}
+
 /// Renders a bounded structured event before invoking a decision process.
 pub fn render_role_decision_request_event(event: &RoleDecisionRequestEvent<'_>) -> String {
     work_item_event("role_decision_request", event.identity)
@@ -69,6 +99,27 @@ pub fn render_role_decision_request_event(event: &RoleDecisionRequestEvent<'_>) 
             "available_external_tools",
             event.available_external_tools.iter().cloned(),
         )
+        .render()
+}
+
+/// Renders a bounded structured event after a role scan completes.
+pub fn render_scan_summary_event(event: &ScanSummaryEvent<'_>) -> String {
+    StructuredEvent::new("scan_summary")
+        .optional_string("tick_id", event.tick_id.map(ToOwned::to_owned))
+        .string("worker_kind", event.worker_kind)
+        .string("worker", event.worker)
+        .string("repo", event.repo.to_string())
+        .string("workflow_id", event.workflow_id)
+        .optional_string("role", event.role.map(ToOwned::to_owned))
+        .number("work_item_count", saturating_u64(event.work_item_count))
+        .render()
+}
+
+/// Renders a bounded structured event for one selected scan work item.
+pub fn render_work_item_selected_event(event: &WorkItemSelectedEvent<'_>) -> String {
+    work_item_event("work_item_selected", event.identity)
+        .string("workflow_id", event.workflow_id)
+        .string("worker", event.worker)
         .render()
 }
 
@@ -136,6 +187,45 @@ pub fn render_transition_execution_event(event: &TransitionExecutionEvent<'_>) -
     rendered.render()
 }
 
+/// Renders a structured mechanical reconciliation finding/action event.
+pub fn render_mechanical_reconciliation_event(event: &MechanicalReconciliationEvent<'_>) -> String {
+    let mut rendered = StructuredEvent::new("mechanical_reconciliation")
+        .string("worker_kind", "mechanical")
+        .string("worker", event.worker)
+        .string("repo", event.repo.to_string())
+        .string("finding", finding_name(event.finding))
+        .string("action", action_name(event.action));
+
+    if let Some(target) = finding_target(event.finding).or_else(|| action_target(event.action)) {
+        let (artifact_type, artifact_number) = source_parts(target);
+        rendered = rendered
+            .string("artifact_type", artifact_type)
+            .number("artifact_number", artifact_number.get());
+    }
+    if let Some(transition) = finding_transition(event.finding) {
+        rendered = rendered.string("transition", transition.to_string());
+    }
+    if let ReconcileFinding::BlockedWithoutDependencies {
+        dependency_count,
+        relation_count,
+        ..
+    } = event.finding
+    {
+        rendered = rendered
+            .string("diagnostic", "blocked_artifact_without_dependencies")
+            .number("dependency_count", saturating_u64(*dependency_count))
+            .number("relation_count", saturating_u64(*relation_count))
+            .string(
+                "reason",
+                "dependency-gated unblocking intentionally cannot proceed without at least one recorded dependency",
+            );
+    }
+    if let Some(effect_count) = action_effect_count(event.action) {
+        rendered = rendered.number("effect_count", saturating_u64(effect_count));
+    }
+    rendered.render()
+}
+
 /// Returns compact, body-free descriptions of planned/applied effects.
 pub fn workflow_effect_summary(effects: &[WorkflowEffect]) -> Vec<String> {
     effects.iter().map(summarize_effect).collect()
@@ -184,6 +274,76 @@ pub fn postcondition_outcome_for_error(error: &ExecutionError) -> &'static str {
         "failed"
     } else {
         "not_checked"
+    }
+}
+
+fn finding_name(finding: &ReconcileFinding) -> &'static str {
+    match finding {
+        ReconcileFinding::ExpiredLease { .. } => "expired_lease",
+        ReconcileFinding::ImpossibleState { .. } => "impossible_state",
+        ReconcileFinding::ClassificationDrift { .. } => "classification_drift",
+        ReconcileFinding::BlockedWithoutDependencies { .. } => "blocked_without_dependencies",
+        ReconcileFinding::PartialTransition { .. } => "partial_transition",
+        ReconcileFinding::StaleCommand { .. } => "stale_command",
+        ReconcileFinding::DependenciesResolved { .. } => "dependencies_resolved",
+    }
+}
+
+fn action_name(action: &RecoveryAction) -> &'static str {
+    match action {
+        RecoveryAction::RequeueLease { .. } => "requeue_lease",
+        RecoveryAction::Escalate { .. } => "escalate",
+        RecoveryAction::Repair { .. } => "repair",
+        RecoveryAction::MarkReconciled { .. } => "mark_reconciled",
+        RecoveryAction::Unblock { .. } => "unblock",
+        RecoveryAction::Diagnose { .. } => "diagnose",
+    }
+}
+
+fn finding_target(finding: &ReconcileFinding) -> Option<ArtifactSource> {
+    match finding {
+        ReconcileFinding::ExpiredLease { target, .. }
+        | ReconcileFinding::ImpossibleState { target, .. }
+        | ReconcileFinding::ClassificationDrift { target, .. }
+        | ReconcileFinding::BlockedWithoutDependencies { target, .. }
+        | ReconcileFinding::PartialTransition { target, .. }
+        | ReconcileFinding::StaleCommand { target, .. }
+        | ReconcileFinding::DependenciesResolved { target, .. } => Some(*target),
+    }
+}
+
+fn action_target(action: &RecoveryAction) -> Option<ArtifactSource> {
+    match action {
+        RecoveryAction::RequeueLease { target }
+        | RecoveryAction::Escalate { target, .. }
+        | RecoveryAction::Repair { target, .. }
+        | RecoveryAction::Unblock { target, .. }
+        | RecoveryAction::Diagnose { target, .. } => Some(*target),
+        RecoveryAction::MarkReconciled { .. } => None,
+    }
+}
+
+fn finding_transition(finding: &ReconcileFinding) -> Option<&TransitionId> {
+    match finding {
+        ReconcileFinding::BlockedWithoutDependencies { transition, .. }
+        | ReconcileFinding::DependenciesResolved { transition, .. } => Some(transition),
+        _ => None,
+    }
+}
+
+fn action_effect_count(action: &RecoveryAction) -> Option<usize> {
+    match action {
+        RecoveryAction::Repair { effects, .. } | RecoveryAction::Unblock { effects, .. } => {
+            Some(effects.len())
+        }
+        _ => None,
+    }
+}
+
+fn source_parts(source: ArtifactSource) -> (&'static str, temper_forge::ItemNumber) {
+    match source {
+        ArtifactSource::Issue { number } => ("issue", number),
+        ArtifactSource::PullRequest { number } => ("pull_request", number),
     }
 }
 
@@ -263,6 +423,32 @@ mod tests {
             &ArtifactKindId::new("code"),
         )
         .with_tick_id("tick-1")
+    }
+
+    #[test]
+    fn scan_events_render_tick_and_work_item_identity() {
+        let identity = identity();
+        let summary = render_scan_summary_event(&ScanSummaryEvent {
+            tick_id: Some("tick-1"),
+            worker_kind: "role",
+            worker: "multi-role:engineer",
+            repo: &RepositoryId::new("forgejo:acme/service"),
+            workflow_id: "reference-delivery",
+            role: Some("engineer"),
+            work_item_count: 1,
+        });
+        assert!(summary.contains(r#""event":"scan_summary""#));
+        assert!(summary.contains(r#""tick_id":"tick-1""#));
+        assert!(summary.contains(r#""work_item_count":1"#));
+
+        let selected = render_work_item_selected_event(&WorkItemSelectedEvent {
+            identity: &identity,
+            workflow_id: "reference-delivery",
+            worker: "multi-role:engineer",
+        });
+        assert!(selected.contains(r#""event":"work_item_selected""#));
+        assert!(selected.contains(r#""decision_id":"decision/"#));
+        assert!(selected.contains(r#""queue":"ready""#));
     }
 
     #[test]
@@ -357,5 +543,36 @@ mod tests {
             "postcondition_failed"
         );
         assert_eq!(postcondition_outcome_for_error(&error), "failed");
+    }
+
+    #[test]
+    fn mechanical_reconciliation_event_names_zero_dependency_blocker() {
+        let finding = ReconcileFinding::BlockedWithoutDependencies {
+            target: ArtifactSource::Issue {
+                number: ItemNumber::new(1),
+            },
+            transition: TransitionId::new("mark_code_ready"),
+            dependency_count: 0,
+            relation_count: 0,
+        };
+        let action = RecoveryAction::Diagnose {
+            target: ArtifactSource::Issue {
+                number: ItemNumber::new(1),
+            },
+            message: "blocked_artifact_without_dependencies".to_string(),
+        };
+        let rendered = render_mechanical_reconciliation_event(&MechanicalReconciliationEvent {
+            worker: "mechanical",
+            repo: &RepositoryId::new("forgejo:acme/service"),
+            finding: &finding,
+            action: &action,
+        });
+
+        assert!(rendered.contains(r#""event":"mechanical_reconciliation""#));
+        assert!(rendered.contains(r#""finding":"blocked_without_dependencies""#));
+        assert!(rendered.contains(r#""diagnostic":"blocked_artifact_without_dependencies""#));
+        assert!(rendered.contains(r#""dependency_count":0"#));
+        assert!(rendered.contains(r#""relation_count":0"#));
+        assert!(rendered.contains(r#""transition":"mark_code_ready""#));
     }
 }

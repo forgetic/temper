@@ -447,6 +447,42 @@ fn reconcile_does_not_confuse_cross_repo_dependency_with_same_number_ambient_ite
 }
 
 #[test]
+fn blocked_code_issue_without_dependencies_gets_named_diagnostic() {
+    let workflow = workflow();
+    let policy = DefaultRecoveryPolicy;
+    let snapshot = ArtifactSnapshot {
+        source: issue_source(7),
+        labels: vec!["code".into(), "blocked".into()],
+        body: String::new(),
+        dependencies: Vec::new(),
+    };
+
+    let report = workflow.reconciler(&policy).scan(
+        &[snapshot],
+        &[],
+        &DependencyStatus::default(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+
+    assert_eq!(
+        report.findings,
+        vec![ReconcileFinding::BlockedWithoutDependencies {
+            target: issue_source(7),
+            transition: TransitionId::new("mark_code_ready"),
+            dependency_count: 0,
+            relation_count: 0,
+        }]
+    );
+    assert_eq!(
+        report.actions,
+        vec![RecoveryAction::Diagnose {
+            target: issue_source(7),
+            message: "blocked_artifact_without_dependencies: dependency-gated unblocking for transition `mark_code_ready` intentionally cannot proceed without at least one recorded dependency (dependency_count=0, relation_count=0)".to_string(),
+        }]
+    );
+}
+
+#[test]
 fn blocked_code_issue_unblocks_only_after_native_dependencies_land() {
     let workflow = workflow();
     let policy = DefaultRecoveryPolicy;

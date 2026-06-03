@@ -70,6 +70,7 @@ See `secrets/.env.example` for the options in detail.
 ```text
 examples/reference-delivery/
 ├── README.md            # this file
+├── observability.md     # operator event/validator guide
 ├── .gitignore           # ignores runtime run/, logs/, *.pid, *.log
 ├── config/
 │   ├── temper.env      # operator-editable knobs (no secrets)
@@ -214,6 +215,10 @@ architect for one child per repo. In Forgejo you should see:
 
 ## Watching progress and validating webhooks
 
+See [`observability.md`](observability.md) for the event names, correlation
+fields, and Forge-state validator diagnostics to inspect when the workflow moves
+or stalls.
+
 Open the Forgejo UI at `BASE_URL` (log in as any provisioned role). In the
 first configured repo, open the seeded parent intake. Watch the architect create
 child code issues across the repo set, then watch each child repo's PR open, CI
@@ -243,13 +248,23 @@ It verifies that every configured repo appears in provisioning, trigger, and
 worker startup logs, checks that only the source repo received the parent intake,
 then summarizes accepted webhook deliveries, wake batches sent, per-worker wake
 consumption, wake-triggered ticks, and whether any wake-triggered tick made
-workflow progress (`actions>0`). For a cheaper generic wake check, use
-`./run.sh validate-webhooks`. For a long-poll smoke, start the demo with
+workflow progress (`actions>0`). When cross-repo intake is enabled it also reads
+live Forge state through `temper-validate-reference-delivery` and fails loudly
+for missing fan-out children, child metadata, or a blocked parent with zero
+dependencies. Run it before `./run.sh stop`; teardown removes the throwaway
+Forgejo state. For a cheaper generic wake check, use `./run.sh validate-webhooks`.
+For a long-poll smoke, start the demo with
 `POLL_MS=120000 ./run.sh`, wait until workflow movement appears in Forgejo for
 each repo, then run `./run.sh validate-multi-repo`; it should pass before any
 two-minute poll backstop is needed.
 
 ## Validated smoke paths
+
+The default, hermetic observability proof is:
+
+```sh
+cargo test -p temper-testing --test observability_smoke
+```
 
 The default, hermetic multi-repo topology smoke is the ignored filesystem process
 rehearsal:
@@ -269,8 +284,8 @@ TEMPER_FORGEJO_E2E=1 \
 That live test validates the repo-hinted wake path. The cross-repo fan-out
 scenario is covered by the gated Forgejo multiprocess suite and the deterministic
 multi-repo process suite. The shell demo's own validation path is
-`./run.sh validate-multi-repo` after a run; it validates the operator logs rather
-than reasserting Forge state.
+`./run.sh validate-multi-repo` during a live run; it validates operator logs and
+Forge state for the seeded cross-repo parent.
 
 ## Troubleshooting long-poll wakeups
 

@@ -9,7 +9,12 @@
 //! spawning an agent.
 
 use crate::agent::{Agent, AgentError, RoleTools};
-use crate::scan::{scan_role, ScanError};
+use crate::observability::{
+    render_mechanical_reconciliation_event, render_scan_summary_event,
+    render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
+    WorkItemSelectedEvent,
+};
+use crate::scan::{scan_role, ScanError, WorkItem};
 use crate::signal::CiError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -226,6 +231,15 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
         )
         .await?;
 
+        log_role_scan(
+            &self.name,
+            self.repo,
+            self.workflow.name(),
+            &self.role,
+            tools,
+            &items,
+        );
+
         let mut progress = Progress::unchanged();
         for item in items {
             progress.record(self.agent.service(&item, tools).await?);
@@ -348,6 +362,7 @@ where
         if report.is_clean() {
             return Ok(Progress::unchanged());
         }
+        log_mechanical_reconciliation(&self.name, self.repo, &report);
 
         let outcome = Applier::new(&self.executor, &self.lease_manager, self.journal)
             .apply_report(self.repo, &report, now)
@@ -365,6 +380,63 @@ where
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+fn log_role_scan<F: Forge + ?Sized>(
+    worker: &str,
+    repo: &RepositoryId,
+    workflow_id: &str,
+    role: &RoleId,
+    tools: &RoleTools<'_, F>,
+    items: &[WorkItem],
+) {
+    let Some(tick_id) = tools.observability_tick_id() else {
+        return;
+    };
+    if items.is_empty() {
+        return;
+    }
+    eprintln!(
+        "{}",
+        render_scan_summary_event(&ScanSummaryEvent {
+            tick_id: Some(tick_id),
+            worker_kind: "role",
+            worker,
+            repo,
+            workflow_id,
+            role: Some(role.as_str()),
+            work_item_count: items.len(),
+        })
+    );
+    for item in items {
+        let identity = tools.work_item_identity(item);
+        eprintln!(
+            "{}",
+            render_work_item_selected_event(&WorkItemSelectedEvent {
+                identity: &identity,
+                workflow_id,
+                worker,
+            })
+        );
+    }
+}
+
+fn log_mechanical_reconciliation(
+    worker: &str,
+    repo: &RepositoryId,
+    report: &temper_workflow::ReconcileReport,
+) {
+    for (finding, action) in report.findings.iter().zip(report.actions.iter()) {
+        eprintln!(
+            "{}",
+            render_mechanical_reconciliation_event(&MechanicalReconciliationEvent {
+                worker,
+                repo,
+                finding,
+                action,
+            })
+        );
     }
 }
 

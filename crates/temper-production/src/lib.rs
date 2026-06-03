@@ -17,6 +17,7 @@ pub mod product_chat_repl;
 pub mod product_chat_service;
 pub mod provision;
 pub mod provision_args;
+pub mod reference_delivery_validator;
 pub mod trigger;
 pub mod trigger_args;
 pub mod wake;

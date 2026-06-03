@@ -137,6 +137,10 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         self.context.clone()
     }
 
+    pub(crate) fn observability_tick_id(&self) -> Option<&str> {
+        self.observability_tick_id.as_deref()
+    }
+
     /// Repository these tools operate on.
     pub fn repo(&self) -> &RepositoryId {
         self.repo

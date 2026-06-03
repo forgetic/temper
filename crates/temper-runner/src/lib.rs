@@ -96,11 +96,13 @@ pub use multi_repo::{
 pub use observability::{
     bounded_preview, execution_error_diagnostic_classes, execution_error_failure_class,
     postcondition_outcome_for_error, redacted_lossy_preview, redacted_preview,
-    render_action_dispatch_event, render_role_decision_reply_event,
-    render_role_decision_request_event, render_transition_execution_event,
+    render_action_dispatch_event, render_mechanical_reconciliation_event,
+    render_role_decision_reply_event, render_role_decision_request_event,
+    render_scan_summary_event, render_transition_execution_event, render_work_item_selected_event,
     render_worker_capability_event, workflow_effect_summary, ActionDispatchEvent,
-    ObservabilityArtifactType, RoleDecisionReplyEvent, RoleDecisionRequestEvent, StructuredEvent,
-    TransitionExecutionEvent, WorkItemIdentity, WorkerCapabilitySummary, REDACTED,
+    MechanicalReconciliationEvent, ObservabilityArtifactType, RoleDecisionReplyEvent,
+    RoleDecisionRequestEvent, ScanSummaryEvent, StructuredEvent, TransitionExecutionEvent,
+    WorkItemIdentity, WorkItemSelectedEvent, WorkerCapabilitySummary, REDACTED,
 };
 pub use role_decision::{
     AuthorizedWorkflowAction, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,

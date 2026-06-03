@@ -109,7 +109,8 @@ usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|smoke-webhoo
   validate-webhooks    inspect logs/ and report whether webhook wakes were
                        registered, accepted, delivered, consumed, and acted on.
   validate-multi-repo  additionally require every configured repo to appear in
-                       provisioning, trigger, and worker startup logs.
+                       provisioning, trigger, worker startup logs, and the
+                       live Forge state for the cross-repo parent/children.
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
@@ -179,7 +180,7 @@ cmd_stop() {
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY \
 TEMPER_FORGEJO_RUNNER_BINARY TEMPER_WORKER_BIN TEMPER_PROVISION_BIN \
-TEMPER_TRIGGER_BIN TEMPER_BUILD_PACKAGE \
+TEMPER_TRIGGER_BIN TEMPER_VALIDATE_BIN TEMPER_BUILD_PACKAGE \
 REFERENCE_DELIVERY_ROLE_DECISION SMITH_WORKSPACE_ROOT SMITH_BUILD_PACKAGE \
 SMITH_WORKFLOW_ROLE_DECISION_BIN SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON \
 SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST SMITH_WORKFLOW_ROLE_DECISION_CWD \
@@ -246,6 +247,7 @@ load_config() {
     TEMPER_WORKER_BIN=${TEMPER_WORKER_BIN:-}
     TEMPER_PROVISION_BIN=${TEMPER_PROVISION_BIN:-}
     TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
+    TEMPER_VALIDATE_BIN=${TEMPER_VALIDATE_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
     REFERENCE_DELIVERY_ROLE_DECISION=${REFERENCE_DELIVERY_ROLE_DECISION:-smith}
     SMITH_WORKSPACE_ROOT=${SMITH_WORKSPACE_ROOT:-$HOME/src/rust/smith}
@@ -314,6 +316,7 @@ resolve_binaries() {
     WORKER_BIN=${TEMPER_WORKER_BIN:-$WORKSPACE_ROOT/target/debug/temper-worker}
     PROVISION_BIN=${TEMPER_PROVISION_BIN:-$WORKSPACE_ROOT/target/debug/temper-provision-forgejo}
     TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-$WORKSPACE_ROOT/target/debug/temper-trigger-forgejo}
+    VALIDATOR_BIN=${TEMPER_VALIDATE_BIN:-$WORKSPACE_ROOT/target/debug/temper-validate-reference-delivery}
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
@@ -327,11 +330,17 @@ resolve_binaries() {
     [ -x "$WORKER_BIN" ] || die "worker binary not found: $WORKER_BIN"
     [ -x "$PROVISION_BIN" ] || die "provision binary not found: $PROVISION_BIN"
     [ -x "$TRIGGER_BIN" ] || die "trigger binary not found: $TRIGGER_BIN"
+    [ -x "$VALIDATOR_BIN" ] || die "reference-delivery validator binary not found: $VALIDATOR_BIN"
 
     _provision_help=$("$PROVISION_BIN" --help 2>&1 || true)
     case "$_provision_help" in
         *--seed-intake*--intake-title*--intake-body-file*) ;;
         *) die "provision binary is stale or incompatible: $PROVISION_BIN does not advertise --seed-intake/--intake-title/--intake-body-file. Re-run without TEMPER_SKIP_BUILD=1 or rebuild temper-production with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+    esac
+    _validator_help=$("$VALIDATOR_BIN" --help 2>&1 || true)
+    case "$_validator_help" in
+        *--parent-number*--expected-children*) ;;
+        *) die "reference-delivery validator binary is stale or incompatible: $VALIDATOR_BIN does not advertise --parent-number/--expected-children. Re-run without TEMPER_SKIP_BUILD=1 or rebuild temper-production with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
     # Pinned Forgejo + runner: env override, else the cached pinned path.
     FORGEJO_BIN=${TEMPER_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
@@ -782,6 +791,62 @@ validate_repo_specific_logs() {
     return "$_ok"
 }
 
+validator_token() {
+    [ -f "$ROLES_ENV" ] || return 1
+    # shellcheck disable=SC1090
+    . "$ROLES_ENV"
+    _key=$(role_env_key architect)
+    eval "_token=\${TEMPER_FORGEJO_TOKEN_${_key}:-}"
+    [ -n "$_token" ] || return 1
+    printf '%s\n' "$_token"
+}
+
+cross_repo_parent_number() {
+    sed -n "s|^repo=$FIRST_CONFIGURED_REPO cross_repo_parent_url=.*/issues/\([0-9][0-9]*\).*|\1|p" \
+        "$LOG_DIR/provision.log" 2>/dev/null | sed -n '1p'
+}
+
+cmd_validate_reference_delivery_state() {
+    [ "$CROSS_REPO_ENABLED" = "1" ] || return 0
+    _ok=0
+    VALIDATOR_BIN=${TEMPER_VALIDATE_BIN:-$WORKSPACE_ROOT/target/debug/temper-validate-reference-delivery}
+    if [ ! -x "$VALIDATOR_BIN" ]; then
+        log "missing: reference-delivery validator binary not found at $VALIDATOR_BIN"
+        return 1
+    fi
+    _parent=$(cross_repo_parent_number)
+    if [ -z "$_parent" ]; then
+        log "missing: could not derive cross-repo parent issue number from logs/provision.log"
+        return 1
+    fi
+    _token=$(validator_token) || {
+        log "missing: could not find architect read token in $ROLES_ENV for Forge-state validation"
+        return 1
+    }
+    _repo_args=
+    for _repo in $CONFIGURED_REPOS; do
+        _repo_args="$_repo_args --repo $_repo"
+    done
+    log "validating reference-delivery Forge state for parent $FIRST_CONFIGURED_REPO#$_parent"
+    # _repo_args intentionally word-split; repo values are validated owner/name.
+    # shellcheck disable=SC2086
+    if _output=$(TEMPER_FORGEJO_TOKEN="$_token" "$VALIDATOR_BIN" \
+        --base-url "$BASE_URL" $_repo_args \
+        --source-repo "$FIRST_CONFIGURED_REPO" \
+        --parent-number "$_parent" \
+        --expected-children "$REPO_COUNT" 2>&1); then
+        printf '%s\n' "$_output" | while IFS= read -r _line; do
+            [ -n "$_line" ] && log "$_line"
+        done
+    else
+        _ok=1
+        printf '%s\n' "$_output" | while IFS= read -r _line; do
+            [ -n "$_line" ] && log "$_line"
+        done
+    fi
+    return "$_ok"
+}
+
 cmd_validate_webhooks() {
     load_config
     _ok=0
@@ -865,7 +930,10 @@ cmd_validate_webhooks() {
 }
 
 cmd_validate_multi_repo() {
-    VALIDATE_REPO_SPECIFIC=1 cmd_validate_webhooks
+    _ok=0
+    VALIDATE_REPO_SPECIFIC=1 cmd_validate_webhooks || _ok=1
+    cmd_validate_reference_delivery_state || _ok=1
+    return "$_ok"
 }
 
 # --- Monitor ------------------------------------------------------------------
