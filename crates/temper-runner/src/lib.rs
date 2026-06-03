@@ -65,6 +65,7 @@ pub mod coding_workspace;
 pub mod config;
 pub mod driver;
 pub mod multi_repo;
+pub mod observability;
 pub mod role_decision;
 pub mod role_decision_process;
 mod role_process_tools;
@@ -91,6 +92,11 @@ pub use multi_repo::{
     MultiRepoConfigError, MultiRepoError, MultiRepoMechanicalWorker, MultiRepoRoleWorker,
     MultiRepoTickReport, RepositoryFailure, RepositoryJournal, RepositoryProgress, RepositorySet,
     RepositoryTarget,
+};
+pub use observability::{
+    bounded_preview, redacted_lossy_preview, redacted_preview, render_worker_capability_event,
+    ObservabilityArtifactType, StructuredEvent, WorkItemIdentity, WorkerCapabilitySummary,
+    REDACTED,
 };
 pub use role_decision::{
     AuthorizedWorkflowAction, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,

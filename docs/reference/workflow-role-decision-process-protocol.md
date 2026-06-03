@@ -32,7 +32,10 @@ A request contains:
 - `protocol_version` (`1` today);
 - `workflow_id`;
 - the compiled `role_manifest` Temper is enforcing;
-- fresh `work_item_context` JSON;
+- fresh `work_item_context` JSON, including an optional nested
+  `observability` object with provider-neutral work item and decision identity
+  fields such as repo, role, queue, artifact type/number/kind, `work_item_id`,
+  and `decision_id`;
 - compact `authorized_actions` derived from the manifest;
 - `available_external_tools` metadata that survived declaration and runner
   binding validation.

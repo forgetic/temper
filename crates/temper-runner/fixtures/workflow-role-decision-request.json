@@ -66,6 +66,16 @@
       "body": "This synthetic task is ready for the generic action.",
       "labels": ["task", "todo"],
       "state": "Open"
+    },
+    "observability": {
+      "work_item_id": "work-item/repo:20:forgejo:acme/service/artifact:issue:1/kind:4:task/queue:4:todo/role:6:banana",
+      "decision_id": "decision/work-item/repo:20:forgejo:acme/service/artifact:issue:1/kind:4:task/queue:4:todo/role:6:banana",
+      "repo": "forgejo:acme/service",
+      "role": "banana",
+      "queue": "todo",
+      "artifact_type": "issue",
+      "artifact_number": 1,
+      "artifact_kind": "task"
     }
   },
   "authorized_actions": [

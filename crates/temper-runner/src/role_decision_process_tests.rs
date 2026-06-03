@@ -15,7 +15,7 @@ use temper_workflow::{
 
 use crate::{
     Agent, BoundExternalTool, CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput,
-    CodingWorkspaceRequest, ExternalToolExecutors, RoleTools, WorkItem,
+    CodingWorkspaceRequest, ExternalToolExecutors, RoleTools, WorkItem, REDACTED,
     WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
 };
 
@@ -264,6 +264,24 @@ fi
         captured.work_item_context["artifact"]["title"],
         "generic work"
     );
+    let observability = captured.work_item_context["observability"]
+        .as_object()
+        .expect("observability context is an object");
+    assert_eq!(observability["repo"], fixture.repo.to_string());
+    assert_eq!(observability["role"], "banana");
+    assert_eq!(observability["queue"], "todo");
+    assert_eq!(observability["artifact_type"], "issue");
+    assert_eq!(observability["artifact_number"], fixture.issue.number.get());
+    assert_eq!(observability["artifact_kind"], "task");
+    assert!(observability["work_item_id"]
+        .as_str()
+        .expect("work item id is a string")
+        .contains("artifact:issue:1"));
+    assert!(observability["decision_id"]
+        .as_str()
+        .expect("decision id is a string")
+        .starts_with("decision/work-item/"));
+    assert!(observability.get("tick_id").is_none());
     assert_eq!(captured.authorized_actions[0].action, "advance");
     assert_eq!(
         captured.available_external_tools[0].provider,
@@ -339,6 +357,23 @@ async fn process_agent_reports_timeout_exit_and_malformed_replies() {
         );
     }
     assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
+}
+
+#[tokio::test]
+async fn process_agent_redacts_secret_like_stderr() {
+    let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
+    let error = agent(
+        fixture.manifest.clone(),
+        inline_config("printf 'token=super-secret' >&2; exit 7"),
+    )
+    .service(&fixture.item, &tools(&fixture))
+    .await
+    .expect_err("process failure is an agent error");
+    let rendered = error.to_string();
+
+    assert!(rendered.contains(REDACTED));
+    assert!(!rendered.contains("super-secret"));
+    assert!(!rendered.contains("token=super-secret"));
 }
 
 #[derive(Default)]

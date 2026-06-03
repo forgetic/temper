@@ -203,6 +203,14 @@ mod tests {
         );
         assert_eq!(request.workflow_id, "generic-agent-test");
         assert_eq!(request.role_manifest.id.as_str(), "banana");
+        assert_eq!(
+            request.work_item_context["observability"]["repo"],
+            "forgejo:acme/service"
+        );
+        assert_eq!(
+            request.work_item_context["observability"]["artifact_type"],
+            "issue"
+        );
         assert!(request.action_is_authorized("advance"));
         assert!(request.action_is_authorized(WORKFLOW_ROLE_DECISION_NO_ACTION));
         assert!(!request.action_is_authorized("delete_everything"));

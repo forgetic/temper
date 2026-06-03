@@ -20,8 +20,9 @@ use temper_workflow::{RoleManifest, ToolManifest};
 
 use crate::role_process_tools::{build_work_item_context, run_process_action};
 use crate::{
-    Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleTools, WorkItem,
-    WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
+    redacted_lossy_preview, Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleTools,
+    WorkItem, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,
+    WorkflowRoleDecisionRequest,
 };
 
 const STDERR_PREVIEW_LIMIT: usize = 4096;
@@ -398,18 +399,7 @@ fn validate_env_name(name: &str) -> Result<(), WorkflowRoleDecisionProcessError>
 }
 
 fn preview_lossy(bytes: &[u8]) -> String {
-    let mut text = String::from_utf8_lossy(bytes).into_owned();
-    if text.len() > STDERR_PREVIEW_LIMIT {
-        let end = text
-            .char_indices()
-            .map(|(index, _)| index)
-            .take_while(|index| *index <= STDERR_PREVIEW_LIMIT)
-            .last()
-            .unwrap_or(0);
-        text.truncate(end);
-        text.push_str("...");
-    }
-    text
+    redacted_lossy_preview(bytes, STDERR_PREVIEW_LIMIT)
 }
 
 fn declared_bound_tools(

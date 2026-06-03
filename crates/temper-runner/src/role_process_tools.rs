@@ -11,7 +11,7 @@ use temper_workflow::{
 use crate::{
     AgentError, BoundExternalTool, CodingWorkspace, CodingWorkspaceGuidance,
     CodingWorkspaceRepository, CodingWorkspaceRequest, CodingWorkspaceWorkItem,
-    ExternalToolExecutors, RoleTools, WorkItem, CODING_WORKSPACE_TOOL_ID,
+    ExternalToolExecutors, RoleTools, WorkItem, WorkItemIdentity, CODING_WORKSPACE_TOOL_ID,
 };
 
 pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
@@ -41,12 +41,21 @@ pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
         }),
     };
 
+    let identity = WorkItemIdentity::new(
+        tools.repo(),
+        tools.role(),
+        &item.queue,
+        item.target,
+        &item.kind,
+    );
+
     Ok(serde_json::json!({
         "repository": tools.repo().as_str(),
         "role": tools.role().as_str(),
         "queue": item.queue.as_str(),
         "kind": item.kind.as_str(),
         "artifact": artifact,
+        "observability": identity.to_json(),
     }))
 }
 

@@ -12,8 +12,9 @@ use crate::{runner_config, workflow};
 use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_runner::{
-    MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal, RepositorySet,
-    RepositoryTarget, RunReport, Worker, WorkerError, WorkerRunReport,
+    render_worker_capability_event, MultiRepoMechanicalWorker, MultiRepoRoleWorker,
+    RepositoryJournal, RepositorySet, RepositoryTarget, RunReport, Worker, WorkerCapabilitySummary,
+    WorkerError, WorkerRunReport,
 };
 use temper_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
 
@@ -90,6 +91,17 @@ async fn run_role(
     let role_manifest = compiled
         .role(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?;
+    let bound_external_tool_ids = config
+        .bound_external_tools_for(role_manifest)
+        .map_err(|error| RunError::Backend(error.to_string()))?
+        .into_iter()
+        .map(|tool| tool.id.to_string())
+        .collect::<Vec<_>>();
+    let authorized_actions = role_manifest
+        .tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<Vec<_>>();
     let agent = build_role_agent(
         args,
         &compiled,
@@ -102,6 +114,15 @@ async fn run_role(
     let repositories = resolve_repositories(forge, &args.repositories).await?;
     ensure_workflow_labels(forge, &repositories, &compiled).await?;
     log_repository_set("role", role, &repositories);
+    log_worker_capabilities(WorkerCapabilitySummary {
+        worker_kind: "role".to_string(),
+        worker: format!("multi-role:{role}"),
+        role: Some(role.to_string()),
+        repositories: repository_display_paths(&repositories),
+        responder_mode: "process".to_string(),
+        authorized_actions,
+        bound_external_tool_ids,
+    });
     let worker = MultiRepoRoleWorker::new(
         &workflow,
         &compiled,
@@ -121,6 +142,15 @@ async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunRe
     let repositories = resolve_repositories(forge, &args.repositories).await?;
     ensure_workflow_labels(forge, &repositories, &compiled).await?;
     log_repository_set("mechanical", "mechanical", &repositories);
+    log_worker_capabilities(WorkerCapabilitySummary {
+        worker_kind: "mechanical".to_string(),
+        worker: "multi-mechanical".to_string(),
+        role: None,
+        repositories: repository_display_paths(&repositories),
+        responder_mode: "none".to_string(),
+        authorized_actions: Vec::new(),
+        bound_external_tool_ids: Vec::new(),
+    });
     let journals: Vec<InMemoryJournal> = repositories
         .repositories()
         .iter()
@@ -189,15 +219,22 @@ async fn ensure_workflow_labels<F: Forge + ?Sized>(
 }
 
 fn log_repository_set(kind: &str, name: &str, repositories: &RepositorySet) {
-    let repos = repositories
-        .repositories()
-        .iter()
-        .map(RepositoryTarget::display_path)
-        .collect::<Vec<_>>()
-        .join(",");
+    let repos = repository_display_paths(repositories).join(",");
     eprintln!(
         "temper-worker: resolved repositories worker_kind={kind} worker={name} repos={repos}"
     );
+}
+
+fn log_worker_capabilities(summary: WorkerCapabilitySummary) {
+    eprintln!("{}", render_worker_capability_event(&summary));
+}
+
+fn repository_display_paths(repositories: &RepositorySet) -> Vec<String> {
+    repositories
+        .repositories()
+        .iter()
+        .map(RepositoryTarget::display_path)
+        .collect()
 }
 
 const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
