@@ -20,6 +20,7 @@ TOOLS_DIR="$SCRIPT_DIR/tools"
 ROLES_ENV="$SECRETS_DIR/roles.env"
 WEBHOOK_SECRET_FILE="$SECRETS_DIR/webhook-secret"
 WAKE_SECRET_FILE="$SECRETS_DIR/wake-secret"
+PRODUCT_CHAT_BINDINGS_FILE="$RUN_DIR/product-chat-interaction-bindings.json"
 STOP_FILE="$RUN_DIR/stop"
 WORKERS_PID_FILE="$RUN_DIR/workers.pids"
 TRIGGER_PID_FILE="$RUN_DIR/trigger.pid"
@@ -61,9 +62,9 @@ usage: $DISPLAY_SCRIPT [start|preflight|product-chat|stop|status|help]
   preflight        explain whether engineer automation has the declared tool,
                    runner binding, diff guard, credentials, and workspace paths;
                    also reports why code+ready issues are idle when possible.
-  product-chat     start an interactive terminal product-manager conversation;
-                   pass extra args after the command (for example
-                   --transcript-issue 3) to resume a transcript.
+  product-chat     start the example product-manager interaction profile in
+                   the generic terminal REPL; pass extra args after the command
+                   (for example --transcript-issue 3) to resume a transcript.
   stop             stop local workers, trigger, and ssh tunnel from run/*.pid.
   status           show local process/log locations.
   help             show this message.
@@ -148,7 +149,10 @@ load_config() {
     TEMPER_CODING_WORKSPACE_PR_LABELS=${TEMPER_CODING_WORKSPACE_PR_LABELS:-implementation,needs-reviewer,needs-merge}
     TEMPER_WORKER_BIN=${TEMPER_WORKER_BIN:-}
     TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
-    TEMPER_PRODUCT_CHAT_BIN=${TEMPER_PRODUCT_CHAT_BIN:-}
+    TEMPER_INTERACTION_BIN=${TEMPER_INTERACTION_BIN:-}
+    DOGFOOD_PRODUCT_CHAT_PROFILE_SPEC=${DOGFOOD_PRODUCT_CHAT_PROFILE_SPEC:-$SCRIPT_DIR/config/interaction-profiles/product-manager.json}
+    DOGFOOD_PRODUCT_CHAT_PROFILE_ID=${DOGFOOD_PRODUCT_CHAT_PROFILE_ID:-product-manager}
+    DOGFOOD_PRODUCT_CHAT_RESPONDER_ID=${DOGFOOD_PRODUCT_CHAT_RESPONDER_ID:-product-manager-responder}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
     DOGFOOD_ROLE_DECISION=${DOGFOOD_ROLE_DECISION:-smith}
@@ -215,13 +219,13 @@ resolve_binaries() {
     esac
 }
 
-resolve_product_chat_binary() {
-    PRODUCT_CHAT_BIN=${TEMPER_PRODUCT_CHAT_BIN:-$WORKSPACE_ROOT/target/debug/temper-product-manager-chat}
+resolve_interaction_binary() {
+    INTERACTION_BIN=${TEMPER_INTERACTION_BIN:-$WORKSPACE_ROOT/target/debug/temper-interaction}
     if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
-        log "ensuring product-chat binary is current (cargo build -p $TEMPER_BUILD_PACKAGE --bin temper-product-manager-chat)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" --bin temper-product-manager-chat ) || die 'cargo build failed'
+        log "ensuring generic interaction binary is current (cargo build -p $TEMPER_BUILD_PACKAGE --bin temper-interaction)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" --bin temper-interaction ) || die 'cargo build failed'
     fi
-    [ -x "$PRODUCT_CHAT_BIN" ] || die "product-chat binary not found: $PRODUCT_CHAT_BIN"
+    [ -x "$INTERACTION_BIN" ] || die "generic interaction binary not found: $INTERACTION_BIN"
 }
 
 resolve_smith_product_manager_responder() {
@@ -279,18 +283,31 @@ check_coding_workspace() {
 
 # Smith owns provider/auth validation for configured responders.
 
-configure_product_chat_responder_args() {
-    PRODUCT_CHAT_RESPONDER_ARGS=
+configure_product_chat_responder_binding() {
     case "$DOGFOOD_PRODUCT_CHAT_RESPONDER" in
         smith | "")
             resolve_smith_product_manager_responder
-            PRODUCT_CHAT_RESPONDER_ARGS="--responder-command $SMITH_PM_RESPONDER_BIN"
-            [ -n "$SMITH_PRODUCT_MANAGER_RESPONDER_CWD" ] && PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-cwd $SMITH_PRODUCT_MANAGER_RESPONDER_CWD"
-            [ -n "$SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS" ] && PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-timeout-secs $SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS"
             log "product-chat responder: Smith process ($SMITH_PM_RESPONDER_BIN)"
             ;;
         *) die "unknown DOGFOOD_PRODUCT_CHAT_RESPONDER '$DOGFOOD_PRODUCT_CHAT_RESPONDER' (expected smith)" ;;
     esac
+}
+
+write_product_chat_interaction_bindings() {
+    python3 "$TOOLS_DIR/write_interaction_bindings.py" \
+        --out "$PRODUCT_CHAT_BINDINGS_FILE" \
+        --base-url "$BASE_URL" \
+        --repo "$REPO" \
+        --profile-id "$DOGFOOD_PRODUCT_CHAT_PROFILE_ID" \
+        --responder-id "$DOGFOOD_PRODUCT_CHAT_RESPONDER_ID" \
+        --responder-command "$SMITH_PM_RESPONDER_BIN" \
+        --responder-args-json "$SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON" \
+        --responder-env-allowlist "$SMITH_PRODUCT_MANAGER_RESPONDER_ENV_ALLOWLIST" \
+        --responder-cwd "$SMITH_PRODUCT_MANAGER_RESPONDER_CWD" \
+        --responder-timeout-secs "$SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS" \
+        --human-token-env TEMPER_INTERACTION_HUMAN_TOKEN \
+        --agent-token-env TEMPER_INTERACTION_AGENT_TOKEN \
+        >"$LOG_DIR/product-chat-bindings.log" 2>&1 || die "failed to write interaction deployment bindings (see logs/product-chat-bindings.log)"
 }
 
 parse_live_secrets() {
@@ -551,6 +568,7 @@ launch_workers() {
 
 cleanup_product_chat_snapshot() {
     [ -n "${TEMPER_DOGFOOD_SNAPSHOT_FILE:-}" ] && rm -f "$TEMPER_DOGFOOD_SNAPSHOT_FILE" 2>/dev/null || true
+    rm -f "$PRODUCT_CHAT_BINDINGS_FILE" 2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
 }
 
@@ -588,9 +606,12 @@ cmd_product_chat() {
     load_config
     mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
     trap cleanup_product_chat_snapshot EXIT INT TERM
-    resolve_product_chat_binary
-    configure_product_chat_responder_args
+    resolve_interaction_binary
+    configure_product_chat_responder_binding
     parse_live_secrets
+
+    [ -f "$DOGFOOD_PRODUCT_CHAT_PROFILE_SPEC" ] || die "missing product-chat interaction profile spec: $DOGFOOD_PRODUCT_CHAT_PROFILE_SPEC"
+    write_product_chat_interaction_bindings
 
     _pm_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER:-}
     [ -n "$_pm_token" ] || die "product-chat requires TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER in $ROLES_ENV"
@@ -599,16 +620,12 @@ cmd_product_chat() {
     _human_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN:-}
     [ -n "$_human_token" ] || die "product-chat requires a token for DOGFOOD_PRODUCT_CHAT_HUMAN_USER=$DOGFOOD_PRODUCT_CHAT_HUMAN_USER in $ROLES_ENV"
 
-    # PRODUCT_CHAT_RESPONDER_ARGS is generated from Smith process config and
-    # intentionally word-split, matching role-worker launch style.
-    # shellcheck disable=SC2086
-    TEMPER_PRODUCT_CHAT_HUMAN_TOKEN="$_human_token" \
-    TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN="$_pm_token" \
-    TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON="$SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON" \
-    TEMPER_PRODUCT_CHAT_RESPONDER_ENV_ALLOWLIST="$SMITH_PRODUCT_MANAGER_RESPONDER_ENV_ALLOWLIST" \
-        "$PRODUCT_CHAT_BIN" repl \
-        --base-url "$BASE_URL" --repo "$REPO" \
-        $PRODUCT_CHAT_RESPONDER_ARGS \
+    TEMPER_INTERACTION_HUMAN_TOKEN="$_human_token" \
+    TEMPER_INTERACTION_AGENT_TOKEN="$_pm_token" \
+        "$INTERACTION_BIN" repl \
+        --spec "$DOGFOOD_PRODUCT_CHAT_PROFILE_SPEC" \
+        --bindings "$PRODUCT_CHAT_BINDINGS_FILE" \
+        --profile "$DOGFOOD_PRODUCT_CHAT_PROFILE_ID" \
         "$@"
 }
 

@@ -35,6 +35,8 @@ mod worker_external_tools;
 mod worker_role_agent;
 
 #[cfg(test)]
+mod dogfood_interaction_profile_tests;
+#[cfg(test)]
 mod interaction_args_tests;
 #[cfg(test)]
 mod interaction_repl_tests;

@@ -25,10 +25,16 @@ ship external frontends.
 
 ## Commands
 
-New deployments should prefer the generic `temper-interaction` binary with the
-product-manager fixture spec and a deployment binding file. The historical
-`temper-product-manager-chat` command remains a compatibility alias for dogfood
-and existing local scripts.
+New deployments should prefer the generic `temper-interaction` binary with a
+profile spec such as
+`examples/dogfood/config/interaction-profiles/product-manager.json` and a
+separate deployment binding file. Dogfood's `./run.sh product-chat` command
+builds that generic binary, generates the binding file, and runs
+`temper-interaction repl --spec ... --bindings ... --profile product-manager`.
+The historical `temper-product-manager-chat` command remains a compatibility
+alias while product-specific surfaces are being retired.
+
+Compatibility command example:
 
 ```sh
 TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND=$HOME/src/rust/smith/target/debug/smith-product-manager-responder \

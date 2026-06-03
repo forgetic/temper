@@ -1,0 +1,71 @@
+{
+  "id": "dogfood-interactions",
+  "responders": [
+    {
+      "id": "product-manager-responder",
+      "protocol": "process-v1",
+      "required": true
+    }
+  ],
+  "profiles": [
+    {
+      "id": "product-manager",
+      "transcript": {
+        "target": "issue",
+        "title_prefix": "Product conversation",
+        "labels": ["product"],
+        "label_policy": "exact",
+        "marker_namespace": "product-chat",
+        "recent_turn_limit": 30
+      },
+      "participants": {
+        "human": { "display_name": "human" },
+        "agent": { "display_name": "product-manager" }
+      },
+      "responder": "product-manager-responder",
+      "proposal_kinds": [
+        {
+          "id": "issue",
+          "payload": "issue_draft"
+        }
+      ],
+      "commands": [
+        {
+          "id": "file-draft",
+          "aliases": ["/file"],
+          "action": {
+            "accept_proposal": {
+              "kind": "issue",
+              "acceptance_action": "file-draft"
+            }
+          }
+        }
+      ],
+      "acceptance_actions": [
+        {
+          "id": "file-draft",
+          "proposal_kind": "issue",
+          "acceptance": {
+            "policy": "explicit",
+            "commands": ["file-draft"]
+          },
+          "idempotency_key": "${conversation.id}:${proposal.id}",
+          "effects": [
+            {
+              "kind": "create_issue",
+              "title": "${proposal.payload.title}",
+              "body_template": "${proposal.payload.body}\n\n---\nTranscript: ${conversation.transcript_url}\nrequested-by: ${human.handle}\n\n${effect.marker}",
+              "labels": ["untriaged"],
+              "marker_namespace": "product-chat",
+              "marker_key": "file",
+              "backlink": {
+                "label": "Transcript",
+                "url": "${conversation.transcript_url}"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

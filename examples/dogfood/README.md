@@ -38,31 +38,35 @@ discussion/planning records, not workflow intake, and the intake labeler will no
 add `untriaged` to them. Press `Ctrl-C` or run `./run.sh stop` to stop local
 processes.
 
-## Product-manager chat
+## Product-manager interaction profile
 
-For the terminal-only product discussion MVP, run:
+Product-manager is a dogfood example interaction profile, not a core Temper
+workflow role. For the terminal-only product discussion MVP, run:
 
 ```sh
 ./run.sh product-chat
 ```
 
-This builds `temper-product-manager-chat`, parses `secrets/roles.env`, maps the
-configured `DOGFOOD_PRODUCT_CHAT_HUMAN_USER` token (default `free`) to
-`TEMPER_PRODUCT_CHAT_HUMAN_TOKEN`, and maps the separate `product-manager`
-token to `TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN` for product-manager
-replies and confirmed filing. If the private note's admin user is exactly the
-configured product-chat human, that same-user API token is accepted; otherwise
-missing human/product-manager tokens fail closed with no bot/admin fallback for
-a different transcript author. The REPL creates a Forgejo transcript issue
-labeled `product` only, mirrors turns as comments, shows draft intake issues,
-and files one as a normal `untriaged` workflow issue only after `/file <n>`.
+This builds the generic `temper-interaction` binary, parses `secrets/roles.env`,
+loads `config/interaction-profiles/product-manager.json`, writes a local
+interaction deployment binding under `run/`, maps the configured
+`DOGFOOD_PRODUCT_CHAT_HUMAN_USER` token (default `free`) to the generic
+`TEMPER_INTERACTION_HUMAN_TOKEN`, and maps the separate `product-manager` token
+to `TEMPER_INTERACTION_AGENT_TOKEN` for profile replies and confirmed filing. If
+the private note's admin user is exactly the configured product-chat human, that
+same-user API token is accepted; otherwise missing human/product-manager tokens
+fail closed with no bot/admin fallback for a different transcript author. The
+REPL creates a Forgejo transcript issue labeled with the profile's exact
+`product` label only, mirrors turns as comments, shows draft intake issues, and
+files one as a normal `untriaged` workflow issue only through the profile's
+accepted `/file <n>` action.
 
 By default this uses Smith's process responder while keeping the same operator
 command. Keep `SMITH_WORKSPACE_ROOT` pointed at `~/src/rust/smith`; the launcher
-builds `smith-product-manager-responder` and passes it as
-`temper-product-manager-chat --responder-command ...`. Forge tokens still stay in
-Temper, and provider/auth arguments plus env allow-list entries remain opaque
-Smith-owned responder configuration.
+builds `smith-product-manager-responder` and records it in the generated generic
+interaction deployment bindings. Forge tokens still stay in Temper, and
+provider/auth arguments plus env allow-list entries remain opaque Smith-owned
+responder configuration.
 Resume an existing product transcript with:
 
 ```sh
@@ -114,14 +118,15 @@ TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing --test forgejo_workspace_pr --
   Polling is set to 10s because this live instance may not emit webhooks for
   every label-only workflow transition.
 - Tokens/passwords are not printed. Logs live in `logs/`.
-- `product-manager` is a separate non-workflow identity, not the workflow
-  `owner` role. Its credentials are optional for normal dogfood workers, but
-  `./run.sh product-chat` requires `TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER` in
-  `secrets/roles.env` (parsed from the private note). Product-chat human turns
-  use `DOGFOOD_PRODUCT_CHAT_HUMAN_USER`, not the workflow `human` alias.
+- `product-manager` is a configured interaction profile and separate
+  non-workflow identity, not the workflow `owner` role. Its credentials are
+  optional for normal dogfood workers, but `./run.sh product-chat` requires
+  `TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER` in `secrets/roles.env` (parsed from the
+  private note). Product-chat human turns use `DOGFOOD_PRODUCT_CHAT_HUMAN_USER`,
+  not the workflow `human` alias.
 - The local runner executes the repo's CI on this machine using Cargo's dev
   profile (`cargo dev-check`).
 - Smith owns LLM provider/auth setup for role decisions and product-manager
-  replies. Edit the `SMITH_*_ARGS_JSON` and allow-list settings in
+  profile replies. Edit the `SMITH_*_ARGS_JSON` and allow-list settings in
   `config/dogfood.env`, then run Smith's documented preflight when changing
   provider credentials.

@@ -210,13 +210,20 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    -p temper-production product_chat --all-targets`; `cargo dev-clippy`; `cargo
    dev-check`.
 
-5. ☐ **Phase 5 — Dogfood/profile migration and product-manager demotion.**
+5. ☑ **Phase 5 — Dogfood/profile migration and product-manager demotion.**
    `prompts/phase-5-dogfood-profile-migration.md`
 
-   Move the dogfood product-manager setup to a checked-in example interaction
-   spec and update `examples/dogfood/run.sh product-chat` to call the generic
-   service/binary with that spec. Keep the same operator experience, but make all
-   labels, commands, profile ids, and accepted transactions come from config.
+   Done: dogfood now has a checked-in example product-manager interaction spec
+   under `examples/dogfood/config/interaction-profiles/`. `./run.sh
+   product-chat` builds and launches the generic `temper-interaction` REPL with
+   that spec, a generated deployment binding file, generic Forge token env names,
+   and Smith process-responder bindings. Dogfood tests cover the example spec,
+   binding generation, product-label safety rails, and credential mapping while
+   existing product-chat compatibility tests remain green. Validation run:
+   `cargo fmt --all`; `cargo test -p temper-interaction --all-targets`; `cargo
+   test -p temper-production --all-targets`; `python3 -m unittest discover -s
+   examples/dogfood/tools -p '*_test.py'`; `sh -n examples/dogfood/run.sh`;
+   `cargo dev-clippy`; `cargo dev-check`.
 
 6. ☐ **Phase 6 — Remove concrete-profile production surfaces and add guards.**
    `prompts/phase-6-remove-concrete-profile-surfaces.md`

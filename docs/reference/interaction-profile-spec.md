@@ -122,14 +122,15 @@ service settings (`bind`, optional bearer `token_env`, and
 `allow_non_loopback`). Secrets are loaded from the named environment variables;
 they are not profile-spec data and are not passed on argv.
 
-## Fixture
+## Fixture and example
 
-The product-manager dogfood behavior is encoded as a fixture, not as the generic
-contract:
+The product-manager dogfood behavior is encoded as fixture/example data, not as
+the generic contract:
 
-`crates/temper-interaction/fixtures/product-manager-interaction-spec.json`
+- `crates/temper-interaction/fixtures/product-manager-interaction-spec.json`
+- `examples/dogfood/config/interaction-profiles/product-manager.json`
 
-It declares the `product` transcript label, `untriaged` filed-issue label,
+They declare the `product` transcript label, `untriaged` filed-issue label,
 `/file` alias, `issue` proposal kind, and explicit issue-proposal acceptance.
 The `/file` text is transport alias data; acceptance executes the generic
 `accept_proposal` action and manifest effects.
