@@ -33,6 +33,7 @@ task-relevant reference pages.
 
 See `reference/`, including the
 [interactive conversation interface](reference/interactive-conversation-interface.md),
+[interaction profile spec](reference/interaction-profile-spec.md),
 [interactive process responder protocol](reference/interactive-process-responder-protocol.md),
 and [workflow role decision process protocol](reference/workflow-role-decision-process-protocol.md).
 
