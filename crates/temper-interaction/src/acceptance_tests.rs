@@ -380,7 +380,7 @@ async fn restart_resume_reconstructs_latest_proposals_and_accepts() {
 }
 
 #[tokio::test]
-async fn unsupported_proposal_kind_is_rejected_at_acceptance() {
+async fn unsupported_proposal_kind_is_rejected_before_persistence() {
     let manifest = support_manifest();
     let (human, agent, _repo) = seeded(&manifest).await;
     let reply = ConversationReply {
@@ -401,13 +401,8 @@ async fn unsupported_proposal_kind_is_rejected_at_acceptance() {
         None,
     )
     .await;
-    session
-        .send_human_turn("Please file custom work.")
-        .await
-        .unwrap();
-
     let error = session
-        .accept_issue_proposal(&proposal_id("custom-work"))
+        .send_human_turn("Please file custom work.")
         .await
         .unwrap_err();
     assert!(matches!(

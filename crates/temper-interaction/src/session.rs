@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
-use temper_forge::{CreateComment, Forge, Issue, ItemNumber, RepositoryPath, User};
+use temper_forge::{CreateComment, Forge, Issue, ItemNumber, Repository, RepositoryPath, User};
 
 use crate::acceptance::{
     AcceptanceExecutor, AcceptanceRequest, AcceptedTarget, IssueAcceptanceOutcome,
@@ -173,6 +173,11 @@ where
         self.transcript.conversation_id()
     }
 
+    /// Repository that owns the transcript and accepted targets.
+    pub fn repository(&self) -> &Repository {
+        self.transcript.repository()
+    }
+
     /// Human Forge user used for human comments.
     pub fn human_user(&self) -> &User {
         self.transcript.human_user()
@@ -221,6 +226,7 @@ where
         };
         let reply = self.responder.respond(&request).await?;
         reply.validate()?;
+        self.validate_reply_proposals(&reply)?;
         let comment_body = render_agent_reply_comment_with_proposals(
             &reply,
             &self.config.transcript.marker_namespace,
@@ -252,6 +258,17 @@ where
         &self,
         proposal_id: &ProposalId,
     ) -> Result<IssueAcceptanceOutcome, InteractionError> {
+        self.accept_issue_proposal_with_action(proposal_id, None)
+            .await
+    }
+
+    /// Idempotently accepts a cached proposal through an optional command-selected
+    /// acceptance action.
+    pub async fn accept_issue_proposal_with_action(
+        &self,
+        proposal_id: &ProposalId,
+        acceptance_action: Option<&crate::AcceptanceActionId>,
+    ) -> Result<IssueAcceptanceOutcome, InteractionError> {
         let outcome = AcceptanceExecutor::new(self.agent_forge.as_ref())
             .accept(AcceptanceRequest {
                 profile: &self.config.profile,
@@ -262,7 +279,7 @@ where
                 requested_by: Some(self.transcript.human_user()),
                 proposals: &self.latest_proposals,
                 proposal_id,
-                acceptance_action: None,
+                acceptance_action,
             })
             .await?;
         let AcceptedTarget::Issue(issue) = outcome.target;
@@ -270,6 +287,21 @@ where
             issue,
             created: outcome.created,
         })
+    }
+
+    fn validate_reply_proposals(&self, reply: &ConversationReply) -> Result<(), InteractionError> {
+        for proposal in &reply.proposals {
+            let manifest = self
+                .config
+                .profile
+                .proposal(&proposal.kind)
+                .ok_or_else(|| InteractionError::UnsupportedProposalKind {
+                    id: proposal.id.clone(),
+                    kind: proposal.kind.clone(),
+                })?;
+            manifest.validate_payload(proposal)?;
+        }
+        Ok(())
     }
 
     fn request_context(&self) -> Value {

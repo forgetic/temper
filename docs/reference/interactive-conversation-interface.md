@@ -84,8 +84,11 @@ is the process protocol using the same serialized request/reply types; see
 - accepting a proposal by stable `ProposalId`;
 - replaying conversation events for transcript and proposal changes.
 
-The production local HTTP adapter currently exposes one configured profile with
-these generic routes:
+The deployable `temper-interaction` binary loads a JSON interaction spec,
+compiles its profiles, applies a separate deployment binding file for Forge
+token environment variables, responder processes, repository selection, bind
+address, and optional service-token auth, then exposes these generic routes for
+all bound profiles:
 
 ```text
 POST /conversations
@@ -96,14 +99,16 @@ GET  /conversations/{id}/events
 POST /conversations/{id}/proposals/{proposal_id}/accept
 ```
 
-`POST /conversations` accepts an optional `profile_id` and optional
-`transcript_issue`; single-profile deployments reject any unconfigured profile.
-`POST /conversations/{id}/turns` accepts `{ "body": "..." }` and returns a
-reply object plus the latest proposals. Event replay returns JSON events with a
-monotonic in-process sequence, `kind`, timestamp, conversation id, and typed
-payload. SSE is not yet enabled by the local adapter; `GET .../events` returns a
-snapshot with `streaming:false` so web, Matrix, mobile, and voice adapters can be
-written against the event schema before a streaming implementation lands.
+`POST /conversations` accepts optional `profile_id` and optional
+`transcript_issue`. Single-profile deployments may omit `profile_id`;
+multi-profile deployments require it unless the binding file declares
+`default_profile`. `POST /conversations/{id}/turns` accepts `{ "body": "..." }`
+and returns a reply object plus the latest proposals. Event replay returns JSON
+events with a monotonic in-process sequence, `kind`, timestamp, conversation id,
+and typed payload. SSE is not yet enabled by the local adapter; `GET .../events`
+returns a snapshot with `streaming:false` so web, Matrix, mobile, and voice
+adapters can be written against the event schema before a streaming
+implementation lands.
 
 ## Invariants
 

@@ -192,14 +192,23 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    --all-targets`; `cargo test -p temper-production product_chat`;
    `cargo dev-clippy`; `cargo dev-check`.
 
-4. ☐ **Phase 4 — Generic deployable interaction service and transport commands.**
+4. ☑ **Phase 4 — Generic deployable interaction service and transport commands.**
    `prompts/phase-4-generic-service-and-transports.md`
 
-   Introduce a generic deployable binary/service that loads interaction specs,
-   binds responder processes/tokens by profile, and exposes REPL + HTTP/event
-   routes without product-manager names. Slash commands and buttons are rendered
-   from command manifests. Product-manager routes/binary may remain as thin
-   compatibility aliases during this phase.
+   Done: `temper-production` now ships a generic `temper-interaction` binary
+   with `repl` and `serve` subcommands. It loads JSON interaction specs,
+   validates/compiles profile manifests, applies a separate deployment binding
+   file for Forge token env names, repository selection, service bind/auth, and
+   process-responder command/cwd/env/timeout bindings, then exposes profile-neutral
+   REPL and HTTP/event routes across bound profiles. Generic REPL help, proposal
+   rendering, and aliases such as `/file` are driven from command/proposal
+   manifests; local commands stay out of responder transcripts. The generic HTTP
+   service keeps event snapshots with `streaming:false`, while the existing
+   product-manager binary and `/sessions`/draft-file routes remain compatibility
+   aliases. Validation run: `cargo fmt --all`; `cargo test -p temper-interaction
+   --all-targets`; `cargo test -p temper-production --all-targets`; `cargo test
+   -p temper-production product_chat --all-targets`; `cargo dev-clippy`; `cargo
+   dev-check`.
 
 5. ☐ **Phase 5 — Dogfood/profile migration and product-manager demotion.**
    `prompts/phase-5-dogfood-profile-migration.md`

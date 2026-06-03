@@ -7,6 +7,14 @@
 pub mod coding_workspace;
 pub mod forgejo_prep;
 pub mod forgejo_rest;
+mod interaction_api;
+pub mod interaction_args;
+pub mod interaction_bindings;
+pub mod interaction_commands;
+mod interaction_http;
+pub mod interaction_repl;
+pub mod interaction_serve;
+pub mod interaction_service;
 pub mod pr_diff_guard;
 pub mod product_chat;
 mod product_chat_api;
@@ -26,6 +34,12 @@ pub mod worker_args;
 mod worker_external_tools;
 mod worker_role_agent;
 
+#[cfg(test)]
+mod interaction_args_tests;
+#[cfg(test)]
+mod interaction_repl_tests;
+#[cfg(test)]
+mod interaction_service_tests;
 #[cfg(test)]
 mod product_chat_args_tests;
 #[cfg(test)]

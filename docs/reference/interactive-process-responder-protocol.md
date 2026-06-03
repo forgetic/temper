@@ -8,12 +8,16 @@ contract and is frozen by the fixtures below.
 
 ## Invocation
 
-Deployments select an external responder process explicitly in their transport or
-service configuration. For the product-manager binary this is
-`--responder-command` or `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`, with matching
-args, cwd, env allow-list, and timeout options. Smith's
-`smith-product-manager-responder` implements this profile process. Temper no
-longer ships an in-process product-manager LLM fallback.
+Deployments select external responder processes explicitly in deployment
+bindings, keyed by the responder ids declared in the compiled interaction spec.
+The generic `temper-interaction` binary reads responder `command`, `args`, `cwd`,
+`env_allowlist`, and `timeout_secs` from that binding file; Forge tokens and
+service auth are read through configured environment-variable names. The
+product-manager compatibility binary keeps its historical
+`--responder-command`/`TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND` options while it
+remains an alias profile. Smith's `smith-product-manager-responder` implements
+that example profile process. Temper no longer ships an in-process
+product-manager LLM fallback.
 
 Frontends must not invoke the responder process directly. They call Temper's
 interaction service (`/conversations`, Matrix adapter, mobile adapter, etc.);

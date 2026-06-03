@@ -11,7 +11,8 @@ Runtime or compiler APIs should consume `ValidatedInteractionSpec` or a compiled
 manifest, not a raw spec. The validated model has no public constructor; callers
 obtain one through `RawInteractionSpec::validate` or `validate_interaction_spec`.
 Compilation is infallible after validation and preserves declaration order for
-deterministic runtime manifests.
+deterministic runtime manifests. Deployable services keep credentials and local
+paths in a separate binding file; profile specs define behavior only.
 
 ## Raw spec scope
 
@@ -110,6 +111,16 @@ newest agent snapshot, validates proposal ids/payloads, strips the hidden marker
 from responder-facing turns, and repopulates the latest proposal list. A restarted
 service can therefore resume a transcript issue, list the latest proposals, and
 accept one without relying on the old process cache.
+
+## Deployment bindings
+
+`temper-interaction` uses a separate JSON deployment binding file. It names the
+Forge base URL, repository (`owner/name`), optional `default_profile`, profile
+bindings (`human_token_env` and `agent_token_env`), responder bindings keyed by
+responder id (`command`, `args`, `cwd`, `env_allowlist`, `timeout_secs`), and
+service settings (`bind`, optional bearer `token_env`, and
+`allow_non_loopback`). Secrets are loaded from the named environment variables;
+they are not profile-spec data and are not passed on argv.
 
 ## Fixture
 

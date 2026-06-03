@@ -23,7 +23,12 @@ responder process. The `/sessions` and `/drafts/{slug}/file` routes below are
 compatibility aliases for the product-manager profile. This repository does not
 ship external frontends.
 
-## Command
+## Commands
+
+New deployments should prefer the generic `temper-interaction` binary with the
+product-manager fixture spec and a deployment binding file. The historical
+`temper-product-manager-chat` command remains a compatibility alias for dogfood
+and existing local scripts.
 
 ```sh
 TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND=$HOME/src/rust/smith/target/debug/smith-product-manager-responder \
@@ -74,9 +79,9 @@ TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON='["--auth","chatgpt-oauth"]' \
 ```
 
 This responder process is an implementation detail of the profile. Web, mobile,
-Matrix, voice, and other frontends should still target Temper's generic
-interaction service routes and select the `product-manager` profile; they should
-not invoke the Smith process directly.
+Matrix, voice, and other frontends should target Temper's generic interaction
+service routes and select the `product-manager` profile; they should not invoke
+the Smith process directly.
 
 ## Authentication
 

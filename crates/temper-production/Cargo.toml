@@ -26,6 +26,10 @@ path = "src/bin/temper-validate-reference-delivery.rs"
 name = "temper-product-manager-chat"
 path = "src/bin/temper-product-manager-chat.rs"
 
+[[bin]]
+name = "temper-interaction"
+path = "src/bin/temper-interaction.rs"
+
 [dependencies]
 async-trait.workspace = true
 base64 = "0.22"
