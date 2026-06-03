@@ -65,6 +65,11 @@ end-to-end rehearsal.
     `TEMPER_AGENTS_AUTH=anthropic-oauth`.
   - **DeepSeek key (fallback, bills per token):** set
     `TEMPER_AGENTS_AUTH=deepseek` and provide `secrets/deepseek-api-key`.
+- Optional Smith workflow-role decisions: set
+  `REFERENCE_DELIVERY_ROLE_DECISION=smith` and keep `SMITH_WORKSPACE_ROOT`
+  pointed at `~/src/rust/smith`. The launcher builds
+  `smith-workflow-role-decision` and passes it to `temper-worker` through the
+  role decision process adapter.
 
 See `secrets/.env.example` for the options in detail.
 

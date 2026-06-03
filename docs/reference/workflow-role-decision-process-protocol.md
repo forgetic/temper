@@ -4,7 +4,8 @@ Temper owns workflow authority. An external workflow-role decision process may
 choose one manifest action, but Temper validates the reply against the compiled
 role manifest and executes only through `RoleTools`. `temper-runner` provides the
 provider-neutral `WorkflowRoleDecisionProcessAgent` adapter; it has no Smith,
-pi-SDK, or provider-auth dependency.
+pi-SDK, or provider-auth dependency. Smith implements the first pi-SDK-backed
+process command, `smith-workflow-role-decision`.
 
 ## Types and fixtures
 
@@ -69,3 +70,18 @@ are `TEMPER_WORKER_ROLE_DECISION_ARGS_JSON`,
 Temper-owned provider secrets; Smith/provider credentials should be supplied
 through Smith-owned env/auth paths rather than broad ambient env. Temper never
 passes Forge handles or workflow mutation tools.
+
+Example Smith selection:
+
+```sh
+cd ~/src/rust/smith
+cargo build -p smith-temper-agent-cli --bin smith-workflow-role-decision
+cd ../temper
+TEMPER_WORKER_ROLE_DECISION_COMMAND=../smith/target/debug/smith-workflow-role-decision \
+TEMPER_WORKER_ROLE_DECISION_ARGS_JSON='["--auth","chatgpt-oauth"]' \
+  temper-worker ...
+```
+
+If `coding_workspace` is declared and bound, Temper invokes that provider after
+the Smith reply selects a PR-creating action. Smith only sees its metadata and
+must still choose one authorized action or `no_action`.

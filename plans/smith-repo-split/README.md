@@ -138,11 +138,18 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    can select Smith with `DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` while preserving
    `temper-product-manager-chat` and `./run.sh product-chat` entry points.
 
-5. ☐ **Phase 5 — Smith workflow-role decision responder.**
+5. ☑ **Phase 5 — Smith workflow-role decision responder.**
    `prompts/phase-5-smith-workflow-role-decisions.md`
 
-   Implement Smith's manifest-driven workflow-role decision process and run the
-   real-agent Forgejo/real-world e2e through Temper's process adapter.
+   Done: Smith now has `smith-workflow-role-decision`, which reads Temper's
+   `WorkflowRoleDecisionRequest`, runs Smith's provider core over the generated
+   role manifest/context, maps unauthorized model actions to `no_action`, and
+   writes a `WorkflowRoleDecisionReply`. Temper production workers can opt into
+   it through the existing process adapter, and the reference-delivery launcher
+   has `REFERENCE_DELIVERY_ROLE_DECISION=smith`. Smith owns hermetic
+   workflow-role decision tests plus an ignored/env-gated real Forgejo + real LLM
+   process-adapter proof; the old Temper real-agent e2e remains runnable until
+   Phase 6.
 
 6. ☐ **Phase 6 — Remove Temper pi-SDK coupling and close parity.**
    `prompts/phase-6-remove-temper-pi-sdk-coupling.md`

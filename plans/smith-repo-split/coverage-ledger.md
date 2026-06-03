@@ -25,13 +25,13 @@ Temper test; until then the current command must remain runnable.
 | `cargo test -p temper-agents decision` (`src/decision.rs` unit tests) | Hermetic model-reply parsing | Smith; Temper replacement is protocol validation | Phase 3/5 | Smith: `cargo test decision`; Temper: `cargo test -p temper-runner role_decision` |
 | `cargo test -p temper-agents product_manager` | Hermetic product-manager profile DTO/prompt/mapping | Smith for responder; Temper for generic fixtures | Phase 4 | Smith: `cargo test product_manager`; Temper: `cargo test -p temper-interaction process_boundary_request_and_reply_json_round_trip` |
 | `cargo test -p temper-production product_chat` | Hermetic product-chat session, local API, explicit filing, process-responder args | Temper | Stays | Same Temper command; Smith adds product-manager process-responder tests. |
-| `cargo test -p temper-agents role` (`src/role_tests.rs`) | Hermetic generic role-agent behavior | Both | Phase 5/6 | Smith: `cargo test role_decision`; Temper: process-adapter conformance tests plus `cargo test -p temper-runner role_decision` |
-| `cargo test -p temper-agents role_external_tool` | Hermetic external-tool metadata and coding-workspace handoff | Both | Phase 5/6 | Smith: role decision tests for external-tool context; Temper: runner process-adapter + existing `coding_workspace` tests |
+| `cargo test -p temper-agents role` (`src/role_tests.rs`) | Hermetic generic role-agent behavior | Both | Phase 5/6 | Smith: `cargo test --workspace --all-targets workflow_role_decision`; Temper: process-adapter conformance tests plus `cargo test -p temper-runner role_decision` |
+| `cargo test -p temper-agents role_external_tool` | Hermetic external-tool metadata and coding-workspace handoff | Both | Phase 5/6 | Smith: `cargo test --workspace --all-targets workflow_role_decision`; Temper: runner process-adapter + existing `coding_workspace` tests |
 | `cargo test -p temper-agents registry` | Hermetic manifest-driven registry, no required-tool gaps | Temper | Stays until process registry exists | `cargo test -p temper-runner` focused process registry tests after Phase 2; no Smith equivalent required except binary manifest smoke. |
 | `cargo test -p temper-agents --test no_legacy_workflow_prompts` | Hermetic guard against checked-in workflow-role prompts | Temper; Smith may add packaging guard | Stays | Same Temper command; Smith optional `cargo test no_legacy_workflow_prompts` for its fixtures. |
-| `TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored` | Forgejo e2e + real LLM | Smith and Temper process e2e | Phase 5 | Smith keeps equivalent test; Temper runs Smith process engine through `TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1 happy_path_converges_with_real_agents` |
+| `TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p temper-agents --test forgejo_engineer_e2e -- --ignored` | Forgejo e2e + real LLM | Smith and Temper process e2e | Phase 5 | Smith: `cd ~/src/rust/smith && TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p smith-temper-agent-cli --test forgejo_workflow_role_e2e -- --ignored --test-threads=1`; Temper old test remains until Phase 6. |
 | `TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1` | Forgejo e2e with fake agents and real CI | Temper | Stays | Same command. |
-| `TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1 happy_path_converges_with_real_agents` | Forgejo e2e + real agents | Both | Phase 5 | Temper uses process adapter and Smith binary; Smith owns real-agent fixture/binary tests. |
+| `TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1 happy_path_converges_with_real_agents` | Forgejo e2e + real agents | Both | Phase 5 | Temper old in-process real-agent command stays runnable; Smith owns `forgejo_workflow_role_e2e`, and the production launcher can opt into Smith with `REFERENCE_DELIVERY_ROLE_DECISION=smith`. |
 | `cargo test -p temper-testing --test multiprocess` and `cargo test -p temper-testing --test multi_repo_multiprocess -- --ignored` | Hermetic process-split rehearsal | Temper | Stays | Same commands. |
 | `TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing --test forgejo_workspace_pr -- --ignored --test-threads=1` | Forgejo e2e for meaningful PR head / coding workspace | Temper | Stays | Same command; Smith role engines must keep choosing only manifest actions. |
 | `cargo test -p temper-production coding_workspace_tests::local_git_workspace_accepts_product_code_or_docs_diff` and `cargo test -p temper-production pr_diff_guard` | Hermetic real-world PR honesty guard | Temper | Stays | Same commands. |
@@ -72,8 +72,19 @@ Temper test; until then the current command must remain runnable.
 | `cargo test -p temper-production product_chat_session_runs_configured_process_responder` | Product-chat transcript/session/filing path driven through a hermetic process responder. | Protects Temper's integration surface while Smith owns the concrete responder. |
 | `examples/dogfood/run.sh product-chat` with `DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` | Live product-chat operator path through Smith's process responder when credentials are available. | Documented/env-configured; still requires live Forgejo credentials and provider auth. |
 
+## Smith workflow-role decision coverage added in Phase 5
+
+| Path / command | Covers | Temper status |
+| --- | --- | --- |
+| `~/src/rust/smith/crates/smith-temper-agent/src/workflow_role_decision.rs` plus `cargo test --workspace --all-targets workflow_role_decision` | Temper workflow-role decision request fixture compatibility, generated manifest prompt/context mapping, runtime bound external-tool metadata, authorized/no-action reply mapping, unauthorized model action downgrading to `no_action`, and protocol-version rejection. | Duplicates generic role-decision behavior for Smith while Temper keeps process-adapter conformance in `cargo test -p temper-runner role_decision`. |
+| `~/src/rust/smith/crates/smith-temper-agent-cli/src/bin/smith-workflow-role-decision.rs` built by `cargo test --workspace --all-targets workflow_role_decision` | Smith process command compilation and provider option parsing for the workflow-role decision protocol. | Temper selects it only through `WorkflowRoleDecisionProcessConfig`; no Rust dependency on Smith. |
+| `cd ~/src/rust/smith && TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 cargo test -p smith-temper-agent-cli --test forgejo_workflow_role_e2e -- --ignored --test-threads=1` | Ignored/env-gated real Forgejo + real LLM proof: Smith binary chooses `open_pr`, Temper process adapter validates the action, invokes a test `coding_workspace`, and opens a PR through `RoleTools`. | The older Temper real-agent Forgejo tests remain runnable until Phase 6 removes transitional in-process pi-SDK paths. |
+| `examples/reference-delivery/run.sh` with `REFERENCE_DELIVERY_ROLE_DECISION=smith` | Operator-facing production worker path through Smith's workflow-role process responder. | Opt-in; default remains in-process until Phase 6, and fake/test paths are unchanged. |
+
 ## Coverage still waiting for Smith
 
-- Real workflow-role model decision behavior, real-agent Forgejo e2e, and Smith
-  workflow-role binaries remain pending until Phase 5.
-- Phases 2, 3, and 4 did not delete or move any `temper-agents` tests.
+- Full multi-scenario real-agent Forgejo convergence through Smith remains an
+  operator/gated rehearsal; the Phase 5 Smith e2e proves the workflow-role
+  process boundary on the PR-creating action, while the old Temper real-agent
+  suite stays available until removal.
+- Phases 2, 3, 4, and 5 did not delete or move any `temper-agents` tests.

@@ -180,6 +180,8 @@ TEMPER_AGENTS_AUTH TEMPER_AGENTS_CODEX_MODEL TEMPER_AGENTS_ANTHROPIC_MODEL \
 TEMPER_AGENTS_AUTH_FILE TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY \
 TEMPER_FORGEJO_RUNNER_BINARY TEMPER_WORKER_BIN TEMPER_PROVISION_BIN \
 TEMPER_TRIGGER_BIN TEMPER_BUILD_PACKAGE \
+REFERENCE_DELIVERY_ROLE_DECISION SMITH_WORKSPACE_ROOT SMITH_BUILD_PACKAGE \
+SMITH_WORKFLOW_ROLE_DECISION_BIN \
 TEMPER_CODING_WORKSPACE_ROOT TEMPER_CODING_WORKSPACE_COMMAND \
 TEMPER_CODING_WORKSPACE_REMOTE TEMPER_CODING_WORKSPACE_PUSH \
 TEMPER_CODING_WORKSPACE_PR_LABELS"
@@ -247,6 +249,10 @@ load_config() {
     TEMPER_PROVISION_BIN=${TEMPER_PROVISION_BIN:-}
     TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
+    REFERENCE_DELIVERY_ROLE_DECISION=${REFERENCE_DELIVERY_ROLE_DECISION:-in-process}
+    SMITH_WORKSPACE_ROOT=${SMITH_WORKSPACE_ROOT:-$HOME/src/rust/smith}
+    SMITH_BUILD_PACKAGE=${SMITH_BUILD_PACKAGE:-smith-temper-agent-cli}
+    SMITH_WORKFLOW_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-}
     TEMPER_CODING_WORKSPACE_ROOT=${TEMPER_CODING_WORKSPACE_ROOT:-}
     TEMPER_CODING_WORKSPACE_COMMAND=${TEMPER_CODING_WORKSPACE_COMMAND:-}
     TEMPER_CODING_WORKSPACE_REMOTE=${TEMPER_CODING_WORKSPACE_REMOTE:-origin}
@@ -385,6 +391,36 @@ resolve_binaries() {
        (running the gated forgejo_multiprocess test once downloads + checksums it)."
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN
        Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/."
+
+    ROLE_DECISION_ARGS=
+    case "$REFERENCE_DELIVERY_ROLE_DECISION" in
+        in-process | "") ;;
+        smith) resolve_smith_workflow_role_decision ;;
+        *) die "unknown REFERENCE_DELIVERY_ROLE_DECISION '$REFERENCE_DELIVERY_ROLE_DECISION' (expected in-process or smith)" ;;
+    esac
+}
+
+resolve_smith_workflow_role_decision() {
+    SMITH_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-$SMITH_WORKSPACE_ROOT/target/debug/smith-workflow-role-decision}
+    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring Smith workflow-role decision responder is current (cargo build -p $SMITH_BUILD_PACKAGE --bin smith-workflow-role-decision)..."
+        ( cd "$SMITH_WORKSPACE_ROOT" && cargo build -p "$SMITH_BUILD_PACKAGE" --bin smith-workflow-role-decision ) \
+            || die 'Smith cargo build failed'
+    fi
+    [ -x "$SMITH_ROLE_DECISION_BIN" ] || die "Smith workflow-role decision binary not found: $SMITH_ROLE_DECISION_BIN"
+
+    ROLE_DECISION_ARGS="--role-decision-command $SMITH_ROLE_DECISION_BIN --role-decision-arg --auth --role-decision-arg $AUTH_FLAG"
+    [ -n "$TEMPER_AGENTS_CODEX_MODEL" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-arg --codex-model --role-decision-arg $TEMPER_AGENTS_CODEX_MODEL"
+    [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-arg --auth-file --role-decision-arg $TEMPER_AGENTS_AUTH_FILE"
+    case "$AUTH_FLAG" in
+        anthropic-oauth)
+            ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-env TEMPER_AGENTS_ANTHROPIC_MODEL"
+            ;;
+        deepseek)
+            ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-env TEMPER_DEEPSEEK_API_KEY --role-decision-env TEMPER_DEEPSEEK_API_KEY_PATH"
+            ;;
+    esac
+    log "role decisions: Smith process responder ($SMITH_ROLE_DECISION_BIN)"
 }
 
 # --- Forgejo server -----------------------------------------------------------
@@ -681,6 +717,7 @@ launch_role_worker() {
         --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
         --kind role --role "$_role" --user "$_user" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
+        $ROLE_DECISION_ARGS \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         $_wake_args \
         >"$LOG_DIR/$_role.log" 2>&1 &

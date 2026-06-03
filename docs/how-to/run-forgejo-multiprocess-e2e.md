@@ -38,7 +38,17 @@ The command above runs the deterministic **fake** agents. To run the **same**
 scenarios with real agents in every role (`--agents real`), set a second gate.
 The end state and the seed/assert closures are identical — only *who decides*
 changes. These fixed reference-delivery adapters are test fixtures, not
-production `temper-agents` prompt/adaptor surfaces.
+production `temper-agents` prompt/adaptor surfaces. Smith's process-boundary
+workflow-role proof now lives in the Smith checkout; it drives Temper's
+`WorkflowRoleDecisionProcessAgent` against a throwaway Forgejo and opens a PR
+through `RoleTools`:
+
+```sh
+cd ~/src/rust/smith
+TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
+  cargo test -p smith-temper-agent-cli --test forgejo_workflow_role_e2e -- \
+  --ignored --test-threads=1
+```
 
 Per the cost policy these runs default to **ChatGPT OAuth** (a flat subscription,
 not pay-per-token DeepSeek), reading the shared `~/.pi/agent/auth.json`. Log in
