@@ -27,6 +27,8 @@ mod worker_role_agent;
 #[cfg(test)]
 mod product_chat_args_tests;
 #[cfg(test)]
+mod product_chat_process_tests;
+#[cfg(test)]
 mod product_chat_tests;
 
 use chrono::Duration;

@@ -11,9 +11,10 @@ contract and is frozen by the fixtures below.
 Deployments select an external responder process explicitly in their transport or
 service configuration. For the product-manager binary this is
 `--responder-command` or `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`, with matching
-args, cwd, env allow-list, and timeout options. If no process responder is
-configured, the current product-manager command may use its transitional
-in-process responder.
+args, cwd, env allow-list, and timeout options. Smith's
+`smith-product-manager-responder` implements this profile process. If no process
+responder is configured, the current product-manager command may use its
+transitional in-process responder.
 
 Frontends must not invoke the responder process directly. They call Temper's
 interaction service (`/conversations`, Matrix adapter, mobile adapter, etc.);

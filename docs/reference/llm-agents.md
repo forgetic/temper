@@ -3,11 +3,10 @@
 `crates/temper-agents` is the current in-repo home for real, in-process LLM role
 agents. It is the only crate in this repository that depends on
 `pi_agent_rust`; `temper-forge`, `temper-workflow`, `temper-runner`, and
-`temper-interaction` stay LLM-agnostic. `ProductManagerAgent` is a transitional
-in-process interactive profile responder; the preferred public
-profile-responder boundary is the `temper-interaction` process protocol so
-pi-SDK-backed responders can live in an external repository later. Workflow-role
-LLM decision engines should target the provider-neutral
+`temper-interaction` stay LLM-agnostic. `ProductManagerAgent` remains only as a
+transitional in-process interactive profile fallback; Smith now owns the
+pi-SDK-backed product-manager process responder. Workflow-role LLM decision
+engines should target the provider-neutral
 [`temper-runner` process protocol](workflow-role-decision-process-protocol.md)
 when split out of this repository.
 

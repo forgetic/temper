@@ -35,8 +35,9 @@ temper-product-manager-chat serve \
 
 `--bind` defaults to `127.0.0.1:39200`. Non-loopback binds require both
 `--allow-non-loopback` and `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`. By default the
-binary uses the in-repo in-process product-manager responder; operators select a
-process responder explicitly with `--responder-command` or
+binary uses the in-repo in-process product-manager responder as a transitional
+fallback; operators select Smith's product-manager process responder (or another
+compatible responder) explicitly with `--responder-command` or
 `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`.
 
 Secrets come from env, never argv:
@@ -62,6 +63,24 @@ Secrets come from env, never argv:
 Equivalent CLI flags are `--responder-command`, repeated `--responder-arg`,
 `--responder-cwd`, repeated `--responder-env`, and
 `--responder-timeout-secs`.
+
+Smith example:
+
+```sh
+cd ~/src/rust/smith
+cargo build -p smith-temper-agent-cli --bin smith-product-manager-responder
+TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND=$PWD/target/debug/smith-product-manager-responder \
+TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON='["--auth","chatgpt-oauth"]' \
+  temper-product-manager-chat serve \
+    --bind 127.0.0.1:39200 \
+    --base-url https://git.ekanayaka.io \
+    --repo ai/temper
+```
+
+This responder process is an implementation detail of the profile. Web, mobile,
+Matrix, voice, and other frontends should still target Temper's generic
+interaction service routes and select the `product-manager` profile; they should
+not invoke the Smith process directly.
 
 ## Authentication
 

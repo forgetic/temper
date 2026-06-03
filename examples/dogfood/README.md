@@ -55,6 +55,14 @@ missing human/product-manager tokens fail closed with no bot/admin fallback for
 a different transcript author. The REPL creates a Forgejo transcript issue
 labeled `product` only, mirrors turns as comments, shows draft intake issues,
 and files one as a normal `untriaged` workflow issue only after `/file <n>`.
+
+By default this uses Temper's transitional in-process responder. To validate the
+Smith process responder while keeping the same operator command, set
+`DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` in `config/dogfood.env` (or export it)
+and keep `SMITH_WORKSPACE_ROOT` pointed at `~/src/rust/smith`. The launcher
+builds `smith-product-manager-responder` and passes it as
+`temper-product-manager-chat --responder-command ...`; Forge tokens still stay in
+Temper and only provider auth arguments/env allow-list entries reach Smith.
 Resume an existing product transcript with:
 
 ```sh

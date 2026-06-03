@@ -126,12 +126,17 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    documented auth/test commands in Smith's README, and kept all `temper-agents`
    code/tests in place for later phases.
 
-4. ☐ **Phase 4 — Smith interactive product-manager responder.**
+4. ☑ **Phase 4 — Smith interactive product-manager responder.**
    `prompts/phase-4-smith-interactive-product-manager.md`
 
-   Implement the product-manager process responder in Smith and point Temper's
-   product-chat profile at it when configured. Keep existing product-chat
-   commands and compatibility aliases working.
+   Done: Smith now has `smith-product-manager-responder`, which reads Temper's
+   `ConversationRequest` process-protocol JSON, runs the product-manager
+   profile through Smith's provider core, and writes a `ConversationReply` with
+   inert issue proposals. Product-manager prompt/profile tests have Smith
+   equivalents, Temper keeps product-chat transcript/filing/session coverage and
+   adds a hermetic process-responder integration test, and dogfood product-chat
+   can select Smith with `DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` while preserving
+   `temper-product-manager-chat` and `./run.sh product-chat` entry points.
 
 5. ☐ **Phase 5 — Smith workflow-role decision responder.**
    `prompts/phase-5-smith-workflow-role-decisions.md`

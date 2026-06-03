@@ -155,6 +155,10 @@ load_config() {
     TEMPER_PRODUCT_CHAT_BIN=${TEMPER_PRODUCT_CHAT_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
+    DOGFOOD_PRODUCT_CHAT_RESPONDER=${DOGFOOD_PRODUCT_CHAT_RESPONDER:-in-process}
+    SMITH_WORKSPACE_ROOT=${SMITH_WORKSPACE_ROOT:-$HOME/src/rust/smith}
+    SMITH_PRODUCT_MANAGER_RESPONDER_BIN=${SMITH_PRODUCT_MANAGER_RESPONDER_BIN:-}
+    SMITH_BUILD_PACKAGE=${SMITH_BUILD_PACKAGE:-smith-temper-agent-cli}
     DOGFOOD_RUNNER=${DOGFOOD_RUNNER:-1}
     DOGFOOD_DEFAULT_BRANCH=${DOGFOOD_DEFAULT_BRANCH:-main}
     DOGFOOD_REMOTE_FORGEJO_BIN=${DOGFOOD_REMOTE_FORGEJO_BIN:-/opt/forgejo/forgejo}
@@ -202,6 +206,16 @@ resolve_product_chat_binary() {
         ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" --bin temper-product-manager-chat ) || die 'cargo build failed'
     fi
     [ -x "$PRODUCT_CHAT_BIN" ] || die "product-chat binary not found: $PRODUCT_CHAT_BIN"
+}
+
+resolve_smith_product_manager_responder() {
+    [ -d "$SMITH_WORKSPACE_ROOT" ] || die "Smith workspace not found: $SMITH_WORKSPACE_ROOT"
+    SMITH_PM_RESPONDER_BIN=${SMITH_PRODUCT_MANAGER_RESPONDER_BIN:-$SMITH_WORKSPACE_ROOT/target/debug/smith-product-manager-responder}
+    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring Smith product-manager responder is current (cargo build -p $SMITH_BUILD_PACKAGE --bin smith-product-manager-responder)..."
+        ( cd "$SMITH_WORKSPACE_ROOT" && cargo build -p "$SMITH_BUILD_PACKAGE" --bin smith-product-manager-responder ) || die 'Smith cargo build failed'
+    fi
+    [ -x "$SMITH_PM_RESPONDER_BIN" ] || die "Smith product-manager responder binary not found: $SMITH_PM_RESPONDER_BIN"
 }
 
 dogfood_preflight() {
@@ -261,6 +275,33 @@ check_auth() {
             log 'auth: DeepSeek'
             ;;
         *) die "unknown TEMPER_AGENTS_AUTH '$TEMPER_AGENTS_AUTH'" ;;
+    esac
+}
+
+configure_product_chat_responder_args() {
+    PRODUCT_CHAT_RESPONDER_ARGS=
+    case "$DOGFOOD_PRODUCT_CHAT_RESPONDER" in
+        in-process | temper | "")
+            log 'product-chat responder: Temper in-process fallback'
+            ;;
+        smith)
+            resolve_smith_product_manager_responder
+            PRODUCT_CHAT_RESPONDER_ARGS="--responder-command $SMITH_PM_RESPONDER_BIN --responder-arg --auth --responder-arg $AUTH_FLAG"
+            if [ -n "$TEMPER_AGENTS_CODEX_MODEL" ]; then
+                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-arg --codex-model --responder-arg $TEMPER_AGENTS_CODEX_MODEL"
+            fi
+            if [ -n "$TEMPER_AGENTS_AUTH_FILE" ]; then
+                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-arg --auth-file --responder-arg $TEMPER_AGENTS_AUTH_FILE"
+            fi
+            if [ "$AUTH_FLAG" = "anthropic-oauth" ] && [ -n "$TEMPER_AGENTS_ANTHROPIC_MODEL" ]; then
+                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-env TEMPER_AGENTS_ANTHROPIC_MODEL"
+            fi
+            if [ "$AUTH_FLAG" = "deepseek" ]; then
+                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-env TEMPER_DEEPSEEK_API_KEY --responder-env TEMPER_DEEPSEEK_API_KEY_PATH"
+            fi
+            log "product-chat responder: Smith process ($SMITH_PM_RESPONDER_BIN)"
+            ;;
+        *) die "unknown DOGFOOD_PRODUCT_CHAT_RESPONDER '$DOGFOOD_PRODUCT_CHAT_RESPONDER' (expected in-process or smith)" ;;
     esac
 }
 
@@ -559,6 +600,7 @@ cmd_product_chat() {
     trap cleanup_product_chat_snapshot EXIT INT TERM
     check_auth
     resolve_product_chat_binary
+    configure_product_chat_responder_args
     parse_live_secrets
 
     _pm_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_MANAGER:-}
@@ -568,7 +610,8 @@ cmd_product_chat() {
     _human_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN:-}
     [ -n "$_human_token" ] || die "product-chat requires a token for DOGFOOD_PRODUCT_CHAT_HUMAN_USER=$DOGFOOD_PRODUCT_CHAT_HUMAN_USER in $ROLES_ENV"
 
-    # CODEX_MODEL_ARG/AUTH_FILE_ARG are generated from config by check_auth and
+    # CODEX_MODEL_ARG/AUTH_FILE_ARG and PRODUCT_CHAT_RESPONDER_ARGS are generated
+    # from config by check_auth/configure_product_chat_responder_args and
     # intentionally word-split, matching role-worker launch style.
     # shellcheck disable=SC2086
     TEMPER_PRODUCT_CHAT_HUMAN_TOKEN="$_human_token" \
@@ -576,6 +619,7 @@ cmd_product_chat() {
         "$PRODUCT_CHAT_BIN" repl \
         --base-url "$BASE_URL" --repo "$REPO" \
         --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
+        $PRODUCT_CHAT_RESPONDER_ARGS \
         "$@"
 }
 

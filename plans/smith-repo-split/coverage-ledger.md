@@ -63,9 +63,17 @@ Temper test; until then the current command must remain runnable.
 | `TEMPER_CHATGPT_OAUTH=1 cargo test --test chatgpt_oauth_live -- --ignored --nocapture` | Live ChatGPT/OpenAI Codex OAuth smoke, generic role-prompt decision, and near-expiry refresh/write-back. | Duplicates the ignored Temper live test; no credentials are committed. |
 | `TEMPER_ANTHROPIC_OAUTH=1 cargo test --test anthropic_oauth_live -- --ignored --nocapture` | Live Anthropic OAuth generic role-prompt decision with Claude Code identity handling. | Duplicates the ignored Temper live test; no credentials are committed. |
 
+## Smith product-manager responder coverage added in Phase 4
+
+| Path / command | Covers | Temper status |
+| --- | --- | --- |
+| `~/src/rust/smith/crates/smith-temper-agent/src/product_manager.rs` plus `cargo test --workspace --all-targets product_manager` | Product-manager request mapping, response parsing, deterministic draft slug validation, duplicate rejection, proposal conversion, prompt export, and Temper interactive request fixture compatibility. | Duplicates `cargo test -p temper-agents product_manager`; Temper originals remain until the removal phase. |
+| `~/src/rust/smith/crates/smith-temper-agent-cli/src/bin/smith-product-manager-responder.rs` built by `cargo test --workspace --all-targets product_manager` | Smith process command compilation against Temper's `ConversationRequest`/`ConversationReply` types and provider option parsing. | Temper selects it only through `ProcessResponderConfig`; no Rust dependency on Smith. |
+| `cargo test -p temper-production product_chat_session_runs_configured_process_responder` | Product-chat transcript/session/filing path driven through a hermetic process responder. | Protects Temper's integration surface while Smith owns the concrete responder. |
+| `examples/dogfood/run.sh product-chat` with `DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` | Live product-chat operator path through Smith's process responder when credentials are available. | Documented/env-configured; still requires live Forgejo credentials and provider auth. |
+
 ## Coverage still waiting for Smith
 
-- Concrete product-manager responder behavior and prompt tests remain in Temper until Phase 4.
 - Real workflow-role model decision behavior, real-agent Forgejo e2e, and Smith
   workflow-role binaries remain pending until Phase 5.
-- Phases 2 and 3 did not delete or move any `temper-agents` tests.
+- Phases 2, 3, and 4 did not delete or move any `temper-agents` tests.
