@@ -1,8 +1,11 @@
-# Configure LLM responder auth through Smith
+# Configure Smith LLM responders from Temper
 
-Temper does not read provider auth files, hold API keys for model providers, or
-link `pi_agent_rust`. For real LLM behavior, run a process responder such as
-Smith and pass its provider/auth arguments through Temper's responder config.
+Temper does not read provider auth files, hold model-provider API keys, or link
+`pi_agent_rust`. For provider login, model ids, auth-file overrides, and live
+provider preflight, read Smith's docs in `~/src/rust/smith/docs/`.
+
+Temper only launches responder processes and treats their args/env as opaque
+child-process configuration.
 
 ## Workflow role workers
 
@@ -33,5 +36,5 @@ TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON='["--auth","chatgpt-oauth"]' \
   temper-product-manager-chat repl --base-url https://git.ekanayaka.io --repo ai/temper
 ```
 
-Smith owns the accepted `--auth`, model, and auth-file options plus provider
-preflight. Temper treats these arguments as opaque child-process configuration.
+External clients should still call Temper's product-chat service/API. Smith's
+process is the responder implementation, not the public chat frontend.

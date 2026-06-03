@@ -30,8 +30,8 @@ To validate a blocking launcher non-interactively:
   `forgejo`/`temper-testing-worker` processes (`pgrep -af`), the port is freed,
   and `run/` is removed. `secrets/roles.env` is gitignored — confirm with
   `git check-ignore` and remove it after the run.
-- Use the default auth (ChatGPT OAuth, `~/.pi/agent/auth.json`) — never bill
-  DeepSeek for a validation run (the cost policy).
+- If the launcher uses Smith responders, prefer Smith's documented low-cost auth
+  mode; provider details belong in the Smith repo, not Temper launcher docs.
 
 ## Where this is now documented
 

@@ -36,11 +36,8 @@ Use `template.md`. Keep each entry short and specific.
 | [0005](0005-avoid-redundant-pending-in-queue-labels.md) | Avoid redundant pending in queue labels | workflow, naming, labels |
 | [0006](0006-wire-modules-and-run-tests-not-just-build.md) | Wire new modules into the crate and run tests, not just build | rust, tooling, forgejo, process |
 | [0007](0007-forgejo-cli-token-and-runner-gotchas.md) | Forgejo 7.0.x CLI token + runner registration gotchas | forgejo, ci, testing, tooling |
-| [0008](0008-pin-pi-sdk-transitive-deps.md) | Pin `pi_agent_rust`'s transitive deps when the SDK won't compile | tooling, rust, agents, dependencies, pi-sdk |
 | [0009](0009-cap-throwaway-forgejo-cpu.md) | Cap (and clean up) the throwaway Forgejo's CPU in the e2e | forgejo, ci, testing, tooling, process |
-| [0010](0010-chatgpt-oauth-shared-auth-dual-schema.md) | Read the shared pi auth.json tolerantly (dual on-disk schema) | agents, pi-sdk, oauth, auth |
 | [0011](0011-validate-blocking-launch-script.md) | Validate the blocking launch script in the background, then stop via its sentinel | process, tooling, forgejo, testing |
-| [0012](0012-anthropic-oauth-requires-claude-code-system-block.md) | Anthropic OAuth needs the Claude Code identity as the first system block | agents, pi-sdk, oauth, auth, anthropic |
 | [0013](0013-ci-workflow-string-literal-strips-yaml-indentation.md) | Don't build indented YAML with `\`-continued string literals | forgejo, ci, rust, provisioning, temper-production |
 | [0014](0014-allow-loopback-for-throwaway-forgejo-webhooks.md) | Allow loopback for throwaway Forgejo webhooks | forgejo, webhook, testing, configuration |
 | [0015](0015-start-downstream-wake-sockets-before-seeding-work.md) | Start downstream wake sockets before seeded work can hand off | webhook, process, forgejo, testing |

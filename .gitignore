@@ -17,11 +17,6 @@ __pycache__/
 !/plans/interactive-agent-interfaces/README.md
 !/plans/interactive-agent-interfaces/prompts/
 !/plans/interactive-agent-interfaces/prompts/*.md
-!/plans/smith-repo-split/
-!/plans/smith-repo-split/README.md
-!/plans/smith-repo-split/coverage-ledger.md
-!/plans/smith-repo-split/prompts/
-!/plans/smith-repo-split/prompts/*.md
 /examples/dogfood/logs/
 /examples/dogfood/run/
 /examples/dogfood/secrets/
