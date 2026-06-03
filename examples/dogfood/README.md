@@ -47,7 +47,8 @@ workflow role. For the terminal-only product discussion MVP, run:
 ./run.sh product-chat
 ```
 
-This builds the generic `temper-interaction` binary, parses `secrets/roles.env`,
+This builds the generic `temper-interaction` binary (the historical
+product-specific Temper binary has been retired), parses `secrets/roles.env`,
 loads `config/interaction-profiles/product-manager.json`, writes a local
 interaction deployment binding under `run/`, maps the configured
 `DOGFOOD_PRODUCT_CHAT_HUMAN_USER` token (default `free`) to the generic

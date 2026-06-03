@@ -69,8 +69,8 @@ impl AcceptedTarget {
     }
 }
 
-/// Result of accepting an issue proposal. Kept as a compatibility DTO for older
-/// product-chat callers that need the full Forge issue.
+/// Result of accepting an issue proposal for callers that need the full Forge
+/// issue.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IssueAcceptanceOutcome {
     /// Existing or newly-created issue.

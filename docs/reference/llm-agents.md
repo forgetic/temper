@@ -1,10 +1,9 @@
 # LLM responders
 
-Temper no longer contains `pi_agent_rust`, `temper-agents`, or concrete LLM
-provider/auth wiring. Real LLM behavior lives outside this repository behind
-process protocols. Smith (`~/src/rust/smith`) is the reference implementation for
-pi-SDK-backed workflow-role decisions and the product-manager interactive
-profile.
+Temper does not contain `pi_agent_rust`, `temper-agents`, concrete LLM provider
+SDKs, or provider-auth wiring. Real LLM behavior lives outside this repository
+behind process protocols; Smith (`~/src/rust/smith`) is the reference external
+implementation used by the dogfood/example deployments.
 
 Temper keeps only provider-neutral contracts and adapters:
 
@@ -13,20 +12,19 @@ Temper keeps only provider-neutral contracts and adapters:
   Production `temper-worker --kind role` requires `--role-decision-command` (or
   `TEMPER_WORKER_ROLE_DECISION_COMMAND`) and passes only allow-listed env vars to
   the child process.
-- Product-manager chat uses
+- Interactive profile replies use
   [Interactive process responder protocol](interactive-process-responder-protocol.md).
-  `temper-product-manager-chat` requires `--responder-command` (or
-  `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`).
+  The generic `temper-interaction` binary loads user-defined profile specs and
+  deployment bindings; each binding selects a process responder command, args,
+  cwd, env allow-list, and timeout for the declared responder id.
 - `temper-interaction`, `temper-runner`, and `temper-production` validate
-  request/reply shapes, authorized actions, proposal filing, process timeouts,
-  exit status, and redacted errors. They do not parse provider auth files or call
-  model APIs.
+  request/reply shapes, authorized actions, proposal acceptance, process
+  timeouts, exit status, and redacted errors. They do not parse provider auth
+  files or call model APIs.
 
 Provider selection, OAuth/API-key handling, model ids, prompt implementation, and
-live provider smoke tests are Smith-owned concerns documented in the Smith repo
-(`~/src/rust/smith/docs/`). Smith may log or capture the authority-neutral
-`work_item_context.observability` fields Temper sends for correlation, but it
-still receives no Forge handle, Forge token, or workflow mutation tools; all
-mutations remain Temper `RoleTools`/executor actions after reply validation. Pass
-Smith arguments through Temper's `*_ARGS_JSON` / repeated CLI arg flags and use
-the corresponding env allow-list only for names that the responder must read.
+live provider smoke tests are external-responder concerns documented outside
+Temper. External responders may receive authority-neutral observability/context
+fields for correlation, but they receive no Forge handle, Forge token, or
+workflow mutation tools. All mutations remain Temper `RoleTools` or explicit
+interaction acceptance executor actions after reply validation.

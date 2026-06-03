@@ -7,6 +7,8 @@ Product-manager remains a useful dogfood/example profile, but the core project
 should expose a user-defined interaction system in the same spirit as workflow
 specification, validation, compilation, and execution.
 
+Status: ☑ complete.
+
 Hand the prompt files to implementation agents **one phase at a time, in order**.
 Each phase should land green, update this README's status, and record the
 validation it ran.
@@ -22,21 +24,21 @@ The lower-level foundation is already mostly right:
   cannot mutate Forge state directly.
 - Filing currently happens only after explicit acceptance and is idempotent.
 
-The production surface is still too concrete:
+The production surface used to be too concrete:
 
-- `temper-production` has `product_chat*` modules and the
+- `temper-production` had `product_chat*` modules and the
   `temper-product-manager-chat` binary.
 - Profile id, marker namespace, transcript title prefix, labels, draft issue DTOs,
-  slash commands such as `/file`, and the accepted-issue transaction are encoded
+  slash commands such as `/file`, and the accepted-issue transaction were encoded
   as product-manager behavior.
-- The generic acceptance helper is still effectively "issue proposal -> create an
+- The generic acceptance helper was effectively "issue proposal -> create an
   intake issue with one configured label" rather than a compiled user-defined
   acceptance transaction.
-- Active sessions/latest proposals are in-memory enough that a generic frontend
-  cannot reliably treat proposals as durable state after restart.
+- Active sessions/latest proposals were in-memory enough that a generic frontend
+  could not reliably treat proposals as durable state after restart.
 
-This plan turns those product-manager assumptions into a **profile spec fixture**
-and moves the production runtime to compiled user-defined interaction profiles.
+This plan turned those product-manager assumptions into **profile spec fixtures**
+and moved the production runtime to compiled user-defined interaction profiles.
 
 ## Target architecture
 
@@ -225,16 +227,25 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    examples/dogfood/tools -p '*_test.py'`; `sh -n examples/dogfood/run.sh`;
    `cargo dev-clippy`; `cargo dev-check`.
 
-6. ☐ **Phase 6 — Remove concrete-profile production surfaces and add guards.**
+6. ☑ **Phase 6 — Remove concrete-profile production surfaces and add guards.**
    `prompts/phase-6-remove-concrete-profile-surfaces.md`
 
-   Delete or make test/example-only the product-manager-specific production
-   modules, env names, binary names, and DTOs. Add grep-style regression tests or
-   CI checks proving non-test/non-fixture core sources contain no concrete
-   profile names or commands such as `product-manager`, `product_chat`, or
-   `/file`.
+   Done: product-chat production modules, the historical product-manager binary,
+   product-specific DTOs/routes/env parsing, and reference API docs were removed.
+   Dogfood product-manager remains available through the example interaction spec
+   and generic `temper-interaction` deployment bindings. Generic runtime tests now
+   exercise the dogfood fixture through `ForgeInteractionSession`, and
+   `interaction_source_guard_tests` plus the final `rg` guard keep non-test,
+   non-fixture `crates/` sources free of concrete profile strings. Validation
+   run: `cargo fmt --all`; `cargo test -p temper-interaction --all-targets`;
+   `cargo test -p temper-production --all-targets`; `python3 -m unittest
+   discover -s examples/dogfood/tools -p '*_test.py'`; `sh -n
+   examples/dogfood/run.sh`; `cargo dev-clippy`; `cargo dev-check`; final
+   production-source `rg` guard (no output, exit 1 because there were no hits).
 
 ## Whole-plan acceptance criteria
+
+Status: ☑ all criteria satisfied by Phase 6.
 
 - A user can define a new interactive agent/profile without adding Rust code to
   Temper production paths.
@@ -276,7 +287,7 @@ Every code phase should run at least:
 ```sh
 cargo fmt --all
 cargo test -p temper-interaction --all-targets
-cargo test -p temper-production product_chat
+cargo test -p temper-production --all-targets
 cargo dev-clippy
 cargo dev-check
 ```
@@ -290,12 +301,11 @@ examples are touched, run their focused tests and `sh -n` on modified launchers.
 - `docs/explanation/interactive-agent-interfaces.md`
 - `docs/reference/interactive-conversation-interface.md`
 - `docs/reference/interactive-process-responder-protocol.md`
-- `docs/reference/product-manager-chat-api.md`
 - `docs/reference/agent-lessons/0024-product-manager-is-an-interactive-profile.md`
 - `docs/reference/agent-lessons/0025-process-boundary-for-interactive-responders.md`
 - `plans/interactive-agent-interfaces/README.md`
 - `crates/temper-interaction/src/{types,proposal,transcript,session,transport,process}.rs`
-- `crates/temper-production/src/product_chat*.rs`
-- `crates/temper-production/src/bin/temper-product-manager-chat.rs`
+- `crates/temper-production/src/interaction_*.rs`
+- `crates/temper-production/src/bin/temper-interaction.rs`
 - `examples/dogfood/run.sh`
 - `examples/dogfood/config/dogfood.env`

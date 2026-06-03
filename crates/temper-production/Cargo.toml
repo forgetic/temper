@@ -23,10 +23,6 @@ name = "temper-validate-reference-delivery"
 path = "src/bin/temper-validate-reference-delivery.rs"
 
 [[bin]]
-name = "temper-product-manager-chat"
-path = "src/bin/temper-product-manager-chat.rs"
-
-[[bin]]
 name = "temper-interaction"
 path = "src/bin/temper-interaction.rs"
 

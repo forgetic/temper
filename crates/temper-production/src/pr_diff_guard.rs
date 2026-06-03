@@ -227,9 +227,11 @@ mod tests {
     #[test]
     fn classifies_product_file_as_meaningful() {
         assert_eq!(
-            safety_for_files(vec!["crates/temper-production/src/product_chat.rs".into()]),
+            safety_for_files(vec![
+                "crates/temper-production/src/interaction_service.rs".into()
+            ]),
             DiffSafety::Meaningful {
-                files: vec!["crates/temper-production/src/product_chat.rs".into()]
+                files: vec!["crates/temper-production/src/interaction_service.rs".into()]
             }
         );
     }

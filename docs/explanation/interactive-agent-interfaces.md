@@ -2,16 +2,16 @@
 
 Interactive agent interfaces are Temper's non-workflow path for connecting live
 human-facing tools to agents while still recording durable state in the Forge.
-The current product-manager chat service is the first concrete profile using
-this idea, but it is not the abstraction itself.
+Concrete behaviors are user-defined profiles; the dogfood product-manager
+profile is one example, not the abstraction itself.
 
-The generic interaction-plane contract now lives in `temper-interaction` for
+The generic interaction-plane contract lives in `temper-interaction` for
 responder requests, replies, participants, inert proposals, Forge-backed
 transcripts/sessions, explicit idempotent issue-proposal acceptance,
 transport-facing commands/events, a replayable in-process event seam, and the
-provider-neutral process responder adapter. The local product-manager HTTP
-service now exposes generic `/conversations` routes while keeping the historical
-product-manager aliases.
+provider-neutral process responder adapter. The deployable `temper-interaction`
+binary exposes generic `/conversations` routes and a manifest-driven REPL for
+configured profiles.
 
 ## Shape
 
@@ -41,8 +41,8 @@ Forge-backed transcripts and accepted workflow artifacts.
   transcript persistence, responder dispatch, and explicit proposal acceptance.
   It is separate from the workflow runtime.
 - **Interactive agent profile**: a named behavior package for a conversational
-  participant. `product-manager` is the first profile. A profile is not a
-  workflow role unless a user explicitly models it as one in a workflow.
+  participant. A profile is not a workflow role unless a user explicitly models
+  it as one in a workflow.
 - **Interactive responder**: the one-turn agent interface. It receives a
   transcript view and profile context, then returns a reply plus optional
   proposals. It receives no Forge handles and does not mutate workflow state.
@@ -53,7 +53,7 @@ Forge-backed transcripts and accepted workflow artifacts.
   store uses Forge issues and comments; transports should treat it as the
   recoverable record, not as a UI cache.
 - **Proposal**: an agent-suggested action that is inert until a human explicitly
-  accepts it. Product-manager draft intake issues are one proposal type.
+  accepts it. Issue drafts are one supported proposal payload.
 - **Transport adapter**: REPL, HTTP/SSE, Matrix, web/PWA, Android, or voice
   integration that turns live events into conversation turns and acceptance
   commands. Transports do not make workflow decisions.

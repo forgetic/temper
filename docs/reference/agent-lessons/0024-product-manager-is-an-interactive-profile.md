@@ -22,11 +22,14 @@ state.
 Model the reusable layer as the interaction plane: profiles provide behavior,
 responders return replies and inert proposals, transcripts remain durable in the
 Forge, and transports are adapters. Product-manager is a profile/example unless a
-user explicitly defines a separate workflow role.
+user explicitly defines a separate workflow role. Non-test/non-fixture `crates/`
+sources should not mention concrete profile ids, compatibility DTOs, profile
+routes, or command aliases; use the source grep guard when touching interaction
+runtime code.
 
 ## Where this is now documented
 
 - `docs/explanation/interactive-agent-interfaces.md`
 - `docs/reference/interactive-conversation-interface.md`
-- `docs/reference/product-manager-chat-api.md`
+- `examples/dogfood/README.md`
 - `plans/interactive-agent-interfaces/README.md`

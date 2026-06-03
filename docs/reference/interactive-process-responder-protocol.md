@@ -12,12 +12,9 @@ Deployments select external responder processes explicitly in deployment
 bindings, keyed by the responder ids declared in the compiled interaction spec.
 The generic `temper-interaction` binary reads responder `command`, `args`, `cwd`,
 `env_allowlist`, and `timeout_secs` from that binding file; Forge tokens and
-service auth are read through configured environment-variable names. The
-product-manager compatibility binary keeps its historical
-`--responder-command`/`TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND` options while it
-remains an alias profile. Smith's `smith-product-manager-responder` implements
-that example profile process. Temper no longer ships an in-process
-product-manager LLM fallback.
+service auth are read through configured environment-variable names. Concrete
+profile implementations are external processes selected by deployment config.
+Temper does not ship in-process LLM fallbacks for any interactive profile.
 
 Frontends must not invoke the responder process directly. They call Temper's
 interaction service (`/conversations`, Matrix adapter, mobile adapter, etc.);

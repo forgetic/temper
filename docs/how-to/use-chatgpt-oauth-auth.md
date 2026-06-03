@@ -24,17 +24,22 @@ TEMPER_WORKER_ROLE_DECISION_ARGS_JSON='["--auth","chatgpt-oauth"]' \
 Use `TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST` only for provider variables that
 Smith explicitly documents. Do not allow-list Forge tokens.
 
-## Product-manager chat
+## Interactive profiles
+
+Interactive LLM responders are selected through the generic interaction
+deployment binding file, not through profile-specific Temper binaries or env
+names. Dogfood's example product-manager profile generates that binding for you:
 
 ```sh
 cd ~/src/rust/smith
 cargo build -p smith-temper-agent-cli --bin smith-product-manager-responder
 
-cd ~/src/rust/temper
-TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND=../smith/target/debug/smith-product-manager-responder \
-TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON='["--auth","chatgpt-oauth"]' \
-  temper-product-manager-chat repl --base-url https://git.ekanayaka.io --repo ai/temper
+cd ~/src/rust/temper/examples/dogfood
+./run.sh product-chat
 ```
 
-External clients should still call Temper's product-chat service/API. Smith's
-process is the responder implementation, not the public chat frontend.
+For a custom profile, set the binding file's `responders.<id>.command`, `args`,
+`cwd`, `env_allowlist`, and `timeout_secs`, then launch `temper-interaction repl`
+or `temper-interaction serve` with `--spec` and `--bindings`. External clients
+should call Temper's generic interaction service/API; Smith's process is only the
+responder implementation.

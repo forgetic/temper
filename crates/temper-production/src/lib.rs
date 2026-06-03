@@ -16,13 +16,6 @@ pub mod interaction_repl;
 pub mod interaction_serve;
 pub mod interaction_service;
 pub mod pr_diff_guard;
-pub mod product_chat;
-mod product_chat_api;
-pub mod product_chat_args;
-pub mod product_chat_commands;
-mod product_chat_http;
-pub mod product_chat_repl;
-pub mod product_chat_service;
 pub mod provision;
 pub mod provision_args;
 pub mod reference_delivery_validator;
@@ -43,13 +36,7 @@ mod interaction_repl_tests;
 #[cfg(test)]
 mod interaction_service_tests;
 #[cfg(test)]
-mod product_chat_args_tests;
-#[cfg(test)]
-mod product_chat_manifest_tests;
-#[cfg(test)]
-mod product_chat_process_tests;
-#[cfg(test)]
-mod product_chat_tests;
+mod interaction_source_guard_tests;
 
 use chrono::Duration;
 use temper_forge::{CreateRepository, User, UserId};

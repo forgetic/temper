@@ -17,5 +17,4 @@ Current reference pages:
 - [Interaction profile spec](interaction-profile-spec.md)
 - [Interactive process responder protocol](interactive-process-responder-protocol.md)
 - [Workflow role decision process protocol](workflow-role-decision-process-protocol.md)
-- [Product-manager chat local API](product-manager-chat-api.md)
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)

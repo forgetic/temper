@@ -143,10 +143,11 @@ issue means next.
 
 Concrete responder implementations live outside Temper behind the
 [interactive process responder protocol](interactive-process-responder-protocol.md).
-Provider SDKs, auth files, and prompts stay out of the generic interaction
-contract; Smith is the reference pi-SDK-backed product-manager responder.
+Provider SDKs, auth files, prompts, and profile-specific behavior stay out of the
+generic interaction contract; deployment bindings select the external responder
+process for each configured profile.
 
-`temper-production` hosts deployable binaries and adapters, including the
-existing product-manager commands. Those commands are compatibility wrappers over
-the generic interaction session/runtime while the generic transport API is still
-being introduced.
+`temper-production` hosts the deployable `temper-interaction` binary plus REPL
+and HTTP adapters. Those adapters load user-defined profile specs, compile
+manifests, apply deployment bindings, and expose profile-neutral conversation,
+proposal, command, transcript, and acceptance APIs.
