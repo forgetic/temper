@@ -7,21 +7,4 @@ __pycache__/
 .vscode/
 /.temper-pr-prep/
 /.temper-ci/
-# Ignore ad-hoc local plans by default; tracked implementation plans opt in.
 /plans/*
-!/plans/user-defined-role-agents/
-!/plans/user-defined-role-agents/README.md
-!/plans/user-defined-role-agents/prompts/
-!/plans/user-defined-role-agents/prompts/*.md
-!/plans/interactive-agent-interfaces/
-!/plans/interactive-agent-interfaces/README.md
-!/plans/interactive-agent-interfaces/prompts/
-!/plans/interactive-agent-interfaces/prompts/*.md
-!/plans/user-defined-interactive-agents/
-!/plans/user-defined-interactive-agents/README.md
-!/plans/user-defined-interactive-agents/prompts/
-!/plans/user-defined-interactive-agents/prompts/*.md
-!/plans/scalable-scans-and-faster-forgejo-e2e/
-!/plans/scalable-scans-and-faster-forgejo-e2e/README.md
-!/plans/scalable-scans-and-faster-forgejo-e2e/prompts/
-!/plans/scalable-scans-and-faster-forgejo-e2e/prompts/*.md
