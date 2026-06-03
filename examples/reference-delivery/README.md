@@ -128,7 +128,8 @@ The multi-repo validator checks provisioning logs, webhook delivery/wake logs,
 fake worker logs, and live Forge state for the parent/child dependency shape.
 See `observability.md` for log names and expected event trails. Persistent
 `wake_delivery outcome=no_sockets` usually means a worker failed before binding
-its wake socket; inspect the matching fake worker log.
+its wake socket or the first-handoff worker ran before downstream sockets were
+ready; inspect the matching fake worker log.
 
 If a run is force-killed, clean up possible orphans:
 

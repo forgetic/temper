@@ -7,7 +7,6 @@ Current guides:
 - [Start a development session](start-a-development-session.md)
 - [Iterate quickly during local development](fast-local-iteration.md)
 - [End a development session cleanly](end-a-development-session.md)
-- [Record an agent lesson](record-agent-lesson.md)
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
 - [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)

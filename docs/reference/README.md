@@ -6,7 +6,6 @@ Current reference pages:
 
 - [Development conventions](development-conventions.md)
 - [LLM responders](llm-agents.md)
-- [Agent lessons register](agent-lessons/README.md)
 - [Forge interface](forge-interface.md)
 - [Filesystem backend](filesystem-backend.md)
 - [In-memory backend](in-memory-backend.md)

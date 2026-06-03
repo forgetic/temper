@@ -37,8 +37,8 @@ broad scans and eager CI web-UI reads.
    timing, scan counts, and CI web-UI reads.
 6. Record before/after timings in this plan README or a small `findings.md` in
    this plan directory.
-7. If any durable lesson emerged, add an agent lesson and/or promote it into the
-   canonical docs.
+7. If any durable steering emerged, promote it into the relevant canonical docs,
+   tests, or ADRs.
 
 ## Validation
 

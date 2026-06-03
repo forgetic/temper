@@ -12,8 +12,6 @@ You are implementing Phase 1 of
    - `docs/explanation/interactive-agent-interfaces.md`
    - `docs/reference/interactive-conversation-interface.md`
    - `docs/reference/interactive-process-responder-protocol.md`
-   - `docs/reference/agent-lessons/0024-product-manager-is-an-interactive-profile.md`
-   - `docs/reference/agent-lessons/0025-process-boundary-for-interactive-responders.md`
    - `plans/interactive-agent-interfaces/README.md`
    - `plans/user-defined-interactive-agents/README.md`
 4. Inspect `crates/temper-interaction/src/` and the product-chat production

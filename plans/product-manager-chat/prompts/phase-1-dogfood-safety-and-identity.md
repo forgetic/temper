@@ -15,7 +15,8 @@ available to later phases.
    - `examples/dogfood/tools/label_intake.py`
    - `examples/dogfood/tools/parse_secrets.py`
    - `examples/dogfood/tools/configure_forgejo.py`
-   - `docs/reference/agent-lessons/0018-snapshot-long-running-shell-launchers.md`
+   - `examples/reference-delivery/run.sh` for the current long-running launcher
+     snapshot/teardown pattern
 3. Keep this repo focused on workflow/integration surfaces. Do not add a web UI.
 
 ## Goals

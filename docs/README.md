@@ -25,11 +25,10 @@ See `how-to/` for the full index.
 ## Reference
 
 Precise contracts and factual details. Use these to define APIs, invariants,
-schemas, compatibility requirements, and the agent lessons register.
+schemas, and compatibility requirements.
 
-Start with `reference/development-conventions.md` and
-`reference/agent-lessons/README.md` during session bootstrap, then read
-task-relevant reference pages.
+Start with `reference/development-conventions.md` during session bootstrap,
+then read task-relevant reference pages.
 
 See `reference/`, including the
 [interactive conversation interface](reference/interactive-conversation-interface.md),

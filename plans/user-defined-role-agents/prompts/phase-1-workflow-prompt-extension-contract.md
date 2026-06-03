@@ -7,10 +7,8 @@ it renders only workflow mechanics plus explicit user-authored prompt extensions
 ## Session bootstrap
 
 1. Confirm you are in `/home/free/src/rust/temper`.
-2. Read `AGENTS.md`, `docs/README.md`, and the active lessons relevant to this
-   task, especially:
-   - `docs/reference/agent-lessons/0020-dogfood-prs-must-not-be-bookkeeping-only.md`
-   - `docs/reference/agent-lessons/0021-user-defined-roles-own-prompt-behavior.md`
+2. Read `AGENTS.md`, `docs/README.md`, and
+   `docs/reference/development-conventions.md`.
 3. Read `plans/user-defined-role-agents/README.md`.
 4. Read the workflow compilation and validation surfaces:
    - `crates/temper-workflow/src/spec.rs`

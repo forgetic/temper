@@ -75,7 +75,7 @@ configuration, docs, or external responder profile.
      state they are an example profile spec;
    - `docs/reference/llm-agents.md` should keep the process-boundary story
      generic;
-   - add/update an agent lesson if this extraction prevents a recurring mistake.
+   - promote any durable steering into the relevant canonical doc, test, or ADR.
 
 5. Run the final regression grep manually and include the output in the handoff.
 

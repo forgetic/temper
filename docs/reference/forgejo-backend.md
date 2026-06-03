@@ -283,7 +283,10 @@ would erase that changes-requested event from history and diverge from the
 reference backends, which have no dismissal concept and return every verdict. The
 portable aggregate (`PullRequestReviewStatus`) already resolves superseding by
 taking the latest verdict per reviewer, so keeping dismissed/stale verdicts does
-not affect the gate. Reviews sort by submission time, then id.
+not affect the gate. Reviews sort by submission time, then id. Forgejo timestamp
+precision can collapse adjacent approval and merge events into the same second;
+callers should treat equal timestamps as inconclusive ordering rather than a
+strict inversion.
 
 `submit_pull_request_review` submits in **one call**:
 `POST /pulls/{number}/reviews` with `{ event, body }` where `event` is

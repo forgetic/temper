@@ -13,10 +13,9 @@ can produce meaningful product-code diffs before an implementation PR is opened.
 1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `AGENTS.md`, `plans/user-defined-role-agents/README.md`, and Phases 1–4
    diffs.
-3. Read dogfood safety context:
-   - `docs/reference/agent-lessons/0020-dogfood-prs-must-not-be-bookkeeping-only.md`
-   - `examples/dogfood/README.md`
-   - `examples/dogfood/config/dogfood.env`
+3. Read dogfood/coding-workspace safety context:
+   - `docs/how-to/configure-coding-workspace.md`
+   - Smith dogfood example docs/config in the sibling Smith checkout
 4. Read current PR prep/diff guard code:
    - `crates/temper-production/src/forgejo_prep.rs`
    - `crates/temper-production/src/pr_diff_guard.rs`

@@ -21,7 +21,8 @@ prompt/adaptor surfaces and document the final model.
    - `docs/reference/workflow-layer.md`
    - `docs/explanation/agentic-workflows.md`
    - `examples/dogfood/README.md`
-4. Re-read `docs/reference/agent-lessons/0021-user-defined-roles-own-prompt-behavior.md`.
+4. Re-read the role prompt contract in `docs/reference/workflow-layer.md` and
+   `docs/explanation/agentic-workflows.md`.
 
 ## Task
 

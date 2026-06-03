@@ -177,5 +177,6 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
 - `crates/temper-production/src/worker.rs`
 - `crates/temper-production/src/forgejo_prep.rs`
 - `crates/temper-production/src/pr_diff_guard.rs`
-- `examples/dogfood/config/dogfood.env`
-- `docs/reference/agent-lessons/0020-dogfood-prs-must-not-be-bookkeeping-only.md`
+- `docs/how-to/configure-coding-workspace.md`
+- `docs/reference/workflow-layer.md`
+- Smith dogfood example config in the sibling Smith checkout

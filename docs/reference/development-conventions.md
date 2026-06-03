@@ -34,6 +34,10 @@ session-start and session-closeout how-to guides.
 - Keep async boundaries at the backend interface; concrete backends may use sync
   internals when appropriate.
 - Avoid global mutable state.
+- Wire new Rust modules into the crate in the same change that creates them;
+  `cargo dev-check` must compile all targets, not just production builds.
+- Use raw strings for multi-line embedded content such as YAML or shell snippets;
+  do not rely on Rust line-continuation string literals to preserve indentation.
 - Keep Rust source and test files at or below 600 lines; split focused modules or
   shared test support before exceeding that budget.
 
@@ -59,8 +63,8 @@ reference pages.
   before about 350 lines; prefer short index pages over catch-all documents.
 - Do not mix tutorial prose into reference pages or hide contracts in explanation
   pages.
-- Capture recurring mistakes or human steering in `docs/reference/agent-lessons/`
-  and promote durable rules to the canonical docs.
+- Promote durable steering directly into the relevant canonical docs, tests, or
+  ADRs instead of adding standalone memory registers.
 
 ## Validation before handoff
 

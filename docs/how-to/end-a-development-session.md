@@ -9,7 +9,8 @@ git status --short
 git diff --stat
 ```
 
-Use `git diff` for any file you edited. Confirm there are no accidental generated files, secrets, or unrelated changes.
+Use `git diff` for any file you edited. Confirm there are no accidental
+generated files, secrets, or unrelated changes.
 
 ## 2. Run validation
 
@@ -53,19 +54,19 @@ Then review task-relevant docs:
 - how-to guides for workflow changes
 - ADRs for significant decisions
 
-Update docs in the same session as the code change. Do not leave stale status notes, obsolete commands, or undocumented behavior changes.
+Update docs in the same session as the code change. Do not leave stale status
+notes, obsolete commands, or undocumented behavior changes. If a session reveals
+durable steering, fold it into the relevant canonical doc, test, or ADR during
+this review.
 
-## 4. Capture lessons learned
+## 4. Check file size budgets
 
-If the session involved a human correction, failed assumption, repeated mistake, or missing guidance, add or update an entry in `docs/reference/agent-lessons/`.
+Keep hand-written documents focused. Aim for about 150 lines or fewer and split
+before about 350 lines. If a file is getting large, create a short index and
+move details into smaller pages.
 
-Use `docs/how-to/record-agent-lesson.md`.
-
-## 5. Check file size budgets
-
-Keep hand-written documents focused. Aim for about 150 lines or fewer and split before about 350 lines. If a file is getting large, create a short index and move details into smaller pages.
-
-Keep Rust source and test files at or below 600 lines. If a file is getting larger, split it into focused modules or shared test support.
+Keep Rust source and test files at or below 600 lines. If a file is getting
+larger, split it into focused modules or shared test support.
 
 Useful checks:
 
@@ -74,7 +75,7 @@ wc -l README.md AGENTS.md docs/**/*.md
 find crates -type f -name '*.rs' -print0 | xargs -0 wc -l | sort -n
 ```
 
-## 6. Leave an explicit handoff
+## 5. Leave an explicit handoff
 
 In the final response or commit message, include:
 

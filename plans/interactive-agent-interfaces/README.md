@@ -142,9 +142,9 @@ Status legend: ☐ pending · ☑ done
 1. ☑ **Phase 1 — Document the interaction plane and boundary.**
    `prompts/phase-1-docs-and-boundary.md`
 
-   Done: added canonical explanation/reference docs, marked product-manager chat
-   as the first profile instance, and recorded lesson 0024 for the architectural
-   steering. Validation run: `cargo fmt --all`; `rg` verified docs present
+   Done: added canonical explanation/reference docs and marked product-manager
+   chat as the first profile instance. Validation run: `cargo fmt --all`; `rg`
+   verified docs present
    product-manager as a profile/API instance rather than the framework
    abstraction. Markdown-only, so no Rust tests were required.
 

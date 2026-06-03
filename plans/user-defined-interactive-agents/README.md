@@ -301,8 +301,6 @@ examples are touched, run their focused tests and `sh -n` on modified launchers.
 - `docs/explanation/interactive-agent-interfaces.md`
 - `docs/reference/interactive-conversation-interface.md`
 - `docs/reference/interactive-process-responder-protocol.md`
-- `docs/reference/agent-lessons/0024-product-manager-is-an-interactive-profile.md`
-- `docs/reference/agent-lessons/0025-process-boundary-for-interactive-responders.md`
 - `plans/interactive-agent-interfaces/README.md`
 - `crates/temper-interaction/src/{types,proposal,transcript,session,transport,process}.rs`
 - `crates/temper-production/src/interaction_*.rs`

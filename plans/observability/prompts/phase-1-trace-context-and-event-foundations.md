@@ -10,16 +10,13 @@ identity and to propagate that identity to Smith through the existing
 1. Confirm you are in `/home/free/src/rust/temper`.
 2. Read `README.md`, `AGENTS.md`, `docs/README.md`, and
    `docs/reference/development-conventions.md`.
-3. Read the relevant lessons:
-   - `docs/reference/agent-lessons/0015-start-downstream-wake-sockets-before-seeding-work.md`
-   - `docs/reference/agent-lessons/0017-cross-repo-demo-needs-closing-architect.md`
-   - `docs/reference/agent-lessons/0021-user-defined-roles-own-prompt-behavior.md`
-4. Read `plans/observability/README.md` and `plans/observability/evidence.md`.
-5. Read the process/workflow contracts:
+3. Read `plans/observability/README.md` and `plans/observability/evidence.md`.
+4. Read the process/workflow contracts:
    - `docs/reference/workflow-role-decision-process-protocol.md`
    - `docs/reference/workflow-layer.md`
    - `docs/reference/cross-repo-workflows.md`
-6. Inspect the relevant code with `rg` before editing:
+   - `docs/explanation/agentic-workflows.md`
+5. Inspect the relevant code with `rg` before editing:
    - `crates/temper-runner/src/role_process_tools.rs`
    - `crates/temper-runner/src/role_decision_process.rs`
    - `crates/temper-runner/src/worker.rs`

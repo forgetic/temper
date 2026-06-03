@@ -1,28 +1,34 @@
-# ADR 0006: Maintain an agent lessons register
+# ADR 0006: Retire the agent lessons register
 
 ## Status
 
-Accepted
+Accepted; replaces the earlier decision to maintain a standalone lessons register.
 
 ## Context
 
-Temper is intended to be developed by autonomous agents over many sessions. Human steering and agent mistakes can be lost if they only appear in chat history.
+Temper originally kept short agent lessons under `docs/reference/agent-lessons/`
+so human steering and repeated mistakes would not be lost between sessions. The
+register later became another bootstrap document that agents were expected to
+load, duplicating rules already present in canonical docs, tests, code comments,
+and ADRs.
 
-Future agents need a compact way to discover past lessons without loading every document or repeating known mistakes.
+The extra memory layer worked against the documentation goal of giving agents
+only task-relevant context.
 
 ## Decision
 
-Maintain a focused lessons register under `docs/reference/agent-lessons/`.
+Remove the standalone agent lessons register.
 
-Each lesson records:
+Durable steering now belongs directly where future readers already look:
 
-- trigger
-- what went wrong
-- steering for future agents
-- where the rule is now documented
-
-The register index is read during session bootstrap. New lessons are added during session closeout when a correction, failed assumption, or missing workflow guidance should inform future sessions.
+- development rules in `docs/reference/development-conventions.md`;
+- task procedures in focused how-to guides;
+- contracts in reference pages;
+- rationale in explanation pages or ADRs;
+- regressions in tests or local code comments.
 
 ## Consequences
 
-Lessons remain separate from ADRs: ADRs record decisions, while lessons record learning from mistakes and steering. Durable rules discovered through lessons must also be promoted to the canonical docs that agents already read.
+Session bootstrap no longer reads a lessons index. Closeout should update the
+canonical doc, test, or ADR that owns the behavior instead of adding a separate
+lesson entry.

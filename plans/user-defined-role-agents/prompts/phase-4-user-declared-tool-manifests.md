@@ -19,7 +19,8 @@ implicit authority or registering undeclared SDK tools.
    - `crates/temper-runner/src/agent.rs`
    - `crates/temper-runner/src/config.rs`
    - `crates/temper-production/src/worker.rs`
-4. Re-read `docs/reference/agent-lessons/0021-user-defined-roles-own-prompt-behavior.md`.
+4. Re-read the role prompt contract in `docs/reference/workflow-layer.md` and
+   `docs/explanation/agentic-workflows.md`.
 
 ## Task
 

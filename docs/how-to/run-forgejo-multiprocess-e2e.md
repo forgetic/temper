@@ -230,10 +230,13 @@ cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --te
 These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
 register the production `/forgejo/webhook` trigger, and launch fake-agent
 Forgejo workers with authenticated Unix wake sockets and `--poll-ms 120000`. The
-multi-repo variants provision a second repo, register webhooks for both repos,
-pass both `--repo` values to one role/mechanical worker set, and require either
-one issue in each repo or one cross-repo fan-out intake to converge in less than
-the poll interval.
+throwaway server config must allow loopback webhook targets (`[webhook]`
+`ALLOWED_HOST_LIST = 127.0.0.1,localhost`); if hooks register but no trigger
+request arrives, check that setting before debugging signatures or wake sockets.
+The multi-repo variants provision a second repo, register webhooks for both
+repos, pass both `--repo` values to one role/mechanical worker set, and require
+either one issue in each repo or one cross-repo fan-out intake to converge in
+less than the poll interval.
 
 On timeout the panic prints the trigger URL (trigger logs are on test stderr),
 repo-specific stalled assertion text, worker log paths/tails, runner log tail,

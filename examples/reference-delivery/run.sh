@@ -13,8 +13,8 @@
 #   ./run.sh stop             tear down a previous run via the saved PIDs
 #   ./run.sh help             show this usage
 #
-# Orphan cleanup (lesson 0009) — if a run is force-killed (SIGKILL) the trap
-# guards do not fire; clean up survivors by hand with:
+# Orphan cleanup — if a run is force-killed (SIGKILL) the trap guards do not
+# fire; clean up survivors by hand with:
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
 #       pkill -f temper-testing-worker

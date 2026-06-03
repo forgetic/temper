@@ -9,16 +9,11 @@ Do not start later phases.
 - `AGENTS.md`
 - `docs/how-to/start-a-development-session.md`
 - `docs/reference/development-conventions.md`
-- `docs/reference/agent-lessons/README.md`
 - `docs/reference/llm-agents.md`
 - `docs/reference/product-manager-chat-api.md`
 - `docs/explanation/agentic-workflows.md`
 - `plans/product-manager-chat/README.md`
 - `plans/interactive-agent-interfaces/README.md`
-
-For broad crate-boundary work, read all active agent lessons or at least every
-lesson tagged `architecture`, `agents`, `workflow`, `prompts`, `dogfood`, or
-`product-chat`.
 
 ## Goal
 
@@ -56,9 +51,8 @@ Create the canonical documentation distinction:
 4. Update `docs/README.md` and `docs/reference/README.md` / explanation index if
    needed so future agents can find the new docs.
 
-5. Consider adding a new lesson under `docs/reference/agent-lessons/` because the
-   human explicitly corrected an architectural assumption. If you add one,
-   update the lesson register.
+5. If the work reveals durable steering, promote it directly into the relevant
+   canonical doc, test, or ADR.
 
 6. Update the status line for Phase 1 in
    `plans/interactive-agent-interfaces/README.md` to `☑ done`, with a compact

@@ -18,7 +18,6 @@ handoff and update the plan status only after validation.
 - `AGENTS.md`
 - `docs/how-to/start-a-development-session.md`
 - `docs/reference/development-conventions.md`
-- `docs/reference/agent-lessons/README.md`
 - `docs/explanation/interactive-agent-interfaces.md`
 - `docs/reference/interactive-conversation-interface.md`
 - `docs/reference/llm-agents.md`
