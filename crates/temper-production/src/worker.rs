@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::wake::{WakeConfig, WakeError, WakeListener};
+use crate::wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
 use crate::worker_args::{ForgejoArgs, WorkerArgs, WorkerKind};
 use crate::worker_external_tools::configure_external_tool_executors;
 use crate::worker_role_agent::build_role_agent;
@@ -377,10 +377,13 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
                 }
             }
         }
-        match wait_for_next_tick(&stop, interval, wake.as_ref()).await? {
-            WaitOutcome::PollDeadline => next_tick_reason = TickReason::Poll,
-            WaitOutcome::Stop => break,
-            WaitOutcome::Wake(hints) => {
+        match wait_for_wake_or_poll(|| stop.should_stop(), interval, wake.as_ref())
+            .await
+            .map_err(|error| RunError::Backend(error.to_string()))?
+        {
+            WakeWaitOutcome::PollDeadline => next_tick_reason = TickReason::Poll,
+            WakeWaitOutcome::Stop => break,
+            WakeWaitOutcome::Wake(hints) => {
                 let wake_count = hints.len();
                 pending_hints.extend(hints);
                 eprintln!(
@@ -419,88 +422,6 @@ impl TickReason {
             TickReason::Initial => "initial",
             TickReason::Poll => "poll",
             TickReason::Wake => "wake",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum WaitOutcome {
-    PollDeadline,
-    Stop,
-    Wake(Vec<ChangeHint>),
-}
-
-const MAX_WAKE_DRAIN: usize = 1024;
-const WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
-
-fn drain_wake_batch(
-    listener: &WakeListener,
-    first: Option<ChangeHint>,
-) -> Result<Vec<ChangeHint>, WakeError> {
-    let mut hints = first.into_iter().collect::<Vec<_>>();
-    let mut drained = 0usize;
-    loop {
-        if drained >= MAX_WAKE_DRAIN {
-            eprintln!(
-                "temper-worker: wake drain hit cap ({MAX_WAKE_DRAIN}); remaining queued wakes will form a later batch"
-            );
-            break;
-        }
-        match listener.try_recv() {
-            Ok(Some(Some(hint))) => {
-                hints.push(hint);
-                drained += 1;
-            }
-            Ok(Some(None)) => drained += 1,
-            Ok(None) => break,
-            Err(WakeError::Unauthorized) => {
-                eprintln!("temper-worker: ignored unauthorized wake message");
-                drained += 1;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(hints)
-}
-
-async fn wait_for_next_tick(
-    stop: &StopSignal,
-    interval: StdDuration,
-    wake: Option<&WakeListener>,
-) -> Result<WaitOutcome, RunError> {
-    let deadline = tokio::time::sleep(interval);
-    tokio::pin!(deadline);
-    loop {
-        if stop.should_stop() {
-            return Ok(WaitOutcome::Stop);
-        }
-        let stop_check = tokio::time::sleep(StdDuration::from_millis(250));
-        tokio::pin!(stop_check);
-        match wake {
-            Some(listener) => {
-                tokio::select! {
-                    _ = &mut deadline => return Ok(WaitOutcome::PollDeadline),
-                    _ = &mut stop_check => {},
-                    received = listener.recv() => match received {
-                        Ok(hint) => {
-                            tokio::time::sleep(WAKE_DEBOUNCE).await;
-                            return drain_wake_batch(listener, hint)
-                                .map(WaitOutcome::Wake)
-                                .map_err(|error| RunError::Backend(error.to_string()));
-                        }
-                        Err(WakeError::Unauthorized) => {
-                            eprintln!("temper-worker: ignored unauthorized wake message");
-                        }
-                        Err(error) => return Err(RunError::Backend(error.to_string())),
-                    },
-                }
-            }
-            None => {
-                tokio::select! {
-                    _ = &mut deadline => return Ok(WaitOutcome::PollDeadline),
-                    _ = &mut stop_check => {},
-                }
-            }
         }
     }
 }

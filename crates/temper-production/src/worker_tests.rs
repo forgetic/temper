@@ -1,6 +1,6 @@
 use super::*;
 use crate::pr_diff_guard::GuardRole;
-use crate::wake::{send_wake, send_wake_with_hint};
+use crate::wake::{send_wake, send_wake_with_hint, wait_for_wake_or_poll, WakeWaitOutcome};
 use crate::worker_role_agent::guard_role_for_manifest;
 use std::path::PathBuf;
 use std::thread;
@@ -181,15 +181,15 @@ fn authenticated_wake_interrupts_long_wait() {
     let start = Instant::now();
 
     let outcome = runtime
-        .block_on(wait_for_next_tick(
-            &stop,
+        .block_on(wait_for_wake_or_poll(
+            || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&listener),
         ))
         .expect("wait succeeds");
     sender.join().expect("sender joins");
 
-    assert_eq!(outcome, WaitOutcome::Wake(Vec::new()));
+    assert_eq!(outcome, WakeWaitOutcome::Wake(Vec::new()));
     assert!(
         start.elapsed() < StdDuration::from_secs(1),
         "authenticated wake should beat the long poll interval"
@@ -215,15 +215,15 @@ fn wake_payload_carries_repository_hint_to_waiter() {
     });
 
     let outcome = runtime
-        .block_on(wait_for_next_tick(
-            &stop,
+        .block_on(wait_for_wake_or_poll(
+            || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&listener),
         ))
         .expect("wait succeeds");
     sender.join().expect("sender joins");
 
-    assert_eq!(outcome, WaitOutcome::Wake(vec![hint]));
+    assert_eq!(outcome, WakeWaitOutcome::Wake(vec![hint]));
 }
 
 #[test]
@@ -247,14 +247,14 @@ fn burst_wakes_are_coalesced_into_one_wait_outcome() {
     send_wake_with_hint(&socket, Some("wake-secret"), &pr_hint).expect("second hinted wake sends");
 
     let outcome = runtime
-        .block_on(wait_for_next_tick(
-            &stop,
+        .block_on(wait_for_wake_or_poll(
+            || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&listener),
         ))
         .expect("wait succeeds");
 
-    assert_eq!(outcome, WaitOutcome::Wake(vec![issue_hint, pr_hint]));
+    assert_eq!(outcome, WakeWaitOutcome::Wake(vec![issue_hint, pr_hint]));
 }
 
 #[test]
@@ -279,15 +279,15 @@ fn unauthorized_wake_is_ignored_until_stop_or_poll() {
     let start = Instant::now();
 
     let outcome = runtime
-        .block_on(wait_for_next_tick(
-            &stop,
+        .block_on(wait_for_wake_or_poll(
+            || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&listener),
         ))
         .expect("wait succeeds");
     sender.join().expect("sender joins");
 
-    assert_eq!(outcome, WaitOutcome::Stop);
+    assert_eq!(outcome, WakeWaitOutcome::Stop);
     assert!(
         start.elapsed() >= StdDuration::from_millis(150),
         "unauthorized wake must not end the wait"

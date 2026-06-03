@@ -51,8 +51,8 @@ multi-process workloads (many role workers + actions + git). It is often the
 
 - `crates/temper-forgejo-fixture/src/lib.rs` (`apply_cpu_cap`,
   `forgejo_gomaxprocs`, `DEFAULT_FORGEJO_GOMAXPROCS`) + `runner.rs`.
-- `crates/temper-production/src/worker.rs` (`WAKE_DEBOUNCE` and
-  `drain_wake_batch`) debounces/coalesces the production demo's queued
-  Unix-datagram wakes before a tick.
+- `crates/temper-production/src/wake.rs` (`wait_for_wake_or_poll`) owns the
+  shared debounce/coalescing of queued Unix-datagram wakes before a tick;
+  production workers and `temper-testing-worker --backend forgejo` both use it.
 - `docs/how-to/run-forgejo-multiprocess-e2e.md` ("Real LLM agents" / "CPU note").
 - `plans/forgejo-e2e/findings-phase-b.md` ("The sustained-CPU incident").

@@ -245,7 +245,9 @@ async fn drive_async<W: temper_runner::Worker>(
     worker: &W,
 ) -> Result<RunReport, RunError> {
     use std::time::Duration as StdDuration;
-    use temper_production::wake::{WakeConfig, WakeError, WakeListener};
+    use temper_production::wake::{
+        wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome,
+    };
 
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
     let interval = args
@@ -304,43 +306,121 @@ async fn drive_async<W: temper_runner::Worker>(
         if stop.should_stop() {
             break;
         }
-        let sleep = tokio::time::sleep(interval);
-        tokio::pin!(sleep);
-        loop {
-            if stop.should_stop() {
-                break;
-            }
-            let stop_check = tokio::time::sleep(StdDuration::from_millis(250));
-            tokio::pin!(stop_check);
-            match wake.as_ref() {
-                Some(listener) => {
-                    tokio::select! {
-                        _ = &mut sleep => break,
-                        _ = &mut stop_check => {},
-                        received = listener.recv() => match received {
-                            Ok(_) => {
-                                eprintln!(
-                                    "temper-testing-worker: worker '{}' consumed authenticated wake; ticking immediately",
-                                    worker.name()
-                                );
-                                break;
-                            }
-                            Err(WakeError::Unauthorized) => {
-                                eprintln!("temper-testing-worker: ignored unauthorized wake message");
-                            }
-                            Err(error) => return Err(RunError::Backend(error.to_string())),
-                        },
-                    }
-                }
-                None => {
-                    tokio::select! {
-                        _ = &mut sleep => break,
-                        _ = &mut stop_check => {},
-                    }
-                }
+        match wait_for_wake_or_poll(|| stop.should_stop(), interval, wake.as_ref())
+            .await
+            .map_err(|error| RunError::Backend(error.to_string()))?
+        {
+            WakeWaitOutcome::PollDeadline => {}
+            WakeWaitOutcome::Stop => break,
+            WakeWaitOutcome::Wake(hints) => {
+                let wake_count = hints.len();
+                eprintln!(
+                    "temper-testing-worker: worker '{}' consumed authenticated wake batch hints={wake_count}; ticking immediately",
+                    worker.name()
+                );
             }
         }
     }
 
     Ok(report)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use chrono::{DateTime, Duration, Utc};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
+    use std::time::Duration as StdDuration;
+    use temper_forge::RepositoryPath;
+    use temper_production::wake::send_wake;
+    use temper_runner::{Progress, Worker, WorkerError};
+
+    use crate::worker_bin::args::{AgentsKind, Backend, ClockKind};
+
+    struct BurstWorker {
+        ticks: AtomicU64,
+        socket: PathBuf,
+    }
+
+    #[async_trait]
+    impl Worker for BurstWorker {
+        async fn tick(&self, _now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+            let tick = self.ticks.fetch_add(1, Ordering::SeqCst) + 1;
+            if tick == 1 {
+                for _ in 0..3 {
+                    send_wake(&self.socket, Some("wake-secret")).expect("wake sends");
+                }
+            }
+            Ok(Progress::unchanged())
+        }
+
+        fn name(&self) -> &str {
+            "burst-worker"
+        }
+    }
+
+    #[test]
+    fn forgejo_drive_coalesces_queued_wake_bursts() {
+        let root = temp_root("coalesced-wakes");
+        std::fs::create_dir_all(&root).expect("temp root exists");
+        let socket = root.join("worker.sock");
+        let secret_file = root.join("wake-secret");
+        let stop_file = root.join("stop");
+        std::fs::write(&secret_file, "wake-secret\n").expect("secret writes");
+        let args = WorkerArgs {
+            kind: WorkerKind::Mechanical,
+            backend: Backend::Forgejo(ForgejoArgs {
+                base_url: "http://127.0.0.1:1".into(),
+                token: "token".into(),
+                username: None,
+                password: None,
+            }),
+            root: root.clone(),
+            owner: "acme".into(),
+            name: "service".into(),
+            repositories: vec![RepositoryPath::new("acme", "service")],
+            poll_interval: Duration::seconds(60),
+            stop_file: Some(stop_file.clone()),
+            run_secs: None,
+            clock: ClockKind::Wall,
+            agents: AgentsKind::Fake,
+            wake_socket: Some(socket.clone()),
+            wake_secret_file: Some(secret_file),
+        };
+        let worker = BurstWorker {
+            ticks: AtomicU64::new(0),
+            socket,
+        };
+        let stop_file_for_thread = stop_file.clone();
+        let stopper = thread::spawn(move || {
+            thread::sleep(StdDuration::from_millis(800));
+            std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime builds");
+
+        let report = runtime
+            .block_on(drive_async(&args, &worker))
+            .expect("drive succeeds");
+        stopper.join().expect("stopper joins");
+
+        assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);
+        assert_eq!(report.ticks, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "temper-testing-forgejo-{name}-{}-{}",
+            std::process::id(),
+            Utc::now()
+                .timestamp_nanos_opt()
+                .expect("timestamp has nanoseconds")
+        ))
+    }
 }

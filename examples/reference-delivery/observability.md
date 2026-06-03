@@ -21,7 +21,7 @@ They log process-level movement such as:
 
 ```text
 temper-testing-worker: worker 'role:architect' completed tick actions=1
-temper-testing-worker: worker 'role:engineer' consumed authenticated wake; ticking immediately
+temper-testing-worker: worker 'role:engineer' consumed authenticated wake batch hints=1; ticking immediately
 ```
 
 ## Minimal movement trail

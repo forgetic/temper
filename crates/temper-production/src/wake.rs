@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration as StdDuration;
 use temper_runner::ChangeHint;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -125,6 +126,87 @@ impl WakeListener {
 
     pub fn try_recv(&self) -> Result<Option<Option<ChangeHint>>, WakeError> {
         Err(WakeError::Unsupported)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WakeWaitOutcome {
+    PollDeadline,
+    Stop,
+    Wake(Vec<ChangeHint>),
+}
+
+const MAX_WAKE_DRAIN: usize = 1024;
+const WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
+const STOP_CHECK_INTERVAL: StdDuration = StdDuration::from_millis(250);
+
+fn drain_wake_batch(
+    listener: &WakeListener,
+    first: Option<ChangeHint>,
+) -> Result<Vec<ChangeHint>, WakeError> {
+    let mut hints = first.into_iter().collect::<Vec<_>>();
+    let mut drained = 0usize;
+    loop {
+        if drained >= MAX_WAKE_DRAIN {
+            eprintln!(
+                "temper-wake: wake drain hit cap ({MAX_WAKE_DRAIN}); remaining queued wakes will form a later batch"
+            );
+            break;
+        }
+        match listener.try_recv() {
+            Ok(Some(Some(hint))) => {
+                hints.push(hint);
+                drained += 1;
+            }
+            Ok(Some(None)) => drained += 1,
+            Ok(None) => break,
+            Err(WakeError::Unauthorized) => {
+                eprintln!("temper-wake: ignored unauthorized wake message");
+                drained += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(hints)
+}
+
+pub async fn wait_for_wake_or_poll(
+    mut should_stop: impl FnMut() -> bool,
+    interval: StdDuration,
+    wake: Option<&WakeListener>,
+) -> Result<WakeWaitOutcome, WakeError> {
+    let deadline = tokio::time::sleep(interval);
+    tokio::pin!(deadline);
+    loop {
+        if should_stop() {
+            return Ok(WakeWaitOutcome::Stop);
+        }
+        let stop_check = tokio::time::sleep(STOP_CHECK_INTERVAL);
+        tokio::pin!(stop_check);
+        match wake {
+            Some(listener) => {
+                tokio::select! {
+                    _ = &mut deadline => return Ok(WakeWaitOutcome::PollDeadline),
+                    _ = &mut stop_check => {},
+                    received = listener.recv() => match received {
+                        Ok(hint) => {
+                            tokio::time::sleep(WAKE_DEBOUNCE).await;
+                            return drain_wake_batch(listener, hint).map(WakeWaitOutcome::Wake);
+                        }
+                        Err(WakeError::Unauthorized) => {
+                            eprintln!("temper-wake: ignored unauthorized wake message");
+                        }
+                        Err(error) => return Err(error),
+                    },
+                }
+            }
+            None => {
+                tokio::select! {
+                    _ = &mut deadline => return Ok(WakeWaitOutcome::PollDeadline),
+                    _ = &mut stop_check => {},
+                }
+            }
+        }
     }
 }
 
