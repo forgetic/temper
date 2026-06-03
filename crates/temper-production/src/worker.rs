@@ -245,6 +245,7 @@ trait DriveWorker: Sync {
         &self,
         now: chrono::DateTime<chrono::Utc>,
         hints: &[ChangeHint],
+        tick_id: &str,
     ) -> Result<temper_runner::Progress, WorkerError>;
 
     fn name(&self) -> &str;
@@ -256,9 +257,12 @@ impl<F: Forge + ?Sized> DriveWorker for MultiRepoRoleWorker<'_, F> {
         &self,
         now: chrono::DateTime<chrono::Utc>,
         hints: &[ChangeHint],
+        tick_id: &str,
     ) -> Result<temper_runner::Progress, WorkerError> {
         let known = known_hints_for(self.repositories(), hints);
-        self.tick_hinted(now, &known).await.into_worker_result()
+        self.tick_hinted_with_observability_tick_id(now, &known, tick_id)
+            .await
+            .into_worker_result()
     }
 
     fn name(&self) -> &str {
@@ -277,6 +281,7 @@ where
         &self,
         now: chrono::DateTime<chrono::Utc>,
         _hints: &[ChangeHint],
+        _tick_id: &str,
     ) -> Result<temper_runner::Progress, WorkerError> {
         Worker::tick(self, now).await
     }
@@ -304,6 +309,10 @@ fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<Ch
     known
 }
 
+fn production_tick_id(worker: &str, reason: TickReason, sequence: u64) -> String {
+    format!("tick/{worker}/{}/{}", reason.as_str(), sequence)
+}
+
 async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<RunReport, RunError> {
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
     let interval = args
@@ -314,6 +323,7 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
     let mut consecutive_failures = 0u32;
     let mut next_tick_reason = TickReason::Initial;
     let mut pending_hints = Vec::new();
+    let mut tick_sequence = 0u64;
     let mut report = RunReport {
         ticks: 0,
         workers: vec![WorkerRunReport {
@@ -330,7 +340,12 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
         } else {
             Vec::new()
         };
-        match worker.tick_for_wake(chrono::Utc::now(), &tick_hints).await {
+        tick_sequence = tick_sequence.saturating_add(1);
+        let tick_id = production_tick_id(worker.name(), tick_reason, tick_sequence);
+        match worker
+            .tick_for_wake(chrono::Utc::now(), &tick_hints, &tick_id)
+            .await
+        {
             Ok(progress) => {
                 consecutive_failures = 0;
                 report.ticks = report.ticks.saturating_add(1);
@@ -338,22 +353,24 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
                 report.workers[0].actions = report.workers[0]
                     .actions
                     .saturating_add(u64::from(progress.actions));
-                if tick_reason != TickReason::Poll {
+                if tick_reason != TickReason::Poll || progress.actions > 0 {
                     eprintln!(
-                        "temper-worker: worker '{}' completed tick trigger={} actions={}",
+                        "temper-worker: worker '{}' completed tick trigger={} actions={} tick_id={}",
                         worker.name(),
                         tick_reason.as_str(),
-                        progress.actions
+                        progress.actions,
+                        tick_id
                     );
                 }
             }
             Err(error) => {
                 consecutive_failures += 1;
                 eprintln!(
-                    "temper-worker: worker '{}' tick failed trigger={} \
+                    "temper-worker: worker '{}' tick failed trigger={} tick_id={} \
                      ({consecutive_failures}/{MAX_CONSECUTIVE_TICK_FAILURES}), retrying: {error}",
                     worker.name(),
-                    tick_reason.as_str()
+                    tick_reason.as_str(),
+                    tick_id
                 );
                 if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES {
                     return Err(RunError::Drive(Box::new(error)));

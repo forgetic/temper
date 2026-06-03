@@ -5,6 +5,15 @@
 
 use std::collections::BTreeMap;
 
+mod events;
+pub use events::{
+    execution_error_diagnostic_classes, execution_error_failure_class,
+    postcondition_outcome_for_error, render_action_dispatch_event,
+    render_role_decision_reply_event, render_role_decision_request_event,
+    render_transition_execution_event, workflow_effect_summary, ActionDispatchEvent,
+    RoleDecisionReplyEvent, RoleDecisionRequestEvent, TransitionExecutionEvent,
+};
+
 use serde_json::Value;
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RoleId};

@@ -5,13 +5,16 @@ use std::sync::Arc;
 use temper_forge::{BranchRef, CreatePullRequest, Forge, ItemNumber};
 use temper_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, Effect, ExecutionError,
-    RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
+    ExecutionReport, RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
 };
 
 use crate::{
-    AgentError, BoundExternalTool, CodingWorkspace, CodingWorkspaceGuidance,
-    CodingWorkspaceRepository, CodingWorkspaceRequest, CodingWorkspaceWorkItem,
-    ExternalToolExecutors, RoleTools, WorkItem, WorkItemIdentity, CODING_WORKSPACE_TOOL_ID,
+    execution_error_diagnostic_classes, execution_error_failure_class,
+    postcondition_outcome_for_error, render_action_dispatch_event,
+    render_transition_execution_event, ActionDispatchEvent, AgentError, BoundExternalTool,
+    CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
+    CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools, TransitionExecutionEvent, WorkItem,
+    WorkItemIdentity, CODING_WORKSPACE_TOOL_ID,
 };
 
 pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
@@ -41,13 +44,7 @@ pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
         }),
     };
 
-    let identity = WorkItemIdentity::new(
-        tools.repo(),
-        tools.role(),
-        &item.queue,
-        item.target,
-        &item.kind,
-    );
+    let identity = tools.work_item_identity(item);
 
     Ok(serde_json::json!({
         "repository": tools.repo().as_str(),
@@ -68,14 +65,29 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
     tool: &ToolManifest,
     work_item_context: &serde_json::Value,
 ) -> Result<bool, AgentError> {
-    if tool_creates_pull_request(tool) && declares_coding_workspace(manifest) {
-        let Some(workspace) =
-            coding_workspace(manifest, bound_external_tools, external_tool_executors)
-        else {
-            eprintln!(
-                "temper-runner: role '{}' cannot run '{}' because coding_workspace is declared but not executable-bound",
-                manifest.id, tool.name
-            );
+    let identity = tools.work_item_identity(item);
+    let needs_workspace = tool_creates_pull_request(tool) && declares_coding_workspace(manifest);
+    let workspace = needs_workspace
+        .then(|| coding_workspace(manifest, bound_external_tools, external_tool_executors))
+        .flatten();
+    log_action_dispatch(
+        &identity,
+        tool,
+        needs_workspace,
+        needs_workspace.then_some(workspace.is_some()),
+        if needs_workspace && workspace.is_none() {
+            "no_op"
+        } else {
+            "dispatching"
+        },
+        if needs_workspace && workspace.is_none() {
+            Some("required_executor_unavailable")
+        } else {
+            None
+        },
+    );
+    if needs_workspace {
+        let Some(workspace) = workspace else {
             return Ok(false);
         };
         return run_pull_request_create_tool(
@@ -89,7 +101,7 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
         )
         .await;
     }
-    run_or_ignore_stale(tools, item.target, &tool.transition).await
+    run_or_ignore_stale(tools, item.target, &tool.transition, &identity).await
 }
 
 async fn run_pull_request_create_tool<F: Forge + ?Sized>(
@@ -101,22 +113,61 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
     work_item_context: &serde_json::Value,
     workspace: Arc<dyn CodingWorkspace>,
 ) -> Result<bool, AgentError> {
+    let identity = tools.work_item_identity(item);
+    let identity = &identity;
     if create_pull_request_count(tool) != 1 {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "failed",
+            false,
+            Some("external_executor_unsupported_effect_shape"),
+            "not_checked",
+        );
         return Err(AgentError::message(format!(
             "coding workspace supports exactly one CreatePullRequest effect for action '{}'",
             tool.name
         )));
     }
     let ArtifactSource::Issue { number } = item.target else {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "stale_no_op",
+            true,
+            Some("target_not_issue"),
+            "not_checked",
+        );
         return Ok(false);
     };
     let Some(issue) = tools.get_issue(number).await? else {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "stale_no_op",
+            true,
+            Some("target_missing"),
+            "not_checked",
+        );
         return Ok(false);
     };
-    let repository = tools
-        .get_repository()
-        .await?
-        .ok_or_else(|| AgentError::message(format!("repository {} not found", tools.repo())))?;
+    let repository = match tools.get_repository().await? {
+        Some(repository) => repository,
+        None => {
+            log_transition_custom(
+                identity,
+                &tool.transition,
+                "failed",
+                false,
+                Some("repository_missing"),
+                "not_checked",
+            );
+            return Err(AgentError::message(format!(
+                "repository {} not found",
+                tools.repo()
+            )));
+        }
+    };
     let base_branch = if repository.default_branch.trim().is_empty() {
         "main".to_string()
     } else {
@@ -144,16 +195,44 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         correlation_key: correlation_key.clone(),
         guidance: workspace_guidance(manifest, bound_external_tools),
     };
-    let output = workspace
-        .produce_head(request)
-        .await
-        .map_err(|error| AgentError::message(format!("coding workspace failed: {error}")))?;
+    let output = match workspace.produce_head(request).await {
+        Ok(output) => output,
+        Err(error) => {
+            log_transition_custom(
+                identity,
+                &tool.transition,
+                "failed",
+                false,
+                Some("external_executor_failed"),
+                "not_checked",
+            );
+            return Err(AgentError::message(format!(
+                "coding workspace failed: {error}"
+            )));
+        }
+    };
     if output.branch.trim().is_empty() {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "failed",
+            false,
+            Some("external_executor_invalid_output"),
+            "not_checked",
+        );
         return Err(AgentError::message(
             "coding workspace returned an empty PR head branch",
         ));
     }
     if output.changed_files.is_empty() {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "failed",
+            false,
+            Some("external_executor_invalid_output"),
+            "not_checked",
+        );
         return Err(AgentError::message(
             "coding workspace returned no changed files for PR head",
         ));
@@ -169,9 +248,18 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         .run_with_pull_request_create_at(item.target, &tool.transition, 0, correlation_key, input)
         .await
     {
-        Ok(_) => Ok(true),
-        Err(error) if stale_execution(&error) => Ok(false),
-        Err(error) => Err(error.into()),
+        Ok(report) => {
+            log_transition_success(identity, &report);
+            Ok(true)
+        }
+        Err(error) if stale_execution(&error) => {
+            log_transition_error(identity, &tool.transition, &error, true);
+            Ok(false)
+        }
+        Err(error) => {
+            log_transition_error(identity, &tool.transition, &error, false);
+            Err(error.into())
+        }
     }
 }
 
@@ -179,14 +267,108 @@ fn run_or_ignore_stale<'a, F: Forge + ?Sized + 'a>(
     tools: &'a RoleTools<'_, F>,
     target: ArtifactSource,
     transition: &'a TransitionId,
+    identity: &'a WorkItemIdentity,
 ) -> impl std::future::Future<Output = Result<bool, AgentError>> + 'a {
     async move {
         match tools.run(target, transition).await {
-            Ok(_) => Ok(true),
-            Err(error) if stale_execution(&error) => Ok(false),
-            Err(error) => Err(error.into()),
+            Ok(report) => {
+                log_transition_success(identity, &report);
+                Ok(true)
+            }
+            Err(error) if stale_execution(&error) => {
+                log_transition_error(identity, transition, &error, true);
+                Ok(false)
+            }
+            Err(error) => {
+                log_transition_error(identity, transition, &error, false);
+                Err(error.into())
+            }
         }
     }
+}
+
+fn log_action_dispatch(
+    identity: &WorkItemIdentity,
+    tool: &ToolManifest,
+    external_executor_required: bool,
+    external_executor_available: Option<bool>,
+    outcome: &str,
+    no_op_reason: Option<&str>,
+) {
+    eprintln!(
+        "{}",
+        render_action_dispatch_event(&ActionDispatchEvent {
+            identity,
+            selected_action: &tool.name,
+            transition: &tool.transition,
+            external_executor_required,
+            external_executor_id: external_executor_required.then_some(CODING_WORKSPACE_TOOL_ID),
+            external_executor_available,
+            outcome,
+            no_op_reason,
+        })
+    );
+}
+
+fn log_transition_success(identity: &WorkItemIdentity, report: &ExecutionReport) {
+    eprintln!(
+        "{}",
+        render_transition_execution_event(&TransitionExecutionEvent {
+            identity,
+            transition: &report.transition,
+            outcome: "mutated",
+            stale_work: false,
+            effects: &report.applied,
+            failure_class: None,
+            diagnostic_classes: Vec::new(),
+            postcondition_outcome: "passed",
+        })
+    );
+}
+
+fn log_transition_error(
+    identity: &WorkItemIdentity,
+    transition: &TransitionId,
+    error: &ExecutionError,
+    stale_work: bool,
+) {
+    let failure_class = execution_error_failure_class(error);
+    eprintln!(
+        "{}",
+        render_transition_execution_event(&TransitionExecutionEvent {
+            identity,
+            transition,
+            outcome: if stale_work { "stale_no_op" } else { "failed" },
+            stale_work,
+            effects: &[],
+            failure_class: Some(failure_class.as_str()),
+            diagnostic_classes: execution_error_diagnostic_classes(error),
+            postcondition_outcome: postcondition_outcome_for_error(error),
+        })
+    );
+}
+
+fn log_transition_custom(
+    identity: &WorkItemIdentity,
+    transition: &TransitionId,
+    outcome: &str,
+    stale_work: bool,
+    failure_class: Option<&str>,
+    postcondition_outcome: &str,
+) {
+    eprintln!(
+        "{}",
+        render_transition_execution_event(&TransitionExecutionEvent {
+            identity,
+            transition,
+            outcome,
+            stale_work,
+            effects: &[],
+            failure_class,
+            diagnostic_classes: Vec::new(),
+            postcondition_outcome,
+        })
+    );
 }
 
 fn stale_execution(error: &ExecutionError) -> bool {

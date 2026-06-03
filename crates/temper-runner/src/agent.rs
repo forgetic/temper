@@ -87,6 +87,7 @@ pub struct RoleTools<'a, F: Forge + ?Sized> {
     forge: &'a F,
     context: ExecutionContext,
     executor: Executor<'a, F>,
+    observability_tick_id: Option<String>,
 }
 
 impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
@@ -106,7 +107,34 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
             forge,
             context: context.clone(),
             executor: Executor::with_context(workflow, forge, context),
+            observability_tick_id: None,
         }
+    }
+
+    /// Returns tools associated with a production tick id for observability.
+    pub fn with_observability_tick_id(mut self, tick_id: impl Into<String>) -> Self {
+        self.observability_tick_id = Some(tick_id.into());
+        self
+    }
+
+    /// Builds the provider-neutral identity for a work item seen by these tools.
+    pub fn work_item_identity(&self, item: &crate::WorkItem) -> crate::WorkItemIdentity {
+        let identity = crate::WorkItemIdentity::new(
+            self.repo,
+            &self.role,
+            &item.queue,
+            item.target,
+            &item.kind,
+        );
+        if let Some(tick_id) = &self.observability_tick_id {
+            identity.with_tick_id(tick_id.clone())
+        } else {
+            identity
+        }
+    }
+
+    pub(crate) fn execution_context(&self) -> ExecutionContext {
+        self.context.clone()
     }
 
     /// Repository these tools operate on.

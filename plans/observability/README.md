@@ -79,7 +79,7 @@ Status legend: ☐ pending · ☑ done · ⚠ blocked
    formatting in Temper. Propagate the trace through `work_item_context` without
    granting authority or leaking secrets.
 
-2. ☐ **Phase 2 — Role-decision and transition execution logs.**
+2. ☑ **Phase 2 — Role-decision and transition execution logs.**
    `prompts/phase-2-role-decision-and-transition-logs.md`
 
    Instrument the production role-decision adapter and action execution path so

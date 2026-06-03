@@ -8,7 +8,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::io::AsyncWriteExt;
@@ -20,9 +20,10 @@ use temper_workflow::{RoleManifest, ToolManifest};
 
 use crate::role_process_tools::{build_work_item_context, run_process_action};
 use crate::{
-    redacted_lossy_preview, Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleTools,
-    WorkItem, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,
-    WorkflowRoleDecisionRequest,
+    redacted_lossy_preview, render_role_decision_reply_event, render_role_decision_request_event,
+    Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleDecisionReplyEvent,
+    RoleDecisionRequestEvent, RoleTools, WorkItem, WorkflowRoleDecisionProtocolError,
+    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
 
 const STDERR_PREVIEW_LIMIT: usize = 4096;
@@ -250,6 +251,17 @@ impl WorkflowRoleDecisionProcessAgent {
         &self,
         request: &WorkflowRoleDecisionRequest,
     ) -> Result<WorkflowRoleDecisionReply, WorkflowRoleDecisionProcessError> {
+        let reply = self.invoke_unvalidated(request).await?;
+        request
+            .validate_reply(&reply)
+            .map_err(WorkflowRoleDecisionProcessError::Protocol)?;
+        Ok(reply)
+    }
+
+    async fn invoke_unvalidated(
+        &self,
+        request: &WorkflowRoleDecisionRequest,
+    ) -> Result<WorkflowRoleDecisionReply, WorkflowRoleDecisionProcessError> {
         let request_json = serde_json::to_vec(request)
             .map_err(|source| WorkflowRoleDecisionProcessError::MalformedJson { source })?;
         let mut command = Command::new(&self.config.program);
@@ -313,12 +325,8 @@ impl WorkflowRoleDecisionProcessAgent {
                 stderr: preview_lossy(&output.stderr),
             });
         }
-        let reply: WorkflowRoleDecisionReply = serde_json::from_slice(&output.stdout)
-            .map_err(|source| WorkflowRoleDecisionProcessError::MalformedJson { source })?;
-        request
-            .validate_reply(&reply)
-            .map_err(WorkflowRoleDecisionProcessError::Protocol)?;
-        Ok(reply)
+        serde_json::from_slice(&output.stdout)
+            .map_err(|source| WorkflowRoleDecisionProcessError::MalformedJson { source })
     }
 
     fn tool_for_action(&self, action: &str) -> Option<&ToolManifest> {
@@ -330,41 +338,184 @@ impl WorkflowRoleDecisionProcessAgent {
 impl<F: Forge + ?Sized> Agent<F> for WorkflowRoleDecisionProcessAgent {
     async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
         let request = self.build_request(item, tools).await?;
-        let reply = match self.invoke(&request).await {
+        let identity = tools.work_item_identity(item);
+        log_decision_request(&identity, &request);
+        let started = Instant::now();
+        let reply = match self.invoke_unvalidated(&request).await {
             Ok(reply) => reply,
-            Err(WorkflowRoleDecisionProcessError::Protocol(
-                WorkflowRoleDecisionProtocolError::UnauthorizedAction { action },
-            )) => {
-                eprintln!(
-                    "temper-runner: role '{}' returned unauthorized process action '{}', treating as no-action",
-                    self.manifest.id, action
+            Err(error) => {
+                let (validation_outcome, action_kind) = classify_process_error(&error);
+                let error_message = error.to_string();
+                log_decision_reply(
+                    &identity,
+                    None,
+                    validation_outcome,
+                    action_kind,
+                    None,
+                    started.elapsed(),
+                    Some(error_message.as_str()),
                 );
-                return Ok(false);
+                return Err(AgentError::message(error_message));
             }
-            Err(error) => return Err(AgentError::message(error.to_string())),
         };
 
-        if reply.is_no_action() {
-            return Ok(false);
+        let classification = classify_decision_reply(&request, &reply);
+        log_decision_reply(
+            &identity,
+            Some(reply.action.as_str()),
+            classification.validation_outcome,
+            classification.action_kind,
+            Some(reply.reason.as_str()),
+            started.elapsed(),
+            classification.error.as_deref(),
+        );
+
+        match classification.disposition {
+            DecisionDisposition::ExecuteAction => {
+                let Some(tool) = self.tool_for_action(&reply.action) else {
+                    return Ok(false);
+                };
+                run_process_action(
+                    &self.manifest,
+                    &self.bound_external_tools,
+                    &self.external_tool_executors,
+                    item,
+                    tools,
+                    tool,
+                    &request.work_item_context,
+                )
+                .await
+            }
+            DecisionDisposition::NoAction => Ok(false),
+            DecisionDisposition::Error => {
+                Err(AgentError::message(classification.error.unwrap_or_else(
+                    || "role decision reply failed validation".to_string(),
+                )))
+            }
         }
-        let Some(tool) = self.tool_for_action(&reply.action) else {
-            eprintln!(
-                "temper-runner: role '{}' returned unknown process action '{}', treating as no-action",
-                self.manifest.id, reply.action
-            );
-            return Ok(false);
-        };
-        run_process_action(
-            &self.manifest,
-            &self.bound_external_tools,
-            &self.external_tool_executors,
-            item,
-            tools,
-            tool,
-            &request.work_item_context,
-        )
-        .await
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DecisionDisposition {
+    ExecuteAction,
+    NoAction,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DecisionReplyClassification {
+    validation_outcome: &'static str,
+    action_kind: &'static str,
+    disposition: DecisionDisposition,
+    error: Option<String>,
+}
+
+fn classify_decision_reply(
+    request: &WorkflowRoleDecisionRequest,
+    reply: &WorkflowRoleDecisionReply,
+) -> DecisionReplyClassification {
+    if reply.protocol_version != request.protocol_version {
+        let error = WorkflowRoleDecisionProtocolError::VersionMismatch {
+            expected: request.protocol_version,
+            actual: reply.protocol_version,
+        };
+        return DecisionReplyClassification {
+            validation_outcome: "protocol_mismatch",
+            action_kind: "invalid_reply",
+            disposition: DecisionDisposition::Error,
+            error: Some(error.to_string()),
+        };
+    }
+    if !request.action_is_authorized(&reply.action) {
+        return DecisionReplyClassification {
+            validation_outcome: "unauthorized_downgraded_to_no_action",
+            action_kind: "no_action",
+            disposition: DecisionDisposition::NoAction,
+            error: None,
+        };
+    }
+    if reply.is_no_action() {
+        return DecisionReplyClassification {
+            validation_outcome: "valid",
+            action_kind: "no_action",
+            disposition: DecisionDisposition::NoAction,
+            error: None,
+        };
+    }
+    DecisionReplyClassification {
+        validation_outcome: "valid",
+        action_kind: "authorized_action",
+        disposition: DecisionDisposition::ExecuteAction,
+        error: None,
+    }
+}
+
+fn classify_process_error(
+    error: &WorkflowRoleDecisionProcessError,
+) -> (&'static str, &'static str) {
+    match error {
+        WorkflowRoleDecisionProcessError::MalformedJson { .. } => {
+            ("malformed_json", "invalid_reply")
+        }
+        WorkflowRoleDecisionProcessError::Timeout { .. } => ("timeout", "process_unavailable"),
+        WorkflowRoleDecisionProcessError::Protocol(
+            WorkflowRoleDecisionProtocolError::VersionMismatch { .. },
+        ) => ("protocol_mismatch", "invalid_reply"),
+        WorkflowRoleDecisionProcessError::Protocol(
+            WorkflowRoleDecisionProtocolError::UnauthorizedAction { .. },
+        ) => ("unauthorized_downgraded_to_no_action", "no_action"),
+        WorkflowRoleDecisionProcessError::InvalidConfig { .. }
+        | WorkflowRoleDecisionProcessError::Io { .. }
+        | WorkflowRoleDecisionProcessError::Exit { .. } => {
+            ("process_failure", "process_unavailable")
+        }
+    }
+}
+
+fn log_decision_request(identity: &crate::WorkItemIdentity, request: &WorkflowRoleDecisionRequest) {
+    let authorized_actions = request
+        .authorized_actions
+        .iter()
+        .map(|action| action.action.clone())
+        .collect::<Vec<_>>();
+    let available_external_tools = request
+        .available_external_tools
+        .iter()
+        .map(|tool| tool.id.to_string())
+        .collect::<Vec<_>>();
+    eprintln!(
+        "{}",
+        render_role_decision_request_event(&RoleDecisionRequestEvent {
+            identity,
+            workflow_id: &request.workflow_id,
+            authorized_actions: &authorized_actions,
+            available_external_tools: &available_external_tools,
+        })
+    );
+}
+
+fn log_decision_reply(
+    identity: &crate::WorkItemIdentity,
+    selected_action: Option<&str>,
+    validation_outcome: &str,
+    action_kind: &str,
+    reason: Option<&str>,
+    latency: Duration,
+    error: Option<&str>,
+) {
+    eprintln!(
+        "{}",
+        render_role_decision_reply_event(&RoleDecisionReplyEvent {
+            identity,
+            selected_action,
+            validation_outcome,
+            action_kind,
+            reason,
+            latency,
+            error,
+        })
+    );
 }
 
 fn validate_config(

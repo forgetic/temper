@@ -156,6 +156,14 @@ fn known_hints_drop_unknown_repos_so_wake_becomes_broad_scan() {
 }
 
 #[test]
+fn production_tick_id_is_stable_for_log_correlation() {
+    assert_eq!(
+        production_tick_id("multi-role:engineer", TickReason::Wake, 3),
+        "tick/multi-role:engineer/wake/3"
+    );
+}
+
+#[test]
 fn authenticated_wake_interrupts_long_wait() {
     let socket = temp_path("authenticated");
     let runtime = runtime();

@@ -294,7 +294,7 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
     /// Ticks every repository in deterministic order, returning a partial
     /// report instead of stopping at the first failure.
     pub async fn tick_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
-        self.tick_repositories(now, self.repositories.iter_refs())
+        self.tick_repositories(now, self.repositories.iter_refs(), None)
             .await
     }
 
@@ -304,7 +304,18 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
         now: DateTime<Utc>,
         hints: &[ChangeHint],
     ) -> MultiRepoTickReport {
-        self.tick_repositories(now, self.repositories.hinted_order(hints))
+        self.tick_repositories(now, self.repositories.hinted_order(hints), None)
+            .await
+    }
+
+    /// Ticks hinted repositories first while attaching a production tick id to work-item logs.
+    pub async fn tick_hinted_with_observability_tick_id(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+        tick_id: &str,
+    ) -> MultiRepoTickReport {
+        self.tick_repositories(now, self.repositories.hinted_order(hints), Some(tick_id))
             .await
     }
 
@@ -312,6 +323,7 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
         &self,
         now: DateTime<Utc>,
         repositories: Vec<&RepositoryTarget>,
+        tick_id: Option<&str>,
     ) -> MultiRepoTickReport {
         let mut report = MultiRepoTickReport::default();
         for repository in repositories {
@@ -324,7 +336,12 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
                 Arc::clone(&self.agent),
                 self.context.clone(),
             );
-            match worker.tick(now).await {
+            let tick_result = if let Some(tick_id) = tick_id {
+                worker.tick_with_observability_tick_id(now, tick_id).await
+            } else {
+                worker.tick(now).await
+            };
+            match tick_result {
                 Ok(progress) => report.record_success(repository.clone(), progress),
                 Err(error) => report.record_failure(repository.clone(), error),
             }

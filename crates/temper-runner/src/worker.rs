@@ -193,11 +193,29 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
     pub fn role(&self) -> &RoleId {
         &self.role
     }
-}
 
-#[async_trait]
-impl<F: Forge + ?Sized> Worker for RoleWorker<'_, F> {
-    async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+    /// Ticks this worker while attaching a production tick id to work-item logs.
+    pub async fn tick_with_observability_tick_id(
+        &self,
+        now: DateTime<Utc>,
+        tick_id: &str,
+    ) -> Result<Progress, WorkerError> {
+        let tools = RoleTools::new(
+            self.workflow,
+            self.forge,
+            self.repo,
+            self.role.clone(),
+            self.tools.execution_context(),
+        )
+        .with_observability_tick_id(tick_id.to_string());
+        self.tick_with_tools(now, &tools).await
+    }
+
+    async fn tick_with_tools(
+        &self,
+        now: DateTime<Utc>,
+        tools: &RoleTools<'_, F>,
+    ) -> Result<Progress, WorkerError> {
         let items = scan_role(
             self.forge,
             self.repo,
@@ -210,9 +228,16 @@ impl<F: Forge + ?Sized> Worker for RoleWorker<'_, F> {
 
         let mut progress = Progress::unchanged();
         for item in items {
-            progress.record(self.agent.service(&item, &self.tools).await?);
+            progress.record(self.agent.service(&item, tools).await?);
         }
         Ok(progress)
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Worker for RoleWorker<'_, F> {
+    async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+        self.tick_with_tools(now, &self.tools).await
     }
 
     fn name(&self) -> &str {
