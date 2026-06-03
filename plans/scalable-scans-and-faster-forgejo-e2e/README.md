@@ -76,14 +76,18 @@ Status legend: ☐ pending · ☑ done
    scans still inspect all queues by design in this phase; Phase 2 must narrow
    candidate listing and closed-history reads.
 
-2. ☐ **Phase 2 — Candidate query planning and closed-history pruning.**
+2. ☑ **Phase 2 — Candidate query planning and closed-history pruning.**
    `prompts/phase-2-candidate-query-planning.md`
 
-   Replace `IssueQuery::default()` / `PullRequestQuery::default()` in scans with
-   queue-derived candidate queries. Open artifacts remain eligible; closed
-   artifacts are fetched only by explicit workflow queue/recovery labels. Add a
-   low-frequency audit scan mode that is broader than a role tick but still skips
-   unlabelled closed history.
+   Added a runner `CandidateQueryPlan` and `ScanMode`. Normal role scans now use
+   role-subscribed queue interest to build state+label issue/PR queries, split by
+   artifact target, and deduplicate artifacts returned by overlapping queries.
+   Open candidates use `state=open` with an open-all fallback only for queues
+   without useful labels. Closed issues and closed/merged PRs are queried only
+   with non-empty queue labels; audit scans add workflow-label recovery interest
+   while still avoiding unlabelled closed history. Regressions cover closed
+   unlabelled history pruning, merged `landed` PR discovery, and open-all
+   condition queues.
 
 3. ☐ **Phase 3 — Forgejo scalable backend paths.**
    `prompts/phase-3-forgejo-scalable-backend-paths.md`

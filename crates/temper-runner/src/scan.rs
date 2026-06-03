@@ -5,15 +5,20 @@
 //! queue candidates, and emits work for active queues. Classification failures
 //! are left to the workflow reconciler and do not fail the scan.
 
+mod candidate;
+
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
-use temper_forge::{Forge, ForgeError, IssueQuery, PullRequestQuery, RepositoryId};
+use temper_forge::{Forge, ForgeError, Issue, PullRequest, RepositoryId};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     queue_active, ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
     ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow,
 };
+
+pub use candidate::{candidate_query_plan, CandidateQueryPlan, ScanMode};
 
 /// A role-addressed member of an active queue.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,7 +83,7 @@ pub async fn scan<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     now: DateTime<Utc>,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    scan_inner(forge, repo, workflow, compiled, now, None).await
+    scan_inner(forge, repo, workflow, compiled, now, None, ScanMode::Normal).await
 }
 
 /// Scans all workflow-visible artifacts and returns work for one role.
@@ -92,7 +97,28 @@ pub async fn scan_role<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     role: &RoleId,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    scan_inner(forge, repo, workflow, compiled, now, Some(role)).await
+    scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Normal,
+    )
+    .await
+}
+
+/// Runs a broad audit scan for all workflow queues and workflow-labelled
+/// recovery interest while still avoiding unlabelled closed history.
+pub async fn scan_audit<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+) -> Result<Vec<WorkItem>, ScanError> {
+    scan_inner(forge, repo, workflow, compiled, now, None, ScanMode::Audit).await
 }
 
 async fn scan_inner<F: Forge + ?Sized>(
@@ -102,36 +128,24 @@ async fn scan_inner<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     now: DateTime<Utc>,
     role: Option<&RoleId>,
+    mode: ScanMode,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    let role_filter = match role {
-        Some(id) => match compiled.role(id) {
+    let role_filter = match (mode, role) {
+        (ScanMode::Normal, Some(id)) => match compiled.role(id) {
             Some(manifest) => Some((id, manifest.queues.as_slice())),
             None => return Ok(Vec::new()),
         },
-        None => None,
+        (ScanMode::Normal, None) | (ScanMode::Audit, _) => None,
     };
 
-    let queues = queues_for_role(compiled, role_filter);
+    let queues = candidate::queues_for_scan(compiled, role, mode);
     if queues.is_empty() {
         return Ok(Vec::new());
     }
 
-    let artifacts = read_artifacts(forge, repo, workflow, &queues).await?;
+    let query_plan = candidate_query_plan(workflow, compiled, role, mode);
+    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan).await?;
     Ok(work_items(&queues, &artifacts, now, role_filter))
-}
-
-fn queues_for_role<'a>(
-    compiled: &'a CompiledWorkflow,
-    role_filter: Option<(&RoleId, &[QueueId])>,
-) -> Vec<&'a QueueManifest> {
-    compiled
-        .queues()
-        .iter()
-        .filter(|queue| match role_filter {
-            Some((_, queues)) => queues.contains(&queue.id),
-            None => true,
-        })
-        .collect()
 }
 
 async fn read_artifacts<F: Forge + ?Sized>(
@@ -139,29 +153,49 @@ async fn read_artifacts<F: Forge + ?Sized>(
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     queues: &[&QueueManifest],
+    query_plan: &CandidateQueryPlan,
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
     let mut artifacts = Vec::new();
+    let mut seen_issues = HashSet::new();
+    let mut seen_pull_requests = HashSet::new();
 
-    for issue in forge.list_issues(repo, IssueQuery::default()).await? {
-        let Ok(classified) = classifier.classify_issue(&issue) else {
-            continue;
-        };
-        push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
+    for query in &query_plan.issue_queries {
+        for issue in forge.list_issues(repo, query.clone()).await? {
+            if !seen_issues.insert(issue_key(&issue)) {
+                continue;
+            }
+            let Ok(classified) = classifier.classify_issue(&issue) else {
+                continue;
+            };
+            push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
+        }
     }
 
-    for pull_request in forge
-        .list_pull_requests(repo, PullRequestQuery::default())
-        .await?
-    {
-        let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
-            continue;
-        };
-        push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
+    for query in &query_plan.pull_request_queries {
+        for pull_request in forge.list_pull_requests(repo, query.clone()).await? {
+            if !seen_pull_requests.insert(pull_request_key(&pull_request)) {
+                continue;
+            }
+            let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
+                continue;
+            };
+            push_candidate(forge, repo, workflow, queues, classified, &mut artifacts).await?;
+        }
     }
 
     artifacts.sort_by_key(scanned_order_key);
     Ok(artifacts)
+}
+
+fn issue_key(issue: &Issue) -> (temper_forge::IssueId, temper_forge::ItemNumber) {
+    (issue.id.clone(), issue.number)
+}
+
+fn pull_request_key(
+    pull_request: &PullRequest,
+) -> (temper_forge::PullRequestId, temper_forge::ItemNumber) {
+    (pull_request.id.clone(), pull_request.number)
 }
 
 async fn push_candidate<F: Forge + ?Sized>(

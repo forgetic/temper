@@ -28,8 +28,9 @@
 //!
 //! - [`RunnerConfig`], which keeps repository, identity, PR-create, external-tool
 //!   binding, lease, and polling settings independent of process topology.
-//! - [`scan`], which reads fresh Forge state and turns active queue members into
-//!   role-addressed [`WorkItem`]s without mutating anything.
+//! - [`scan`], which reads fresh Forge state through queue-derived candidate
+//!   queries and turns active queue members into role-addressed [`WorkItem`]s
+//!   without mutating anything.
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
 //!   agents mutate workflow state only by running authorized transitions or the
 //!   idempotent pull-request creation seam through role-scoped tools. The
@@ -113,7 +114,10 @@ pub use role_decision_process::{
     WorkflowRoleDecisionProcessAgent, WorkflowRoleDecisionProcessConfig,
     WorkflowRoleDecisionProcessError,
 };
-pub use scan::{scan, scan_role, ScanError, WorkItem};
+pub use scan::{
+    candidate_query_plan, scan, scan_audit, scan_role, CandidateQueryPlan, ScanError, ScanMode,
+    WorkItem,
+};
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{
     run_scenario, run_scenario_with_budget, BoxError, InProcessStage, InProcessWorkerContext,

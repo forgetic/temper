@@ -14,12 +14,16 @@ pub enum CountedForgeOp {
     GetIssueByNumber,
     GetPullRequestByNumber,
     ListCiJobs,
+    ListIssues,
     ListPullRequestReviews,
+    ListPullRequests,
 }
 
 pub struct CountingForge<F: Forge> {
     inner: F,
     counts: Mutex<HashMap<CountedForgeOp, usize>>,
+    issue_queries: Mutex<Vec<IssueQuery>>,
+    pull_request_queries: Mutex<Vec<PullRequestQuery>>,
 }
 
 impl<F: Forge> CountingForge<F> {
@@ -27,6 +31,8 @@ impl<F: Forge> CountingForge<F> {
         Self {
             inner,
             counts: Mutex::new(HashMap::new()),
+            issue_queries: Mutex::new(Vec::new()),
+            pull_request_queries: Mutex::new(Vec::new()),
         }
     }
 
@@ -39,9 +45,39 @@ impl<F: Forge> CountingForge<F> {
             .unwrap_or(&0)
     }
 
+    #[allow(dead_code)]
+    pub fn issue_queries(&self) -> Vec<IssueQuery> {
+        self.issue_queries
+            .lock()
+            .expect("issue query mutex")
+            .clone()
+    }
+
+    #[allow(dead_code)]
+    pub fn pull_request_queries(&self) -> Vec<PullRequestQuery> {
+        self.pull_request_queries
+            .lock()
+            .expect("pull request query mutex")
+            .clone()
+    }
+
     fn tick(&self, op: CountedForgeOp) {
         let mut counts = self.counts.lock().expect("counts mutex");
         *counts.entry(op).or_insert(0) += 1;
+    }
+
+    fn record_issue_query(&self, query: &IssueQuery) {
+        self.issue_queries
+            .lock()
+            .expect("issue query mutex")
+            .push(query.clone());
+    }
+
+    fn record_pull_request_query(&self, query: &PullRequestQuery) {
+        self.pull_request_queries
+            .lock()
+            .expect("pull request query mutex")
+            .push(query.clone());
     }
 }
 
@@ -87,6 +123,8 @@ impl<F: Forge> Forge for CountingForge<F> {
         repo_id: &RepositoryId,
         query: IssueQuery,
     ) -> ForgeResult<Vec<Issue>> {
+        self.tick(CountedForgeOp::ListIssues);
+        self.record_issue_query(&query);
         self.inner.list_issues(repo_id, query).await
     }
 
@@ -136,6 +174,8 @@ impl<F: Forge> Forge for CountingForge<F> {
         repo_id: &RepositoryId,
         query: PullRequestQuery,
     ) -> ForgeResult<Vec<PullRequest>> {
+        self.tick(CountedForgeOp::ListPullRequests);
+        self.record_pull_request_query(&query);
         self.inner.list_pull_requests(repo_id, query).await
     }
 
