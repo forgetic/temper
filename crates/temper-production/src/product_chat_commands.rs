@@ -1,6 +1,6 @@
 //! Shared product-chat slash command parsing.
 
-use temper_agents::ProductManagerDraftIssue;
+use crate::product_chat::ProductManagerDraftIssue;
 
 pub const COMMAND_HELP: &str = "Commands: /drafts, /file <n>, /issue, /help, /quit";
 

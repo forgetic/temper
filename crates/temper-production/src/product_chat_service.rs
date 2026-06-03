@@ -7,7 +7,6 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
 use serde_json::json;
-use temper_agents::{AuthChoice, ProviderConfig};
 use temper_forge::{Forge, Issue, ItemNumber, RepositoryPath};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_interaction::{
@@ -27,7 +26,7 @@ use crate::product_chat_api::{
     FiledIssueResponse, MessageResponse, ProposalsResponse, SendMessageRequest, SendTurnRequest,
     SessionResponse, TranscriptResponse, TurnResponse,
 };
-use crate::product_chat_args::{AuthKind, ProductChatServeArgs};
+use crate::product_chat_args::ProductChatServeArgs;
 use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
 pub(crate) use crate::product_chat_http::{HttpRequest, HttpResponse};
 
@@ -70,13 +69,7 @@ pub fn run_serve(args: &ProductChatServeArgs) -> Result<(), ProductChatServiceEr
         .enable_all()
         .build()
         .map_err(|error| ProductChatError::Runtime(error.to_string()))?;
-    let responder = build_product_profile_responder(args.process_responder.clone(), || {
-        ProviderConfig::from_auth(
-            auth_choice(args.auth),
-            args.codex_model.clone(),
-            args.auth_file.clone(),
-        )
-    })?;
+    let responder = build_product_profile_responder(args.process_responder.clone())?;
     let service = ProductChatService::new(
         args.base_url.clone(),
         args.repo.clone(),
@@ -112,14 +105,6 @@ fn validate_serve_safety(args: &ProductChatServeArgs) -> Result<(), ProductChatE
 
 fn build_forge(base_url: &str, token: &str) -> ForgejoForge {
     ForgejoForge::new(ForgejoConfig::new(base_url.to_string(), token.to_string()))
-}
-
-fn auth_choice(auth: AuthKind) -> AuthChoice {
-    match auth {
-        AuthKind::DeepSeek => AuthChoice::DeepSeek,
-        AuthKind::ChatGptOAuth => AuthChoice::ChatGptOAuth,
-        AuthKind::AnthropicOAuth => AuthChoice::AnthropicOAuth,
-    }
 }
 
 fn run_http(

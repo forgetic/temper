@@ -193,11 +193,11 @@ temper-runner
   mechanical workers
   external tool integration
         ↑
-temper-agents / temper-production
-  LLM agents
+temper-production + external responder processes
   Forge integrations
   provisioners
   webhook triggers
+  process-bound role/chat responders
 ```
 
 The key invariant is simple:
@@ -228,4 +228,4 @@ It runs agentic workflows whose durable state lives in the Forge.
 
 Temper is under active development.
 
-The current implementation is opinionated toward agentic software-delivery workflows and includes support for running role-specific agents directly. The underlying workflow engine, however, is designed around a more general model: state-machine workflows executed against Forge artifacts as the authoritative source of truth.
+The current implementation is opinionated toward agentic software-delivery workflows and runs role-specific behavior through explicit process responder boundaries. The underlying workflow engine is designed around a more general model: state-machine workflows executed against Forge artifacts as the authoritative source of truth.

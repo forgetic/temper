@@ -16,9 +16,9 @@ Each phase should land green and update this README's status.
 
 ## Goal
 
-Temper should remain the workflow and interaction runtime. Smith should own the
-concrete agent implementation that currently lives behind `pi_agent_rust`:
-provider auth, OAuth quirks, model calls, product-manager profile behavior, and
+Temper remains the workflow and interaction runtime. Smith owns the concrete
+agent implementation that previously lived behind `pi_agent_rust`: provider
+auth, OAuth quirks, model calls, product-manager profile behavior, and
 manifest-driven workflow-role decisions.
 
 The stable integration boundary should be a process protocol. Temper sends a
@@ -112,9 +112,8 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    `temper-runner` now has a provider-neutral workflow-role decision process
    agent with strict reply validation, env allow-listing, authorized action
    execution through `RoleTools`, and hermetic fake-process coverage; and
-   `temper-worker` can select that adapter with `--role-decision-*` /
-   `TEMPER_WORKER_ROLE_DECISION_*` configuration while preserving defaults when
-   unset.
+   `temper-worker` selects that adapter with `--role-decision-*` /
+   `TEMPER_WORKER_ROLE_DECISION_*` configuration.
 
 3. ☑ **Phase 3 — Bootstrap `~/src/rust/smith` and move provider core.**
    `prompts/phase-3-bootstrap-smith-provider-core.md`
@@ -135,7 +134,7 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    inert issue proposals. Product-manager prompt/profile tests have Smith
    equivalents, Temper keeps product-chat transcript/filing/session coverage and
    adds a hermetic process-responder integration test, and dogfood product-chat
-   can select Smith with `DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` while preserving
+   now selects Smith with `DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` while preserving
    `temper-product-manager-chat` and `./run.sh product-chat` entry points.
 
 5. ☑ **Phase 5 — Smith workflow-role decision responder.**
@@ -144,23 +143,26 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
    Done: Smith now has `smith-workflow-role-decision`, which reads Temper's
    `WorkflowRoleDecisionRequest`, runs Smith's provider core over the generated
    role manifest/context, maps unauthorized model actions to `no_action`, and
-   writes a `WorkflowRoleDecisionReply`. Temper production workers can opt into
-   it through the existing process adapter, and the reference-delivery launcher
-   has `REFERENCE_DELIVERY_ROLE_DECISION=smith`. Smith owns hermetic
-   workflow-role decision tests plus an ignored/env-gated real Forgejo + real LLM
-   process-adapter proof; the old Temper real-agent e2e remains runnable until
-   Phase 6.
+   writes a `WorkflowRoleDecisionReply`. Temper production workers use it
+   through the existing process adapter, and the reference-delivery launcher has
+   `REFERENCE_DELIVERY_ROLE_DECISION=smith`. Smith owns hermetic workflow-role
+   decision tests plus an ignored/env-gated real Forgejo + real LLM
+   process-adapter proof.
 
-6. ☐ **Phase 6 — Remove Temper pi-SDK coupling and close parity.**
+6. ☑ **Phase 6 — Remove Temper pi-SDK coupling and close parity.**
    `prompts/phase-6-remove-temper-pi-sdk-coupling.md`
 
-   Delete or deprecate in-repo concrete pi-SDK agent code only after Smith owns
-   equivalent coverage and Temper's process-adapter tests are green.
+   Done: deleted `crates/temper-agents` and `temper-testing` real-agent fixtures,
+   removed all Temper `pi_agent_rust` dependencies and provider/auth CLI flags,
+   made production role workers and product-manager chat require process
+   responders, switched reference-delivery/dogfood launchers to Smith process
+   binaries, and updated the coverage ledger to mark Smith as the only concrete
+   LLM/provider home.
 
 ## Acceptance criteria
 
 - Temper builds and tests without `pi_agent_rust` or concrete provider SDKs.
-- Temper can run workflow role agents and interactive responders through process
+- Temper runs workflow role agents and interactive responders through process
   adapters.
 - Smith provides pi-SDK-backed binaries for the same workflow-role and
   product-manager behavior previously available in Temper.
@@ -168,7 +170,8 @@ Status legend: ☐ pending · ⚠ blocked · ☑ done
   process-adapter coverage.
 - Real LLM + Forgejo e2e coverage remains available and documented, even if
   ignored/env-gated.
-- Product-chat and reference/real-world agent paths still work after the split.
+- Product-chat and reference/real-world agent paths still work through Smith
+  process responders after the split.
 
 ## Validation expectations
 
@@ -189,16 +192,13 @@ commands documented in Smith's README as they are introduced. If a real-world
 e2e gate cannot run locally, leave it ignored/env-gated and record what is
 needed rather than deleting it.
 
-## Relevant Temper starting points
+## Relevant Temper/Smith starting points after split
 
-- `crates/temper-agents/src/provider.rs`
-- `crates/temper-agents/src/decision.rs`
-- `crates/temper-agents/src/product_manager.rs`
-- `crates/temper-agents/src/role.rs`
-- `crates/temper-agents/src/registry.rs`
-- `crates/temper-agents/tests/`
 - `crates/temper-interaction/`
 - `crates/temper-runner/src/agent.rs`
+- `crates/temper-runner/src/role_decision_process.rs`
 - `crates/temper-production/src/product_chat*.rs`
-- `crates/temper-production/src/worker.rs`
+- `crates/temper-production/src/worker*.rs`
 - `crates/temper-testing/`
+- `~/src/rust/smith/crates/smith-temper-agent/`
+- `~/src/rust/smith/crates/smith-temper-agent-cli/`

@@ -58,18 +58,18 @@ role-agent behavior for unauthorized model output.
 
 ## Production worker selection
 
-`temper-worker` keeps the in-process LLM role agents by default. A role worker
-uses the process adapter only when explicitly configured with
-`--role-decision-command` or `TEMPER_WORKER_ROLE_DECISION_COMMAND`. Matching
-options are `--role-decision-arg`, `--role-decision-cwd`,
-`--role-decision-env`, and `--role-decision-timeout-secs`; environment fallbacks
-are `TEMPER_WORKER_ROLE_DECISION_ARGS_JSON`,
+A production `temper-worker --kind role` requires a process responder configured
+with `--role-decision-command` or `TEMPER_WORKER_ROLE_DECISION_COMMAND`; Temper
+no longer ships an in-process LLM fallback. Matching options are
+`--role-decision-arg`, `--role-decision-cwd`, `--role-decision-env`, and
+`--role-decision-timeout-secs`; environment fallbacks are
+`TEMPER_WORKER_ROLE_DECISION_ARGS_JSON`,
 `TEMPER_WORKER_ROLE_DECISION_CWD`,
 `TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST`, and
 `TEMPER_WORKER_ROLE_DECISION_TIMEOUT_SECS`. Do not allow-list Forge tokens or
-Temper-owned provider secrets; Smith/provider credentials should be supplied
-through Smith-owned env/auth paths rather than broad ambient env. Temper never
-passes Forge handles or workflow mutation tools.
+Temper-owned secrets. Provider credentials should be supplied through
+responder-owned auth paths rather than broad ambient env. Temper never passes
+Forge handles or workflow mutation tools.
 
 Example Smith selection:
 

@@ -2,7 +2,6 @@
 
 use std::fmt;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use temper_forge::RepositoryPath;
@@ -11,7 +10,6 @@ use temper_interaction::ProcessResponderConfig;
 pub const HUMAN_TOKEN_ENV: &str = "TEMPER_PRODUCT_CHAT_HUMAN_TOKEN";
 pub const PRODUCT_MANAGER_TOKEN_ENV: &str = "TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN";
 pub const SERVICE_TOKEN_ENV: &str = "TEMPER_PRODUCT_CHAT_SERVICE_TOKEN";
-pub const AGENTS_AUTH_ENV: &str = "TEMPER_AGENTS_AUTH";
 pub const PROCESS_RESPONDER_COMMAND_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND";
 pub const PROCESS_RESPONDER_ARGS_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON";
 pub const PROCESS_RESPONDER_CWD_ENV: &str = "TEMPER_PRODUCT_CHAT_RESPONDER_CWD";
@@ -21,21 +19,19 @@ pub const DEFAULT_SERVICE_BIND: &str = "127.0.0.1:39200";
 
 pub const USAGE: &str = concat!(
     "temper-product-manager-chat repl --base-url <url> --repo <owner/name> ",
-    "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
-    "[--codex-model <id>] [--auth-file <path>] [--transcript-issue <n>] ",
-    "[--responder-command <path>] [--responder-arg <arg>] ",
+    "[--transcript-issue <n>] ",
+    "--responder-command <path> [--responder-arg <arg>] ",
     "[--responder-env <name>] [--responder-cwd <path>] ",
     "[--responder-timeout-secs <n>]\n",
     "temper-product-manager-chat serve --base-url <url> --repo <owner/name> ",
     "[--bind <addr:port>] [--allow-non-loopback] ",
-    "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
-    "[--codex-model <id>] [--auth-file <path>] ",
-    "[--responder-command <path>] [--responder-arg <arg>] ",
+    "--responder-command <path> [--responder-arg <arg>] ",
     "[--responder-env <name>] [--responder-cwd <path>] ",
     "[--responder-timeout-secs <n>]\n",
     "  Forgejo tokens come from TEMPER_PRODUCT_CHAT_HUMAN_TOKEN and ",
     "TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN; optional API bearer comes from ",
-    "TEMPER_PRODUCT_CHAT_SERVICE_TOKEN; no secrets on argv"
+    "TEMPER_PRODUCT_CHAT_SERVICE_TOKEN; responder credentials belong to the ",
+    "configured process, not Temper"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,22 +41,12 @@ pub enum ParseOutcome {
     Help,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthKind {
-    ChatGptOAuth,
-    DeepSeek,
-    AnthropicOAuth,
-}
-
 #[derive(Clone, Eq, PartialEq)]
 pub struct ProductChatArgs {
     pub base_url: String,
     pub repo: RepositoryPath,
     pub human_token: String,
     pub product_manager_token: String,
-    pub auth: AuthKind,
-    pub codex_model: Option<String>,
-    pub auth_file: Option<PathBuf>,
     pub transcript_issue: Option<u64>,
     pub process_responder: Option<ProcessResponderConfig>,
 }
@@ -73,9 +59,6 @@ impl fmt::Debug for ProductChatArgs {
             .field("repo", &self.repo)
             .field("human_token", &"<redacted>")
             .field("product_manager_token", &"<redacted>")
-            .field("auth", &self.auth)
-            .field("codex_model", &self.codex_model)
-            .field("auth_file", &self.auth_file)
             .field("transcript_issue", &self.transcript_issue)
             .field(
                 "process_responder",
@@ -94,9 +77,6 @@ pub struct ProductChatServeArgs {
     pub human_token: String,
     pub product_manager_token: String,
     pub service_token: Option<String>,
-    pub auth: AuthKind,
-    pub codex_model: Option<String>,
-    pub auth_file: Option<PathBuf>,
     pub process_responder: Option<ProcessResponderConfig>,
 }
 
@@ -114,9 +94,6 @@ impl fmt::Debug for ProductChatServeArgs {
                 "service_token",
                 &self.service_token.as_ref().map(|_| "<redacted>"),
             )
-            .field("auth", &self.auth)
-            .field("codex_model", &self.codex_model)
-            .field("auth_file", &self.auth_file)
             .field(
                 "process_responder",
                 &self.process_responder.as_ref().map(|_| "<configured>"),
@@ -191,9 +168,6 @@ struct RawReplArgs {
     help: bool,
     base_url: Option<String>,
     repo: Option<String>,
-    auth: Option<String>,
-    codex_model: Option<String>,
-    auth_file: Option<String>,
     transcript_issue: Option<String>,
     responder: RawProcessResponderArgs,
 }
@@ -210,9 +184,6 @@ impl RawReplArgs {
                 "--help" | "-h" => raw.help = true,
                 "--base-url" => raw.base_url = Some(value_for(&flag, &mut iter)?),
                 "--repo" => raw.repo = Some(value_for(&flag, &mut iter)?),
-                "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
-                "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
-                "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--transcript-issue" => raw.transcript_issue = Some(value_for(&flag, &mut iter)?),
                 "--responder-command" => raw.responder.command = Some(value_for(&flag, &mut iter)?),
                 "--responder-arg" => raw.responder.args.push(value_for(&flag, &mut iter)?),
@@ -243,14 +214,11 @@ impl RawReplArgs {
             repo: parse_repo(&require(self.repo, "--repo")?)?,
             human_token: require_env(env, HUMAN_TOKEN_ENV)?,
             product_manager_token: require_env(env, PRODUCT_MANAGER_TOKEN_ENV)?,
-            auth: parse_auth(self.auth.as_deref(), env)?,
-            codex_model: non_empty(self.codex_model),
-            auth_file: non_empty(self.auth_file).map(PathBuf::from),
             transcript_issue: self
                 .transcript_issue
                 .map(|raw| parse_issue_number(&raw, "--transcript-issue"))
                 .transpose()?,
-            process_responder: self.responder.into_config(env)?,
+            process_responder: require_process_responder(self.responder.into_config(env)?)?,
         })
     }
 }
@@ -262,9 +230,6 @@ struct RawServeArgs {
     allow_non_loopback: bool,
     base_url: Option<String>,
     repo: Option<String>,
-    auth: Option<String>,
-    codex_model: Option<String>,
-    auth_file: Option<String>,
     responder: RawProcessResponderArgs,
 }
 
@@ -282,9 +247,6 @@ impl RawServeArgs {
                 "--allow-non-loopback" => raw.allow_non_loopback = true,
                 "--base-url" => raw.base_url = Some(value_for(&flag, &mut iter)?),
                 "--repo" => raw.repo = Some(value_for(&flag, &mut iter)?),
-                "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
-                "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
-                "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--responder-command" => raw.responder.command = Some(value_for(&flag, &mut iter)?),
                 "--responder-arg" => raw.responder.args.push(value_for(&flag, &mut iter)?),
                 "--responder-cwd" => raw.responder.cwd = Some(value_for(&flag, &mut iter)?),
@@ -323,10 +285,7 @@ impl RawServeArgs {
             human_token: require_env(env, HUMAN_TOKEN_ENV)?,
             product_manager_token: require_env(env, PRODUCT_MANAGER_TOKEN_ENV)?,
             service_token,
-            auth: parse_auth(self.auth.as_deref(), env)?,
-            codex_model: non_empty(self.codex_model),
-            auth_file: non_empty(self.auth_file).map(PathBuf::from),
-            process_responder: self.responder.into_config(env)?,
+            process_responder: require_process_responder(self.responder.into_config(env)?)?,
         })
     }
 }
@@ -379,6 +338,17 @@ impl RawProcessResponderArgs {
     }
 }
 
+fn require_process_responder(
+    config: Option<ProcessResponderConfig>,
+) -> Result<Option<ProcessResponderConfig>, ArgsError> {
+    if config.is_some() {
+        return Ok(config);
+    }
+    Err(ArgsError::new(
+        "product-manager chat requires --responder-command or TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND",
+    ))
+}
+
 fn value_for<I>(flag: &str, iter: &mut I) -> Result<String, ArgsError>
 where
     I: Iterator<Item = String>,
@@ -409,24 +379,6 @@ where
     E: Fn(&str) -> Option<String>,
 {
     env(key).and_then(|value| (!value.trim().is_empty()).then_some(value))
-}
-
-fn parse_auth<E>(raw: Option<&str>, env: &E) -> Result<AuthKind, ArgsError>
-where
-    E: Fn(&str) -> Option<String>,
-{
-    let selected = raw
-        .map(str::to_string)
-        .or_else(|| non_empty_env(env, AGENTS_AUTH_ENV))
-        .unwrap_or_else(|| "chatgpt-oauth".to_string());
-    match selected.as_str() {
-        "chatgpt-oauth" => Ok(AuthKind::ChatGptOAuth),
-        "deepseek" => Ok(AuthKind::DeepSeek),
-        "anthropic-oauth" => Ok(AuthKind::AnthropicOAuth),
-        other => Err(ArgsError::new(format!(
-            "unknown --auth '{other}'; expected deepseek|chatgpt-oauth|anthropic-oauth"
-        ))),
-    }
 }
 
 fn parse_responder_args_json(raw: Option<String>) -> Result<Vec<String>, ArgsError> {

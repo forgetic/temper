@@ -19,10 +19,11 @@ session-start and session-closeout how-to guides.
   portable concepts.
 - Keep `temper-forge` free of concrete backend dependencies.
 - Keep `temper-workflow` focused on workflow and orchestration logic.
-- Keep LLM SDK usage inside concrete agent implementation crates (currently
-  `temper-agents`, or external responder repositories); never add it to
-  `temper-forge`, `temper-workflow`, `temper-runner`, or `temper-interaction`.
-  Workflow state mutations still go through runner tools such as `RoleTools`.
+- Keep LLM SDK usage outside Temper in external responder repositories such as
+  Smith; never add provider SDKs or auth-file handling to `temper-forge`,
+  `temper-workflow`, `temper-runner`, `temper-interaction`, or
+  `temper-production`. Workflow state mutations still go through runner tools
+  such as `RoleTools`.
 - Keep `temper-testing` out of production dependency graphs. It is test support
   and may be a dev-dependency or a dependency of test-only crates.
 

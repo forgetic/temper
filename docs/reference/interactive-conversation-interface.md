@@ -22,9 +22,10 @@ authoritative for workflow state.
 ## Domain crate boundary
 
 `temper-interaction` should remain provider-neutral and have no dependency on
-`temper-agents`, `temper-runner`, `temper-workflow`, `temper-production`, or any
-LLM SDK. It may use the portable `temper-forge` trait for transcript and
-acceptance storage. Responders still receive no Forge handle, and proposals are
+external responder crates, `temper-runner`, `temper-workflow`,
+`temper-production`, or any LLM SDK. It may use the portable `temper-forge`
+trait for transcript and acceptance storage. Responders still receive no Forge
+handle, and proposals are
 data until the interaction runtime's acceptance path acts on them.
 
 The Rust trait is an adapter interface. The preferred public extension boundary
@@ -128,12 +129,12 @@ transitions, role tools, gates, and recovery. The interaction plane may create a
 normal intake issue after acceptance, but the workflow runtime decides what that
 issue means next.
 
-`temper-agents` may implement concrete in-process responders for profiles while
-this repository still carries provider code. Provider SDKs and prompts stay out
-of the generic interaction contract, and concrete pi-SDK responders should be
-movable to an external repository that implements the process protocol.
+Concrete responder implementations live outside Temper behind the
+[interactive process responder protocol](interactive-process-responder-protocol.md).
+Provider SDKs, auth files, and prompts stay out of the generic interaction
+contract; Smith is the reference pi-SDK-backed product-manager responder.
 
-`temper-production` may host deployable binaries and adapters, including the
+`temper-production` hosts deployable binaries and adapters, including the
 existing product-manager commands. Those commands are compatibility wrappers over
 the generic interaction session/runtime while the generic transport API is still
 being introduced.

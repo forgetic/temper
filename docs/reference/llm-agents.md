@@ -1,56 +1,28 @@
-# LLM agents reference
+# LLM responders
 
-`crates/temper-agents` is the current transitional in-repo home for real,
-in-process LLM role agents. It is the only crate in this repository that depends
-on `pi_agent_rust`; `temper-forge`, `temper-workflow`, `temper-runner`, and
-`temper-interaction` stay LLM-agnostic. `ProductManagerAgent` remains only as a
-transitional in-process interactive profile fallback; Smith now owns the
-pi-SDK-backed product-manager process responder and the
-`smith-workflow-role-decision` process responder for manifest-driven workflow
-roles. Workflow-role LLM decision engines should target the provider-neutral
-[`temper-runner` process protocol](workflow-role-decision-process-protocol.md).
+Temper no longer contains `pi_agent_rust`, `temper-agents`, or concrete LLM
+provider/auth wiring. Real LLM behavior lives outside this repository behind
+process protocols. Smith (`~/src/rust/smith`) is the reference implementation for
+pi-SDK-backed workflow-role decisions and the product-manager interactive
+profile.
 
-## Runtime boundary
+Temper keeps only provider-neutral contracts and adapters:
 
-- Agents receive work items from the runner and emit structured decisions.
-- The SDK is run with no registered bash/file tools.
-- Workflow state mutations happen only through authorized runner tools such as
-  `RoleTools`.
-- Implementation PR creation may invoke a declared-and-bound `coding_workspace`
-  provider, but the LLM only sees the narrow tool metadata; the provider receives
-  work-item context and returns a committed branch/head.
-- Manifest-driven role agents are the production path. `temper-agents` does not
-  ship checked-in workflow-role prompts or role-specific production adapters;
-  fixed reference-delivery LLM fixtures, when needed, live in `temper-testing`.
+- Workflow role decisions use
+  [Workflow-role decision process protocol](workflow-role-decision-process-protocol.md).
+  Production `temper-worker --kind role` requires `--role-decision-command` (or
+  `TEMPER_WORKER_ROLE_DECISION_COMMAND`) and passes only allow-listed env vars to
+  the child process.
+- Product-manager chat uses
+  [Interactive process responder protocol](interactive-process-responder-protocol.md).
+  `temper-product-manager-chat` requires `--responder-command` (or
+  `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`).
+- `temper-interaction`, `temper-runner`, and `temper-production` validate
+  request/reply shapes, authorized actions, proposal filing, process timeouts,
+  exit status, and redacted errors. They do not parse provider auth files or call
+  model APIs.
 
-## Auth modes
-
-`ProviderConfig::from_auth` supports three modes:
-
-- `deepseek` / API key: OpenAI-compatible DeepSeek route, with the key read from
-  the configured env or cache path.
-- `chatgpt-oauth`: OpenAI Codex OAuth from the shared pi auth file; this is the
-  test/dev default because it uses a flat subscription.
-- `anthropic-oauth`: Anthropic OAuth from the shared pi auth file, selected
-  explicitly.
-
-Credentials are read from env or the shared auth file, never from argv; errors
-and debug output redact secrets. See `docs/how-to/use-chatgpt-oauth-auth.md` for
-login, env, and verification commands.
-
-## Rust and dependency notes
-
-`temper-agents` pins its own `edition = "2024"` and `rust-version = "1.85"`
-because of the SDK floor; the workspace root stays on the broader workspace
-settings.
-
-`pi_agent_rust 0.1.13` pulls `asupersync =0.3.1`, which needs the
-API-compatible `franken-decision 0.3.1`. Keep the workspace `Cargo.lock` pin made
-with:
-
-```sh
-cargo update -p franken-decision --precise 0.3.1
-```
-
-If `pi_agent_rust` is bumped, re-check the transitive constraints before
-changing or dropping this pin. Lesson 0008 records the original failure mode.
+Provider selection, OAuth/API-key handling, model ids, prompt implementation, and
+live provider smoke tests are Smith-owned concerns. Pass Smith arguments through
+Temper's `*_ARGS_JSON` / repeated CLI arg flags and use the corresponding env
+allow-list only for names that the responder must read.

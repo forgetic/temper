@@ -16,7 +16,6 @@
 pub mod agents;
 pub mod ci;
 pub mod forgejo_server;
-pub mod legacy_llm;
 pub mod provision_bin;
 pub mod scenarios;
 pub mod worker_bin;

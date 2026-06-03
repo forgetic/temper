@@ -7,66 +7,42 @@ use temper_runner::{Agent, ExternalToolExecutors, RunnerConfig, WorkflowRoleDeci
 use temper_workflow::{CompiledWorkflow, Effect, QueueId, RoleId, RoleManifest, ToolManifest};
 
 use crate::pr_diff_guard::{GuardRole, PullRequestDiffGuard};
-use crate::worker_args::{AuthKind, WorkerArgs};
+use crate::worker_args::WorkerArgs;
 
 pub(crate) fn build_role_agent(
     args: &WorkerArgs,
     compiled: &CompiledWorkflow,
     config: &RunnerConfig,
     external_tool_executors: ExternalToolExecutors,
-    role_id: &RoleId,
+    _role_id: &RoleId,
     role_manifest: &RoleManifest,
 ) -> Result<Arc<dyn Agent<dyn Forge>>, String> {
-    let agent: Arc<dyn Agent<dyn Forge>> =
-        if let Some(process_config) = args.role_decision_process.clone() {
-            config
-                .validate_external_tool_bindings(compiled)
-                .map_err(|error| error.to_string())?;
-            external_tool_executors
-                .validate(compiled, config)
-                .map_err(|error| error.to_string())?;
-            let bound_tools = config
-                .bound_external_tools_for(role_manifest)
-                .map_err(|error| error.to_string())?;
-            Arc::new(
-                WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
-                    compiled.name(),
-                    role_manifest.clone(),
-                    process_config,
-                    bound_tools,
-                    external_tool_executors,
-                )
-                .map_err(|error| error.to_string())?,
-            ) as Arc<dyn Agent<dyn Forge>>
-        } else {
-            let provider = provider_for(args)?;
-            let registry = temper_agents::real_registry_from_compiled_with_external_tool_executors(
-                provider,
-                compiled,
-                config,
-                external_tool_executors,
-            )
-            .map_err(|error| error.to_string())?;
-            registry
-                .get(role_id)
-                .ok_or_else(|| format!("no agent registered for role '{role_id}'"))?
-                .clone()
-        };
-    Ok(guard_agent_if_needed(args, compiled, role_manifest, agent))
-}
-
-fn provider_for(args: &WorkerArgs) -> Result<temper_agents::ProviderConfig, String> {
-    let choice = match args.auth {
-        AuthKind::DeepSeek => temper_agents::AuthChoice::DeepSeek,
-        AuthKind::ChatGptOAuth => temper_agents::AuthChoice::ChatGptOAuth,
-        AuthKind::AnthropicOAuth => temper_agents::AuthChoice::AnthropicOAuth,
+    let Some(process_config) = args.role_decision_process.clone() else {
+        return Err(
+            "role decision process is required; configure --role-decision-command or TEMPER_WORKER_ROLE_DECISION_COMMAND"
+                .to_string(),
+        );
     };
-    temper_agents::ProviderConfig::from_auth(
-        choice,
-        args.codex_model.clone(),
-        args.auth_file.clone(),
-    )
-    .map_err(|error| error.to_string())
+    config
+        .validate_external_tool_bindings(compiled)
+        .map_err(|error| error.to_string())?;
+    external_tool_executors
+        .validate(compiled, config)
+        .map_err(|error| error.to_string())?;
+    let bound_tools = config
+        .bound_external_tools_for(role_manifest)
+        .map_err(|error| error.to_string())?;
+    let agent = Arc::new(
+        WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+            compiled.name(),
+            role_manifest.clone(),
+            process_config,
+            bound_tools,
+            external_tool_executors,
+        )
+        .map_err(|error| error.to_string())?,
+    ) as Arc<dyn Agent<dyn Forge>>;
+    Ok(guard_agent_if_needed(args, compiled, role_manifest, agent))
 }
 
 fn guard_agent_if_needed(

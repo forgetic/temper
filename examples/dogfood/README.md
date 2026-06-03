@@ -27,9 +27,10 @@ The script:
 7. starts a local host-mode `forgejo-runner` registered with the live instance;
 8. starts a tiny dogfood-only intake labeler so newly filed issues get the
    workflow's `untriaged` label automatically; and
-9. launches reviewer, human, architect, and mechanical workers; engineer and
-   owner auto-merge workers stay skipped until a coding workspace binding is
-   configured and intentionally enabled.
+9. launches reviewer, human, architect, and mechanical workers; role workers use
+   Smith process role decisions. Engineer and owner auto-merge workers stay
+   skipped until a coding workspace binding is configured and intentionally
+   enabled.
 
 Then file workflow intake issues in `https://git.ekanayaka.io/ai/temper/issues`
 without adding labels by hand. Issues labeled `product` are treated as product
@@ -56,13 +57,12 @@ a different transcript author. The REPL creates a Forgejo transcript issue
 labeled `product` only, mirrors turns as comments, shows draft intake issues,
 and files one as a normal `untriaged` workflow issue only after `/file <n>`.
 
-By default this uses Temper's transitional in-process responder. To validate the
-Smith process responder while keeping the same operator command, set
-`DOGFOOD_PRODUCT_CHAT_RESPONDER=smith` in `config/dogfood.env` (or export it)
-and keep `SMITH_WORKSPACE_ROOT` pointed at `~/src/rust/smith`. The launcher
+By default this uses Smith's process responder while keeping the same operator
+command. Keep `SMITH_WORKSPACE_ROOT` pointed at `~/src/rust/smith`; the launcher
 builds `smith-product-manager-responder` and passes it as
-`temper-product-manager-chat --responder-command ...`; Forge tokens still stay in
-Temper and only provider auth arguments/env allow-list entries reach Smith.
+`temper-product-manager-chat --responder-command ...`. Forge tokens still stay in
+Temper, and provider/auth arguments plus env allow-list entries remain opaque
+Smith-owned responder configuration.
 Resume an existing product transcript with:
 
 ```sh
@@ -121,5 +121,7 @@ TEMPER_FORGEJO_E2E=1 cargo test -p temper-testing --test forgejo_workspace_pr --
   use `DOGFOOD_PRODUCT_CHAT_HUMAN_USER`, not the workflow `human` alias.
 - The local runner executes the repo's CI on this machine using Cargo's dev
   profile (`cargo dev-check`).
-- LLM auth defaults to ChatGPT/Codex OAuth from `~/.pi/agent/auth.json` with
-  `TEMPER_AGENTS_CODEX_MODEL=gpt-5.5`; run `pi /login openai-codex` if needed.
+- Smith owns LLM provider/auth setup for role decisions and product-manager
+  replies. Edit the `SMITH_*_ARGS_JSON` and allow-list settings in
+  `config/dogfood.env`, then run Smith's documented preflight when changing
+  provider credentials.

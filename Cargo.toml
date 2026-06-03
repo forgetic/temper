@@ -8,7 +8,6 @@ members = [
     "crates/temper-forge-forgejo",
     "crates/temper-runner",
     "crates/temper-testing",
-    "crates/temper-agents",
     "crates/temper-production",
 ]
 resolver = "2"

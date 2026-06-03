@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temper_agents::{ProductManagerDraftIssue, ProductManagerResponse};
 use temper_forge::{
     CreateRepository, Forge, Repository, RepositoryPath, UpsertLabel, User, UserId,
 };
@@ -13,12 +12,12 @@ use temper_interaction::{
 
 use crate::product_chat::{
     parse_transcript_session_key, render_filing_marker, render_transcript_marker, ProductChatError,
-    ProductChatOpenOptions, ProductChatSession, PRODUCT_LABEL, PRODUCT_PROFILE_ID,
-    WORKFLOW_INTAKE_LABEL,
+    ProductChatOpenOptions, ProductChatSession, ProductManagerDraftIssue, ProductManagerResponse,
+    PRODUCT_LABEL, PRODUCT_PROFILE_ID, WORKFLOW_INTAKE_LABEL,
 };
 use crate::product_chat_args::{
-    parse_with_env, ParseOutcome, DEFAULT_SERVICE_BIND, HUMAN_TOKEN_ENV, PRODUCT_MANAGER_TOKEN_ENV,
-    SERVICE_TOKEN_ENV,
+    parse_with_env, ParseOutcome, DEFAULT_SERVICE_BIND, HUMAN_TOKEN_ENV,
+    PROCESS_RESPONDER_COMMAND_ENV, PRODUCT_MANAGER_TOKEN_ENV, SERVICE_TOKEN_ENV,
 };
 use crate::product_chat_service::{HttpRequest, ProductChatHttpApp, ProductChatService};
 
@@ -103,6 +102,7 @@ fn product_chat_env(key: &str) -> Option<String> {
     match key {
         HUMAN_TOKEN_ENV => Some("human-secret".into()),
         PRODUCT_MANAGER_TOKEN_ENV => Some("pm-secret".into()),
+        PROCESS_RESPONDER_COMMAND_ENV => Some("/opt/respond".into()),
         _ => None,
     }
 }

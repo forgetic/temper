@@ -11,7 +11,6 @@ use temper_runner::WorkflowRoleDecisionProcessConfig;
 pub const FORGEJO_TOKEN_ENV: &str = "TEMPER_FORGEJO_TOKEN";
 pub const FORGEJO_USERNAME_ENV: &str = "TEMPER_FORGEJO_USERNAME";
 pub const FORGEJO_PASSWORD_ENV: &str = "TEMPER_FORGEJO_PASSWORD";
-pub const AGENTS_AUTH_ENV: &str = "TEMPER_AGENTS_AUTH";
 pub const ROLE_DECISION_COMMAND_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_COMMAND";
 pub const ROLE_DECISION_ARGS_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_ARGS_JSON";
 pub const ROLE_DECISION_CWD_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_CWD";
@@ -21,8 +20,6 @@ pub const ROLE_DECISION_TIMEOUT_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_TIMEOUT
 pub const USAGE: &str = concat!(
     "temper-worker --backend forgejo --base-url <url> (--repo <owner/name> [--repo <owner/name> ...] | --repo-list <path>) ",
     "--kind <role|mechanical> [--role <id> --user <handle>] ",
-    "[--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
-    "[--codex-model <id>] [--auth-file <path>] ",
     "[--role-decision-command <path>] [--role-decision-arg <arg>] ",
     "[--role-decision-env <name>] [--role-decision-cwd <path>] ",
     "[--role-decision-timeout-secs <n>] ",
@@ -30,8 +27,8 @@ pub const USAGE: &str = concat!(
     "[--wake-socket <path>] [--wake-secret-file <path>] ",
     "[--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from TEMPER_FORGEJO_TOKEN; optional web UI credentials ",
-    "come from TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD; optional role ",
-    "decision process comes from TEMPER_WORKER_ROLE_DECISION_*"
+    "come from TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD; role ",
+    "decision process config comes from TEMPER_WORKER_ROLE_DECISION_*"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,13 +41,6 @@ pub enum ParseOutcome {
 pub enum WorkerKind {
     Role { role: String, user: String },
     Mechanical,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthKind {
-    ChatGptOAuth,
-    DeepSeek,
-    AnthropicOAuth,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -87,9 +77,6 @@ pub struct WorkerArgs {
     pub poll_interval: Duration,
     pub stop_file: Option<PathBuf>,
     pub run_secs: Option<u64>,
-    pub auth: AuthKind,
-    pub codex_model: Option<String>,
-    pub auth_file: Option<PathBuf>,
     pub wake_socket: Option<PathBuf>,
     pub wake_secret_file: Option<PathBuf>,
     pub role_decision_process: Option<WorkflowRoleDecisionProcessConfig>,
@@ -110,9 +97,6 @@ impl fmt::Debug for WorkerArgs {
             .field("poll_interval", &self.poll_interval)
             .field("stop_file", &self.stop_file)
             .field("run_secs", &self.run_secs)
-            .field("auth", &self.auth)
-            .field("codex_model", &self.codex_model)
-            .field("auth_file", &self.auth_file)
             .field("wake_socket", &self.wake_socket)
             .field("wake_secret_file", &self.wake_secret_file)
             .field(
@@ -174,9 +158,6 @@ struct RawArgs {
     poll_ms: Option<String>,
     stop_file: Option<String>,
     run_secs: Option<String>,
-    auth: Option<String>,
-    codex_model: Option<String>,
-    auth_file: Option<String>,
     wake_socket: Option<String>,
     wake_secret_file: Option<String>,
     role_decision: RawRoleDecisionProcessArgs,
@@ -203,9 +184,6 @@ impl RawArgs {
                 "--poll-ms" => raw.poll_ms = Some(value_for(&flag, &mut iter)?),
                 "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
-                "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
-                "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
-                "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
                 "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
                 "--role-decision-command" => {
@@ -263,7 +241,13 @@ impl RawArgs {
             password: non_empty_env(env, FORGEJO_PASSWORD_ENV),
         };
         let role_decision_process = if matches!(kind, WorkerKind::Role { .. }) {
-            self.role_decision.into_config(env)?
+            let process = self.role_decision.into_config(env)?;
+            if process.is_none() {
+                return Err(ArgsError::new(
+                    "role workers require --role-decision-command or TEMPER_WORKER_ROLE_DECISION_COMMAND; Smith provides the first concrete responder",
+                ));
+            }
+            process
         } else {
             None
         };
@@ -282,9 +266,6 @@ impl RawArgs {
                 .run_secs
                 .map(|raw| parse_u64(&raw, "--run-secs"))
                 .transpose()?,
-            auth: parse_auth(self.auth.as_deref(), env)?,
-            codex_model: non_empty(self.codex_model),
-            auth_file: non_empty(self.auth_file).map(PathBuf::from),
             wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
             role_decision_process,
@@ -421,24 +402,6 @@ fn parse_repo(repo: &str) -> Result<RepositoryPath, ArgsError> {
         )));
     }
     Ok(RepositoryPath::new(parts[0], parts[1]))
-}
-
-fn parse_auth<E>(raw: Option<&str>, env: &E) -> Result<AuthKind, ArgsError>
-where
-    E: Fn(&str) -> Option<String>,
-{
-    let selected = raw
-        .map(str::to_string)
-        .or_else(|| non_empty_env(env, AGENTS_AUTH_ENV))
-        .unwrap_or_else(|| "chatgpt-oauth".to_string());
-    match selected.as_str() {
-        "chatgpt-oauth" => Ok(AuthKind::ChatGptOAuth),
-        "deepseek" => Ok(AuthKind::DeepSeek),
-        "anthropic-oauth" => Ok(AuthKind::AnthropicOAuth),
-        other => Err(ArgsError::new(format!(
-            "unknown --auth '{other}'; expected deepseek|chatgpt-oauth|anthropic-oauth"
-        ))),
-    }
 }
 
 fn parse_role_decision_args_json(raw: Option<String>) -> Result<Vec<String>, ArgsError> {

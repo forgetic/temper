@@ -30,11 +30,10 @@ use temper_runner::{
 };
 use temper_workflow::{InMemoryJournal, LeasePolicy, RoleId};
 
-use crate::worker_bin::args::{AgentsKind, ForgejoArgs, RoleBehavior, WorkerArgs, WorkerKind};
-use crate::worker_bin::forgejo_engineer::{ForgejoEngineer, ForgejoLlmPrep};
+use crate::worker_bin::args::{ForgejoArgs, RoleBehavior, WorkerArgs, WorkerKind};
+use crate::worker_bin::forgejo_engineer::ForgejoEngineer;
 use crate::worker_bin::run::{
-    real_registry_for, registry_for, resolve_repository, resolve_repository_set, upsert_labels,
-    RunError, StopSignal,
+    registry_for, resolve_repository, resolve_repository_set, upsert_labels, RunError, StopSignal,
 };
 use crate::{runner_config, workflow};
 
@@ -71,14 +70,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
             let config = runner_config();
             let role_id = RoleId::new(role);
 
-            // `--agents fake` (default) keeps the deterministic fakes with the
-            // Forgejo-aware engineer; `--agents real` swaps in the quarantined
-            // legacy reference-delivery LLM test adapters from `temper-testing`,
-            // the engineer carrying the Forgejo prep hook.
-            let registry = match args.agents {
-                AgentsKind::Fake => registry_with_forgejo_engineer(forgejo, *behavior),
-                AgentsKind::Real => real_registry_with_forgejo_prep(forgejo, args, *behavior)?,
-            };
+            let registry = registry_with_forgejo_engineer(forgejo, *behavior);
             let agent = registry
                 .get(&role_id)
                 .ok_or_else(|| RunError::UnknownRole { role: role.clone() })?
@@ -204,29 +196,6 @@ fn registry_with_forgejo_engineer(
         Arc::new(engineer) as Arc<dyn Agent<dyn Forge>>,
     );
     registry
-}
-
-/// Builds the test-only legacy reference-delivery **real** (LLM) registry for
-/// the Forgejo backend, with the engineer carrying a Forgejo [`ForgejoLlmPrep`]
-/// hook (real PR head + CI sentinel commit).
-///
-/// Mirrors [`registry_with_forgejo_engineer`] but for `--agents real`: the
-/// architect/reviewer variants and engineer prep come from [`real_registry_for`],
-/// so every role is a quarantined legacy LLM test adapter while the engineer
-/// keeps the real-PR/real-CI side effects. The credential is resolved at runtime
-/// by `real_registry_for`; a missing key or login fails as a `Backend` setup
-/// error before any worker ticks.
-fn real_registry_with_forgejo_prep(
-    forgejo: &ForgejoArgs,
-    args: &WorkerArgs,
-    behavior: RoleBehavior,
-) -> Result<temper_runner::AgentRegistry<dyn Forge>, RunError> {
-    let prep = Arc::new(ForgejoLlmPrep::new(
-        forgejo.base_url.clone(),
-        forgejo.token.clone(),
-        behavior.ci_sentinel,
-    )) as Arc<dyn crate::legacy_llm::EngineerPrep<dyn Forge>>;
-    real_registry_for(args, behavior, prep)
 }
 
 /// Optional repo+labels provisioning step, given a token with admin rights.

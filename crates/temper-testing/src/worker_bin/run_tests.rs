@@ -1,5 +1,5 @@
 use super::*;
-use crate::worker_bin::args::WorkerArgs;
+use crate::worker_bin::args::{AgentsKind, WorkerArgs};
 use temper_runner::Worker;
 
 fn temp_root(suite: &str) -> PathBuf {
@@ -24,9 +24,6 @@ fn base_args(root: PathBuf, kind: WorkerKind) -> WorkerArgs {
         run_secs: Some(0),
         clock: ClockKind::Deterministic,
         agents: AgentsKind::Fake,
-        auth: AgentsAuthKind::default(),
-        codex_model: None,
-        auth_file: None,
         wake_socket: None,
         wake_secret_file: None,
     }

@@ -1,7 +1,8 @@
 //! Production-owned executable wiring for Temper.
 //!
 //! This crate owns deployable process code. It composes the reusable runner,
-//! real LLM agents, and Forgejo backend without depending on `temper-testing`.
+//! provider-neutral process responders, and Forgejo backend without depending on
+//! `temper-testing` or concrete LLM SDK crates.
 
 pub mod coding_workspace;
 pub mod forgejo_prep;

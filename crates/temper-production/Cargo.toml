@@ -27,7 +27,6 @@ async-trait.workspace = true
 base64 = "0.22"
 chrono.workspace = true
 hmac = "0.12"
-temper-agents = { path = "../temper-agents" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-interaction = { path = "../temper-interaction" }

@@ -57,19 +57,11 @@ end-to-end rehearsal.
   `TEMPER_FORGEJO_RUNNER_BINARY` in `config/temper.env`.
 - A host that permits **host-mode** CI jobs (spawning child processes, binding a
   loopback port) — the runner executes steps directly on the host, no containers.
-- LLM agent auth — **one of**:
-  - **ChatGPT login (preferred, no per-call cost):** `pi /login openai-codex`
-    once, which populates `~/.pi/agent/auth.json`. This is the default
-    (`TEMPER_AGENTS_AUTH=chatgpt-oauth`).
-  - **Anthropic OAuth (opt-in):** `pi /login anthropic` once, then set
-    `TEMPER_AGENTS_AUTH=anthropic-oauth`.
-  - **DeepSeek key (fallback, bills per token):** set
-    `TEMPER_AGENTS_AUTH=deepseek` and provide `secrets/deepseek-api-key`.
-- Optional Smith workflow-role decisions: set
-  `REFERENCE_DELIVERY_ROLE_DECISION=smith` and keep `SMITH_WORKSPACE_ROOT`
-  pointed at `~/src/rust/smith`. The launcher builds
-  `smith-workflow-role-decision` and passes it to `temper-worker` through the
-  role decision process adapter.
+- Smith workflow-role decisions. Keep `SMITH_WORKSPACE_ROOT` pointed at
+  `~/src/rust/smith`; the launcher builds `smith-workflow-role-decision` and
+  passes it to `temper-worker` through the role decision process adapter. Smith
+  owns provider/auth setup and preflight; Temper only passes opaque responder
+  args/env allow-list configuration.
 
 See `secrets/.env.example` for the options in detail.
 
@@ -86,8 +78,7 @@ examples/reference-delivery/
 │   │                    #   reference-delivery.json — do not fork its semantics)
 │   └── ci.yml           # the host-mode CI workflow (commit-message marker)
 ├── secrets/             # gitignored except the templates + .gitignore
-│   ├── .env.example
-│   └── deepseek-api-key.example
+│   └── .env.example
 └── run.sh               # launcher/teardown (phase B3)
 ```
 
@@ -97,8 +88,8 @@ role guidance, prompt extensions, and external-tool declarations are derived fro
 carry mechanics and authority boundaries; `charter`, `prompt.guidance`,
 `prompt.tool_guidance`, and `external_tools` carry the reference-delivery demo's
 user-authored behavior. `config/` otherwise carries what an operator must edit
-(repo, endpoint, cadence, auth, coding workspace binding, and whether the demo
-seeds one cross-repo parent intake).
+(repo, endpoint, cadence, Smith responder args, coding workspace binding, and
+whether the demo seeds one cross-repo parent intake).
 
 ## Quick start
 
@@ -119,8 +110,9 @@ expects the pinned Forgejo + `forgejo-runner` binaries under `.cache/forgejo/`
 (or set `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY`). `run.sh
 start` runs from a private snapshot under `run/`, so editing the launcher while a
 demo is running cannot corrupt the eventual teardown path. Edit
-`config/temper.env` for the repo set, endpoint, cadence, and auth knobs; any of
-those may also be overridden by exporting the matching env var before invoking
+`config/temper.env` for the repo set, endpoint, cadence, and Smith responder
+args; any of those may also be overridden by exporting the matching env var
+before invoking
 the script (env wins over the file). The checked-in default is
 `REPOS="acme/service acme/service-canary"` with `CROSS_REPO_INTAKE=auto`, so the
 first repo receives one parent intake that asks the architect to create children

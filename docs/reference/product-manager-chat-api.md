@@ -26,19 +26,19 @@ ship external frontends.
 ## Command
 
 ```sh
-temper-product-manager-chat serve \
-  --bind 127.0.0.1:39200 \
-  --base-url https://git.ekanayaka.io \
-  --repo ai/temper \
-  --auth chatgpt-oauth
+TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND=$HOME/src/rust/smith/target/debug/smith-product-manager-responder \
+TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON='["--auth","chatgpt-oauth"]' \
+  temper-product-manager-chat serve \
+    --bind 127.0.0.1:39200 \
+    --base-url https://git.ekanayaka.io \
+    --repo ai/temper
 ```
 
 `--bind` defaults to `127.0.0.1:39200`. Non-loopback binds require both
-`--allow-non-loopback` and `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`. By default the
-binary uses the in-repo in-process product-manager responder as a transitional
-fallback; operators select Smith's product-manager process responder (or another
-compatible responder) explicitly with `--responder-command` or
-`TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`.
+`--allow-non-loopback` and `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`. The binary
+requires a compatible process responder, selected with `--responder-command` or
+`TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`; Smith provides the reference
+product-manager responder.
 
 Secrets come from env, never argv:
 
@@ -47,10 +47,6 @@ Secrets come from env, never argv:
   replies and filed intake issues.
 - `TEMPER_PRODUCT_CHAT_SERVICE_TOKEN`: optional local API bearer token; required
   for non-loopback binds.
-- `TEMPER_AGENTS_AUTH`, `TEMPER_AGENTS_CODEX_MODEL`,
-  `TEMPER_AGENTS_AUTH_FILE`, and provider-specific auth envs follow the normal
-  `temper-agents` rules for the in-process fallback. CLI `--auth`,
-  `--codex-model`, and `--auth-file` override the matching defaults.
 - `TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND`: external responder program path.
 - `TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON`: optional JSON array of responder
   arguments.

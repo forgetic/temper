@@ -125,13 +125,9 @@ the **exact** scenario seed/assert closures, with these two pieces made real:
   per role and feeds each worker its own, so `current_user` matches the
   role-to-user map the executor authorizes against.
 
-- **Agents — ✅ done (Forgejo topology, `--agents real`).** Production workers
-  register generic manifest-driven LLM agents from compiled role manifests. The
-  historical `temper-testing-worker --agents real` topology uses quarantined
-  reference-delivery LLM fixtures under `temper-testing` so the old gated e2e
-  scenarios remain available without shipping checked-in workflow-role prompts
-  in production `temper-agents` (ChatGPT OAuth default, DeepSeek or Anthropic
-  OAuth opt-in).
+- **Agents — split.** Temper's multi-process fixtures use deterministic fake
+  agents. Production role workers require process responders, and Smith owns the
+  real LLM process-boundary Forgejo proof.
 
 **Still on fakes — pending:**
 

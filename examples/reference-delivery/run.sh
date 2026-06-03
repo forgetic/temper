@@ -8,7 +8,7 @@
 #      (org/users/tokens/repo/labels/CI workflow + one cross-repo intake issue),
 #   4. one fixed temper-worker pool (one process per workflow role, plus one
 #      mechanical reconciler) scanning every configured repo — all against
-#      Forgejo with real LLM agents and wall time,
+#      Forgejo with Smith process role decisions and wall time,
 # then tears them all down cleanly on Ctrl-C / signal / `./run.sh stop`.
 #
 # This script targets the operator-facing entry points from temper-production
@@ -113,8 +113,9 @@ usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|smoke-webhoo
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
-Configuration is read from config/temper.env (no secrets). Auth selection is
-TEMPER_AGENTS_AUTH (default chatgpt-oauth); see secrets/.env.example.
+Configuration is read from config/temper.env (no secrets). Concrete LLM
+provider/auth options are passed to Smith as opaque responder arguments; see
+Smith's README.
 EOF
 }
 
@@ -176,12 +177,13 @@ cmd_stop() {
 # (precedence: CLI/env > config/temper.env > built-in default). The file is
 # the operator's edited config; a `VAR=x ./run.sh` still overrides it.
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
-TEMPER_AGENTS_AUTH TEMPER_AGENTS_CODEX_MODEL TEMPER_AGENTS_ANTHROPIC_MODEL \
-TEMPER_AGENTS_AUTH_FILE TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY \
+TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY \
 TEMPER_FORGEJO_RUNNER_BINARY TEMPER_WORKER_BIN TEMPER_PROVISION_BIN \
 TEMPER_TRIGGER_BIN TEMPER_BUILD_PACKAGE \
 REFERENCE_DELIVERY_ROLE_DECISION SMITH_WORKSPACE_ROOT SMITH_BUILD_PACKAGE \
-SMITH_WORKFLOW_ROLE_DECISION_BIN \
+SMITH_WORKFLOW_ROLE_DECISION_BIN SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON \
+SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST SMITH_WORKFLOW_ROLE_DECISION_CWD \
+SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS \
 TEMPER_CODING_WORKSPACE_ROOT TEMPER_CODING_WORKSPACE_COMMAND \
 TEMPER_CODING_WORKSPACE_REMOTE TEMPER_CODING_WORKSPACE_PUSH \
 TEMPER_CODING_WORKSPACE_PR_LABELS"
@@ -238,10 +240,6 @@ load_config() {
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
     WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:38080/forgejo/webhook}
-    TEMPER_AGENTS_AUTH=${TEMPER_AGENTS_AUTH:-chatgpt-oauth}
-    TEMPER_AGENTS_CODEX_MODEL=${TEMPER_AGENTS_CODEX_MODEL:-}
-    TEMPER_AGENTS_ANTHROPIC_MODEL=${TEMPER_AGENTS_ANTHROPIC_MODEL:-}
-    TEMPER_AGENTS_AUTH_FILE=${TEMPER_AGENTS_AUTH_FILE:-}
     TEMPER_FORGEJO_GOMAXPROCS=${TEMPER_FORGEJO_GOMAXPROCS:-2}
     TEMPER_FORGEJO_BINARY=${TEMPER_FORGEJO_BINARY:-}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
@@ -249,10 +247,17 @@ load_config() {
     TEMPER_PROVISION_BIN=${TEMPER_PROVISION_BIN:-}
     TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
-    REFERENCE_DELIVERY_ROLE_DECISION=${REFERENCE_DELIVERY_ROLE_DECISION:-in-process}
+    REFERENCE_DELIVERY_ROLE_DECISION=${REFERENCE_DELIVERY_ROLE_DECISION:-smith}
     SMITH_WORKSPACE_ROOT=${SMITH_WORKSPACE_ROOT:-$HOME/src/rust/smith}
     SMITH_BUILD_PACKAGE=${SMITH_BUILD_PACKAGE:-smith-temper-agent-cli}
     SMITH_WORKFLOW_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-}
+    SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON=${SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON:-}
+    if [ -z "$SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON" ]; then
+        SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON='["--auth","chatgpt-oauth"]'
+    fi
+    SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST=${SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST:-}
+    SMITH_WORKFLOW_ROLE_DECISION_CWD=${SMITH_WORKFLOW_ROLE_DECISION_CWD:-}
+    SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS=${SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS:-}
     TEMPER_CODING_WORKSPACE_ROOT=${TEMPER_CODING_WORKSPACE_ROOT:-}
     TEMPER_CODING_WORKSPACE_COMMAND=${TEMPER_CODING_WORKSPACE_COMMAND:-}
     TEMPER_CODING_WORKSPACE_REMOTE=${TEMPER_CODING_WORKSPACE_REMOTE:-origin}
@@ -301,62 +306,7 @@ load_config() {
     esac
 }
 
-# Validates the selected auth's input and sets CLI flag fragments. ChatGPT OAuth
-# (default) and Anthropic OAuth read the shared pi auth.json in place; DeepSeek
-# reads a key file.
-# Fails fast with a clear message when the selected auth's input is missing.
-CODEX_MODEL_ARG=
-AUTH_FILE_ARG=
-check_auth() {
-    case "$TEMPER_AGENTS_AUTH" in
-        chatgpt-oauth)
-            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
-            if [ ! -f "$_auth_file" ]; then
-                die "ChatGPT OAuth selected but $_auth_file is missing.
-       Log in once:  pi /login openai-codex
-       (or set TEMPER_AGENTS_AUTH=deepseek to use a DeepSeek key instead)"
-            fi
-            if ! grep -q 'openai-codex' "$_auth_file" 2>/dev/null; then
-                die "no 'openai-codex' entry in $_auth_file.
-       Log in once:  pi /login openai-codex"
-            fi
-            AUTH_FLAG=chatgpt-oauth
-            [ -n "$TEMPER_AGENTS_CODEX_MODEL" ] && CODEX_MODEL_ARG="--codex-model $TEMPER_AGENTS_CODEX_MODEL"
-            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
-            log "auth: ChatGPT OAuth (reads $_auth_file)"
-            ;;
-        anthropic-oauth)
-            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
-            if [ ! -f "$_auth_file" ]; then
-                die "Anthropic OAuth selected but $_auth_file is missing.
-       Log in once:  pi /login anthropic"
-            fi
-            if ! grep -q '"anthropic"' "$_auth_file" 2>/dev/null; then
-                die "no 'anthropic' entry in $_auth_file.
-       Log in once:  pi /login anthropic"
-            fi
-            AUTH_FLAG=anthropic-oauth
-            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
-            # Anthropic model selection is env-only in the worker/provider seam.
-            [ -n "$TEMPER_AGENTS_ANTHROPIC_MODEL" ] && export TEMPER_AGENTS_ANTHROPIC_MODEL
-            log "auth: Anthropic OAuth (reads $_auth_file; model ${TEMPER_AGENTS_ANTHROPIC_MODEL:-claude-opus-4-8})"
-            ;;
-        deepseek)
-            _key_file="$SECRETS_DIR/deepseek-api-key"
-            [ -f "$_key_file" ] || die "DeepSeek selected but $_key_file is missing.
-       Create it with your key (see secrets/deepseek-api-key.example),
-       or set TEMPER_AGENTS_AUTH=chatgpt-oauth to use a ChatGPT login."
-            # Exported so every worker child resolves the key from the file;
-            # the key value never appears on argv.
-            export TEMPER_DEEPSEEK_API_KEY_PATH="$_key_file"
-            AUTH_FLAG=deepseek
-            log "auth: DeepSeek (key file $_key_file)"
-            ;;
-        *)
-            die "unknown TEMPER_AGENTS_AUTH '$TEMPER_AGENTS_AUTH' (expected chatgpt-oauth|deepseek|anthropic-oauth)"
-            ;;
-    esac
-}
+# Smith owns provider/auth validation for role decision responders.
 
 # --- Binaries -----------------------------------------------------------------
 
@@ -394,9 +344,8 @@ resolve_binaries() {
 
     ROLE_DECISION_ARGS=
     case "$REFERENCE_DELIVERY_ROLE_DECISION" in
-        in-process | "") ;;
-        smith) resolve_smith_workflow_role_decision ;;
-        *) die "unknown REFERENCE_DELIVERY_ROLE_DECISION '$REFERENCE_DELIVERY_ROLE_DECISION' (expected in-process or smith)" ;;
+        smith | "") resolve_smith_workflow_role_decision ;;
+        *) die "unknown REFERENCE_DELIVERY_ROLE_DECISION '$REFERENCE_DELIVERY_ROLE_DECISION' (expected smith)" ;;
     esac
 }
 
@@ -409,17 +358,9 @@ resolve_smith_workflow_role_decision() {
     fi
     [ -x "$SMITH_ROLE_DECISION_BIN" ] || die "Smith workflow-role decision binary not found: $SMITH_ROLE_DECISION_BIN"
 
-    ROLE_DECISION_ARGS="--role-decision-command $SMITH_ROLE_DECISION_BIN --role-decision-arg --auth --role-decision-arg $AUTH_FLAG"
-    [ -n "$TEMPER_AGENTS_CODEX_MODEL" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-arg --codex-model --role-decision-arg $TEMPER_AGENTS_CODEX_MODEL"
-    [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-arg --auth-file --role-decision-arg $TEMPER_AGENTS_AUTH_FILE"
-    case "$AUTH_FLAG" in
-        anthropic-oauth)
-            ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-env TEMPER_AGENTS_ANTHROPIC_MODEL"
-            ;;
-        deepseek)
-            ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-env TEMPER_DEEPSEEK_API_KEY --role-decision-env TEMPER_DEEPSEEK_API_KEY_PATH"
-            ;;
-    esac
+    ROLE_DECISION_ARGS="--role-decision-command $SMITH_ROLE_DECISION_BIN"
+    [ -n "$SMITH_WORKFLOW_ROLE_DECISION_CWD" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-cwd $SMITH_WORKFLOW_ROLE_DECISION_CWD"
+    [ -n "$SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-timeout-secs $SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS"
     log "role decisions: Smith process responder ($SMITH_ROLE_DECISION_BIN)"
 }
 
@@ -700,10 +641,9 @@ launch_role_worker() {
         _wake_socket="$WAKE_DIR/$_role.sock"
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
-    # Per-role secrets are literal env-assignment prefixes (never on argv). The
-    # auth-mode env (DeepSeek key path) is exported globally by check_auth.
-    # WORKER_REPO_ARGS / CODEX_MODEL_ARG / AUTH_FILE_ARG / _wake_args intentionally
-    # word-split (POSIX has no arrays); repo values are owner/name with no spaces.
+    # Per-role secrets are literal env-assignment prefixes (never on argv).
+    # WORKER_REPO_ARGS / ROLE_DECISION_ARGS / _wake_args intentionally word-split
+    # (POSIX has no arrays); repo values are owner/name with no spaces.
     # shellcheck disable=SC2086
     TEMPER_FORGEJO_TOKEN="$_token" \
     TEMPER_FORGEJO_USERNAME="$_user" \
@@ -713,10 +653,11 @@ launch_role_worker() {
     TEMPER_CODING_WORKSPACE_REMOTE="$TEMPER_CODING_WORKSPACE_REMOTE" \
     TEMPER_CODING_WORKSPACE_PUSH="$TEMPER_CODING_WORKSPACE_PUSH" \
     TEMPER_CODING_WORKSPACE_PR_LABELS="$TEMPER_CODING_WORKSPACE_PR_LABELS" \
+    TEMPER_WORKER_ROLE_DECISION_ARGS_JSON="$SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON" \
+    TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST="$SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
         --kind role --role "$_role" --user "$_user" \
-        --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         $ROLE_DECISION_ARGS \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
         $_wake_args \
@@ -737,7 +678,7 @@ launch_workers() {
     _roles=$(sed -n "s/^TEMPER_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" "$ROLES_ENV")
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
 
-    log 'launching role workers (production binary, real agents) ...'
+    log 'launching role workers (production binary, Smith process decisions) ...'
     # The seeded intake issue is immediately available to the architect. Start
     # every other wake listener first, then launch architect last, so the first
     # role handoff webhook can find all downstream sockets even with a long poll.
@@ -974,7 +915,6 @@ monitor() {
 
 cmd_start() {
     load_config
-    check_auth
     resolve_binaries
 
     if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null; then

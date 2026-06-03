@@ -2,13 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temper_agents::ProductManagerDraftIssue;
 use temper_interaction::{
     ConversationEvent, ConversationProfileId, ConversationReply, InteractionError, Proposal,
     ProposalId,
 };
 
-use crate::product_chat::ProductChatError;
+use crate::product_chat::{ProductChatError, ProductManagerDraftIssue};
 use crate::product_chat_http::{HttpRequest, HttpResponse};
 
 #[derive(Debug)]
@@ -63,7 +62,7 @@ impl From<ProductChatError> for ApiError {
             }
             ProductChatError::Interaction(error) => interaction_error_response(error),
             ProductChatError::Forge(_) => ApiError::internal("forge operation failed"),
-            ProductChatError::ProductManager(_) | ProductChatError::Provider(_) => {
+            ProductChatError::ProductManager(_) => {
                 ApiError::internal("interactive responder failed")
             }
             ProductChatError::Runtime(_) | ProductChatError::Io(_) => {

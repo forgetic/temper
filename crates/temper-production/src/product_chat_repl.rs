@@ -3,15 +3,15 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
-use temper_agents::{AuthChoice, ProductManagerDraftIssue, ProviderConfig};
 use temper_forge::{Forge, ItemNumber};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_interaction::InteractiveResponder;
 
 use crate::product_chat::{
     build_product_profile_responder, ProductChatError, ProductChatOpenOptions, ProductChatSession,
+    ProductManagerDraftIssue,
 };
-use crate::product_chat_args::{AuthKind, ProductChatArgs};
+use crate::product_chat_args::ProductChatArgs;
 use crate::product_chat_commands::{render_drafts, ProductChatCommand, COMMAND_HELP};
 
 pub fn run_repl(args: &ProductChatArgs) -> Result<(), ProductChatError> {
@@ -23,13 +23,7 @@ pub fn run_repl(args: &ProductChatArgs) -> Result<(), ProductChatError> {
 }
 
 async fn run_repl_async(args: &ProductChatArgs) -> Result<(), ProductChatError> {
-    let responder = build_product_profile_responder(args.process_responder.clone(), || {
-        ProviderConfig::from_auth(
-            auth_choice(args.auth),
-            args.codex_model.clone(),
-            args.auth_file.clone(),
-        )
-    })?;
+    let responder = build_product_profile_responder(args.process_responder.clone())?;
     let human_forge = Arc::new(build_forge(&args.base_url, &args.human_token));
     let product_forge = Arc::new(build_forge(&args.base_url, &args.product_manager_token));
     let mut session = ProductChatSession::open(
@@ -53,14 +47,6 @@ async fn run_repl_async(args: &ProductChatArgs) -> Result<(), ProductChatError> 
 
 fn build_forge(base_url: &str, token: &str) -> ForgejoForge {
     ForgejoForge::new(ForgejoConfig::new(base_url.to_string(), token.to_string()))
-}
-
-fn auth_choice(auth: AuthKind) -> AuthChoice {
-    match auth {
-        AuthKind::DeepSeek => AuthChoice::DeepSeek,
-        AuthKind::ChatGptOAuth => AuthChoice::ChatGptOAuth,
-        AuthKind::AnthropicOAuth => AuthChoice::AnthropicOAuth,
-    }
 }
 
 async fn repl_loop<H, P, R>(

@@ -131,10 +131,6 @@ load_config() {
     WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:39080/forgejo/webhook}
     WEBHOOKS=${WEBHOOKS:-1}
     POLL_MS=${POLL_MS:-120000}
-    TEMPER_AGENTS_AUTH=${TEMPER_AGENTS_AUTH:-chatgpt-oauth}
-    TEMPER_AGENTS_CODEX_MODEL=${TEMPER_AGENTS_CODEX_MODEL:-}
-    TEMPER_AGENTS_AUTH_FILE=${TEMPER_AGENTS_AUTH_FILE:-}
-    TEMPER_AGENTS_ANTHROPIC_MODEL=${TEMPER_AGENTS_ANTHROPIC_MODEL:-}
     DOGFOOD_HUMAN_USER=${DOGFOOD_HUMAN_USER:-bot}
     DOGFOOD_PRODUCT_CHAT_HUMAN_USER=${DOGFOOD_PRODUCT_CHAT_HUMAN_USER:-}
     DOGFOOD_MECHANICAL_USER=${DOGFOOD_MECHANICAL_USER:-bot}
@@ -155,9 +151,25 @@ load_config() {
     TEMPER_PRODUCT_CHAT_BIN=${TEMPER_PRODUCT_CHAT_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper-production}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
-    DOGFOOD_PRODUCT_CHAT_RESPONDER=${DOGFOOD_PRODUCT_CHAT_RESPONDER:-in-process}
+    DOGFOOD_ROLE_DECISION=${DOGFOOD_ROLE_DECISION:-smith}
+    DOGFOOD_PRODUCT_CHAT_RESPONDER=${DOGFOOD_PRODUCT_CHAT_RESPONDER:-smith}
     SMITH_WORKSPACE_ROOT=${SMITH_WORKSPACE_ROOT:-$HOME/src/rust/smith}
+    SMITH_WORKFLOW_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-}
+    SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON=${SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON:-}
+    if [ -z "$SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON" ]; then
+        SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON='["--auth","chatgpt-oauth"]'
+    fi
+    SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST=${SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST:-}
+    SMITH_WORKFLOW_ROLE_DECISION_CWD=${SMITH_WORKFLOW_ROLE_DECISION_CWD:-}
+    SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS=${SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS:-}
     SMITH_PRODUCT_MANAGER_RESPONDER_BIN=${SMITH_PRODUCT_MANAGER_RESPONDER_BIN:-}
+    SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON=${SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON:-}
+    if [ -z "$SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON" ]; then
+        SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON='["--auth","chatgpt-oauth"]'
+    fi
+    SMITH_PRODUCT_MANAGER_RESPONDER_ENV_ALLOWLIST=${SMITH_PRODUCT_MANAGER_RESPONDER_ENV_ALLOWLIST:-}
+    SMITH_PRODUCT_MANAGER_RESPONDER_CWD=${SMITH_PRODUCT_MANAGER_RESPONDER_CWD:-}
+    SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS=${SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS:-}
     SMITH_BUILD_PACKAGE=${SMITH_BUILD_PACKAGE:-smith-temper-agent-cli}
     DOGFOOD_RUNNER=${DOGFOOD_RUNNER:-1}
     DOGFOOD_DEFAULT_BRANCH=${DOGFOOD_DEFAULT_BRANCH:-main}
@@ -197,6 +209,10 @@ resolve_binaries() {
     if [ "$DOGFOOD_RUNNER" = "1" ]; then
         [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN"
     fi
+    case "$DOGFOOD_ROLE_DECISION" in
+        smith | "") resolve_smith_workflow_role_decision ;;
+        *) die "unknown DOGFOOD_ROLE_DECISION '$DOGFOOD_ROLE_DECISION' (expected smith)" ;;
+    esac
 }
 
 resolve_product_chat_binary() {
@@ -216,6 +232,20 @@ resolve_smith_product_manager_responder() {
         ( cd "$SMITH_WORKSPACE_ROOT" && cargo build -p "$SMITH_BUILD_PACKAGE" --bin smith-product-manager-responder ) || die 'Smith cargo build failed'
     fi
     [ -x "$SMITH_PM_RESPONDER_BIN" ] || die "Smith product-manager responder binary not found: $SMITH_PM_RESPONDER_BIN"
+}
+
+resolve_smith_workflow_role_decision() {
+    [ -d "$SMITH_WORKSPACE_ROOT" ] || die "Smith workspace not found: $SMITH_WORKSPACE_ROOT"
+    SMITH_ROLE_DECISION_BIN=${SMITH_WORKFLOW_ROLE_DECISION_BIN:-$SMITH_WORKSPACE_ROOT/target/debug/smith-workflow-role-decision}
+    if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+        log "ensuring Smith workflow-role decision responder is current (cargo build -p $SMITH_BUILD_PACKAGE --bin smith-workflow-role-decision)..."
+        ( cd "$SMITH_WORKSPACE_ROOT" && cargo build -p "$SMITH_BUILD_PACKAGE" --bin smith-workflow-role-decision ) || die 'Smith cargo build failed'
+    fi
+    [ -x "$SMITH_ROLE_DECISION_BIN" ] || die "Smith workflow-role decision binary not found: $SMITH_ROLE_DECISION_BIN"
+    ROLE_DECISION_ARGS="--role-decision-command $SMITH_ROLE_DECISION_BIN"
+    [ -n "$SMITH_WORKFLOW_ROLE_DECISION_CWD" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-cwd $SMITH_WORKFLOW_ROLE_DECISION_CWD"
+    [ -n "$SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS" ] && ROLE_DECISION_ARGS="$ROLE_DECISION_ARGS --role-decision-timeout-secs $SMITH_WORKFLOW_ROLE_DECISION_TIMEOUT_SECS"
+    log "role decisions: Smith process ($SMITH_ROLE_DECISION_BIN)"
 }
 
 dogfood_preflight() {
@@ -247,61 +277,19 @@ check_coding_workspace() {
     fi
 }
 
-check_auth() {
-    CODEX_MODEL_ARG=
-    AUTH_FILE_ARG=
-    case "$TEMPER_AGENTS_AUTH" in
-        chatgpt-oauth)
-            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
-            [ -f "$_auth_file" ] || die "ChatGPT OAuth selected but $_auth_file is missing; run: pi /login openai-codex"
-            grep -q 'openai-codex' "$_auth_file" 2>/dev/null || die "no openai-codex entry in $_auth_file; run: pi /login openai-codex"
-            AUTH_FLAG=chatgpt-oauth
-            [ -n "$TEMPER_AGENTS_CODEX_MODEL" ] && CODEX_MODEL_ARG="--codex-model $TEMPER_AGENTS_CODEX_MODEL"
-            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
-            log "auth: ChatGPT OAuth ($_auth_file)"
-            ;;
-        anthropic-oauth)
-            _auth_file=${TEMPER_AGENTS_AUTH_FILE:-$HOME/.pi/agent/auth.json}
-            [ -f "$_auth_file" ] || die "Anthropic OAuth selected but $_auth_file is missing; run: pi /login anthropic"
-            grep -q '"anthropic"' "$_auth_file" 2>/dev/null || die "no anthropic entry in $_auth_file; run: pi /login anthropic"
-            AUTH_FLAG=anthropic-oauth
-            [ -n "$TEMPER_AGENTS_AUTH_FILE" ] && AUTH_FILE_ARG="--auth-file $TEMPER_AGENTS_AUTH_FILE"
-            [ -n "$TEMPER_AGENTS_ANTHROPIC_MODEL" ] && export TEMPER_AGENTS_ANTHROPIC_MODEL
-            log "auth: Anthropic OAuth ($_auth_file)"
-            ;;
-        deepseek)
-            [ -n "${TEMPER_DEEPSEEK_API_KEY:-}" ] || [ -n "${TEMPER_DEEPSEEK_API_KEY_PATH:-}" ] || die 'DeepSeek selected; set TEMPER_DEEPSEEK_API_KEY or TEMPER_DEEPSEEK_API_KEY_PATH'
-            AUTH_FLAG=deepseek
-            log 'auth: DeepSeek'
-            ;;
-        *) die "unknown TEMPER_AGENTS_AUTH '$TEMPER_AGENTS_AUTH'" ;;
-    esac
-}
+# Smith owns provider/auth validation for configured responders.
 
 configure_product_chat_responder_args() {
     PRODUCT_CHAT_RESPONDER_ARGS=
     case "$DOGFOOD_PRODUCT_CHAT_RESPONDER" in
-        in-process | temper | "")
-            log 'product-chat responder: Temper in-process fallback'
-            ;;
-        smith)
+        smith | "")
             resolve_smith_product_manager_responder
-            PRODUCT_CHAT_RESPONDER_ARGS="--responder-command $SMITH_PM_RESPONDER_BIN --responder-arg --auth --responder-arg $AUTH_FLAG"
-            if [ -n "$TEMPER_AGENTS_CODEX_MODEL" ]; then
-                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-arg --codex-model --responder-arg $TEMPER_AGENTS_CODEX_MODEL"
-            fi
-            if [ -n "$TEMPER_AGENTS_AUTH_FILE" ]; then
-                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-arg --auth-file --responder-arg $TEMPER_AGENTS_AUTH_FILE"
-            fi
-            if [ "$AUTH_FLAG" = "anthropic-oauth" ] && [ -n "$TEMPER_AGENTS_ANTHROPIC_MODEL" ]; then
-                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-env TEMPER_AGENTS_ANTHROPIC_MODEL"
-            fi
-            if [ "$AUTH_FLAG" = "deepseek" ]; then
-                PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-env TEMPER_DEEPSEEK_API_KEY --responder-env TEMPER_DEEPSEEK_API_KEY_PATH"
-            fi
+            PRODUCT_CHAT_RESPONDER_ARGS="--responder-command $SMITH_PM_RESPONDER_BIN"
+            [ -n "$SMITH_PRODUCT_MANAGER_RESPONDER_CWD" ] && PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-cwd $SMITH_PRODUCT_MANAGER_RESPONDER_CWD"
+            [ -n "$SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS" ] && PRODUCT_CHAT_RESPONDER_ARGS="$PRODUCT_CHAT_RESPONDER_ARGS --responder-timeout-secs $SMITH_PRODUCT_MANAGER_RESPONDER_TIMEOUT_SECS"
             log "product-chat responder: Smith process ($SMITH_PM_RESPONDER_BIN)"
             ;;
-        *) die "unknown DOGFOOD_PRODUCT_CHAT_RESPONDER '$DOGFOOD_PRODUCT_CHAT_RESPONDER' (expected in-process or smith)" ;;
+        *) die "unknown DOGFOOD_PRODUCT_CHAT_RESPONDER '$DOGFOOD_PRODUCT_CHAT_RESPONDER' (expected smith)" ;;
     esac
 }
 
@@ -493,10 +481,12 @@ launch_role_worker() {
     TEMPER_CODING_WORKSPACE_REMOTE="$TEMPER_CODING_WORKSPACE_REMOTE" \
     TEMPER_CODING_WORKSPACE_PUSH="$TEMPER_CODING_WORKSPACE_PUSH" \
     TEMPER_CODING_WORKSPACE_PR_LABELS="$TEMPER_CODING_WORKSPACE_PR_LABELS" \
+    TEMPER_WORKER_ROLE_DECISION_ARGS_JSON="$SMITH_WORKFLOW_ROLE_DECISION_ARGS_JSON" \
+    TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST="$SMITH_WORKFLOW_ROLE_DECISION_ENV_ALLOWLIST" \
         "$WORKER_BIN" \
         --backend forgejo --base-url "$BASE_URL" --repo "$REPO" \
         --kind role --role "$_role" --user "$_user" \
-        --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
+        $ROLE_DECISION_ARGS \
         --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" \
         $_wake_args \
         >"$LOG_DIR/$_role.log" 2>&1 &
@@ -598,7 +588,6 @@ cmd_product_chat() {
     load_config
     mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
     trap cleanup_product_chat_snapshot EXIT INT TERM
-    check_auth
     resolve_product_chat_binary
     configure_product_chat_responder_args
     parse_live_secrets
@@ -610,15 +599,15 @@ cmd_product_chat() {
     _human_token=${TEMPER_FORGEJO_TOKEN_PRODUCT_CHAT_HUMAN:-}
     [ -n "$_human_token" ] || die "product-chat requires a token for DOGFOOD_PRODUCT_CHAT_HUMAN_USER=$DOGFOOD_PRODUCT_CHAT_HUMAN_USER in $ROLES_ENV"
 
-    # CODEX_MODEL_ARG/AUTH_FILE_ARG and PRODUCT_CHAT_RESPONDER_ARGS are generated
-    # from config by check_auth/configure_product_chat_responder_args and
+    # PRODUCT_CHAT_RESPONDER_ARGS is generated from Smith process config and
     # intentionally word-split, matching role-worker launch style.
     # shellcheck disable=SC2086
     TEMPER_PRODUCT_CHAT_HUMAN_TOKEN="$_human_token" \
     TEMPER_PRODUCT_CHAT_PRODUCT_MANAGER_TOKEN="$_pm_token" \
+    TEMPER_PRODUCT_CHAT_RESPONDER_ARGS_JSON="$SMITH_PRODUCT_MANAGER_RESPONDER_ARGS_JSON" \
+    TEMPER_PRODUCT_CHAT_RESPONDER_ENV_ALLOWLIST="$SMITH_PRODUCT_MANAGER_RESPONDER_ENV_ALLOWLIST" \
         "$PRODUCT_CHAT_BIN" repl \
         --base-url "$BASE_URL" --repo "$REPO" \
-        --auth "$AUTH_FLAG" $CODEX_MODEL_ARG $AUTH_FILE_ARG \
         $PRODUCT_CHAT_RESPONDER_ARGS \
         "$@"
 }
@@ -628,7 +617,6 @@ cmd_start() {
     mkdir -p "$RUN_DIR" "$LOG_DIR" "$SECRETS_DIR"
     rm -f "$STOP_FILE"
     RUN_STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    check_auth
     parse_live_secrets
     check_coding_workspace
     resolve_binaries

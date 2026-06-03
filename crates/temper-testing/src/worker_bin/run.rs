@@ -28,7 +28,6 @@ use chrono::{DateTime, Duration, Utc};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 use temper_forge::{
     CreateRepository, Forge, ForgeError, RepositoryId, RepositoryPath, UpsertLabel, User,
@@ -45,8 +44,8 @@ use crate::agents::{
     RequestChangesThenApproveReviewer,
 };
 use crate::worker_bin::args::{
-    AgentsAuthKind, AgentsKind, ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind,
-    RoleBehavior, WorkerArgs, WorkerKind,
+    ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior, WorkerArgs,
+    WorkerKind,
 };
 use crate::worker_bin::multi_ci::MultiRepoCiWorker;
 use crate::{block_on, runner_config, workflow};
@@ -196,12 +195,7 @@ fn run_role(
     let config = runner_config();
     let role_id = RoleId::new(role);
 
-    // `--agents real` here uses quarantined legacy LLM fixtures from
-    // `temper-testing`; production workers use compiled role manifests.
-    let registry = match args.agents {
-        AgentsKind::Fake => registry_for(behavior),
-        AgentsKind::Real => real_registry_for(args, behavior, Arc::new(crate::legacy_llm::NoPrep))?,
-    };
+    let registry = registry_for(behavior);
     let agent = registry
         .get(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?
@@ -262,62 +256,6 @@ pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
             fake_registry_with(ClosingArchitect, RequestChangesThenApproveReviewer::new())
         }
     }
-}
-
-/// Builds the test-only legacy reference-delivery **real** (LLM-backed)
-/// registry whose architect/reviewer variants match `behavior` and whose
-/// engineer carries `engineer_prep`.
-///
-/// This is the `--agents real` counterpart of [`registry_for`] used by the
-/// historical reference-delivery e2e tests. The fixed prompts and role-specific
-/// adapters live in [`crate::legacy_llm`], not in production `temper-agents`.
-/// Production workers use compiled workflow manifests instead.
-///
-/// The provider is built with [`provider_for`], which resolves the auth mode,
-/// codex model, and auth-file path from `args` (precedence CLI > env > default)
-/// and runs an **eager credential preflight** so a missing key or login fails
-/// here — before any worker tick.
-pub(super) fn real_registry_for(
-    args: &WorkerArgs,
-    behavior: RoleBehavior,
-    engineer_prep: Arc<dyn crate::legacy_llm::EngineerPrep<dyn Forge>>,
-) -> Result<AgentRegistry<dyn Forge>, RunError> {
-    let provider = provider_for(args)?;
-    let config = crate::legacy_llm::LegacyRealRegistryConfig {
-        architect_closing: matches!(behavior.architect, ArchitectKind::Closing),
-        reviewer_request_changes_then_approve: matches!(
-            behavior.reviewer,
-            ReviewerKind::RequestChangesThenApprove
-        ),
-        engineer_prep,
-    };
-    Ok(crate::legacy_llm::legacy_real_registry_with(
-        provider, config,
-    ))
-}
-
-/// Builds the shared [`ProviderConfig`](temper_agents::ProviderConfig) for the
-/// auth mode selected on `args`.
-///
-/// Maps the worker's [`AgentsAuthKind`] onto [`temper_agents::AuthChoice`] and
-/// forwards the `--codex-model` / `--auth-file` overrides (each `None` falls back
-/// to its env var then the built-in default inside `temper-agents`). Anthropic
-/// model selection is env-only (`TEMPER_AGENTS_ANTHROPIC_MODEL`). The eager
-/// preflight inside `from_auth` surfaces a missing DeepSeek key, ChatGPT login,
-/// or Anthropic login as a [`RunError::Backend`] setup error, before any worker
-/// tick; OAuth errors point the operator at the matching `pi /login ...` command.
-fn provider_for(args: &WorkerArgs) -> Result<temper_agents::ProviderConfig, RunError> {
-    let choice = match args.auth {
-        AgentsAuthKind::ChatGptOAuth => temper_agents::AuthChoice::ChatGptOAuth,
-        AgentsAuthKind::DeepSeek => temper_agents::AuthChoice::DeepSeek,
-        AgentsAuthKind::AnthropicOAuth => temper_agents::AuthChoice::AnthropicOAuth,
-    };
-    temper_agents::ProviderConfig::from_auth(
-        choice,
-        args.codex_model.clone(),
-        args.auth_file.clone(),
-    )
-    .map_err(|error| RunError::Backend(error.to_string()))
 }
 
 pub(super) fn resolve_role_user(

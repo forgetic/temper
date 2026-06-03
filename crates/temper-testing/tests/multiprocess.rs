@@ -215,9 +215,6 @@ fn provision(root: &Path, paths: &[RepositoryPath]) {
         run_secs: Some(0),
         clock: worker_bin::ClockKind::Deterministic,
         agents: worker_bin::AgentsKind::Fake,
-        auth: worker_bin::AgentsAuthKind::default(),
-        codex_model: None,
-        auth_file: None,
         wake_socket: None,
         wake_secret_file: None,
     };

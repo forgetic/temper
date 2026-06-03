@@ -12,7 +12,7 @@ Current guides:
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
 - [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)
 - [Run the Forgejo multi-process end-to-end fixture](run-forgejo-multiprocess-e2e.md)
-- [Use OAuth auth modes for the LLM agents](use-chatgpt-oauth-auth.md)
+- [Configure LLM responder auth through Smith](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — now wired
   to the planned production binary names; see its

@@ -7,9 +7,9 @@
 //! of flags, reconsider a small lockfile crate rather than hand-rolling more.
 
 use super::args::{
-    AgentsAuthKind, AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind,
-    CiSentinelKind, ClockKind, ForgejoArgs, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
-    AGENTS_AUTH_ENV, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
+    AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
+    ClockKind, ForgejoArgs, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
+    FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
 };
 use chrono::Duration;
 use std::collections::BTreeSet;
@@ -32,8 +32,7 @@ pub const USAGE: &str = concat!(
     "[--role <id> --user <handle>] ",
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
-    "[--agents <fake|real>] [--auth <deepseek|chatgpt-oauth|anthropic-oauth>] ",
-    "[--codex-model <id>] [--auth-file <path>] ",
+    "[--agents <fake>] ",
     "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
@@ -90,9 +89,6 @@ struct RawArgs {
     run_secs: Option<String>,
     clock: Option<String>,
     agents: Option<String>,
-    auth: Option<String>,
-    codex_model: Option<String>,
-    auth_file: Option<String>,
     wake_socket: Option<String>,
     wake_secret_file: Option<String>,
 }
@@ -120,9 +116,6 @@ impl RawArgs {
             run_secs: None,
             clock: None,
             agents: None,
-            auth: None,
-            codex_model: None,
-            auth_file: None,
             wake_socket: None,
             wake_secret_file: None,
         };
@@ -146,9 +139,6 @@ impl RawArgs {
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
                 "--clock" => raw.clock = Some(value_for(&flag, &mut iter)?),
                 "--agents" => raw.agents = Some(value_for(&flag, &mut iter)?),
-                "--auth" => raw.auth = Some(value_for(&flag, &mut iter)?),
-                "--codex-model" => raw.codex_model = Some(value_for(&flag, &mut iter)?),
-                "--auth-file" => raw.auth_file = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
                 "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
                 other => {
@@ -185,13 +175,6 @@ impl RawArgs {
             .transpose()?;
         let clock = parse_clock(self.clock.as_deref())?;
         let agents = parse_agents(self.agents.as_deref())?;
-        // Auth selection (real agents only): CLI > TEMPER_AGENTS_AUTH > default
-        // (chatgpt-oauth). The codex-model / auth-file overrides are CLI-only
-        // here; `temper-agents` applies their env (TEMPER_AGENTS_CODEX_MODEL /
-        // TEMPER_AGENTS_AUTH_FILE) and built-in defaults when these are `None`.
-        let auth = parse_agents_auth(self.auth.as_deref(), env)?;
-        let codex_model = non_empty(self.codex_model);
-        let auth_file = non_empty(self.auth_file).map(PathBuf::from);
 
         let backend = match backend_kind {
             BackendKind::Filesystem => {
@@ -250,9 +233,6 @@ impl RawArgs {
             run_secs,
             clock,
             agents,
-            auth,
-            codex_model,
-            auth_file,
             wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
         })
@@ -422,29 +402,11 @@ fn parse_clock(clock: Option<&str>) -> Result<ClockKind, ArgsError> {
 fn parse_agents(agents: Option<&str>) -> Result<AgentsKind, ArgsError> {
     match agents {
         None | Some("fake") => Ok(AgentsKind::Fake),
-        Some("real") => Ok(AgentsKind::Real),
+        Some("real") => Err(ArgsError::new(
+            "--agents real moved out of Temper; run Smith's workflow-role process e2e instead",
+        )),
         Some(other) => Err(ArgsError::new(format!(
-            "unknown --agents '{other}'; expected fake|real"
-        ))),
-    }
-}
-
-/// Resolves the real-agent auth mode: CLI flag, else [`AGENTS_AUTH_ENV`], else
-/// the test/dev default ([`AgentsAuthKind::ChatGptOAuth`]).
-fn parse_agents_auth<E>(cli: Option<&str>, env: &E) -> Result<AgentsAuthKind, ArgsError>
-where
-    E: Fn(&str) -> Option<String>,
-{
-    let selected = cli
-        .map(str::to_string)
-        .or_else(|| non_empty_env(env, AGENTS_AUTH_ENV));
-    match selected.as_deref() {
-        None => Ok(AgentsAuthKind::default()),
-        Some("chatgpt-oauth") => Ok(AgentsAuthKind::ChatGptOAuth),
-        Some("deepseek") => Ok(AgentsAuthKind::DeepSeek),
-        Some("anthropic-oauth") => Ok(AgentsAuthKind::AnthropicOAuth),
-        Some(other) => Err(ArgsError::new(format!(
-            "unknown --auth '{other}'; expected deepseek|chatgpt-oauth|anthropic-oauth"
+            "unknown --agents '{other}'; expected fake"
         ))),
     }
 }

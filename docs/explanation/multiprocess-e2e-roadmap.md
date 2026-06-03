@@ -108,7 +108,7 @@ Status legend: ☐ pending · ☑ done.
   `run-reference-delivery-end-to-end.md`. Added the explicit **"to swap fakes for
   real, change only this"** list to `run-multiprocess-e2e.md`: replace the
   `FilesystemForge` handle factory with a `ForgejoForge` one; replace fake agents
-  with real LLM agents behind the same `Agent`/`RoleTools` boundary; drop the `ci`
+  with process-bound real LLM responders behind the same `Agent`/`RoleTools` boundary; drop the `ci`
   worker (provider CI is the producer; the engine already reads `list_ci_jobs`);
   pass `--clock wall`; add the ADR 0009 webhook/`ChangeHint` accelerator alongside
   `PollLoop`; supply real `RunnerConfig` bindings and tokens.

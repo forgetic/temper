@@ -27,14 +27,15 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
-fn production_real_registry_uses_compiled_manifests_not_prompt_constants() {
+fn production_role_workers_use_process_decisions_not_in_process_sdk_agents() {
     let worker_source = format!(
         "{}{}",
         include_str!("worker.rs"),
         include_str!("worker_role_agent.rs")
     );
-    assert!(worker_source.contains("real_registry_from_compiled"));
-    assert!(!worker_source.contains("real_registry_with("));
+    assert!(worker_source.contains("WorkflowRoleDecisionProcessAgent"));
+    assert!(!worker_source.contains("temper_agents"));
+    assert!(!worker_source.contains("real_registry"));
     for prompt_constant in [
         "ENGINEER_SYSTEM_PROMPT",
         "ARCHITECT_SYSTEM_PROMPT",

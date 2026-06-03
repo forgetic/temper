@@ -22,14 +22,10 @@ fn product_chat_args_parse_repl_and_redact_tokens_in_debug() {
             "https://git.example.test",
             "--repo",
             "ai/temper",
-            "--auth",
-            "chatgpt-oauth",
-            "--codex-model",
-            "gpt-5.5",
-            "--auth-file",
-            "/tmp/auth.json",
             "--transcript-issue",
             "3",
+            "--responder-command",
+            "/opt/respond",
         ]
         .into_iter()
         .map(String::from),
@@ -40,8 +36,8 @@ fn product_chat_args_parse_repl_and_redact_tokens_in_debug() {
         panic!("expected repl")
     };
     assert_eq!(args.repo, RepositoryPath::new("ai", "temper"));
-    assert_eq!(args.auth, AuthKind::ChatGptOAuth);
     assert_eq!(args.transcript_issue, Some(3));
+    assert!(args.process_responder.is_some());
     let debug = format!("{args:?}");
     assert!(debug.contains("<redacted>"));
     assert!(!debug.contains("human-secret"));
@@ -49,29 +45,23 @@ fn product_chat_args_parse_repl_and_redact_tokens_in_debug() {
 }
 
 #[test]
-fn product_chat_args_default_auth_comes_from_env_then_chatgpt() {
-    let outcome = parse_with_env(
+fn product_chat_args_reject_provider_auth_flags() {
+    let error = parse_with_env(
         [
             "repl",
             "--base-url",
             "https://git.example.test",
             "--repo",
             "ai/temper",
+            "--auth",
+            "chatgpt-oauth",
         ]
         .into_iter()
         .map(String::from),
-        |key| match key {
-            HUMAN_TOKEN_ENV => Some("human-secret".into()),
-            PRODUCT_MANAGER_TOKEN_ENV => Some("pm-secret".into()),
-            AGENTS_AUTH_ENV => Some("anthropic-oauth".into()),
-            _ => None,
-        },
+        env,
     )
-    .expect("parses");
-    let ParseOutcome::Repl(args) = outcome else {
-        panic!("expected repl")
-    };
-    assert_eq!(args.auth, AuthKind::AnthropicOAuth);
+    .unwrap_err();
+    assert!(error.to_string().contains("unrecognized argument '--auth'"));
 }
 
 #[test]
@@ -145,6 +135,24 @@ fn product_chat_args_parse_process_responder_from_env() {
 }
 
 #[test]
+fn product_chat_args_reject_missing_process_responder() {
+    let error = parse_with_env(
+        [
+            "repl",
+            "--base-url",
+            "https://git.example.test",
+            "--repo",
+            "ai/temper",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("requires --responder-command"));
+}
+
+#[test]
 fn product_chat_args_reject_missing_tokens() {
     let error = parse_with_env(
         [
@@ -153,6 +161,8 @@ fn product_chat_args_reject_missing_tokens() {
             "https://git.example.test",
             "--repo",
             "ai/temper",
+            "--responder-command",
+            "/opt/respond",
         ]
         .into_iter()
         .map(String::from),

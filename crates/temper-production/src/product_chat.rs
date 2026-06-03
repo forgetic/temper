@@ -6,15 +6,13 @@
 //! replies and draft intake issues only; filing still happens through explicit
 //! issue-proposal acceptance.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use temper_agents::{
-    ProductManagerAgent, ProductManagerDraftIssue, ProductManagerError, ProductManagerResponse,
-    ProviderConfig, ProviderError, PRODUCT_MANAGER_PROFILE_ID,
-};
+use serde::{Deserialize, Serialize};
 use temper_forge::{Forge, ForgeError, Issue, ItemNumber, Repository, RepositoryPath};
 use temper_interaction::{
     find_issue_by_marker as find_interaction_issue_by_marker,
@@ -23,14 +21,14 @@ use temper_interaction::{
     render_transcript_marker as render_interaction_transcript_marker, ConversationId,
     ConversationProfileId, ConversationReply, ForgeInteractionSession, ForgeSessionConfig,
     ForgeSessionOpenOptions, ForgeTranscriptConfig, InteractionError, InteractiveResponder,
-    IssueIntakeAcceptanceConfig, Participant, ProcessResponder, ProcessResponderConfig, Proposal,
-    ProposalId,
+    IssueIntakeAcceptanceConfig, IssueProposal, Participant, ProcessResponder,
+    ProcessResponderConfig, Proposal, ProposalId,
 };
 
 pub const PRODUCT_LABEL: &str = "product";
 pub const WORKFLOW_INTAKE_LABEL: &str = "untriaged";
 pub const PRODUCT_MARKER_NAMESPACE: &str = "product-chat";
-pub const PRODUCT_PROFILE_ID: &str = PRODUCT_MANAGER_PROFILE_ID;
+pub const PRODUCT_PROFILE_ID: &str = "product-manager";
 pub const PRODUCT_CONVERSATION_ID_PREFIX: &str = "pc";
 
 /// Product-manager profile policy over the generic interaction runtime.
@@ -63,12 +61,141 @@ impl Default for ProductChatProfileConfig {
     }
 }
 
+/// Structured result of one product-manager profile turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductManagerResponse {
+    /// Conversational reply to show to the human.
+    pub reply: String,
+    /// Draft intake issues. These are proposals only; callers decide whether and
+    /// when to file them.
+    pub drafts: Vec<ProductManagerDraftIssue>,
+}
+
+impl ProductManagerResponse {
+    /// Validates draft slugs are safe to use in deterministic filing
+    /// correlation keys.
+    pub fn validate(&self) -> Result<(), ProductManagerError> {
+        let mut seen = HashSet::new();
+        for draft in &self.drafts {
+            if !is_valid_draft_slug(&draft.slug) {
+                return Err(ProductManagerError::InvalidDraftSlug {
+                    slug: draft.slug.clone(),
+                });
+            }
+            if !seen.insert(draft.slug.as_str()) {
+                return Err(ProductManagerError::DuplicateDraftSlug {
+                    slug: draft.slug.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Maps this product-chat compatibility DTO onto the generic interaction
+    /// reply used by fake responders and tests.
+    pub fn to_conversation_reply(&self) -> Result<ConversationReply, InteractionError> {
+        let proposals = self
+            .drafts
+            .iter()
+            .map(ProductManagerDraftIssue::to_proposal)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ConversationReply {
+            message: self.reply.clone(),
+            proposals,
+        })
+    }
+}
+
+/// One draft intake issue proposed by the product-manager profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductManagerDraftIssue {
+    /// Stable deterministic identifier for explicit filing correlation keys.
+    pub slug: String,
+    /// Issue title to file if the human chooses this draft.
+    pub title: String,
+    /// Issue body to file as workflow intake.
+    pub body: String,
+    /// Optional reason this draft is worth filing.
+    pub rationale: Option<String>,
+}
+
+impl ProductManagerDraftIssue {
+    /// Builds a product-manager draft from a generic issue proposal.
+    pub fn from_issue_proposal(slug: impl Into<String>, proposal: IssueProposal) -> Self {
+        Self {
+            slug: slug.into(),
+            title: proposal.title,
+            body: proposal.body,
+            rationale: proposal.rationale,
+        }
+    }
+
+    /// Maps this compatibility DTO to a generic issue proposal.
+    pub fn to_issue_proposal(&self) -> IssueProposal {
+        IssueProposal {
+            title: self.title.clone(),
+            body: self.body.clone(),
+            rationale: self.rationale.clone(),
+        }
+    }
+
+    /// Maps this draft to a generic inert proposal.
+    pub fn to_proposal(&self) -> Result<Proposal, InteractionError> {
+        Proposal::issue(
+            ProposalId::new(self.slug.clone())?,
+            self.to_issue_proposal(),
+        )
+    }
+}
+
+/// Returns whether `slug` is safe and deterministic-looking for draft filing.
+pub fn is_valid_draft_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.len() > 80 {
+        return false;
+    }
+    let mut previous_hyphen = false;
+    for (index, byte) in slug.bytes().enumerate() {
+        match byte {
+            b'a'..=b'z' | b'0'..=b'9' => previous_hyphen = false,
+            b'-' => {
+                if index == 0 || index + 1 == slug.len() || previous_hyphen {
+                    return false;
+                }
+                previous_hyphen = true;
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Product-manager profile DTO validation failure.
+#[derive(Debug)]
+pub enum ProductManagerError {
+    InvalidDraftSlug { slug: String },
+    DuplicateDraftSlug { slug: String },
+}
+
+impl fmt::Display for ProductManagerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidDraftSlug { slug } => {
+                write!(formatter, "invalid product-manager draft slug `{slug}`")
+            }
+            Self::DuplicateDraftSlug { slug } => {
+                write!(formatter, "duplicate product-manager draft slug `{slug}`")
+            }
+        }
+    }
+}
+
+impl Error for ProductManagerError {}
+
 #[derive(Debug)]
 pub enum ProductChatError {
     Forge(ForgeError),
     Interaction(InteractionError),
     ProductManager(ProductManagerError),
-    Provider(ProviderError),
     RepositoryNotFound {
         owner: String,
         name: String,
@@ -100,10 +227,10 @@ impl fmt::Display for ProductChatError {
                 write!(formatter, "interaction failed: {error}")
             }
             ProductChatError::ProductManager(error) => {
-                write!(formatter, "product-manager failed: {error}")
-            }
-            ProductChatError::Provider(error) => {
-                write!(formatter, "provider setup failed: {error}")
+                write!(
+                    formatter,
+                    "product-manager response failed validation: {error}"
+                )
             }
             ProductChatError::RepositoryNotFound { owner, name } => write!(
                 formatter,
@@ -141,7 +268,6 @@ impl Error for ProductChatError {
             ProductChatError::Forge(error) => Some(error),
             ProductChatError::Interaction(error) => Some(error),
             ProductChatError::ProductManager(error) => Some(error),
-            ProductChatError::Provider(error) => Some(error),
             ProductChatError::Io(error) => Some(error),
             ProductChatError::RepositoryNotFound { .. }
             | ProductChatError::TranscriptNotFound { .. }
@@ -181,12 +307,6 @@ impl From<ProductManagerError> for ProductChatError {
     }
 }
 
-impl From<ProviderError> for ProductChatError {
-    fn from(error: ProviderError) -> Self {
-        Self::Provider(error)
-    }
-}
-
 impl From<io::Error> for ProductChatError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
@@ -195,17 +315,18 @@ impl From<io::Error> for ProductChatError {
 
 /// Builds the configured product-manager profile responder.
 ///
-/// A process responder is selected only when configured; otherwise the in-repo
-/// in-process product-manager implementation remains as a compatibility path.
+/// Product-manager behavior is now external to Temper. Operators must configure
+/// a process responder such as Smith's `smith-product-manager-responder`; Temper
+/// owns transcript persistence, reply validation, and proposal acceptance.
 pub fn build_product_profile_responder(
     process: Option<ProcessResponderConfig>,
-    provider_config: impl FnOnce() -> Result<ProviderConfig, ProviderError>,
 ) -> Result<Arc<dyn InteractiveResponder>, ProductChatError> {
-    if let Some(config) = process {
-        Ok(Arc::new(ProcessResponder::new(config)?) as Arc<dyn InteractiveResponder>)
-    } else {
-        Ok(Arc::new(ProductManagerAgent::new(provider_config()?)) as Arc<dyn InteractiveResponder>)
-    }
+    let Some(config) = process else {
+        return Err(ProductChatError::Runtime(
+            "product-manager responder process is required; configure --responder-command or TEMPER_PRODUCT_CHAT_RESPONDER_COMMAND".into(),
+        ));
+    };
+    Ok(Arc::new(ProcessResponder::new(config)?) as Arc<dyn InteractiveResponder>)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

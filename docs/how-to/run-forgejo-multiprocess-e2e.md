@@ -4,9 +4,8 @@
 > real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
-> swapped to real**. With `--agents real` every role runs a real LLM through
-> quarantined `temper-testing` reference-delivery fixtures (ChatGPT OAuth by
-> default), while production workers use generic manifest-driven agents. The
+> swapped to real**. Temper's fixture workers use deterministic fake agents;
+> real LLM decisions live in Smith's process-responder e2e. The
 > production reference-delivery demo now carries the ADR 0009 webhook trigger;
 > the separate long-poll wakeup regression covers that path. The design rationale
 > (topology, real CI, per-token identity, webhook wakeups) lives in
@@ -32,16 +31,14 @@ spawns real processes and executes CI **on this host**, so run it only where tha
 is acceptable. Budget several minutes. The per-phase smoke tests below build up
 to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
 
-## Real LLM agents (Phase B2)
+## Real LLM process proof
 
-The command above runs the deterministic **fake** agents. To run the **same**
-scenarios with real agents in every role (`--agents real`), set a second gate.
-The end state and the seed/assert closures are identical — only *who decides*
-changes. These fixed reference-delivery adapters are test fixtures, not
-production `temper-agents` prompt/adaptor surfaces. Smith's process-boundary
-workflow-role proof now lives in the Smith checkout; it drives Temper's
-`WorkflowRoleDecisionProcessAgent` against a throwaway Forgejo and opens a PR
-through `RoleTools`:
+The command above runs deterministic **fake** agents. Temper no longer contains
+real in-process LLM fixtures or `--agents real`; provider/model behavior is
+Smith-owned. To validate real Forgejo + real LLM + Temper's process adapter, run
+Smith's ignored process-boundary e2e from the Smith checkout. It drives
+Temper's `WorkflowRoleDecisionProcessAgent` against a throwaway Forgejo and
+opens a PR through `RoleTools`:
 
 ```sh
 cd ~/src/rust/smith
@@ -50,45 +47,7 @@ TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
   --ignored --test-threads=1
 ```
 
-Per the cost policy these runs default to **ChatGPT OAuth** (a flat subscription,
-not pay-per-token DeepSeek), reading the shared `~/.pi/agent/auth.json`. Log in
-once with `pi /login openai-codex`; **no DeepSeek key is required**:
-
-```sh
-TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
-  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored \
-  --test-threads=1 happy_path_converges_with_real_agents
-```
-
-To opt into Anthropic OAuth instead, log in with `pi /login anthropic` and set
-`TEMPER_AGENTS_AUTH=anthropic-oauth` (optionally
-`TEMPER_AGENTS_ANTHROPIC_MODEL`):
-
-```sh
-TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 TEMPER_AGENTS_AUTH=anthropic-oauth \
-  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored \
-  --test-threads=1 happy_path_converges_with_real_agents
-```
-
-To opt back to DeepSeek (the bring-your-own-key fallback), set
-`TEMPER_AGENTS_AUTH=deepseek` and provide the key:
-
-```sh
-TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 TEMPER_AGENTS_AUTH=deepseek \
-  TEMPER_DEEPSEEK_API_KEY_PATH="$PWD/.cache/deepseek-api-key" \
-  cargo test -p temper-testing --test forgejo_multiprocess -- --ignored \
-  --test-threads=1 happy_path_converges_with_real_agents
-```
-
-- It is **double-gated** (both env vars) and makes real, non-deterministic LLM
-  calls — never in the default suite. OAuth bearers are resolved fresh per
-  decision from `~/.pi/agent/auth.json` (refreshed near expiry); any DeepSeek key
-  is read at runtime. None are ever logged; the worker children receive
-  credentials via env (or the absolute shared auth file), not argv.
-- Run the real-agent tests **serially** (`--test-threads=1`): each boots its own
-  real Forgejo, and several at once would multiply the CPU load.
-- The original four scenarios converge (happy ~26–29 s, the others ~34–61 s on a 4-core
-  host); see `plans/forgejo-e2e/findings-phase-b.md` for cost/latency.
+Run Smith's documented provider/auth preflight before enabling that gate.
 
 ### CPU note (sustained-CPU incident + mitigation)
 

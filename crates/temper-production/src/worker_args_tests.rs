@@ -8,8 +8,8 @@ fn env(key: &str) -> Option<String> {
 }
 
 #[test]
-fn parses_role_worker_and_redacts_token_in_debug() {
-    let outcome = parse_with_env(
+fn rejects_role_worker_without_decision_process() {
+    let error = parse_with_env(
         [
             "--backend",
             "forgejo",
@@ -28,20 +28,8 @@ fn parses_role_worker_and_redacts_token_in_debug() {
         .map(String::from),
         env,
     )
-    .expect("parses");
-    let ParseOutcome::Run(args) = outcome else {
-        panic!("expected run")
-    };
-    assert_eq!(args.owner, "acme");
-    assert_eq!(args.name, "service");
-    assert_eq!(
-        args.repositories,
-        vec![RepositoryPath::new("acme", "service")]
-    );
-    assert!(format!("{:?}", args.forgejo).contains("<redacted>"));
-    assert!(!format!("{:?}", args.forgejo).contains("secret-token"));
-    assert!(!args.allow_bookkeeping_only_pr);
-    assert!(args.role_decision_process.is_none());
+    .unwrap_err();
+    assert!(error.to_string().contains("role workers require"));
 }
 
 #[test]
@@ -151,6 +139,8 @@ fn parses_production_safety_flags() {
             "architect",
             "--user",
             "architect",
+            "--role-decision-command",
+            "/opt/smith-role-decision",
             "--allow-bookkeeping-only-pr",
         ]
         .into_iter()

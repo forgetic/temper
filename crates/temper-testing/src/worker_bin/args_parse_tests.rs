@@ -283,8 +283,8 @@ fn agents_defaults_to_fake() {
 }
 
 #[test]
-fn parses_agents_real() {
-    let args = run(&[
+fn rejects_agents_real_after_smith_split() {
+    let error = parse(argv(&[
         "--kind",
         "role",
         "--role",
@@ -297,34 +297,14 @@ fn parses_agents_real() {
         "/tmp/x",
         "--repo",
         "acme/service",
-    ]);
-    assert_eq!(args.agents, AgentsKind::Real);
+    ]))
+    .unwrap_err();
+    assert!(error.to_string().contains("moved out of Temper"));
 }
 
 #[test]
-fn auth_defaults_to_chatgpt_oauth() {
-    // The worker is a test/dev surface, so it defaults to the flat-rate ChatGPT
-    // subscription rather than pay-per-token DeepSeek (the cost policy).
-    let args = run(&[
-        "--kind",
-        "role",
-        "--role",
-        "engineer",
-        "--user",
-        "engineer",
-        "--root",
-        "/tmp/x",
-        "--repo",
-        "acme/service",
-    ]);
-    assert_eq!(args.auth, AgentsAuthKind::ChatGptOAuth);
-    assert_eq!(args.codex_model, None);
-    assert_eq!(args.auth_file, None);
-}
-
-#[test]
-fn parses_auth_codex_model_and_auth_file() {
-    let args = run(&[
+fn rejects_provider_auth_flags_after_smith_split() {
+    let error = parse(argv(&[
         "--kind",
         "role",
         "--role",
@@ -332,38 +312,14 @@ fn parses_auth_codex_model_and_auth_file() {
         "--user",
         "engineer",
         "--auth",
-        "deepseek",
-        "--codex-model",
-        "gpt-5.9-codex",
-        "--auth-file",
-        "/tmp/auth.json",
+        "chatgpt-oauth",
         "--root",
         "/tmp/x",
         "--repo",
         "acme/service",
-    ]);
-    assert_eq!(args.auth, AgentsAuthKind::DeepSeek);
-    assert_eq!(args.codex_model.as_deref(), Some("gpt-5.9-codex"));
-    assert_eq!(args.auth_file, Some(PathBuf::from("/tmp/auth.json")));
-}
-
-#[test]
-fn parses_anthropic_oauth_auth() {
-    let args = run(&[
-        "--kind",
-        "role",
-        "--role",
-        "engineer",
-        "--user",
-        "engineer",
-        "--auth",
-        "anthropic-oauth",
-        "--root",
-        "/tmp/x",
-        "--repo",
-        "acme/service",
-    ]);
-    assert_eq!(args.auth, AgentsAuthKind::AnthropicOAuth);
+    ]))
+    .unwrap_err();
+    assert!(error.to_string().contains("unrecognized argument '--auth'"));
 }
 
 #[test]
@@ -385,71 +341,6 @@ fn parses_wake_socket_options() {
         args.wake_secret_file,
         Some(PathBuf::from("/tmp/wake-secret"))
     );
-}
-
-#[test]
-fn auth_env_bridges_config_file() {
-    // The launch script sources a config file into TEMPER_AGENTS_AUTH; absent a
-    // CLI flag, that env value selects the mode.
-    let args = run_env(
-        &[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ],
-        &[(AGENTS_AUTH_ENV, "anthropic-oauth")],
-    );
-    assert_eq!(args.auth, AgentsAuthKind::AnthropicOAuth);
-}
-
-#[test]
-fn auth_cli_overrides_env() {
-    // Precedence: CLI > config/env > default.
-    let args = run_env(
-        &[
-            "--kind",
-            "role",
-            "--role",
-            "engineer",
-            "--user",
-            "engineer",
-            "--auth",
-            "chatgpt-oauth",
-            "--root",
-            "/tmp/x",
-            "--repo",
-            "acme/service",
-        ],
-        &[(AGENTS_AUTH_ENV, "deepseek")],
-    );
-    assert_eq!(args.auth, AgentsAuthKind::ChatGptOAuth);
-}
-
-#[test]
-fn rejects_bad_auth() {
-    let error = parse(argv(&[
-        "--kind",
-        "role",
-        "--role",
-        "engineer",
-        "--user",
-        "engineer",
-        "--auth",
-        "bogus",
-        "--root",
-        "/tmp/x",
-        "--repo",
-        "acme/service",
-    ]))
-    .unwrap_err();
-    assert!(error.to_string().contains("--auth"));
 }
 
 #[test]

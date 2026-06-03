@@ -47,7 +47,7 @@ mod multi_repo_support;
 #[path = "support/forgejo_multiprocess.rs"]
 mod multiprocess_support;
 
-use multiprocess_support::{agents_auth_choice, enabled, Agents, WorkerFleet};
+use multiprocess_support::{convergence_timeout, enabled, WorkerFleet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -63,7 +63,6 @@ const ASSERT_POLL: Duration = Duration::from_secs(2);
 /// §6 measured ~10–20 ms/call locally).
 const WORKER_POLL_MS: u64 = 500;
 /// Backstop run length per child, in case the driver dies before stopping it.
-/// Large enough to cover the real-agent convergence budget plus teardown slack.
 const WORKER_RUN_SECS: u64 = 1200;
 
 /// The worker behavior that distinguishes one scenario's topology.
@@ -81,11 +80,6 @@ struct Variant {
     reviewer: &'static str,
     /// `--ci-sentinel` value passed to the engineer role worker.
     ci_sentinel: &'static str,
-    /// `--agents` value passed to every role worker (`fake` or `real`). The
-    /// `real` topology swaps the deterministic fakes for in-process LLM agents
-    /// (ChatGPT OAuth by default per the cost policy) and is double-gated (see
-    /// [`Agents`]).
-    agents: Agents,
     /// Whether this variant provisions a second repo and passes both repos to
     /// the one fixed worker fleet.
     multi_repo: bool,
@@ -100,7 +94,6 @@ fn happy_path_converges_against_real_forgejo() {
         architect: "default",
         reviewer: "default",
         ci_sentinel: "present",
-        agents: Agents::Fake,
         multi_repo: false,
     });
 }
@@ -114,7 +107,6 @@ fn changes_requested_then_approved_converges_against_real_forgejo() {
         architect: "default",
         reviewer: "request-changes-then-approve",
         ci_sentinel: "present",
-        agents: Agents::Fake,
         multi_repo: false,
     });
 }
@@ -130,7 +122,6 @@ fn ci_fails_then_passes_converges_against_real_forgejo() {
         // The PR head omits `ci-ok` so the first run fails; the engineer's fix
         // commit adds it, producing a second, passing head SHA (two verdicts).
         ci_sentinel: "deferred",
-        agents: Agents::Fake,
         multi_repo: false,
     });
 }
@@ -144,7 +135,6 @@ fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
         architect: "closing",
         reviewer: "default",
         ci_sentinel: "present",
-        agents: Agents::Fake,
         multi_repo: false,
     });
 }
@@ -158,90 +148,6 @@ fn cross_repo_fanout_converges_against_real_forgejo() {
         architect: "closing",
         reviewer: "default",
         ci_sentinel: "present",
-        agents: Agents::Fake,
-        multi_repo: true,
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Real-agent topology (Phase B2). Same scenarios, same seed/assert closures, but
-// every role worker runs the quarantined reference-delivery LLM test fixture
-// (ChatGPT OAuth by default; `--agents real`) instead of the deterministic fakes.
-// Production workers use compiled workflow manifests; these fixed adapters live
-// under `temper-testing`, outside production `temper-agents`. Double-gated
-// behind TEMPER_FORGEJO_E2E=1 **and** TEMPER_FORGEJO_AGENTS=1.
-//
-// The **happy path** is B2's bar (it must converge). The harder scenarios are
-// attempted too; if a real run is flaky, see `findings-phase-b.md` for the
-// known-limitation note rather than forcing it.
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
-            run with TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 -- --ignored"]
-fn happy_path_converges_with_real_agents() {
-    run_variant(&Variant {
-        scenario: happy_path,
-        architect: "default",
-        reviewer: "default",
-        ci_sentinel: "present",
-        agents: Agents::Real,
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
-            run with TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 -- --ignored"]
-fn changes_requested_then_approved_with_real_agents() {
-    run_variant(&Variant {
-        scenario: changes_requested_then_approved,
-        architect: "default",
-        reviewer: "request-changes-then-approve",
-        ci_sentinel: "present",
-        agents: Agents::Real,
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
-            run with TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 -- --ignored"]
-fn ci_fails_then_passes_with_real_agents() {
-    run_variant(&Variant {
-        scenario: ci_fails_then_passes,
-        architect: "default",
-        reviewer: "default",
-        ci_sentinel: "deferred",
-        agents: Agents::Real,
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
-            run with TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 -- --ignored"]
-fn dependency_chain_mechanically_unblocked_with_real_agents() {
-    run_variant(&Variant {
-        scenario: dependency_chain_mechanically_unblocked,
-        architect: "closing",
-        reviewer: "default",
-        ci_sentinel: "present",
-        agents: Agents::Real,
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + runner and makes real LLM calls; \
-            run with TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 -- --ignored"]
-fn cross_repo_fanout_converges_with_real_agents() {
-    run_variant(&Variant {
-        scenario: cross_repo_fanout_converges,
-        architect: "closing",
-        reviewer: "default",
-        ci_sentinel: "present",
-        agents: Agents::Real,
         multi_repo: true,
     });
 }
@@ -250,23 +156,8 @@ fn cross_repo_fanout_converges_with_real_agents() {
 /// Forgejo, asserting it converges to the same end state as the in-process
 /// scenario.
 fn run_variant(variant: &Variant) {
-    if !enabled(variant.agents) {
+    if !enabled() {
         return;
-    }
-
-    // For the real-agent topology, fail fast with a clear message if the
-    // credential is missing — before booting a server or making any LLM call. The
-    // error never includes secret bytes. Defaults to ChatGPT OAuth (the cost
-    // policy: a flat subscription, not pay-per-token DeepSeek); opt into
-    // Anthropic OAuth with TEMPER_AGENTS_AUTH=anthropic-oauth or opt back to
-    // DeepSeek with TEMPER_AGENTS_AUTH=deepseek.
-    if variant.agents == Agents::Real {
-        temper_agents::ProviderConfig::from_auth(agents_auth_choice(), None, None).expect(
-            "LLM provider config builds for --agents real \
-             (ChatGPT OAuth: run `pi /login openai-codex`; \
-             Anthropic OAuth: run `pi /login anthropic`; \
-             DeepSeek: set TEMPER_DEEPSEEK_API_KEY[_PATH] or place .cache/deepseek-api-key)",
-        );
     }
 
     // Boot the server + runner. `ForgejoServer::start` polls readiness with a
@@ -308,11 +199,10 @@ fn run_variant(variant: &Variant) {
         variant.architect,
         variant.reviewer,
         variant.ci_sentinel,
-        variant.agents,
     );
 
     // Detect convergence in-process by polling the exact scenario assert.
-    let timeout = variant.agents.convergence_timeout();
+    let timeout = convergence_timeout();
     let converged = poll_until_converged(&server, &provisioned, &scenario, timeout);
 
     // Stop: touch the sentinel and join every child.
