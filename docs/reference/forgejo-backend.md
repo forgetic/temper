@@ -187,12 +187,14 @@ state filter maps `Open → open`, `Closed → closed`, `None → all`. Normal r
 scan queries pass an explicit `open` state or labelled `closed` state; `all` is
 reserved for callers that ask for the portable default. Belt and suspenders
 against the provider ignoring `type=issues`, PR-as-issue rows are also dropped
-client-side. Author and assignee are filtered client-side after mapping (state
-and labels are filtered by the provider). When `details.dependencies=true` (the
-default), matching issues are enriched with their dependency links; summary list
-queries set `details.dependencies=false` and skip the dependency N+1, returning
-empty dependency vectors. Results are then sorted by the requested sort field,
-then by number, then by id for determinism.
+client-side. Forgejo 7.0.x has no reliable provider-side exact body-substring
+search, so `body_contains` is applied client-side after the state/label provider
+query; `Some("")` is the same as no body filter. Author and assignee are filtered
+client-side after mapping too. When `details.dependencies=true` (the default),
+matching issues are enriched with their dependency links; summary list queries
+set `details.dependencies=false` and skip the dependency N+1, returning empty
+dependency vectors. Results are then sorted by the requested sort field, then by
+number, then by id for determinism.
 
 `get_issue`/`get_issue_by_number` call `GET /issues/{number}`; a `404` **or** a
 PR-as-issue row maps to `Ok(None)`. The match is enriched with dependency links.
@@ -230,11 +232,14 @@ The portable state filter maps `Open → open`, both `Closed` and `Merged →
 closed`, and `None → all`; `Merged` is then re-checked client-side after the PR
 detail fetch. The labelled path deliberately does not fall back to
 `/pulls?state=all`, so provider-shape failures are explicit backend errors rather
-than silent broad scans. Author and assignee are filtered client-side after
-mapping. When `details.dependencies=true` (the default), matching pull requests
-are enriched with dependency links; summary list queries set
-`details.dependencies=false` and skip that dependency N+1. Results sort by the
-requested sort field, then by number, then by id for determinism.
+than silent broad scans. Forgejo 7.0.x has no reliable provider-side exact
+body-substring search, so `body_contains` is applied client-side after the
+existing state/label provider query; `Some("")` is the same as no body filter.
+Author and assignee are filtered client-side after mapping too. When
+`details.dependencies=true` (the default), matching pull requests are enriched
+with dependency links; summary list queries set `details.dependencies=false` and
+skip that dependency N+1. Results sort by the requested sort field, then by
+number, then by id for determinism.
 
 `get_pull_request`/`get_pull_request_by_number` call `GET /pulls/{number}`; a
 `404` maps to `Ok(None)`.

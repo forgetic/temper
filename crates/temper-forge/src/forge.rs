@@ -118,6 +118,8 @@ const fn default_include_dependencies() -> bool {
 pub struct IssueQuery {
     pub state: Option<IssueState>,
     pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_contains: Option<String>,
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
     pub sort: Option<ItemSort>,
@@ -130,6 +132,8 @@ pub struct IssueQuery {
 pub struct PullRequestQuery {
     pub state: Option<PullRequestState>,
     pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_contains: Option<String>,
     pub author_id: Option<UserId>,
     pub assignee_id: Option<UserId>,
     pub sort: Option<ItemSort>,

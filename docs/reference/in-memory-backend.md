@@ -11,7 +11,7 @@ It is a sibling to the filesystem backend (see ADR 0008) and intentionally
 reproduces the same observable contract so tests can swap between them. The
 contract below records only what is specific to the in-memory backend; the
 shared semantics (operations, identifiers, logical clock, ordering, query
-filters, error mapping) are defined in
+filters including `body_contains`, error mapping) are defined in
 [the filesystem backend reference](filesystem-backend.md) and apply identically
 here unless stated otherwise.
 

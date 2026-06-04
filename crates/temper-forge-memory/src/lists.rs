@@ -185,6 +185,11 @@ pub(crate) fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
     {
         return false;
     }
+    if let Some(needle) = &query.body_contains {
+        if !needle.is_empty() && !issue.body.contains(needle) {
+            return false;
+        }
+    }
     if let Some(author_id) = &query.author_id {
         if &issue.author_id != author_id {
             return false;
@@ -217,6 +222,11 @@ pub(crate) fn pull_request_matches_query(
         .all(|required| pull_request.labels.iter().any(|label| label == required))
     {
         return false;
+    }
+    if let Some(needle) = &query.body_contains {
+        if !needle.is_empty() && !pull_request.body.contains(needle) {
+            return false;
+        }
     }
     if let Some(author_id) = &query.author_id {
         if &pull_request.author_id != author_id {

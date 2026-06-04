@@ -73,6 +73,18 @@ List methods return all visible resources matching the query; the current interf
 List queries may include one optional sort. Backends must apply the requested primary sort and use deterministic tie-breaks such as item number or stable ID.
 If sort is absent, backends should still return deterministic results.
 
+Issue and pull-request list queries also carry `body_contains`, an optional
+exact body-substring filter intended for small correlation markers. When it is
+`Some(non_empty)`, a matching issue or pull request must have a body containing
+that exact substring; matching is case-sensitive, has no wildcard or regex
+semantics, and does not search titles or comments. `None` and `Some("")` have
+identical list-result semantics: no body filter. The filter composes with state,
+labels, author, assignee, sort, and detail flags. Backends may apply it
+provider-side or client-side after narrower provider filters such as state and
+labels, but the observable result set, sorting, and detail behavior must match.
+A backend must not widen an otherwise narrower provider query just to apply the
+portable body filter.
+
 Issue and pull-request list queries also carry `ItemListDetails`. The default
 is full detail (`dependencies=true`), preserving the historical contract that
 list results populate native dependency links. Callers that only need summary
@@ -135,7 +147,7 @@ Required methods:
 
 Issue state is `open` or `closed`.
 
-`IssueQuery` supports filtering by state, labels, author, assignee, and list detail. Label filtering is conjunctive: every requested label must be present. Issues can be sorted by number, creation time, or update time.
+`IssueQuery` supports filtering by state, conjunctive labels, exact body substring, author, assignee, and list detail. Every requested label must be present. Issues can be sorted by number, creation time, or update time.
 
 `Issue::dependencies` lists repository item numbers the issue depends on, sorted deterministically. New issues start with no dependencies. `UpdateIssue` may change title, body, state, labels, and assignees. Closing an open issue sets `closed_at`; reopening a closed issue clears `closed_at`. Label updates apply `set_labels`, then removals, then additions. Assignee changes are idempotent set operations; removals are applied before additions. `UpdateIssue` also carries an optional `expected_version` precondition; see [Optimistic concurrency](#optimistic-concurrency).
 
@@ -182,7 +194,7 @@ Pull-request state is `open`, `closed`, or `merged`. `PullRequest::dependencies`
 
 Merging must go through `merge_pull_request` so the backend can record merge metadata and produce the `merged` state.
 
-`PullRequestQuery` supports filtering by state, labels, author, assignee, and list detail. Label filtering is conjunctive. Pull requests can be sorted by number, creation time, or update time.
+`PullRequestQuery` supports filtering by state, conjunctive labels, exact body substring, author, assignee, and list detail. Pull requests can be sorted by number, creation time, or update time.
 
 ## Review operations
 

@@ -26,8 +26,9 @@ impl<C: HttpClient> ForgejoForge<C> {
     ///
     /// Forgejo returns pull requests from `/issues`, so the backend asks for
     /// `type=issues` and additionally drops any row carrying a `pull_request`
-    /// marker. The state filter and labels go to the provider; author and
-    /// assignee are applied client-side after mapping, then the portable sort.
+    /// marker. The state filter and labels go to the provider; body, author,
+    /// and assignee filters are applied client-side after mapping, then the
+    /// portable sort.
     pub async fn list_issues(
         &self,
         repo_id: &RepositoryId,
@@ -272,9 +273,14 @@ impl<C: HttpClient> ForgejoForge<C> {
 
 /// Returns whether an issue satisfies the client-side filters of `query`.
 ///
-/// State and labels are filtered by the provider; only author and assignee are
-/// re-checked here.
+/// State and labels are filtered by the provider; body, author, and assignee
+/// are checked here after the provider has already narrowed the result.
 fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
+    if let Some(needle) = &query.body_contains {
+        if !needle.is_empty() && !issue.body.contains(needle) {
+            return false;
+        }
+    }
     if let Some(author) = &query.author_id {
         if &issue.author_id != author {
             return false;

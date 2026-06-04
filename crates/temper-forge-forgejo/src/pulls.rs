@@ -1,11 +1,6 @@
-//! Pull-request operations: list/get/create/update, comments, reviewer
-//! requests, native reviews, and merge.
-//!
-//! These are inherent methods on [`ForgejoForge`] mirroring the
-//! [`temper_forge::Forge`] pull-request surface; the trait implementation is
-//! assembled once every phase's methods exist. Label and assignee changes reuse
-//! the shared item helpers in [`crate::items`] so pull requests and issues share
-//! one sequencing implementation. See `docs/reference/forgejo-backend.md`.
+//! Forgejo pull-request operations: list/get/create/update, comments,
+//! reviewers, native reviews, and merge. Label and assignee changes reuse the
+//! shared item helpers in [`crate::items`]. See `docs/reference/forgejo-backend.md`.
 
 use crate::ids::{
     format_review_id, format_user_id, parse_pull_request_id, parse_repository_id, RepoCoord,
@@ -25,11 +20,10 @@ use temper_forge::{
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists pull requests in a repository, filtered and sorted per `query`.
     ///
-    /// Unlabelled queries use Forgejo's `/pulls` state filter. Labelled queries
-    /// first discover candidate pull-request numbers through the issue endpoint
-    /// (`type=pulls`, `state`, and `labels`) so they scale with the labelled
-    /// candidate set instead of total pull-request history, then fetch details
-    /// only for those candidates.
+    /// Unlabelled queries use `/pulls` state filtering. Labelled queries use the
+    /// issue endpoint (`type=pulls`, `state`, `labels`) as the PR-label index,
+    /// then fetch candidate details. Body filtering stays client-side after the
+    /// existing state/label provider narrowing.
     pub async fn list_pull_requests(
         &self,
         repo_id: &RepositoryId,
@@ -561,6 +555,11 @@ fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
         .all(|required| pull.labels.iter().any(|label| label == required))
     {
         return false;
+    }
+    if let Some(needle) = &query.body_contains {
+        if !needle.is_empty() && !pull.body.contains(needle) {
+            return false;
+        }
     }
     if let Some(author) = &query.author_id {
         if &pull.author_id != author {
