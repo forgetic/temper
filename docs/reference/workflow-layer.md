@@ -233,6 +233,8 @@ Queue matching: a classified artifact matches a queue when its kind is one of th
 
 Queue activation: a queue with no activation policy is active whenever it has at least one matched member. A queue with `min_depth` and/or `max_age` is active when it is non-empty and either its member count is at least `min_depth` or the oldest timestamped member is at least `max_age` old at `now`. `max_age` uses the classified artifact's Forge `updated_at` timestamp; snapshot-classified artifacts without timestamps cannot satisfy the age branch.
 
+Runner scans are staged by queue interest, not by repository history. A normal role scan considers only queues subscribed by that role, plans Forge list queries from those queues' artifact targets and label sets, lists open candidates plus closed/merged candidates only when a non-empty queue label can select them, classifies the summary records, and then reads only the signal families needed by cheap-matched queues. Therefore unlabelled closed artifacts are not part of ordinary ticks, and a role with no CI-gated candidate queue performs no CI reads. Audit scans broaden queue interest to all workflow queues and workflow-label recovery interest, but they still do not issue closed-all queries; exact dependency targets are loaded by reference when dependency gates need them.
+
 Transition planning checks, in order, and collects every problem:
 
 - the transition is declared (else `UnknownTransition`)

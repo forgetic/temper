@@ -221,6 +221,18 @@ the same end state. CI is gated on a **commit-message marker** (`[ci-pass]`) the
 engineer's commit carries — not a checked-out file — because the host-mode runner
 has no `actions/checkout` offline.
 
+### Expected timing and scan diagnostics
+
+On a warmed local checkout, expect one shared setup line (~2s server, <1s runner,
+~3s identity provisioning) and one timing line per scenario. Recent runs finished
+in about 93–99s total, with worker convergence and real CI dominating. Each
+successful scenario also prints a worker scan summary (`ticks`, summed
+`scanned_repositories`, `ci_read_log_lines`, and last scanned paths); the suite
+enables `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback reads are counted.
+If times regress, first check that normal role ticks are not scanning many
+repositories or emitting CI reads from non-CI roles; timeout panics include the
+same summaries, worker log tails, runner log tail, and per-repo CI diagnostics.
+
 ## Long-poll webhook wakeup regressions
 
 Single repo:

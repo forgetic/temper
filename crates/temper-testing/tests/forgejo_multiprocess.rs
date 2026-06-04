@@ -248,6 +248,11 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
     });
     timing.final_assert = final_assert_start.elapsed();
     timing.total = scenario_start.elapsed();
+    eprintln!(
+        "forgejo_multiprocess scenario '{}' scan summary:\n{}",
+        variant.name,
+        workers.scan_summary()
+    );
 
     let _ = std::fs::remove_file(&paths.stop_file);
     if !std::thread::panicking() {

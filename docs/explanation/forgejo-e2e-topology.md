@@ -106,6 +106,17 @@ in `temper-forge-forgejo` (all behind the unchanged `Forge` signatures):
 - **`list_pull_request_reviews` keeps dismissed/stale verdicts** — history is
   preserved; the aggregate still takes the latest per reviewer.
 
+## Scaling shape
+
+The production scan fixes are part of the e2e topology now, not test-only
+shortcuts. Role workers derive candidate queries from subscribed queues, request
+summary issue/PR rows, prune unlabelled closed history, and read CI/review/
+dependency signals only after a cheap queue match needs them. Webhook wakeups
+narrow immediate role ticks to hinted configured repositories; poll and audit
+remain broad backstops. The shared Forgejo world removes repeated server/runner
+startup while fresh repos keep scenario state isolated, so the remaining runtime
+is mostly real CI convergence.
+
 ## Why it stays `#[ignore]`d
 
 It boots real OS processes (server, runner, N workers), executes CI **on the

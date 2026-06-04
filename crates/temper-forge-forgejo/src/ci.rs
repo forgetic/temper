@@ -31,6 +31,8 @@ use temper_forge::{
 
 /// Bound on Actions list responses, mirroring the reference TypeScript tooling.
 const ACTIONS_LIMIT: &str = "200";
+/// Optional diagnostic flag: when set, web-UI CI fallback reads are logged.
+const CI_DIAGNOSTICS_ENV: &str = "TEMPER_FORGEJO_CI_DIAGNOSTICS";
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists CI jobs for a repository, filtered by [`CiJobQuery`].
@@ -138,6 +140,7 @@ impl<C: HttpClient> ForgejoForge<C> {
                     .to_string(),
             ));
         };
+        log_web_ui_ci_read(repo, target, "read_ci_jobs_via_web_ui");
         let mut jobs = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
         if let Some(status) = query.status {
             jobs.retain(|job| job.status == status);
@@ -159,6 +162,7 @@ impl<C: HttpClient> ForgejoForge<C> {
                     .to_string(),
             ));
         };
+        log_web_ui_ci_read(&coord.repo, &Target::default(), "read_ci_job_via_web_ui");
         crate::ci_ui::read_ci_job(self, credentials, coord, repo_id).await
     }
 
@@ -481,6 +485,23 @@ fn compare_jobs(left: &CiJob, right: &CiJob, query: &CiJobQuery) -> Ordering {
     primary
         .then_with(|| left.name.cmp(&right.name))
         .then_with(|| left.id.cmp(&right.id))
+}
+
+fn log_web_ui_ci_read(repo: &RepoCoord, target: &Target, operation: &str) {
+    if std::env::var_os(CI_DIAGNOSTICS_ENV).is_none() {
+        return;
+    }
+    eprintln!(
+        "temper-forge-forgejo: {operation} repo={}/{} pr={} head_ref={} commit={}",
+        repo.owner,
+        repo.name,
+        target
+            .pr_number
+            .map(|number| number.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        target.pr_head_ref.as_deref().unwrap_or("-"),
+        target.commit_sha.as_deref().unwrap_or("-")
+    );
 }
 
 #[cfg(test)]

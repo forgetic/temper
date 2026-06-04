@@ -412,7 +412,11 @@ Both Actions endpoints return their array wrapped in a `workflow_runs` field; th
 backend tolerantly decodes that wrapper (and a bare array or `null`). Timestamps
 may arrive as RFC3339 strings (`*_at`) or unix-epoch integers (`created`/
 `updated`), so they decode through a flexible serde helper into
-`chrono::DateTime<Utc>`.
+`chrono::DateTime<Utc>`. Runner scans call `list_ci_jobs` only after
+queue/transition signal-needs analysis proves that the candidate can inspect CI,
+so non-CI role scans do not enter the REST or web-UI CI paths. Setting
+`TEMPER_FORGEJO_CI_DIAGNOSTICS=1` logs each web-UI CI fallback read without
+secrets for live/e2e diagnostics.
 
 ### Run matching
 

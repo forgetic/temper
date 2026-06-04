@@ -141,12 +141,15 @@ Status legend: ☐ pending · ☑ done
    7.6–25.8s real-CI cost. Subsequent validation runs saw 92.85–98.91s test
    time. Net improvement on this host: about 21–27s test time (~17–22%).
 
-6. ☐ **Phase 6 — Documentation, knobs, and performance acceptance.**
+6. ☑ **Phase 6 — Documentation, knobs, and performance acceptance.**
    `prompts/phase-6-docs-and-performance-acceptance.md`
 
-   Document the new scan contract, audit behavior, production knobs, and e2e
-   commands. Add regression/performance assertions that prove closed history and
-   CI web-UI reads do not grow with unrelated historical artifacts.
+   Documented the final staged scan contract, Forgejo backend hot paths,
+   production worker knobs, and Forgejo e2e timing/troubleshooting. Added a
+   default regression proving many closed unlabelled artifacts do not change role
+   scan results or query counts; earlier phase regressions cover non-CI role
+   scans avoiding CI and repo-specific wake scans avoiding non-hinted repos.
+   Timing and acceptance findings are recorded in [`findings.md`](findings.md).
 
 ## Whole-plan acceptance criteria
 

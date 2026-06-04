@@ -346,6 +346,63 @@ fn overlapping_candidate_queries_deduplicate_artifacts() {
 }
 
 #[test]
+fn closed_unlabelled_history_does_not_change_scan_result_or_query_count() {
+    #[derive(Debug, PartialEq)]
+    struct ScanShape {
+        items: Vec<WorkItem>,
+        issue_calls: usize,
+        pull_request_calls: usize,
+        issue_queries: Vec<IssueQuery>,
+        pull_request_queries: Vec<PullRequestQuery>,
+        ci_calls: usize,
+    }
+
+    fn scan_with_closed_history(history: usize) -> ScanShape {
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge);
+        create_issue(&forge, &repo, &["code", "ready"]);
+        for _ in 0..history {
+            let issue = create_issue(&forge, &repo, &[]);
+            close_issue(&forge, &repo, issue);
+            let pull_request = create_pr(&forge, &repo, &[]);
+            close_pr(&forge, &repo, pull_request);
+        }
+        let workflow = workflow_from_json(REFERENCE_FIXTURE);
+        let compiled = workflow.compile();
+        let counting = CountingForge::new(forge.clone());
+        let items = block_on(scan_role(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("engineer"),
+        ))
+        .expect("scan succeeds");
+        ScanShape {
+            items,
+            issue_calls: counting.count(CountedForgeOp::ListIssues),
+            pull_request_calls: counting.count(CountedForgeOp::ListPullRequests),
+            issue_queries: counting.issue_queries(),
+            pull_request_queries: counting.pull_request_queries(),
+            ci_calls: counting.count(CountedForgeOp::ListCiJobs),
+        }
+    }
+
+    let baseline = scan_with_closed_history(0);
+    let with_history = scan_with_closed_history(200);
+
+    assert_eq!(baseline, with_history);
+    assert_eq!(with_history.ci_calls, 0);
+    assert!(closed_issue_queries_have_labels(
+        &with_history.issue_queries
+    ));
+    assert!(closed_pull_request_queries_have_labels(
+        &with_history.pull_request_queries
+    ));
+}
+
+#[test]
 fn role_scan_does_not_request_closed_unlabelled_history() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

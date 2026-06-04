@@ -11,6 +11,7 @@ Current reference pages:
 - [In-memory backend](in-memory-backend.md)
 - [Forgejo backend](forgejo-backend.md)
 - [Workflow layer](workflow-layer.md)
+- [Production worker runtime](production-worker.md)
 - [Cross-repository workflow contracts](cross-repo-workflows.md)
 - [Interactive conversation interface](interactive-conversation-interface.md)
 - [Interaction profile spec](interaction-profile-spec.md)

@@ -33,7 +33,9 @@ trait before planning or mutating.
 Backends and adapters that can emit hints may expose an inherent subscribe/watch
 method or wrapper returning a `ChangeSource`. Backends that cannot emit hints are
 still complete Forge implementations; periodic polling remains the liveness and
-correctness backstop.
+correctness backstop. Multi-repository runners may narrow an immediate wake tick
+to configured repositories named by known hints, but unknown/no-hint batches and
+ordinary poll/audit ticks must fall back to the configured scan set.
 
 ## Identity model
 
@@ -76,8 +78,10 @@ is full detail (`dependencies=true`), preserving the historical contract that
 list results populate native dependency links. Callers that only need summary
 fields may set `details.dependencies=false`; then backends may skip dependency
 link enrichment and must return an empty `dependencies` vector in each listed
-item. Exact `get_*` lookups and dependency mutation returns still carry
-available dependency detail.
+item. Runner candidate scans use summary lists and queue-derived `state`/`labels`
+filters so normal ticks do not fetch unlabelled closed history; dependency-gated
+paths reload exact artifacts when they need dependency links. Exact `get_*`
+lookups and dependency mutation returns still carry available dependency detail.
 
 ## Error categories
 

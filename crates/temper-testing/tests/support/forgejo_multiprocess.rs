@@ -194,7 +194,8 @@ fn spawn_worker(
     command
         .env_remove(FORGEJO_TOKEN_ENV)
         .env_remove(FORGEJO_USERNAME_ENV)
-        .env_remove(FORGEJO_PASSWORD_ENV);
+        .env_remove(FORGEJO_PASSWORD_ENV)
+        .env("TEMPER_FORGEJO_CI_DIAGNOSTICS", "1");
     for (key, value) in env {
         command.env(key, value);
     }
