@@ -89,7 +89,9 @@ window, but a wider window can no longer produce a lost-update lease race.
   `Executor::ensure_issue_with_parent`, and `Executor::ensure_pull_request`
   stamp the correlation key into the new body before creating, so an issue or PR
   create that crashes after it lands is found by the retry instead of being
-  duplicated. The parent-aware issue path also ensures a found child issue keeps
+  duplicated. Normal retries use bounded summary list queries over explicit
+  states plus create labels and a body marker, then parse metadata to confirm the
+  exact key. The parent-aware issue path also ensures a found child issue keeps
   the repo-qualified parent back-reference needed by cross-repo fan-out.
 - **At-most-once merge.** `MergePullRequest` runs before the label commit point
   and is skipped when the freshly loaded pull request is already merged. A crash

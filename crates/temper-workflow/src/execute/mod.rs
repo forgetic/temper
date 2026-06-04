@@ -74,13 +74,18 @@
 //! [`Executor::ensure_pull_request`] implement idempotency in the workflow
 //! layer: they stamp a
 //! [correlation key](crate::metadata::WorkflowMetadata::correlation_key) into
-//! the new artifact's metadata block and search existing artifacts for that key
-//! before creating. Retrying with the same key returns the existing artifact
-//! instead of creating a duplicate.
+//! the new artifact's metadata block, then search with bounded summary list
+//! queries over explicit states, create labels, and a body marker before
+//! creating. The body marker is only a narrowing hint; the executor parses the
+//! metadata block and compares the exact key before accepting a match. Retrying
+//! with the same key returns the existing artifact instead of creating a
+//! duplicate.
 
 mod apply;
 mod ensure;
 mod signals;
+
+pub use ensure::CorrelationLookupPlan;
 
 use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, Classifier};
 use crate::context::ExecutionContext;

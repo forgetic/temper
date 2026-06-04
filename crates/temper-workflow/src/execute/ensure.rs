@@ -4,8 +4,8 @@ use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMeta
 use std::collections::BTreeSet;
 use std::sync::{Condvar, Mutex, OnceLock};
 use temper_forge::{
-    CreateIssue, CreatePullRequest, Forge, Issue, IssueQuery, PullRequest, PullRequestQuery,
-    RepositoryId, UpdateIssue,
+    CreateIssue, CreatePullRequest, Forge, Issue, IssueId, IssueQuery, IssueState, ItemListDetails,
+    PullRequest, PullRequestId, PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -40,7 +40,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     ) -> Result<EnsureOutcome<Issue>, ExecutionError> {
         let _guard = correlation_locks().acquire(lock_key("issue", repo_id, correlation_key));
         if let Some(existing) = self
-            .find_issue_by_correlation(repo_id, correlation_key)
+            .find_issue_by_correlation(repo_id, correlation_key, &input.labels)
             .await?
         {
             let existing = self.ensure_issue_parent(existing, parent).await?;
@@ -72,7 +72,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     ) -> Result<EnsureOutcome<PullRequest>, ExecutionError> {
         let _guard = correlation_locks().acquire(lock_key("pull", repo_id, correlation_key));
         if let Some(existing) = self
-            .find_pull_request_by_correlation(repo_id, correlation_key)
+            .find_pull_request_by_correlation(repo_id, correlation_key, &input.labels)
             .await?
         {
             return Ok(EnsureOutcome::Existing(existing));
@@ -92,12 +92,19 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         repo_id: &RepositoryId,
         correlation_key: &str,
+        labels: &[String],
     ) -> Result<Option<Issue>, ExecutionError> {
-        let issues = self
-            .forge
-            .list_issues(repo_id, IssueQuery::default())
-            .await?;
-        Ok(issues
+        let plan = CorrelationLookupPlan::new(correlation_key, labels);
+        let mut seen = BTreeSet::<IssueId>::new();
+        let mut candidates = Vec::new();
+        for query in plan.issue_queries() {
+            for issue in self.forge.list_issues(repo_id, query).await? {
+                if seen.insert(issue.id.clone()) {
+                    candidates.push(issue);
+                }
+            }
+        }
+        Ok(candidates
             .into_iter()
             .find(|issue| metadata_has_correlation_key(&issue.body, correlation_key)))
     }
@@ -133,15 +140,92 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         &self,
         repo_id: &RepositoryId,
         correlation_key: &str,
+        labels: &[String],
     ) -> Result<Option<PullRequest>, ExecutionError> {
-        let pull_requests = self
-            .forge
-            .list_pull_requests(repo_id, PullRequestQuery::default())
-            .await?;
-        Ok(pull_requests
+        let plan = CorrelationLookupPlan::new(correlation_key, labels);
+        let mut seen = BTreeSet::<PullRequestId>::new();
+        let mut candidates = Vec::new();
+        for query in plan.pull_request_queries() {
+            for pull_request in self.forge.list_pull_requests(repo_id, query).await? {
+                if seen.insert(pull_request.id.clone()) {
+                    candidates.push(pull_request);
+                }
+            }
+        }
+        Ok(candidates
             .into_iter()
             .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
     }
+}
+
+/// Bounded list-query plan for correlation-key lookups.
+///
+/// The body filter is only a narrowing hint. Callers must still parse the
+/// workflow metadata block and compare the exact correlation key before
+/// accepting a match.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CorrelationLookupPlan {
+    body_contains: String,
+    labels: Vec<String>,
+}
+
+impl CorrelationLookupPlan {
+    /// Builds a state-explicit, summary-only correlation lookup plan.
+    pub fn new(correlation_key: &str, labels: &[String]) -> Self {
+        Self {
+            body_contains: correlation_body_marker(correlation_key),
+            labels: normalized_labels(labels),
+        }
+    }
+
+    /// Issue queries for open and closed state, with create labels when known.
+    pub fn issue_queries(&self) -> Vec<IssueQuery> {
+        [IssueState::Open, IssueState::Closed]
+            .into_iter()
+            .map(|state| IssueQuery {
+                state: Some(state),
+                labels: self.labels.clone(),
+                body_contains: Some(self.body_contains.clone()),
+                author_id: None,
+                assignee_id: None,
+                sort: None,
+                details: ItemListDetails::summary(),
+            })
+            .collect()
+    }
+
+    /// Pull-request queries for open, closed, and merged state, with create labels when known.
+    pub fn pull_request_queries(&self) -> Vec<PullRequestQuery> {
+        [
+            PullRequestState::Open,
+            PullRequestState::Closed,
+            PullRequestState::Merged,
+        ]
+        .into_iter()
+        .map(|state| PullRequestQuery {
+            state: Some(state),
+            labels: self.labels.clone(),
+            body_contains: Some(self.body_contains.clone()),
+            author_id: None,
+            assignee_id: None,
+            sort: None,
+            details: ItemListDetails::summary(),
+        })
+        .collect()
+    }
+}
+
+fn normalized_labels(labels: &[String]) -> Vec<String> {
+    let mut labels = labels.to_vec();
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+fn correlation_body_marker(correlation_key: &str) -> String {
+    let escaped_key = serde_json::to_string(correlation_key)
+        .expect("serializing a correlation key string cannot fail");
+    format!("\"correlation_key\": {escaped_key}")
 }
 
 /// Returns `true` when `body` has a metadata block with `correlation_key`.

@@ -8,18 +8,18 @@
 
 use crate::WorkItem;
 use async_trait::async_trait;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use temper_forge::{
     CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest,
-    PullRequestQuery, Repository, RepositoryId, UpdateIssue,
+    Repository, RepositoryId, UpdateIssue,
 };
 use temper_workflow::{
-    parse_metadata_block, replace_metadata_block, ArtifactRef, ArtifactSource, EnsureOutcome,
-    ExecutionContext, ExecutionError, ExecutionReport, Executor, RoleId, TransitionId,
-    ValidatedWorkflow, WorkflowMetadata,
+    parse_metadata_block, replace_metadata_block, ArtifactRef, ArtifactSource,
+    CorrelationLookupPlan, EnsureOutcome, ExecutionContext, ExecutionError, ExecutionReport,
+    Executor, RoleId, TransitionId, ValidatedWorkflow, WorkflowMetadata,
 };
 
 /// Error returned by an [`Agent`] while servicing a work item.
@@ -343,11 +343,17 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         &self,
         correlation_key: &str,
     ) -> Result<Option<PullRequest>, ForgeError> {
-        let pull_requests = self
-            .forge
-            .list_pull_requests(self.repo, PullRequestQuery::default())
-            .await?;
-        Ok(pull_requests
+        let plan = CorrelationLookupPlan::new(correlation_key, &[]);
+        let mut seen = BTreeSet::new();
+        let mut candidates = Vec::new();
+        for query in plan.pull_request_queries() {
+            for pull_request in self.forge.list_pull_requests(self.repo, query).await? {
+                if seen.insert(pull_request.id.clone()) {
+                    candidates.push(pull_request);
+                }
+            }
+        }
+        Ok(candidates
             .into_iter()
             .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
     }
@@ -359,11 +365,17 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         target_repo: &RepositoryId,
         correlation_key: &str,
     ) -> Result<Option<Issue>, ForgeError> {
-        let issues = self
-            .forge
-            .list_issues(target_repo, Default::default())
-            .await?;
-        Ok(issues
+        let plan = CorrelationLookupPlan::new(correlation_key, &[]);
+        let mut seen = BTreeSet::new();
+        let mut candidates = Vec::new();
+        for query in plan.issue_queries() {
+            for issue in self.forge.list_issues(target_repo, query).await? {
+                if seen.insert(issue.id.clone()) {
+                    candidates.push(issue);
+                }
+            }
+        }
+        Ok(candidates
             .into_iter()
             .find(|issue| metadata_has_correlation_key(&issue.body, correlation_key)))
     }

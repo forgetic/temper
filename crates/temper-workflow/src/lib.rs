@@ -112,7 +112,9 @@ pub use compile::{
 };
 pub use context::ExecutionContext;
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
-pub use execute::{EnsureOutcome, ExecutionError, ExecutionReport, Executor};
+pub use execute::{
+    CorrelationLookupPlan, EnsureOutcome, ExecutionError, ExecutionReport, Executor,
+};
 pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId,

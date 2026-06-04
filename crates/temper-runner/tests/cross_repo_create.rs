@@ -1,15 +1,22 @@
+mod support;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
-use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, ItemNumber, RepositoryId};
+use support::{CountedForgeOp, CountingForge};
+use temper_forge::{
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
+    ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
+    RepositoryId, UpdateIssue, UserId,
+};
 use temper_forge_filesystem::FilesystemForge;
 use temper_forge_memory::MemoryForge;
 use temper_runner::RoleTools;
 use temper_testing::{block_on, workflow};
 use temper_workflow::{
-    global_child_correlation_key, parse_metadata_block, ArtifactRef, EnsureOutcome,
-    ExecutionContext, RoleId,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactRef,
+    EnsureOutcome, ExecutionContext, RoleId, WorkflowMetadata,
 };
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
@@ -148,6 +155,140 @@ fn memory_missing_target_repo_reports_permission_or_visibility_error() {
 }
 
 #[test]
+fn role_tools_correlation_helpers_use_targeted_summary_queries() {
+    let forge = MemoryForge::new();
+    let repo = memory_repo(&forge, "service");
+    let issue_key = "closed-child";
+    let issue = block_on(forge.create_issue(
+        &repo,
+        CreateIssue {
+            title: "Closed child".into(),
+            body: body_with_correlation(issue_key),
+            labels: vec!["code".into()],
+            assignees: Vec::new(),
+        },
+    ))
+    .expect("issue created");
+    block_on(forge.update_issue(
+        &issue.id,
+        UpdateIssue {
+            state: Some(IssueState::Closed),
+            ..UpdateIssue::default()
+        },
+    ))
+    .expect("issue closed");
+
+    let pr_key = "merged-pr";
+    let pull_request = block_on(forge.create_pull_request(
+        &repo,
+        CreatePullRequest {
+            title: "Implementation".into(),
+            body: body_with_correlation(pr_key),
+            source: BranchRef {
+                repository_id: repo.clone(),
+                branch: "feature".into(),
+            },
+            target: BranchRef {
+                repository_id: repo.clone(),
+                branch: "main".into(),
+            },
+            labels: vec!["implementation".into()],
+            assignees: Vec::<UserId>::new(),
+        },
+    ))
+    .expect("pull request created");
+    block_on(forge.merge_pull_request(
+        &pull_request.id,
+        MergePullRequest {
+            method: MergeMethod::MergeCommit,
+            commit_title: None,
+            commit_body: None,
+        },
+    ))
+    .expect("pull request merged");
+
+    let counted = CountingForge::new(forge.clone());
+    let workflow = workflow();
+    let tools = RoleTools::new(
+        &workflow,
+        &counted,
+        &repo,
+        RoleId::new("architect"),
+        ExecutionContext::default(),
+    );
+
+    let found_issue = block_on(tools.find_issue_in_repo_by_correlation(&repo, issue_key))
+        .expect("issue lookup succeeds")
+        .expect("issue is found");
+    assert_eq!(found_issue.number, issue.number);
+    assert_eq!(found_issue.state, IssueState::Closed);
+
+    let found_pr = block_on(tools.find_pull_request_by_correlation(pr_key))
+        .expect("pull-request lookup succeeds")
+        .expect("pull request is found");
+    assert_eq!(found_pr.number, pull_request.number);
+    assert_eq!(found_pr.state, PullRequestState::Merged);
+
+    assert_eq!(counted.count(CountedForgeOp::ListIssues), 2);
+    assert_eq!(counted.count(CountedForgeOp::ListPullRequests), 3);
+    assert_eq!(
+        counted.issue_queries(),
+        vec![
+            IssueQuery {
+                state: Some(IssueState::Open),
+                labels: Vec::new(),
+                body_contains: Some("\"correlation_key\": \"closed-child\"".into()),
+                author_id: None,
+                assignee_id: None,
+                sort: None,
+                details: ItemListDetails::summary(),
+            },
+            IssueQuery {
+                state: Some(IssueState::Closed),
+                labels: Vec::new(),
+                body_contains: Some("\"correlation_key\": \"closed-child\"".into()),
+                author_id: None,
+                assignee_id: None,
+                sort: None,
+                details: ItemListDetails::summary(),
+            },
+        ]
+    );
+    assert_eq!(
+        counted.pull_request_queries(),
+        vec![
+            PullRequestQuery {
+                state: Some(PullRequestState::Open),
+                labels: Vec::new(),
+                body_contains: Some("\"correlation_key\": \"merged-pr\"".into()),
+                author_id: None,
+                assignee_id: None,
+                sort: None,
+                details: ItemListDetails::summary(),
+            },
+            PullRequestQuery {
+                state: Some(PullRequestState::Closed),
+                labels: Vec::new(),
+                body_contains: Some("\"correlation_key\": \"merged-pr\"".into()),
+                author_id: None,
+                assignee_id: None,
+                sort: None,
+                details: ItemListDetails::summary(),
+            },
+            PullRequestQuery {
+                state: Some(PullRequestState::Merged),
+                labels: Vec::new(),
+                body_contains: Some("\"correlation_key\": \"merged-pr\"".into()),
+                author_id: None,
+                assignee_id: None,
+                sort: None,
+                details: ItemListDetails::summary(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn filesystem_distinct_handles_racing_converge_on_one_child_issue() {
     let root = TempRoot::new();
     let setup = root.forge();
@@ -228,6 +369,16 @@ fn issue_input(title: impl Into<String>, body: impl Into<String>) -> CreateIssue
         labels: Vec::new(),
         assignees: Vec::new(),
     }
+}
+
+fn body_with_correlation(key: &str) -> String {
+    format!(
+        "body\n\n{}",
+        render_metadata_block(&WorkflowMetadata {
+            correlation_key: Some(key.to_string()),
+            ..WorkflowMetadata::default()
+        })
+    )
 }
 
 fn create_issue<F: Forge + ?Sized>(
