@@ -56,6 +56,15 @@ pub enum FaultPoint {
     After,
 }
 
+/// Error category emitted by a deterministic fault.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FaultError {
+    /// Emit a generic backend failure, modelling a crash or unavailable store.
+    Backend,
+    /// Emit a portable conflict, used by merge-conflict/rejection tests.
+    Conflict,
+}
+
 /// A single deterministic fault: fail `op` on its `occurrence`-th call.
 #[derive(Clone, Copy, Debug)]
 pub struct Fault {
@@ -63,6 +72,7 @@ pub struct Fault {
     /// 1-based call index at which to fire.
     pub occurrence: usize,
     pub point: FaultPoint,
+    pub error: FaultError,
 }
 
 impl Fault {
@@ -72,6 +82,7 @@ impl Fault {
             op,
             occurrence,
             point: FaultPoint::Before,
+            error: FaultError::Backend,
         }
     }
 
@@ -81,6 +92,27 @@ impl Fault {
             op,
             occurrence,
             point: FaultPoint::After,
+            error: FaultError::Backend,
+        }
+    }
+
+    /// A conflict fault that fails before the backend is touched.
+    pub fn conflict_before(op: ForgeOp, occurrence: usize) -> Self {
+        Self {
+            op,
+            occurrence,
+            point: FaultPoint::Before,
+            error: FaultError::Conflict,
+        }
+    }
+
+    /// A conflict fault that fails after the backend mutation has landed.
+    pub fn conflict_after(op: ForgeOp, occurrence: usize) -> Self {
+        Self {
+            op,
+            occurrence,
+            point: FaultPoint::After,
+            error: FaultError::Conflict,
         }
     }
 }
@@ -147,16 +179,18 @@ impl<F: Forge> CrashForge<F> {
 
     /// Fails when a fault is armed for `op` at this `occurrence` and `point`.
     fn guard(&self, op: ForgeOp, occurrence: usize, point: FaultPoint) -> ForgeResult<()> {
-        let armed = self
+        let fault = self
             .faults
             .iter()
-            .any(|fault| fault.op == op && fault.occurrence == occurrence && fault.point == point);
-        if armed {
-            Err(ForgeError::Backend(format!(
+            .find(|fault| fault.op == op && fault.occurrence == occurrence && fault.point == point);
+        match fault.map(|fault| fault.error) {
+            Some(FaultError::Backend) => Err(ForgeError::Backend(format!(
                 "injected fault: {op:?} {point:?} on call #{occurrence}"
-            )))
-        } else {
-            Ok(())
+            ))),
+            Some(FaultError::Conflict) => Err(ForgeError::Conflict(format!(
+                "injected conflict: {op:?} {point:?} on call #{occurrence}"
+            ))),
+            None => Ok(()),
         }
     }
 }

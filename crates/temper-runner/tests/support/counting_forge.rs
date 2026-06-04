@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use temper_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
-    CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
-    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
-    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
+    IssueQuery, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
+    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
+    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -23,6 +23,7 @@ pub enum CountedForgeOp {
 pub struct CountingForge<F: Forge> {
     inner: F,
     counts: Mutex<HashMap<CountedForgeOp, usize>>,
+    merge_conflicts: Mutex<HashMap<PullRequestId, String>>,
     issue_queries: Mutex<Vec<IssueQuery>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
 }
@@ -32,6 +33,7 @@ impl<F: Forge> CountingForge<F> {
         Self {
             inner,
             counts: Mutex::new(HashMap::new()),
+            merge_conflicts: Mutex::new(HashMap::new()),
             issue_queries: Mutex::new(Vec::new()),
             pull_request_queries: Mutex::new(Vec::new()),
         }
@@ -44,6 +46,14 @@ impl<F: Forge> CountingForge<F> {
             .expect("counts mutex")
             .get(&op)
             .unwrap_or(&0)
+    }
+
+    #[allow(dead_code)]
+    pub fn reject_merge_for(&self, id: PullRequestId, message: impl Into<String>) {
+        self.merge_conflicts
+            .lock()
+            .expect("merge conflicts mutex")
+            .insert(id, message.into());
     }
 
     #[allow(dead_code)]
@@ -267,6 +277,15 @@ impl<F: Forge> Forge for CountingForge<F> {
         input: MergePullRequest,
     ) -> ForgeResult<MergeRecord> {
         self.tick(CountedForgeOp::MergePullRequest);
+        if let Some(message) = self
+            .merge_conflicts
+            .lock()
+            .expect("merge conflicts mutex")
+            .get(id)
+            .cloned()
+        {
+            return Err(ForgeError::Conflict(message));
+        }
         self.inner.merge_pull_request(id, input).await
     }
 

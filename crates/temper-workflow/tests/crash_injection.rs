@@ -18,7 +18,7 @@
 mod support;
 
 use chrono::Duration;
-use support::crash::{CrashForge, Fault, FaultPoint, ForgeOp};
+use support::crash::{CrashForge, Fault, FaultError, FaultPoint, ForgeOp};
 use support::{
     add_issue_dependency, block_on, close_issue, create_issue, issue_labels, new_repo, ts,
     workflow, TestRoot,
@@ -137,6 +137,7 @@ fn a_claim_is_applied_at_most_once_under_any_single_write_fault() {
                 op: ForgeOp::UpdateIssue,
                 occurrence: 1,
                 point,
+                error: FaultError::Backend,
             }],
         );
         let workflow = workflow();
@@ -399,6 +400,7 @@ fn applying_a_repair_is_retry_safe_under_a_crash() {
                 op: ForgeOp::UpdateIssue,
                 occurrence: 1,
                 point,
+                error: FaultError::Backend,
             }],
         );
         let workflow = workflow();
@@ -479,6 +481,7 @@ fn applying_an_unblock_is_retry_safe_under_a_crash() {
                 op: ForgeOp::UpdateIssue,
                 occurrence: 1,
                 point,
+                error: FaultError::Backend,
             }],
         );
         let workflow = workflow();

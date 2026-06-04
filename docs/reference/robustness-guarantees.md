@@ -36,6 +36,7 @@ is supplied explicitly, so the suite is reproducible.
 | A merge is not authorized, and the pull request is not merged, until native review approval and CI gates pass; once gated, it merges and projects `landed`/`alignment` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
 | The gate mechanism blocks a merge until native CI conclusions plus native review approval both pass | `the_merge_gate_mechanism_requires_ci_and_review_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
+| Merge rejections are typed only after a re-read: open/unmerged PRs return `MergeConflict`, while a conflict response after a successful merge still projects post-merge labels | `merge_conflict.rs` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
@@ -100,9 +101,11 @@ window, but a wider window can no longer produce a lost-update lease race.
   and is skipped when the freshly loaded pull request is already merged. A crash
   that lands the merge but loses the response leaves the post-merge labels
   unapplied; the retry observes the merged state, skips the merge, and finishes
-  the `landed`/`alignment` projection. Those labels are also the planner
-  re-run guard, so the merge happens exactly once and the post-merge projection
-  survives on the closed pull request.
+  the `landed`/`alignment` projection. A merge `Conflict` response is also
+  re-read before routing: already merged continues projection, missing/closed is
+  stale, and only still-open unmerged is a typed merge conflict. Those labels
+  are also the planner re-run guard, so the merge happens exactly once and the
+  post-merge projection survives on the closed pull request.
 - **Applied reconciler actions.** `recover::Applier` applies a `ReconcileReport`
   through the existing components (the executor's idempotent label-apply path,
   `LeaseManager::clear`, and the command journal). Each mutating action loads

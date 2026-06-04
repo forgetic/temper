@@ -332,7 +332,11 @@ The merge `POST` returns no usable body, so the backend re-fetches the pull
 request for the merge commit SHA, merger, and timestamp; the returned
 `MergeRecord` reports the method that was requested. A success with no merge
 record maps to `Backend`. `404` maps to `NotFound`; `405`/`409`/`412`/`422`
-(already merged, not mergeable, failed precondition) map to `Conflict`.
+(already merged, not mergeable, failed precondition) map to `Conflict`. Forgejo
+responses do not give the portable backend enough information to distinguish
+content conflicts from branch-protection or other merge rejections, so the
+workflow executor conservatively treats a `Conflict` response on an open,
+unmerged pull request as an engineer-routable merge conflict for now.
 
 ## Dependency links
 

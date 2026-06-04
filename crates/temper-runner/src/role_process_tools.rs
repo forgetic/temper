@@ -376,6 +376,7 @@ fn stale_execution(error: &ExecutionError) -> bool {
         error,
         ExecutionError::Precondition { .. }
             | ExecutionError::TargetMissing { .. }
+            | ExecutionError::TargetStale { .. }
             | ExecutionError::Classification(_)
     )
 }

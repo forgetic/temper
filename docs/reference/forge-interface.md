@@ -216,7 +216,7 @@ Provider-specific review policy is outside this portable contract: CODEOWNERS, r
 - merging user
 - merge timestamp
 
-Backends that cannot support a requested merge method must return `ForgeError::InvalidRequest` or `ForgeError::Conflict`, depending on whether the method is unsupported in general or unavailable for the current pull request.
+Backends that cannot support a requested merge method must return `ForgeError::InvalidRequest` or `ForgeError::Conflict`, depending on whether the method is unsupported in general or unavailable for the current pull request. A merge `Conflict` is a current-state merge rejection only for the merge operation; callers must not treat generic backend conflicts (for example compare-and-swap failures on updates) as merge conflicts. The workflow executor re-reads the pull request after a merge `Conflict`: if it is already merged, at-most-once post-merge projection continues; if it is missing or closed, the target is stale; if it remains open and unmerged, the executor returns a typed workflow-routable merge conflict.
 
 ## CI job operations
 

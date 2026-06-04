@@ -43,6 +43,8 @@ pub struct AutomatedWorkItem {
     pub actor: RoleId,
     /// Transition declared by the queue automation metadata.
     pub transition: TransitionId,
+    /// Optional fallback transition declared for merge-conflict routing.
+    pub on_merge_conflict: Option<TransitionId>,
     /// Forge artifact to service.
     pub target: ArtifactSource,
     /// Workflow artifact kind resolved during classification.
@@ -338,6 +340,7 @@ fn automated_work_items(
                 queue: queue.id.clone(),
                 actor: automation.actor.clone(),
                 transition: automation.transition.clone(),
+                on_merge_conflict: automation.on_merge_conflict.clone(),
                 target: member.source,
                 kind: member.kind.clone(),
             });

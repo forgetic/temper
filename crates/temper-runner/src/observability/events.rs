@@ -244,6 +244,8 @@ pub fn execution_error_failure_class(error: &ExecutionError) -> String {
             .unwrap_or_else(|| "precondition".to_string()),
         ExecutionError::Classification(_) => "classification".to_string(),
         ExecutionError::TargetMissing { .. } => "target_missing".to_string(),
+        ExecutionError::TargetStale { .. } => "target_stale".to_string(),
+        ExecutionError::MergeConflict { .. } => "merge_conflict".to_string(),
         ExecutionError::UnsupportedEffect { .. } => "unsupported_effect".to_string(),
         ExecutionError::UnresolvedAssignee { .. } => "unresolved_assignee".to_string(),
         ExecutionError::UnresolvedReviewer { .. } => "unresolved_reviewer".to_string(),

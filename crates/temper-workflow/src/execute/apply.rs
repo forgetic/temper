@@ -18,9 +18,8 @@ use crate::ids::{RoleId, TransitionId};
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
 use std::collections::HashSet;
 use temper_forge::{
-    CreateComment, CreatePullRequest, CreatePullRequestReview, Forge, MergeMethod,
-    MergePullRequest, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,
-    UpdatePullRequest, UserId,
+    CreateComment, CreatePullRequest, CreatePullRequestReview, Forge, RepositoryId,
+    RequestReviewers, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -46,7 +45,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .await?;
         self.apply_reviews(loaded, &plan.transition, &prepared.reviews)
             .await?;
-        self.apply_merge(loaded, prepared.merge).await?;
+        self.apply_merge(repo_id, loaded, prepared.merge).await?;
         let committed = self.apply_update(loaded, prepared).await?;
         if let Some(state) = committed {
             self.verify_state(&state, &plan.postconditions)?;
@@ -339,38 +338,6 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 .as_deref()
                 .is_some_and(|body| body.contains(&marker))
         }))
-    }
-
-    /// Merges the target pull request at most once.
-    ///
-    /// Runs before the label commit point so that the post-merge labels (which
-    /// the transition declares as ordinary `add_label` effects) double as the
-    /// "already done" marker: once they land, a retry's planner sees them
-    /// present and refuses to re-run. A pull request that is already merged
-    /// (observed in the freshly loaded state) is skipped, so a crash that lands
-    /// the merge but loses the response never merges twice on retry. A merge
-    /// effect targeting an issue is impossible under a validated workflow (the
-    /// transition's artifact kind maps to a pull-request target); it is rejected
-    /// defensively as unsupported rather than silently ignored.
-    async fn apply_merge(&self, loaded: &Loaded, merge: bool) -> Result<(), ExecutionError> {
-        if !merge {
-            return Ok(());
-        }
-        let Loaded::PullRequest { id, merged, .. } = loaded else {
-            return Err(ExecutionError::UnsupportedEffect {
-                effect: WorkflowEffect::MergePullRequest,
-            });
-        };
-        if *merged {
-            return Ok(());
-        }
-        let input = MergePullRequest {
-            method: MergeMethod::MergeCommit,
-            commit_title: None,
-            commit_body: None,
-        };
-        self.forge.merge_pull_request(id, input).await?;
-        Ok(())
     }
 
     /// Posts each planned comment at most once, guarded by a deterministic

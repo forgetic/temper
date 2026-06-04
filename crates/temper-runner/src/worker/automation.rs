@@ -6,13 +6,15 @@ use crate::scan::{scan_automated_queues, AutomatedWorkItem};
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, ExecutionError, Executor, PlanDiagnostic, ValidatedWorkflow,
+    ArtifactSource, CompiledWorkflow, ExecutionError, Executor, PlanDiagnostic, TransitionId,
+    ValidatedWorkflow,
 };
 
 #[derive(Default)]
 struct AutomationCounts {
     candidates: usize,
     applied: usize,
+    merge_conflicts_routed: usize,
     unchanged: usize,
     gate_not_satisfied: usize,
     errors: usize,
@@ -27,6 +29,13 @@ impl AutomationCounts {
 enum ExpectedPreconditionOutcome {
     Unchanged,
     GateNotSatisfied,
+}
+
+#[derive(Clone, Copy)]
+struct AutomationContext<'a> {
+    worker: &'a str,
+    repo: &'a RepositoryId,
+    workflow_id: &'a str,
 }
 
 pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
@@ -52,6 +61,11 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
         ..AutomationCounts::default()
     };
     let mut progress = Progress::unchanged();
+    let context = AutomationContext {
+        worker,
+        repo,
+        workflow_id: workflow.name(),
+    };
 
     for item in items {
         match executor
@@ -62,9 +76,9 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
                 counts.applied = counts.applied.saturating_add(1);
                 progress.record(true);
                 log_automation_item(
-                    worker,
-                    repo,
-                    workflow.name(),
+                    context.worker,
+                    context.repo,
+                    context.workflow_id,
                     &item,
                     "applied",
                     None,
@@ -72,34 +86,19 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
                 );
             }
             Err(error) => {
-                if let Some(outcome) = expected_precondition_outcome(&error) {
-                    let diagnostics = execution_error_diagnostic_classes(&error);
-                    match outcome {
-                        ExpectedPreconditionOutcome::Unchanged => {
-                            counts.unchanged = counts.unchanged.saturating_add(1);
-                            log_automation_item(
-                                worker,
-                                repo,
-                                workflow.name(),
-                                &item,
-                                "unchanged",
-                                None,
-                                diagnostics,
-                            );
-                        }
-                        ExpectedPreconditionOutcome::GateNotSatisfied => {
-                            counts.gate_not_satisfied = counts.gate_not_satisfied.saturating_add(1);
-                            log_automation_item(
-                                worker,
-                                repo,
-                                workflow.name(),
-                                &item,
-                                "gate_not_satisfied",
-                                None,
-                                diagnostics,
-                            );
-                        }
-                    }
+                if route_merge_conflict(
+                    &context,
+                    executor,
+                    &item,
+                    &error,
+                    &mut counts,
+                    &mut progress,
+                )
+                .await?
+                {
+                    continue;
+                }
+                if record_expected_precondition(&context, &item, &error, &mut counts) {
                     continue;
                 }
 
@@ -107,22 +106,145 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
                 let failure_class = execution_error_failure_class(&error);
                 let diagnostics = execution_error_diagnostic_classes(&error);
                 log_automation_item(
-                    worker,
-                    repo,
-                    workflow.name(),
+                    context.worker,
+                    context.repo,
+                    context.workflow_id,
                     &item,
                     "error",
                     Some(&failure_class),
                     diagnostics,
                 );
-                log_automation_summary(worker, repo, workflow.name(), &counts, progress);
+                log_automation_summary(
+                    context.worker,
+                    context.repo,
+                    context.workflow_id,
+                    &counts,
+                    progress,
+                );
                 return Err(error.into());
             }
         }
     }
 
-    log_automation_summary(worker, repo, workflow.name(), &counts, progress);
+    log_automation_summary(
+        context.worker,
+        context.repo,
+        context.workflow_id,
+        &counts,
+        progress,
+    );
     Ok(progress)
+}
+
+async fn route_merge_conflict<F: Forge + ?Sized>(
+    context: &AutomationContext<'_>,
+    executor: &Executor<'_, F>,
+    item: &AutomatedWorkItem,
+    error: &ExecutionError,
+    counts: &mut AutomationCounts,
+    progress: &mut Progress,
+) -> Result<bool, WorkerError> {
+    let ExecutionError::MergeConflict { target, message } = error else {
+        return Ok(false);
+    };
+    let Some(fallback) = item.on_merge_conflict.as_ref() else {
+        return Ok(false);
+    };
+    let summary = provider_message_summary(message);
+    match executor
+        .execute(context.repo, *target, fallback, &item.actor)
+        .await
+    {
+        Ok(_) => {
+            counts.applied = counts.applied.saturating_add(1);
+            counts.merge_conflicts_routed = counts.merge_conflicts_routed.saturating_add(1);
+            progress.record(true);
+            log_merge_conflict_route(
+                context,
+                item,
+                fallback,
+                "routed",
+                None,
+                Vec::new(),
+                &summary,
+            );
+            Ok(true)
+        }
+        Err(fallback_error) => {
+            if record_expected_precondition(context, item, &fallback_error, counts) {
+                log_merge_conflict_route(
+                    context,
+                    item,
+                    fallback,
+                    "fallback_unchanged",
+                    None,
+                    execution_error_diagnostic_classes(&fallback_error),
+                    &summary,
+                );
+                return Ok(true);
+            }
+
+            counts.errors = counts.errors.saturating_add(1);
+            let failure_class = execution_error_failure_class(&fallback_error);
+            let diagnostics = execution_error_diagnostic_classes(&fallback_error);
+            log_merge_conflict_route(
+                context,
+                item,
+                fallback,
+                "fallback_error",
+                Some(&failure_class),
+                diagnostics,
+                &summary,
+            );
+            log_automation_summary(
+                context.worker,
+                context.repo,
+                context.workflow_id,
+                counts,
+                *progress,
+            );
+            Err(fallback_error.into())
+        }
+    }
+}
+
+fn record_expected_precondition(
+    context: &AutomationContext<'_>,
+    item: &AutomatedWorkItem,
+    error: &ExecutionError,
+    counts: &mut AutomationCounts,
+) -> bool {
+    let Some(outcome) = expected_precondition_outcome(error) else {
+        return false;
+    };
+    let diagnostics = execution_error_diagnostic_classes(error);
+    match outcome {
+        ExpectedPreconditionOutcome::Unchanged => {
+            counts.unchanged = counts.unchanged.saturating_add(1);
+            log_automation_item(
+                context.worker,
+                context.repo,
+                context.workflow_id,
+                item,
+                "unchanged",
+                None,
+                diagnostics,
+            );
+        }
+        ExpectedPreconditionOutcome::GateNotSatisfied => {
+            counts.gate_not_satisfied = counts.gate_not_satisfied.saturating_add(1);
+            log_automation_item(
+                context.worker,
+                context.repo,
+                context.workflow_id,
+                item,
+                "gate_not_satisfied",
+                None,
+                diagnostics,
+            );
+        }
+    }
+    true
 }
 
 fn expected_precondition_outcome(error: &ExecutionError) -> Option<ExpectedPreconditionOutcome> {
@@ -184,6 +306,55 @@ fn log_automation_item(
     eprintln!("{}", event.render());
 }
 
+fn log_merge_conflict_route(
+    context: &AutomationContext<'_>,
+    item: &AutomatedWorkItem,
+    fallback: &TransitionId,
+    outcome: &str,
+    failure_class: Option<&str>,
+    diagnostic_classes: Vec<String>,
+    provider_message_summary: &str,
+) {
+    let (artifact_type, artifact_number) = source_parts(item.target);
+    let mut event = StructuredEvent::new("mechanical_automation_merge_conflict_route")
+        .string("worker_kind", "mechanical")
+        .string("worker", context.worker)
+        .string("repo", context.repo.to_string())
+        .string("workflow_id", context.workflow_id)
+        .string("queue", item.queue.to_string())
+        .string("original_transition", item.transition.to_string())
+        .string("fallback_transition", fallback.to_string())
+        .string("actor", item.actor.to_string())
+        .string("artifact_type", artifact_type)
+        .number("artifact_number", artifact_number.get())
+        .string("artifact_kind", item.kind.to_string())
+        .string("provider_message_summary", provider_message_summary)
+        .string("outcome", outcome);
+    if let Some(failure_class) = failure_class {
+        event = event.string("failure_class", failure_class);
+    }
+    if !diagnostic_classes.is_empty() {
+        event = event
+            .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
+            .string_array("diagnostic_classes", diagnostic_classes);
+    }
+    eprintln!("{}", event.render());
+}
+
+fn provider_message_summary(message: &str) -> String {
+    let collapsed = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return "provider reported a merge rejection".to_string();
+    }
+    let mut chars = collapsed.chars();
+    let summary: String = chars.by_ref().take(160).collect();
+    if chars.next().is_some() {
+        format!("{summary}…")
+    } else {
+        summary
+    }
+}
+
 fn log_automation_summary(
     worker: &str,
     repo: &RepositoryId,
@@ -200,6 +371,10 @@ fn log_automation_summary(
             .string("workflow_id", workflow_id)
             .number("candidate_count", saturating_u64(counts.candidates))
             .number("applied_count", saturating_u64(counts.applied))
+            .number(
+                "merge_conflict_routed_count",
+                saturating_u64(counts.merge_conflicts_routed),
+            )
             .number("unchanged_count", saturating_u64(counts.unchanged_total()))
             .number("stale_unchanged_count", saturating_u64(counts.unchanged))
             .number(

@@ -145,8 +145,19 @@ Status legend: ☐ pending · ☑ done
    treats provider merge errors as visible execution errors rather than routing
    them.
 
-3. ☐ **Phase 3 — Typed merge-conflict fallback.**
+3. ☑ **Phase 3 — Typed merge-conflict fallback.**
    `prompts/phase-3-typed-merge-conflict-fallback.md`
+
+   Merge rejections are now classified at the executor boundary: a merge
+   `Conflict` response triggers a fresh PR read, already-merged targets continue
+   post-merge projection, missing/closed targets are stale, and open/unmerged
+   targets return `ExecutionError::MergeConflict`. Mechanical automated queues
+   with `on_merge_conflict` route that typed outcome through the declared
+   fallback transition, with structured logs for the original transition,
+   fallback transition, target, and provider-message summary. Notable finding:
+   Forgejo's merge endpoint does not distinguish content conflicts from branch
+   protection or other rejection causes, so open/unmerged Forgejo conflicts are
+   conservatively engineer-routable for now.
 
 4. ☐ **Phase 4 — Reference-delivery workflow update.**
    `prompts/phase-4-reference-delivery-workflow-update.md`

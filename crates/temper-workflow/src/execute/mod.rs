@@ -43,11 +43,15 @@
 //! *before* the label/assignee commit point and is guarded by the freshly
 //! loaded pull-request state: a pull request that is already merged is skipped,
 //! so the merge is at most once even when a crash lands the merge but loses the
-//! response. The transition's post-merge labels (`landed`, `alignment`) are
-//! modeled as ordinary `add_label` effects, so they are projected by the same
-//! atomic update and survive on the now-closed pull request — there is no
-//! executor-special-cased post-merge labeling. Lease effects remain unsupported
-//! until later phases.
+//! response. If the backend reports a merge conflict/rejection, the executor
+//! re-reads the pull request before deciding: already merged continues to
+//! post-merge projection, missing or closed is stale, and still-open/unmerged is
+//! returned as [`ExecutionError::MergeConflict`] for declared workflow routing.
+//! The transition's post-merge labels (`landed`, `alignment`) are modeled as
+//! ordinary `add_label` effects, so they are projected by the same atomic update
+//! and survive on the now-closed pull request — there is no executor-special-
+//! cased post-merge labeling. Lease effects remain unsupported until later
+//! phases.
 //!
 //! # Gate signals
 //!
@@ -83,6 +87,7 @@
 
 mod apply;
 mod ensure;
+mod merge;
 mod signals;
 
 pub use ensure::CorrelationLookupPlan;
@@ -149,9 +154,10 @@ pub struct ExecutionReport {
 /// must distinguish: a [validation](ExecutionError::Validation) problem with the
 /// request itself, a [precondition](ExecutionError::Precondition) problem with
 /// the artifact's current state, and a [backend](ExecutionError::Backend)
-/// failure from the Forge. Classification, missing-target, unsupported-effect,
-/// missing-create-context, and postcondition failures are reported distinctly so
-/// callers never have to guess which stage failed.
+/// failure from the Forge. Classification, missing/stale targets, routable
+/// merge conflicts, unsupported effects, missing-create-context, and
+/// postcondition failures are reported distinctly so callers never have to guess
+/// which stage failed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionError {
     /// The request is invalid regardless of artifact state: an undeclared
@@ -165,6 +171,18 @@ pub enum ExecutionError {
     Classification(ClassificationError),
     /// The target artifact does not exist in the backend.
     TargetMissing { target: ArtifactSource },
+    /// The target changed while a side effect was being applied, so the
+    /// original transition should be treated as stale rather than routed.
+    TargetStale {
+        target: ArtifactSource,
+        message: String,
+    },
+    /// A pull-request merge was rejected while the target remained open and
+    /// unmerged, making it eligible for workflow-declared conflict routing.
+    MergeConflict {
+        target: ArtifactSource,
+        message: String,
+    },
     /// The planner produced an effect the executor cannot apply yet.
     UnsupportedEffect { effect: WorkflowEffect },
     /// An assignee effect named a role with no Forge user bound in the
@@ -204,6 +222,13 @@ impl std::fmt::Display for ExecutionError {
             ExecutionError::TargetMissing { target } => {
                 write!(formatter, "target artifact {target:?} does not exist")
             }
+            ExecutionError::TargetStale { target, message } => {
+                write!(formatter, "target artifact {target:?} is stale: {message}")
+            }
+            ExecutionError::MergeConflict { target, message } => write!(
+                formatter,
+                "merge of target artifact {target:?} was rejected: {message}"
+            ),
             ExecutionError::UnsupportedEffect { effect } => {
                 write!(formatter, "executor cannot apply effect {effect:?}")
             }
