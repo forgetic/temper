@@ -27,13 +27,11 @@ checkout).
 
 Then run the non-default tests that are self-contained for this checkout before
 handoff. They must be green; fix failures instead of handing them off. This means
-all ignored local-process/local-Forgejo tests, after populating `.cache/forgejo/`
-when needed.
+all ignored local-process/local-Forgejo tests; on a networked machine, first
+startup downloads pinned Forgejo binaries automatically when `.cache/forgejo/`
+is empty.
 
 ```sh
-# Only needed when .cache/forgejo/ is missing.
-cargo test -p temper-forgejo-fixture --test cache -- --ignored
-
 cargo test -p temper-forge-forgejo --test live -- --ignored --test-threads=1
 cargo test -p temper-testing -- --ignored --test-threads=1
 ```

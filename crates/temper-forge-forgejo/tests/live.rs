@@ -2,11 +2,10 @@
 //!
 //! A plain `cargo test` stays hermetic because this file is `#[ignore]`d. When
 //! run with `--ignored`, the suite boots a local Forgejo plus a host-mode
-//! `forgejo-runner` from the shared `.cache/forgejo/` binary cache, provisions a
-//! fresh repository, exercises the Forgejo backend against it, and tears the
-//! processes down on drop. No credentials or opt-in environment variables are
-//! required; a missing binary cache fails with a hint pointing at the ignored
-//! cache-population helper.
+//! `forgejo-runner`, provisions a fresh repository, exercises the Forgejo backend
+//! against it, and tears the processes down on drop. No credentials or opt-in
+//! environment variables are required; missing cached binaries are downloaded
+//! from the pinned upstream release assets and checksum-verified on first use.
 //!
 //! ```sh
 //! cargo test -p temper-forge-forgejo --test live -- --ignored --test-threads=1

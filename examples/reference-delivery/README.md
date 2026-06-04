@@ -20,15 +20,11 @@ with deterministic fake agent worker binaries.
 ## Prerequisites
 
 - Rust workspace build tools.
-- The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries. Populate the
-  cache with:
-
-  ```sh
-  cargo test -p temper-forgejo-fixture --test cache -- --ignored
-  ```
-
-  Or set `TEMPER_FORGEJO_BINARY` and `TEMPER_FORGEJO_RUNNER_BINARY` in
-  `config/temper.env` or the environment.
+- The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries, either in
+  the shared `.cache/forgejo/` cache or through `TEMPER_FORGEJO_BINARY` and
+  `TEMPER_FORGEJO_RUNNER_BINARY` in `config/temper.env` or the environment.
+  Ignored Forgejo fixture tests fill the shared cache automatically on first
+  startup when network access is available.
 - A host where the runner may execute host-mode jobs directly. No containers are
   used.
 

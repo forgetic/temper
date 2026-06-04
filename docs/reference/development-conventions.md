@@ -80,8 +80,9 @@ cargo dev-test
 The default `cargo dev-test` suite should stay fast (soft target: under about 10
 seconds on a warmed local checkout). Before ending a session, also run every
 non-default/ignored test that is self-contained for the checkout: this includes
-local Forgejo tests once `.cache/forgejo/` is populated, and excludes only tests
-that require real LLMs or external services. See
+local Forgejo tests (which download pinned binaries on first startup when
+`.cache/forgejo/` is empty), and excludes only tests that require real LLMs or
+external services. See
 `docs/how-to/fast-local-iteration.md`,
 `docs/how-to/end-a-development-session.md`, and
 `docs/how-to/run-forgejo-multiprocess-e2e.md`.

@@ -11,7 +11,8 @@ For the conceptual model, read `docs/explanation/cross-repo-workflows.md` first.
 
 Follow `examples/reference-delivery/README.md`. In short:
 
-- populate the pinned Forgejo / `forgejo-runner` binary cache;
+- provide the pinned Forgejo / `forgejo-runner` binaries via the shared cache or
+  explicit `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY` paths;
 - run on a host that permits host-mode runner jobs;
 - let `run.sh` build `temper-production` helpers and `temper-testing-worker`, or
   provide current binary overrides.

@@ -129,10 +129,10 @@ remaining runtime is mostly real CI convergence.
 It boots real OS processes (server, runner, N workers), executes CI **on the
 host**, and detects convergence by wall-clock polling — non-deterministic,
 network-bound, and host-mutating. Like the `temper-forge-forgejo` live test it is
-`#[ignore]`d, so the default `cargo test` stays hermetic and deterministic. The
-ignored test requires the shared `.cache/forgejo/` binary cache (or explicit
-binary overrides) and fails with a cache-population hint when the cache is
-missing. The in-process scenarios remain the first-line coverage for workflow
+`#[ignore]`d, so the default `cargo test` stays hermetic and deterministic. On a
+networked machine, ignored Forgejo startup downloads the pinned binaries into the
+shared `.cache/forgejo/` cache when explicit binary overrides and cached files
+are absent. The in-process scenarios remain the first-line coverage for workflow
 logic; this covers the real-backend topology.
 
 ## Triggering status

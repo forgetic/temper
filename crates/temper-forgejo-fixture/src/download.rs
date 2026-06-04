@@ -1,11 +1,12 @@
 //! Pinned, checksum-verified Forgejo binary cache under `.cache/forgejo/`.
 //!
-//! The Forgejo end-to-end fixture needs real server and runner binaries. Regular
-//! tests call [`require_binary`] / [`require_runner_binary`], which only accept a
-//! cached file or explicit `*_BINARY` override and fail predictably when the
-//! cache is absent. The ignored cache-population helper calls [`ensure_binary`]
-//! / [`ensure_runner_binary`] to download into the gitignored `/.cache/` and
-//! verify the pinned SHA-256 before publishing the file.
+//! The Forgejo end-to-end fixture needs real server and runner binaries. When
+//! an ignored/local fixture path starts a server or runner, it resolves the
+//! binary with [`ensure_binary`] / [`ensure_runner_binary`]: explicit
+//! `*_BINARY` override → cached `.cache/forgejo/` file → download the pinned
+//! release asset, verify its SHA-256, and publish it atomically. Default
+//! non-ignored tests stay offline because they never start the real Forgejo
+//! server or runner.
 //!
 //! Env overrides (for CI, offline machines, or a version bump). The server
 //! binary uses the `TEMPER_FORGEJO_*` namespace; the runner mirrors it under
@@ -45,12 +46,6 @@ pub enum DownloadError {
     WorkspaceRoot(String),
     /// An override path was given but does not exist.
     MissingOverride { variable: String, path: PathBuf },
-    /// The binary cache is missing and this caller is not allowed to download.
-    MissingCache {
-        binary: &'static str,
-        path: PathBuf,
-        override_variable: &'static str,
-    },
     /// The HTTP download failed.
     Http(String),
     /// Writing the binary to the cache failed.
@@ -66,17 +61,6 @@ impl std::fmt::Display for DownloadError {
             DownloadError::MissingOverride { variable, path } => {
                 write!(f, "{variable} does not exist: {}", path.display())
             }
-            DownloadError::MissingCache {
-                binary,
-                path,
-                override_variable,
-            } => write!(
-                f,
-                "{binary} binary is not cached at {}; run `cargo test -p \
-                 temper-forgejo-fixture --test cache -- --ignored` to populate \
-                 .cache/forgejo, or set {override_variable} to an existing binary",
-                path.display()
-            ),
             DownloadError::Http(why) => write!(f, "forgejo download failed: {why}"),
             DownloadError::Io(err) => write!(f, "forgejo cache io error: {err}"),
             DownloadError::Checksum { expected, actual } => write!(
@@ -100,8 +84,6 @@ impl From<std::io::Error> for DownloadError {
 /// cache filename. The `Forgejo` and the `Runner` instances differ only in
 /// these fields, so the resolve logic below is shared.
 struct Pin {
-    /// Human-readable binary name for diagnostics.
-    name: &'static str,
     /// Env prefix, e.g. `TEMPER_FORGEJO` or `TEMPER_FORGEJO_RUNNER`.
     env_prefix: &'static str,
     /// Default pinned version when `<prefix>_VERSION` is unset.
@@ -115,7 +97,6 @@ struct Pin {
 }
 
 const FORGEJO_PIN: Pin = Pin {
-    name: "Forgejo server",
     env_prefix: "TEMPER_FORGEJO",
     default_version: FORGEJO_VERSION,
     default_sha256: FORGEJO_SHA256,
@@ -128,7 +109,6 @@ const FORGEJO_PIN: Pin = Pin {
 };
 
 const FORGEJO_RUNNER_PIN: Pin = Pin {
-    name: "forgejo-runner",
     env_prefix: "TEMPER_FORGEJO_RUNNER",
     default_version: FORGEJO_RUNNER_VERSION,
     default_sha256: FORGEJO_RUNNER_SHA256,
@@ -140,61 +120,24 @@ const FORGEJO_RUNNER_PIN: Pin = Pin {
     file_name: |version| format!("forgejo-runner-{version}-linux-amd64"),
 };
 
-/// Requires the pinned Forgejo **server** binary to exist locally.
+/// Ensures the pinned Forgejo **server** binary exists locally and returns its
+/// path.
 ///
-/// Resolution order: `TEMPER_FORGEJO_BINARY` override → cached file. This never
-/// downloads; a missing cache returns a hint pointing to the ignored
-/// cache-population test.
-pub fn require_binary() -> Result<PathBuf, DownloadError> {
-    require_pinned(&FORGEJO_PIN)
-}
-
-/// Requires the pinned `forgejo-runner` binary to exist locally.
-pub fn require_runner_binary() -> Result<PathBuf, DownloadError> {
-    require_pinned(&FORGEJO_RUNNER_PIN)
-}
-
-/// Ensures the pinned Forgejo **server** binary exists locally, downloading and
-/// checksum-verifying it into `.cache/forgejo/` if needed. Use this from the
-/// explicit cache-population helper, not from regular tests.
+/// Resolution order: `TEMPER_FORGEJO_BINARY` override → cached file (verified
+/// present) → download to `.cache/forgejo/` and checksum-verify. The returned
+/// path is executable.
 pub fn ensure_binary() -> Result<PathBuf, DownloadError> {
     ensure_pinned(&FORGEJO_PIN)
 }
 
-/// Ensures the pinned `forgejo-runner` binary exists locally, downloading and
-/// checksum-verifying it into `.cache/forgejo/` if needed.
+/// Ensures the pinned `forgejo-runner` binary exists locally and returns its
+/// path.
+///
+/// Mirrors [`ensure_binary`] under the `TEMPER_FORGEJO_RUNNER_*` env namespace
+/// and shares the same cache dir (`.cache/forgejo/`), download/verify/atomic
+/// write logic.
 pub fn ensure_runner_binary() -> Result<PathBuf, DownloadError> {
     ensure_pinned(&FORGEJO_RUNNER_PIN)
-}
-
-fn require_pinned(pin: &Pin) -> Result<PathBuf, DownloadError> {
-    if let Some(path) = env_var(&format!("{}_BINARY", pin.env_prefix)) {
-        let path = PathBuf::from(path);
-        if !path.exists() {
-            return Err(DownloadError::MissingOverride {
-                variable: format!("{}_BINARY", pin.env_prefix),
-                path,
-            });
-        }
-        return Ok(path);
-    }
-
-    let version = env_var(&format!("{}_VERSION", pin.env_prefix))
-        .unwrap_or_else(|| pin.default_version.to_string());
-    let target = cache_target(pin, &version)?;
-    if target.exists() {
-        Ok(target)
-    } else {
-        Err(DownloadError::MissingCache {
-            binary: pin.name,
-            path: target,
-            override_variable: match pin.env_prefix {
-                "TEMPER_FORGEJO" => "TEMPER_FORGEJO_BINARY",
-                "TEMPER_FORGEJO_RUNNER" => "TEMPER_FORGEJO_RUNNER_BINARY",
-                _ => "<PIN>_BINARY",
-            },
-        })
-    }
 }
 
 /// Shared resolver for a [`Pin`]: env override path → cached file → verified
@@ -388,18 +331,6 @@ mod tests {
         let root = workspace_root().expect("workspace root resolves");
         assert!(root.join("crates").is_dir());
         assert!(root.join("Cargo.toml").is_file());
-    }
-
-    #[test]
-    fn missing_cache_error_points_to_population_helper() {
-        let error = DownloadError::MissingCache {
-            binary: "Forgejo server",
-            path: PathBuf::from("/tmp/missing-forgejo"),
-            override_variable: "TEMPER_FORGEJO_BINARY",
-        }
-        .to_string();
-        assert!(error.contains("cargo test -p temper-forgejo-fixture --test cache -- --ignored"));
-        assert!(error.contains("TEMPER_FORGEJO_BINARY"));
     }
 
     #[test]

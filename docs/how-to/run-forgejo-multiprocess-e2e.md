@@ -15,9 +15,10 @@
 This fixture runs a **real Forgejo** server locally so the reference-delivery
 workflow can be exercised against the `temper-forge-forgejo` backend instead of
 the in-memory/filesystem backends. Everything here is `#[ignore]`d, so a plain
-`cargo test` never opens a socket. No opt-in environment variable is required,
-but the pinned Forgejo binaries must already be cached under `.cache/forgejo/`
-or provided through `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY`.
+`cargo test` never opens a socket. No opt-in environment variable is required.
+On first startup, the fixture resolves `TEMPER_FORGEJO_BINARY` /
+`TEMPER_FORGEJO_RUNNER_BINARY` overrides, then cached `.cache/forgejo/` binaries,
+then downloads the pinned assets and verifies their SHA-256 values.
 
 Tests declare their required initial Forgejo state as JSON. The first run for a
 new state hash boots a fresh Forgejo, provisions that state, shuts it down
@@ -38,15 +39,10 @@ This starts one Forgejo server from the declared cached state **and** one
 host-mode `forgejo-runner`, then converges all five reference-delivery scenarios
 in predeclared per-scenario repos across real OS processes. It spawns real
 processes and executes CI **on this host**, so run it only where that is
-acceptable. The first run for a cache miss still pays provisioning cost; warmed
-runs copy the state from `.cache` to `/tmp`. The per-phase smoke tests below
-build up to it. See
+acceptable. The first run for a binary or state cache miss still pays download or
+provisioning cost; warmed runs copy the state from `.cache` to `/tmp`. The
+per-phase smoke tests below build up to it. See
 [The multi-process test](#the-multi-process-test-phase-5) for detail.
-If the binary cache is missing, first run:
-
-```sh
-cargo test -p temper-forgejo-fixture --test cache -- --ignored
-```
 
 ## Real LLM process proof
 
@@ -306,15 +302,12 @@ edit; instead, configure your CI system with a **dedicated job**, separate from
 the default hermetic suite. The default job runs plain `cargo test` (the Forgejo
 tests are `#[ignore]`d, so they never fire there). The dedicated job:
 
-1. **Provides the two pinned binaries.** Either run the cache helper first
-   (needs network to Codeberg / code.forgejo.org) or pre-stage them and point
-   `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY` at the absolute
-   paths (the offline/sandboxed path — see [Environment knobs](#environment-knobs)).
-   Cache `.cache/forgejo/` across runs to avoid re-downloading.
-
-   ```sh
-   cargo test -p temper-forgejo-fixture --test cache -- --ignored
-   ```
+1. **Allows pinned-binary resolution.** Networked jobs can let the ignored
+   fixture download the pinned Forgejo and `forgejo-runner` assets on first use;
+   cache `.cache/forgejo/` across runs to avoid re-downloading. Offline or
+   sandboxed jobs should pre-stage the binaries and point `TEMPER_FORGEJO_BINARY`
+   / `TEMPER_FORGEJO_RUNNER_BINARY` at the absolute paths (see
+   [Environment knobs](#environment-knobs)).
 2. **Runs on a host that allows host-mode jobs.** The `forgejo-runner` registers
    with `--labels host:host` and executes workflow steps **directly on the CI
    host** (no containers), so the job must run on a runner that permits spawning
@@ -336,10 +329,10 @@ the host can boot a server + runner before the full suite.
 
 ## The pinned binaries
 
-The ignored cache helper downloads the pinned Forgejo **and** `forgejo-runner`
-binaries into `.cache/forgejo/` (gitignored) and verifies each SHA-256 before
-use. The regular ignored Forgejo tests require the cache (or explicit binary
-overrides) and fail with a cache-population hint when it is absent.
+Ignored/local Forgejo fixture startup resolves the pinned Forgejo **and**
+`forgejo-runner` binaries as: explicit `*_BINARY` override → cached
+`.cache/forgejo/` file → download the pinned asset and verify SHA-256. The
+cache is gitignored and reused by later runs.
 
 | Binary | Version | SHA-256 | Source |
 | --- | --- | --- | --- |
@@ -378,7 +371,7 @@ overrides at pre-downloaded binaries.
 
 ## Why blocking HTTP in Temper
 
-The cache helper downloads binaries and the fixture polls readiness with a
-**blocking** `reqwest` client. The async `temper-forge-forgejo` backend needs a
-Tokio reactor, so driving it against the live server happens in the e2e tests
-(under an async runtime), not in the lifecycle code itself.
+Binary resolution and fixture readiness polling use a **blocking** `reqwest`
+client. The async `temper-forge-forgejo` backend needs a Tokio reactor, so
+driving it against the live server happens in the e2e tests (under an async
+runtime), not in the lifecycle code itself.

@@ -9,7 +9,8 @@
 //!
 //! Like [`ForgejoServer`], this is **never** reached by the default test suite:
 //! only `#[ignore]`d tests construct one. CI is real here — the runner executes
-//! genuine jobs on this host.
+//! genuine jobs on this host. On first startup, the pinned runner binary is
+//! downloaded and cached when no explicit override or cached binary exists.
 
 use super::download;
 use super::{ForgejoServer, ServerError};
@@ -80,7 +81,7 @@ impl ForgejoRunner {
     /// `.runner` file there), then spawns `forgejo-runner daemon` from that dir
     /// behind a kill-on-drop guard.
     pub fn register(server: &ForgejoServer) -> Result<Self, RunnerError> {
-        let binary = download::require_runner_binary()?;
+        let binary = download::ensure_runner_binary()?;
         let work_dir = unique_runner_dir();
         let _ = std::fs::remove_dir_all(&work_dir);
         std::fs::create_dir_all(&work_dir)?;

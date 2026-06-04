@@ -292,11 +292,11 @@ resolve_binaries() {
     FORGEJO_BIN=${TEMPER_FORGEJO_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64}
     RUNNER_BIN=${TEMPER_FORGEJO_RUNNER_BINARY:-$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64}
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN
-       Set TEMPER_FORGEJO_BINARY, or pre-stage the pinned binary in .cache/forgejo/
-       with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
+       Set TEMPER_FORGEJO_BINARY, or pre-stage the pinned binary in .cache/forgejo/.
+       Ignored Forgejo fixture tests fill that cache automatically on first startup."
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN
-       Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/
-       with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
+       Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/.
+       Ignored Forgejo fixture tests fill that cache automatically on first startup."
 }
 
 # --- Forgejo server + runner --------------------------------------------------

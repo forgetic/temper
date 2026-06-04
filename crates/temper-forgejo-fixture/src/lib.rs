@@ -1,18 +1,17 @@
 //! Shared throwaway Forgejo fixture for ignored, local-only tests.
 //!
-//! [`ForgejoServer::start`] boots a real Forgejo from the gitignored
-//! `.cache/forgejo/` binary cache (or a `TEMPER_FORGEJO_BINARY` override)
-//! against a fresh SQLite data dir on an ephemeral port, waits for
-//! `/api/v1/version`, and kills the process plus removes the data dir on drop.
-//! [`ForgejoServer::start_with_state`] instead restores a JSON-declared cached
-//! data tree from `.cache/forgejo/states/` into `/tmp` before starting the same
-//! per-test process. [`ForgejoRunner::register`] does the same process lifecycle
-//! for a host-mode `forgejo-runner`.
+//! [`ForgejoServer::start`] boots a real Forgejo from a resolved binary — first
+//! a `TEMPER_FORGEJO_BINARY` override, then the gitignored `.cache/forgejo/`
+//! cache, then a pinned checked download — against a fresh SQLite data dir on an
+//! ephemeral port, waits for `/api/v1/version`, and kills the process plus
+//! removes the data dir on drop. [`ForgejoServer::start_with_state`] instead
+//! restores a JSON-declared cached data tree from `.cache/forgejo/states/` into
+//! `/tmp` before starting the same per-test process. [`ForgejoRunner::register`]
+//! does the same process lifecycle for a host-mode `forgejo-runner`.
 //!
-//! Regular tests do **not** download binaries implicitly: if the cache is
-//! missing they fail with a message pointing to the ignored cache-population
-//! helper. The helper calls [`download::ensure_binary`] and
-//! [`download::ensure_runner_binary`] to download and verify the pinned assets.
+//! Default non-ignored tests stay offline because they never construct these
+//! real process fixtures; ignored/local Forgejo tests download the pinned assets
+//! automatically on first startup and reuse `.cache/forgejo/` afterward.
 
 pub mod download;
 pub mod runner;
@@ -103,7 +102,7 @@ impl ForgejoServer {
     /// Boots a fresh instance: writes config, migrates, spawns `web`, and waits
     /// for readiness. The returned handle owns the process and data dir.
     pub fn start() -> Result<Self, ServerError> {
-        let binary = download::require_binary()?;
+        let binary = download::ensure_binary()?;
         let data_dir = unique_data_dir();
         let _ = std::fs::remove_dir_all(&data_dir);
         for sub in ["custom/conf", "data", "log", "repos"] {
@@ -122,7 +121,7 @@ impl ForgejoServer {
     /// tree contents; this rewrites only `custom/conf/app.ini` with this run's
     /// temp path and port, then starts `forgejo web` without re-running migrate.
     pub(crate) fn start_from_prepared_dir(data_dir: PathBuf) -> Result<Self, ServerError> {
-        let binary = download::require_binary()?;
+        let binary = download::ensure_binary()?;
         let (config_path, base_url) = write_runtime_config(&data_dir)?;
         Self::spawn_prepared(binary, data_dir, config_path, base_url)
     }
