@@ -90,6 +90,8 @@ pub struct CrashForge<F: Forge> {
     inner: F,
     faults: Vec<Fault>,
     counts: Mutex<HashMap<ForgeOp, usize>>,
+    issue_queries: Mutex<Vec<IssueQuery>>,
+    pull_request_queries: Mutex<Vec<PullRequestQuery>>,
 }
 
 impl<F: Forge> CrashForge<F> {
@@ -99,6 +101,8 @@ impl<F: Forge> CrashForge<F> {
             inner,
             faults,
             counts: Mutex::new(HashMap::new()),
+            issue_queries: Mutex::new(Vec::new()),
+            pull_request_queries: Mutex::new(Vec::new()),
         }
     }
 
@@ -115,6 +119,22 @@ impl<F: Forge> CrashForge<F> {
             .expect("counts mutex")
             .get(&op)
             .unwrap_or(&0)
+    }
+
+    /// Returns the issue list queries this wrapper observed.
+    pub fn issue_queries(&self) -> Vec<IssueQuery> {
+        self.issue_queries
+            .lock()
+            .expect("issue queries mutex")
+            .clone()
+    }
+
+    /// Returns the pull-request list queries this wrapper observed.
+    pub fn pull_request_queries(&self) -> Vec<PullRequestQuery> {
+        self.pull_request_queries
+            .lock()
+            .expect("pull request queries mutex")
+            .clone()
     }
 
     /// Records a call to `op` and returns its 1-based occurrence.
@@ -187,6 +207,10 @@ impl<F: Forge> Forge for CrashForge<F> {
         if query == IssueQuery::default() {
             self.tick(ForgeOp::ListIssuesDefault);
         }
+        self.issue_queries
+            .lock()
+            .expect("issue queries mutex")
+            .push(query.clone());
         self.guard(ForgeOp::ListIssues, n, FaultPoint::Before)?;
         let result = self.inner.list_issues(repo_id, query).await?;
         self.guard(ForgeOp::ListIssues, n, FaultPoint::After)?;
@@ -254,6 +278,10 @@ impl<F: Forge> Forge for CrashForge<F> {
         if query == PullRequestQuery::default() {
             self.tick(ForgeOp::ListPullRequestsDefault);
         }
+        self.pull_request_queries
+            .lock()
+            .expect("pull request queries mutex")
+            .push(query.clone());
         self.guard(ForgeOp::ListPullRequests, n, FaultPoint::Before)?;
         let result = self.inner.list_pull_requests(repo_id, query).await?;
         self.guard(ForgeOp::ListPullRequests, n, FaultPoint::After)?;

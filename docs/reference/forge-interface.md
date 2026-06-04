@@ -78,10 +78,11 @@ is full detail (`dependencies=true`), preserving the historical contract that
 list results populate native dependency links. Callers that only need summary
 fields may set `details.dependencies=false`; then backends may skip dependency
 link enrichment and must return an empty `dependencies` vector in each listed
-item. Runner candidate scans use summary lists and queue-derived `state`/`labels`
-filters so normal ticks do not fetch unlabelled closed history; dependency-gated
-paths reload exact artifacts when they need dependency links. Exact `get_*`
-lookups and dependency mutation returns still carry available dependency detail.
+item. Runner and reconciliation candidate scans use summary lists and queue- or
+workflow-derived `state`/`labels` filters so normal ticks do not fetch
+unlabelled closed history; dependency-gated paths reload exact artifacts when
+they need dependency links. Exact `get_*` lookups and dependency mutation
+returns still carry available dependency detail.
 
 ## Error categories
 

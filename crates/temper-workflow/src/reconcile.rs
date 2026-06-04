@@ -9,11 +9,9 @@
 //! # Decide, then apply
 //!
 //! [`Reconciler::scan`] is pure and deterministic over snapshots, journal
-//! records, dependency status, and time. [`Reconciler::reconcile`] is the bounded
-//! async convenience that loads exact snapshots for incomplete journal targets,
-//! derives native dependency status, then calls `scan`.
-//! [`Reconciler::reconcile_deep_audit`] is the explicit all-history loader for
-//! rare operator audits.
+//! records, dependency status, and time. [`Reconciler::reconcile`] is the
+//! bounded loader for exact journal targets plus workflow-labelled candidates.
+//! [`Reconciler::reconcile_deep_audit`] is the explicit all-history loader.
 //!
 //! Applying the chosen actions is the job of
 //! [`recover::Applier`](crate::recover::Applier), which routes each action
@@ -92,16 +90,17 @@ impl ArtifactSnapshot {
 /// How a runtime loads reconciliation snapshots before calling [`Reconciler::scan`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReconciliationMode {
-    /// Load bounded runtime inputs: exact incomplete journal targets plus any
-    /// caller-supplied bounded candidate snapshots.
+    /// Load bounded runtime inputs.
     Bounded,
     /// Load every visible issue and pull request with full details. This is for
     /// rare operator audits and compatibility tests, not normal hot-path ticks.
     DeepAudit,
 }
 
+mod candidate;
 mod finding;
 
+pub use candidate::{reconciliation_candidate_query_plan, ReconciliationCandidateQueryPlan};
 pub use finding::{
     DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport, RecoveryAction,
     RecoveryPolicy,
@@ -354,8 +353,7 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         }
     }
 
-    /// Runs bounded reconciliation from exact incomplete journal targets only.
-    /// It never lists the whole repository.
+    /// Runs bounded reconciliation without listing the whole repository.
     pub async fn reconcile<F, J>(
         &self,
         forge: &F,
@@ -367,8 +365,17 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         F: Forge + ?Sized,
         J: CommandJournal,
     {
-        self.reconcile_bounded(forge, repo_id, journal, Vec::new(), now)
-            .await
+        let entries = journal.list().await?;
+        let mut snapshots = self
+            .load_incomplete_journal_snapshots(forge, repo_id, &entries)
+            .await?;
+        snapshots.extend(
+            self.load_bounded_candidate_snapshots(forge, repo_id)
+                .await?,
+        );
+        Ok(self
+            .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
+            .await)
     }
 
     /// Runs reconciliation using an explicit loading mode.
@@ -394,9 +401,7 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     }
 
     /// Runs bounded reconciliation from exact incomplete journal targets plus
-    /// caller-supplied bounded candidate snapshots. Exact journal snapshots are
-    /// loaded first so deduplication keeps them over duplicate candidates.
-    /// Missing journal targets are omitted, so `scan_command` reports stale.
+    /// caller-supplied candidate snapshots.
     pub async fn reconcile_bounded<F, J>(
         &self,
         forge: &F,
@@ -463,8 +468,7 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     }
 
     /// Explicit all-history reconciliation for deep audits and compatibility
-    /// tests. Normal bounded paths should call [`Self::reconcile`] or
-    /// [`Self::reconcile_bounded`] instead.
+    /// tests, not normal bounded paths.
     pub async fn reconcile_deep_audit<F, J>(
         &self,
         forge: &F,

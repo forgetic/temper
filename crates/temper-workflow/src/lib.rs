@@ -134,8 +134,9 @@ pub use plan::{
     TransitionPlan, WorkflowEffect,
 };
 pub use reconcile::{
-    ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
-    Reconciler, ReconciliationMode, RecoveryAction, RecoveryPolicy,
+    reconciliation_candidate_query_plan, ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError,
+    ReconcileFinding, ReconcileReport, Reconciler, ReconciliationCandidateQueryPlan,
+    ReconciliationMode, RecoveryAction, RecoveryPolicy,
 };
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
