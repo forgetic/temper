@@ -1,13 +1,8 @@
 # Reference-delivery example
 
-A **self-contained Temper topology demo** that has no Smith or provider-auth
-requirement: it boots a throwaway Forgejo server, registers a real host-mode
-`forgejo-runner`, and drives the reference-delivery workflow with deterministic
-fake agent worker binaries.
-
-The Smith-backed operator/dogfood examples that used to live under Temper's
-`examples/` tree have been copied to `~/src/rust/smith/examples/`. Temper keeps
-this example as the hermetic Forgejo + runner rehearsal.
+A **self-contained Temper demo**: it boots a throwaway Forgejo server, registers
+a real host-mode `forgejo-runner`, and drives the reference-delivery workflow
+with deterministic fake agent worker binaries.
 
 ## What this example proves
 
@@ -21,9 +16,6 @@ this example as the hermetic Forgejo + runner rehearsal.
 - Webhooks are real wake hints: the production `temper-trigger-forgejo` receives
   Forgejo webhooks and wakes the local fake workers; polling remains the
   correctness backstop.
-
-This is not a production deployment and not an LLM demo. Use Smith for
-provider-backed role decisions and product-chat examples.
 
 ## Prerequisites
 
