@@ -189,10 +189,12 @@ reserved for callers that ask for the portable default. Belt and suspenders
 against the provider ignoring `type=issues`, PR-as-issue rows are also dropped
 client-side. Forgejo 7.0.x has no reliable provider-side exact body-substring
 search, so `body_contains` is applied client-side after the state/label provider
-query; `Some("")` is the same as no body filter. Author and assignee are filtered
-client-side after mapping too. When `details.dependencies=true` (the default),
-matching issues are enriched with their dependency links; summary list queries
-set `details.dependencies=false` and skip the dependency N+1, returning empty
+query; `Some("")` is the same as no body filter. No `q`/`body` provider query
+parameter is sent for this fallback, so the state and label parameters remain the
+narrowest provider-side filter. Author and assignee are filtered client-side
+after mapping too. When `details.dependencies=true` (the default), matching
+issues are enriched with their dependency links; summary list queries set
+`details.dependencies=false` and skip the dependency N+1, returning empty
 dependency vectors. Results are then sorted by the requested sort field, then by
 number, then by id for determinism.
 
@@ -235,11 +237,14 @@ detail fetch. The labelled path deliberately does not fall back to
 than silent broad scans. Forgejo 7.0.x has no reliable provider-side exact
 body-substring search, so `body_contains` is applied client-side after the
 existing state/label provider query; `Some("")` is the same as no body filter.
-Author and assignee are filtered client-side after mapping too. When
-`details.dependencies=true` (the default), matching pull requests are enriched
-with dependency links; summary list queries set `details.dependencies=false` and
-skip that dependency N+1. Results sort by the requested sort field, then by
-number, then by id for determinism.
+No `q`/`body` provider query parameter is sent for this fallback. Labelled
+correlation lookups therefore keep the shape
+`/issues?type=pulls&state=<open|closed>&labels=...` followed by exact
+`/pulls/{number}` reads, never `/pulls?state=all`. Author and assignee are
+filtered client-side after mapping too. When `details.dependencies=true` (the
+default), matching pull requests are enriched with dependency links; summary list
+queries set `details.dependencies=false` and skip that dependency N+1. Results
+sort by the requested sort field, then by number, then by id for determinism.
 
 `get_pull_request`/`get_pull_request_by_number` call `GET /pulls/{number}`; a
 `404` maps to `Ok(None)`.

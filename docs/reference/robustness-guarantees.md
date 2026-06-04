@@ -91,8 +91,11 @@ window, but a wider window can no longer produce a lost-update lease race.
   create that crashes after it lands is found by the retry instead of being
   duplicated. Normal retries use bounded summary list queries over explicit
   states plus create labels and a body marker, then parse metadata to confirm the
-  exact key. The parent-aware issue path also ensures a found child issue keeps
-  the repo-qualified parent back-reference needed by cross-repo fan-out.
+  exact key. Provider-side body search is not required for the proof: client-side
+  body filtering after state/label narrowing is safe because exact metadata
+  confirmation remains mandatory. The parent-aware issue path also ensures a
+  found child issue keeps the repo-qualified parent back-reference needed by
+  cross-repo fan-out.
 - **At-most-once merge.** `MergePullRequest` runs before the label commit point
   and is skipped when the freshly loaded pull request is already merged. A crash
   that lands the merge but loses the response leaves the post-merge labels
