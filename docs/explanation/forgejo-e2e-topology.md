@@ -12,9 +12,9 @@ the CI-read decision is [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
 The filesystem rehearsal proves the *topology* — workers coordinate solely
 through the Forge and survive real process boundaries — on fakes. The Forgejo
 twin keeps the **exact** scenario seed/assert closures and worker set, but makes
-two of the "swap to real" pieces real: the **backend** and **CI**. Agents stay
-the deterministic fakes in the main suite; separate gated regressions cover real
-webhook/`ChangeHint` triggering, including a two-repo fixed worker set.
+the **backend**, **CI**, and **webhook wake path** real. Agents stay the
+deterministic fakes in the main suite; separate gated regressions cover focused
+single- and multi-repo wake narrowing.
 
 ## Process topology
 
@@ -42,10 +42,13 @@ repositories, worker logs, and stop files:
 - **Repositories**: fresh repo names per scenario; cross-repo fan-out alone gets
   a second fresh repo. Older scenario repos remain visible but are not in the
   next scenario's worker `--repo` set.
+- **Trigger**: one host-local `/forgejo/webhook` receiver is registered against
+  each scenario repository and sends authenticated Unix-datagram wakes to the
+  scenario's workers.
 - **Role + mechanical workers**: per scenario, the `temper-testing-worker`
   binary, one OS process per role-with-an-agent plus one mechanical reconciler,
-  launched `--backend forgejo --clock wall` with a unique stop file and log dir.
-  They coordinate **only** through the server.
+  launched `--backend forgejo --clock wall` with a unique stop file, wake socket,
+  and log dir. They coordinate **only** through the server.
 
 ## Identity is per-token
 
@@ -113,9 +116,13 @@ shortcuts. Role workers derive candidate queries from subscribed queues, request
 summary issue/PR rows, prune unlabelled closed history, and read CI/review/
 dependency signals only after a cheap queue match needs them. Webhook wakeups
 narrow immediate role ticks to hinted configured repositories; poll and audit
-remain broad backstops. The shared Forgejo world removes repeated server/runner
-startup while fresh repos keep scenario state isolated, so the remaining runtime
-is mostly real CI convergence.
+remain broad backstops. The pinned Forgejo 7.0.x fixture does not surface Actions
+completion as a repo webhook, so CI-reading roles use a short 1s status-poll
+fallback only for CI verdict transitions: the owner in every scenario, and the
+engineer in the CI fail→pass scenario that must observe the failed run before
+pushing the recovery commit. The shared Forgejo world removes repeated
+server/runner startup while fresh repos keep scenario state isolated, so the
+remaining runtime is mostly real CI convergence.
 
 ## Why it stays `#[ignore]`d
 
@@ -130,12 +137,13 @@ logic; this covers the real-backend topology.
 
 ## Triggering status
 
-The five-scenario Forgejo multi-process suite remains poll-driven so it can
-compare directly with the filesystem rehearsal. Separate ignored long-poll
-regressions cover the real webhook accelerator: `forgejo_webhook_wakeup` for one
-repo, and `forgejo_multi_repo_webhook` for one fixed worker set scanning two
-repos. Real Forgejo posts to the production trigger, the trigger sends
-authenticated wake datagrams, fake-agent Forgejo workers consume them, and the
-happy path must converge before the `120000` ms poll backstop can fire. Polling
+The five-scenario Forgejo multi-process suite is webhook-driven: real Forgejo
+posts to the production trigger, the trigger sends authenticated wake datagrams,
+and fake-agent Forgejo workers consume them while their normal poll backstop is
+`120000` ms. The focused ignored regressions still cover the wake accelerator in
+isolation: `forgejo_webhook_wakeup` for one repo, and
+`forgejo_multi_repo_webhook` for one fixed worker set scanning two repos. Polling
 still stays the correctness backstop; webhook payloads are hints only and every
-wake runs the same fresh Forge scan.
+wake runs the same fresh Forge scan. On Forgejo 7.0.x, CI-completion wakeups are
+not observable through repo hooks, so the suite keeps the short status-poll
+fallback limited to the CI-reading role workers that need those verdicts.

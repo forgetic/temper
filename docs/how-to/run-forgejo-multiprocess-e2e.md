@@ -5,10 +5,9 @@
 > CI**. This is the **same** rehearsal as the filesystem
 > [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
 > swapped to real**. Temper's fixture workers use deterministic fake agents;
-> real LLM decisions live in Smith's process-responder e2e. The
-> `examples/reference-delivery` launcher uses the same fake-agent + real
-> Forgejo/runner shape and carries the webhook trigger; the separate long-poll
-> wakeup regression covers that path. The design rationale
+> real LLM decisions live in Smith's process-responder e2e. The suite carries the
+> same webhook trigger shape as `examples/reference-delivery`; separate long-poll
+> wakeup regressions cover focused single- and multi-repo wake behavior. The design rationale
 > (topology, real CI, per-token identity, webhook wakeups) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
 > [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
@@ -196,42 +195,55 @@ one-process-per-part rehearsal, but against a real Forgejo + a real host-mode
 server + runner, bootstraps one admin and one per-role identity/token set, then
 provisions a fresh primary repo for each of the five scenarios (happy path,
 changes-requested, CI-fails-then-passes, dependency-chain, and cross-repo
-fan-out). Cross-repo fan-out alone gets a second fresh repo. Each scenario seeds
-via the scenario's **exact** seed closure, spawns a fresh `temper-testing-worker`
-fleet `--backend forgejo --clock wall` once per role-with-an-agent plus one
-mechanical worker (**no** `--kind ci` — the real runner is the CI producer),
-polls the scenario's **exact** assert closure to convergence, then stops via its
-unique `--stop-file` sentinel and asserts each child exited 0.
+fan-out). Cross-repo fan-out alone gets a second fresh repo. Each scenario
+registers those repos against one shared production-shaped `/forgejo/webhook`
+trigger, then spawns a fresh `temper-testing-worker` fleet `--backend forgejo
+--clock wall` once per role-with-an-agent plus one mechanical worker (**no**
+`--kind ci` — the real runner is the CI producer). Workers use authenticated
+Unix wake sockets and a `120000` ms non-CI poll backstop; all non-CI handoffs
+must converge by webhook wake before that backstop. Because the pinned Forgejo
+7.0.x fixture does not emit Actions-completion repo webhooks, only CI-reading
+role workers use a 1s status-poll fallback for CI verdict transitions: owner in
+every scenario, plus engineer in `ci_fails_then_passes` so it can observe the
+failed run and push the recovery commit. The driver polls the scenario's
+**exact** assert closure to observe convergence, then stops via its unique
+`--stop-file` sentinel and asserts each child exited 0.
 
-Scenario isolation is by repository, stop file, and log directory; only the
-Forgejo server, runner, admin, and role users are shared. The single `#[test]`
-keeps cleanup under normal Rust ownership, so a panic drops the active worker
-fleet and then the runner/server handles.
+Scenario isolation is by repository, stop file, wake socket, and log directory;
+only the Forgejo server, runner, trigger, admin, and role users are shared. The
+single `#[test]` keeps cleanup under normal Rust ownership, so a panic drops the
+active worker fleet and then the runner/server handles.
 
 Secrets travel by env only: each role worker gets its token via
 `TEMPER_FORGEJO_TOKEN`, plus `TEMPER_FORGEJO_USERNAME`/`PASSWORD` for the
 web-UI CI read, never on argv.
 
 The only per-topology differences from the filesystem test are the worker flags
-(`--backend forgejo`, `--base-url`, `--clock wall`, and the Forgejo-only
-`--ci-sentinel present|deferred` telling the engineer whether the PR head passes
-CI from the start or fails first and is fixed by a follow-up commit). The
-seed/assert closures are reused verbatim, so both topologies are checked against
-the same end state. CI is gated on a **commit-message marker** (`[ci-pass]`) the
-engineer's commit carries — not a checked-out file — because the host-mode runner
-has no `actions/checkout` offline.
+(`--backend forgejo`, `--base-url`, `--clock wall`, wake socket flags, and the
+Forgejo-only `--ci-sentinel present|deferred` telling the engineer whether the PR
+head passes CI from the start or fails first and is fixed by a follow-up commit).
+The seed/assert closures are reused verbatim, so both topologies are checked
+against the same end state. CI is gated on a **commit-message marker**
+(`[ci-pass]`) the engineer's commit carries — not a checked-out file — because
+the host-mode runner has no `actions/checkout` offline.
 
 ### Expected timing and scan diagnostics
 
 On a warmed local checkout, expect one shared setup line (~2s server, <1s runner,
 ~3s identity provisioning) and one timing line per scenario. Recent runs finished
-in about 93–99s total, with worker convergence and real CI dominating. Each
-successful scenario also prints a worker scan summary (`ticks`, summed
-`scanned_repositories`, `ci_read_log_lines`, and last scanned paths); the suite
-enables `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback reads are counted.
-If times regress, first check that normal role ticks are not scanning many
-repositories or emitting CI reads from non-CI roles; timeout panics include the
-same summaries, worker log tails, runner log tail, and per-repo CI diagnostics.
+in roughly high-80s to mid-90s total, with worker convergence and real CI
+dominating. Each successful scenario also prints a worker scan summary (`ticks`,
+summed `scanned_repositories`, `ci_read_log_lines`, and last scanned paths); the
+suite enables `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback reads are
+counted.
+If times regress, first check that wake ticks are present, poll-trigger ticks are
+limited to the narrow CI status fallback roles, and multi-repo wake scans remain
+narrowed except for the mechanical worker's intentional broad recovery scan. The
+shared five-scenario fixture sets `TEMPER_WAKE_DEBOUNCE_MS=50` for its worker
+children; the production default remains 500ms for more conservative
+webhook-burst coalescing. Timeout
+panics include the same summaries, worker log tails, runner log tail, and
+per-repo CI diagnostics.
 
 ## Long-poll webhook wakeup regressions
 

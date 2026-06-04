@@ -9,8 +9,11 @@
 //! 2. bootstrap one admin and one per-role identity/token map;
 //! 3. provision fresh repository names per scenario (plus one second repo only
 //!    for cross-repo fan-out);
-//! 4. spawn a fresh worker fleet per scenario with unique stop file and logs;
-//! 5. poll the scenario's backend-neutral assert closure to convergence.
+//! 4. register repo webhooks against one shared trigger;
+//! 5. spawn a fresh worker fleet per scenario with unique stop file, wake
+//!    sockets, and logs;
+//! 6. poll the scenario's backend-neutral assert closure to convergence while
+//!    the workers advance through webhook wakes, not their poll backstop.
 //!
 //! The five scenarios are collapsed into one ignored test so ordinary Rust
 //! ownership performs panic cleanup: the active worker fleet is a stack value and
@@ -21,7 +24,11 @@
 //! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 //! ```
 
+#![cfg(unix)]
+
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_production::trigger_args::TriggerArgs;
 use temper_runner::Scenario;
 use temper_testing::forgejo_server::provision::bootstrap_admin;
 use temper_testing::forgejo_server::{
@@ -31,7 +38,7 @@ use temper_testing::forgejo_server::{
 #[path = "support/forgejo_multiprocess.rs"]
 mod multiprocess_support;
 
-use multiprocess_support::{convergence_timeout, WorkerFleet};
+use multiprocess_support::{convergence_timeout, WorkerFleet, WorkerPollProfile};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -42,9 +49,14 @@ use temper_testing::scenarios::{
 };
 
 /// How often the driver re-runs the assert closure while polling.
-const ASSERT_POLL: Duration = Duration::from_secs(2);
-/// Worker poll cadence; modest because every tick is real HTTP.
-const WORKER_POLL_MS: u64 = 500;
+const ASSERT_POLL: Duration = Duration::from_secs(1);
+/// Deliberately long worker poll backstop; scenario progress should come from
+/// Forgejo webhooks delivered through wake sockets before this deadline.
+const LONG_POLL_MS: u64 = 120_000;
+/// Forgejo 7.0.x does not emit Actions-completion webhooks through repository
+/// hooks, so CI-reading roles keep a narrow poll backstop for CI status
+/// transitions only.
+const CI_STATUS_POLL_MS: u64 = 1_000;
 /// Backstop run length per child, in case the driver dies before stopping it.
 const WORKER_RUN_SECS: u64 = 1200;
 
@@ -64,6 +76,9 @@ struct Variant {
     reviewer: &'static str,
     /// `--ci-sentinel` value passed to the engineer role worker.
     ci_sentinel: &'static str,
+    /// Role workers allowed to use the narrow CI status-poll fallback. All other
+    /// workers keep the long webhook-only poll backstop.
+    ci_status_poll_roles: &'static [&'static str],
 }
 
 #[test]
@@ -107,6 +122,7 @@ fn variants() -> [Variant; 5] {
             architect: "default",
             reviewer: "default",
             ci_sentinel: "present",
+            ci_status_poll_roles: &["owner"],
         },
         Variant {
             name: "changes_requested_then_approved",
@@ -116,6 +132,7 @@ fn variants() -> [Variant; 5] {
             architect: "default",
             reviewer: "request-changes-then-approve",
             ci_sentinel: "present",
+            ci_status_poll_roles: &["owner"],
         },
         Variant {
             name: "ci_fails_then_passes",
@@ -125,6 +142,7 @@ fn variants() -> [Variant; 5] {
             architect: "default",
             reviewer: "default",
             ci_sentinel: "deferred",
+            ci_status_poll_roles: &["engineer", "owner"],
         },
         Variant {
             name: "dependency_chain_mechanically_unblocked",
@@ -134,6 +152,7 @@ fn variants() -> [Variant; 5] {
             architect: "closing",
             reviewer: "default",
             ci_sentinel: "present",
+            ci_status_poll_roles: &["owner"],
         },
         Variant {
             name: "cross_repo_fanout",
@@ -146,6 +165,7 @@ fn variants() -> [Variant; 5] {
             architect: "closing",
             reviewer: "default",
             ci_sentinel: "present",
+            ci_status_poll_roles: &["owner"],
         },
     ]
 }
@@ -170,23 +190,29 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
         .collect::<Vec<_>>();
 
     let scenario = (variant.scenario)();
-    let seed_start = Instant::now();
-    seed(world.server(), &primary, &scenario, variant.name);
-    timing.seed = seed_start.elapsed();
 
     let paths = scenario_paths(&primary);
     let _ = std::fs::remove_file(&paths.stop_file);
     let _ = std::fs::remove_dir_all(&paths.log_dir);
+    world.reset_wake_dir();
     std::fs::create_dir_all(&paths.log_dir).expect("scenario worker log dir creates");
 
     let config = runner_config();
+    let poll_profile = WorkerPollProfile {
+        long_poll_ms: LONG_POLL_MS,
+        ci_status_poll_ms: CI_STATUS_POLL_MS,
+        ci_status_roles: variant.ci_status_poll_roles,
+    };
     let spawn_start = Instant::now();
     let mut workers = WorkerFleet::spawn(
         world.server(),
         &primary,
         &repo_args,
         &paths.stop_file,
+        world.wake_dir(),
+        world.wake_secret(),
         &paths.log_dir,
+        poll_profile,
         &config,
         variant.architect,
         variant.reviewer,
@@ -194,10 +220,43 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
     );
     timing.worker_spawn = spawn_start.elapsed();
 
+    let ready_start = Instant::now();
+    workers.wait_for_wake_sockets(Duration::from_secs(30));
+    timing.worker_ready = ready_start.elapsed();
+
+    let seed_start = Instant::now();
+    seed(world.server(), &primary, &scenario, variant.name);
+    timing.seed = seed_start.elapsed();
+
     let timeout = convergence_timeout();
     let convergence_start = Instant::now();
     let converged = poll_until_converged(world.server(), &primary, &scenario, timeout);
     timing.convergence = convergence_start.elapsed();
+    if converged.is_ok() {
+        assert!(
+            timing.convergence < Duration::from_millis(LONG_POLL_MS),
+            "scenario '{}' converged in {:?}, which is not before the {}ms non-CI poll backstop\n--- worker logs ---\n{}",
+            variant.name,
+            timing.convergence,
+            LONG_POLL_MS,
+            workers.logs()
+        );
+        assert!(
+            workers.logs().contains("consumed authenticated wake"),
+            "scenario '{}' converged without any authenticated wake in worker logs\n{}",
+            variant.name,
+            workers.logs()
+        );
+        let unexpected_polls = unexpected_poll_triggers(&workers, variant.ci_status_poll_roles);
+        assert!(
+            unexpected_polls.is_empty(),
+            "scenario '{}' had poll-trigger ticks outside the narrow CI status fallback roles {:?}:\n{}\n--- worker logs ---\n{}",
+            variant.name,
+            variant.ci_status_poll_roles,
+            unexpected_polls.join("\n"),
+            workers.logs()
+        );
+    }
 
     let teardown_start = Instant::now();
     touch(&paths.stop_file);
@@ -234,19 +293,6 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
         );
     }
 
-    let final_assert_start = Instant::now();
-    let forge = admin_forge(world.server(), &primary);
-    futures_block_on((scenario.assert)(&forge, &primary.repository)).unwrap_or_else(|error| {
-        panic!(
-            "scenario '{}' final assertion failed after workers stopped: {error}\n\
-             timing: {}\n--- worker logs ---\n{}\n--- CI diagnostics ---\n{}",
-            variant.name,
-            timing.render(),
-            workers.logs(),
-            ci_diagnostics(world.server(), &repos)
-        )
-    });
-    timing.final_assert = final_assert_start.elapsed();
     timing.total = scenario_start.elapsed();
     eprintln!(
         "forgejo_multiprocess scenario '{}' scan summary:\n{}",
@@ -262,12 +308,32 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
     timing
 }
 
+fn unexpected_poll_triggers(workers: &WorkerFleet, allowed_roles: &[&str]) -> Vec<String> {
+    let allowed_labels = allowed_roles
+        .iter()
+        .map(|role| format!("role:{role}"))
+        .collect::<Vec<_>>();
+    workers
+        .poll_trigger_lines()
+        .into_iter()
+        .filter(|line| {
+            !allowed_labels
+                .iter()
+                .any(|label| line.starts_with(&format!("{label}:")))
+        })
+        .collect()
+}
+
 struct SharedLiveWorld {
     // Drop runner before server so the daemon cannot keep polling a dead Forgejo.
     runner: ForgejoRunner,
     server: ForgejoServer,
     roles: ProvisionedRoles,
     default_branch: String,
+    trigger_addr: SocketAddr,
+    webhook_secret: String,
+    wake_secret_file: PathBuf,
+    wake_dir: PathBuf,
     timing: WorldTiming,
 }
 
@@ -295,10 +361,24 @@ impl SharedLiveWorld {
         .expect("forgejo role identities provision once");
         let identity_provision = identity_start.elapsed();
 
+        let trigger_start = Instant::now();
+        let trigger_paths = TriggerPaths::new(server.data_dir());
+        trigger_paths.write_secrets();
+        let trigger_addr = free_addr();
+        start_trigger(
+            trigger_addr,
+            trigger_paths.webhook_secret_file.clone(),
+            trigger_paths.wake_secret_file.clone(),
+            trigger_paths.wake_dir.clone(),
+        );
+        wait_for_trigger(trigger_addr);
+        let trigger_startup = trigger_start.elapsed();
+
         let timing = WorldTiming {
             server_startup,
             runner_startup,
             identity_provision,
+            trigger_startup,
             total: total_start.elapsed(),
         };
         Self {
@@ -306,12 +386,16 @@ impl SharedLiveWorld {
             server,
             roles,
             default_branch: config.repository.default_branch,
+            trigger_addr,
+            webhook_secret: trigger_paths.webhook_secret,
+            wake_secret_file: trigger_paths.wake_secret_file,
+            wake_dir: trigger_paths.wake_dir,
             timing,
         }
     }
 
     fn provision_repo(&self, name: &str) -> Provisioned {
-        futures_block_on(provision_repository(
+        let provisioned = futures_block_on(provision_repository(
             self.server.base_url(),
             &self.roles,
             name,
@@ -322,7 +406,29 @@ impl SharedLiveWorld {
                 "provisioning repo {}/{} failed: {error}",
                 self.roles.owner, name
             )
-        })
+        });
+        register_webhook(
+            &self.server,
+            &provisioned.admin_token,
+            &provisioned.owner,
+            &provisioned.name,
+            self.trigger_addr,
+            &self.webhook_secret,
+        );
+        provisioned
+    }
+
+    fn wake_dir(&self) -> &Path {
+        &self.wake_dir
+    }
+
+    fn wake_secret(&self) -> &Path {
+        &self.wake_secret_file
+    }
+
+    fn reset_wake_dir(&self) {
+        let _ = std::fs::remove_dir_all(&self.wake_dir);
+        std::fs::create_dir_all(&self.wake_dir).expect("scenario wake dir creates");
     }
 
     fn server(&self) -> &ForgejoServer {
@@ -343,16 +449,117 @@ struct WorldTiming {
     server_startup: Duration,
     runner_startup: Duration,
     identity_provision: Duration,
+    trigger_startup: Duration,
     total: Duration,
 }
 
 impl WorldTiming {
     fn render(&self) -> String {
         format!(
-            "server_startup={:?} runner_startup={:?} identity_provision={:?} total={:?}",
-            self.server_startup, self.runner_startup, self.identity_provision, self.total
+            "server_startup={:?} runner_startup={:?} identity_provision={:?} \
+             trigger_startup={:?} total={:?}",
+            self.server_startup,
+            self.runner_startup,
+            self.identity_provision,
+            self.trigger_startup,
+            self.total
         )
     }
+}
+
+struct TriggerPaths {
+    webhook_secret: String,
+    webhook_secret_file: PathBuf,
+    wake_secret_file: PathBuf,
+    wake_dir: PathBuf,
+}
+
+impl TriggerPaths {
+    fn new(server_data_dir: &Path) -> Self {
+        let run_dir = server_data_dir.join("multiprocess-webhook");
+        Self {
+            webhook_secret: "webhook-secret".to_string(),
+            webhook_secret_file: run_dir.join("webhook-secret"),
+            wake_secret_file: run_dir.join("wake-secret"),
+            wake_dir: run_dir.join("wake"),
+        }
+    }
+
+    fn write_secrets(&self) {
+        if let Some(parent) = self.webhook_secret_file.parent() {
+            std::fs::create_dir_all(parent).expect("trigger secret dir creates");
+        }
+        std::fs::write(
+            &self.webhook_secret_file,
+            format!("{}\n", self.webhook_secret),
+        )
+        .expect("webhook secret is written");
+        std::fs::write(&self.wake_secret_file, "wake-secret\n").expect("wake secret is written");
+        std::fs::create_dir_all(&self.wake_dir).expect("wake dir creates");
+    }
+}
+
+fn start_trigger(
+    addr: SocketAddr,
+    webhook_secret: PathBuf,
+    wake_secret: PathBuf,
+    wake_dir: PathBuf,
+) {
+    std::thread::spawn(move || {
+        let args = TriggerArgs {
+            bind: addr,
+            webhook_secret_file: webhook_secret,
+            wake_secret_file: Some(wake_secret),
+            wake_dir: Some(wake_dir),
+            wake_sockets: Vec::new(),
+        };
+        if let Err(error) = temper_production::trigger::run(&args) {
+            eprintln!("forgejo multiprocess trigger exited: {error}");
+        }
+    });
+}
+
+fn wait_for_trigger(addr: SocketAddr) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpStream::connect(addr).is_ok() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "trigger did not start listening at {addr}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn free_addr() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("free TCP port binds");
+    listener.local_addr().expect("local addr is available")
+}
+
+fn register_webhook(
+    server: &ForgejoServer,
+    admin_token: &str,
+    owner: &str,
+    name: &str,
+    addr: SocketAddr,
+    secret: &str,
+) {
+    let url = format!("http://{addr}/forgejo/webhook");
+    futures_block_on(async {
+        temper_production::forgejo_rest::ensure_repo_webhook(
+            &temper_production::forgejo_rest::http_client().expect("HTTP client builds"),
+            server.base_url(),
+            admin_token,
+            owner,
+            name,
+            &url,
+            secret,
+        )
+        .await
+    })
+    .unwrap_or_else(|error| panic!("repo webhook registration failed for {owner}/{name}: {error}"));
 }
 
 #[derive(Clone, Default)]
@@ -360,23 +567,23 @@ struct ScenarioTiming {
     repo_provision: Duration,
     seed: Duration,
     worker_spawn: Duration,
+    worker_ready: Duration,
     convergence: Duration,
     worker_teardown: Duration,
-    final_assert: Duration,
     total: Duration,
 }
 
 impl ScenarioTiming {
     fn render(&self) -> String {
         format!(
-            "repo_provision={:?} seed={:?} worker_spawn={:?} convergence={:?} \
-             worker_teardown={:?} final_assert={:?} total={:?}",
+            "repo_provision={:?} worker_spawn={:?} worker_ready={:?} seed={:?} \
+             convergence={:?} worker_teardown={:?} total={:?}",
             self.repo_provision,
-            self.seed,
             self.worker_spawn,
+            self.worker_ready,
+            self.seed,
             self.convergence,
             self.worker_teardown,
-            self.final_assert,
             self.total
         )
     }

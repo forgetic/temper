@@ -137,8 +137,20 @@ pub enum WakeWaitOutcome {
 }
 
 const MAX_WAKE_DRAIN: usize = 1024;
-const WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
+const DEFAULT_WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
+const WAKE_DEBOUNCE_MS_ENV: &str = "TEMPER_WAKE_DEBOUNCE_MS";
 const STOP_CHECK_INTERVAL: StdDuration = StdDuration::from_millis(250);
+
+fn wake_debounce() -> StdDuration {
+    wake_debounce_from(std::env::var(WAKE_DEBOUNCE_MS_ENV).ok().as_deref())
+}
+
+fn wake_debounce_from(raw: Option<&str>) -> StdDuration {
+    raw.and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|milliseconds| *milliseconds > 0)
+        .map(StdDuration::from_millis)
+        .unwrap_or(DEFAULT_WAKE_DEBOUNCE)
+}
 
 fn drain_wake_batch(
     listener: &WakeListener,
@@ -198,7 +210,7 @@ pub async fn wait_for_wake_or_poll(
                     _ = &mut stop_check => {},
                     received = listener.recv() => match received {
                         Ok(hint) => {
-                            tokio::time::sleep(WAKE_DEBOUNCE).await;
+                            tokio::time::sleep(wake_debounce()).await;
                             return drain_wake_batch(listener, hint).map(WakeWaitOutcome::Wake);
                         }
                         Err(WakeError::Unauthorized) => {
@@ -310,6 +322,17 @@ mod tests {
         };
         assert!(!format!("{config:?}").contains("local-secret"));
         assert!(format!("{config:?}").contains("<redacted>"));
+    }
+
+    #[test]
+    fn wake_debounce_uses_positive_millisecond_override() {
+        assert_eq!(wake_debounce_from(None), DEFAULT_WAKE_DEBOUNCE);
+        assert_eq!(wake_debounce_from(Some("75")), StdDuration::from_millis(75));
+        assert_eq!(wake_debounce_from(Some("0")), DEFAULT_WAKE_DEBOUNCE);
+        assert_eq!(
+            wake_debounce_from(Some("not-a-number")),
+            DEFAULT_WAKE_DEBOUNCE
+        );
     }
 
     #[test]

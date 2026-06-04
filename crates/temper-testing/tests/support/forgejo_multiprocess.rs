@@ -15,6 +15,29 @@ pub fn convergence_timeout() -> Duration {
     CONVERGENCE_TIMEOUT
 }
 
+/// Per-worker poll cadence. CI-reading roles can use a narrow status-poll
+/// fallback while every other worker keeps the long webhook-only backstop.
+#[derive(Clone, Copy)]
+pub struct WorkerPollProfile {
+    pub long_poll_ms: u64,
+    pub ci_status_poll_ms: u64,
+    pub ci_status_roles: &'static [&'static str],
+}
+
+impl WorkerPollProfile {
+    fn for_role(&self, role: &str) -> u64 {
+        if self.ci_status_roles.contains(&role) {
+            self.ci_status_poll_ms
+        } else {
+            self.long_poll_ms
+        }
+    }
+
+    fn for_mechanical(&self) -> u64 {
+        self.long_poll_ms
+    }
+}
+
 /// Owns every spawned worker process and kills any survivors on drop.
 pub struct WorkerFleet {
     workers: Vec<SpawnedWorker>,
@@ -23,6 +46,7 @@ pub struct WorkerFleet {
 struct SpawnedWorker {
     label: String,
     log: PathBuf,
+    wake_socket: PathBuf,
     child: Child,
 }
 
@@ -35,7 +59,10 @@ impl WorkerFleet {
         provisioned: &Provisioned,
         repos: &[String],
         stop_file: &Path,
+        wake_dir: &Path,
+        wake_secret: &Path,
         log_dir: &Path,
+        poll_profile: WorkerPollProfile,
         config: &RunnerConfig,
         architect: &str,
         reviewer: &str,
@@ -54,10 +81,14 @@ impl WorkerFleet {
                 (FORGEJO_PASSWORD_ENV, identity.password.as_str()),
             ];
             let log = log_dir.join(format!("role-{role}.log"));
+            let wake_socket = wake_dir.join(format!("{role}.sock"));
             let child = spawn_worker(
                 &base,
                 repos,
                 stop_file,
+                wake_secret,
+                &wake_socket,
+                poll_profile.for_role(&role),
                 &[
                     ("--kind", "role"),
                     ("--role", &role),
@@ -73,15 +104,20 @@ impl WorkerFleet {
             workers.push(SpawnedWorker {
                 label: format!("role:{role}"),
                 log,
+                wake_socket,
                 child,
             });
         }
 
         let log = log_dir.join("mechanical.log");
+        let wake_socket = wake_dir.join("mechanical.sock");
         let child = spawn_worker(
             &base,
             repos,
             stop_file,
+            wake_secret,
+            &wake_socket,
+            poll_profile.for_mechanical(),
             &[("--kind", "mechanical")],
             &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
             &log,
@@ -89,10 +125,34 @@ impl WorkerFleet {
         workers.push(SpawnedWorker {
             label: "mechanical".into(),
             log,
+            wake_socket,
             child,
         });
 
         Self { workers }
+    }
+
+    /// Waits until each worker has bound its wake socket before the driver seeds
+    /// webhook-generating work. The workers' initial empty scans can overlap
+    /// seeding; any webhooks delivered during that scan queue on the socket and
+    /// wake the next loop iteration.
+    pub fn wait_for_wake_sockets(&self, timeout: Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        for worker in &self.workers {
+            loop {
+                if worker.wake_socket.exists() {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "worker '{}' did not bind wake socket {}; logs:\n{}",
+                    worker.label,
+                    worker.wake_socket.display(),
+                    self.logs()
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
     }
 
     /// Waits for every child and returns its (label, exit status).
@@ -115,6 +175,21 @@ impl WorkerFleet {
             .map(|worker| summarize_log(&worker.label, &worker.log))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Completed poll-trigger ticks, prefixed with their worker labels.
+    pub fn poll_trigger_lines(&self) -> Vec<String> {
+        self.workers
+            .iter()
+            .flat_map(|worker| {
+                std::fs::read_to_string(&worker.log)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|line| line.contains("completed tick trigger=poll"))
+                    .map(|line| format!("{}: {line}", worker.label))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     /// Tails every worker log for timeout diagnostics.
@@ -163,6 +238,9 @@ fn spawn_worker(
     base_url: &str,
     repos: &[String],
     stop_file: &Path,
+    wake_secret: &Path,
+    wake_socket: &Path,
+    poll_ms: u64,
     extra: &[(&str, &str)],
     env: &[(&str, &str)],
     log_path: &Path,
@@ -183,11 +261,15 @@ fn spawn_worker(
         .arg("--clock")
         .arg("wall")
         .arg("--poll-ms")
-        .arg(super::WORKER_POLL_MS.to_string())
+        .arg(poll_ms.to_string())
         .arg("--stop-file")
         .arg(stop_file)
         .arg("--run-secs")
-        .arg(super::WORKER_RUN_SECS.to_string());
+        .arg(super::WORKER_RUN_SECS.to_string())
+        .arg("--wake-socket")
+        .arg(wake_socket)
+        .arg("--wake-secret-file")
+        .arg(wake_secret);
     for (flag, value) in extra {
         command.arg(flag).arg(value);
     }
@@ -195,7 +277,11 @@ fn spawn_worker(
         .env_remove(FORGEJO_TOKEN_ENV)
         .env_remove(FORGEJO_USERNAME_ENV)
         .env_remove(FORGEJO_PASSWORD_ENV)
-        .env("TEMPER_FORGEJO_CI_DIAGNOSTICS", "1");
+        .env("TEMPER_FORGEJO_CI_DIAGNOSTICS", "1")
+        // The shared five-scenario suite has a dedicated long-poll backstop;
+        // use a shorter wake drain window so webhook bursts do not dominate
+        // runtime while still coalescing same-turn Forgejo hook fan-out.
+        .env("TEMPER_WAKE_DEBOUNCE_MS", "50");
     for (key, value) in env {
         command.env(key, value);
     }

@@ -21,6 +21,8 @@ the Forgejo token decides what the worker may read or mutate.
   narrows role scans to the hinted configured repositories. No-hint or unknown
   hints fall back to a broad configured-repo scan. Mechanical wake scans remain
   broad in production so cross-repo recovery can see dependency sources.
+  `TEMPER_WAKE_DEBOUNCE_MS` can override the default 500ms local wake drain
+  window when a deployment or fixture needs different burst coalescing.
 
 Every tick re-reads fresh Forge state before planning or mutating. Webhooks only
 accelerate latency; polling and audits remain the correctness backstops.

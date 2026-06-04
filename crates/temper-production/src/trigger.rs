@@ -114,11 +114,14 @@ fn handle_request(
     webhook_secret: &str,
     wake_secret: Option<&str>,
 ) -> HttpResponse {
+    let event = header(&request.headers, "x-forgejo-event")
+        .or_else(|| header(&request.headers, "x-gitea-event"))
+        .unwrap_or("unknown");
     match accept_webhook(request, webhook_secret) {
         Ok(hint) => {
             let delivery = deliver_wakes(args, wake_secret, &hint);
             eprintln!(
-                "temper-trigger-forgejo: webhook accepted kind={:?} repo={}/{} item={:?} wake_outcome={} targets={} sent={} failed={}",
+                "temper-trigger-forgejo: webhook accepted event={event} kind={:?} repo={}/{} item={:?} wake_outcome={} targets={} sent={} failed={}",
                 hint.kind,
                 hint.repo.owner,
                 hint.repo.name,
@@ -235,9 +238,12 @@ fn parse_hint(body: &[u8], event: &str) -> Result<ChangeHint, TriggerError> {
         | "pull_request_review_approved"
         | "pull_request_review_rejected"
         | "pull_request_review_comment"
+        | "pull_request_approved"
+        | "pull_request_rejected"
         | "review" => ChangeKind::Review,
         "push" => ChangeKind::Push,
-        "status" | "check_run" | "workflow_run" | "workflow_job" => ChangeKind::Ci,
+        "status" | "check_run" | "workflow_run" | "workflow_job" | "action_run_failure"
+        | "action_run_recover" | "action_run_success" => ChangeKind::Ci,
         _ => ChangeKind::Unknown,
     };
     Ok(ChangeHint { repo, item, kind })
@@ -478,6 +484,32 @@ mod tests {
             .insert("x-gitea-signature".into(), signature_hex(b"wrong", body));
         let error = accept_webhook(&request, "secret").unwrap_err();
         assert!(error.to_string().contains("invalid webhook signature"));
+    }
+
+    #[test]
+    fn workflow_events_are_ci_hints() {
+        let body = br#"{"repository":{"owner":{"login":"acme"},"name":"service"}}"#;
+        for event in [
+            "status",
+            "workflow_job",
+            "workflow_run",
+            "action_run_success",
+        ] {
+            let hint = accept_webhook(&request(body, "secret", event), "secret")
+                .expect("CI events wake workers");
+            assert_eq!(hint.kind, ChangeKind::Ci, "event {event}");
+        }
+    }
+
+    #[test]
+    fn forgejo_pull_request_review_events_are_review_hints() {
+        let body = br#"{"repository":{"full_name":"acme/service"},"pull_request":{"number":7}}"#;
+        for event in ["pull_request_approved", "pull_request_rejected"] {
+            let hint = accept_webhook(&request(body, "secret", event), "secret")
+                .expect("review events wake workers");
+            assert_eq!(hint.kind, ChangeKind::Review, "event {event}");
+            assert_eq!(hint.item, Some(ItemNumber::new(7)));
+        }
     }
 
     #[test]
