@@ -4,9 +4,10 @@
 //! an ignored/local fixture path starts a server or runner, it resolves the
 //! binary with [`ensure_binary`] / [`ensure_runner_binary`]: explicit
 //! `*_BINARY` override → cached `.cache/forgejo/` file → download the pinned
-//! release asset, verify its SHA-256, and publish it atomically. Default
-//! non-ignored tests stay offline because they never start the real Forgejo
-//! server or runner.
+//! release asset, verify its SHA-256, and publish it through a process-safe
+//! per-target lock plus an atomic same-directory rename. Default non-ignored
+//! tests stay offline because they never start the real Forgejo server or
+//! runner.
 //!
 //! Env overrides (for CI, offline machines, or a version bump). The server
 //! binary uses the `TEMPER_FORGEJO_*` namespace; the runner mirrors it under
@@ -19,9 +20,11 @@
 //! - `*_SHA256` — override the expected checksum.
 
 use sha2::{Digest, Sha256};
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// Pinned Forgejo version. Proven by the Phase 0 spike (linux-amd64, SQLite).
 pub const FORGEJO_VERSION: &str = "7.0.12";
@@ -38,6 +41,10 @@ pub const FORGEJO_RUNNER_SHA256: &str =
 
 /// How long the one-shot download is allowed to take.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long to wait for another process to finish publishing the same target.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(300);
+
+static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
 /// A failure resolving the Forgejo binary.
 #[derive(Debug)]
@@ -50,6 +57,8 @@ pub enum DownloadError {
     Http(String),
     /// Writing the binary to the cache failed.
     Io(std::io::Error),
+    /// Waiting for the per-target cache lock failed.
+    Lock(String),
     /// The downloaded bytes did not match the expected checksum.
     Checksum { expected: String, actual: String },
 }
@@ -63,6 +72,7 @@ impl std::fmt::Display for DownloadError {
             }
             DownloadError::Http(why) => write!(f, "forgejo download failed: {why}"),
             DownloadError::Io(err) => write!(f, "forgejo cache io error: {err}"),
+            DownloadError::Lock(why) => write!(f, "forgejo cache lock error: {why}"),
             DownloadError::Checksum { expected, actual } => write!(
                 f,
                 "forgejo binary checksum mismatch: expected {expected}, got {actual}"
@@ -143,6 +153,18 @@ pub fn ensure_runner_binary() -> Result<PathBuf, DownloadError> {
 /// Shared resolver for a [`Pin`]: env override path → cached file → verified
 /// download.
 fn ensure_pinned(pin: &Pin) -> Result<PathBuf, DownloadError> {
+    let cache_dir = workspace_root()?.join(".cache").join("forgejo");
+    ensure_pinned_with_fetch(pin, &cache_dir, http_get)
+}
+
+fn ensure_pinned_with_fetch<F>(
+    pin: &Pin,
+    cache_dir: &Path,
+    fetch: F,
+) -> Result<PathBuf, DownloadError>
+where
+    F: FnOnce(&str) -> Result<Vec<u8>, DownloadError>,
+{
     if let Some(path) = env_var(&format!("{}_BINARY", pin.env_prefix)) {
         let path = PathBuf::from(path);
         if !path.exists() {
@@ -159,18 +181,7 @@ fn ensure_pinned(pin: &Pin) -> Result<PathBuf, DownloadError> {
     let expected_sha = env_var(&format!("{}_SHA256", pin.env_prefix));
     let url_override = env_var(&format!("{}_URL", pin.env_prefix));
     let url = url_override.clone().unwrap_or_else(|| (pin.url)(&version));
-
-    let cache_dir = workspace_root()?.join(".cache").join("forgejo");
-    let target = cache_target(pin, &version)?;
-
-    // A present binary is trusted: it was checksum-verified when first written
-    // (or supplied via an override URL the operator chose).
-    if target.exists() {
-        return Ok(target);
-    }
-
-    std::fs::create_dir_all(&cache_dir)?;
-    let bytes = http_get(&url)?;
+    let target = cache_target(cache_dir, pin, &version);
 
     // Verify before publishing the file. Default pin always checks; an override
     // URL checks only when paired with `<prefix>_SHA256`.
@@ -179,19 +190,46 @@ fn ensure_pinned(pin: &Pin) -> Result<PathBuf, DownloadError> {
     } else {
         Some(expected_sha.unwrap_or_else(|| pin.default_sha256.to_string()))
     };
-    if let Some(expected) = expected {
-        verify_checksum(&bytes, &expected)?;
-    }
 
-    write_executable(&target, &bytes)?;
-    Ok(target)
+    resolve_cached_binary(&target, &url, expected.as_deref(), fetch)
 }
 
-fn cache_target(pin: &Pin, version: &str) -> Result<PathBuf, DownloadError> {
-    Ok(workspace_root()?
-        .join(".cache")
-        .join("forgejo")
-        .join((pin.file_name)(version)))
+fn cache_target(cache_dir: &Path, pin: &Pin, version: &str) -> PathBuf {
+    cache_dir.join((pin.file_name)(version))
+}
+
+fn resolve_cached_binary<F>(
+    target: &Path,
+    url: &str,
+    expected_sha: Option<&str>,
+    fetch: F,
+) -> Result<PathBuf, DownloadError>
+where
+    F: FnOnce(&str) -> Result<Vec<u8>, DownloadError>,
+{
+    // A present binary is trusted: it was checksum-verified when first written
+    // (or supplied via an override URL the operator chose).
+    if target.exists() {
+        return Ok(target.to_path_buf());
+    }
+
+    let cache_dir = target_parent(target)?;
+    std::fs::create_dir_all(cache_dir)?;
+    let _lock = CacheLock::acquire(&lock_path(target)?)?;
+
+    // Another process may have completed the first-use download while this
+    // process waited for the per-target lock.
+    if target.exists() {
+        return Ok(target.to_path_buf());
+    }
+
+    let bytes = fetch(url)?;
+    if let Some(expected) = expected_sha {
+        verify_checksum(&bytes, expected)?;
+    }
+
+    write_executable(target, &bytes)?;
+    Ok(target.to_path_buf())
 }
 
 fn http_get(url: &str) -> Result<Vec<u8>, DownloadError> {
@@ -242,11 +280,123 @@ fn hex_lower(bytes: &[u8]) -> String {
 fn write_executable(target: &Path, bytes: &[u8]) -> Result<(), DownloadError> {
     // Write to a unique temp file in the same dir, then rename, so a concurrent
     // or interrupted download never leaves a half-written binary at `target`.
-    let tmp = target.with_extension(format!("part-{}", std::process::id()));
-    std::fs::write(&tmp, bytes)?;
-    set_executable(&tmp)?;
-    std::fs::rename(&tmp, target)?;
-    Ok(())
+    let (tmp, mut file) = create_unique_temp_file(target)?;
+    let published = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        set_executable(&tmp)?;
+
+        // Under the per-target lock this should already be false, but keeping
+        // the check here makes the publishing primitive safe if a legacy or
+        // external publisher raced us to the final path.
+        if target.exists() {
+            return Ok(false);
+        }
+
+        match std::fs::rename(&tmp, target) {
+            Ok(()) => Ok(true),
+            Err(err) if target.exists() => Ok(false),
+            Err(err) => Err(DownloadError::Io(err)),
+        }
+    })();
+
+    match published {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            let _ = std::fs::remove_file(&tmp);
+            Ok(())
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(err)
+        }
+    }
+}
+
+fn create_unique_temp_file(target: &Path) -> Result<(PathBuf, File), DownloadError> {
+    let parent = target_parent(target)?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .ok_or_else(|| io_error("cache target has no file name"))?;
+    for _ in 0..1_000 {
+        let id = NEXT_TMP.fetch_add(1, Ordering::SeqCst);
+        let tmp = parent.join(format!(".{name}.part-{}-{id}", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(DownloadError::Io(err)),
+        }
+    }
+    Err(DownloadError::Lock(format!(
+        "could not allocate a unique temp file next to {}",
+        target.display()
+    )))
+}
+
+fn target_parent(target: &Path) -> Result<&Path, DownloadError> {
+    target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| io_error("cache target has no parent directory"))
+}
+
+fn lock_path(target: &Path) -> Result<PathBuf, DownloadError> {
+    let parent = target_parent(target)?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .ok_or_else(|| io_error("cache target has no file name"))?;
+    Ok(parent.join(format!(".{name}.lock")))
+}
+
+fn io_error(message: &'static str) -> DownloadError {
+    DownloadError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        message,
+    ))
+}
+
+struct CacheLock {
+    path: PathBuf,
+}
+
+impl CacheLock {
+    fn acquire(path: &Path) -> Result<Self, DownloadError> {
+        let deadline = Instant::now() + LOCK_TIMEOUT;
+        loop {
+            match std::fs::create_dir(path) {
+                Ok(()) => {
+                    if let Err(err) =
+                        std::fs::write(path.join("owner"), std::process::id().to_string())
+                    {
+                        let _ = std::fs::remove_dir_all(path);
+                        return Err(DownloadError::Io(err));
+                    }
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if Instant::now() >= deadline {
+                        return Err(DownloadError::Lock(format!(
+                            "timed out waiting for binary-cache lock {}",
+                            path.display()
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(err) => return Err(DownloadError::Io(err)),
+            }
+        }
+    }
+}
+
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 #[cfg(unix)]
@@ -331,6 +481,62 @@ mod tests {
         let root = workspace_root().expect("workspace root resolves");
         assert!(root.join("crates").is_dir());
         assert!(root.join("Cargo.toml").is_file());
+    }
+
+    #[test]
+    fn concurrent_binary_cache_publication_downloads_once() {
+        const TEST_PAYLOAD: &[u8] = b"tiny forgejo fixture payload\n";
+        const TEST_PAYLOAD_SHA256: &str =
+            "8ee6a6db0eae82c49e13cef44b63a083001ceb6b8f7178f502ec69c045aa5819";
+        const TEST_PIN: Pin = Pin {
+            env_prefix: "TEMPER_FORGEJO_FIXTURE_BINARY_CACHE_TEST_NEVER_SET",
+            default_version: "1",
+            default_sha256: TEST_PAYLOAD_SHA256,
+            url: |_| "fixture://payload".to_string(),
+            file_name: |_| "forgejo-fixture-test-binary".to_string(),
+        };
+
+        let cache_dir = std::env::temp_dir().join(format!(
+            "temper-forgejo-binary-cache-test-{}-{}",
+            std::process::id(),
+            NEXT_TMP.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let target = cache_target(&cache_dir, &TEST_PIN, TEST_PIN.default_version);
+        let fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let threads = 16;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(threads));
+
+        let handles = (0..threads)
+            .map(|_| {
+                let cache_dir = cache_dir.clone();
+                let fetches = std::sync::Arc::clone(&fetches);
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    ensure_pinned_with_fetch(&TEST_PIN, &cache_dir, move |url| {
+                        assert_eq!(url, "fixture://payload");
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(25));
+                        Ok(TEST_PAYLOAD.to_vec())
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            let path = handle.join().expect("publisher thread panicked").unwrap();
+            assert_eq!(path, target);
+        }
+
+        assert_eq!(std::fs::read(&target).unwrap(), TEST_PAYLOAD);
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        let leftovers = std::fs::read_dir(&cache_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(leftovers, vec!["forgejo-fixture-test-binary"]);
+        let _ = std::fs::remove_dir_all(&cache_dir);
     }
 
     #[test]

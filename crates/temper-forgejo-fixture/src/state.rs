@@ -2,9 +2,11 @@
 //!
 //! A test describes the Forgejo state it needs with JSON, and provides an
 //! initializer closure for the first cache miss. The fixture boots a fresh
-//! Forgejo once, runs the initializer, shuts the server down cleanly, publishes
-//! the resulting data tree under `.cache/forgejo/states/<hash>/`, and then every
-//! test run copies that tree to `/tmp` before starting `forgejo web` against it.
+//! Forgejo once, runs the initializer, shuts the server down cleanly, and
+//! publishes the resulting data tree under `.cache/forgejo/states/<hash>/` with
+//! a per-key process-safe lock plus an atomic directory rename. Later callers
+//! validate the ready marker, metadata, and tree before copying that tree to a
+//! unique `/tmp` runtime directory and starting `forgejo web` against it.
 //! Runtime servers still die by SIGKILL through `ForgejoServer`'s `Drop` guard.
 
 use crate::{download, unique_data_dir, ForgejoServer, ServerError};
@@ -136,20 +138,34 @@ fn ensure_cached<T, E, F>(
     initialize: F,
 ) -> Result<bool, ServerError>
 where
-    T: Serialize,
+    T: DeserializeOwned + Serialize,
     E: std::fmt::Display,
     F: FnOnce(&ForgejoServer) -> Result<T, E>,
 {
-    if paths.ready.exists() {
+    if cache_ready::<T>(paths)? {
         return Ok(true);
     }
     std::fs::create_dir_all(&paths.parent)?;
     let _lock = CacheLock::acquire(&paths.lock)?;
-    if paths.ready.exists() {
+    if cache_ready::<T>(paths)? {
         return Ok(true);
     }
     build_cache(paths, state, initialize)?;
     Ok(false)
+}
+
+fn cache_ready<T: DeserializeOwned>(paths: &StatePaths) -> Result<bool, ServerError> {
+    if std::fs::read(&paths.ready).is_err() {
+        return Ok(false);
+    }
+    if !paths.tree.is_dir() || std::fs::read_dir(&paths.tree).is_err() {
+        return Ok(false);
+    }
+    let metadata = match std::fs::read(&paths.metadata) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(false),
+    };
+    Ok(serde_json::from_slice::<T>(&metadata).is_ok())
 }
 
 fn build_cache<T, E, F>(
@@ -172,16 +188,31 @@ where
         std::process::id(),
         NEXT_TMP.fetch_add(1, Ordering::SeqCst)
     ));
-    let _ = std::fs::remove_dir_all(&tmp);
+    remove_path_if_exists(&tmp)?;
     std::fs::create_dir_all(&tmp)?;
     copy_dir(server.data_dir(), &tmp.join(TREE_DIR))?;
     write_json(&tmp.join(METADATA_FILE), &metadata)?;
     write_json(&tmp.join(DESCRIPTION_FILE), state.description())?;
     std::fs::write(tmp.join(READY_FILE), b"ready\n")?;
 
-    let _ = std::fs::remove_dir_all(&paths.root);
+    remove_path_if_exists(&paths.root)?;
     std::fs::rename(&tmp, &paths.root)?;
     Ok(())
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), ServerError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            std::fs::remove_dir_all(path)?;
+            Ok(())
+        }
+        Ok(_) => {
+            std::fs::remove_file(path)?;
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(ServerError::Io(err)),
+    }
 }
 
 fn copy_cached_tree_to_tmp(cached_tree: &Path) -> Result<PathBuf, ServerError> {
@@ -242,7 +273,12 @@ impl CacheLock {
         loop {
             match std::fs::create_dir(path) {
                 Ok(()) => {
-                    std::fs::write(path.join("owner"), std::process::id().to_string())?;
+                    if let Err(err) =
+                        std::fs::write(path.join("owner"), std::process::id().to_string())
+                    {
+                        let _ = std::fs::remove_dir_all(path);
+                        return Err(ServerError::Io(err));
+                    }
                     return Ok(Self {
                         path: path.to_path_buf(),
                     });
@@ -323,6 +359,45 @@ mod tests {
         let c = ForgejoState::new(serde_json::json!({"repos": ["two"]})).unwrap();
         assert_eq!(a.cache_key().unwrap(), b.cache_key().unwrap());
         assert_ne!(a.cache_key().unwrap(), c.cache_key().unwrap());
+    }
+
+    #[test]
+    fn cache_ready_requires_marker_tree_and_metadata() {
+        let parent = std::env::temp_dir().join(format!(
+            "temper-forgejo-state-ready-test-{}-{}",
+            std::process::id(),
+            NEXT_TMP.fetch_add(1, Ordering::SeqCst)
+        ));
+        let root = parent.join("state");
+        let paths = StatePaths {
+            key: "state".to_string(),
+            parent: parent.clone(),
+            tree: root.join(TREE_DIR),
+            metadata: root.join(METADATA_FILE),
+            ready: root.join(READY_FILE),
+            lock: root.with_extension("lock"),
+            root,
+        };
+        let _ = std::fs::remove_dir_all(&parent);
+
+        assert!(!cache_ready::<serde_json::Value>(&paths).unwrap());
+        std::fs::create_dir_all(&paths.tree).unwrap();
+        std::fs::write(&paths.metadata, b"{\"token\":\"abc\"}").unwrap();
+        std::fs::write(&paths.ready, b"ready\n").unwrap();
+        assert!(cache_ready::<serde_json::Value>(&paths).unwrap());
+
+        std::fs::remove_file(&paths.metadata).unwrap();
+        assert!(!cache_ready::<serde_json::Value>(&paths).unwrap());
+        std::fs::write(&paths.metadata, b"not json").unwrap();
+        assert!(!cache_ready::<serde_json::Value>(&paths).unwrap());
+        std::fs::write(&paths.metadata, b"{}").unwrap();
+        std::fs::remove_dir_all(&paths.tree).unwrap();
+        assert!(!cache_ready::<serde_json::Value>(&paths).unwrap());
+        std::fs::create_dir_all(&paths.tree).unwrap();
+        std::fs::remove_file(&paths.ready).unwrap();
+        assert!(!cache_ready::<serde_json::Value>(&paths).unwrap());
+
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]

@@ -10,7 +10,8 @@
 //! Like [`ForgejoServer`], this is **never** reached by the default test suite:
 //! only `#[ignore]`d tests construct one. CI is real here — the runner executes
 //! genuine jobs on this host. On first startup, the pinned runner binary is
-//! downloaded and cached when no explicit override or cached binary exists.
+//! downloaded and published to the shared cache through the same process-safe
+//! cache path as the server when no explicit override or cached binary exists.
 
 use super::download;
 use super::{ForgejoServer, ServerError};
@@ -82,12 +83,11 @@ impl ForgejoRunner {
     /// behind a kill-on-drop guard.
     pub fn register(server: &ForgejoServer) -> Result<Self, RunnerError> {
         let binary = download::ensure_runner_binary()?;
-        let work_dir = unique_runner_dir();
+        let identity = next_runner_identity();
+        let work_dir = identity.work_dir;
+        let name = identity.name;
         let _ = std::fs::remove_dir_all(&work_dir);
         std::fs::create_dir_all(&work_dir)?;
-
-        let id = NEXT_RUNNER.fetch_add(1, Ordering::SeqCst);
-        let name = format!("temper-runner-{}-{id}", std::process::id());
 
         let token = registration_token(server).map_err(RunnerError::Token)?;
         register_runner(&binary, &work_dir, server.base_url(), &token, &name)?;
@@ -149,8 +149,21 @@ impl Drop for ForgejoRunner {
     }
 }
 
-fn unique_runner_dir() -> PathBuf {
-    let id = NEXT_RUNNER.load(Ordering::SeqCst);
+#[derive(Debug)]
+struct RunnerIdentity {
+    name: String,
+    work_dir: PathBuf,
+}
+
+fn next_runner_identity() -> RunnerIdentity {
+    let id = NEXT_RUNNER.fetch_add(1, Ordering::SeqCst);
+    RunnerIdentity {
+        name: format!("temper-runner-{}-{id}", std::process::id()),
+        work_dir: runner_dir_for_id(id),
+    }
+}
+
+fn runner_dir_for_id(id: u64) -> PathBuf {
     std::env::temp_dir().join(format!("temper-forgejo-runner-{}-{id}", std::process::id()))
 }
 
@@ -208,4 +221,49 @@ fn spawn_daemon(binary: &Path, work_dir: &Path) -> Result<Child, RunnerError> {
     super::apply_cpu_cap(&mut command);
     let child = command.spawn()?;
     Ok(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::{Arc, Barrier, Mutex};
+
+    #[test]
+    fn runner_identities_are_unique_under_parallel_generation() {
+        let threads = 16;
+        let per_thread = 16;
+        let barrier = Arc::new(Barrier::new(threads));
+        let identities = Arc::new(Mutex::new(Vec::new()));
+        let handles = (0..threads)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let identities = Arc::clone(&identities);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut local = Vec::new();
+                    for _ in 0..per_thread {
+                        let identity = next_runner_identity();
+                        local.push((identity.name, identity.work_dir));
+                    }
+                    identities.lock().unwrap().extend(local);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("identity thread panicked");
+        }
+        let identities = identities.lock().unwrap();
+        let names = identities
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<HashSet<_>>();
+        let work_dirs = identities
+            .iter()
+            .map(|(_, work_dir)| work_dir.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(names.len(), threads * per_thread);
+        assert_eq!(work_dirs.len(), threads * per_thread);
+    }
 }

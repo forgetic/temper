@@ -2,12 +2,13 @@
 //!
 //! [`ForgejoServer::start`] boots a real Forgejo from a resolved binary — first
 //! a `TEMPER_FORGEJO_BINARY` override, then the gitignored `.cache/forgejo/`
-//! cache, then a pinned checked download — against a fresh SQLite data dir on an
-//! ephemeral port, waits for `/api/v1/version`, and kills the process plus
-//! removes the data dir on drop. [`ForgejoServer::start_with_state`] instead
-//! restores a JSON-declared cached data tree from `.cache/forgejo/states/` into
-//! `/tmp` before starting the same per-test process. [`ForgejoRunner::register`]
-//! does the same process lifecycle for a host-mode `forgejo-runner`.
+//! cache, then a pinned checked download published through a process-safe cache
+//! lock — against a fresh SQLite data dir on an ephemeral port, waits for
+//! `/api/v1/version`, and kills the process plus removes the data dir on drop.
+//! [`ForgejoServer::start_with_state`] instead restores a JSON-declared cached
+//! data tree from `.cache/forgejo/states/` into a unique `/tmp` directory before
+//! starting the same per-test process. [`ForgejoRunner::register`] does the same
+//! process lifecycle for a host-mode `forgejo-runner`.
 //!
 //! Default non-ignored tests stay offline because they never construct these
 //! real process fixtures; ignored/local Forgejo tests download the pinned assets
@@ -30,6 +31,8 @@ use std::time::{Duration, Instant};
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Poll interval while waiting for readiness.
 const READY_POLL: Duration = Duration::from_millis(200);
+/// Narrow retry count for the racy free-port → Go bind handoff.
+const WEB_BIND_RETRY_ATTEMPTS: usize = 3;
 
 /// A failure starting or operating the throwaway server.
 #[derive(Debug)]
@@ -129,19 +132,38 @@ impl ForgejoServer {
     fn spawn_prepared(
         binary: PathBuf,
         data_dir: PathBuf,
-        config_path: PathBuf,
-        base_url: String,
+        mut config_path: PathBuf,
+        mut base_url: String,
     ) -> Result<Self, ServerError> {
-        let child = spawn_web(&binary, &config_path, &data_dir)?;
-        let mut server = Self {
-            binary,
-            data_dir,
-            config_path,
-            base_url,
-            child,
-        };
-        server.wait_until_ready()?;
-        Ok(server)
+        for attempt in 0..WEB_BIND_RETRY_ATTEMPTS {
+            let mut child = spawn_web(&binary, &config_path, &data_dir)?;
+            match wait_until_ready(&mut child, &base_url, &data_dir) {
+                Ok(()) => {
+                    return Ok(Self {
+                        binary,
+                        data_dir,
+                        config_path,
+                        base_url,
+                        child,
+                    });
+                }
+                Err(err)
+                    if attempt + 1 < WEB_BIND_RETRY_ATTEMPTS && is_address_in_use_startup(&err) =>
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let (next_config_path, next_base_url) = write_runtime_config(&data_dir)?;
+                    config_path = next_config_path;
+                    base_url = next_base_url;
+                }
+                Err(err) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(err);
+                }
+            }
+        }
+        unreachable!("web bind retry loop always returns from an attempt")
     }
 
     /// The base URL (`http://127.0.0.1:<port>`), no trailing slash.
@@ -197,49 +219,60 @@ impl ForgejoServer {
         }
     }
 
-    fn wait_until_ready(&mut self) -> Result<(), ServerError> {
-        let version_url = format!("{}/api/v1/version", self.base_url);
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .map_err(|err| ServerError::NotReady(err.to_string()))?;
-        let deadline = Instant::now() + READY_TIMEOUT;
-        loop {
-            // Surface an early crash instead of polling a dead process.
-            if let Some(status) = self.child.try_wait()? {
-                return Err(ServerError::NotReady(format!(
-                    "process exited early with {status}; log: {}",
-                    self.read_log_tail()
-                )));
-            }
-            if let Ok(response) = client.get(&version_url).send() {
-                if response.status().is_success() {
-                    return Ok(());
-                }
-            }
-            if Instant::now() >= deadline {
-                return Err(ServerError::NotReady(format!(
-                    "no 200 from {version_url} within {READY_TIMEOUT:?}; log: {}",
-                    self.read_log_tail()
-                )));
-            }
-            std::thread::sleep(READY_POLL);
-        }
-    }
-
     fn read_log_tail(&self) -> String {
-        std::fs::read_to_string(self.data_dir.join("web.log"))
-            .map(|log| {
-                log.lines()
-                    .rev()
-                    .take(5)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            })
-            .unwrap_or_default()
+        read_log_tail(&self.data_dir)
+    }
+}
+
+fn wait_until_ready(child: &mut Child, base_url: &str, data_dir: &Path) -> Result<(), ServerError> {
+    let version_url = format!("{base_url}/api/v1/version");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|err| ServerError::NotReady(err.to_string()))?;
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        // Surface an early crash instead of polling a dead process.
+        if let Some(status) = child.try_wait()? {
+            return Err(ServerError::NotReady(format!(
+                "process exited early with {status}; log: {}",
+                read_log_tail(data_dir)
+            )));
+        }
+        if let Ok(response) = client.get(&version_url).send() {
+            if response.status().is_success() {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(ServerError::NotReady(format!(
+                "no 200 from {version_url} within {READY_TIMEOUT:?}; log: {}",
+                read_log_tail(data_dir)
+            )));
+        }
+        std::thread::sleep(READY_POLL);
+    }
+}
+
+fn read_log_tail(data_dir: &Path) -> String {
+    std::fs::read_to_string(data_dir.join("web.log"))
+        .map(|log| {
+            log.lines()
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default()
+}
+
+fn is_address_in_use_startup(err: &ServerError) -> bool {
+    match err {
+        ServerError::NotReady(why) => why.to_ascii_lowercase().contains("address already in use"),
+        _ => false,
     }
 }
 
@@ -259,8 +292,8 @@ pub(crate) fn unique_data_dir() -> PathBuf {
 }
 
 /// Binds `127.0.0.1:0`, reads the assigned port, then releases it. There is an
-/// unavoidable race between release and the server's bind, but a fresh OS port
-/// is effectively never reused that fast in a test.
+/// unavoidable race between release and the server's later Go-side bind, so
+/// startup retries only the clear address-in-use failure this handoff can cause.
 fn free_port() -> Result<u16, ServerError> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     Ok(listener.local_addr()?.port())
@@ -458,6 +491,52 @@ mod tests {
         if std::env::var("TEMPER_FORGEJO_GOMAXPROCS").is_err() {
             assert_eq!(gomaxprocs.as_deref(), Some("2"));
         }
+    }
+
+    #[test]
+    fn data_dirs_are_unique_under_parallel_generation() {
+        let threads = 16;
+        let per_thread = 16;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(threads));
+        let dirs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handles = (0..threads)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                let dirs = std::sync::Arc::clone(&dirs);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let local = (0..per_thread)
+                        .map(|_| unique_data_dir())
+                        .collect::<Vec<_>>();
+                    dirs.lock().unwrap().extend(local);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("data-dir thread panicked");
+        }
+        let dirs = dirs.lock().unwrap();
+        let unique = dirs
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), threads * per_thread);
+    }
+
+    #[test]
+    fn address_in_use_retry_detector_is_narrow() {
+        assert!(is_address_in_use_startup(&ServerError::NotReady(
+            "process exited early; log: listen tcp 127.0.0.1:3000: bind: address already in use"
+                .to_string()
+        )));
+        assert!(!is_address_in_use_startup(&ServerError::NotReady(
+            "no 200 from version endpoint within timeout".to_string()
+        )));
+        assert!(!is_address_in_use_startup(&ServerError::Command {
+            command: "migrate".to_string(),
+            output: "address already in use in unrelated output".to_string(),
+        }));
     }
 
     #[test]
