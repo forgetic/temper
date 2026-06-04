@@ -40,7 +40,7 @@ export TEMPER_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
 export TEMPER_CODING_WORKSPACE_COMMAND='your-coder --context "$TEMPER_CODING_WORKSPACE_CONTEXT"'
 export TEMPER_CODING_WORKSPACE_REMOTE=origin        # default
 export TEMPER_CODING_WORKSPACE_PUSH=1              # default; set 0 for local tests
-export TEMPER_CODING_WORKSPACE_PR_LABELS=implementation,needs-reviewer,needs-merge
+export TEMPER_CODING_WORKSPACE_PR_LABELS=implementation,needs-reviewer
 ```
 
 The command runs in the checkout. It receives the work item and user guidance in

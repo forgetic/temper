@@ -53,8 +53,8 @@ const ASSERT_POLL: Duration = Duration::from_secs(1);
 /// Forgejo webhooks delivered through wake sockets before this deadline.
 const LONG_POLL_MS: u64 = 120_000;
 /// Forgejo 7.0.x does not emit Actions-completion webhooks through repository
-/// hooks, so CI-reading roles keep a narrow poll backstop for CI status
-/// transitions only.
+/// hooks, so CI-reading roles and mechanical landing keep a narrow poll
+/// backstop for CI status transitions only.
 const CI_STATUS_POLL_MS: u64 = 1_000;
 /// Backstop run length per child, in case the driver dies before stopping it.
 const WORKER_RUN_SECS: u64 = 1200;
@@ -75,8 +75,9 @@ struct Variant {
     reviewer: &'static str,
     /// `--ci-sentinel` value passed to the engineer role worker.
     ci_sentinel: &'static str,
-    /// Role workers allowed to use the narrow CI status-poll fallback. All other
-    /// workers keep the long webhook-only poll backstop.
+    /// Role workers allowed to use the narrow CI status-poll fallback. Mechanical
+    /// landing also uses that fallback; all other workers keep the long
+    /// webhook-only poll backstop.
     ci_status_poll_roles: &'static [&'static str],
 }
 
@@ -258,7 +259,7 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
         let unexpected_polls = unexpected_poll_triggers(&workers, variant.ci_status_poll_roles);
         assert!(
             unexpected_polls.is_empty(),
-            "scenario '{}' had poll-trigger ticks outside the narrow CI status fallback roles {:?}:\n{}\n--- worker logs ---\n{}",
+            "scenario '{}' had poll-trigger ticks outside mechanical landing and the narrow CI status fallback roles {:?}:\n{}\n--- worker logs ---\n{}",
             variant.name,
             variant.ci_status_poll_roles,
             unexpected_polls.join("\n"),
@@ -325,9 +326,10 @@ fn unexpected_poll_triggers(workers: &WorkerFleet, allowed_roles: &[&str]) -> Ve
         .poll_trigger_lines()
         .into_iter()
         .filter(|line| {
-            !allowed_labels
-                .iter()
-                .any(|label| line.starts_with(&format!("{label}:")))
+            !line.starts_with("mechanical:")
+                && !allowed_labels
+                    .iter()
+                    .any(|label| line.starts_with(&format!("{label}:")))
         })
         .collect()
 }

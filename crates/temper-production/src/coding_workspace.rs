@@ -318,11 +318,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn default_pr_labels() -> Vec<String> {
-    vec![
-        "implementation".to_string(),
-        "needs-reviewer".to_string(),
-        "needs-merge".to_string(),
-    ]
+    vec!["implementation".to_string(), "needs-reviewer".to_string()]
 }
 
 fn parse_labels(raw: &str) -> Vec<String> {

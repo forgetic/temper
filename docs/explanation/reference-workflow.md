@@ -1,9 +1,9 @@
 # Reference delivery workflow
 
-This page designs a clean five-role delivery workflow, using the production
-ekanayaka.io agent workflow as inspiration but removing its accidental
-complexity. It is the target Temper spec, compiler, planner, and executor
-should be able to express and run. The `reference-delivery.json`
+This page designs a clean delivery workflow with five judgment roles plus a
+mechanical automation authority, using the production ekanayaka.io agent
+workflow as inspiration but removing its accidental complexity. It is the target
+Temper spec, compiler, planner, and executor should be able to express and run. The `reference-delivery.json`
 `RawWorkflowSpec` fixture transcribes it; any gap between this design and what
 the runtime can execute becomes implementation backlog.
 
@@ -48,19 +48,21 @@ These were decided during design and are not open:
   recovery procedure is dropped.
 - **Effort labels are dropped from the spec.** `easy`/`hard` gated nothing; they
   live as free prompt metadata if useful, not as workflow state.
-- **Post-merge has two consumers.** The architect drains landed PRs eagerly and
-  per-item (drives dependency unblocking); the owner reviews landed work in
-  cohorts via a queue activation policy.
+- **Post-merge has two consumers.** Mechanical landing projects `landed` and
+  `alignment`; the architect drains landed PRs eagerly and per-item (drives
+  dependency unblocking); the owner reviews landed work in cohorts via a queue
+  activation policy.
 
 ## Roles
 
 | Role | Charter (short) | Primary queues |
 | --- | --- | --- |
 | `architect` | Turn requests into epics/design/ready code issues; resolve `needs-architect`; reconcile landed PRs. | `design_triage`, `needs_architect`, `landed_inbox` |
-| `engineer` | Claim ready code issues, implement, open PRs, address failed review or CI gates. | `code_ready`, `pr_changes_requested`, `pr_ci_failed` |
+| `engineer` | Claim ready code issues, implement, open PRs, address failed review, CI, or merge-conflict routes. | `code_ready`, `pr_changes_requested`, `pr_ci_failed`, `pr_merge_conflict` |
 | `reviewer` | Static review against the contract catalog; approve or request changes. | `pr_needs_review` |
-| `owner` | Resolve design feedback, approve gated merges, and run holistic alignment review of landed cohorts. | `needs_owner`, `merge_ready`, `owner_alignment` |
+| `owner` | Resolve design feedback and run holistic alignment review of landed cohorts. | `needs_owner`, `owner_alignment` |
 | `human` | Resolve `needs-human` items that require non-agent judgment. | `needs_human` |
+| `mechanical` | Automation authority for landing and merge-conflict routing; not an LLM/process worker. | automated `landing` queue |
 
 ## Artifact kinds
 
@@ -87,11 +89,12 @@ Exclusive unless noted; each state projects to one label.
 - CI/test status is not a workflow-owned state dimension; merge eligibility and
   failed-CI routing read native CI job conclusions through `ci_passed` and
   `ci_failed` conditions.
-- Merge eligibility is derived from gates rather than stored as a state;
-  `needs-merge` is only an owner-routing label.
+- Merge eligibility is derived from gates rather than stored as a state. The
+  `landing` label means reviewer approval has queued mechanical landing; it is
+  not sufficient without current-head CI and native review gates.
 - `attention` (non-exclusive): `needs_architect` (`needs-architect`),
-  `needs_owner` (`needs-owner`), `needs_human` (`needs-human`), and
-  `needs_merge` (`needs-merge`) route explicit role work.
+  `needs_owner` (`needs-owner`), `needs_human` (`needs-human`), `landing`, and
+  `merge_conflict` (`merge-conflict`) route explicit role or automation work.
 - `post_merge` (non-exclusive): `landed` (awaiting architect reconcile),
   `alignment` (awaiting owner alignment).
 
@@ -103,11 +106,16 @@ Exclusive unless noted; each state projects to one label.
 - `dependency_gate` — satisfied when every prerequisite relation of a code issue
   is merged. Drives mechanical unblocking.
 
-The merge transition requires `review_gate` and `ci_gate`. The engineer marks
-an implementation PR with `needs-merge`; the `merge_ready` queue wakes the owner
-once native CI has passed, and `approve_merge` still rechecks both gates before
-mutating. A failed review or CI run returns the PR to the engineer (native
-`review_changes_requested` or `ci_failed` → engineer queues); work is never lost.
+The mechanical `land_pr` transition requires `review_gate` and `ci_gate`. A
+reviewer approval removes `needs-reviewer` and adds `landing`; the automated
+`landing` queue wakes the mechanical worker only when native CI has passed, and
+`land_pr` still rechecks both gates before merging. A failed review or CI run
+returns the PR to the engineer (native `review_changes_requested` or `ci_failed`
+→ engineer queues); CI failure after landing approval clears `landing` before
+requesting review so it cannot bypass another review. A merge conflict removes
+`landing`, adds `merge-conflict`, and routes to the engineer, whose
+`resolve_merge_conflict` requeues `landing` after a new PR head without
+requesting another review.
 
 ## Relations
 
@@ -135,7 +143,7 @@ to `needs-human` when non-agent human judgment is required. The explicit
 
 ## Post-merge handling
 
-Merging an `implementation_pr` fires two independent consumers:
+Mechanically landing an `implementation_pr` fires two independent consumers:
 
 - **Architect, eager and per-item.** A merged PR carries `landed`. The architect
   drains `landed_inbox` as soon as possible: update the epic body, file
@@ -188,9 +196,11 @@ expected backlog was:
   parent/dependency/produced-PR links, native Forge dependency links feed the
   `dependencies_resolved` gate, and the reconciler mechanically produces and
   applies the `blocked` unblock once every prerequisite lands.
-- **Queue activation and richer matching** — `min_depth`/`max_age`, multi-kind
-  queue targets, disjunctive label-set matching, and queue conditions such as
-  `review_changes_requested` are implemented as read-side planner predicates.
+- **Queue activation, richer matching, and automation** — `min_depth`/`max_age`,
+  multi-kind queue targets, disjunctive label-set matching, queue conditions such
+  as `review_changes_requested`, and mechanically serviced queues such as
+  `landing` are implemented as read-side planner predicates plus executor-backed
+  transitions.
 
 The contract catalog and the layered prompt system stay as prose the runner
 injects; they are not modeled as Temper machinery in this design.

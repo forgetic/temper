@@ -3,9 +3,10 @@
 //! This is the Phase 4 real-Forgejo wake path check for
 //! `plans/hint-driven-wakeups/`: a throwaway Forgejo and real host-mode
 //! `forgejo-runner` send webhooks to the production trigger, which delivers
-//! authenticated Unix-datagram wakes to fake-agent Forgejo workers. The worker
-//! poll interval is intentionally huge; convergence must finish before polling
-//! can explain progress.
+//! authenticated Unix-datagram wakes to fake-agent Forgejo workers. Role worker
+//! poll intervals are intentionally huge; only mechanical landing keeps a narrow
+//! CI status-poll fallback because Forgejo 7.0.x does not emit Actions-completion
+//! webhooks through repository hooks.
 
 #![cfg(unix)]
 
@@ -27,6 +28,7 @@ use temper_testing::{runner_config, workflow};
 use temper_workflow::RoleId;
 
 const LONG_POLL_MS: u64 = 120_000;
+const CI_STATUS_POLL_MS: u64 = 1_000;
 const WAKE_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
 const ASSERT_POLL: Duration = Duration::from_secs(1);
 const WORKER_RUN_SECS: u64 = 180;
@@ -305,6 +307,7 @@ impl WorkerFleet {
                 stop_file,
                 wake_secret,
                 &wake_dir.join(format!("{role}.sock")),
+                LONG_POLL_MS,
                 &[
                     ("--kind", "role"),
                     ("--role", &role),
@@ -324,14 +327,23 @@ impl WorkerFleet {
             });
         }
         let log = log_dir.join("mechanical.log");
+        let ci_reader = provisioned
+            .role(&RoleId::new("engineer"))
+            .expect("engineer identity is provisioned for mechanical CI reads");
+        let mechanical_env: Vec<(&str, &str)> = vec![
+            (FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str()),
+            (FORGEJO_USERNAME_ENV, ci_reader.user.as_str()),
+            (FORGEJO_PASSWORD_ENV, ci_reader.password.as_str()),
+        ];
         let child = spawn_worker(
             &base,
             &repo,
             stop_file,
             wake_secret,
             &wake_dir.join("mechanical.sock"),
+            CI_STATUS_POLL_MS,
             &[("--kind", "mechanical")],
-            &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
+            &mechanical_env,
             &log,
         );
         workers.push(SpawnedWorker {
@@ -411,6 +423,7 @@ fn spawn_worker(
     stop_file: &Path,
     wake_secret: &Path,
     wake_socket: &Path,
+    poll_ms: u64,
     extra: &[(&str, &str)],
     env: &[(&str, &str)],
     log_path: &Path,
@@ -429,7 +442,7 @@ fn spawn_worker(
         .arg("--clock")
         .arg("wall")
         .arg("--poll-ms")
-        .arg(LONG_POLL_MS.to_string())
+        .arg(poll_ms.to_string())
         .arg("--stop-file")
         .arg(stop_file)
         .arg("--run-secs")

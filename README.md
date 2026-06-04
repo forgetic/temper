@@ -151,7 +151,8 @@ The workflow might define transitions like:
 architect  -> prepare implementation work
 engineer   -> implement and open PR
 reviewer   -> approve or request changes
-owner      -> merge after required gates pass
+mechanical -> merge after required gates pass
+owner      -> review post-merge alignment
 controller -> repair, recover, and unblock work
 ```
 

@@ -24,6 +24,10 @@ pub struct CountingForge<F: Forge> {
     inner: F,
     counts: Mutex<HashMap<CountedForgeOp, usize>>,
     merge_conflicts: Mutex<HashMap<PullRequestId, String>>,
+    synthetic_heads: Mutex<bool>,
+    head_overrides: Mutex<HashMap<PullRequestId, String>>,
+    head_generations: Mutex<HashMap<PullRequestId, u64>>,
+    advance_heads_on_conflict_resolution: Mutex<bool>,
     issue_queries: Mutex<Vec<IssueQuery>>,
     pull_request_queries: Mutex<Vec<PullRequestQuery>>,
 }
@@ -34,6 +38,10 @@ impl<F: Forge> CountingForge<F> {
             inner,
             counts: Mutex::new(HashMap::new()),
             merge_conflicts: Mutex::new(HashMap::new()),
+            synthetic_heads: Mutex::new(false),
+            head_overrides: Mutex::new(HashMap::new()),
+            head_generations: Mutex::new(HashMap::new()),
+            advance_heads_on_conflict_resolution: Mutex::new(false),
             issue_queries: Mutex::new(Vec::new()),
             pull_request_queries: Mutex::new(Vec::new()),
         }
@@ -54,6 +62,40 @@ impl<F: Forge> CountingForge<F> {
             .lock()
             .expect("merge conflicts mutex")
             .insert(id, message.into());
+    }
+
+    #[allow(dead_code)]
+    pub fn allow_merge_for(&self, id: &PullRequestId) {
+        self.merge_conflicts
+            .lock()
+            .expect("merge conflicts mutex")
+            .remove(id);
+    }
+
+    #[allow(dead_code)]
+    pub fn enable_synthetic_pull_request_heads(&self) {
+        *self.synthetic_heads.lock().expect("synthetic heads mutex") = true;
+    }
+
+    #[allow(dead_code)]
+    pub fn advance_heads_on_conflict_resolution(&self) {
+        *self
+            .advance_heads_on_conflict_resolution
+            .lock()
+            .expect("advance heads mutex") = true;
+    }
+
+    #[allow(dead_code)]
+    pub fn override_head_for(&self, id: PullRequestId, head: impl Into<String>) {
+        self.head_overrides
+            .lock()
+            .expect("head overrides mutex")
+            .insert(id, head.into());
+    }
+
+    #[allow(dead_code)]
+    pub fn projected_head(&self, pull_request: &PullRequest) -> Option<String> {
+        self.project_pull_request(pull_request.clone()).head_sha
     }
 
     #[allow(dead_code)]
@@ -90,6 +132,59 @@ impl<F: Forge> CountingForge<F> {
             .expect("pull request query mutex")
             .push(query.clone());
     }
+
+    fn project_pull_request(&self, mut pull_request: PullRequest) -> PullRequest {
+        if let Some(head) = self
+            .head_overrides
+            .lock()
+            .expect("head overrides mutex")
+            .get(&pull_request.id)
+            .cloned()
+        {
+            pull_request.head_sha = Some(head);
+        } else if *self.synthetic_heads.lock().expect("synthetic heads mutex")
+            && pull_request.head_sha.is_none()
+        {
+            pull_request.head_sha = Some(default_synthetic_head(pull_request.number));
+        }
+        pull_request
+    }
+
+    fn maybe_advance_head_after_update(
+        &self,
+        input: &UpdatePullRequest,
+        updated: &PullRequest,
+    ) -> Option<String> {
+        let enabled = *self
+            .advance_heads_on_conflict_resolution
+            .lock()
+            .expect("advance heads mutex");
+        if !enabled
+            || !input
+                .remove_labels
+                .iter()
+                .any(|label| label == "merge-conflict")
+            || !input.add_labels.iter().any(|label| label == "landing")
+        {
+            return None;
+        }
+        let mut generations = self
+            .head_generations
+            .lock()
+            .expect("head generations mutex");
+        let generation = generations.entry(updated.id.clone()).or_insert(0);
+        *generation = generation.saturating_add(1);
+        let head = format!("pr-{}-resolved-head-{}", updated.number.get(), *generation);
+        self.head_overrides
+            .lock()
+            .expect("head overrides mutex")
+            .insert(updated.id.clone(), head.clone());
+        Some(head)
+    }
+}
+
+fn default_synthetic_head(number: ItemNumber) -> String {
+    format!("pr-{}-head", number.get())
 }
 
 #[async_trait]
@@ -187,7 +282,13 @@ impl<F: Forge> Forge for CountingForge<F> {
     ) -> ForgeResult<Vec<PullRequest>> {
         self.tick(CountedForgeOp::ListPullRequests);
         self.record_pull_request_query(&query);
-        self.inner.list_pull_requests(repo_id, query).await
+        Ok(self
+            .inner
+            .list_pull_requests(repo_id, query)
+            .await?
+            .into_iter()
+            .map(|pull_request| self.project_pull_request(pull_request))
+            .collect())
     }
 
     async fn create_pull_request(
@@ -195,11 +296,18 @@ impl<F: Forge> Forge for CountingForge<F> {
         repo_id: &RepositoryId,
         input: CreatePullRequest,
     ) -> ForgeResult<PullRequest> {
-        self.inner.create_pull_request(repo_id, input).await
+        self.inner
+            .create_pull_request(repo_id, input)
+            .await
+            .map(|pull_request| self.project_pull_request(pull_request))
     }
 
     async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
-        self.inner.get_pull_request(id).await
+        Ok(self
+            .inner
+            .get_pull_request(id)
+            .await?
+            .map(|pull_request| self.project_pull_request(pull_request)))
     }
 
     async fn get_pull_request_by_number(
@@ -208,7 +316,11 @@ impl<F: Forge> Forge for CountingForge<F> {
         number: ItemNumber,
     ) -> ForgeResult<Option<PullRequest>> {
         self.tick(CountedForgeOp::GetPullRequestByNumber);
-        self.inner.get_pull_request_by_number(repo_id, number).await
+        Ok(self
+            .inner
+            .get_pull_request_by_number(repo_id, number)
+            .await?
+            .map(|pull_request| self.project_pull_request(pull_request)))
     }
 
     async fn update_pull_request(
@@ -216,7 +328,12 @@ impl<F: Forge> Forge for CountingForge<F> {
         id: &PullRequestId,
         input: UpdatePullRequest,
     ) -> ForgeResult<PullRequest> {
-        self.inner.update_pull_request(id, input).await
+        let updated = self.inner.update_pull_request(id, input.clone()).await?;
+        let mut projected = self.project_pull_request(updated.clone());
+        if let Some(head) = self.maybe_advance_head_after_update(&input, &updated) {
+            projected.head_sha = Some(head);
+        }
+        Ok(projected)
     }
 
     async fn add_pull_request_dependency(

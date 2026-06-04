@@ -40,9 +40,11 @@ plans today**.
   the executor's idempotent label-apply path, and journal transitions go through
   the command journal. Applying is idempotent and crash-safe, and the scan→apply
   loop converges.
-- **Queue activation policy.** `RawQueue`/`ValidatedQueue` carry optional
-  `min_depth`/`max_age`; `owner_alignment` uses the planner's pure activation
-  predicate for cohorts.
+- **Queue activation and mechanical landing.** `RawQueue`/`ValidatedQueue` carry
+  optional `min_depth`/`max_age`; `owner_alignment` uses the planner's pure
+  activation predicate for cohorts. Queue automation metadata drives the
+  reference `landing` queue through the mechanical worker, with merge-conflict
+  fallback routing to the engineer.
 - **Multi-artifact-kind queues.** A queue can now select several artifact kinds.
   `needs_architect` covers issue artifact kinds and `implementation_pr` without
   duplicate per-kind queues; `needs_owner`/`needs_human` cover the design-issue

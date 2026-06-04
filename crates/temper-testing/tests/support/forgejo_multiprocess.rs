@@ -15,8 +15,9 @@ pub fn convergence_timeout() -> Duration {
     CONVERGENCE_TIMEOUT
 }
 
-/// Per-worker poll cadence. CI-reading roles can use a narrow status-poll
-/// fallback while every other worker keeps the long webhook-only backstop.
+/// Per-worker poll cadence. CI-reading roles and the mechanical landing worker
+/// can use a narrow status-poll fallback while every other worker keeps the long
+/// webhook-only backstop.
 #[derive(Clone, Copy)]
 pub struct WorkerPollProfile {
     pub long_poll_ms: u64,
@@ -34,7 +35,7 @@ impl WorkerPollProfile {
     }
 
     fn for_mechanical(&self) -> u64 {
-        self.long_poll_ms
+        self.ci_status_poll_ms
     }
 }
 
@@ -111,6 +112,14 @@ impl WorkerFleet {
 
         let log = log_dir.join("mechanical.log");
         let wake_socket = wake_dir.join("mechanical.sock");
+        let ci_reader = provisioned
+            .role(&RoleId::new("engineer"))
+            .expect("engineer identity is provisioned for mechanical CI reads");
+        let mechanical_env: Vec<(&str, &str)> = vec![
+            (FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str()),
+            (FORGEJO_USERNAME_ENV, ci_reader.user.as_str()),
+            (FORGEJO_PASSWORD_ENV, ci_reader.password.as_str()),
+        ];
         let child = spawn_worker(
             &base,
             repos,
@@ -119,7 +128,7 @@ impl WorkerFleet {
             &wake_socket,
             poll_profile.for_mechanical(),
             &[("--kind", "mechanical")],
-            &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
+            &mechanical_env,
             &log,
         );
         workers.push(SpawnedWorker {

@@ -73,15 +73,21 @@ pub fn actor_user(role: &str) -> User {
 
 /// Runner config shared by the production binaries.
 ///
-/// Role bindings are derived from the workflow roles so adding a user-defined
-/// role to the spec does not require adding another Rust hard-coded id. The
-/// demo provisioning convention keeps Forge user id == role id.
+/// Role bindings are derived from workflow roles that subscribe to queues, so
+/// adding a user-defined process role to the spec does not require another Rust
+/// hard-coded id. Automation-only authorities such as `mechanical` have no role
+/// worker or role-decision process. The demo provisioning convention keeps Forge
+/// user id == role id.
 pub fn runner_config() -> RunnerConfig {
     let workflow = workflow();
     let mut config = RunnerConfig::new(repo_input())
         .with_lease_ttl(Duration::minutes(30))
         .with_poll_interval(Duration::seconds(1));
-    for role in workflow.roles() {
+    for role in workflow
+        .roles()
+        .iter()
+        .filter(|role| !role.queues.is_empty())
+    {
         config.set_role_binding(role.id.clone(), actor_user(role.id.as_str()));
     }
     config

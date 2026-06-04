@@ -89,9 +89,11 @@ that issue asks the fake architect to create one child code issue per repo.
 4. Fake engineers create real Forgejo PR heads and open implementation PRs.
 5. The real `forgejo-runner` runs CI for each PR head.
 6. Fake reviewers approve PRs.
-7. Fake owners merge after CI and review gates pass.
+7. The mechanical worker lands PRs after reviewer approval and current-head CI.
 8. The closing fake architect reconciles landed PRs and closes produced code
    issues so the mechanical worker can unblock the parent dependency aggregate.
+9. Fake owners later handle alignment cohorts when the queue activation policy
+   reaches depth or age.
 
 ## Useful knobs
 

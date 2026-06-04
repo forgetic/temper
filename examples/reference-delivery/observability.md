@@ -35,8 +35,8 @@ trigger.log: wake_delivery outcome=sent ...
 architect.log: completed tick actions=1
 engineer.log: completed tick actions=1
 reviewer.log: completed tick actions=1
-owner.log: completed tick actions=1
 mechanical.log: completed tick actions=...
+owner.log: completed tick actions=0   # until the alignment cohort activates
 ```
 
 Some wake-triggered ticks may report `actions=0`; that means the worker woke,

@@ -46,6 +46,7 @@ const PREP_DIR: &str = ".temper-pr-prep";
 /// [`provision::CI_PASS_MARKER`]); the file only exists to make a non-empty,
 /// uniquely-named commit. A per-call suffix keeps repeated pass commits distinct.
 const CI_SENTINEL_DIR: &str = ".temper-ci";
+const CONFLICT_RESOLUTION_DIR: &str = "docs/temper-conflict-resolution";
 
 /// Ensures the head branch and a trivial differing commit for `input` exist.
 ///
@@ -152,6 +153,50 @@ pub async fn commit_ci_sentinel(
         name,
         &path,
         &format!("ci pass marker for {branch}\n"),
+        &message,
+        branch,
+    )
+    .await
+}
+
+/// Idempotently pushes a small docs change that represents resolving a merge
+/// conflict on `branch`.
+///
+/// This is intentionally **not** a `.temper-*` bookkeeping-only path: conflict
+/// resolution is a PR-head/code-edit side effect, while the workflow transition
+/// only requeues landing. The commit message includes the CI pass marker so the
+/// real Forgejo fixture's latest head can pass after the new run completes.
+pub async fn commit_conflict_resolution_update(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    name: &str,
+    branch: &str,
+) -> Result<()> {
+    if branch.is_empty() {
+        return Err(ProvisionError::Shape {
+            what: "conflict-resolution branch".into(),
+            detail: "target branch is empty".into(),
+        });
+    }
+    let client = rest::http_client()?;
+    let safe: String = branch
+        .chars()
+        .map(|c| if c == '/' { '-' } else { c })
+        .collect();
+    let path = format!("{CONFLICT_RESOLUTION_DIR}/{safe}.md");
+    let message = format!(
+        "resolve merge conflict for {branch} {}",
+        provision::CI_PASS_MARKER
+    );
+    rest::commit_file(
+        &client,
+        base_url,
+        token,
+        owner,
+        name,
+        &path,
+        &format!("Resolved merge conflict for `{branch}`.\n"),
         &message,
         branch,
     )

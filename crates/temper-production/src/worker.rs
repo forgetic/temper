@@ -91,6 +91,11 @@ async fn run_role(
     let role_manifest = compiled
         .role(&role_id)
         .ok_or_else(|| RunError::UnknownRole { role: role.into() })?;
+    if role_manifest.queues.is_empty() {
+        return Err(RunError::Backend(format!(
+            "role '{role}' has no subscribed queues; automation-only authorities such as 'mechanical' are serviced by --kind mechanical and do not use a role-decision process"
+        )));
+    }
     let bound_external_tool_ids = config
         .bound_external_tools_for(role_manifest)
         .map_err(|error| RunError::Backend(error.to_string()))?

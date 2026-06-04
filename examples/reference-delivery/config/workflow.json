@@ -16,9 +16,9 @@
     },
     {
       "id": "engineer",
-      "charter": "Claim ready code issues, implement them, open PRs, and address failed review or CI gates.",
+      "charter": "Claim ready code issues, implement them, open PRs, address failed review or CI gates, and resolve merge conflicts.",
       "prompt": {
-        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. For ready code, use open_pr after the coding workspace has produced a real product diff; do not use claim_code by itself unless another tool has already handled PR creation. Use address_review_changes for PRs with changes requested and address_ci_failure for PRs whose CI failed. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work.",
+        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. For ready code, use open_pr after the coding workspace has produced a real product diff; do not use claim_code by itself unless another tool has already handled PR creation. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after pushing a conflict-resolution PR head. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work.",
         "tool_guidance": "The coding_workspace tool must prepare a real implementation branch before open_pr. Do not open implementation PRs from .temper-pr-prep, .temper-ci, or other bookkeeping-only diffs."
       },
       "external_tools": [
@@ -37,7 +37,8 @@
       "queues": [
         "code_ready",
         "pr_changes_requested",
-        "pr_ci_failed"
+        "pr_ci_failed",
+        "pr_merge_conflict"
       ]
     },
     {
@@ -55,12 +56,11 @@
       "id": "owner",
       "charter": "Resolve needs-owner items and run holistic alignment review of landed cohorts; escalate to humans when needed.",
       "prompt": {
-        "guidance": "Use approve_merge only for implementation PRs whose native CI and review gates are satisfied and whose diff is meaningful. Use review_alignment for landed PR alignment follow-up. Use request_human_input when owner judgment needs explicit human input."
+        "guidance": "Use review_alignment for landed PR alignment follow-up. Use request_human_input when owner judgment needs explicit human input."
       },
       "concurrency": 1,
       "queues": [
         "needs_owner",
-        "merge_ready",
         "owner_alignment"
       ]
     },
@@ -74,6 +74,15 @@
       "queues": [
         "needs_human"
       ]
+    },
+    {
+      "id": "mechanical",
+      "charter": "Automation authority used by the mechanical worker for landing and merge-conflict routing; do not bind this role to an LLM or role-decision process.",
+      "prompt": {
+        "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
+      },
+      "concurrency": 1,
+      "queues": []
     }
   ],
   "labels": [
@@ -130,16 +139,20 @@
       "description": "human-input flag routed to the human"
     },
     {
-      "id": "needs-merge",
-      "description": "implementation PR awaits owner merge approval once gates pass"
-    },
-    {
       "id": "landed",
       "description": "merged PR awaiting architect reconcile"
     },
     {
       "id": "alignment",
       "description": "merged PR awaiting owner alignment review"
+    },
+    {
+      "id": "landing",
+      "description": "approved implementation PR awaiting mechanical landing once current-head CI passes"
+    },
+    {
+      "id": "merge-conflict",
+      "description": "mechanical landing found a merge conflict; engineer must update the PR head"
     }
   ],
   "artifact_kinds": [
@@ -266,8 +279,15 @@
           ]
         },
         {
-          "id": "needs_merge",
-          "label": "needs-merge",
+          "id": "landing",
+          "label": "landing",
+          "artifacts": [
+            "implementation_pr"
+          ]
+        },
+        {
+          "id": "merge_conflict",
+          "label": "merge-conflict",
           "artifacts": [
             "implementation_pr"
           ]
@@ -326,6 +346,13 @@
       }
     },
     {
+      "id": "pr_merge_conflict",
+      "artifact": "implementation_pr",
+      "labels": [
+        "merge-conflict"
+      ]
+    },
+    {
       "id": "needs_architect",
       "artifact": [
         "intake",
@@ -353,21 +380,26 @@
       ]
     },
     {
+      "id": "landing",
+      "artifact": "implementation_pr",
+      "labels": [
+        "landing"
+      ],
+      "condition": {
+        "kind": "ci_passed"
+      },
+      "automation": {
+        "actor": "mechanical",
+        "transition": "land_pr",
+        "on_merge_conflict": "route_merge_conflict"
+      }
+    },
+    {
       "id": "landed_inbox",
       "artifact": "implementation_pr",
       "labels": [
         "landed"
       ]
-    },
-    {
-      "id": "merge_ready",
-      "artifact": "implementation_pr",
-      "labels": [
-        "needs-merge"
-      ],
-      "condition": {
-        "kind": "ci_passed"
-      }
     },
     {
       "id": "owner_alignment",
@@ -576,10 +608,6 @@
           "label": "needs-reviewer"
         },
         {
-          "kind": "add_label",
-          "label": "needs-merge"
-        },
-        {
           "kind": "request_reviewers",
           "roles": [
             "reviewer"
@@ -626,6 +654,29 @@
       ]
     },
     {
+      "id": "address_landing_ci_failure",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "landing"
+        },
+        {
+          "kind": "add_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "request_reviewers",
+          "roles": [
+            "reviewer"
+          ]
+        }
+      ]
+    },
+    {
       "id": "request_architect_input",
       "artifact": "implementation_pr",
       "roles": [
@@ -653,6 +704,10 @@
         {
           "kind": "submit_review",
           "decision": "approved"
+        },
+        {
+          "kind": "add_label",
+          "label": "landing"
         }
       ]
     },
@@ -730,10 +785,48 @@
       ]
     },
     {
-      "id": "approve_merge",
+      "id": "resolve_merge_conflict",
       "artifact": "implementation_pr",
       "roles": [
-        "owner"
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "merge-conflict"
+        },
+        {
+          "kind": "add_label",
+          "label": "landing"
+        }
+      ]
+    },
+    {
+      "id": "route_merge_conflict",
+      "artifact": "implementation_pr",
+      "roles": [
+        "mechanical"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "landing"
+        },
+        {
+          "kind": "add_label",
+          "label": "merge-conflict"
+        },
+        {
+          "kind": "create_comment",
+          "body": "Mechanical landing found a merge conflict. Engineer: update the PR head to resolve it; after fresh CI passes, Temper will retry landing without another review request."
+        }
+      ]
+    },
+    {
+      "id": "land_pr",
+      "artifact": "implementation_pr",
+      "roles": [
+        "mechanical"
       ],
       "requires_gates": [
         "review_gate",
@@ -745,7 +838,7 @@
         },
         {
           "kind": "remove_label",
-          "label": "needs-merge"
+          "label": "landing"
         },
         {
           "kind": "add_label",

@@ -159,8 +159,18 @@ Status legend: ☐ pending · ☑ done
    protection or other rejection causes, so open/unmerged Forgejo conflicts are
    conservatively engineer-routable for now.
 
-4. ☐ **Phase 4 — Reference-delivery workflow update.**
+4. ☑ **Phase 4 — Reference-delivery workflow update.**
    `prompts/phase-4-reference-delivery-workflow-update.md`
+
+   The reference-delivery fixture and demo copy now declare the automation-only
+   `mechanical` authority, use an automated `landing` queue for approved/current-
+   head-green PRs, route merge conflicts to `merge-conflict`, and let engineers
+   requeue conflict resolutions without another review request. The fake owner no
+   longer services normal merges; owner alignment and architect landed
+   reconciliation remain unchanged. Notable finding: memory/filesystem tests need
+   synthetic PR-head projection to prove old green CI does not satisfy a
+   conflict-resolution head, while real Forgejo gets the new head SHA from the
+   engineer's branch push.
 
 5. ☐ **Phase 5 — Wake behavior, docs, and acceptance.**
    `prompts/phase-5-wake-docs-and-acceptance.md`

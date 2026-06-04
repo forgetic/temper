@@ -1,7 +1,7 @@
 //! The Forgejo-backed engineer agent.
 //!
 //! On the filesystem/memory backends the [`FakeEngineer`](crate::agents::FakeEngineer)
-//! opens PRs and addresses CI failures with pure metadata, because those backends
+//! opens PRs and addresses CI/conflict routes with pure metadata, because those backends
 //! never check that a PR head is a real git ref or run real CI. On **real
 //! Forgejo** neither is true:
 //!
@@ -12,12 +12,13 @@
 //!   head that carries the `ci-ok` sentinel passes and one that does not fails. A
 //!   commit status is keyed by SHA (findings-phase-0b), so a fail→pass needs a
 //!   **new head SHA** — the engineer's fix commit adds `ci-ok`, producing a
-//!   second, passing run.
+//!   second, passing run. A merge-conflict resolution likewise pushes a small
+//!   docs update before the workflow requeues landing.
 //!
-//! [`ForgejoEngineer`] supplies both as an [`EnginePrep`] hook around the shared
-//! [`engineer_service`] state machine, so the engineer's behavior (claim, open
-//! PR, request review, handle review/CI feedback) is **identical** across both
-//! topologies — only the backend-specific side effects differ, exactly as
+//! [`ForgejoEngineer`] supplies those side effects as [`EnginePrep`] hooks around
+//! the shared [`engineer_service`] state machine, so the engineer's behavior
+//! (claim, open PR, request review, handle review/CI/conflict feedback) is
+//! **identical** across both topologies — only the backend-specific side effects differ, exactly as
 //! `--architect`/`--reviewer` vary the other roles. It is constructed only on the
 //! Forgejo worker path (see [`super::forgejo`]); the filesystem path keeps the
 //! plain `FakeEngineer`.
@@ -28,7 +29,9 @@ use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::ArtifactSource;
 
 use crate::agents::{engineer_service, EnginePrep};
-use crate::forgejo_server::{commit_ci_sentinel, prepare_pull_request_head};
+use crate::forgejo_server::{
+    commit_ci_sentinel, commit_conflict_resolution_update, prepare_pull_request_head,
+};
 use crate::worker_bin::args::CiSentinelKind;
 
 /// The engineer role on the real Forgejo backend.
@@ -129,6 +132,24 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
         commit_ci_sentinel(&self.base_url, &self.token, &owner, &name, &branch)
             .await
             .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
+    }
+
+    async fn before_resolve_merge_conflict(
+        &self,
+        tools: &RoleTools<'_, F>,
+        target: ArtifactSource,
+    ) -> Result<(), AgentError> {
+        let Some(branch) = self.pr_head_branch(tools, target).await? else {
+            return Ok(());
+        };
+        let (owner, name) = self.repo_path(tools).await?;
+        commit_conflict_resolution_update(&self.base_url, &self.token, &owner, &name, &branch)
+            .await
+            .map_err(|error| {
+                AgentError::message(format!(
+                    "forgejo conflict-resolution commit failed: {error}"
+                ))
+            })
     }
 }
 

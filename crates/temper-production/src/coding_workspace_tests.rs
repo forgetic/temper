@@ -87,10 +87,7 @@ fn local_git_workspace_accepts_product_code_or_docs_diff() {
     assert_eq!(output.branch, "agent/pr-for-code-7");
     assert_eq!(output.base_branch, "main");
     assert_eq!(output.changed_files, vec!["docs/product-change.md"]);
-    assert_eq!(
-        output.labels,
-        vec!["implementation", "needs-reviewer", "needs-merge"]
-    );
+    assert_eq!(output.labels, vec!["implementation", "needs-reviewer"]);
     let head = git(&repo.path, &["log", "--oneline", "-1"]).expect("git log succeeds");
     assert!(head.contains("Implement pr-for-code-7"));
     assert!(changed_files(&repo.path)

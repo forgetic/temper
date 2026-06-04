@@ -144,14 +144,15 @@ impl<F: Forge + ?Sized> Agent<F> for FakeEngineer {
 /// Side-effect hook the engineer state machine calls at backend-specific moments.
 ///
 /// On the filesystem/memory backends this is a no-op ([`NoPrep`]): the fake
-/// engineer opens PRs and addresses CI failures with pure metadata, because those
-/// backends never check that a PR head is a real git ref. On **real Forgejo** a
-/// PR head must exist as a branch before `create_pull_request`, and a CI fail→pass
-/// needs a new head SHA — so the Forgejo worker supplies a hook that creates the
-/// branch + a differing commit before opening the PR and pushes a `ci-ok` fix
-/// commit before the `address_ci_failure` transition. The engineer state machine
-/// itself ([`engineer_service`]) is shared verbatim across both topologies; only
-/// this hook differs, exactly as `--architect`/`--reviewer` vary the other roles.
+/// engineer opens PRs and addresses CI/merge-conflict routes with pure metadata,
+/// because those backends never check that a PR head is a real git ref. On **real
+/// Forgejo** a PR head must exist as a branch before `create_pull_request`, and a
+/// CI fail→pass or conflict resolution needs a new head SHA — so the Forgejo
+/// worker supplies hooks that create the branch + differing commit before opening
+/// the PR and push fix/conflict-resolution commits before the routing
+/// transitions. The engineer state machine itself ([`engineer_service`]) is
+/// shared verbatim across both topologies; only this hook differs, exactly as
+/// `--architect`/`--reviewer` vary the other roles.
 #[async_trait]
 pub(crate) trait EnginePrep<F: Forge + ?Sized>: Send + Sync {
     /// Called with the PR input immediately before `open_pull_request`.
@@ -163,9 +164,21 @@ pub(crate) trait EnginePrep<F: Forge + ?Sized>: Send + Sync {
         Ok(())
     }
 
-    /// Called on a `pr_ci_failed` item just before the `address_ci_failure`
-    /// transition runs, so a backend that needs a new head SHA can push one.
+    /// Called on a `pr_ci_failed` item just before the CI-failure transition
+    /// runs, so a backend that needs a new head SHA can push one.
     async fn before_address_ci_failure(
+        &self,
+        _tools: &RoleTools<'_, F>,
+        _target: ArtifactSource,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+
+    /// Called on a `pr_merge_conflict` item before requeueing landing, so a real
+    /// backend can push a conflict-resolution PR head. The workflow transition
+    /// itself only changes routing labels; this hook represents the external
+    /// code/head update that must happen first.
+    async fn before_resolve_merge_conflict(
         &self,
         _tools: &RoleTools<'_, F>,
         _target: ArtifactSource,
@@ -182,7 +195,7 @@ impl<F: Forge + ?Sized> EnginePrep<F> for NoPrep {}
 /// The engineer role state machine, shared by [`FakeEngineer`] and the Forgejo
 /// engineer wrapper. `prep` injects backend-specific side effects at the two
 /// moments a real provider needs them; the no-op [`NoPrep`] keeps the filesystem
-/// behavior byte-identical.
+/// behavior deterministic and backend-neutral.
 pub(crate) async fn engineer_service<F, P>(
     item: &WorkItem,
     tools: &RoleTools<'_, F>,
@@ -200,7 +213,13 @@ where
     }
     if item.queue.as_str() == "pr_ci_failed" {
         prep.before_address_ci_failure(tools, item.target).await?;
-        return run_or_ignore_stale(tools, item.target, "address_ci_failure").await;
+        let transition = ci_failure_transition(item, tools).await?;
+        return run_or_ignore_stale(tools, item.target, transition).await;
+    }
+    if item.queue.as_str() == "pr_merge_conflict" {
+        prep.before_resolve_merge_conflict(tools, item.target)
+            .await?;
+        return run_or_ignore_stale(tools, item.target, "resolve_merge_conflict").await;
     }
     Ok(false)
 }
@@ -240,9 +259,6 @@ impl<F: Forge + ?Sized> Agent<F> for FakeOwner {
     async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
         if item.kind.as_str() == "implementation_pr" && item.queue.as_str() == "owner_alignment" {
             return run_or_ignore_stale(tools, item.target, "review_alignment").await;
-        }
-        if item.kind.as_str() == "implementation_pr" {
-            return run_or_ignore_stale(tools, item.target, "approve_merge").await;
         }
         if item.queue.as_str() == "needs_owner" && item.kind.as_str() == "design" {
             return run_or_ignore_stale(tools, item.target, "request_human_input").await;
@@ -460,6 +476,23 @@ where
     )
     .await?;
     Ok(claimed || requested)
+}
+
+async fn ci_failure_transition<F: Forge + ?Sized>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+) -> Result<&'static str, AgentError> {
+    let ArtifactSource::PullRequest { number } = item.target else {
+        return Ok("address_ci_failure");
+    };
+    let Some(pull_request) = tools.get_pull_request(number).await? else {
+        return Ok("address_ci_failure");
+    };
+    if pull_request.labels.iter().any(|label| label == "landing") {
+        Ok("address_landing_ci_failure")
+    } else {
+        Ok("address_ci_failure")
+    }
 }
 
 pub(crate) fn implementation_pr_input<F: Forge + ?Sized>(

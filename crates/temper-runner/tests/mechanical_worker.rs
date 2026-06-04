@@ -261,7 +261,7 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
     );
     assert_eq!(
         counted.count(CountedForgeOp::ListPullRequests),
-        workflow.labels().len() * 3
+        workflow.labels().len() * 3 + 3
     );
     assert!(!counted
         .issue_queries()

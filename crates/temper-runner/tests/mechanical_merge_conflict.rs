@@ -8,12 +8,15 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest, CreateRepository,
-    Forge, ItemNumber, PullRequestState, RepositoryId, UserId,
+    BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest,
+    CreatePullRequestReview, CreateRepository, Forge, ItemNumber, PullRequestState, RepositoryId,
+    RequestReviewers, ReviewDecision, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
-use temper_workflow::{InMemoryJournal, LeasePolicy, RawWorkflowSpec};
+use temper_workflow::{
+    ArtifactSource, InMemoryJournal, LeasePolicy, RawWorkflowSpec, RoleId, TransitionId,
+};
 
 const AUTOMATED_CONFLICT_WORKFLOW: &str = r#"
 {
@@ -183,6 +186,56 @@ fn seed_successful_ci(forge: &MemoryForge, repo: &RepositoryId, numbers: &[ItemN
     forge.seed_ci_jobs(repo, jobs);
 }
 
+fn seed_successful_ci_for_head(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    commit_sha: String,
+    index: usize,
+) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    let mut jobs = block_on(forge.list_ci_jobs(repo, Default::default())).expect("CI jobs list");
+    jobs.push(CiJob {
+        id: CiJobId::new(format!("ci-{}-{}-{index}", repo.as_str(), number.get())),
+        repo_id: repo.clone(),
+        pull_request_id: Some(pull_request.id),
+        commit_sha,
+        name: "ci".into(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(CiJobConclusion::Success),
+        url: None,
+        created_at: ts("2026-05-29T00:00:00Z") + Duration::seconds(index as i64),
+        started_at: Some(ts("2026-05-29T00:00:30Z") + Duration::seconds(index as i64)),
+        completed_at: Some(ts("2026-05-29T00:01:00Z") + Duration::seconds(index as i64)),
+        updated_at: ts("2026-05-29T00:01:00Z") + Duration::seconds(index as i64),
+    });
+    forge.seed_ci_jobs(repo, jobs);
+}
+
+fn approve_as_requested_reviewer(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    block_on(forge.request_pull_request_reviewers(
+        &pull_request.id,
+        RequestReviewers {
+            reviewers: vec![UserId::new("reviewer")],
+        },
+    ))
+    .expect("reviewer requested");
+    let reviewer_forge = forge.as_user(temper_testing::actor_user("reviewer"));
+    block_on(reviewer_forge.submit_pull_request_review(
+        &pull_request.id,
+        CreatePullRequestReview {
+            decision: ReviewDecision::Approved,
+            body: None,
+        },
+    ))
+    .expect("review submitted");
+}
+
 fn pull_request_labels(
     forge: &MemoryForge,
     repo: &RepositoryId,
@@ -205,6 +258,19 @@ fn pull_request_state(
         .expect("lookup succeeds")
         .expect("pull request exists")
         .state
+}
+
+fn projected_head<F: Forge>(
+    counted: &CountingForge<F>,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) -> String {
+    let pull_request = block_on(counted.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    counted
+        .projected_head(&pull_request)
+        .expect("synthetic head is projected")
 }
 
 #[test]
@@ -291,4 +357,110 @@ fn unrelated_landing_pr_continues_after_another_pr_routes_to_conflict() {
         PullRequestState::Merged
     );
     assert!(pull_request_labels(&forge, &repo, ready).contains(&"landed".to_string()));
+}
+
+#[test]
+fn reference_conflict_resolution_requires_fresh_ci_but_no_second_review() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pull_request(&forge, &repo, &["implementation", "landing"]);
+    approve_as_requested_reviewer(&forge, &repo, number);
+    let counted = CountingForge::new(forge.clone());
+    counted.enable_synthetic_pull_request_heads();
+    counted.advance_heads_on_conflict_resolution();
+    let old_head = projected_head(&counted, &repo, number);
+    seed_successful_ci_for_head(&forge, &repo, number, old_head, 1);
+    let pr_id = pull_request_id(&forge, &repo, number);
+    counted.reject_merge_for(pr_id.clone(), "simulated content conflict");
+    let workflow = temper_testing::workflow();
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("conflict routes"),
+        Progress {
+            changed: true,
+            actions: 1,
+        }
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
+    assert_eq!(
+        pull_request_labels(&forge, &repo, number),
+        vec!["implementation".to_string(), "merge-conflict".to_string(),]
+    );
+
+    counted.allow_merge_for(&pr_id);
+    block_on(workflow.executor(&counted).execute(
+        &repo,
+        ArtifactSource::PullRequest { number },
+        &TransitionId::new("resolve_merge_conflict"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("engineer requeues conflict resolution");
+    let new_head = projected_head(&counted, &repo, number);
+    assert_ne!(new_head, format!("pr-{}-head", number.get()));
+    assert_eq!(
+        pull_request_labels(&forge, &repo, number),
+        vec!["implementation".to_string(), "landing".to_string()]
+    );
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:01:00Z"))).expect("old CI is not enough"),
+        Progress::unchanged()
+    );
+    assert_eq!(
+        counted.count(CountedForgeOp::MergePullRequest),
+        1,
+        "old green CI must not satisfy the new head"
+    );
+    let reviews = block_on(forge.list_pull_request_reviews(&pr_id)).expect("reviews list");
+    assert_eq!(
+        reviews.len(),
+        1,
+        "conflict resolution keeps the existing approval"
+    );
+
+    seed_successful_ci_for_head(&forge, &repo, number, new_head, 2);
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:02:00Z"))).expect("new green CI lands"),
+        Progress {
+            changed: true,
+            actions: 1,
+        }
+    );
+    assert_eq!(
+        pull_request_state(&forge, &repo, number),
+        PullRequestState::Merged
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 2);
+    let reviews = block_on(forge.list_pull_request_reviews(&pr_id)).expect("reviews list");
+    assert_eq!(
+        reviews.len(),
+        1,
+        "mechanical landing did not request a second review"
+    );
+}
+
+#[test]
+fn reference_landing_pr_without_approval_does_not_merge_even_when_ci_passes() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pull_request(&forge, &repo, &["implementation", "landing"]);
+    let counted = CountingForge::new(forge.clone());
+    counted.enable_synthetic_pull_request_heads();
+    let head = projected_head(&counted, &repo, number);
+    seed_successful_ci_for_head(&forge, &repo, number, head, 1);
+    let workflow = temper_testing::workflow();
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("approval gate miss is nonfatal"),
+        Progress::unchanged()
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 0);
+    assert_eq!(
+        pull_request_state(&forge, &repo, number),
+        PullRequestState::Open
+    );
 }

@@ -13,7 +13,7 @@ use temper_forge::{
     RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UserId,
 };
 use temper_forge_memory::MemoryForge;
-use temper_runner::{scan, scan_role, WorkItem};
+use temper_runner::{scan, scan_automated_queues, scan_role, AutomatedWorkItem, WorkItem};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
@@ -409,28 +409,29 @@ fn role_scan_without_ci_gated_queue_does_not_list_ci_jobs() {
 }
 
 #[test]
-fn ci_gated_queue_fetches_ci_and_matches() {
+fn ci_gated_automated_queue_fetches_ci_and_matches() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
-    let number = create_pr(&forge, &repo, &["implementation", "needs-merge"]);
+    let number = create_pr(&forge, &repo, &["implementation", "landing"]);
     seed_ci(&forge, &repo, number, CiJobConclusion::Success);
     let workflow = workflow();
     let compiled = workflow.compile();
     let counting = CountingForge::new(forge.clone());
 
     assert_eq!(
-        block_on(scan_role(
+        block_on(scan_automated_queues(
             &counting,
             &repo,
             &workflow,
             &compiled,
             ts("2026-05-29T00:00:00Z"),
-            &RoleId::new("owner"),
         ))
         .expect("scan succeeds"),
-        vec![WorkItem {
-            queue: QueueId::new("merge_ready"),
-            role: RoleId::new("owner"),
+        vec![AutomatedWorkItem {
+            queue: QueueId::new("landing"),
+            actor: RoleId::new("mechanical"),
+            transition: temper_workflow::TransitionId::new("land_pr"),
+            on_merge_conflict: Some(temper_workflow::TransitionId::new("route_merge_conflict")),
             target: ArtifactSource::PullRequest { number },
             kind: ArtifactKindId::new("implementation_pr"),
         }]

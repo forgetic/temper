@@ -83,8 +83,8 @@ pub struct WorkerArgs {
     pub wake_socket: Option<PathBuf>,
     pub wake_secret_file: Option<PathBuf>,
     pub role_decision_process: Option<WorkflowRoleDecisionProcessConfig>,
-    /// Allows reviewer/owner agents to approve or merge a PR whose changed files
-    /// are only Temper bookkeeping paths. Intended only with synthetic demos.
+    /// Allows guarded role agents to approve PRs whose changed files are only
+    /// Temper bookkeeping paths. Intended only with synthetic demos.
     pub allow_bookkeeping_only_pr: bool,
 }
 

@@ -44,26 +44,37 @@ fn end_to_end_reference_delivery_happy_path_converges() {
 
     // Expected fake-driven loop: intake -> triage_to_code (architect) ->
     // claim_code + create PR + request_review (engineer) -> CI passes
-    // (CiWorker) + approve_review (reviewer) -> approve_merge (owner) ->
+    // (CiWorker) + approve_review (reviewer) -> land_pr (mechanical) ->
     // reconcile_landed (architect) -> quiescent. The scenario deliberately
     // accepts two current seams: the produced code issue may stay open after
     // merge, and the single PR keeps `alignment` because owner_alignment needs
     // a cohort of five (or max_age) before it activates.
-    assert_scenario_converges_on_backends(
+    let memory_stage =
+        block_on(full_reference_stage(runner_config())).expect("memory stage builds");
+    assert_mechanical_landed_without_owner_merge(&assert_scenario_converges(
+        "memory",
+        &memory_stage,
         &scenario,
         HAPPY_PATH_BUDGET,
-        || block_on(full_reference_stage(runner_config())),
-        || block_on(full_reference_filesystem_stage(runner_config())),
-    );
+    ));
+
+    let filesystem_stage = block_on(full_reference_filesystem_stage(runner_config()))
+        .expect("filesystem stage builds");
+    assert_mechanical_landed_without_owner_merge(&assert_scenario_converges(
+        "filesystem",
+        &filesystem_stage,
+        &scenario,
+        HAPPY_PATH_BUDGET,
+    ));
 
     let multiprocess_stage = block_on(full_reference_multiprocess_stage(runner_config()))
         .expect("multi-process stage builds");
-    assert_scenario_converges(
+    assert_mechanical_landed_without_owner_merge(&assert_scenario_converges(
         "filesystem-multiprocess-sketch",
         &multiprocess_stage,
         &scenario,
         HAPPY_PATH_BUDGET,
-    );
+    ));
 }
 
 #[test]
@@ -163,7 +174,12 @@ fn assert_scenario_converges_on_backends<M, F, MB, FB>(
     assert_scenario_converges("filesystem", &filesystem_stage, scenario, budget);
 }
 
-fn assert_scenario_converges<S: Stage>(backend: &str, stage: &S, scenario: &Scenario, budget: u64) {
+fn assert_scenario_converges<S: Stage>(
+    backend: &str,
+    stage: &S,
+    scenario: &Scenario,
+    budget: u64,
+) -> temper_runner::RunReport {
     let report = block_on(run_scenario_with_budget(stage, scenario, budget))
         .unwrap_or_else(|error| panic!("{backend} scenario passes: {error}"));
 
@@ -171,6 +187,19 @@ fn assert_scenario_converges<S: Stage>(backend: &str, stage: &S, scenario: &Scen
         report.ticks <= budget,
         "{backend} scenario used {} ticks, over budget {budget}",
         report.ticks
+    );
+    report
+}
+
+fn assert_mechanical_landed_without_owner_merge(report: &temper_runner::RunReport) {
+    assert!(
+        report.action_count("mechanical").unwrap_or(0) > 0,
+        "mechanical worker should apply the landing transition"
+    );
+    assert_eq!(
+        report.action_count("role:owner"),
+        Some(0),
+        "owner role should not service a normal merge queue"
     );
 }
 

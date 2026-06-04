@@ -28,7 +28,7 @@ Status legend: ☐ pending · ☑ done.
   `plan::WorkflowEffect` so transitions can express `SetAssignee`,
   `RemoveAssignee`, `CreateComment`, `CreatePullRequest`, `MergePullRequest`.
   Wire validation and planner emission. Make `reference-delivery` use them
-  (`open_pr` creates a PR, `approve_merge` merges, `claim_code` sets assignee).
+  (`open_pr` creates a PR, `land_pr` merges, `claim_code` sets assignee).
   No execution yet; `Executor` still rejects them with `UnsupportedEffect`.
 - ☑ **9b — Execute assignee + comment effects.** `Executor::execute` applies
   `SetAssignee`/`RemoveAssignee`/`CreateComment` through the `Forge` trait, with
@@ -78,7 +78,7 @@ the phases above but are out of scope for the reference-workflow backlog:
 
 All phases ☑, `reference-delivery.json` carries no expression workarounds, the
 reference workflow's full loop (intake → triage → claim → PR → review/CI →
-merge → post-merge reconcile/alignment) is expressible/plannable, and
+mechanical landing → post-merge reconcile/alignment) is expressible/plannable, and
 `reference-workflow-gaps.md` is updated to a "resolved" record.
 
 **Status: complete.** Phases 9a–14 have all landed. The fixture carries no

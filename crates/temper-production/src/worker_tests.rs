@@ -72,6 +72,13 @@ fn dogfood_reference_engineer_declares_coding_workspace() {
 }
 
 #[test]
+fn dogfood_runner_config_omits_automation_only_role_binding() {
+    let config = crate::runner_config();
+    assert!(config.role_binding(&RoleId::new("engineer")).is_some());
+    assert!(config.role_binding(&RoleId::new("mechanical")).is_none());
+}
+
+#[test]
 fn pr_diff_guard_targets_are_derived_from_role_manifests() {
     let compiled = crate::workflow().compile();
 
@@ -91,24 +98,21 @@ fn pr_diff_guard_targets_are_derived_from_role_manifests() {
             && queues.iter().any(|queue| queue.as_str() == "pr_needs_review")
     ));
 
-    let owner = guard_role_for_manifest(
-        &compiled,
-        compiled
-            .role(&RoleId::new("owner"))
-            .expect("owner manifest exists"),
-    )
-    .expect("owner gets a guard");
-    assert!(matches!(
-        owner,
-        GuardRole::Owner { ref queues }
-            if queues.iter().any(|queue| queue.as_str() == "merge_ready")
-                && !queues.iter().any(|queue| queue.as_str() == "owner_alignment")
-    ));
+    let owner = compiled
+        .role(&RoleId::new("owner"))
+        .expect("owner manifest exists");
+    assert!(guard_role_for_manifest(&compiled, owner).is_none());
 
     let engineer = compiled
         .role(&RoleId::new("engineer"))
         .expect("engineer manifest exists");
     assert!(guard_role_for_manifest(&compiled, engineer).is_none());
+
+    let mechanical = compiled
+        .role(&RoleId::new("mechanical"))
+        .expect("mechanical manifest exists");
+    assert!(mechanical.queues.is_empty());
+    assert!(guard_role_for_manifest(&compiled, mechanical).is_none());
 }
 
 #[test]

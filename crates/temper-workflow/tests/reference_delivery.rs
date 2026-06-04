@@ -109,11 +109,11 @@ fn classify_pr_updated_at(
 fn reference_fixture_validates_with_expected_shape() {
     let workflow = fixture_workflow();
     assert_eq!(workflow.name(), "reference-delivery");
-    assert_eq!(workflow.roles().len(), 5);
+    assert_eq!(workflow.roles().len(), 6);
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
-    assert_eq!(workflow.queues().len(), 11);
-    assert_eq!(workflow.transitions().len(), 21);
+    assert_eq!(workflow.queues().len(), 12);
+    assert_eq!(workflow.transitions().len(), 24);
     assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow
@@ -124,8 +124,24 @@ fn reference_fixture_validates_with_expected_shape() {
         .labels()
         .iter()
         .any(|label| label.as_str() == "merge-ready"
+            || label.as_str() == "needs-merge"
             || label.as_str().starts_with("ci-")
             || label.as_str().starts_with("review-")));
+    assert!(workflow
+        .labels()
+        .iter()
+        .any(|label| label.as_str() == "landing"));
+    assert!(workflow
+        .labels()
+        .iter()
+        .any(|label| label.as_str() == "merge-conflict"));
+
+    let mechanical = workflow
+        .roles()
+        .iter()
+        .find(|role| role.id.as_str() == "mechanical")
+        .expect("mechanical automation authority is declared");
+    assert!(mechanical.queues.is_empty());
 
     let ci_gate = workflow
         .gates()
@@ -134,14 +150,21 @@ fn reference_fixture_validates_with_expected_shape() {
         .expect("ci_gate is declared");
     assert_eq!(ci_gate.condition.as_ref(), Some(&GateCondition::CiPassed));
 
-    let merge_ready = workflow
+    let landing = workflow
         .queues()
         .iter()
-        .find(|queue| queue.id.as_str() == "merge_ready")
-        .expect("merge_ready queue is declared");
+        .find(|queue| queue.id.as_str() == "landing")
+        .expect("landing queue is declared");
+    assert_eq!(landing.condition.as_ref(), Some(&GateCondition::CiPassed));
+    let automation = landing
+        .automation
+        .as_ref()
+        .expect("landing queue is mechanically serviced");
+    assert_eq!(automation.actor, RoleId::new("mechanical"));
+    assert_eq!(automation.transition, TransitionId::new("land_pr"));
     assert_eq!(
-        merge_ready.condition.as_ref(),
-        Some(&GateCondition::CiPassed)
+        automation.on_merge_conflict,
+        Some(TransitionId::new("route_merge_conflict"))
     );
     let owner_alignment = workflow
         .queues()
@@ -180,7 +203,14 @@ fn reference_fixture_compiles_every_role() {
     ids.sort();
     assert_eq!(
         ids,
-        vec!["architect", "engineer", "human", "owner", "reviewer"]
+        vec![
+            "architect",
+            "engineer",
+            "human",
+            "mechanical",
+            "owner",
+            "reviewer"
+        ]
     );
 
     assert!(compiled.labels().get(&LabelId::new("ci-passed")).is_none());
@@ -192,6 +222,15 @@ fn reference_fixture_compiles_every_role() {
         .labels()
         .get(&LabelId::new("merge-ready"))
         .is_none());
+    assert!(compiled
+        .labels()
+        .get(&LabelId::new("needs-merge"))
+        .is_none());
+    assert!(compiled.labels().get(&LabelId::new("landing")).is_some());
+    assert!(compiled
+        .labels()
+        .get(&LabelId::new("merge-conflict"))
+        .is_some());
 
     let owner_alignment = compiled
         .queues()
@@ -216,6 +255,22 @@ fn reference_fixture_compiles_every_role() {
         .find(|queue| queue.id.as_str() == "pr_ci_failed")
         .expect("CI failure queue is compiled");
     assert_eq!(ci_failed.condition.as_ref(), Some(&GateCondition::CiFailed));
+
+    let landing = compiled
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "landing")
+        .expect("landing queue is compiled");
+    let automation = landing
+        .automation
+        .as_ref()
+        .expect("landing automation is compiled");
+    assert_eq!(automation.actor, RoleId::new("mechanical"));
+    assert_eq!(automation.transition, TransitionId::new("land_pr"));
+    assert_eq!(
+        automation.on_merge_conflict,
+        Some(TransitionId::new("route_merge_conflict"))
+    );
 }
 
 #[test]
@@ -453,16 +508,16 @@ fn dependency_gate_requires_every_prerequisite() {
 }
 
 #[test]
-fn merge_requires_review_and_native_ci() {
+fn mechanical_landing_requires_review_and_native_ci() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    let ready = classify_pr(&workflow, 10, &["implementation", "needs-merge"]);
+    let ready = classify_pr(&workflow, 10, &["implementation", "landing"]);
     let review = GateSignals::new().with_review(ReviewStatus::new(true, false));
     let blocked = planner
         .plan_transition_with(
-            &TransitionId::new("approve_merge"),
-            &RoleId::new("owner"),
+            &TransitionId::new("land_pr"),
+            &RoleId::new("mechanical"),
             &ready,
             &review,
         )
@@ -470,8 +525,24 @@ fn merge_requires_review_and_native_ci() {
     assert!(blocked
         .diagnostics()
         .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("approve_merge"),
+            transition: TransitionId::new("land_pr"),
             gate: GateId::new("ci_gate"),
+        }));
+
+    let ci_only = GateSignals::new().with_ci(CiStatus::passed());
+    let blocked = planner
+        .plan_transition_with(
+            &TransitionId::new("land_pr"),
+            &RoleId::new("mechanical"),
+            &ready,
+            &ci_only,
+        )
+        .expect_err("a PR with landing and green CI still needs native approval");
+    assert!(blocked
+        .diagnostics()
+        .contains(&PlanDiagnostic::GateNotSatisfied {
+            transition: TransitionId::new("land_pr"),
+            gate: GateId::new("review_gate"),
         }));
 
     let signals = GateSignals::new()
@@ -479,17 +550,17 @@ fn merge_requires_review_and_native_ci() {
         .with_review(ReviewStatus::new(true, false));
     let plan = planner
         .plan_transition_with(
-            &TransitionId::new("approve_merge"),
-            &RoleId::new("owner"),
+            &TransitionId::new("land_pr"),
+            &RoleId::new("mechanical"),
             &ready,
             &signals,
         )
-        .expect("owner can approve a fully gated merge once CI passes");
+        .expect("mechanical automation can land a fully gated PR once CI passes");
     assert_eq!(
         plan.effects,
         vec![
             WorkflowEffect::MergePullRequest,
-            WorkflowEffect::RemoveLabel(LabelId::new("needs-merge")),
+            WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::AddLabel(LabelId::new("landed")),
             WorkflowEffect::AddLabel(LabelId::new("alignment")),
         ]
@@ -512,6 +583,44 @@ fn failed_gates_route_back_to_engineer_queues() {
     assert!(planner
         .matching_queues_with(&failed, &ci_signal)
         .contains(&QueueId::new("pr_ci_failed")));
+
+    let landing_failed = classify_pr(&workflow, 22, &["implementation", "landing"]);
+    let return_for_review = planner
+        .plan_transition(
+            &TransitionId::new("address_landing_ci_failure"),
+            &RoleId::new("engineer"),
+            &landing_failed,
+        )
+        .expect("landing-approved CI failure returns to review");
+    assert_eq!(
+        return_for_review.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("landing")),
+            WorkflowEffect::AddLabel(LabelId::new("needs-reviewer")),
+            WorkflowEffect::RequestReviewers {
+                roles: vec![RoleId::new("reviewer")],
+            },
+        ]
+    );
+
+    let conflicted = classify_pr(&workflow, 23, &["implementation", "merge-conflict"]);
+    assert!(planner
+        .matching_queues(&conflicted)
+        .contains(&QueueId::new("pr_merge_conflict")));
+    let requeue = planner
+        .plan_transition(
+            &TransitionId::new("resolve_merge_conflict"),
+            &RoleId::new("engineer"),
+            &conflicted,
+        )
+        .expect("engineer can requeue a conflict resolution without review request");
+    assert_eq!(
+        requeue.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("merge-conflict")),
+            WorkflowEffect::AddLabel(LabelId::new("landing")),
+        ]
+    );
 }
 
 #[test]

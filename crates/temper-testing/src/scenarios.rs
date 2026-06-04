@@ -5,7 +5,7 @@ use serde_json::json;
 use temper_forge::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, Forge, Issue, IssueQuery, IssueState,
     ItemNumber, PullRequest, PullRequestQuery, PullRequestState, Repository, RepositoryId,
-    RepositoryQuery, ReviewDecision,
+    RepositoryQuery, ReviewDecision, UserId,
 };
 use temper_runner::{scan, BoxError, Scenario};
 use temper_workflow::{parse_metadata_block, ArtifactRef, CiStatus, QueueId};
@@ -157,6 +157,7 @@ async fn assert_happy_path(forge: &dyn Forge, repo: &RepositoryId) -> Result<(),
     let pull_request = only_implementation_pr(&pull_requests)?;
     assert_parent(pull_request, code_issue.number)?;
     assert_pr_merged_and_reconciled(pull_request)?;
+    assert_not_merged_by_owner(pull_request)?;
     assert_quiescent(forge, repo).await
 }
 
@@ -426,8 +427,24 @@ fn assert_pr_merged_and_reconciled(pull_request: &PullRequest) -> Result<(), Box
             "alignment should remain set until the owner cohort activates",
         ));
     }
-    if has_label(&pull_request.labels, "needs-merge") {
-        return Err(boxed_error("merge routing label was not cleared"));
+    if has_label(&pull_request.labels, "landing") {
+        return Err(boxed_error("landing label was not cleared"));
+    }
+    if has_label(&pull_request.labels, "merge-conflict") {
+        return Err(boxed_error("merge-conflict label was not cleared"));
+    }
+    Ok(())
+}
+
+fn assert_not_merged_by_owner(pull_request: &PullRequest) -> Result<(), BoxError> {
+    let merge = pull_request
+        .merge
+        .as_ref()
+        .ok_or_else(|| boxed_error("merged pull request is missing merge record"))?;
+    if merge.merged_by == UserId::new("owner") {
+        return Err(boxed_error(
+            "happy path PR was merged by owner role, not mechanical automation",
+        ));
     }
     Ok(())
 }

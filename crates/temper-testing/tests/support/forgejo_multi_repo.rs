@@ -13,6 +13,7 @@ use temper_testing::workflow;
 use temper_workflow::RoleId;
 
 pub const LONG_POLL_MS: u64 = 120_000;
+const CI_STATUS_POLL_MS: u64 = 1_000;
 pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const ASSERT_POLL: Duration = Duration::from_secs(1);
 const WORKER_RUN_SECS: u64 = 240;
@@ -297,6 +298,7 @@ impl WorkerFleet {
                 stop_file,
                 wake_secret,
                 &wake_dir.join(format!("{role}.sock")),
+                LONG_POLL_MS,
                 &[
                     ("--kind", "role"),
                     ("--role", &role),
@@ -318,14 +320,23 @@ impl WorkerFleet {
             });
         }
         let log = log_dir.join("mechanical.log");
+        let ci_reader = provisioned
+            .role(&RoleId::new("engineer"))
+            .expect("engineer identity is provisioned for mechanical CI reads");
+        let mechanical_env: Vec<(&str, &str)> = vec![
+            (FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str()),
+            (FORGEJO_USERNAME_ENV, ci_reader.user.as_str()),
+            (FORGEJO_PASSWORD_ENV, ci_reader.password.as_str()),
+        ];
         let child = spawn_worker(
             &base,
             repos,
             stop_file,
             wake_secret,
             &wake_dir.join("mechanical.sock"),
+            CI_STATUS_POLL_MS,
             &[("--kind", "mechanical")],
-            &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
+            &mechanical_env,
             &log,
         );
         workers.push(SpawnedWorker {
@@ -445,6 +456,7 @@ fn spawn_worker(
     stop_file: &Path,
     wake_secret: &Path,
     wake_socket: &Path,
+    poll_ms: u64,
     extra: &[(&str, &str)],
     env: &[(&str, &str)],
     log_path: &Path,
@@ -461,7 +473,7 @@ fn spawn_worker(
         .arg("--clock")
         .arg("wall")
         .arg("--poll-ms")
-        .arg(LONG_POLL_MS.to_string())
+        .arg(poll_ms.to_string())
         .arg("--stop-file")
         .arg(stop_file)
         .arg("--run-secs")

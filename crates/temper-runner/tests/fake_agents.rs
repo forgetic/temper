@@ -240,7 +240,7 @@ fn engineer_fake_claims_code_opens_pr_and_requests_review() {
     let pr = &pull_requests[0];
     assert_eq!(
         labels(pr.labels.clone()),
-        vec!["implementation", "needs-merge", "needs-reviewer"]
+        vec!["implementation", "needs-reviewer"]
     );
     assert_eq!(pr.requested_reviewers, vec![UserId::new("reviewer")]);
     assert!(pr.body.contains("pr-for-code-"));
@@ -283,7 +283,7 @@ fn reviewer_fake_approves_as_requested_reviewer() {
     let pr = block_on(forge.get_pull_request_by_number(&repo, number))
         .expect("lookup succeeds")
         .expect("pull request exists");
-    assert_eq!(labels(pr.labels), vec!["implementation"]);
+    assert_eq!(labels(pr.labels), vec!["implementation", "landing"]);
     let reviews = block_on(forge.list_pull_request_reviews(&pr.id)).expect("reviews list");
     assert_eq!(reviews.len(), 1);
     assert_eq!(reviews[0].reviewer_id, UserId::new("reviewer"));
@@ -372,16 +372,10 @@ fn human_fake_clears_human_flag() {
 }
 
 #[test]
-fn owner_fake_merges_fully_gated_pr_when_serviced() {
+fn owner_fake_ignores_landing_prs_because_merges_are_mechanical() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
-    let number = create_pr(
-        &forge,
-        &repo,
-        &["implementation", "needs-merge"],
-        "impl",
-        "",
-    );
+    let number = create_pr(&forge, &repo, &["implementation", "landing"], "impl", "");
     approve_as_requested_reviewer(&forge, &repo, number);
     block_on(MemoryCiSink::new(forge.clone()).record(
         &repo,
@@ -399,22 +393,19 @@ fn owner_fake_merges_fully_gated_pr_when_serviced() {
         runner_config().execution_context(&RoleId::new("owner")),
     );
     let item = WorkItem {
-        queue: QueueId::new("merge_ready"),
+        queue: QueueId::new("landing"),
         role: RoleId::new("owner"),
         target: ArtifactSource::PullRequest { number },
         kind: ArtifactKindId::new("implementation_pr"),
     };
 
-    assert!(block_on(FakeOwner.service(&item, &tools)).expect("owner services PR"));
+    assert!(!block_on(FakeOwner.service(&item, &tools)).expect("owner ignores landing PR"));
 
     let pr = block_on(forge.get_pull_request_by_number(&repo, number))
         .expect("lookup succeeds")
         .expect("pull request exists");
-    assert_eq!(pr.state, PullRequestState::Merged);
-    assert_eq!(
-        labels(pr.labels),
-        vec!["alignment", "implementation", "landed"]
-    );
+    assert_eq!(pr.state, PullRequestState::Open);
+    assert_eq!(labels(pr.labels), vec!["implementation", "landing"]);
 }
 
 fn tick(worker: &impl Worker) -> Progress {
