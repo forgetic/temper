@@ -73,6 +73,12 @@ pub enum ReferenceSite {
     QueueLabel { queue: String },
     /// A queue's condition referenced a label or state.
     QueueCondition { queue: String },
+    /// A queue automation block referenced an actor role.
+    QueueAutomationActor { queue: String },
+    /// A queue automation block referenced its primary transition.
+    QueueAutomationTransition { queue: String },
+    /// A queue automation block referenced its merge-conflict fallback transition.
+    QueueAutomationConflictFallback { queue: String },
     /// An artifact kind's `labels` list referenced a label.
     ArtifactLabel { artifact: String },
     /// A state's `label` referenced a label.
@@ -109,6 +115,11 @@ impl fmt::Display for ReferenceSite {
             ReferenceSite::QueueArtifact { queue }
             | ReferenceSite::QueueLabel { queue }
             | ReferenceSite::QueueCondition { queue } => write!(formatter, "queue `{queue}`"),
+            ReferenceSite::QueueAutomationActor { queue }
+            | ReferenceSite::QueueAutomationTransition { queue }
+            | ReferenceSite::QueueAutomationConflictFallback { queue } => {
+                write!(formatter, "automation for queue `{queue}`")
+            }
             ReferenceSite::ArtifactLabel { artifact } => {
                 write!(formatter, "artifact kind `{artifact}`")
             }
@@ -146,6 +157,26 @@ pub enum Diagnostic {
     },
     /// A queue did not select any artifact kinds.
     EmptyQueueArtifacts { queue: String },
+    /// A queue automation transition does not authorize its declared actor.
+    QueueAutomationUnauthorized {
+        queue: String,
+        actor: String,
+        transition: String,
+    },
+    /// A queue automation primary transition acts on an artifact outside the queue.
+    QueueAutomationArtifactMismatch {
+        queue: String,
+        transition: String,
+        artifact: String,
+        queue_artifacts: Vec<String>,
+    },
+    /// A queue automation conflict fallback acts on a different artifact kind than the primary transition.
+    QueueAutomationConflictFallbackArtifactMismatch {
+        queue: String,
+        fallback: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl Diagnostic {
@@ -156,7 +187,10 @@ impl Diagnostic {
             | Diagnostic::DuplicateState { .. }
             | Diagnostic::DuplicateRoleExternalTool { .. }
             | Diagnostic::UndeclaredReference { .. }
-            | Diagnostic::EmptyQueueArtifacts { .. } => Severity::Error,
+            | Diagnostic::EmptyQueueArtifacts { .. }
+            | Diagnostic::QueueAutomationUnauthorized { .. }
+            | Diagnostic::QueueAutomationArtifactMismatch { .. }
+            | Diagnostic::QueueAutomationConflictFallbackArtifactMismatch { .. } => Severity::Error,
         }
     }
 }
@@ -181,6 +215,33 @@ impl fmt::Display for Diagnostic {
             Diagnostic::EmptyQueueArtifacts { queue } => {
                 write!(formatter, "queue `{queue}` selects no artifact kinds")
             }
+            Diagnostic::QueueAutomationUnauthorized {
+                queue,
+                actor,
+                transition,
+            } => write!(
+                formatter,
+                "automation for queue `{queue}` uses actor `{actor}`, but transition `{transition}` does not authorize that role"
+            ),
+            Diagnostic::QueueAutomationArtifactMismatch {
+                queue,
+                transition,
+                artifact,
+                queue_artifacts,
+            } => write!(
+                formatter,
+                "automation for queue `{queue}` uses transition `{transition}` on artifact `{artifact}`, which is not selected by the queue ({})",
+                queue_artifacts.join(", ")
+            ),
+            Diagnostic::QueueAutomationConflictFallbackArtifactMismatch {
+                queue,
+                fallback,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "automation for queue `{queue}` uses conflict fallback `{fallback}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
+            ),
         }
     }
 }

@@ -24,8 +24,8 @@ use crate::ids::{
 use crate::plan::SignalNeeds;
 use crate::prompt::build_prompt;
 use crate::validated::{
-    Effect, GateCondition, QueueLabelSet, RolePromptExtension, ValidatedRole, ValidatedTransition,
-    ValidatedWorkflow,
+    Effect, GateCondition, QueueAutomation, QueueLabelSet, RolePromptExtension, ValidatedRole,
+    ValidatedTransition, ValidatedWorkflow,
 };
 use chrono::Duration;
 
@@ -145,7 +145,7 @@ pub struct ExternalToolManifest {
     pub guidance: Option<String>,
 }
 
-/// A queue projected for runtime evaluation, with filters, subscribers, and activation.
+/// A queue projected for runtime evaluation, with filters, subscribers, activation, and automation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueManifest {
     pub id: QueueId,
@@ -155,6 +155,9 @@ pub struct QueueManifest {
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
     pub condition: Option<GateCondition>,
+    /// Optional mechanical servicing metadata. It is separate from subscribers
+    /// so an automation actor does not become an LLM/process queue worker.
+    pub automation: Option<QueueAutomation>,
     /// Roles that draw work from this queue, in role declaration order.
     pub subscribers: Vec<RoleId>,
 }
@@ -278,6 +281,7 @@ fn compile_queues(workflow: &ValidatedWorkflow) -> Vec<QueueManifest> {
             min_depth: queue.min_depth,
             max_age: queue.max_age,
             condition: queue.condition.clone(),
+            automation: queue.automation.clone(),
             subscribers: workflow
                 .roles()
                 .iter()

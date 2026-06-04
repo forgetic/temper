@@ -6,11 +6,11 @@
 //! checks (contradictory effects, unsatisfiable gates, tool-authority limits).
 
 use crate::diagnostics::{Diagnostic, ReferenceSite, SymbolKind};
-use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
+use crate::spec::{RawEffect, RawGateCondition, RawTransition, RawWorkflowSpec};
 use crate::validate_build::build_validated;
 use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Validates a raw workflow spec, collecting all diagnostics.
 ///
@@ -74,6 +74,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
 
     check_state_dimensions(spec, &labels, &artifacts, &mut diagnostics);
     check_role_external_tools(spec, &mut diagnostics);
+    check_queue_automation_contract(spec, &roles, &mut diagnostics);
 
     if diagnostics.is_empty() {
         Ok(build_validated(spec))
@@ -213,6 +214,37 @@ fn check_references(
                 },
                 diagnostics,
             );
+        }
+        if let Some(automation) = &queue.automation {
+            check_reference(
+                declared.roles,
+                &automation.actor,
+                SymbolKind::Role,
+                ReferenceSite::QueueAutomationActor {
+                    queue: queue.id.clone(),
+                },
+                diagnostics,
+            );
+            check_reference(
+                declared.transitions,
+                &automation.transition,
+                SymbolKind::Transition,
+                ReferenceSite::QueueAutomationTransition {
+                    queue: queue.id.clone(),
+                },
+                diagnostics,
+            );
+            if let Some(fallback) = &automation.on_merge_conflict {
+                check_reference(
+                    declared.transitions,
+                    fallback,
+                    SymbolKind::Transition,
+                    ReferenceSite::QueueAutomationConflictFallback {
+                        queue: queue.id.clone(),
+                    },
+                    diagnostics,
+                );
+            }
         }
     }
 
@@ -419,6 +451,96 @@ fn check_role_external_tools(spec: &RawWorkflowSpec, diagnostics: &mut Vec<Diagn
                 });
             }
         }
+    }
+}
+
+/// Checks semantic consistency of queue automation declarations once simple
+/// undeclared-reference diagnostics have been collected.
+fn check_queue_automation_contract(
+    spec: &RawWorkflowSpec,
+    roles: &HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let transitions: HashMap<&str, &RawTransition> = spec
+        .transitions
+        .iter()
+        .map(|transition| (transition.id.as_str(), transition))
+        .collect();
+
+    for queue in &spec.queues {
+        let Some(automation) = &queue.automation else {
+            continue;
+        };
+        let actor_declared = roles.contains(&automation.actor);
+        let primary = transitions.get(automation.transition.as_str()).copied();
+
+        if let Some(transition) = primary {
+            check_queue_automation_authority(
+                &queue.id,
+                &automation.actor,
+                actor_declared,
+                transition,
+                diagnostics,
+            );
+            check_queue_automation_artifact(&queue.id, &queue.artifacts, transition, diagnostics);
+        }
+
+        if let Some(fallback_id) = &automation.on_merge_conflict {
+            let Some(fallback) = transitions.get(fallback_id.as_str()).copied() else {
+                continue;
+            };
+            check_queue_automation_authority(
+                &queue.id,
+                &automation.actor,
+                actor_declared,
+                fallback,
+                diagnostics,
+            );
+            if let Some(primary) = primary {
+                if fallback.artifact != primary.artifact {
+                    diagnostics.push(
+                        Diagnostic::QueueAutomationConflictFallbackArtifactMismatch {
+                            queue: queue.id.clone(),
+                            fallback: fallback.id.clone(),
+                            expected: primary.artifact.clone(),
+                            actual: fallback.artifact.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn check_queue_automation_authority(
+    queue: &str,
+    actor: &str,
+    actor_declared: bool,
+    transition: &RawTransition,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if actor_declared && !transition.roles.iter().any(|role| role == actor) {
+        diagnostics.push(Diagnostic::QueueAutomationUnauthorized {
+            queue: queue.to_string(),
+            actor: actor.to_string(),
+            transition: transition.id.clone(),
+        });
+    }
+}
+
+fn check_queue_automation_artifact(
+    queue: &str,
+    queue_artifacts: &[String],
+    transition: &RawTransition,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !queue_artifacts.contains(&transition.artifact) {
+        diagnostics.push(Diagnostic::QueueAutomationArtifactMismatch {
+            queue: queue.to_string(),
+            transition: transition.id.clone(),
+            artifact: transition.artifact.clone(),
+            queue_artifacts: queue_artifacts.to_vec(),
+        });
     }
 }
 

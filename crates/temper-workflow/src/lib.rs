@@ -70,7 +70,9 @@
 //! activation policies for depth- or age-gated servicing. Phase 14 added
 //! multi-kind queues and disjunctive queue label filters. ADR 0016 added native
 //! pull-request reviews, review gate signals, and reviewer request/review
-//! submission effects.
+//! submission effects. Queue automation metadata now lets compiled manifests
+//! identify queues serviced mechanically by declared transition authority without
+//! changing pure queue matching.
 //!
 //! Lease acquisition is now a compare-and-swap built on the portable
 //! optimistic-concurrency primitive in `temper-forge` (the `Version` token and
@@ -144,12 +146,12 @@ pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
     RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawLabel, RawQueue,
-    RawQueueLabelSet, RawRelation, RawRole, RawRolePrompt, RawState, RawStateDimension,
-    RawTransition, RawWorkflowSpec,
+    RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole, RawRolePrompt, RawState,
+    RawStateDimension, RawTransition, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, ExternalToolDeclaration, GateCondition, QueueLabelSet, RolePromptExtension,
-    ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole,
-    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, ExternalToolDeclaration, GateCondition, QueueAutomation, QueueLabelSet,
+    RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
+    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };

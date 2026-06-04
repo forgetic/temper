@@ -4,11 +4,11 @@ use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId,
 };
-use crate::spec::{RawEffect, RawGateCondition, RawWorkflowSpec};
+use crate::spec::{RawEffect, RawGateCondition, RawQueueAutomation, RawWorkflowSpec};
 use crate::validated::{
-    Effect, ExternalToolDeclaration, GateCondition, QueueLabelSet, RolePromptExtension,
-    ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole,
-    ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, ExternalToolDeclaration, GateCondition, QueueAutomation, QueueLabelSet,
+    RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
+    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
 use chrono::Duration;
 
@@ -118,6 +118,15 @@ fn build_queue(queue: &crate::spec::RawQueue) -> ValidatedQueue {
             .max_age
             .map(|seconds| Duration::seconds(i64::from(seconds))),
         condition: queue.condition.as_ref().map(build_gate_condition),
+        automation: queue.automation.as_ref().map(build_queue_automation),
+    }
+}
+
+fn build_queue_automation(automation: &RawQueueAutomation) -> QueueAutomation {
+    QueueAutomation {
+        actor: RoleId::new(&automation.actor),
+        transition: TransitionId::new(&automation.transition),
+        on_merge_conflict: automation.on_merge_conflict.as_ref().map(TransitionId::new),
     }
 }
 

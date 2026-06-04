@@ -190,7 +190,7 @@ pub struct ValidatedStateDimension {
     pub states: Vec<ValidatedState>,
 }
 
-/// A validated queue with typed artifact, label, and activation references.
+/// A validated queue with typed artifact, label, activation, and automation references.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedQueue {
     pub id: QueueId,
@@ -200,6 +200,17 @@ pub struct ValidatedQueue {
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
     pub condition: Option<GateCondition>,
+    /// Optional mechanical servicing declaration. Matching and activation stay
+    /// pure; this only describes which actor/transition may service members.
+    pub automation: Option<QueueAutomation>,
+}
+
+/// Mechanical servicing metadata for a validated or compiled queue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueueAutomation {
+    pub actor: RoleId,
+    pub transition: TransitionId,
+    pub on_merge_conflict: Option<TransitionId>,
 }
 
 /// One AND-clause in a queue's disjunctive label filter.

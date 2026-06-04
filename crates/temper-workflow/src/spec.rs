@@ -206,6 +206,25 @@ pub struct RawQueue {
     /// Optional native/projected condition that must hold for the queue to match.
     #[serde(default)]
     pub condition: Option<RawGateCondition>,
+    /// Optional mechanical servicing declaration. This does not change queue
+    /// matching; it names the role authority and transition a runner may use to
+    /// service already-matched active queue members.
+    #[serde(default)]
+    pub automation: Option<RawQueueAutomation>,
+}
+
+/// Mechanical servicing metadata for a queue.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawQueueAutomation {
+    /// Workflow role id whose authority is used to execute the transition.
+    pub actor: String,
+    /// Transition to run for matched active queue members.
+    pub transition: String,
+    /// Optional fallback transition to run when the primary transition fails
+    /// because the PR cannot be merged cleanly.
+    #[serde(default)]
+    pub on_merge_conflict: Option<String>,
 }
 
 /// One AND-clause in a queue's disjunctive label filter.
