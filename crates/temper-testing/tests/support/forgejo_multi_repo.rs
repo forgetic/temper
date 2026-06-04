@@ -2,14 +2,14 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use temper_forge::{
-    CiJobQuery, Forge, PullRequestQuery, RepositoryId, RepositoryPath, UpsertLabel,
-};
+use temper_forge::{CiJobQuery, Forge, PullRequestQuery, RepositoryId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_production::trigger_args::TriggerArgs;
 use temper_runner::{RunnerConfig, Scenario};
 use temper_testing::agents::fake_registry;
-use temper_testing::forgejo_server::{provision, ForgejoServer, Provisioned};
+use temper_testing::forgejo_server::{
+    provision, provision_repository, ForgejoServer, Provisioned, ProvisionedRoles,
+};
 use temper_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV};
 use temper_testing::{runner_config, workflow};
 use temper_workflow::RoleId;
@@ -54,70 +54,20 @@ pub async fn provision_extra_repo(
     provisioned: &Provisioned,
     name: &str,
 ) -> Result<RepositoryId, Box<dyn std::error::Error>> {
-    let client = temper_production::forgejo_rest::http_client()?;
+    let roles = ProvisionedRoles {
+        admin_token: provisioned.admin_token.clone(),
+        owner: provisioned.owner.clone(),
+        roles: provisioned.roles.clone(),
+    };
     let config = runner_config();
-    temper_production::forgejo_rest::ensure_repo(
-        &client,
+    Ok(provision_repository(
         server.base_url(),
-        &provisioned.admin_token,
-        &provisioned.owner,
+        &roles,
         name,
         &config.repository.default_branch,
     )
-    .await?;
-    let repo = repo_id(server, &provisioned.admin_token, &provisioned.owner, name).await?;
-    let compiled = workflow().compile();
-    let forge = ForgejoForge::new(
-        ForgejoConfig::new(server.base_url(), &provisioned.admin_token)
-            .with_default_repo(&provisioned.owner, name),
-    );
-    for label in compiled.labels().labels() {
-        forge
-            .upsert_label(
-                &repo,
-                UpsertLabel {
-                    name: label.id.to_string(),
-                    color: Some("#ededed".into()),
-                    description: None,
-                },
-            )
-            .await?;
-    }
-    temper_production::forgejo_rest::commit_file(
-        &client,
-        server.base_url(),
-        &provisioned.admin_token,
-        &provisioned.owner,
-        name,
-        ".forgejo/workflows/ci.yml",
-        temper_testing::forgejo_server::provision::CI_WORKFLOW,
-        "add CI workflow (runs-on: host)",
-        &config.repository.default_branch,
-    )
-    .await?;
-    temper_production::forgejo_rest::enable_actions(
-        &client,
-        server.base_url(),
-        &provisioned.admin_token,
-        &provisioned.owner,
-        name,
-    )
-    .await?;
-    Ok(repo)
-}
-
-async fn repo_id(
-    server: &ForgejoServer,
-    token: &str,
-    owner: &str,
-    name: &str,
-) -> Result<RepositoryId, Box<dyn std::error::Error>> {
-    let forge = ForgejoForge::new(ForgejoConfig::new(server.base_url(), token));
-    Ok(forge
-        .get_repository_by_path(&RepositoryPath::new(owner, name))
-        .await?
-        .ok_or_else(|| format!("repo {owner}/{name} not readable"))?
-        .id)
+    .await?
+    .repository)
 }
 
 fn admin_forge(

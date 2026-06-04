@@ -1,48 +1,33 @@
-//! The Forgejo twin of `tests/multiprocess.rs` (Phase 4 of
-//! `plans/forgejo-e2e/README.md`).
+//! Forgejo multi-process scenarios against one shared live Forgejo world.
 //!
-//! Same one-process-per-part rehearsal as the filesystem `multiprocess` test, but
-//! against a **real Forgejo server** with a **real host-mode `forgejo-runner`**
-//! producing genuine CI. For each of the five reference-delivery scenarios it:
+//! This is the real-backend twin of `tests/multiprocess.rs`: deterministic fake
+//! role agents and a mechanical worker coordinate only through a real Forgejo
+//! backend while a real host-mode `forgejo-runner` produces CI. The suite keeps
+//! real-backend coverage but avoids rebooting Forgejo for every scenario:
 //!
-//! 1. boots a throwaway [`ForgejoServer`] + [`ForgejoRunner`] and provisions the
-//!    org, repo (`auto_init`), per-role users/tokens/passwords, labels, and the
-//!    CI workflow ([`provision`]);
-//! 2. seeds via the scenario's **exact** seed closure against an admin
-//!    [`ForgejoForge`] — the same closure the filesystem test uses;
-//! 3. spawns the `temper-testing-worker` binary `--backend forgejo --clock wall`
-//!    once per role-with-an-agent (each given its role's token, plus the web-UI
-//!    username/password for the CI read path, via env) plus one mechanical
-//!    worker, behind a kill-on-drop fleet — **no** `--kind ci` worker, because the
-//!    real runner is the CI producer (read via the Phase 3b web-UI path);
-//! 4. polls the scenario's **exact** assert closure (fresh forge each poll) until
-//!    convergence, then stops via the `--stop-file` sentinel and asserts every
-//!    child exited 0 — identical control flow to `multiprocess.rs`.
+//! 1. boot one [`ForgejoServer`] and register one [`ForgejoRunner`];
+//! 2. bootstrap one admin and one per-role identity/token map;
+//! 3. provision fresh repository names per scenario (plus one second repo only
+//!    for cross-repo fan-out);
+//! 4. spawn a fresh worker fleet per scenario with unique stop file and logs;
+//! 5. poll the scenario's backend-neutral assert closure to convergence.
 //!
-//! The only per-topology difference from the filesystem test is the worker flags
-//! (`--backend forgejo`, `--base-url`, `--clock wall`, `--ci-sentinel`) and the
-//! secrets passed via env; the seed/assert closures are reused verbatim.
-//!
-//! `#[ignore]`d, so the default `cargo test` never downloads a binary, opens a
-//! socket, or spawns a server. No extra environment variable is required; run it
-//! with:
+//! The five scenarios are collapsed into one ignored test so ordinary Rust
+//! ownership performs panic cleanup: the active worker fleet is a stack value and
+//! kills children on drop, and the shared runner/server handles are dropped if any
+//! scenario panics.
 //!
 //! ```sh
 //! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 //! ```
-//!
-//! A real host CI job takes seconds and provisioning + git + HTTP add up, so the
-//! convergence timeout, run-secs backstop, and poll cadence are **much** larger
-//! than the filesystem test's. Each scenario boots its own server + runner for
-//! full isolation (the simplest correct alternative to one-server-many-repos,
-//! given provisioning targets a fixed repo).
 
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_runner::Scenario;
-use temper_testing::forgejo_server::{provision, ForgejoRunner, ForgejoServer, Provisioned};
-#[allow(dead_code)]
-#[path = "support/forgejo_multi_repo.rs"]
-mod multi_repo_support;
+use temper_testing::forgejo_server::provision::bootstrap_admin;
+use temper_testing::forgejo_server::{
+    provision_repository, provision_role_identities, ForgejoRunner, ForgejoServer, Provisioned,
+    ProvisionedRoles,
+};
 #[path = "support/forgejo_multiprocess.rs"]
 mod multiprocess_support;
 
@@ -58,279 +43,453 @@ use temper_testing::scenarios::{
 
 /// How often the driver re-runs the assert closure while polling.
 const ASSERT_POLL: Duration = Duration::from_secs(2);
-/// Worker poll cadence; modest because every tick is real HTTP (findings-phase-0
-/// §6 measured ~10–20 ms/call locally).
+/// Worker poll cadence; modest because every tick is real HTTP.
 const WORKER_POLL_MS: u64 = 500;
 /// Backstop run length per child, in case the driver dies before stopping it.
 const WORKER_RUN_SECS: u64 = 1200;
 
-/// The worker behavior that distinguishes one scenario's topology.
-///
-/// These map onto the same in-process registry wiring the filesystem test uses
-/// (`--architect`/`--reviewer`), plus the Forgejo-only `--ci-sentinel` policy that
-/// tells the engineer whether the PR head passes CI from the start (`present`) or
-/// fails first and is fixed by a follow-up commit (`deferred`).
+#[derive(Clone, Copy)]
 struct Variant {
+    /// Stable name used in logs, repo names, and panic messages.
+    name: &'static str,
     /// The scenario whose seed/assert closures the driver reuses.
     scenario: fn() -> Scenario,
+    /// Fresh primary repository for this scenario.
+    primary_repo: &'static str,
+    /// Optional second repository; only the cross-repo fan-out scenario uses it.
+    extra_repo: Option<&'static str>,
     /// `--architect` value passed to the architect role worker.
     architect: &'static str,
     /// `--reviewer` value passed to the reviewer role worker.
     reviewer: &'static str,
     /// `--ci-sentinel` value passed to the engineer role worker.
     ci_sentinel: &'static str,
-    /// Whether this variant provisions a second repo and passes both repos to
-    /// the one fixed worker fleet.
-    multi_repo: bool,
 }
 
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn happy_path_converges_against_real_forgejo() {
-    run_variant(&Variant {
-        scenario: happy_path,
-        architect: "default",
-        reviewer: "default",
-        ci_sentinel: "present",
-        multi_repo: false,
-    });
+fn forgejo_multiprocess_scenarios_converge_against_shared_forgejo_world() {
+    let suite_start = Instant::now();
+    let mut world = SharedLiveWorld::start();
+    eprintln!(
+        "forgejo_multiprocess shared world timing: {}",
+        world.timing.render()
+    );
+
+    let mut scenario_total = Duration::ZERO;
+    for variant in variants() {
+        let timing = run_variant(&mut world, &variant);
+        scenario_total += timing.total;
+        eprintln!(
+            "forgejo_multiprocess scenario '{}' timing: {}",
+            variant.name,
+            timing.render()
+        );
+    }
+
+    let world_teardown_start = Instant::now();
+    drop(world);
+    let world_teardown = world_teardown_start.elapsed();
+    eprintln!(
+        "forgejo_multiprocess suite timing: scenarios={scenario_total:?} \
+         world_teardown={world_teardown:?} total={:?}",
+        suite_start.elapsed()
+    );
 }
 
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn changes_requested_then_approved_converges_against_real_forgejo() {
-    run_variant(&Variant {
-        scenario: changes_requested_then_approved,
-        architect: "default",
-        reviewer: "request-changes-then-approve",
-        ci_sentinel: "present",
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn ci_fails_then_passes_converges_against_real_forgejo() {
-    run_variant(&Variant {
-        scenario: ci_fails_then_passes,
-        architect: "default",
-        reviewer: "default",
-        // The PR head omits `ci-ok` so the first run fails; the engineer's fix
-        // commit adds it, producing a second, passing head SHA (two verdicts).
-        ci_sentinel: "deferred",
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn dependency_chain_mechanically_unblocked_against_real_forgejo() {
-    run_variant(&Variant {
-        scenario: dependency_chain_mechanically_unblocked,
-        architect: "closing",
-        reviewer: "default",
-        ci_sentinel: "present",
-        multi_repo: false,
-    });
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn cross_repo_fanout_converges_against_real_forgejo() {
-    run_variant(&Variant {
-        scenario: cross_repo_fanout_converges,
-        architect: "closing",
-        reviewer: "default",
-        ci_sentinel: "present",
-        multi_repo: true,
-    });
+fn variants() -> [Variant; 5] {
+    [
+        Variant {
+            name: "happy_path",
+            scenario: happy_path,
+            primary_repo: "service-happy-path",
+            extra_repo: None,
+            architect: "default",
+            reviewer: "default",
+            ci_sentinel: "present",
+        },
+        Variant {
+            name: "changes_requested_then_approved",
+            scenario: changes_requested_then_approved,
+            primary_repo: "service-review-cycle",
+            extra_repo: None,
+            architect: "default",
+            reviewer: "request-changes-then-approve",
+            ci_sentinel: "present",
+        },
+        Variant {
+            name: "ci_fails_then_passes",
+            scenario: ci_fails_then_passes,
+            primary_repo: "service-ci-retry",
+            extra_repo: None,
+            architect: "default",
+            reviewer: "default",
+            ci_sentinel: "deferred",
+        },
+        Variant {
+            name: "dependency_chain_mechanically_unblocked",
+            scenario: dependency_chain_mechanically_unblocked,
+            primary_repo: "service-dependency-chain",
+            extra_repo: None,
+            architect: "closing",
+            reviewer: "default",
+            ci_sentinel: "present",
+        },
+        Variant {
+            name: "cross_repo_fanout",
+            scenario: cross_repo_fanout_converges,
+            primary_repo: "service-cross-repo-source",
+            // `cross_repo_targets` chooses the first visible repo other than the
+            // source by owner/name, so keep the scenario's intended target before
+            // the single-repo scenario names from earlier in this shared world.
+            extra_repo: Some("aaa-cross-repo-target"),
+            architect: "closing",
+            reviewer: "default",
+            ci_sentinel: "present",
+        },
+    ]
 }
 
 /// Drives one scenario through the true multi-process topology against a real
 /// Forgejo, asserting it converges to the same end state as the in-process
 /// scenario.
-fn run_variant(variant: &Variant) {
-    // Boot the server + runner. `ForgejoServer::start` polls readiness with a
-    // *blocking* reqwest client whose nested runtime must live and die off any
-    // async reactor — this driver is a plain `#[test]`, so there is no reactor to
-    // collide with, and the worker processes carry their own Tokio runtimes.
-    let server = ForgejoServer::start().expect("forgejo server boots");
-    let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
-    assert!(runner.is_running(), "runner daemon exited immediately");
+fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming {
+    let scenario_start = Instant::now();
+    let mut timing = ScenarioTiming::default();
 
-    let provisioned = block_on_provision(&server);
-    let mut repo_args = vec![format!("{}/{}", provisioned.owner, provisioned.name)];
-    if variant.multi_repo {
-        let second_name = "service-canary".to_string();
-        multi_repo_support::futures_block_on(multi_repo_support::provision_extra_repo(
-            &server,
-            &provisioned,
-            &second_name,
-        ))
-        .expect("second Forgejo repo provisions for cross-repo scenario");
-        repo_args.push(format!("{}/{}", provisioned.owner, second_name));
+    let provision_start = Instant::now();
+    let mut repos = vec![world.provision_repo(variant.primary_repo)];
+    if let Some(name) = variant.extra_repo {
+        repos.push(world.provision_repo(name));
     }
-    let config = runner_config();
+    timing.repo_provision = provision_start.elapsed();
+    let primary = repos[0].clone();
+    let repo_args = repos
+        .iter()
+        .map(|repo| format!("{}/{}", repo.owner, repo.name))
+        .collect::<Vec<_>>();
 
-    // Seed via the scenario's exact seed closure against an admin-owner backend.
     let scenario = (variant.scenario)();
-    seed(&server, &provisioned, &scenario);
+    let seed_start = Instant::now();
+    seed(world.server(), &primary, &scenario, variant.name);
+    timing.seed = seed_start.elapsed();
 
-    let stop_file = server_stop_file(&provisioned);
-    let _ = std::fs::remove_file(&stop_file);
+    let paths = scenario_paths(&primary);
+    let _ = std::fs::remove_file(&paths.stop_file);
+    let _ = std::fs::remove_dir_all(&paths.log_dir);
+    std::fs::create_dir_all(&paths.log_dir).expect("scenario worker log dir creates");
 
-    // Spawn one process per moving part behind a kill-on-drop guard.
+    let config = runner_config();
+    let spawn_start = Instant::now();
     let mut workers = WorkerFleet::spawn(
-        &server,
-        &provisioned,
+        world.server(),
+        &primary,
         &repo_args,
-        &stop_file,
+        &paths.stop_file,
+        &paths.log_dir,
         &config,
         variant.architect,
         variant.reviewer,
         variant.ci_sentinel,
     );
+    timing.worker_spawn = spawn_start.elapsed();
 
-    // Detect convergence in-process by polling the exact scenario assert.
     let timeout = convergence_timeout();
-    let converged = poll_until_converged(&server, &provisioned, &scenario, timeout);
+    let convergence_start = Instant::now();
+    let converged = poll_until_converged(world.server(), &primary, &scenario, timeout);
+    timing.convergence = convergence_start.elapsed();
 
-    // Stop: touch the sentinel and join every child.
-    touch(&stop_file);
+    let teardown_start = Instant::now();
+    touch(&paths.stop_file);
     let exits = workers.wait_all();
+    timing.worker_teardown = teardown_start.elapsed();
+    timing.total = scenario_start.elapsed();
 
     if let Err(error) = converged {
-        let diag = ci_diagnostics(&server, &provisioned);
+        let runner_running = world.runner_running();
+        let runner_log = world.runner_log_tail();
         panic!(
-            "multi-process world did not converge within {timeout:?}: {error}\n\
-             runner running={}, runner log tail:\n{}\n--- CI diagnostics ---\n{}",
-            runner.is_running(),
-            runner.log_tail(),
-            diag
+            "scenario '{}' did not converge within {timeout:?}: {error}\n\
+             timing: {}\n\
+             runner running={runner_running}, runner log tail:\n{runner_log}\n\
+             --- worker scan summary ---\n{}\n\
+             --- worker logs ---\n{}\n\
+             --- CI diagnostics ---\n{}",
+            variant.name,
+            timing.render(),
+            workers.scan_summary(),
+            workers.logs(),
+            ci_diagnostics(world.server(), &repos)
         );
     }
 
     for (label, status) in &exits {
         assert!(
             status.success(),
-            "worker '{label}' exited with {status:?}, expected success"
+            "scenario '{}' worker '{label}' exited with {status:?}, expected success\n\
+             timing: {}\n--- worker logs ---\n{}",
+            variant.name,
+            timing.render(),
+            workers.logs()
         );
     }
 
-    // Run the assert once more for a clean message.
-    let forge = admin_forge(&server, &provisioned);
-    let assert = (scenario.assert)(&forge, &provisioned.repository);
-    futures_block_on(assert).expect("final scenario assertion passes after workers stop");
+    let final_assert_start = Instant::now();
+    let forge = admin_forge(world.server(), &primary);
+    futures_block_on((scenario.assert)(&forge, &primary.repository)).unwrap_or_else(|error| {
+        panic!(
+            "scenario '{}' final assertion failed after workers stopped: {error}\n\
+             timing: {}\n--- worker logs ---\n{}\n--- CI diagnostics ---\n{}",
+            variant.name,
+            timing.render(),
+            workers.logs(),
+            ci_diagnostics(world.server(), &repos)
+        )
+    });
+    timing.final_assert = final_assert_start.elapsed();
+    timing.total = scenario_start.elapsed();
 
-    let _ = std::fs::remove_file(&stop_file);
+    let _ = std::fs::remove_file(&paths.stop_file);
+    if !std::thread::panicking() {
+        let _ = std::fs::remove_dir_all(&paths.log_dir);
+    }
     drop(workers);
-    drop(runner);
-    drop(server);
+    timing
 }
 
-/// Runs the async [`provision`] to completion on a one-shot current-thread Tokio
-/// runtime (the driver is a sync `#[test]`).
-fn block_on_provision(server: &ForgejoServer) -> Provisioned {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds");
-    runtime
-        .block_on(provision(server))
-        .expect("provisioning succeeds")
+struct SharedLiveWorld {
+    // Drop runner before server so the daemon cannot keep polling a dead Forgejo.
+    runner: ForgejoRunner,
+    server: ForgejoServer,
+    roles: ProvisionedRoles,
+    default_branch: String,
+    timing: WorldTiming,
 }
+
+impl SharedLiveWorld {
+    fn start() -> Self {
+        let total_start = Instant::now();
+        let server_start = Instant::now();
+        let server = ForgejoServer::start().expect("forgejo server boots");
+        let server_startup = server_start.elapsed();
+
+        let runner_start = Instant::now();
+        let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
+        let runner_startup = runner_start.elapsed();
+        assert!(runner.is_running(), "runner daemon exited immediately");
+
+        let identity_start = Instant::now();
+        let admin_token = bootstrap_admin(&server).expect("forgejo admin bootstrap succeeds");
+        let config = runner_config();
+        let roles = futures_block_on(provision_role_identities(
+            server.base_url(),
+            &admin_token,
+            &config.repository.owner,
+            &config.role_bindings,
+        ))
+        .expect("forgejo role identities provision once");
+        let identity_provision = identity_start.elapsed();
+
+        let timing = WorldTiming {
+            server_startup,
+            runner_startup,
+            identity_provision,
+            total: total_start.elapsed(),
+        };
+        Self {
+            runner,
+            server,
+            roles,
+            default_branch: config.repository.default_branch,
+            timing,
+        }
+    }
+
+    fn provision_repo(&self, name: &str) -> Provisioned {
+        futures_block_on(provision_repository(
+            self.server.base_url(),
+            &self.roles,
+            name,
+            &self.default_branch,
+        ))
+        .unwrap_or_else(|error| {
+            panic!(
+                "provisioning repo {}/{} failed: {error}",
+                self.roles.owner, name
+            )
+        })
+    }
+
+    fn server(&self) -> &ForgejoServer {
+        &self.server
+    }
+
+    fn runner_running(&mut self) -> bool {
+        self.runner.is_running()
+    }
+
+    fn runner_log_tail(&self) -> String {
+        self.runner.log_tail()
+    }
+}
+
+#[derive(Clone, Default)]
+struct WorldTiming {
+    server_startup: Duration,
+    runner_startup: Duration,
+    identity_provision: Duration,
+    total: Duration,
+}
+
+impl WorldTiming {
+    fn render(&self) -> String {
+        format!(
+            "server_startup={:?} runner_startup={:?} identity_provision={:?} total={:?}",
+            self.server_startup, self.runner_startup, self.identity_provision, self.total
+        )
+    }
+}
+
+#[derive(Clone, Default)]
+struct ScenarioTiming {
+    repo_provision: Duration,
+    seed: Duration,
+    worker_spawn: Duration,
+    convergence: Duration,
+    worker_teardown: Duration,
+    final_assert: Duration,
+    total: Duration,
+}
+
+impl ScenarioTiming {
+    fn render(&self) -> String {
+        format!(
+            "repo_provision={:?} seed={:?} worker_spawn={:?} convergence={:?} \
+             worker_teardown={:?} final_assert={:?} total={:?}",
+            self.repo_provision,
+            self.seed,
+            self.worker_spawn,
+            self.convergence,
+            self.worker_teardown,
+            self.final_assert,
+            self.total
+        )
+    }
+}
+
+struct ScenarioPaths {
+    stop_file: PathBuf,
+    log_dir: PathBuf,
+}
+
+fn scenario_paths(provisioned: &Provisioned) -> ScenarioPaths {
+    let id = NEXT_SCENARIO.fetch_add(1, Ordering::SeqCst);
+    let base = format!(
+        "temper-forgejo-mp-{}-{}-{id}",
+        std::process::id(),
+        provisioned.name,
+    );
+    ScenarioPaths {
+        stop_file: std::env::temp_dir().join(format!("{base}.stop")),
+        log_dir: std::env::temp_dir().join(format!("{base}-logs")),
+    }
+}
+
+static NEXT_SCENARIO: AtomicU64 = AtomicU64::new(0);
 
 /// Builds an admin-owner [`ForgejoForge`] (admin token, default repo + web-UI
 /// credentials) for seeding and asserting against the provisioned repo.
 fn admin_forge(server: &ForgejoServer, provisioned: &Provisioned) -> ForgejoForge {
-    // The admin can read CI through the web UI with the shared role password; the
-    // admin login is not a role user, so reuse a provisioned role's web-UI creds
-    // for the CI read fallback during asserts.
     let config = ForgejoConfig::new(server.base_url(), &provisioned.admin_token)
         .with_default_repo(&provisioned.owner, &provisioned.name);
-    let config = match any_role(provisioned) {
+    let config = match provisioned.roles.values().next() {
         Some(role) => config.with_web_ui_credentials(&role.user, &role.password),
         None => config,
     };
     ForgejoForge::new(config)
 }
 
-/// Any provisioned role identity, used only for its web-UI credentials during
-/// admin-side CI reads.
-fn any_role(provisioned: &Provisioned) -> Option<&temper_testing::forgejo_server::RoleIdentity> {
-    runner_config()
-        .role_bindings
-        .iter()
-        .find_map(|binding| provisioned.role(&binding.role))
-}
-
-/// Lists each PR, its head branch, and its CI jobs for a convergence-failure
-/// message. Best-effort: any read error is folded into the string.
-fn ci_diagnostics(server: &ForgejoServer, provisioned: &Provisioned) -> String {
+/// Lists each PR, its head branch, and its CI jobs for convergence-failure
+/// messages. Best-effort: any read error is folded into the string.
+fn ci_diagnostics(server: &ForgejoServer, repos: &[Provisioned]) -> String {
     use temper_forge::{CiJobQuery, PullRequestQuery};
-    let forge = admin_forge(server, provisioned);
     futures_block_on(async {
         let mut out = String::new();
-        match forge
-            .list_pull_requests(&provisioned.repository, PullRequestQuery::default())
-            .await
-        {
-            Ok(prs) => {
-                for pr in &prs {
-                    out.push_str(&format!(
-                        "PR #{} head={} labels={:?} state={:?} merge={}\n",
-                        pr.number,
-                        pr.source.branch,
-                        pr.labels,
-                        pr.state,
-                        pr.merge.is_some()
-                    ));
-                    match forge.list_pull_request_reviews(&pr.id).await {
-                        Ok(reviews) => {
-                            for r in reviews {
-                                out.push_str(&format!(
-                                    "  review by {} decision={:?} at={}\n",
-                                    r.reviewer_id.as_str(),
-                                    r.decision,
-                                    r.submitted_at
-                                ));
+        for provisioned in repos {
+            out.push_str(&format!(
+                "repo {}/{}\n",
+                provisioned.owner, provisioned.name
+            ));
+            let forge = admin_forge(server, provisioned);
+            match forge
+                .list_pull_requests(&provisioned.repository, PullRequestQuery::default())
+                .await
+            {
+                Ok(prs) => {
+                    for pr in &prs {
+                        out.push_str(&format!(
+                            "  PR #{} head={} labels={:?} state={:?} merge={}\n",
+                            pr.number,
+                            pr.source.branch,
+                            pr.labels,
+                            pr.state,
+                            pr.merge.is_some()
+                        ));
+                        match forge.list_pull_request_reviews(&pr.id).await {
+                            Ok(reviews) => {
+                                for r in reviews {
+                                    out.push_str(&format!(
+                                        "    review by {} decision={:?} at={}\n",
+                                        r.reviewer_id.as_str(),
+                                        r.decision,
+                                        r.submitted_at
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                out.push_str(&format!("    list reviews error: {error}\n"));
                             }
                         }
-                        Err(error) => out.push_str(&format!("  list reviews error: {error}\n")),
-                    }
-                    match forge
-                        .list_ci_jobs(
-                            &provisioned.repository,
-                            CiJobQuery {
-                                pull_request_id: Some(pr.id.clone()),
-                                ..CiJobQuery::default()
-                            },
-                        )
-                        .await
-                    {
-                        Ok(jobs) => {
-                            for job in jobs {
-                                out.push_str(&format!(
-                                    "  job {} status={:?} conclusion={:?} created={}\n",
-                                    job.name, job.status, job.conclusion, job.created_at
-                                ));
+                        match forge
+                            .list_ci_jobs(
+                                &provisioned.repository,
+                                CiJobQuery {
+                                    pull_request_id: Some(pr.id.clone()),
+                                    ..CiJobQuery::default()
+                                },
+                            )
+                            .await
+                        {
+                            Ok(jobs) => {
+                                for job in jobs {
+                                    out.push_str(&format!(
+                                        "    job {} status={:?} conclusion={:?} created={}\n",
+                                        job.name, job.status, job.conclusion, job.created_at
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                out.push_str(&format!("    list_ci_jobs error: {error}\n"));
                             }
                         }
-                        Err(error) => out.push_str(&format!("  list_ci_jobs error: {error}\n")),
                     }
                 }
+                Err(error) => out.push_str(&format!("  list_pull_requests error: {error}\n")),
             }
-            Err(error) => out.push_str(&format!("list_pull_requests error: {error}\n")),
         }
         out
     })
 }
 
 /// Seeds the provisioned repo in-process using the scenario's exact seed closure.
-fn seed(server: &ForgejoServer, provisioned: &Provisioned, scenario: &Scenario) {
+fn seed(server: &ForgejoServer, provisioned: &Provisioned, scenario: &Scenario, label: &str) {
     let forge = admin_forge(server, provisioned);
-    let future = (scenario.seed)(&forge, &provisioned.repository);
-    futures_block_on(future).expect("seeding the scenario succeeds");
+    futures_block_on((scenario.seed)(&forge, &provisioned.repository)).unwrap_or_else(|error| {
+        panic!(
+            "scenario '{label}' seeding failed for {}/{}: {error}",
+            provisioned.owner, provisioned.name
+        )
+    });
 }
 
 /// Polls the scenario assert until it passes or the timeout elapses.
@@ -365,17 +524,6 @@ fn futures_block_on<F: std::future::Future>(future: F) -> F::Output {
         .expect("tokio runtime builds")
         .block_on(future)
 }
-
-fn server_stop_file(provisioned: &Provisioned) -> PathBuf {
-    let id = NEXT_STOP.fetch_add(1, Ordering::SeqCst);
-    std::env::temp_dir().join(format!(
-        "temper-forgejo-mp-stop-{}-{}-{id}",
-        provisioned.name,
-        std::process::id()
-    ))
-}
-
-static NEXT_STOP: AtomicU64 = AtomicU64::new(0);
 
 fn touch(path: &Path) {
     std::fs::write(path, b"stop").expect("writing the stop sentinel succeeds");

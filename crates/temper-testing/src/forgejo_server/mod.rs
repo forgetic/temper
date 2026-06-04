@@ -11,7 +11,10 @@ mod provision_rest;
 pub mod provision_seed;
 
 pub use pr_prep::{commit_ci_sentinel, prepare_pull_request_head};
-pub use provision::{provision, provision_world, ProvisionError, Provisioned, RoleIdentity};
+pub use provision::{
+    provision, provision_repository, provision_role_identities, provision_world, ProvisionError,
+    Provisioned, ProvisionedRoles, RoleIdentity,
+};
 pub use provision_seed::{intake_labels, seed_intake_issue};
 pub use temper_forgejo_fixture::{
     download, ForgejoRunner, ForgejoServer, RunnerError, ServerError,

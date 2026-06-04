@@ -18,7 +18,8 @@ webhook/`ChangeHint` triggering, including a two-repo fixed worker set.
 
 ## Process topology
 
-For each scenario the test boots an isolated world:
+The multi-process suite boots one live world and gives each scenario isolated
+repositories, worker logs, and stop files:
 
 ```text
   ┌──────────────────────────────────────────────────────────┐
@@ -33,14 +34,18 @@ For each scenario the test boots an isolated world:
   └───────────┘  └──────────┘  └──────────────┘      └────────────────┘
 ```
 
-- **Server**: a throwaway Forgejo (`temper_testing::forgejo_server`), Actions
+- **Server**: one throwaway Forgejo (`temper_testing::forgejo_server`), Actions
   enabled, fresh SQLite, ephemeral port, killed and removed on drop.
-- **Runner**: a real host-mode `forgejo-runner` (`--labels host:host`, **no
+- **Runner**: one real host-mode `forgejo-runner` (`--labels host:host`, **no
   containers**) registered to the server. It is the genuine CI producer — there
   is no fake `--kind ci` worker on Forgejo.
-- **Role + mechanical workers**: the `temper-testing-worker` binary, one OS
-  process per role-with-an-agent plus one mechanical reconciler, launched
-  `--backend forgejo --clock wall`. They coordinate **only** through the server.
+- **Repositories**: fresh repo names per scenario; cross-repo fan-out alone gets
+  a second fresh repo. Older scenario repos remain visible but are not in the
+  next scenario's worker `--repo` set.
+- **Role + mechanical workers**: per scenario, the `temper-testing-worker`
+  binary, one OS process per role-with-an-agent plus one mechanical reconciler,
+  launched `--backend forgejo --clock wall` with a unique stop file and log dir.
+  They coordinate **only** through the server.
 
 ## Identity is per-token
 
@@ -55,10 +60,11 @@ REST token, PR assignee `UserId`, and web-UI CI login — the role users are giv
 
 ## Provisioning is server-agnostic and operator-runnable
 
-The provisioning sequence (org → per-role user/token → `auto_init` repo → label
-upsert → CI workflow commit) is split so it does not depend on the throwaway
-server. `provision_world(base_url, admin_token, owner, name, roles,
-default_branch)` is the portable REST/Forge portion; `provision(&server)` is the
+The provisioning sequence is split at the same boundary production operators
+need: org + per-role user/token (`provision_role_identities`) can run once, then
+`auto_init` repo + labels + CI workflow (`provision_repository`) can run for each
+repo. `provision_world(base_url, admin_token, owner, name, roles, default_branch)`
+keeps the old single-repo convenience path, and `provision(&server)` is the
 throwaway-server wrapper that bootstraps an admin (CLI) then calls it. Role
 logins come from the passed-in binding list (`runner_config().role_bindings`),
 never hardcoded. `seed_intake_issue(base_url, token, owner, name)` adds one
@@ -68,9 +74,7 @@ binary exposes this as `temper-provision-forgejo`: it takes
 `--base-url/--owner/--name/--out`, reads the admin token from
 `TEMPER_FORGEJO_ADMIN_TOKEN` (never argv), and writes the per-role
 `{user, token, password}` to a `0600` POSIX-sourceable secrets file
-(`TEMPER_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret. The
-operator demo calls it once per configured repo so labels, CI, webhooks, and one
-seed issue are present in every repo before the single shared worker pool starts.
+(`TEMPER_FORGEJO_{USER,TOKEN,PASSWORD}_<ROLE>=…`), printing nothing secret.
 
 ## Real CI: producing and reading
 

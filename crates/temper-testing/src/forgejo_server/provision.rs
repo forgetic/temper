@@ -154,11 +154,36 @@ impl std::fmt::Debug for RoleIdentity {
     }
 }
 
-/// The full result of provisioning a fresh Forgejo for the e2e scenarios.
-///
-/// This is the one value Phase 4 (and optionally the worker) needs: the admin
-/// token for any further admin REST, the resolved [`RepositoryId`], and the
-/// per-role identity map.
+/// Shared admin/org/role identity state that can provision many repositories.
+#[derive(Clone, Debug)]
+pub struct ProvisionedRoles {
+    /// Admin access token (scope `all`), for further admin REST if needed.
+    pub admin_token: String,
+    /// The owner org all role users can write to.
+    pub owner: String,
+    /// Per-role identity, keyed by workflow role.
+    pub roles: BTreeMap<RoleId, RoleIdentity>,
+}
+
+impl ProvisionedRoles {
+    /// The identity for `role`, if provisioned.
+    pub fn role(&self, role: &RoleId) -> Option<&RoleIdentity> {
+        self.roles.get(role)
+    }
+
+    /// Materializes this shared identity set as a single-repository fixture.
+    pub fn for_repository(&self, name: impl Into<String>, repository: RepositoryId) -> Provisioned {
+        Provisioned {
+            admin_token: self.admin_token.clone(),
+            owner: self.owner.clone(),
+            name: name.into(),
+            repository,
+            roles: self.roles.clone(),
+        }
+    }
+}
+
+/// The full result of provisioning one repository for the e2e scenarios.
 #[derive(Clone, Debug)]
 pub struct Provisioned {
     /// Admin access token (scope `all`), for further admin REST if needed.
@@ -251,20 +276,19 @@ pub(super) type Result<T> = std::result::Result<T, ProvisionError>;
 /// elsewhere. Idempotent where Forgejo allows it (re-creating an org/user/label
 /// is tolerated), so a retried provision does not wedge.
 pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
-    // 1. Admin bootstrap via the CLI (the REST user-create path needs an admin
-    //    token, and the admin itself must exist first). This is the only step
-    //    coupled to the throwaway [`ForgejoServer`]; everything else is portable
-    //    REST/Forge handled by [`provision_world`].
     let admin_token = bootstrap_admin(server)?;
-
-    // Repository coordinates and role bindings come from the shared runner config.
     let config = runner_config();
-    provision_world(
+    let roles = provision_role_identities(
         server.base_url(),
         &admin_token,
         &config.repository.owner,
-        &config.repository.name,
         &config.role_bindings,
+    )
+    .await?;
+    provision_repository(
+        server.base_url(),
+        &roles,
+        &config.repository.name,
         &config.repository.default_branch,
     )
     .await
@@ -281,9 +305,9 @@ pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
 /// then calls this; both share one code path so behaviour stays identical.
 ///
 /// `roles` is the role-binding list (from `runner_config()` or operator config),
-/// so role logins stay derived from config and are never hardcoded. Idempotent
-/// where Forgejo allows it (re-creating an org/user/label/repo is tolerated), so
-/// a retried provision against the same instance does not wedge.
+/// so role logins stay derived from config and are never hardcoded. For multiple
+/// repos in one live world, prefer [`provision_role_identities`] once and then
+/// [`provision_repository`] per repo so same-name tokens are not reminted.
 pub async fn provision_world(
     base_url: &str,
     admin_token: &str,
@@ -292,21 +316,25 @@ pub async fn provision_world(
     roles: &[RoleBinding],
     default_branch: &str,
 ) -> Result<Provisioned> {
-    let client = rest::http_client()?;
+    let identities = provision_role_identities(base_url, admin_token, owner, roles).await?;
+    provision_repository(base_url, &identities, name, default_branch).await
+}
 
-    // 1. Org (owner). Idempotent: a 422 "already exists" is tolerated.
+/// Provisions the org and per-role Forgejo identities once for a live world.
+///
+/// The returned map can be reused for every repository in the same org, avoiding
+/// repeated same-name token minting while still giving each role token access via
+/// Owners-team membership.
+pub async fn provision_role_identities(
+    base_url: &str,
+    admin_token: &str,
+    owner: &str,
+    roles: &[RoleBinding],
+) -> Result<ProvisionedRoles> {
+    let client = rest::http_client()?;
     rest::ensure_org(&client, base_url, admin_token, owner).await?;
     let owners_team = rest::owners_team_id(&client, base_url, admin_token, owner).await?;
 
-    // 2. Per-role identity: user + Owners membership + basic-auth token.
-    //
-    // The Forgejo **login** must equal both the user's display handle (the
-    // web-UI CI-read login form authenticates by handle) **and** the bound
-    // [`UserId`] the workflow sends as an assignee (`set_assignee` resolves a role
-    // to `binding.user.id`; the backend PATCHes that string as the assignee
-    // login, and a mismatch 500s with `UpdateAssignees: user does not exist`).
-    // `runner_config()` therefore binds each role to a user whose `id` and
-    // `handle` are the same string, so this single login satisfies both.
     let mut role_map = BTreeMap::new();
     for binding in roles {
         debug_assert_eq!(
@@ -330,19 +358,38 @@ pub async fn provision_world(
         );
     }
 
-    // 3. Repository (auto_init so `main` exists for PRs). Created by the admin
-    //    under the org; idempotent on re-create.
-    rest::ensure_repo(&client, base_url, admin_token, owner, name, default_branch).await?;
+    Ok(ProvisionedRoles {
+        admin_token: admin_token.to_string(),
+        owner: owner.to_string(),
+        roles: role_map,
+    })
+}
 
-    // 4. Labels through the real async backend (mirrors `upsert_labels`).
-    let repository = upsert_labels(base_url, admin_token, owner, name).await?;
+/// Provisions one repository using an already-created role identity map.
+pub async fn provision_repository(
+    base_url: &str,
+    identities: &ProvisionedRoles,
+    name: &str,
+    default_branch: &str,
+) -> Result<Provisioned> {
+    let client = rest::http_client()?;
+    rest::ensure_repo(
+        &client,
+        base_url,
+        &identities.admin_token,
+        &identities.owner,
+        name,
+        default_branch,
+    )
+    .await?;
 
-    // 5. CI workflow file + enable Actions.
+    let repository =
+        upsert_labels(base_url, &identities.admin_token, &identities.owner, name).await?;
     rest::commit_file(
         &client,
         base_url,
-        admin_token,
-        owner,
+        &identities.admin_token,
+        &identities.owner,
         name,
         WORKFLOW_PATH,
         CI_WORKFLOW,
@@ -350,15 +397,16 @@ pub async fn provision_world(
         default_branch,
     )
     .await?;
-    rest::enable_actions(&client, base_url, admin_token, owner, name).await?;
+    rest::enable_actions(
+        &client,
+        base_url,
+        &identities.admin_token,
+        &identities.owner,
+        name,
+    )
+    .await?;
 
-    Ok(Provisioned {
-        admin_token: admin_token.to_string(),
-        owner: owner.to_string(),
-        name: name.to_string(),
-        repository,
-        roles: role_map,
-    })
+    Ok(identities.for_repository(name.to_string(), repository))
 }
 
 /// Creates a non-reserved admin user and mints an `all`-scoped token via the
@@ -493,24 +541,45 @@ mod tests {
 
     #[test]
     fn provisioned_role_lookup_uses_role_map() {
+        let provisioned =
+            shared_roles().for_repository("service", RepositoryId::new("acme/service"));
+        assert!(provisioned.role(&RoleId::new("engineer")).is_some());
+        assert!(provisioned.role(&RoleId::new("nobody")).is_none());
+    }
+
+    #[test]
+    fn shared_role_identities_materialize_two_repos_without_reminting() {
+        let roles = shared_roles();
+        let first = roles.for_repository("service-a", RepositoryId::new("acme/service-a"));
+        let second = roles.for_repository("service-b", RepositoryId::new("acme/service-b"));
+
+        let role = RoleId::new("engineer");
+        assert_eq!(
+            first.role(&role).map(|identity| identity.token.as_str()),
+            Some("engineer-token")
+        );
+        assert_eq!(
+            second.role(&role).map(|identity| identity.token.as_str()),
+            Some("engineer-token")
+        );
+        assert_eq!(first.roles.len(), second.roles.len());
+    }
+
+    fn shared_roles() -> ProvisionedRoles {
         let mut roles = BTreeMap::new();
         roles.insert(
             RoleId::new("engineer"),
             RoleIdentity {
                 user: "engineer".into(),
                 email: "engineer@example.invalid".into(),
-                token: "t".into(),
+                token: "engineer-token".into(),
                 password: ROLE_PASSWORD.into(),
             },
         );
-        let provisioned = Provisioned {
-            admin_token: "a".into(),
+        ProvisionedRoles {
+            admin_token: "admin-token".into(),
             owner: "acme".into(),
-            name: "service".into(),
-            repository: RepositoryId::new("acme/service"),
             roles,
-        };
-        assert!(provisioned.role(&RoleId::new("engineer")).is_some());
-        assert!(provisioned.role(&RoleId::new("nobody")).is_none());
+        }
     }
 }

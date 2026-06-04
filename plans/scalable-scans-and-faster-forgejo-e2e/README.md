@@ -117,13 +117,29 @@ Status legend: ☐ pending · ☑ done
    `scanned_repositories` and `scanned_repository_paths` for debugging and e2e
    assertions.
 
-5. ☐ **Phase 5 — Faster Forgejo e2e topology.**
+5. ☑ **Phase 5 — Faster Forgejo e2e topology.**
    `prompts/phase-5-faster-forgejo-e2e-topology.md`
 
-   Rework the ignored Forgejo multiprocess suite so setup cost is not repeated
-   unnecessarily. Prefer one server+runner per test binary with fresh repo names
-   per scenario, or another design with equivalent isolation. Keep tests serial
-   and make logs report scan counts/CI-read counts on timeout.
+   Collapsed `forgejo_multiprocess` into one ignored serial scenario suite that
+   boots one Forgejo server and one host-mode runner, provisions admin/role
+   identities once, then uses fresh repo names per scenario (plus one second repo
+   only for cross-repo fan-out). Worker fleets remain per-scenario and isolated
+   by repo args, stop file, and log dir; timeout panics include worker scan-log
+   summaries, worker log tails, runner log tail, repo-specific CI diagnostics,
+   and scenario timings. A unit test covers reusing one `ProvisionedRoles` map
+   for two repos without reminting role tokens.
+
+   Warm local timing for the full `forgejo_multiprocess` ignored suite with
+   `--nocapture`:
+   legacy per-scenario server topology finished in 119.69s test time / 122.10s
+   wall, with each scenario paying about 1.7–5.3s server startup, 0.08–0.12s
+   runner registration, and ~4.0–4.3s full provisioning before worker
+   convergence. Shared topology finished in 93.27s test time / 93.37s wall:
+   shared startup was 1.93s server + 0.08s runner + 3.12s identity
+   provisioning; per-scenario repo provisioning was 0.86–0.92s for single-repo
+   scenarios and 2.05s for cross-repo; worker convergence remained the dominant
+   7.6–25.8s real-CI cost. Subsequent validation runs saw 92.85–98.91s test
+   time. Net improvement on this host: about 21–27s test time (~17–22%).
 
 6. ☐ **Phase 6 — Documentation, knobs, and performance acceptance.**
    `prompts/phase-6-docs-and-performance-acceptance.md`

@@ -26,11 +26,13 @@ or provided through `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY`.
 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
-This boots a Forgejo server **and** a host-mode `forgejo-runner`, provisions, and
-converges all five reference-delivery scenarios across real OS processes. It
-spawns real processes and executes CI **on this host**, so run it only where that
-is acceptable. Budget several minutes. The per-phase smoke tests below build up
-to it. See [The multi-process test](#the-multi-process-test-phase-4) for detail.
+This boots one Forgejo server **and** one host-mode `forgejo-runner`, provisions
+one shared role identity set, then converges all five reference-delivery
+scenarios in fresh per-scenario repos across real OS processes. It spawns real
+processes and executes CI **on this host**, so run it only where that is
+acceptable. Budget a couple of minutes on a warmed checkout. The per-phase smoke
+tests below build up to it. See
+[The multi-process test](#the-multi-process-test-phase-5) for detail.
 If the binary cache is missing, first run:
 
 ```sh
@@ -182,23 +184,29 @@ The ignored test proves the full contract: without prep `create_pull_request` 40
 after prep it succeeds and the PR becomes `mergeable` (Forgejo computes
 mergeability asynchronously, so the test polls); and re-running prep is a no-op.
 
-## The multi-process test (Phase 4)
+## The multi-process test (Phase 5)
 
 ```sh
 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
-This is the Forgejo twin of `tests/multiprocess.rs`: the **same** one-process-per-part
-rehearsal, but against a real Forgejo + a real host-mode `forgejo-runner`. For
-each of the five reference-delivery scenarios (happy path, changes-requested,
-CI-fails-then-passes, dependency-chain, and cross-repo fan-out) it boots a server
-+ runner, provisions, seeds via the scenario's **exact** seed closure, spawns the
-`temper-testing-worker` binary `--backend forgejo --clock wall` once per
-role-with-an-agent plus one mechanical worker (**no** `--kind ci` — the real
-runner is the CI producer), polls the scenario's **exact** assert closure to
-convergence, then stops via the `--stop-file` sentinel and asserts each child
-exited 0. Each scenario boots its own server+runner for isolation, so run it
-`--test-threads=1` (five servers at once is heavy). Budget several minutes.
+This is the Forgejo twin of `tests/multiprocess.rs`: the **same**
+one-process-per-part rehearsal, but against a real Forgejo + a real host-mode
+`forgejo-runner`. The ignored test is one serial scenario suite: it boots one
+server + runner, bootstraps one admin and one per-role identity/token set, then
+provisions a fresh primary repo for each of the five scenarios (happy path,
+changes-requested, CI-fails-then-passes, dependency-chain, and cross-repo
+fan-out). Cross-repo fan-out alone gets a second fresh repo. Each scenario seeds
+via the scenario's **exact** seed closure, spawns a fresh `temper-testing-worker`
+fleet `--backend forgejo --clock wall` once per role-with-an-agent plus one
+mechanical worker (**no** `--kind ci` — the real runner is the CI producer),
+polls the scenario's **exact** assert closure to convergence, then stops via its
+unique `--stop-file` sentinel and asserts each child exited 0.
+
+Scenario isolation is by repository, stop file, and log directory; only the
+Forgejo server, runner, admin, and role users are shared. The single `#[test]`
+keeps cleanup under normal Rust ownership, so a panic drops the active worker
+fleet and then the runner/server handles.
 
 Secrets travel by env only: each role worker gets its token via
 `TEMPER_FORGEJO_TOKEN`, plus `TEMPER_FORGEJO_USERNAME`/`PASSWORD` for the
@@ -276,7 +284,8 @@ tests are `#[ignore]`d, so they never fire there). The dedicated job:
    cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
    ```
 
-   `--test-threads=1` keeps the five per-scenario servers from running at once.
+   `--test-threads=1` is still recommended because the suite owns a real
+   server, runner, and multiple worker processes while it runs.
 
 The job should not block the default pipeline gate (it is slower and
 host-dependent); treat it as a periodic / on-demand real-backend check. The

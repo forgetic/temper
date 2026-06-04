@@ -13,6 +13,9 @@ use super::provision::{ProvisionError, Result, ROLE_PASSWORD, TOKEN_SCOPES};
 use base64::Engine;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_TOKEN_NAME: AtomicU64 = AtomicU64::new(0);
 
 /// Builds the shared blocking-free HTTP client used for all REST provisioning.
 pub(super) fn http_client() -> Result<Client> {
@@ -111,13 +114,14 @@ pub(super) async fn add_team_member(
 }
 
 /// Mints a token for `login` via the user's own **basic-auth** (admin-on-behalf
-/// 404s on 7.0.x; findings-phase-0 §3). Returns the raw `sha1` token.
+/// 404s on 7.0.x; findings-phase-0 §3). Token names are unique per process so
+/// repeated single-repo provisions do not collide. Returns the raw `sha1` token.
 pub(super) async fn mint_user_token(client: &Client, base: &str, login: &str) -> Result<String> {
     let resp = client
         .post(format!("{base}/api/v1/users/{login}/tokens"))
         .basic_auth(login, Some(ROLE_PASSWORD))
         .json(&json!({
-            "name": format!("e2e-{login}"),
+            "name": unique_token_name(login),
             "scopes": TOKEN_SCOPES,
         }))
         .send()
@@ -241,6 +245,11 @@ fn http_err(err: reqwest::Error) -> ProvisionError {
     ProvisionError::Http(err.to_string())
 }
 
+fn unique_token_name(login: &str) -> String {
+    let id = NEXT_TOKEN_NAME.fetch_add(1, Ordering::SeqCst);
+    format!("e2e-{login}-{}-{id}", std::process::id())
+}
+
 /// Reads a JSON body, erroring on non-success status. `what` is a secret-free
 /// label of the call.
 async fn json_ok(resp: reqwest::Response, what: &str) -> Result<Value> {
@@ -322,5 +331,13 @@ mod tests {
     #[test]
     fn snippet_passes_short_bodies_through() {
         assert_eq!(snippet("  hi  "), "hi");
+    }
+
+    #[test]
+    fn token_names_are_unique_for_repeated_role_provisions() {
+        let first = unique_token_name("engineer");
+        let second = unique_token_name("engineer");
+        assert!(first.starts_with("e2e-engineer-"));
+        assert_ne!(first, second);
     }
 }

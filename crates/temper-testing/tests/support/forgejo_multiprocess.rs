@@ -1,5 +1,5 @@
-use std::path::Path;
-use std::process::{Child, Command};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use temper_forge::Forge;
 use temper_runner::RunnerConfig;
@@ -22,6 +22,7 @@ pub struct WorkerFleet {
 
 struct SpawnedWorker {
     label: String,
+    log: PathBuf,
     child: Child,
 }
 
@@ -34,6 +35,7 @@ impl WorkerFleet {
         provisioned: &Provisioned,
         repos: &[String],
         stop_file: &Path,
+        log_dir: &Path,
         config: &RunnerConfig,
         architect: &str,
         reviewer: &str,
@@ -51,6 +53,7 @@ impl WorkerFleet {
                 (FORGEJO_USERNAME_ENV, identity.user.as_str()),
                 (FORGEJO_PASSWORD_ENV, identity.password.as_str()),
             ];
+            let log = log_dir.join(format!("role-{role}.log"));
             let child = spawn_worker(
                 &base,
                 repos,
@@ -65,22 +68,27 @@ impl WorkerFleet {
                     ("--agents", "fake"),
                 ],
                 &env,
+                &log,
             );
             workers.push(SpawnedWorker {
                 label: format!("role:{role}"),
+                log,
                 child,
             });
         }
 
+        let log = log_dir.join("mechanical.log");
         let child = spawn_worker(
             &base,
             repos,
             stop_file,
             &[("--kind", "mechanical")],
             &[(FORGEJO_TOKEN_ENV, provisioned.admin_token.as_str())],
+            &log,
         );
         workers.push(SpawnedWorker {
             label: "mechanical".into(),
+            log,
             child,
         });
 
@@ -98,6 +106,31 @@ impl WorkerFleet {
                 (worker.label.clone(), status)
             })
             .collect()
+    }
+
+    /// Per-worker tick/scan counters parsed from worker logs.
+    pub fn scan_summary(&self) -> String {
+        self.workers
+            .iter()
+            .map(|worker| summarize_log(&worker.label, &worker.log))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Tails every worker log for timeout diagnostics.
+    pub fn logs(&self) -> String {
+        self.workers
+            .iter()
+            .map(|worker| {
+                format!(
+                    "--- {} ({}) ---\n{}",
+                    worker.label,
+                    worker.log.display(),
+                    tail(&worker.log, 80)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -132,7 +165,9 @@ fn spawn_worker(
     stop_file: &Path,
     extra: &[(&str, &str)],
     env: &[(&str, &str)],
+    log_path: &Path,
 ) -> Child {
+    let log = std::fs::File::create(log_path).expect("worker log opens");
     let mut command = Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"));
     command
         .arg("--backend")
@@ -164,6 +199,59 @@ fn spawn_worker(
         command.env(key, value);
     }
     command
+        .stdout(Stdio::from(log.try_clone().expect("worker log clones")))
+        .stderr(Stdio::from(log))
         .spawn()
         .unwrap_or_else(|error| panic!("spawning worker {extra:?} failed: {error}"))
+}
+
+fn summarize_log(label: &str, log: &Path) -> String {
+    let contents = match std::fs::read_to_string(log) {
+        Ok(contents) => contents,
+        Err(error) => return format!("{label}: log unreadable at {}: {error}", log.display()),
+    };
+    let mut ticks = 0u64;
+    let mut scanned_sum = 0u64;
+    let mut last_paths = "-".to_string();
+    let mut ci_read_lines = 0u64;
+    for line in contents.lines() {
+        if line.contains("completed tick") {
+            ticks += 1;
+            if let Some(count) = value_after(line, "scanned_repositories=")
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                scanned_sum += count;
+            }
+            if let Some(paths) = value_after(line, "scanned_repository_paths=") {
+                last_paths = paths.to_string();
+            }
+        }
+        if line.contains("list_ci_jobs") || line.contains("read_ci_jobs") {
+            ci_read_lines += 1;
+        }
+    }
+    format!(
+        "{label}: ticks={ticks} scanned_repository_sum={scanned_sum} \
+         ci_read_log_lines={ci_read_lines} last_scanned_repository_paths={last_paths}"
+    )
+}
+
+fn value_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let start = line.find(key)? + key.len();
+    Some(line[start..].split_whitespace().next().unwrap_or(""))
+}
+
+fn tail(path: &Path, lines: usize) -> String {
+    std::fs::read_to_string(path)
+        .map(|log| {
+            log.lines()
+                .rev()
+                .take(lines)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_else(|error| format!("<could not read {}: {error}>", path.display()))
 }
