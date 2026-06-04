@@ -20,7 +20,7 @@
 
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
-use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer};
+use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer, ForgejoState};
 
 const ADMIN_USER: &str = "temperadmin";
 const ADMIN_PASSWORD: &str = "Sup3rSecret-Phase1b!";
@@ -37,15 +37,35 @@ jobs:\n\
 \u{20}\u{20}\u{20}\u{20}steps:\n\
 \u{20}\u{20}\u{20}\u{20}\u{20}\u{20}- run: exit 1\n";
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct RunnerSmokeMetadata {
+    admin_token: String,
+}
+
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
 fn runner_runs_failing_job_and_reports_failure() {
-    let server = ForgejoServer::start().expect("forgejo server boots");
+    let state = ForgejoState::new(json!({
+        "kind": "runner-smoke",
+        "version": 1,
+        "admin": ADMIN_USER,
+        "repo": REPO,
+    }))
+    .expect("runner smoke state serializes");
+    let cached = ForgejoServer::start_with_state(&state, |server| {
+        let base = server.base_url().to_string();
+        let token = create_admin_token(server);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|err| err.to_string())?;
+        create_repo(&client, &base, &token);
+        Ok::<RunnerSmokeMetadata, String>(RunnerSmokeMetadata { admin_token: token })
+    })
+    .expect("forgejo runner smoke state starts");
+    let server = cached.server;
+    let token = cached.metadata.admin_token;
     let base = server.base_url().to_string();
-
-    // Admin user + access token via the server CLI (no running-server REST
-    // dependency for the user itself); the token drives REST provisioning.
-    let token = create_admin_token(&server);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -56,9 +76,8 @@ fn runner_runs_failing_job_and_reports_failure() {
     let mut runner = ForgejoRunner::register(&server).expect("runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
 
-    // Provision: an auto-initialized repo, the failing workflow committed to it,
-    // and Actions enabled on the repo.
-    create_repo(&client, &base, &token);
+    // The cached state already has the admin and initialized repo. Commit the
+    // failing workflow into this per-test copy and enable Actions.
     let head_sha = put_workflow_file(&client, &base, &token);
     enable_repo_actions(&client, &base, &token);
 

@@ -20,7 +20,7 @@ use temper_forge::{
     PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ReqwestHttpClient};
-use temper_forgejo_fixture::{ForgejoRunner, ForgejoServer, ServerError};
+use temper_forgejo_fixture::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError};
 
 const ADMIN_USER: &str = "liveadmin";
 const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";
@@ -35,6 +35,11 @@ jobs:
     steps:
       - run: echo temper forgejo live smoke
 "#;
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct LiveMetadata {
+    admin_token: String,
+}
 
 struct LiveWorld {
     _server: ForgejoServer,
@@ -100,12 +105,37 @@ async fn live_smoke_suite_against_throwaway_forgejo() {
 }
 
 async fn boot_world() -> LiveWorld {
-    let server = tokio::task::spawn_blocking(ForgejoServer::start)
-        .await
-        .expect("server boot task joins")
-        .expect("Forgejo server boots");
+    let state = ForgejoState::new(json!({
+        "kind": "forgejo-backend-live-smoke",
+        "version": 1,
+        "admin": ADMIN_USER,
+        "repo": REPO,
+    }))
+    .expect("live smoke state serializes");
+    let cached = tokio::task::spawn_blocking(move || {
+        ForgejoServer::start_with_state(&state, |server| {
+            let base = server.base_url().to_string();
+            let admin_token = bootstrap_admin(server).expect("admin token bootstraps");
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime builds")
+                .block_on(async {
+                    let client = reqwest::Client::builder()
+                        .timeout(Duration::from_secs(15))
+                        .build()
+                        .map_err(|err| err.to_string())?;
+                    create_initialized_repo(&client, &base, &admin_token).await;
+                    Ok::<LiveMetadata, String>(LiveMetadata { admin_token })
+                })
+        })
+    })
+    .await
+    .expect("server boot task joins")
+    .expect("cached Forgejo state starts");
+    let server = cached.server;
     let base = server.base_url().to_string();
-    let admin_token = bootstrap_admin(&server).expect("admin token bootstraps");
+    let admin_token = cached.metadata.admin_token;
 
     let mut runner = ForgejoRunner::register(&server).expect("forgejo-runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
@@ -114,7 +144,6 @@ async fn boot_world() -> LiveWorld {
         .timeout(Duration::from_secs(15))
         .build()
         .expect("reqwest client builds");
-    create_initialized_repo(&client, &base, &admin_token).await;
     enable_repo_actions(&client, &base, &admin_token).await;
     put_workflow_file(&client, &base, &admin_token).await;
 

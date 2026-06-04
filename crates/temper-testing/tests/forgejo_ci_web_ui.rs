@@ -8,10 +8,10 @@
 //! cargo test -p temper-testing --test forgejo_ci_web_ui -- --ignored
 //! ```
 //!
-//! It boots a [`ForgejoServer`] + [`ForgejoRunner`] (host mode, no containers),
-//! provisions the repo (whose `.forgejo/workflows/ci.yml` fails on a head with no
-//! `ci-ok` sentinel — the committed `main` head has none), and then drives a real
-//! [`ForgejoForge`] configured with web-UI credentials. Because Forgejo 7.0.12
+//! It starts a cached [`ForgejoServer`] + [`ForgejoRunner`] (host mode, no
+//! containers). The cached repo's `.forgejo/workflows/ci.yml` fails on a head
+//! with no `[ci-pass]` marker; the committed `main` head has none. The test then
+//! drives a real [`ForgejoForge`] configured with web-UI credentials. Because Forgejo 7.0.12
 //! does not serve `actions/runs` over REST, `list_ci_jobs` transparently falls
 //! back to the password/web-UI read path (ADR 0019), logging in and reading the
 //! run's live-view JSON. The test polls until a `CiJob` with a `Failure`
@@ -21,27 +21,28 @@
 use std::time::{Duration, Instant};
 use temper_forge::{CiJobConclusion, CiJobQuery, CiJobStatus};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_testing::forgejo_server::{provision, ForgejoRunner, ForgejoServer};
+use temper_testing::forgejo_server::{start_cached_provisioned_server, ForgejoRunner};
 use temper_testing::runner_config;
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
 async fn list_ci_jobs_reads_failure_through_web_ui() {
-    // `ForgejoServer::start` uses a *blocking* reqwest client for its readiness
-    // poll; boot it on a blocking thread so that nested runtime lives and dies
+    // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
+    // polling; boot it on a blocking thread so that nested runtime lives and dies
     // off-reactor (matching the Phase 2 provisioning test).
-    let server = tokio::task::spawn_blocking(ForgejoServer::start)
+    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
         .await
         .expect("server boot task joins")
-        .expect("forgejo server boots");
+        .expect("forgejo cached provisioned state starts");
+    let server = cached.server;
+    let provisioned = cached.provisioned;
     let base = server.base_url().to_string();
 
-    // Register the host-mode runner before provisioning so it is ready to claim
-    // the run the workflow commit triggers.
+    // Register the host-mode runner after restoring the cached tree. The cached
+    // provisioning committed the workflow already; the runner claims the queued
+    // run from this per-test server copy.
     let mut runner = ForgejoRunner::register(&server).expect("runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
-
-    let provisioned = provision(&server).await.expect("provisioning succeeds");
 
     // Build a backend as one workflow role: the role's token for REST plus that
     // role's user/password for the web-UI CI read fallback (ADR 0019).

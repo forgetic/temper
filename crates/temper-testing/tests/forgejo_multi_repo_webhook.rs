@@ -13,7 +13,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 use temper_runner::Scenario;
-use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer};
+use temper_testing::forgejo_server::{start_cached_provisioned_repositories, ForgejoRunner};
 use temper_testing::runner_config;
 use temper_testing::scenarios::{cross_repo_fanout_converges, happy_path};
 
@@ -53,18 +53,26 @@ enum SeedMode {
 }
 
 fn run_webhook_variant(variant: WebhookVariant) {
-    let server = ForgejoServer::start().expect("forgejo server boots");
+    let config = runner_config();
+    let second_name = variant.second_repo.to_string();
+    let cached = start_cached_provisioned_repositories(&[
+        config.repository.name.clone(),
+        second_name.clone(),
+    ])
+    .expect("forgejo cached provisioned multi-repo state starts");
+    let server = cached.server;
+    let provisioned = cached
+        .state
+        .provisioned(&config.repository.name)
+        .expect("primary repo is in cached state");
+    let second_repo = cached
+        .state
+        .repositories
+        .get(&second_name)
+        .expect("second repo is in cached state")
+        .clone();
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
-
-    let provisioned = support::block_on_provision(&server);
-    let second_name = variant.second_repo.to_string();
-    let second_repo = support::futures_block_on(support::provision_extra_repo(
-        &server,
-        &provisioned,
-        &second_name,
-    ))
-    .expect("second repo provisions");
     let repos = vec![
         support::RepoTarget::from_provisioned(&provisioned),
         support::RepoTarget {

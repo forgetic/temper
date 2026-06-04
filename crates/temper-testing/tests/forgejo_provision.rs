@@ -8,8 +8,8 @@
 //! cargo test -p temper-testing --test forgejo_provision -- --ignored
 //! ```
 //!
-//! It boots a [`ForgejoServer`], runs [`provision`], and proves the Phase 2
-//! contract end to end against the real backend:
+//! It starts a [`ForgejoServer`] from the declared cached provisioned state and
+//! proves the Phase 2 contract end to end against the real backend:
 //!
 //! - admin bootstrap works (a usable admin token comes back);
 //! - each role token resolves to the matching `current_user` via `ForgejoForge`;
@@ -23,23 +23,23 @@
 use std::collections::BTreeSet;
 use temper_forge::RepositoryPath;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_testing::forgejo_server::{provision, ForgejoServer};
+use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_testing::{runner_config, workflow};
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 async fn provisions_identity_repo_labels_and_workflow() {
-    // `ForgejoServer::start` uses a *blocking* reqwest client for its readiness
-    // poll; building/dropping that client inside the async test context trips
+    // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
+    // polling; building/dropping that client inside the async test context trips
     // Tokio's "cannot drop a runtime in an async context" guard. Boot it on a
     // blocking thread so the nested blocking runtime lives and dies off-reactor.
-    let server = tokio::task::spawn_blocking(ForgejoServer::start)
+    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
         .await
         .expect("server boot task joins")
-        .expect("forgejo server boots");
+        .expect("forgejo cached provisioned state starts");
+    let server = cached.server;
+    let provisioned = cached.provisioned;
     let base = server.base_url().to_string();
-
-    let provisioned = provision(&server).await.expect("provisioning succeeds");
 
     // 1. Admin bootstrap produced a non-empty token.
     assert!(

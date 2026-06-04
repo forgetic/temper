@@ -19,18 +19,28 @@ the in-memory/filesystem backends. Everything here is `#[ignore]`d, so a plain
 but the pinned Forgejo binaries must already be cached under `.cache/forgejo/`
 or provided through `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY`.
 
+Tests declare their required initial Forgejo state as JSON. The first run for a
+new state hash boots a fresh Forgejo, provisions that state, shuts it down
+cleanly, and saves the data tree plus fixture metadata under
+`.cache/forgejo/states/`. Each test execution then copies that cached tree to
+`/tmp` and starts a new Forgejo process against the copy. Runtime Forgejo and
+`forgejo-runner` processes are still killed on drop for fast teardown; only the
+one-time cache publisher uses clean shutdown so the SQLite/git tree is safe to
+reuse.
+
 ## One-line command (the full test)
 
 ```sh
 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 ```
 
-This boots one Forgejo server **and** one host-mode `forgejo-runner`, provisions
-one shared role identity set, then converges all five reference-delivery
-scenarios in fresh per-scenario repos across real OS processes. It spawns real
+This starts one Forgejo server from the declared cached state **and** one
+host-mode `forgejo-runner`, then converges all five reference-delivery scenarios
+in predeclared per-scenario repos across real OS processes. It spawns real
 processes and executes CI **on this host**, so run it only where that is
-acceptable. Budget a couple of minutes on a warmed checkout. The per-phase smoke
-tests below build up to it. See
+acceptable. The first run for a cache miss still pays provisioning cost; warmed
+runs copy the state from `.cache` to `/tmp`. The per-phase smoke tests below
+build up to it. See
 [The multi-process test](#the-multi-process-test-phase-5) for detail.
 If the binary cache is missing, first run:
 
@@ -76,9 +86,8 @@ with `pkill -f forgejo` / `pkill -f temper-testing-worker` and
 cargo test -p temper-testing --test forgejo_server -- --ignored
 ```
 
-This boots a throwaway Forgejo on an ephemeral port against a fresh SQLite data
-dir, polls `/api/v1/version` to readiness, and kills the process plus removes the
-data dir on drop.
+This declares an empty state, restores it to `/tmp`, polls `/api/v1/version` to
+readiness, and kills the process plus removes the runtime data dir on drop.
 
 ## Runner smoke test (Phase 1b)
 
@@ -107,12 +116,14 @@ only where that is acceptable.
 cargo test -p temper-testing --test forgejo_provision -- --ignored
 ```
 
-`temper_testing::forgejo_server::provision(&server)` turns a freshly-booted
-server into a world the reference-delivery scenarios can run against, and returns
-a `Provisioned { admin_token, owner, name, repository, roles }`. It is the
-real-backend analogue of the filesystem `provision` step; because Forgejo
-identity **is the token** (not a free `as_user` relabel), it creates a real user
-and token per workflow role. In order it:
+`temper_testing::forgejo_server::start_cached_provisioned_server()` declares the
+reference-delivery state, restores a per-test Forgejo from the matching cache,
+and returns a `Provisioned { admin_token, owner, name, repository, roles }`. On a
+cache miss the initializer runs the same provisioning sequence against a fresh
+server before publishing the cache. It is the real-backend analogue of the
+filesystem `provision` step; because Forgejo identity **is the token** (not a
+free `as_user` relabel), it creates a real user and token per workflow role. In
+order it:
 
 1. **Admin bootstrap** — creates a non-reserved admin (`e2eadmin`; `admin` is
    reserved) via the server CLI and mints an `all`-scoped admin token
@@ -130,8 +141,8 @@ and token per workflow role. In order it:
 5. **Labels** — upserts every label the compiled workflow declares **through the
    async `ForgejoForge` backend** (mirrors the filesystem `upsert_labels`). One
    neutral grey color is supplied because 7.0.12 requires a non-empty color.
-6. **CI** — commits `.forgejo/workflows/ci.yml` (base64 contents API) and
-   `PATCH has_actions:true`.
+6. **CI** — `PATCH has_actions:true`, then commits `.forgejo/workflows/ci.yml`
+   (base64 contents API) so the push schedules an Actions run.
 
 Tokens and passwords are **never logged**; `RoleIdentity`'s `Debug` redacts them
 and provisioning errors carry only a status + body snippet.
@@ -191,28 +202,29 @@ cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-thr
 
 This is the Forgejo twin of `tests/multiprocess.rs`: the **same**
 one-process-per-part rehearsal, but against a real Forgejo + a real host-mode
-`forgejo-runner`. The ignored test is one serial scenario suite: it boots one
-server + runner, bootstraps one admin and one per-role identity/token set, then
-provisions a fresh primary repo for each of the five scenarios (happy path,
-changes-requested, CI-fails-then-passes, dependency-chain, and cross-repo
-fan-out). Cross-repo fan-out alone gets a second fresh repo. Each scenario
-registers those repos against one shared production-shaped `/forgejo/webhook`
-trigger, then spawns a fresh `temper-testing-worker` fleet `--backend forgejo
---clock wall` once per role-with-an-agent plus one mechanical worker (**no**
-`--kind ci` — the real runner is the CI producer). Workers use authenticated
-Unix wake sockets and a `120000` ms non-CI poll backstop; all non-CI handoffs
-must converge by webhook wake before that backstop. Because the pinned Forgejo
-7.0.x fixture does not emit Actions-completion repo webhooks, only CI-reading
-role workers use a 1s status-poll fallback for CI verdict transitions: owner in
-every scenario, plus engineer in `ci_fails_then_passes` so it can observe the
-failed run and push the recovery commit. The driver polls the scenario's
-**exact** assert closure to observe convergence, then stops via its unique
-`--stop-file` sentinel and asserts each child exited 0.
+`forgejo-runner`. The ignored test is one serial scenario suite: it declares one
+state containing the shared admin, per-role identity/token set, all five primary
+scenario repos, and the cross-repo target repo. Each test run starts a new
+Forgejo process from a `/tmp` copy of that cached tree, starts a new runner, then
+registers dynamic webhooks for the repos against one shared production-shaped
+`/forgejo/webhook` trigger. Each scenario spawns a fresh
+`temper-testing-worker` fleet `--backend forgejo --clock wall` once per
+role-with-an-agent plus one mechanical worker (**no** `--kind ci` — the real
+runner is the CI producer). Workers use authenticated Unix wake sockets and a
+`120000` ms non-CI poll backstop; all non-CI handoffs must converge by webhook
+wake before that backstop. Because the pinned Forgejo 7.0.x fixture does not
+emit Actions-completion repo webhooks, only CI-reading role workers use a 1s
+status-poll fallback for CI verdict transitions: owner in every scenario, plus
+engineer in `ci_fails_then_passes` so it can observe the failed run and push the
+recovery commit. The driver polls the scenario's **exact** assert closure to
+observe convergence, then stops via its unique `--stop-file` sentinel and asserts
+each child exited 0.
 
 Scenario isolation is by repository, stop file, wake socket, and log directory;
-only the Forgejo server, runner, trigger, admin, and role users are shared. The
-single `#[test]` keeps cleanup under normal Rust ownership, so a panic drops the
-active worker fleet and then the runner/server handles.
+only the Forgejo server, runner, trigger, admin, and role users are shared within
+the one test process. The cached tree itself is never mutated directly: each run
+uses a fresh `/tmp` copy, so a panic drops the active worker fleet and then the
+runner/server handles without corrupting future starts.
 
 Secrets travel by env only: each role worker gets its token via
 `TEMPER_FORGEJO_TOKEN`, plus `TEMPER_FORGEJO_USERNAME`/`PASSWORD` for the
@@ -229,10 +241,12 @@ the host-mode runner has no `actions/checkout` offline.
 
 ### Expected timing and scan diagnostics
 
-On a warmed local checkout, expect one shared setup line (~2s server, <1s runner,
-~3s identity provisioning) and one timing line per scenario. Recent runs finished
-in roughly high-80s to mid-90s total, with worker convergence and real CI
-dominating. Each successful scenario also prints a worker scan summary (`ticks`,
+On a warmed local checkout, expect one shared setup line (state copy + server
+startup, <1s runner startup) and one timing line per scenario. A cache miss also
+prints the one-time provisioning cost before the warmed path is available. Recent
+pre-cache runs finished in roughly high-80s to mid-90s total, with worker
+convergence and real CI dominating; warmed runs should reduce setup time. Each
+successful scenario also prints a worker scan summary (`ticks`,
 summed `scanned_repositories`, `ci_read_log_lines`, and last scanned paths); the
 suite enables `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback reads are
 counted.
@@ -267,8 +281,8 @@ disables audit ticks), so the immediate webhook assertions exercise hint-narrowe
 wake scans rather than the poll/audit backstop. The throwaway server config must allow loopback webhook targets (`[webhook]`
 `ALLOWED_HOST_LIST = 127.0.0.1,localhost`); if hooks register but no trigger
 request arrives, check that setting before debugging signatures or wake sockets.
-The multi-repo variants provision a second repo, register webhooks for both
-repos, pass both `--repo` values to one role/mechanical worker set, and require
+The multi-repo variants declare a cached two-repo state, register webhooks for
+both repos, pass both `--repo` values to one role/mechanical worker set, and require
 either one issue in each repo or one cross-repo fan-out intake to converge in
 less than the poll interval.
 
@@ -345,6 +359,14 @@ The server uses the `TEMPER_FORGEJO_*` namespace; the runner mirrors it under
 | `TEMPER_FORGEJO_RUNNER_VERSION` | override the pinned runner version in the default download URL |
 | `TEMPER_FORGEJO_RUNNER_URL` | override the runner download URL (checked only when paired with `TEMPER_FORGEJO_RUNNER_SHA256`) |
 | `TEMPER_FORGEJO_RUNNER_SHA256` | override the expected runner checksum |
+
+State snapshots live under `.cache/forgejo/states/<hash>/`. The hash includes a
+fixture cache-format version, the Forgejo binary version/override, and the test's
+JSON state description. If a state cache becomes stale or you want to force
+re-provisioning, remove `.cache/forgejo/states/`; the binary cache in
+`.cache/forgejo/forgejo-*` and `.cache/forgejo/forgejo-runner-*` can remain.
+The metadata sidecar stores raw tokens for the throwaway cached state, so keep
+`.cache/` local and gitignored.
 
 A mismatched checksum fails loudly; the partial download is never published to
 the cache path. A sandboxed/offline machine should point the two `*_BINARY`

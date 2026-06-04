@@ -30,7 +30,7 @@
 //! directly inside this `#[tokio::test]` reactor would panic ("cannot start a
 //! runtime from within a runtime").
 
-use temper_testing::forgejo_server::{provision, ForgejoServer};
+use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_testing::worker_bin::{
     self, parse_with_env, Backend, ParseOutcome, RoleBehavior, WorkerKind, FORGEJO_PASSWORD_ENV,
     FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
@@ -40,16 +40,16 @@ use temper_workflow::RoleId;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 async fn forgejo_role_worker_ticks_against_a_running_server() {
-    // Boot off-reactor: `ForgejoServer::start` uses a blocking reqwest client for
-    // its readiness poll, whose nested blocking runtime must live and die off the
+    // Boot off-reactor: the cached Forgejo fixture uses a blocking reqwest client
+    // for readiness polling, whose nested blocking runtime must live and die off the
     // async test thread (same pattern as the Phase 2/2b tests).
-    let server = tokio::task::spawn_blocking(ForgejoServer::start)
+    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
         .await
         .expect("server boot task joins")
-        .expect("forgejo server boots");
+        .expect("forgejo cached provisioned state starts");
+    let server = cached.server;
+    let provisioned = cached.provisioned;
     let base = server.base_url().to_string();
-
-    let provisioned = provision(&server).await.expect("provisioning succeeds");
     let engineer = provisioned
         .role(&RoleId::new("engineer"))
         .expect("engineer role is provisioned")

@@ -8,8 +8,9 @@
 //! cargo test -p temper-testing --test forgejo_pr_prep -- --ignored
 //! ```
 //!
-//! It boots a [`ForgejoServer`], provisions (Phase 2), then proves the Phase 2b
-//! contract end to end against the real backend (findings-phase-0 §1):
+//! It starts a [`ForgejoServer`] from the declared cached Phase 2 state, then
+//! proves the Phase 2b contract end to end against the real backend
+//! (findings-phase-0 §1):
 //!
 //! - the fake engineer's `CreatePullRequest` (head `fake/pr-for-code-{N}`, base
 //!   `main`) **cannot** be opened as-is — `create_pull_request` 404s because the
@@ -25,23 +26,23 @@
 
 use serde_json::Value;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_testing::forgejo_server::{prepare_pull_request_head, provision, ForgejoServer};
+use temper_testing::forgejo_server::{prepare_pull_request_head, start_cached_provisioned_server};
 use temper_testing::pull_request_input;
 use temper_workflow::RoleId;
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 async fn prep_makes_head_real_and_pr_is_mergeable() {
-    // `ForgejoServer::start` uses a *blocking* reqwest client for readiness; boot
-    // it off-reactor so its nested blocking runtime lives and dies off the async
+    // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
+    // boot it off-reactor so its nested blocking runtime lives and dies off the async
     // test thread (same pattern as the Phase 2 provisioning test).
-    let server = tokio::task::spawn_blocking(ForgejoServer::start)
+    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
         .await
         .expect("server boot task joins")
-        .expect("forgejo server boots");
+        .expect("forgejo cached provisioned state starts");
+    let server = cached.server;
+    let provisioned = cached.provisioned;
     let base = server.base_url().to_string();
-
-    let provisioned = provision(&server).await.expect("provisioning succeeds");
     let engineer = provisioned
         .role(&RoleId::new("engineer"))
         .expect("engineer role is provisioned");

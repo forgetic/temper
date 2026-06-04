@@ -18,14 +18,18 @@
 //! later phases under `#[tokio::test]`. Here we only prove the lifecycle.
 
 use std::time::Duration;
-use temper_testing::forgejo_server::ForgejoServer;
+use temper_testing::forgejo_server::{ForgejoServer, ForgejoState};
 
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn server_boots_serves_version_and_tears_down() {
     // Booting already polls `/api/v1/version` to readiness; reaching this line
     // proves download → migrate → web → ready all succeeded.
-    let server = ForgejoServer::start().expect("forgejo server boots");
+    let cached = ForgejoServer::start_with_state(&ForgejoState::empty("server-smoke"), |_| {
+        Ok::<(), String>(())
+    })
+    .expect("forgejo server boots from declared empty state");
+    let server = cached.server;
     let base = server.base_url().to_string();
     assert!(base.starts_with("http://127.0.0.1:"));
 

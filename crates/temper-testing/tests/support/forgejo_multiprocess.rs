@@ -234,6 +234,7 @@ fn role_workers(config: &RunnerConfig) -> Vec<String> {
 }
 
 /// Spawns the worker binary with the Forgejo backend flags and per-child env.
+#[allow(clippy::too_many_arguments)]
 fn spawn_worker(
     base_url: &str,
     repos: &[String],

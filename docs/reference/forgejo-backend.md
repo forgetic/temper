@@ -51,12 +51,13 @@ token authenticates every REST operation; the web-UI password is needed only for
 CI reads on a server that does not serve the Actions REST endpoints.
 
 The optional live smoke test (`tests/live.rs`) is `#[ignore]`d, so a plain
-`cargo test` never touches the network. When run with `--ignored`, it boots a
-throwaway local Forgejo plus a host-mode `forgejo-runner` from the shared
-`.cache/forgejo/` binary cache and provisions its own repository; it does not
-read external Forgejo credentials and does not need `TEMPER_FORGEJO_LIVE` or
-`TEMPER_FORGEJO_LIVE_MUTATE`. Populate the cache with
-`cargo test -p temper-forgejo-fixture --test cache -- --ignored`.
+`cargo test` never touches the network. When run with `--ignored`, it starts a
+throwaway local Forgejo from a JSON-declared cached state plus a host-mode
+`forgejo-runner` from the shared `.cache/forgejo/` binary cache; it does not read
+external Forgejo credentials and does not need `TEMPER_FORGEJO_LIVE` or
+`TEMPER_FORGEJO_LIVE_MUTATE`. Populate the binary cache with
+`cargo test -p temper-forgejo-fixture --test cache -- --ignored`; state snapshots
+are created on demand under `.cache/forgejo/states/`.
 
 ## Identifier scheme
 

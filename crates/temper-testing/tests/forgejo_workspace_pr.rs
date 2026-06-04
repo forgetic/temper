@@ -18,7 +18,7 @@ use temper_runner::{
     CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
     CodingWorkspaceWorkItem, CODING_WORKSPACE_TOOL_ID,
 };
-use temper_testing::forgejo_server::{provision, ForgejoServer};
+use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, QueueId, RoleId,
     WorkflowMetadata,
@@ -27,8 +27,10 @@ use temper_workflow::{
 #[test]
 #[ignore = "boots a real Forgejo; run with --ignored"]
 fn local_git_workspace_pushes_meaningful_pr_diff() {
-    let server = ForgejoServer::start().expect("forgejo server boots");
-    let provisioned = block_on(provision(&server)).expect("provisioning succeeds");
+    let cached =
+        start_cached_provisioned_server().expect("forgejo cached provisioned state starts");
+    let server = cached.server;
+    let provisioned = cached.provisioned;
     let engineer = provisioned
         .role(&RoleId::new("engineer"))
         .expect("engineer identity is provisioned")

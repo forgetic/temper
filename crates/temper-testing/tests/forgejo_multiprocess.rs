@@ -5,14 +5,14 @@
 //! backend while a real host-mode `forgejo-runner` produces CI. The suite keeps
 //! real-backend coverage but avoids rebooting Forgejo for every scenario:
 //!
-//! 1. boot one [`ForgejoServer`] and register one [`ForgejoRunner`];
-//! 2. bootstrap one admin and one per-role identity/token map;
-//! 3. provision fresh repository names per scenario (plus one second repo only
-//!    for cross-repo fan-out);
-//! 4. register repo webhooks against one shared trigger;
-//! 5. spawn a fresh worker fleet per scenario with unique stop file, wake
+//! 1. declare one cached state containing the admin, role identities, and all
+//!    scenario repositories;
+//! 2. start one [`ForgejoServer`] from a `/tmp` copy of that state and register
+//!    one [`ForgejoRunner`];
+//! 3. register repo webhooks against one shared trigger;
+//! 4. spawn a fresh worker fleet per scenario with unique stop file, wake
 //!    sockets, and logs;
-//! 6. poll the scenario's backend-neutral assert closure to convergence while
+//! 5. poll the scenario's backend-neutral assert closure to convergence while
 //!    the workers advance through webhook wakes, not their poll backstop.
 //!
 //! The five scenarios are collapsed into one ignored test so ordinary Rust
@@ -30,10 +30,9 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_production::trigger_args::TriggerArgs;
 use temper_runner::Scenario;
-use temper_testing::forgejo_server::provision::bootstrap_admin;
 use temper_testing::forgejo_server::{
-    provision_repository, provision_role_identities, ForgejoRunner, ForgejoServer, Provisioned,
-    ProvisionedRoles,
+    start_cached_provisioned_repositories, ForgejoRunner, ForgejoServer, Provisioned,
+    ProvisionedRepositories,
 };
 #[path = "support/forgejo_multiprocess.rs"]
 mod multiprocess_support;
@@ -168,6 +167,15 @@ fn variants() -> [Variant; 5] {
             ci_status_poll_roles: &["owner"],
         },
     ]
+}
+
+fn declared_repo_names() -> Vec<String> {
+    variants()
+        .into_iter()
+        .flat_map(|variant| [Some(variant.primary_repo), variant.extra_repo])
+        .flatten()
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Drives one scenario through the true multi-process topology against a real
@@ -328,8 +336,7 @@ struct SharedLiveWorld {
     // Drop runner before server so the daemon cannot keep polling a dead Forgejo.
     runner: ForgejoRunner,
     server: ForgejoServer,
-    roles: ProvisionedRoles,
-    default_branch: String,
+    state: ProvisionedRepositories,
     trigger_addr: SocketAddr,
     webhook_secret: String,
     wake_secret_file: PathBuf,
@@ -341,25 +348,18 @@ impl SharedLiveWorld {
     fn start() -> Self {
         let total_start = Instant::now();
         let server_start = Instant::now();
-        let server = ForgejoServer::start().expect("forgejo server boots");
+        let repo_names = declared_repo_names();
+        let cached = start_cached_provisioned_repositories(&repo_names)
+            .expect("forgejo cached provisioned scenario state starts");
+        let cache_hit = cached.cache_hit;
+        let server = cached.server;
+        let state = cached.state;
         let server_startup = server_start.elapsed();
 
         let runner_start = Instant::now();
         let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
         let runner_startup = runner_start.elapsed();
         assert!(runner.is_running(), "runner daemon exited immediately");
-
-        let identity_start = Instant::now();
-        let admin_token = bootstrap_admin(&server).expect("forgejo admin bootstrap succeeds");
-        let config = runner_config();
-        let roles = futures_block_on(provision_role_identities(
-            server.base_url(),
-            &admin_token,
-            &config.repository.owner,
-            &config.role_bindings,
-        ))
-        .expect("forgejo role identities provision once");
-        let identity_provision = identity_start.elapsed();
 
         let trigger_start = Instant::now();
         let trigger_paths = TriggerPaths::new(server.data_dir());
@@ -377,15 +377,14 @@ impl SharedLiveWorld {
         let timing = WorldTiming {
             server_startup,
             runner_startup,
-            identity_provision,
+            cache_hit,
             trigger_startup,
             total: total_start.elapsed(),
         };
         Self {
             runner,
             server,
-            roles,
-            default_branch: config.repository.default_branch,
+            state,
             trigger_addr,
             webhook_secret: trigger_paths.webhook_secret,
             wake_secret_file: trigger_paths.wake_secret_file,
@@ -395,16 +394,10 @@ impl SharedLiveWorld {
     }
 
     fn provision_repo(&self, name: &str) -> Provisioned {
-        let provisioned = futures_block_on(provision_repository(
-            self.server.base_url(),
-            &self.roles,
-            name,
-            &self.default_branch,
-        ))
-        .unwrap_or_else(|error| {
+        let provisioned = self.state.provisioned(name).unwrap_or_else(|| {
             panic!(
-                "provisioning repo {}/{} failed: {error}",
-                self.roles.owner, name
+                "declared cached Forgejo state did not contain repo {}/{name}",
+                self.state.roles.owner
             )
         });
         register_webhook(
@@ -448,7 +441,7 @@ impl SharedLiveWorld {
 struct WorldTiming {
     server_startup: Duration,
     runner_startup: Duration,
-    identity_provision: Duration,
+    cache_hit: bool,
     trigger_startup: Duration,
     total: Duration,
 }
@@ -456,11 +449,11 @@ struct WorldTiming {
 impl WorldTiming {
     fn render(&self) -> String {
         format!(
-            "server_startup={:?} runner_startup={:?} identity_provision={:?} \
+            "state_cache_hit={} server_startup={:?} runner_startup={:?} \
              trigger_startup={:?} total={:?}",
+            self.cache_hit,
             self.server_startup,
             self.runner_startup,
-            self.identity_provision,
             self.trigger_startup,
             self.total
         )

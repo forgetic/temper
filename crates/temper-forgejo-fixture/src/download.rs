@@ -328,7 +328,7 @@ fn env_var(key: &str) -> Option<String> {
 
 /// Locates the workspace root by walking up from this crate to the dir that
 /// holds the top-level `Cargo.toml` workspace manifest.
-fn workspace_root() -> Result<PathBuf, DownloadError> {
+pub(crate) fn workspace_root() -> Result<PathBuf, DownloadError> {
     // `CARGO_MANIFEST_DIR` is `<root>/crates/temper-forgejo-fixture` at compile time.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir

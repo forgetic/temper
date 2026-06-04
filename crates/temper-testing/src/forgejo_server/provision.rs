@@ -27,6 +27,7 @@
 use super::provision_rest as rest;
 use super::{ForgejoServer, ServerError};
 use crate::{runner_config, workflow};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use temper_forge::RepositoryId;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -35,7 +36,7 @@ use temper_workflow::RoleId;
 
 /// A non-reserved admin login. `admin` itself is reserved by Forgejo
 /// (`CreateUser: name is reserved`), so the spike used `e2eadmin`.
-const ADMIN_USER: &str = "e2eadmin";
+pub(super) const ADMIN_USER: &str = "e2eadmin";
 const ADMIN_EMAIL: &str = "e2eadmin@example.invalid";
 /// A fixed, known admin password. This is throwaway, single-process test infra
 /// (the server is killed on drop), not a credential that ever reaches anything
@@ -58,7 +59,7 @@ pub(super) const TOKEN_SCOPES: &[&str] = &[
 ];
 
 /// The path the CI workflow is committed to. `runs-on: host` (Phase 1b runner).
-const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
+pub(super) const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 
 /// A neutral grey label color. Forgejo 7.0.12 requires a non-empty color on
 /// label create/update; the workflow declares none, so every label gets this.
@@ -130,7 +131,7 @@ jobs:
 /// `user`/`token` are what a role worker needs to build a `ForgejoForge` handle
 /// whose `current_user` resolves to this role; `password` is the web-UI CI-read
 /// credential reused by Phase 3b. None of these are ever logged.
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct RoleIdentity {
     /// Forgejo login (matches the `RunnerConfig` role binding's user handle).
     pub user: String,
@@ -155,7 +156,7 @@ impl std::fmt::Debug for RoleIdentity {
 }
 
 /// Shared admin/org/role identity state that can provision many repositories.
-#[derive(Clone, Debug)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ProvisionedRoles {
     /// Admin access token (scope `all`), for further admin REST if needed.
     pub admin_token: String,
@@ -163,6 +164,16 @@ pub struct ProvisionedRoles {
     pub owner: String,
     /// Per-role identity, keyed by workflow role.
     pub roles: BTreeMap<RoleId, RoleIdentity>,
+}
+
+impl std::fmt::Debug for ProvisionedRoles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProvisionedRoles")
+            .field("admin_token", &"<redacted>")
+            .field("owner", &self.owner)
+            .field("roles", &self.roles)
+            .finish()
+    }
 }
 
 impl ProvisionedRoles {
@@ -184,7 +195,7 @@ impl ProvisionedRoles {
 }
 
 /// The full result of provisioning one repository for the e2e scenarios.
-#[derive(Clone, Debug)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Provisioned {
     /// Admin access token (scope `all`), for further admin REST if needed.
     pub admin_token: String,
@@ -196,6 +207,18 @@ pub struct Provisioned {
     pub repository: RepositoryId,
     /// Per-role identity, keyed by workflow role.
     pub roles: BTreeMap<RoleId, RoleIdentity>,
+}
+
+impl std::fmt::Debug for Provisioned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Provisioned")
+            .field("admin_token", &"<redacted>")
+            .field("owner", &self.owner)
+            .field("name", &self.name)
+            .field("repository", &self.repository)
+            .field("roles", &self.roles)
+            .finish()
+    }
 }
 
 impl Provisioned {
@@ -225,6 +248,8 @@ pub enum ProvisionError {
     Shape { what: String, detail: String },
     /// The async Forge backend rejected an operation (e.g. label upsert).
     Forge(temper_forge::ForgeError),
+    /// The reusable Forgejo state-cache fixture failed.
+    Fixture(ServerError),
 }
 
 impl std::fmt::Display for ProvisionError {
@@ -239,6 +264,7 @@ impl std::fmt::Display for ProvisionError {
                 write!(f, "provisioning response '{what}' malformed: {detail}")
             }
             ProvisionError::Forge(err) => write!(f, "forge operation failed: {err}"),
+            ProvisionError::Fixture(err) => write!(f, "forgejo fixture failed: {err}"),
         }
     }
 }
@@ -269,29 +295,28 @@ pub(super) type Result<T> = std::result::Result<T, ProvisionError>;
 /// 4. **Repository** — an `auto_init` repo under the org so `main` exists.
 /// 5. **Labels** — upsert every label the compiled workflow declares, through
 ///    the async [`ForgejoForge`] backend (mirrors `upsert_labels`).
-/// 6. **CI** — commit [`CI_WORKFLOW`] to [`WORKFLOW_PATH`] and
-///    `PATCH has_actions:true`.
+/// 6. **CI** — `PATCH has_actions:true`, then commit [`CI_WORKFLOW`] to
+///    [`WORKFLOW_PATH`] so the push schedules an Actions run.
 ///
 /// The owner/name come from `runner_config().repository`; nothing is hardcoded
 /// elsewhere. Idempotent where Forgejo allows it (re-creating an org/user/label
 /// is tolerated), so a retried provision does not wedge.
 pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
-    let admin_token = bootstrap_admin(server)?;
     let config = runner_config();
-    let roles = provision_role_identities(
-        server.base_url(),
-        &admin_token,
-        &config.repository.owner,
-        &config.role_bindings,
+    let repos = super::provision_cache::provision_repositories(
+        server,
+        std::slice::from_ref(&config.repository.name),
     )
     .await?;
-    provision_repository(
-        server.base_url(),
-        &roles,
-        &config.repository.name,
-        &config.repository.default_branch,
-    )
-    .await
+    repos
+        .provisioned(&config.repository.name)
+        .ok_or_else(|| ProvisionError::Shape {
+            what: "provisioned repository".into(),
+            detail: format!(
+                "{} missing from provisioned repository map",
+                config.repository.name
+            ),
+        })
 }
 
 /// Provisions the org, per-role identity, repository, labels, and CI workflow
@@ -385,6 +410,14 @@ pub async fn provision_repository(
 
     let repository =
         upsert_labels(base_url, &identities.admin_token, &identities.owner, name).await?;
+    rest::enable_actions(
+        &client,
+        base_url,
+        &identities.admin_token,
+        &identities.owner,
+        name,
+    )
+    .await?;
     rest::commit_file(
         &client,
         base_url,
@@ -395,14 +428,6 @@ pub async fn provision_repository(
         CI_WORKFLOW,
         "add CI workflow (runs-on: host)",
         default_branch,
-    )
-    .await?;
-    rest::enable_actions(
-        &client,
-        base_url,
-        &identities.admin_token,
-        &identities.owner,
-        name,
     )
     .await?;
 
@@ -508,78 +533,5 @@ async fn upsert_labels(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn workflow_is_host_mode_and_gated_on_commit_marker() {
-        // The fail→pass mechanism: `runs-on: host` (Phase 1b) and a gate on the
-        // `GITHUB_SHA` commit message carrying the CI-pass marker (no checkout
-        // needed), which the engineer's fix commit adds. Both must be present
-        // for Phase 4 to drive `ci_fails_then_passes`.
-        assert!(CI_WORKFLOW.contains("runs-on: host"));
-        assert!(CI_WORKFLOW.contains(CI_PASS_MARKER));
-        assert!(CI_WORKFLOW.contains("GITHUB_SHA"));
-        assert!(CI_WORKFLOW.contains("/git/commits/"));
-        assert!(!CI_WORKFLOW.contains("github.event.head_commit.message"));
-    }
-
-    #[test]
-    fn role_identity_debug_redacts_secrets() {
-        let identity = RoleIdentity {
-            user: "engineer".into(),
-            email: "engineer@example.invalid".into(),
-            token: "super-secret-token".into(),
-            password: "super-secret-password".into(),
-        };
-        let rendered = format!("{identity:?}");
-        assert!(rendered.contains("engineer"));
-        assert!(!rendered.contains("super-secret-token"));
-        assert!(!rendered.contains("super-secret-password"));
-        assert!(rendered.contains("<redacted>"));
-    }
-
-    #[test]
-    fn provisioned_role_lookup_uses_role_map() {
-        let provisioned =
-            shared_roles().for_repository("service", RepositoryId::new("acme/service"));
-        assert!(provisioned.role(&RoleId::new("engineer")).is_some());
-        assert!(provisioned.role(&RoleId::new("nobody")).is_none());
-    }
-
-    #[test]
-    fn shared_role_identities_materialize_two_repos_without_reminting() {
-        let roles = shared_roles();
-        let first = roles.for_repository("service-a", RepositoryId::new("acme/service-a"));
-        let second = roles.for_repository("service-b", RepositoryId::new("acme/service-b"));
-
-        let role = RoleId::new("engineer");
-        assert_eq!(
-            first.role(&role).map(|identity| identity.token.as_str()),
-            Some("engineer-token")
-        );
-        assert_eq!(
-            second.role(&role).map(|identity| identity.token.as_str()),
-            Some("engineer-token")
-        );
-        assert_eq!(first.roles.len(), second.roles.len());
-    }
-
-    fn shared_roles() -> ProvisionedRoles {
-        let mut roles = BTreeMap::new();
-        roles.insert(
-            RoleId::new("engineer"),
-            RoleIdentity {
-                user: "engineer".into(),
-                email: "engineer@example.invalid".into(),
-                token: "engineer-token".into(),
-                password: ROLE_PASSWORD.into(),
-            },
-        );
-        ProvisionedRoles {
-            admin_token: "admin-token".into(),
-            owner: "acme".into(),
-            roles,
-        }
-    }
-}
+#[path = "provision_tests.rs"]
+mod tests;

@@ -7,6 +7,7 @@
 
 pub mod pr_prep;
 pub mod provision;
+mod provision_cache;
 mod provision_rest;
 pub mod provision_seed;
 
@@ -15,7 +16,11 @@ pub use provision::{
     provision, provision_repository, provision_role_identities, provision_world, ProvisionError,
     Provisioned, ProvisionedRoles, RoleIdentity,
 };
+pub use provision_cache::{
+    start_cached_provisioned_repositories, start_cached_provisioned_server,
+    CachedProvisionedServer, CachedProvisionedWorld, ProvisionedRepositories,
+};
 pub use provision_seed::{intake_labels, seed_intake_issue};
 pub use temper_forgejo_fixture::{
-    download, ForgejoRunner, ForgejoServer, RunnerError, ServerError,
+    download, CachedForgejo, ForgejoRunner, ForgejoServer, ForgejoState, RunnerError, ServerError,
 };

@@ -4,7 +4,10 @@
 //! `.cache/forgejo/` binary cache (or a `TEMPER_FORGEJO_BINARY` override)
 //! against a fresh SQLite data dir on an ephemeral port, waits for
 //! `/api/v1/version`, and kills the process plus removes the data dir on drop.
-//! [`ForgejoRunner::register`] does the same for a host-mode `forgejo-runner`.
+//! [`ForgejoServer::start_with_state`] instead restores a JSON-declared cached
+//! data tree from `.cache/forgejo/states/` into `/tmp` before starting the same
+//! per-test process. [`ForgejoRunner::register`] does the same process lifecycle
+//! for a host-mode `forgejo-runner`.
 //!
 //! Regular tests do **not** download binaries implicitly: if the cache is
 //! missing they fail with a message pointing to the ignored cache-population
@@ -13,8 +16,10 @@
 
 pub mod download;
 pub mod runner;
+pub mod state;
 
 pub use runner::{ForgejoRunner, RunnerError};
+pub use state::{CachedForgejo, ForgejoState};
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -38,6 +43,14 @@ pub enum ServerError {
     Command { command: String, output: String },
     /// The server never answered within [`READY_TIMEOUT`].
     NotReady(String),
+    /// A cached-state description or metadata file was not valid JSON.
+    Json(serde_json::Error),
+    /// A cached-state initializer failed while materializing the state.
+    Initialize(String),
+    /// Cache coordination or publication failed.
+    Cache(String),
+    /// A clean shutdown request failed or timed out.
+    Shutdown(String),
 }
 
 impl std::fmt::Display for ServerError {
@@ -49,6 +62,10 @@ impl std::fmt::Display for ServerError {
                 write!(f, "`forgejo {command}` failed: {output}")
             }
             ServerError::NotReady(why) => write!(f, "forgejo never became ready: {why}"),
+            ServerError::Json(err) => write!(f, "forgejo cached-state json error: {err}"),
+            ServerError::Initialize(why) => write!(f, "forgejo cached-state init failed: {why}"),
+            ServerError::Cache(why) => write!(f, "forgejo cached-state cache error: {why}"),
+            ServerError::Shutdown(why) => write!(f, "forgejo clean shutdown failed: {why}"),
         }
     }
 }
@@ -63,6 +80,11 @@ impl From<std::io::Error> for ServerError {
 impl From<download::DownloadError> for ServerError {
     fn from(err: download::DownloadError) -> Self {
         ServerError::Binary(err)
+    }
+}
+impl From<serde_json::Error> for ServerError {
+    fn from(err: serde_json::Error) -> Self {
+        ServerError::Json(err)
     }
 }
 
@@ -88,14 +110,29 @@ impl ForgejoServer {
             std::fs::create_dir_all(data_dir.join(sub))?;
         }
 
-        let port = free_port()?;
-        let base_url = format!("http://127.0.0.1:{port}");
-        let config_path = data_dir.join("custom/conf/app.ini");
-        std::fs::write(&config_path, app_ini(&data_dir, port, &base_url))?;
+        let (config_path, base_url) = write_runtime_config(&data_dir)?;
 
         // `migrate` initializes the SQLite schema before the web server starts.
         run_forgejo(&binary, &config_path, &["migrate"])?;
 
+        Self::spawn_prepared(binary, data_dir, config_path, base_url)
+    }
+
+    /// Boots against an already-prepared Forgejo data tree. The caller owns the
+    /// tree contents; this rewrites only `custom/conf/app.ini` with this run's
+    /// temp path and port, then starts `forgejo web` without re-running migrate.
+    pub(crate) fn start_from_prepared_dir(data_dir: PathBuf) -> Result<Self, ServerError> {
+        let binary = download::require_binary()?;
+        let (config_path, base_url) = write_runtime_config(&data_dir)?;
+        Self::spawn_prepared(binary, data_dir, config_path, base_url)
+    }
+
+    fn spawn_prepared(
+        binary: PathBuf,
+        data_dir: PathBuf,
+        config_path: PathBuf,
+        base_url: String,
+    ) -> Result<Self, ServerError> {
         let child = spawn_web(&binary, &config_path, &data_dir)?;
         let mut server = Self {
             binary,
@@ -133,6 +170,32 @@ impl ForgejoServer {
     /// returning trimmed stdout. Used by later phases for admin bootstrap.
     pub fn run_cli(&self, args: &[&str]) -> Result<String, ServerError> {
         run_forgejo(&self.binary, &self.config_path, args)
+    }
+
+    /// Requests a graceful web-server stop and waits for the process to exit.
+    /// Used only while publishing reusable cached state: normal test teardown
+    /// intentionally uses `Child::kill` in [`Drop`] so every test shuts down
+    /// quickly by SIGKILL/TerminateProcess.
+    pub(crate) fn stop_cleanly(&mut self) -> Result<(), ServerError> {
+        if self.child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        request_graceful_stop(&mut self.child)?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if self.child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err(ServerError::Shutdown(format!(
+                    "process did not exit within 15s after graceful stop; log: {}",
+                    self.read_log_tail()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn wait_until_ready(&mut self) -> Result<(), ServerError> {
@@ -191,7 +254,7 @@ impl Drop for ForgejoServer {
     }
 }
 
-fn unique_data_dir() -> PathBuf {
+pub(crate) fn unique_data_dir() -> PathBuf {
     let id = NEXT_INSTANCE.fetch_add(1, Ordering::SeqCst);
     std::env::temp_dir().join(format!("temper-forgejo-{}-{id}", std::process::id()))
 }
@@ -239,6 +302,40 @@ fn forgejo_gomaxprocs() -> Option<String> {
 pub(crate) fn apply_cpu_cap(command: &mut Command) {
     if let Some(value) = forgejo_gomaxprocs() {
         command.env("GOMAXPROCS", value);
+    }
+}
+
+fn write_runtime_config(data_dir: &Path) -> Result<(PathBuf, String), ServerError> {
+    let port = free_port()?;
+    let base_url = format!("http://127.0.0.1:{port}");
+    let config_path = data_dir.join("custom/conf/app.ini");
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&config_path, app_ini(data_dir, port, &base_url))?;
+    Ok((config_path, base_url))
+}
+
+fn request_graceful_stop(child: &mut Child) -> Result<(), ServerError> {
+    #[cfg(unix)]
+    {
+        let status = Command::new("kill")
+            .arg("-TERM")
+            .arg(child.id().to_string())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(ServerError::Shutdown(format!(
+                "`kill -TERM {}` exited with {status}",
+                child.id()
+            )))
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        child.kill()?;
+        Ok(())
     }
 }
 

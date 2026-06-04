@@ -7,11 +7,9 @@ use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_production::trigger_args::TriggerArgs;
 use temper_runner::{RunnerConfig, Scenario};
 use temper_testing::agents::fake_registry;
-use temper_testing::forgejo_server::{
-    provision, provision_repository, ForgejoServer, Provisioned, ProvisionedRoles,
-};
+use temper_testing::forgejo_server::{ForgejoServer, Provisioned};
 use temper_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV};
-use temper_testing::{runner_config, workflow};
+use temper_testing::workflow;
 use temper_workflow::RoleId;
 
 pub const LONG_POLL_MS: u64 = 120_000;
@@ -38,36 +36,6 @@ impl RepoTarget {
     pub fn display(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
-}
-
-pub fn block_on_provision(server: &ForgejoServer) -> Provisioned {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds")
-        .block_on(provision(server))
-        .expect("provisioning succeeds")
-}
-
-pub async fn provision_extra_repo(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    name: &str,
-) -> Result<RepositoryId, Box<dyn std::error::Error>> {
-    let roles = ProvisionedRoles {
-        admin_token: provisioned.admin_token.clone(),
-        owner: provisioned.owner.clone(),
-        roles: provisioned.roles.clone(),
-    };
-    let config = runner_config();
-    Ok(provision_repository(
-        server.base_url(),
-        &roles,
-        name,
-        &config.repository.default_branch,
-    )
-    .await?
-    .repository)
 }
 
 fn admin_forge(

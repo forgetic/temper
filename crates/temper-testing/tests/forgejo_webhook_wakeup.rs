@@ -18,7 +18,9 @@ use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_production::trigger_args::TriggerArgs;
 use temper_runner::{RunnerConfig, Scenario};
 use temper_testing::agents::fake_registry;
-use temper_testing::forgejo_server::{provision, ForgejoRunner, ForgejoServer, Provisioned};
+use temper_testing::forgejo_server::{
+    start_cached_provisioned_server, ForgejoRunner, ForgejoServer, Provisioned,
+};
 use temper_testing::scenarios::happy_path;
 use temper_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV};
 use temper_testing::{runner_config, workflow};
@@ -32,10 +34,12 @@ const WORKER_RUN_SECS: u64 = 180;
 #[test]
 #[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with --ignored"]
 fn happy_path_progresses_by_webhook_wake_before_long_poll() {
-    let server = ForgejoServer::start().expect("forgejo server boots");
+    let cached =
+        start_cached_provisioned_server().expect("forgejo cached provisioned state starts");
+    let server = cached.server;
+    let provisioned = cached.provisioned;
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
-    let provisioned = block_on_provision(&server);
 
     let run_dir = server.data_dir().join("webhook-wakeup");
     let log_dir = run_dir.join("logs");
@@ -111,15 +115,6 @@ fn happy_path_progresses_by_webhook_wake_before_long_poll() {
     drop(workers);
     drop(runner);
     drop(server);
-}
-
-fn block_on_provision(server: &ForgejoServer) -> Provisioned {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds")
-        .block_on(provision(server))
-        .expect("provisioning succeeds")
 }
 
 fn admin_forge(server: &ForgejoServer, provisioned: &Provisioned) -> ForgejoForge {
