@@ -28,8 +28,7 @@ checkout).
 Then run the non-default tests that are self-contained for this checkout before
 handoff. They must be green; fix failures instead of handing them off. This means
 all ignored local-process/local-Forgejo tests, after populating `.cache/forgejo/`
-when needed. Exclude only tests that require real LLM credentials or external
-services outside the checkout.
+when needed.
 
 ```sh
 # Only needed when .cache/forgejo/ is missing.
