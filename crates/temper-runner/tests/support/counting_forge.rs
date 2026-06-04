@@ -17,6 +17,7 @@ pub enum CountedForgeOp {
     ListIssues,
     ListPullRequestReviews,
     ListPullRequests,
+    MergePullRequest,
 }
 
 pub struct CountingForge<F: Forge> {
@@ -265,6 +266,7 @@ impl<F: Forge> Forge for CountingForge<F> {
         id: &PullRequestId,
         input: MergePullRequest,
     ) -> ForgeResult<MergeRecord> {
+        self.tick(CountedForgeOp::MergePullRequest);
         self.inner.merge_pull_request(id, input).await
     }
 

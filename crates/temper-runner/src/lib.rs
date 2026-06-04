@@ -30,7 +30,8 @@
 //!   binding, lease, and polling settings independent of process topology.
 //! - [`scan`], which reads fresh Forge state through queue-derived candidate
 //!   queries and turns active queue members into role-addressed [`WorkItem`]s
-//!   without mutating anything.
+//!   without mutating anything; [`scan_automated_queues`] uses the same bounded
+//!   candidate path for mechanically serviced queues.
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
 //!   agents mutate workflow state only by running authorized transitions or the
 //!   idempotent pull-request creation seam through role-scoped tools. The
@@ -38,7 +39,8 @@
 //!   chosen actions only through this boundary.
 //! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
 //!   judgment queues and delegate to agents, while the mechanical worker runs
-//!   reconcile → apply once per tick without spawning agents.
+//!   reconcile → apply and then declared queue automation once per normal tick
+//!   without spawning agents.
 //! - [`RepositorySet`], [`MultiRepoRoleWorker`], and
 //!   [`MultiRepoMechanicalWorker`], which let one worker tick a deterministic
 //!   set of repositories while reporting per-repo failures and continuing the
@@ -115,8 +117,8 @@ pub use role_decision_process::{
     WorkflowRoleDecisionProcessError,
 };
 pub use scan::{
-    candidate_query_plan, scan, scan_audit, scan_role, scan_role_audit, CandidateQueryPlan,
-    ScanError, ScanMode, WorkItem,
+    candidate_query_plan, scan, scan_audit, scan_automated_queues, scan_role, scan_role_audit,
+    AutomatedWorkItem, CandidateQueryPlan, ScanError, ScanMode, WorkItem,
 };
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{

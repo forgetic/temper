@@ -15,7 +15,8 @@ use temper_forge::{Forge, ForgeError, Issue, PullRequest, RepositoryId};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     queue_active, ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
-    ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, ValidatedWorkflow,
+    ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, TransitionId,
+    ValidatedWorkflow,
 };
 
 pub use candidate::{candidate_query_plan, CandidateQueryPlan, ScanMode};
@@ -27,6 +28,21 @@ pub struct WorkItem {
     pub queue: QueueId,
     /// Role subscribed to the queue.
     pub role: RoleId,
+    /// Forge artifact to service.
+    pub target: ArtifactSource,
+    /// Workflow artifact kind resolved during classification.
+    pub kind: ArtifactKindId,
+}
+
+/// A mechanically serviced member of an active automated queue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutomatedWorkItem {
+    /// Queue whose automation metadata selected the artifact.
+    pub queue: QueueId,
+    /// Workflow role whose authority should execute the transition.
+    pub actor: RoleId,
+    /// Transition declared by the queue automation metadata.
+    pub transition: TransitionId,
     /// Forge artifact to service.
     pub target: ArtifactSource,
     /// Workflow artifact kind resolved during classification.
@@ -107,6 +123,28 @@ pub async fn scan_role<F: Forge + ?Sized>(
         ScanMode::Normal,
     )
     .await
+}
+
+/// Scans active queues that declare mechanical automation metadata.
+///
+/// The scan is read-only and bounded by the automated queues' candidate query
+/// plan. Results are deterministic by queue declaration order and then artifact
+/// number. The automation actor is not required to subscribe to the queue.
+pub async fn scan_automated_queues<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+) -> Result<Vec<AutomatedWorkItem>, ScanError> {
+    let queues = candidate::queues_for_scan(compiled, None, ScanMode::Automated);
+    if queues.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query_plan = candidate_query_plan(workflow, compiled, None, ScanMode::Automated);
+    let artifacts = read_artifacts(forge, repo, workflow, &queues, &query_plan).await?;
+    Ok(automated_work_items(&queues, &artifacts, now))
 }
 
 /// Runs a broad audit scan for all workflow queues and workflow-labelled
@@ -277,20 +315,52 @@ fn work_items(
             continue;
         }
 
-        let members: Vec<&ClassifiedArtifact> = artifacts
-            .iter()
-            .filter(|artifact| matches_queue_with(queue, &artifact.classified, &artifact.signals))
-            .map(|artifact| &artifact.classified)
-            .collect();
-        if !queue_active(queue, &members, now) {
-            continue;
-        }
-
+        let members = active_members(queue, artifacts, now);
         for member in members {
             emit_member_items(queue, member, role_filter.map(|(role, _)| role), &mut items);
         }
     }
     items
+}
+
+fn automated_work_items(
+    queues: &[&QueueManifest],
+    artifacts: &[ScannedArtifact],
+    now: DateTime<Utc>,
+) -> Vec<AutomatedWorkItem> {
+    let mut items = Vec::new();
+    for &queue in queues {
+        let Some(automation) = &queue.automation else {
+            continue;
+        };
+        for member in active_members(queue, artifacts, now) {
+            items.push(AutomatedWorkItem {
+                queue: queue.id.clone(),
+                actor: automation.actor.clone(),
+                transition: automation.transition.clone(),
+                target: member.source,
+                kind: member.kind.clone(),
+            });
+        }
+    }
+    items
+}
+
+fn active_members<'a>(
+    queue: &QueueManifest,
+    artifacts: &'a [ScannedArtifact],
+    now: DateTime<Utc>,
+) -> Vec<&'a ClassifiedArtifact> {
+    let members: Vec<&ClassifiedArtifact> = artifacts
+        .iter()
+        .filter(|artifact| matches_queue_with(queue, &artifact.classified, &artifact.signals))
+        .map(|artifact| &artifact.classified)
+        .collect();
+    if queue_active(queue, &members, now) {
+        members
+    } else {
+        Vec::new()
+    }
 }
 
 fn emit_member_items(

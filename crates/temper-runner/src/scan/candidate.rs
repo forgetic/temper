@@ -9,6 +9,10 @@ pub enum ScanMode {
     /// Normal role/work scans. When a role is supplied, only that role's
     /// subscribed queues contribute candidate queries.
     Normal,
+    /// Normal mechanical automation scans. Only queues that declare automation
+    /// metadata contribute candidate queries, and no audit/recovery interest is
+    /// added.
+    Automated,
     /// Broader audit scans. Audit includes all queues for candidate discovery
     /// and adds workflow-label recovery interest while still avoiding unlabelled
     /// closed history; callers may still filter emitted work to one role.
@@ -66,6 +70,7 @@ pub(crate) fn queues_for_scan<'a>(
         .queues()
         .iter()
         .filter(|queue| match (mode, role) {
+            (ScanMode::Automated, _) => queue.automation.is_some(),
             (ScanMode::Audit, _) | (ScanMode::Normal, None) => true,
             (ScanMode::Normal, Some(role)) => compiled
                 .role(role)

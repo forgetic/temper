@@ -133,8 +133,17 @@ Status legend: ☐ pending · ☑ done
    queue subscribers, so declaring mechanical servicing does not by itself create
    an LLM/process role worker or grant external tools.
 
-2. ☐ **Phase 2 — Mechanical automated-queue execution.**
+2. ☑ **Phase 2 — Mechanical automated-queue execution.**
    `prompts/phase-2-mechanical-automated-queue-execution.md`
+
+   Normal mechanical ticks now run bounded reconciliation first and then service
+   compiled automated queues through the bounded queue-candidate scanner. Each
+   automated item executes through `Executor::execute` with the declared actor
+   and transition; stale preconditions and gate misses are logged/counted as
+   unchanged while unexpected execution failures still fail the worker. Notable
+   finding: merge-conflict-specific fallback remains Phase 3, so current Phase 2
+   treats provider merge errors as visible execution errors rather than routing
+   them.
 
 3. ☐ **Phase 3 — Typed merge-conflict fallback.**
    `prompts/phase-3-typed-merge-conflict-fallback.md`

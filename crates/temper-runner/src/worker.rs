@@ -3,10 +3,12 @@
 //! A [`Worker`] is the unit a driver ticks. [`RoleWorker`] is the per-role
 //! production worker: every tick scans fresh Forge state for that role and lets
 //! the role's [`Agent`] service each active [`WorkItem`] through [`RoleTools`].
-//! [`MechanicalWorker`] is the controller-plane worker: every tick runs the
-//! workflow reconciler and recovery applier so expired leases, interrupted
-//! commands, dependency unblocks, and stale journal entries converge without
+//! [`MechanicalWorker`] is the controller-plane worker: every normal tick runs
+//! bounded reconciliation/recovery and then services declared automated queues
+//! through workflow transitions, so mechanical state changes converge without
 //! spawning an agent.
+
+mod automation;
 
 use crate::agent::{Agent, AgentError, RoleTools};
 use crate::observability::{
@@ -304,11 +306,12 @@ impl<F: Forge + ?Sized> Worker for RoleWorker<'_, F> {
     }
 }
 
-/// Controller-plane worker that runs mechanical recovery once per tick.
+/// Controller-plane worker that runs mechanical recovery and automation.
 ///
 /// The worker owns the reusable runtime components for the process — an
 /// [`Executor`] and [`LeaseManager`] bound to `forge` — and borrows the process's
-/// [`CommandJournal`](temper_workflow::CommandJournal). `Escalate` and
+/// [`CommandJournal`](temper_workflow::CommandJournal). Normal ticks run bounded
+/// reconciliation/apply before declared automated queues. `Escalate` and
 /// `Diagnose` actions are not mutations; they are counted by
 /// [`advisory_actions`](Self::advisory_actions) so operators or tests can
 /// observe them separately from workflow-state changes.
@@ -320,6 +323,7 @@ pub struct MechanicalWorker<
 > {
     name: String,
     workflow: &'a ValidatedWorkflow,
+    compiled: CompiledWorkflow,
     forge: &'a F,
     repo: &'a RepositoryId,
     executor: Executor<'a, F>,
@@ -371,6 +375,7 @@ where
         Self {
             name: "mechanical".to_string(),
             workflow,
+            compiled: workflow.compile(),
             forge,
             repo,
             executor: Executor::new(workflow, forge),
@@ -418,14 +423,36 @@ where
             self.advisory_actions
                 .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
         }
-        let progress = Progress {
+        let reconciliation_progress = Progress {
             changed: !outcome.applied.is_empty(),
             actions: saturating_u32(outcome.applied.len()),
         };
         log_mechanical_reconciliation_summary(
-            &self.name, self.repo, mode, &report, &outcome, progress,
+            &self.name,
+            self.repo,
+            mode,
+            &report,
+            &outcome,
+            reconciliation_progress,
         );
-        Ok(progress)
+        if mode == ReconciliationMode::DeepAudit {
+            return Ok(reconciliation_progress);
+        }
+
+        let automation_progress = automation::execute_automated_queues(
+            &self.name,
+            self.repo,
+            self.workflow,
+            &self.compiled,
+            &self.executor,
+            self.forge,
+            now,
+        )
+        .await?;
+        Ok(combine_progress(
+            reconciliation_progress,
+            automation_progress,
+        ))
     }
 }
 
@@ -542,6 +569,13 @@ fn reconciliation_mode_name(mode: ReconciliationMode) -> &'static str {
     match mode {
         ReconciliationMode::Bounded => "bounded",
         ReconciliationMode::DeepAudit => "deep-audit",
+    }
+}
+
+fn combine_progress(left: Progress, right: Progress) -> Progress {
+    Progress {
+        changed: left.changed || right.changed,
+        actions: left.actions.saturating_add(right.actions),
     }
 }
 
