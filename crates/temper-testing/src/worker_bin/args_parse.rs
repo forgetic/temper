@@ -35,7 +35,7 @@ pub const USAGE: &str = concat!(
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
     "[--agents <fake>] ",
-    "[--poll-ms <n>] [--audit-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
+    "[--poll-ms <n>] [--audit-ms <n deep-audit, 0 disables>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
     "TEMPER_FORGEJO_TOKEN (required), TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD ",

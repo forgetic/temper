@@ -24,7 +24,7 @@ pub const USAGE: &str = concat!(
     "[--role-decision-command <path>] [--role-decision-arg <arg>] ",
     "[--role-decision-env <name>] [--role-decision-cwd <path>] ",
     "[--role-decision-timeout-secs <n>] ",
-    "[--poll-ms <n>] [--audit-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
+    "[--poll-ms <n>] [--audit-ms <n deep-audit, 0 disables>] [--stop-file <path>] [--run-secs <max>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>] ",
     "[--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from TEMPER_FORGEJO_TOKEN; optional web UI credentials ",

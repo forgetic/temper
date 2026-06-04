@@ -327,14 +327,13 @@ where
                 let known = known_hints_for(self.repositories(), hints, "temper-worker");
                 if !known.is_empty() {
                     eprintln!(
-                        "temper-worker: mechanical wake uses broad scan despite configured hints to preserve cross-repo recovery"
+                        "temper-worker: mechanical wake scans all configured repositories with bounded reconciliation to preserve cross-repo recovery"
                     );
                 }
                 self.tick_report(now).await
             }
-            TickReason::Initial | TickReason::Poll | TickReason::Audit => {
-                self.tick_report(now).await
-            }
+            TickReason::Audit => self.tick_deep_audit_report(now).await,
+            TickReason::Initial | TickReason::Poll => self.tick_report(now).await,
         };
         DriveTickReport::from_multi_repo(report)
     }
@@ -508,7 +507,7 @@ fn deadline_tick_reason(_next_poll_due: Instant, next_audit_due: Option<Instant>
         TickReason::Audit
     } else {
         // The wait deadline can fire a little early if the stop-check cadence
-        // races the timer; keep the normal poll path as the safe broad scan.
+        // races the timer; keep the normal configured-repo poll path as safe.
         TickReason::Poll
     }
 }

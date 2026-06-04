@@ -369,10 +369,10 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         let mut snapshots = self
             .load_incomplete_journal_snapshots(forge, repo_id, &entries)
             .await?;
-        snapshots.extend(
-            self.load_bounded_candidate_snapshots(forge, repo_id)
-                .await?,
-        );
+        let candidates = self
+            .load_bounded_candidate_snapshots(forge, repo_id)
+            .await?;
+        snapshots.extend(candidates);
         Ok(self
             .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
             .await)
@@ -446,7 +446,6 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
             .collect::<Vec<_>>();
         sort_artifact_sources(&mut targets);
         targets.dedup();
-
         let mut snapshots = Vec::new();
         for target in targets {
             match target {
@@ -467,8 +466,7 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         Ok(snapshots)
     }
 
-    /// Explicit all-history reconciliation for deep audits and compatibility
-    /// tests, not normal bounded paths.
+    /// Explicit all-history reconciliation for deep audits and compatibility tests.
     pub async fn reconcile_deep_audit<F, J>(
         &self,
         forge: &F,
@@ -501,11 +499,10 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
             .await?;
         let mut snapshots: Vec<ArtifactSnapshot> =
             issues.iter().map(ArtifactSnapshot::from_issue).collect();
-        snapshots.extend(
-            pull_requests
-                .iter()
-                .map(ArtifactSnapshot::from_pull_request),
-        );
+        let pull_request_snapshots = pull_requests
+            .iter()
+            .map(ArtifactSnapshot::from_pull_request);
+        snapshots.extend(pull_request_snapshots);
         normalize_snapshots(&mut snapshots);
         Ok(snapshots)
     }
@@ -519,8 +516,11 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ReconcileReport {
         normalize_snapshots(&mut snapshots);
+        let snapshot_count = snapshots.len();
         let deps = self.dependency_status(forge, repo_id, &snapshots).await;
-        self.scan(&snapshots, entries, &deps, now)
+        let mut report = self.scan(&snapshots, entries, &deps, now);
+        report.snapshot_count = snapshot_count;
+        report
     }
 
     async fn dependency_status<F: Forge + ?Sized>(

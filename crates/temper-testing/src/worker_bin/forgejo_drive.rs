@@ -136,10 +136,15 @@ where
     async fn tick_for_reason(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-        _reason: TickReason,
+        reason: TickReason,
         _hints: &[ChangeHint],
     ) -> Result<ForgejoTickReport, WorkerError> {
-        Worker::tick(self, now).await.map(ForgejoTickReport::single)
+        let progress = if reason == TickReason::Audit {
+            self.tick_deep_audit(now).await?
+        } else {
+            Worker::tick(self, now).await?
+        };
+        Ok(ForgejoTickReport::single(progress))
     }
 
     fn name(&self) -> &str {
@@ -165,14 +170,13 @@ where
                 let known = known_hints_for(self.repositories(), hints);
                 if !known.is_empty() {
                     eprintln!(
-                        "temper-testing-worker: mechanical wake uses broad scan despite configured hints to preserve cross-repo recovery"
+                        "temper-testing-worker: mechanical wake scans all configured repositories with bounded reconciliation to preserve cross-repo recovery"
                     );
                 }
                 self.tick_report(now).await
             }
-            TickReason::Initial | TickReason::Poll | TickReason::Audit => {
-                self.tick_report(now).await
-            }
+            TickReason::Audit => self.tick_deep_audit_report(now).await,
+            TickReason::Initial | TickReason::Poll => self.tick_report(now).await,
         };
         ForgejoTickReport::from_multi_repo(report)
     }
@@ -202,7 +206,7 @@ fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<Ch
 
 /// Drives `worker` with a resilient wall-clock poll loop on the current Tokio
 /// runtime. Authenticated wake hints interrupt the wait; known repo hints narrow
-/// the immediate multi-repo wake tick, while polls and audits remain broad.
+/// the immediate multi-repo role tick, while polls and audits scan configured repos.
 pub(super) async fn drive_async<W: ForgejoDriveWorker>(
     args: &WorkerArgs,
     worker: &W,

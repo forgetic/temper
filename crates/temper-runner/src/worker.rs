@@ -12,7 +12,7 @@ use crate::agent::{Agent, AgentError, RoleTools};
 use crate::observability::{
     render_mechanical_reconciliation_event, render_scan_summary_event,
     render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
-    WorkItemSelectedEvent,
+    StructuredEvent, WorkItemSelectedEvent,
 };
 use crate::scan::{scan_role, scan_role_audit, ScanError, WorkItem};
 use crate::signal::CiError;
@@ -24,8 +24,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use temper_forge::{Forge, ForgeError, RepositoryId};
 use temper_workflow::{
-    Applier, ApplyError, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext, ExecutionError,
-    Executor, LeaseManager, LeasePolicy, ReconcileError, RecoveryPolicy, RoleId, ValidatedWorkflow,
+    Applier, ApplyError, ApplyOutcome, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext,
+    ExecutionError, Executor, LeaseManager, LeasePolicy, ReconcileError, ReconciliationMode,
+    RecoveryPolicy, RoleId, ValidatedWorkflow,
 };
 
 /// Progress made by one worker tick.
@@ -389,6 +390,43 @@ where
     pub fn journal(&self) -> &J {
         self.journal
     }
+
+    /// Runs the explicit all-history deep audit path once.
+    pub async fn tick_deep_audit(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+        self.tick_with_reconciliation_mode(now, ReconciliationMode::DeepAudit)
+            .await
+    }
+
+    async fn tick_with_reconciliation_mode(
+        &self,
+        now: DateTime<Utc>,
+        mode: ReconciliationMode,
+    ) -> Result<Progress, WorkerError> {
+        let reconciler = self.workflow.reconciler(&self.policy);
+        let report = reconciler
+            .reconcile_with_mode(self.forge, self.repo, self.journal, mode, now)
+            .await?;
+        let outcome = if report.is_clean() {
+            ApplyOutcome::default()
+        } else {
+            log_mechanical_reconciliation(&self.name, self.repo, &report);
+            Applier::new(&self.executor, &self.lease_manager, self.journal)
+                .apply_report(self.repo, &report, now)
+                .await?
+        };
+        if !outcome.advisory.is_empty() {
+            self.advisory_actions
+                .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
+        }
+        let progress = Progress {
+            changed: !outcome.applied.is_empty(),
+            actions: saturating_u32(outcome.applied.len()),
+        };
+        log_mechanical_reconciliation_summary(
+            &self.name, self.repo, mode, &report, &outcome, progress,
+        );
+        Ok(progress)
+    }
 }
 
 #[async_trait]
@@ -399,27 +437,8 @@ where
     P: RecoveryPolicy + Send + Sync,
 {
     async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
-        let reconciler = self.workflow.reconciler(&self.policy);
-        let report = reconciler
-            .reconcile_deep_audit(self.forge, self.repo, self.journal, now)
-            .await?;
-        if report.is_clean() {
-            return Ok(Progress::unchanged());
-        }
-        log_mechanical_reconciliation(&self.name, self.repo, &report);
-
-        let outcome = Applier::new(&self.executor, &self.lease_manager, self.journal)
-            .apply_report(self.repo, &report, now)
-            .await?;
-        if !outcome.advisory.is_empty() {
-            self.advisory_actions
-                .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
-        }
-
-        Ok(Progress {
-            changed: !outcome.applied.is_empty(),
-            actions: saturating_u32(outcome.applied.len()),
-        })
+        self.tick_with_reconciliation_mode(now, ReconciliationMode::Bounded)
+            .await
     }
 
     fn name(&self) -> &str {
@@ -481,6 +500,48 @@ fn log_mechanical_reconciliation(
                 action,
             })
         );
+    }
+}
+
+fn log_mechanical_reconciliation_summary(
+    worker: &str,
+    repo: &RepositoryId,
+    mode: ReconciliationMode,
+    report: &temper_workflow::ReconcileReport,
+    outcome: &ApplyOutcome,
+    progress: Progress,
+) {
+    eprintln!(
+        "{}",
+        StructuredEvent::new("mechanical_reconciliation_summary")
+            .string("worker_kind", "mechanical")
+            .string("worker", worker)
+            .string("repo", repo.to_string())
+            .string("mode", reconciliation_mode_name(mode))
+            .number("snapshot_count", saturating_u64(report.snapshot_count))
+            .number("finding_count", saturating_u64(report.findings.len()))
+            .number(
+                "recovery_action_count",
+                saturating_u64(report.actions.len())
+            )
+            .number(
+                "applied_action_count",
+                saturating_u64(outcome.applied.len())
+            )
+            .number(
+                "advisory_action_count",
+                saturating_u64(outcome.advisory.len())
+            )
+            .boolean("changed", progress.changed)
+            .number("progress_actions", u64::from(progress.actions))
+            .render()
+    );
+}
+
+fn reconciliation_mode_name(mode: ReconciliationMode) -> &'static str {
+    match mode {
+        ReconciliationMode::Bounded => "bounded",
+        ReconciliationMode::DeepAudit => "deep-audit",
     }
 }
 

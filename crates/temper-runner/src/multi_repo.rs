@@ -10,7 +10,7 @@ use std::sync::Arc;
 use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryId, RepositoryPath};
 use temper_workflow::{
     CommandJournal, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext, LeasePolicy,
-    RecoveryPolicy, RoleId, ValidatedWorkflow,
+    ReconciliationMode, RecoveryPolicy, RoleId, ValidatedWorkflow,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -505,7 +505,14 @@ where
     }
 
     pub async fn tick_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
-        self.tick_mechanical_repositories(now, self.mechanical_repositories.iter().collect())
+        let repositories = self.mechanical_repositories.iter().collect();
+        self.tick_mechanical_repositories(now, repositories, ReconciliationMode::Bounded)
+            .await
+    }
+
+    pub async fn tick_deep_audit_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
+        let repositories = self.mechanical_repositories.iter().collect();
+        self.tick_mechanical_repositories(now, repositories, ReconciliationMode::DeepAudit)
             .await
     }
 
@@ -526,7 +533,8 @@ where
                 repositories.push(repository);
             }
         }
-        self.tick_mechanical_repositories(now, repositories).await
+        self.tick_mechanical_repositories(now, repositories, ReconciliationMode::Bounded)
+            .await
     }
 
     /// Ticks only repositories matching known repo hints.
@@ -541,13 +549,15 @@ where
             .iter()
             .filter(|repository| hinted.contains(&path_key(&repository.target.path)))
             .collect();
-        self.tick_mechanical_repositories(now, repositories).await
+        self.tick_mechanical_repositories(now, repositories, ReconciliationMode::Bounded)
+            .await
     }
 
     async fn tick_mechanical_repositories(
         &self,
         now: DateTime<Utc>,
         repositories: Vec<&RepositoryMechanical<'a, J>>,
+        mode: ReconciliationMode,
     ) -> MultiRepoTickReport {
         let mut report = MultiRepoTickReport::default();
         for repository in repositories {
@@ -560,7 +570,11 @@ where
                 self.lease_policy,
                 self.policy.clone(),
             );
-            match worker.tick(now).await {
+            let tick = match mode {
+                ReconciliationMode::Bounded => worker.tick(now).await,
+                ReconciliationMode::DeepAudit => worker.tick_deep_audit(now).await,
+            };
+            match tick {
                 Ok(progress) => report.record_success(repository.target.clone(), progress),
                 Err(error) => report.record_failure(repository.target.clone(), error),
             }

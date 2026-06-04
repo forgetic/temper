@@ -197,6 +197,9 @@ impl RecoveryPolicy for DefaultRecoveryPolicy {}
 /// snapshot-style assertions.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReconcileReport {
+    /// Number of deduplicated artifact snapshots scanned by the loading path.
+    /// Pure [`Reconciler::scan`](crate::reconcile::Reconciler::scan) reports `0`.
+    pub snapshot_count: usize,
     pub findings: Vec<ReconcileFinding>,
     pub actions: Vec<RecoveryAction>,
 }
