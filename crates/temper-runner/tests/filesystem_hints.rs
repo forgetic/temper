@@ -7,15 +7,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{
-    CreateIssue, CreatePullRequestReview, Forge, RepositoryId, ReviewDecision, UpdateIssue, UserId,
+    CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequestReview, Forge,
+    IssueQuery, ItemListDetails, PullRequest, PullRequestId, PullRequestQuery, PullRequestState,
+    RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_filesystem::FilesystemForge;
 use temper_runner::{
-    broad_targets, Agent, AgentError, Progress, RoleTools, RoleWorker, WakeTarget,
-    WakeablePollLoop, WorkItem, Worker,
+    broad_targets, Agent, AgentError, MechanicalWorker, Progress, RoleTools, RoleWorker,
+    WakeTarget, WakeablePollLoop, WorkItem, Worker,
 };
-use temper_testing::{block_on, repo_input, runner_config, user, workflow};
-use temper_workflow::{ArtifactKindId, QueueId, RoleId, TransitionId};
+use temper_testing::{actor_user, block_on, repo_input, runner_config, ts, user, workflow};
+use temper_workflow::{
+    ArtifactKindId, InMemoryJournal, LeasePolicy, QueueId, RoleId, TransitionId,
+};
+
+mod support;
+use support::{CountedForgeOp, CountingForge};
 
 struct TempRoot {
     path: PathBuf,
@@ -87,6 +94,248 @@ fn create_repo(forge: &FilesystemForge) -> RepositoryId {
     block_on(forge.create_repository(repo_input()))
         .expect("repository is created")
         .id
+}
+
+fn lease_policy() -> LeasePolicy {
+    LeasePolicy::new(Duration::minutes(30))
+}
+
+fn create_implementation_pr(
+    forge: &FilesystemForge,
+    repo: &RepositoryId,
+    labels: Vec<String>,
+) -> PullRequest {
+    block_on(forge.create_pull_request(
+        repo,
+        temper_testing::pull_request_input(repo, "implementation", "", "feature", labels),
+    ))
+    .expect("implementation PR is created")
+}
+
+fn request_reviewer(forge: &FilesystemForge, id: &PullRequestId) {
+    block_on(forge.request_pull_request_reviewers(
+        id,
+        RequestReviewers {
+            reviewers: vec![UserId::new("reviewer")],
+        },
+    ))
+    .expect("reviewer is requested");
+}
+
+fn approve(forge: &FilesystemForge, id: &PullRequestId) {
+    let reviewer = forge.as_user(actor_user("reviewer"));
+    block_on(reviewer.submit_pull_request_review(
+        id,
+        CreatePullRequestReview {
+            decision: ReviewDecision::Approved,
+            body: None,
+        },
+    ))
+    .expect("review is submitted");
+}
+
+fn seed_successful_ci(forge: &FilesystemForge, repo: &RepositoryId, pr: &PullRequest) {
+    forge
+        .seed_ci_jobs(
+            repo,
+            vec![CiJob {
+                id: CiJobId::new(format!("ci-{}", pr.number.get())),
+                repo_id: repo.clone(),
+                pull_request_id: Some(pr.id.clone()),
+                commit_sha: format!("pr-{}-head", pr.number.get()),
+                name: "ci".into(),
+                status: CiJobStatus::Completed,
+                conclusion: Some(CiJobConclusion::Success),
+                url: None,
+                created_at: ts("2026-05-29T00:00:00Z"),
+                started_at: Some(ts("2026-05-29T00:00:30Z")),
+                completed_at: Some(ts("2026-05-29T00:01:00Z")),
+                updated_at: ts("2026-05-29T00:01:00Z"),
+            }],
+        )
+        .expect("CI jobs are seeded");
+}
+
+fn add_landing_label(forge: &FilesystemForge, id: &PullRequestId) {
+    block_on(forge.update_pull_request(
+        id,
+        UpdatePullRequest {
+            add_labels: vec!["landing".into()],
+            ..UpdatePullRequest::default()
+        },
+    ))
+    .expect("landing label is added");
+}
+
+fn pull_request_is_merged(forge: &FilesystemForge, id: &PullRequestId) -> bool {
+    block_on(forge.get_pull_request(id))
+        .expect("pull request lookup succeeds")
+        .is_some_and(|pr| pr.state == PullRequestState::Merged)
+}
+
+fn is_bounded_issue_query(query: &IssueQuery) -> bool {
+    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+}
+
+fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
+    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+}
+
+#[derive(Clone, Copy)]
+enum LandingWake {
+    ReviewApproval,
+    CiCompletion,
+    LandingLabel,
+}
+
+impl LandingWake {
+    fn suite(self) -> &'static str {
+        match self {
+            Self::ReviewApproval => "mechanical-review",
+            Self::CiCompletion => "mechanical-ci",
+            Self::LandingLabel => "mechanical-label",
+        }
+    }
+}
+
+#[test]
+fn review_hint_wakes_mechanical_landing_before_poll_deadline() {
+    mechanical_landing_wake_driven_by(LandingWake::ReviewApproval);
+}
+
+#[test]
+fn ci_hint_wakes_mechanical_landing_before_poll_deadline() {
+    mechanical_landing_wake_driven_by(LandingWake::CiCompletion);
+}
+
+#[test]
+fn landing_label_hint_wakes_mechanical_landing_before_poll_deadline() {
+    mechanical_landing_wake_driven_by(LandingWake::LandingLabel);
+}
+
+fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
+    let root = TempRoot::new(final_wake.suite());
+    let writer = root.forge();
+    let repo = create_repo(&writer);
+    let initial_labels = match final_wake {
+        LandingWake::LandingLabel => vec!["implementation".into()],
+        LandingWake::ReviewApproval | LandingWake::CiCompletion => {
+            vec!["implementation".into(), "landing".into()]
+        }
+    };
+    let pr = create_implementation_pr(&writer, &repo, initial_labels);
+    match final_wake {
+        LandingWake::ReviewApproval => {
+            request_reviewer(&writer, &pr.id);
+            seed_successful_ci(&writer, &repo, &pr);
+        }
+        LandingWake::CiCompletion => {
+            request_reviewer(&writer, &pr.id);
+            approve(&writer, &pr.id);
+        }
+        LandingWake::LandingLabel => {
+            request_reviewer(&writer, &pr.id);
+            approve(&writer, &pr.id);
+            seed_successful_ci(&writer, &repo, &pr);
+        }
+    }
+
+    let mut hints = root.forge().subscribe_hints();
+    let counted = CountingForge::new(root.forge());
+    let workflow = workflow();
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+    let observer = root.forge();
+    let pr_id = pr.id.clone();
+    let target = WakeTarget::Mechanical;
+    let loop_ = WakeablePollLoop::new(&worker, target.clone(), Duration::seconds(30));
+    let start = Instant::now();
+
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| {
+            block_on(loop_.run_until(
+                &mut hints,
+                |_| broad_targets([RoleId::new("engineer"), RoleId::new("reviewer")]),
+                || pull_request_is_merged(&observer, &pr_id),
+            ))
+        });
+
+        std::thread::sleep(StdDuration::from_millis(50));
+        match final_wake {
+            LandingWake::ReviewApproval => approve(&writer, &pr.id),
+            LandingWake::CiCompletion => seed_successful_ci(&writer, &repo, &pr),
+            LandingWake::LandingLabel => add_landing_label(&writer, &pr.id),
+        }
+
+        let report = handle
+            .join()
+            .expect("worker thread joins")
+            .expect("wake loop runs");
+        assert!(report.ticks >= 2);
+    });
+
+    assert!(
+        start.elapsed() < StdDuration::from_secs(1),
+        "landing hint should beat the 30s poll interval"
+    );
+    assert!(pull_request_is_merged(&root.forge(), &pr.id));
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
+    assert!(!counted
+        .issue_queries()
+        .iter()
+        .any(|query| query == &IssueQuery::default()));
+    assert!(!counted
+        .pull_request_queries()
+        .iter()
+        .any(|query| query == &PullRequestQuery::default()));
+    assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
+    assert!(counted
+        .pull_request_queries()
+        .iter()
+        .all(is_bounded_pull_request_query));
+}
+
+#[test]
+fn dropped_mechanical_landing_hint_still_converges_by_polling() {
+    let root = TempRoot::new("mechanical-poll-backstop");
+    let writer = root.forge();
+    let repo = create_repo(&writer);
+    let pr = create_implementation_pr(
+        &writer,
+        &repo,
+        vec!["implementation".into(), "landing".into()],
+    );
+    request_reviewer(&writer, &pr.id);
+    approve(&writer, &pr.id);
+
+    let mut hints = root.forge().subscribe_hints();
+    let workflow = workflow();
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &writer, &repo, &journal, lease_policy());
+    let observer = root.forge();
+    let pr_id = pr.id.clone();
+    let loop_ = WakeablePollLoop::new(&worker, WakeTarget::Mechanical, Duration::milliseconds(150));
+
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| {
+            block_on(loop_.run_until(
+                &mut hints,
+                |_| Vec::<WakeTarget>::new(),
+                || pull_request_is_merged(&observer, &pr_id),
+            ))
+        });
+
+        std::thread::sleep(StdDuration::from_millis(50));
+        seed_successful_ci(&writer, &repo, &pr);
+
+        let report = handle
+            .join()
+            .expect("worker thread joins")
+            .expect("poll loop runs");
+        assert!(report.ticks >= 2);
+    });
+
+    assert!(pull_request_is_merged(&root.forge(), &pr.id));
 }
 
 #[test]

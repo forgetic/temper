@@ -172,28 +172,37 @@ Status legend: ☐ pending · ☑ done
    conflict-resolution head, while real Forgejo gets the new head SHA from the
    engineer's branch push.
 
-5. ☐ **Phase 5 — Wake behavior, docs, and acceptance.**
+5. ☑ **Phase 5 — Wake behavior, docs, and acceptance.**
    `prompts/phase-5-wake-docs-and-acceptance.md`
+
+   Landed filesystem wake regressions proving review, CI, and landing-label
+   hints wake mechanical landing before a long poll deadline, while dropped
+   hints still converge by polling and wake ticks keep bounded normal scan
+   shapes. Durable docs and example observability now describe mechanical
+   landing order, current-head CI/review semantics, conflict routing, and
+   provider caveats. Final acceptance notes are recorded in `findings.md`.
 
 ## Whole-plan acceptance criteria
 
-- A PR cannot be mechanically merged until native reviewer approval and
+- ☑ A PR cannot be mechanically merged until native reviewer approval and
   current-head CI have both passed.
-- An approved PR whose old head had green CI does not merge after a conflict-
+- ☑ An approved PR whose old head had green CI does not merge after a conflict-
   resolution push until the new head has its own green CI job.
-- A merge conflict removes the PR from the active landing queue and routes it to
-  the engineer; normal mechanical ticks do not retry it until the engineer
+- ☑ A merge conflict removes the PR from the active landing queue and routes it
+  to the engineer; normal mechanical ticks do not retry it until the engineer
   resolves and requeues it.
-- The engineer conflict-resolution path requeues for landing without requesting
-  a new review.
-- An unrelated approved/green PR can still land while another PR is waiting in
+- ☑ The engineer conflict-resolution path requeues for landing without
+  requesting a new review.
+- ☑ An unrelated approved/green PR can still land while another PR is waiting in
   `merge-conflict`; there is no global FIFO/head-of-line block.
-- Normal mechanical landing scans use bounded state/label/condition queries and
-  do not call deep audit or default all-history issue/PR list queries.
-- Webhook/change hints for PR label/review/CI changes wake the mechanical worker
-  promptly in production/testing paths, while polling alone still converges.
-- Reference-delivery docs, fixture, fake agents, scenario tests, and robustness
-  docs describe the new merge path.
+- ☑ Normal mechanical landing scans use bounded state/label/condition queries
+  and do not call deep audit or default all-history issue/PR list queries.
+- ☑ Webhook/change hints for PR label/review/CI changes wake the mechanical
+  worker promptly in production/testing paths, while polling alone still
+  converges. Forgejo Actions completion webhooks remain provider-limited in
+  7.0.x, so tests keep a narrow CI-status poll fallback as documented.
+- ☑ Reference-delivery docs, fixture, fake agents, scenario tests, and
+  robustness docs describe the new merge path.
 
 ## Relevant starting points
 

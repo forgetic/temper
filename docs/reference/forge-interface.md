@@ -33,8 +33,10 @@ trait before planning or mutating.
 Backends and adapters that can emit hints may expose an inherent subscribe/watch
 method or wrapper returning a `ChangeSource`. Backends that cannot emit hints are
 still complete Forge implementations; periodic polling remains the liveness and
-correctness backstop. Multi-repository runners may narrow an immediate wake tick
-to configured repositories named by known hints, but unknown/no-hint batches and
+correctness backstop. Review, CI/status, pull-request/head, label, and push hints
+are broad enough to wake mechanical landing, but the subsequent scan remains the
+authority. Multi-repository runners may narrow an immediate wake tick to
+configured repositories named by known hints, but unknown/no-hint batches and
 ordinary poll/audit ticks must fall back to the configured scan set.
 
 ## Identity model

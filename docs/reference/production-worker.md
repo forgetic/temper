@@ -20,12 +20,13 @@ the Forgejo token decides what the worker may read or mutate.
   unlabelled closed history. Mechanical audit ticks are the explicit deep-audit
   path and may run all-history reconciliation.
 - `--wake-socket <path>` plus optional `--wake-secret-file <path>` enables
-  authenticated webhook wakeups. A wake with known repository hints immediately
-  narrows role scans to the hinted configured repositories. No-hint or unknown
-  hints fall back to a broad configured-repo scan. Mechanical wake scans still
-  visit all configured repositories in production so cross-repo recovery can see
-  dependency sources, but each per-repo reconciliation and automated-queue scan
-  is bounded.
+  authenticated webhook wakeups. Pull-request, review, CI/status, label-change,
+  and push hints are all safe triggers for the same normal scan path. A wake with
+  known repository hints immediately narrows role scans to the hinted configured
+  repositories. No-hint or unknown hints fall back to a broad configured-repo
+  scan. Mechanical wake scans still visit all configured repositories in
+  production so cross-repo recovery can see dependency sources, but each per-repo
+  reconciliation and automated-queue scan is bounded.
   `TEMPER_WAKE_DEBOUNCE_MS` can override the default 500ms local wake drain
   window when a deployment or fixture needs different burst coalescing.
 

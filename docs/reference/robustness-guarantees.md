@@ -33,10 +33,12 @@ is supplied explicitly, so the suite is reproducible.
 | No duplicate issue or pull request is created for one correlation key, even when a create crashes after it lands | `no_duplicate_artifact_is_created_for_a_correlation_key_after_a_crash` |
 | An exclusive claim never holds two active leases at once | `an_exclusive_claim_never_has_two_active_leases` |
 | Two acquirers that both observe "no lease" cannot both win: lease acquisition is a compare-and-swap, so the loser observes a conflict | `two_no_lease_acquirers_cannot_both_win_the_same_claim`, `interleaved_acquirers_cannot_both_win_the_same_unclaimed_issue` |
-| A merge is not authorized, and the pull request is not merged, until native review approval and CI gates pass; once gated, it merges and projects `landed`/`alignment` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
+| A merge is not authorized, and the pull request is not merged, until native review approval and current-head CI gates pass; once gated, it merges and projects `landed`/`alignment` | `a_merge_is_not_authorized_until_review_and_ci_gates_pass` |
+| Mechanical landing does not bypass gates: a PR with `landing` and green CI but no native approval stays open | `reference_landing_pr_without_approval_does_not_merge_even_when_ci_passes` |
 | The gate mechanism blocks a merge until native CI conclusions plus native review approval both pass | `the_merge_gate_mechanism_requires_ci_and_review_together`, `ci_gate_reads_native_ci_job_conclusions` |
 | A gated merge executes at most once: a crash that lands the merge but loses the response is retried without merging twice | `a_merge_executes_at_most_once_under_retry` |
 | Merge rejections are typed only after a re-read: open/unmerged PRs return `MergeConflict`, while a conflict response after a successful merge still projects post-merge labels | `merge_conflict.rs` |
+| Mechanical conflict routing removes `landing`, adds `merge-conflict`, does not retry until requeued, and does not block unrelated landable PRs | `mechanical_merge_conflict.rs` |
 | A failed review gate returns work to the engineer, and the reviewer cannot perform that return path | `a_failed_review_gate_returns_work_to_the_engineer` |
 | Expired in-progress work becomes visible for recovery | `expired_in_progress_work_becomes_visible_for_recovery` |
 | Impossible label combinations are detected by both the executor and the reconciler | `impossible_label_combinations_are_detected_not_silently_ignored` |
@@ -103,7 +105,9 @@ window, but a wider window can no longer produce a lost-update lease race.
   unapplied; the retry observes the merged state, skips the merge, and finishes
   the `landed`/`alignment` projection. A merge `Conflict` response is also
   re-read before routing: already merged continues projection, missing/closed is
-  stale, and only still-open unmerged is a typed merge conflict. Those labels
+  stale, and only still-open unmerged is a typed merge conflict. Mechanical
+  conflict fallback removes `landing` before adding `merge-conflict`, so normal
+  ticks do not retry the same PR until the engineer requeues it. Those labels
   are also the planner re-run guard, so the merge happens exactly once and the
   post-merge projection survives on the closed pull request.
 - **Applied reconciler actions.** `recover::Applier` applies a `ReconcileReport`
@@ -128,7 +132,10 @@ rather than hidden:
 - **Provider branch-protection policy is not modeled.** The portable gate reads
   the latest CI jobs and requested-reviewer aggregate. Provider-specific rules
   such as required-check configuration, CODEOWNERS, or stale-review dismissal on
-  push remain outside the workflow core.
+  push remain outside the workflow core. Forgejo merge rejection categories are
+  also coarse today; an open, unmerged PR after a merge `Conflict` is routed as
+  an engineer-visible merge conflict even if the provider rejection was stricter
+  policy rather than a textual conflict.
 - **Escalation/diagnosis is record-only.** `recover::Applier` applies the
   mutating recovery actions, but `Escalate` and `Diagnose` are advisory: the
   applier records them in `ApplyOutcome::advisory` and performs no Forge

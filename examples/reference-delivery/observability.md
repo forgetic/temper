@@ -40,7 +40,11 @@ owner.log: completed tick actions=0   # until the alignment cohort activates
 ```
 
 Some wake-triggered ticks may report `actions=0`; that means the worker woke,
-read fresh Forge state, and found no eligible item.
+read fresh Forge state, and found no eligible item. Mechanical logs also include
+`mechanical_automation_execution`, `mechanical_automation_summary`, and, after a
+merge rejection, `mechanical_automation_merge_conflict_route`; these show the
+landing queue, transition, target PR, and whether the item was applied,
+gate-blocked, unchanged, or routed to `merge-conflict`.
 
 ## Validators
 

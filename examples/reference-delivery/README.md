@@ -89,10 +89,14 @@ that issue asks the fake architect to create one child code issue per repo.
 4. Fake engineers create real Forgejo PR heads and open implementation PRs.
 5. The real `forgejo-runner` runs CI for each PR head.
 6. Fake reviewers approve PRs.
-7. The mechanical worker lands PRs after reviewer approval and current-head CI.
-8. The closing fake architect reconciles landed PRs and closes produced code
+7. The mechanical worker lands PRs after reviewer approval and current-head CI;
+   the owner role does not perform normal merges.
+8. If a merge conflict is reported, mechanical automation removes `landing`, adds
+   `merge-conflict`, and the fake engineer requeues after updating the PR head;
+   fresh CI is still required, but a second review is not.
+9. The closing fake architect reconciles landed PRs and closes produced code
    issues so the mechanical worker can unblock the parent dependency aggregate.
-9. Fake owners later handle alignment cohorts when the queue activation policy
+10. Fake owners later handle alignment cohorts when the queue activation policy
    reaches depth or age.
 
 ## Useful knobs
@@ -120,10 +124,13 @@ state.
 
 The multi-repo validator checks provisioning logs, webhook delivery/wake logs,
 fake worker logs, and live Forge state for the parent/child dependency shape.
-See `observability.md` for log names and expected event trails. Persistent
+See `observability.md` for log names and expected event trails, including
+`mechanical_automation_*` entries for landing and conflict routing. Persistent
 `wake_delivery outcome=no_sockets` usually means a worker failed before binding
 its wake socket or the first-handoff worker ran before downstream sockets were
-ready; inspect the matching fake worker log.
+ready; inspect the matching fake worker log. A PR stuck with `landing` usually
+lacks current-head CI or reviewer approval; a PR stuck with `merge-conflict`
+needs an engineer conflict-resolution push before mechanical landing retries.
 
 If a run is force-killed, clean up possible orphans:
 
@@ -148,4 +155,5 @@ Live Forgejo + runner fake-agent fixture:
 ```sh
 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
 cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
 ```

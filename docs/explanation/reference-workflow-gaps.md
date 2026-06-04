@@ -66,3 +66,8 @@ activation policy plus Phase 14's multi-kind and disjunctive matching.
   recovery actions (including the mechanical `Unblock`), but `Escalate` and
   `Diagnose` stay advisory: projecting them into a label or comment is left to a
   workflow-specific adapter rather than being decided in the runtime layer.
+- **Provider merge-rejection precision.** The workflow can route typed merge
+  conflicts, but Forgejo currently exposes coarse merge rejections. Temper
+  conservatively routes an open/unmerged PR to `merge-conflict` after such a
+  rejection until the backend can distinguish textual conflicts from policy
+  failures.

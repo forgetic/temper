@@ -48,10 +48,13 @@ These were decided during design and are not open:
   recovery procedure is dropped.
 - **Effort labels are dropped from the spec.** `easy`/`hard` gated nothing; they
   live as free prompt metadata if useful, not as workflow state.
-- **Post-merge has two consumers.** Mechanical landing projects `landed` and
-  `alignment`; the architect drains landed PRs eagerly and per-item (drives
-  dependency unblocking); the owner reviews landed work in cohorts via a queue
-  activation policy.
+- **Post-merge has two consumers.** Mechanical landing, not the owner role,
+  projects `landed` and `alignment`; the architect drains landed PRs eagerly and
+  per-item (drives dependency unblocking); the owner reviews landed work in
+  cohorts via a queue activation policy.
+- **No FIFO landing queue.** The mechanical worker scans current landable PRs in
+  a deterministic order, but a conflicted PR is routed out of `landing` instead
+  of blocking unrelated approved/green PRs.
 
 ## Roles
 
@@ -108,14 +111,16 @@ Exclusive unless noted; each state projects to one label.
 
 The mechanical `land_pr` transition requires `review_gate` and `ci_gate`. A
 reviewer approval removes `needs-reviewer` and adds `landing`; the automated
-`landing` queue wakes the mechanical worker only when native CI has passed, and
-`land_pr` still rechecks both gates before merging. A failed review or CI run
-returns the PR to the engineer (native `review_changes_requested` or `ci_failed`
-→ engineer queues); CI failure after landing approval clears `landing` before
-requesting review so it cannot bypass another review. A merge conflict removes
-`landing`, adds `merge-conflict`, and routes to the engineer, whose
-`resolve_merge_conflict` requeues `landing` after a new PR head without
-requesting another review.
+`landing` queue becomes active only when native CI has passed, and `land_pr`
+still rechecks both gates before merging. CI is current-head-scoped when the
+backend supplies a PR head SHA, while the portable review aggregate is not
+head-scoped. A failed review or CI run returns the PR to the engineer (native
+`review_changes_requested` or `ci_failed` → engineer queues); CI failure after
+landing approval clears `landing` before requesting review so it cannot bypass
+another review. A merge conflict removes `landing`, adds `merge-conflict`, and
+routes to the engineer, whose `resolve_merge_conflict` requeues `landing` after a
+new PR head without requesting another review; fresh CI on that new head is still
+required before retry.
 
 ## Relations
 
