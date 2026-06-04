@@ -159,7 +159,7 @@ fn transient_child_repo_read_failure_is_not_a_false_unblock() {
         FaultOp::GetIssueByNumber,
         "child repo temporarily unreadable",
     );
-    let report = support::block_on(workflow.reconciler(&policy).reconcile(
+    let report = support::block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &parent_repo,
         &journal,
@@ -171,7 +171,7 @@ fn transient_child_repo_read_failure_is_not_a_false_unblock() {
         "an unreadable child is treated as not landed, never as a false unblock"
     );
 
-    let report = support::block_on(workflow.reconciler(&policy).reconcile(
+    let report = support::block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &parent_repo,
         &journal,
@@ -268,7 +268,7 @@ fn reconcile<F: Forge + ?Sized>(
     repo: &RepositoryId,
     journal: &InMemoryJournal,
 ) -> temper_workflow::ReconcileReport {
-    support::block_on(workflow.reconciler(policy).reconcile(
+    support::block_on(workflow.reconciler(policy).reconcile_deep_audit(
         forge,
         repo,
         journal,

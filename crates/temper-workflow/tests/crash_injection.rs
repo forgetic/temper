@@ -228,7 +228,7 @@ fn a_journaled_claim_that_crashes_before_the_write_is_repaired_after_restart() {
     // repair.
     let policy = DefaultRecoveryPolicy;
     let restarted = journal.clone();
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         crash.inner(),
         &repo,
         &restarted,
@@ -309,7 +309,7 @@ fn a_journaled_claim_that_lands_before_a_crash_is_marked_reconciled_after_restar
     // command is stale and is marked reconciled rather than re-applied.
     let policy = DefaultRecoveryPolicy;
     let restarted = journal.clone();
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         crash.inner(),
         &repo,
         &restarted,
@@ -428,12 +428,11 @@ fn applying_a_repair_is_retry_safe_under_a_crash() {
         ))
         .expect("applying");
 
-        let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
-            &crash,
-            &repo,
-            &journal,
-            ts("2026-05-29T00:05:00Z"),
-        ))
+        let report = block_on(
+            workflow
+                .reconciler(&DefaultRecoveryPolicy)
+                .reconcile_deep_audit(&crash, &repo, &journal, ts("2026-05-29T00:05:00Z")),
+        )
         .expect("reconcile");
 
         let applier = Applier::new(&executor, &manager, &journal);
@@ -487,12 +486,11 @@ fn applying_an_unblock_is_retry_safe_under_a_crash() {
         let manager = LeaseManager::new(&crash, LeasePolicy::new(Duration::minutes(30)));
         let journal = InMemoryJournal::new();
 
-        let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
-            &crash,
-            &repo,
-            &journal,
-            ts("2026-05-29T00:00:00Z"),
-        ))
+        let report = block_on(
+            workflow
+                .reconciler(&DefaultRecoveryPolicy)
+                .reconcile_deep_audit(&crash, &repo, &journal, ts("2026-05-29T00:00:00Z")),
+        )
         .expect("reconcile");
 
         let applier = Applier::new(&executor, &manager, &journal);

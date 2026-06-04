@@ -2,9 +2,8 @@
 //!
 //! The pure-scan tests assert the deterministic findings and policy-chosen
 //! actions for expired leases, impossible states, partial transitions, and
-//! stale commands. The end-to-end test exercises [`Reconciler::reconcile`]
-//! against the in-memory backend and an in-memory journal, which is how a
-//! restarted runtime rediscovers interrupted work.
+//! stale commands. The end-to-end tests exercise the explicit deep-audit loader
+//! against the in-memory backend and an in-memory journal.
 
 mod support;
 
@@ -344,7 +343,7 @@ fn reconcile_loads_backend_state_and_finds_interrupted_work() {
 
     // Restart: a fresh reconciler attaches to the same backend and journal.
     let restarted_journal = journal.clone();
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &restarted_journal,
@@ -390,7 +389,7 @@ fn reconcile_derives_dependency_status_from_native_links() {
     let policy = DefaultRecoveryPolicy;
     let journal = InMemoryJournal::new();
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -432,12 +431,16 @@ fn reconcile_does_not_confuse_cross_repo_dependency_with_same_number_ambient_ite
     });
     create_issue(&forge, &repo, &["code", "blocked"], &body);
 
-    let report = block_on(workflow.reconciler(&DefaultRecoveryPolicy).reconcile(
-        &forge,
-        &repo,
-        &InMemoryJournal::new(),
-        ts("2026-05-29T00:00:00Z"),
-    ))
+    let report = block_on(
+        workflow
+            .reconciler(&DefaultRecoveryPolicy)
+            .reconcile_deep_audit(
+                &forge,
+                &repo,
+                &InMemoryJournal::new(),
+                ts("2026-05-29T00:00:00Z"),
+            ),
+    )
     .expect("reconcile reads same-repo records");
 
     assert!(

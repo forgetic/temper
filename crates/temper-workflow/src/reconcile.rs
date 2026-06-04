@@ -9,9 +9,11 @@
 //! # Decide, then apply
 //!
 //! [`Reconciler::scan`] is pure and deterministic over snapshots, journal
-//! records, dependency status, and time. [`Reconciler::reconcile`] is the async
-//! convenience that loads fresh Forge state and journal entries, derives native
-//! dependency status, then calls `scan`.
+//! records, dependency status, and time. [`Reconciler::reconcile`] is the bounded
+//! async convenience that loads exact snapshots for incomplete journal targets,
+//! derives native dependency status, then calls `scan`.
+//! [`Reconciler::reconcile_deep_audit`] is the explicit all-history loader for
+//! rare operator audits.
 //!
 //! Applying the chosen actions is the job of
 //! [`recover::Applier`](crate::recover::Applier), which routes each action
@@ -85,6 +87,17 @@ impl ArtifactSnapshot {
             dependencies: pull_request.dependencies.clone(),
         }
     }
+}
+
+/// How a runtime loads reconciliation snapshots before calling [`Reconciler::scan`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReconciliationMode {
+    /// Load bounded runtime inputs: exact incomplete journal targets plus any
+    /// caller-supplied bounded candidate snapshots.
+    Bounded,
+    /// Load every visible issue and pull request with full details. This is for
+    /// rare operator audits and compatibility tests, not normal hot-path ticks.
+    DeepAudit,
 }
 
 mod finding;
@@ -341,8 +354,8 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
         }
     }
 
-    /// Loads snapshots and journal entries from a backend, derives native
-    /// dependency status from fresh Forge state, then scans them.
+    /// Runs bounded reconciliation from exact incomplete journal targets only.
+    /// It never lists the whole repository.
     pub async fn reconcile<F, J>(
         &self,
         forge: &F,
@@ -353,6 +366,130 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
     where
         F: Forge + ?Sized,
         J: CommandJournal,
+    {
+        self.reconcile_bounded(forge, repo_id, journal, Vec::new(), now)
+            .await
+    }
+
+    /// Runs reconciliation using an explicit loading mode.
+    pub async fn reconcile_with_mode<F, J>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        journal: &J,
+        mode: ReconciliationMode,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<ReconcileReport, ReconcileError>
+    where
+        F: Forge + ?Sized,
+        J: CommandJournal,
+    {
+        match mode {
+            ReconciliationMode::Bounded => self.reconcile(forge, repo_id, journal, now).await,
+            ReconciliationMode::DeepAudit => {
+                self.reconcile_deep_audit(forge, repo_id, journal, now)
+                    .await
+            }
+        }
+    }
+
+    /// Runs bounded reconciliation from exact incomplete journal targets plus
+    /// caller-supplied bounded candidate snapshots. Exact journal snapshots are
+    /// loaded first so deduplication keeps them over duplicate candidates.
+    /// Missing journal targets are omitted, so `scan_command` reports stale.
+    pub async fn reconcile_bounded<F, J>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        journal: &J,
+        bounded_snapshots: Vec<ArtifactSnapshot>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<ReconcileReport, ReconcileError>
+    where
+        F: Forge + ?Sized,
+        J: CommandJournal,
+    {
+        let entries = journal.list().await?;
+        let mut snapshots = self
+            .load_incomplete_journal_snapshots(forge, repo_id, &entries)
+            .await?;
+        snapshots.extend(bounded_snapshots);
+        Ok(self
+            .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
+            .await)
+    }
+
+    /// Loads exact snapshots for incomplete journal command targets.
+    ///
+    /// Issue targets use [`Forge::get_issue_by_number`], pull-request targets use
+    /// [`Forge::get_pull_request_by_number`], and missing targets are skipped.
+    /// The result is deduplicated and ordered by item number, with issues before
+    /// pull requests for the same number.
+    pub async fn load_incomplete_journal_snapshots<F>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        records: &[CommandRecord],
+    ) -> Result<Vec<ArtifactSnapshot>, ReconcileError>
+    where
+        F: Forge + ?Sized,
+    {
+        let mut targets = records
+            .iter()
+            .filter(|record| record.state.is_incomplete())
+            .map(|record| record.target)
+            .collect::<Vec<_>>();
+        sort_artifact_sources(&mut targets);
+        targets.dedup();
+
+        let mut snapshots = Vec::new();
+        for target in targets {
+            match target {
+                ArtifactSource::Issue { number } => {
+                    if let Some(issue) = forge.get_issue_by_number(repo_id, number).await? {
+                        snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                    }
+                }
+                ArtifactSource::PullRequest { number } => {
+                    if let Some(pull_request) =
+                        forge.get_pull_request_by_number(repo_id, number).await?
+                    {
+                        snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
+                    }
+                }
+            }
+        }
+        Ok(snapshots)
+    }
+
+    /// Explicit all-history reconciliation for deep audits and compatibility
+    /// tests. Normal bounded paths should call [`Self::reconcile`] or
+    /// [`Self::reconcile_bounded`] instead.
+    pub async fn reconcile_deep_audit<F, J>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        journal: &J,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<ReconcileReport, ReconcileError>
+    where
+        F: Forge + ?Sized,
+        J: CommandJournal,
+    {
+        let entries = journal.list().await?;
+        let snapshots = self.load_deep_audit_snapshots(forge, repo_id).await?;
+        Ok(self
+            .reconcile_loaded_snapshots(forge, repo_id, snapshots, &entries, now)
+            .await)
+    }
+
+    async fn load_deep_audit_snapshots<F>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+    ) -> Result<Vec<ArtifactSnapshot>, ReconcileError>
+    where
+        F: Forge + ?Sized,
     {
         let issues = forge.list_issues(repo_id, IssueQuery::default()).await?;
         let pull_requests = forge
@@ -365,10 +502,21 @@ impl<'a, P: RecoveryPolicy> Reconciler<'a, P> {
                 .iter()
                 .map(ArtifactSnapshot::from_pull_request),
         );
+        normalize_snapshots(&mut snapshots);
+        Ok(snapshots)
+    }
 
-        let entries = journal.list().await?;
+    async fn reconcile_loaded_snapshots<F: Forge + ?Sized>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        mut snapshots: Vec<ArtifactSnapshot>,
+        entries: &[CommandRecord],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ReconcileReport {
+        normalize_snapshots(&mut snapshots);
         let deps = self.dependency_status(forge, repo_id, &snapshots).await;
-        Ok(self.scan(&snapshots, &entries, &deps, now))
+        self.scan(&snapshots, entries, &deps, now)
     }
 
     async fn dependency_status<F: Forge + ?Sized>(
@@ -413,6 +561,22 @@ fn label_postcondition(effect: &WorkflowEffect) -> Option<Postcondition> {
         WorkflowEffect::AddLabel(label) => Some(Postcondition::LabelPresent(label.clone())),
         WorkflowEffect::RemoveLabel(label) => Some(Postcondition::LabelAbsent(label.clone())),
         _ => None,
+    }
+}
+
+fn normalize_snapshots(snapshots: &mut Vec<ArtifactSnapshot>) {
+    snapshots.sort_by_key(|snapshot| artifact_source_sort_key(snapshot.source));
+    snapshots.dedup_by_key(|snapshot| snapshot.source);
+}
+
+fn sort_artifact_sources(sources: &mut [ArtifactSource]) {
+    sources.sort_by_key(|source| artifact_source_sort_key(*source));
+}
+
+fn artifact_source_sort_key(source: ArtifactSource) -> (ItemNumber, u8) {
+    match source {
+        ArtifactSource::Issue { number } => (number, 0),
+        ArtifactSource::PullRequest { number } => (number, 1),
     }
 }
 

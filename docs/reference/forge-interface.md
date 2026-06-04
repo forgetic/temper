@@ -65,7 +65,7 @@ Read lookups return `ForgeResult<Option<T>>`:
 - `Ok(None)` means the resource does not exist or is not visible.
 - `Err(error)` means the backend could not complete the lookup.
 
-Mutations return `ForgeResult<T>` and should use `ForgeError::NotFound` when the target resource is missing.
+Mutations return `ForgeResult<T>` and should use `ForgeError::NotFound` when the target resource is missing. Callers that already know an issue or pull-request number, such as journal recovery, should prefer exact `get_*_by_number` lookups over broad list queries; an `Ok(None)` target is treated as absent.
 
 ## Sorting semantics
 

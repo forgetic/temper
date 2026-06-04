@@ -135,7 +135,7 @@ pub use plan::{
 };
 pub use reconcile::{
     ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
-    Reconciler, RecoveryAction, RecoveryPolicy,
+    Reconciler, ReconciliationMode, RecoveryAction, RecoveryPolicy,
 };
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;

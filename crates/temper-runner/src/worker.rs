@@ -401,7 +401,7 @@ where
     async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
         let reconciler = self.workflow.reconciler(&self.policy);
         let report = reconciler
-            .reconcile(self.forge, self.repo, self.journal, now)
+            .reconcile_deep_audit(self.forge, self.repo, self.journal, now)
             .await?;
         if report.is_clean() {
             return Ok(Progress::unchanged());

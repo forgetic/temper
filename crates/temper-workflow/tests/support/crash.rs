@@ -36,10 +36,12 @@ pub enum ForgeOp {
     UpdateIssue,
     GetIssueByNumber,
     ListIssues,
+    ListIssuesDefault,
     CreatePullRequest,
     UpdatePullRequest,
     GetPullRequestByNumber,
     ListPullRequests,
+    ListPullRequestsDefault,
     ListPullRequestReviews,
     ListCiJobs,
     MergePullRequest,
@@ -182,6 +184,9 @@ impl<F: Forge> Forge for CrashForge<F> {
         query: IssueQuery,
     ) -> ForgeResult<Vec<Issue>> {
         let n = self.tick(ForgeOp::ListIssues);
+        if query == IssueQuery::default() {
+            self.tick(ForgeOp::ListIssuesDefault);
+        }
         self.guard(ForgeOp::ListIssues, n, FaultPoint::Before)?;
         let result = self.inner.list_issues(repo_id, query).await?;
         self.guard(ForgeOp::ListIssues, n, FaultPoint::After)?;
@@ -246,6 +251,9 @@ impl<F: Forge> Forge for CrashForge<F> {
         query: PullRequestQuery,
     ) -> ForgeResult<Vec<PullRequest>> {
         let n = self.tick(ForgeOp::ListPullRequests);
+        if query == PullRequestQuery::default() {
+            self.tick(ForgeOp::ListPullRequestsDefault);
+        }
         self.guard(ForgeOp::ListPullRequests, n, FaultPoint::Before)?;
         let result = self.inner.list_pull_requests(repo_id, query).await?;
         self.guard(ForgeOp::ListPullRequests, n, FaultPoint::After)?;

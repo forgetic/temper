@@ -58,7 +58,7 @@ fn requeue_lease_clears_the_lease_through_the_manager() {
     ))
     .expect("claim");
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -84,7 +84,7 @@ fn requeue_lease_clears_the_lease_through_the_manager() {
     assert!(metadata.lease.is_none(), "the lease was force-cleared");
 
     // Re-scanning finds nothing more to do.
-    let after = block_on(workflow.reconciler(&policy).reconcile(
+    let after = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -128,7 +128,7 @@ fn repair_realizes_pending_labels_and_reconciles_the_command() {
     ))
     .expect("applying");
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -146,7 +146,7 @@ fn repair_realizes_pending_labels_and_reconciles_the_command() {
     );
     assert_eq!(command_state(&journal, "claim-1"), CommandState::Reconciled);
 
-    let after = block_on(workflow.reconciler(&policy).reconcile(
+    let after = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -171,7 +171,7 @@ fn unblock_realizes_labels_and_journals_a_completed_command() {
     let executor = Executor::new(&workflow, &forge);
     let journal = InMemoryJournal::new();
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -199,7 +199,7 @@ fn unblock_realizes_labels_and_journals_a_completed_command() {
     );
 
     // Once unblocked, the issue no longer admits the mechanical unblock.
-    let after = block_on(workflow.reconciler(&policy).reconcile(
+    let after = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -243,7 +243,7 @@ fn mark_reconciled_flips_a_stale_command_state() {
     ))
     .expect("applying");
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -276,7 +276,7 @@ fn escalate_is_recorded_advisory_and_never_mutates_state() {
     let executor = Executor::new(&workflow, &forge);
     let journal = InMemoryJournal::new();
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -342,7 +342,7 @@ fn re_applying_a_report_is_a_no_op() {
     ))
     .expect("applying");
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &crash,
         &repo,
         &journal,
@@ -423,7 +423,7 @@ fn the_scan_apply_loop_converges_to_a_clean_state() {
     let applier = Applier::new(&executor, &manager, &journal);
     let mut iterations = 0;
     loop {
-        let report = block_on(workflow.reconciler(&policy).reconcile(
+        let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
             &forge,
             &repo,
             &journal,

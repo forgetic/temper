@@ -503,7 +503,7 @@ fn expired_in_progress_work_becomes_visible_for_recovery() {
     let journal = InMemoryJournal::new();
 
     // Before expiry, the live lease is left alone.
-    let quiet = block_on(workflow.reconciler(&policy).reconcile(
+    let quiet = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -513,7 +513,7 @@ fn expired_in_progress_work_becomes_visible_for_recovery() {
     assert!(quiet.is_clean(), "a live lease is not reconciled");
 
     // After expiry, the abandoned claim becomes visible and is requeued.
-    let recovered = block_on(workflow.reconciler(&policy).reconcile(
+    let recovered = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
@@ -555,7 +555,7 @@ fn impossible_label_combinations_are_detected_not_silently_ignored() {
     // And the reconciler surfaces it as an impossible state to escalate.
     let policy = DefaultRecoveryPolicy;
     let journal = InMemoryJournal::new();
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let report = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
         &forge,
         &repo,
         &journal,
