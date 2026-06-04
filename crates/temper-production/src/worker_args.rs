@@ -16,6 +16,7 @@ pub const ROLE_DECISION_ARGS_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_ARGS_JSON"
 pub const ROLE_DECISION_CWD_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_CWD";
 pub const ROLE_DECISION_ENV_ALLOWLIST_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST";
 pub const ROLE_DECISION_TIMEOUT_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_TIMEOUT_SECS";
+pub const DEFAULT_AUDIT_INTERVAL_MS: i64 = 600_000;
 
 pub const USAGE: &str = concat!(
     "temper-worker --backend forgejo --base-url <url> (--repo <owner/name> [--repo <owner/name> ...] | --repo-list <path>) ",
@@ -23,7 +24,7 @@ pub const USAGE: &str = concat!(
     "[--role-decision-command <path>] [--role-decision-arg <arg>] ",
     "[--role-decision-env <name>] [--role-decision-cwd <path>] ",
     "[--role-decision-timeout-secs <n>] ",
-    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
+    "[--poll-ms <n>] [--audit-ms <n>] [--stop-file <path>] [--run-secs <max>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>] ",
     "[--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from TEMPER_FORGEJO_TOKEN; optional web UI credentials ",
@@ -75,6 +76,8 @@ pub struct WorkerArgs {
     /// Forge permissions on the token remain the authority for mutations.
     pub repositories: Vec<RepositoryPath>,
     pub poll_interval: Duration,
+    /// Low-frequency broad audit cadence. `None` disables audit ticks.
+    pub audit_interval: Option<Duration>,
     pub stop_file: Option<PathBuf>,
     pub run_secs: Option<u64>,
     pub wake_socket: Option<PathBuf>,
@@ -95,6 +98,7 @@ impl fmt::Debug for WorkerArgs {
             .field("name", &self.name)
             .field("repositories", &self.repositories)
             .field("poll_interval", &self.poll_interval)
+            .field("audit_interval", &self.audit_interval)
             .field("stop_file", &self.stop_file)
             .field("run_secs", &self.run_secs)
             .field("wake_socket", &self.wake_socket)
@@ -156,6 +160,7 @@ struct RawArgs {
     role: Option<String>,
     user: Option<String>,
     poll_ms: Option<String>,
+    audit_ms: Option<String>,
     stop_file: Option<String>,
     run_secs: Option<String>,
     wake_socket: Option<String>,
@@ -182,6 +187,7 @@ impl RawArgs {
                 "--role" => raw.role = Some(value_for(&flag, &mut iter)?),
                 "--user" => raw.user = Some(value_for(&flag, &mut iter)?),
                 "--poll-ms" => raw.poll_ms = Some(value_for(&flag, &mut iter)?),
+                "--audit-ms" => raw.audit_ms = Some(value_for(&flag, &mut iter)?),
                 "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
@@ -261,6 +267,7 @@ impl RawArgs {
                 Some(raw) => parse_i64(&raw, "--poll-ms")?,
                 None => 1_000,
             }),
+            audit_interval: parse_audit_interval(self.audit_ms)?,
             stop_file: self.stop_file.map(PathBuf::from),
             run_secs: self
                 .run_secs
@@ -440,13 +447,31 @@ fn parse_role_decision_timeout_secs(raw: &str) -> Result<u64, ArgsError> {
     Ok(value)
 }
 
+fn parse_audit_interval(raw: Option<String>) -> Result<Option<Duration>, ArgsError> {
+    let value = match raw {
+        Some(raw) => parse_i64_allow_zero(&raw, "--audit-ms")?,
+        None => DEFAULT_AUDIT_INTERVAL_MS,
+    };
+    Ok((value > 0).then(|| Duration::milliseconds(value)))
+}
+
 fn parse_i64(raw: &str, flag: &str) -> Result<i64, ArgsError> {
-    let value = raw
-        .parse::<i64>()
-        .map_err(|_| ArgsError::new(format!("{flag} must be an integer, got '{raw}'")))?;
+    let value = parse_i64_allow_zero(raw, flag)?;
     if value <= 0 {
         return Err(ArgsError::new(format!(
             "{flag} must be positive, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
+fn parse_i64_allow_zero(raw: &str, flag: &str) -> Result<i64, ArgsError> {
+    let value = raw
+        .parse::<i64>()
+        .map_err(|_| ArgsError::new(format!("{flag} must be an integer, got '{raw}'")))?;
+    if value < 0 {
+        return Err(ArgsError::new(format!(
+            "{flag} must be non-negative, got {value}"
         )));
     }
     Ok(value)

@@ -155,6 +155,55 @@ fn parses_production_safety_flags() {
 }
 
 #[test]
+fn parses_audit_interval_and_allows_disabling_audit() {
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+            "--audit-ms",
+            "2500",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(args.audit_interval, Some(Duration::milliseconds(2500)));
+
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+            "--audit-ms",
+            "0",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(args.audit_interval, None);
+}
+
+#[test]
 fn parses_optional_wake_socket() {
     let outcome = parse_with_env(
         [

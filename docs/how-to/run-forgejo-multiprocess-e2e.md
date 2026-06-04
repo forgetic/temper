@@ -229,8 +229,10 @@ cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --te
 
 These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
 register the production `/forgejo/webhook` trigger, and launch fake-agent
-Forgejo workers with authenticated Unix wake sockets and `--poll-ms 120000`. The
-throwaway server config must allow loopback webhook targets (`[webhook]`
+Forgejo workers with authenticated Unix wake sockets and `--poll-ms 120000`.
+The workers default to a conservative audit cadence of `--audit-ms 600000` (`0`
+disables audit ticks), so the immediate webhook assertions exercise hint-narrowed
+wake scans rather than the poll/audit backstop. The throwaway server config must allow loopback webhook targets (`[webhook]`
 `ALLOWED_HOST_LIST = 127.0.0.1,localhost`); if hooks register but no trigger
 request arrives, check that setting before debugging signatures or wake sockets.
 The multi-repo variants provision a second repo, register webhooks for both
@@ -240,8 +242,12 @@ less than the poll interval.
 
 On timeout the panic prints the trigger URL (trigger logs are on test stderr),
 repo-specific stalled assertion text, worker log paths/tails, runner log tail,
-and per-repo CI diagnostics. Run these serially for the same CPU/isolation
-reasons as the multi-process suite.
+and per-repo CI diagnostics. Worker tick logs include `scanned_repositories` and
+`scanned_repository_paths`; the multi-repo webhook regression uses these counters
+to prove source-repo role-worker wakes can narrow to one configured repo even
+when provider startup noise also produces broad mixed-repo batches. Mechanical wake scans intentionally remain broad so cross-repo recovery can
+observe dependency-source repositories. Run these serially for the same
+CPU/isolation reasons as the multi-process suite.
 
 ## Running it in CI
 

@@ -463,6 +463,40 @@ impl WorkerFleet {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    pub fn log_offsets(&self) -> Vec<LogOffset> {
+        self.workers
+            .iter()
+            .map(|worker| LogOffset {
+                label: worker.label.clone(),
+                log: worker.log.clone(),
+                bytes: std::fs::metadata(&worker.log)
+                    .map(|meta| meta.len())
+                    .unwrap_or(0),
+            })
+            .collect()
+    }
+
+    pub fn wake_scan_lines_since(&self, offsets: &[LogOffset]) -> Vec<String> {
+        offsets
+            .iter()
+            .flat_map(|offset| {
+                let log = std::fs::read_to_string(&offset.log).unwrap_or_default();
+                let start = usize::try_from(offset.bytes).unwrap_or(0).min(log.len());
+                log[start..]
+                    .lines()
+                    .filter(|line| line.contains("completed tick trigger=wake"))
+                    .map(|line| format!("{}: {line}", offset.label))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+}
+
+pub struct LogOffset {
+    label: String,
+    log: PathBuf,
+    bytes: u64,
 }
 
 impl Drop for WorkerFleet {

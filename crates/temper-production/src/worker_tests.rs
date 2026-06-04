@@ -3,9 +3,11 @@ use crate::pr_diff_guard::GuardRole;
 use crate::wake::{send_wake, send_wake_with_hint, wait_for_wake_or_poll, WakeWaitOutcome};
 use crate::worker_role_agent::guard_role_for_manifest;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use temper_forge::{ChangeKind, CreateRepository};
+use temper_forge::{ChangeKind, CreateIssue, CreateRepository, RepositoryId};
 use temper_forge_memory::MemoryForge;
+use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 
 fn temp_path(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -149,10 +151,125 @@ fn known_hints_drop_unknown_repos_so_wake_becomes_broad_scan() {
     let unknown = ChangeHint::repo(RepositoryPath::new("acme", "other"), ChangeKind::Issue);
 
     assert_eq!(
-        known_hints_for(&repositories, std::slice::from_ref(&known)),
+        known_hints_for(&repositories, std::slice::from_ref(&known), "test"),
         vec![known]
     );
-    assert!(known_hints_for(&repositories, &[unknown]).is_empty());
+    assert!(known_hints_for(&repositories, &[unknown], "test").is_empty());
+}
+
+struct RecordingAgent {
+    seen: Arc<Mutex<Vec<RepositoryId>>>,
+}
+
+#[async_trait::async_trait]
+impl Agent<MemoryForge> for RecordingAgent {
+    async fn service(
+        &self,
+        _item: &WorkItem,
+        tools: &RoleTools<'_, MemoryForge>,
+    ) -> Result<bool, AgentError> {
+        self.seen
+            .lock()
+            .expect("recording mutex")
+            .push(tools.repo().clone());
+        Ok(false)
+    }
+}
+
+#[test]
+fn production_role_wake_with_known_hint_scans_only_that_repo() {
+    let forge = MemoryForge::new();
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let repo_a = runtime
+        .block_on(forge.create_repository(CreateRepository {
+            owner: "acme".into(),
+            name: "alpha".into(),
+            default_branch: "main".into(),
+            description: None,
+        }))
+        .expect("repo a creates");
+    let repo_b = runtime
+        .block_on(forge.create_repository(CreateRepository {
+            owner: "acme".into(),
+            name: "bravo".into(),
+            default_branch: "main".into(),
+            description: None,
+        }))
+        .expect("repo b creates");
+    for repo in [&repo_a.id, &repo_b.id] {
+        runtime
+            .block_on(forge.create_issue(
+                repo,
+                CreateIssue {
+                    title: "ready work".into(),
+                    body: String::new(),
+                    labels: vec!["code".into(), "ready".into()],
+                    assignees: Vec::new(),
+                },
+            ))
+            .expect("issue creates");
+    }
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = MultiRepoRoleWorker::new(
+        &workflow,
+        &compiled,
+        &forge,
+        RepositorySet::new(vec![
+            RepositoryTarget::new(
+                repo_a.id.clone(),
+                RepositoryPath::new(repo_a.owner.clone(), repo_a.name.clone()),
+            ),
+            RepositoryTarget::new(
+                repo_b.id.clone(),
+                RepositoryPath::new(repo_b.owner.clone(), repo_b.name.clone()),
+            ),
+        ]),
+        RoleId::new("engineer"),
+        Arc::new(RecordingAgent {
+            seen: Arc::clone(&seen),
+        }),
+        temper_workflow::ExecutionContext::new(),
+    );
+    let hint = ChangeHint::repo(RepositoryPath::new("acme", "bravo"), ChangeKind::Issue);
+
+    let report = runtime
+        .block_on(worker.tick_for_reason(
+            chrono::Utc::now(),
+            TickReason::Wake,
+            &[hint],
+            "tick/test/wake/1",
+        ))
+        .expect("wake tick succeeds");
+
+    assert_eq!(report.scanned_repository_count, 1);
+    assert_eq!(
+        report.scanned_repository_paths,
+        vec!["acme/bravo".to_string()]
+    );
+    assert_eq!(*seen.lock().unwrap(), vec![repo_b.id.clone()]);
+
+    seen.lock().unwrap().clear();
+    let unknown = ChangeHint::repo(RepositoryPath::new("acme", "charlie"), ChangeKind::Issue);
+    let report = runtime
+        .block_on(worker.tick_for_reason(
+            chrono::Utc::now(),
+            TickReason::Wake,
+            &[unknown],
+            "tick/test/wake/2",
+        ))
+        .expect("unknown hint falls back to broad scan");
+    assert_eq!(report.scanned_repository_count, 2);
+    assert_eq!(
+        report.scanned_repository_paths,
+        vec!["acme/alpha".to_string(), "acme/bravo".to_string()]
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![repo_a.id.clone(), repo_b.id.clone()]
+    );
 }
 
 #[test]
@@ -227,7 +344,7 @@ fn wake_payload_carries_repository_hint_to_waiter() {
 }
 
 #[test]
-fn burst_wakes_are_coalesced_into_one_wait_outcome() {
+fn broad_wake_in_coalesced_batch_forces_broad_wait_outcome() {
     let socket = temp_path("burst");
     let runtime = runtime();
     let _guard = runtime.enter();
@@ -254,7 +371,7 @@ fn burst_wakes_are_coalesced_into_one_wait_outcome() {
         ))
         .expect("wait succeeds");
 
-    assert_eq!(outcome, WakeWaitOutcome::Wake(vec![issue_hint, pr_hint]));
+    assert_eq!(outcome, WakeWaitOutcome::Wake(Vec::new()));
 }
 
 #[test]

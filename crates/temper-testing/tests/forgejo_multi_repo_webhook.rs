@@ -119,6 +119,8 @@ fn run_webhook_variant(variant: WebhookVariant) {
         "default",
     );
     workers.wait_for_initial_ticks(Duration::from_secs(30));
+    std::thread::sleep(Duration::from_millis(1_500));
+    let pre_seed_log_offsets = workers.log_offsets();
 
     let started = Instant::now();
     match variant.seed {
@@ -173,6 +175,28 @@ fn run_webhook_variant(variant: WebhookVariant) {
         "no worker consumed an authenticated wake; logs:\n{}",
         workers.logs()
     );
+    if matches!(variant.seed, SeedMode::SourceRepoOnly) {
+        let expected_repo = repos[0].display();
+        let wake_lines = workers.wake_scan_lines_since(&pre_seed_log_offsets);
+        assert!(
+            !wake_lines.is_empty(),
+            "no completed wake scan lines found; logs:\n{}",
+            workers.logs()
+        );
+        let role_wake_lines = wake_lines
+            .into_iter()
+            .filter(|line| line.starts_with("role:"))
+            .collect::<Vec<_>>();
+        assert!(
+            role_wake_lines.iter().any(|line| {
+                line.contains("scanned_repositories=1")
+                    && line.contains(&format!("scanned_repository_paths={expected_repo}"))
+            }),
+            "no narrowed source-repo role wake found for {expected_repo}; role wake lines:\n{}\nlogs:\n{}",
+            role_wake_lines.join("\n"),
+            workers.logs()
+        );
+    }
     for (label, status) in &exits {
         assert!(status.success(), "worker '{label}' exited with {status:?}");
     }

@@ -115,8 +115,8 @@ pub use role_decision_process::{
     WorkflowRoleDecisionProcessError,
 };
 pub use scan::{
-    candidate_query_plan, scan, scan_audit, scan_role, CandidateQueryPlan, ScanError, ScanMode,
-    WorkItem,
+    candidate_query_plan, scan, scan_audit, scan_role, scan_role_audit, CandidateQueryPlan,
+    ScanError, ScanMode, WorkItem,
 };
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{

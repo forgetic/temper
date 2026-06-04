@@ -144,6 +144,7 @@ fn drain_wake_batch(
     listener: &WakeListener,
     first: Option<ChangeHint>,
 ) -> Result<Vec<ChangeHint>, WakeError> {
+    let mut broad = first.is_none();
     let mut hints = first.into_iter().collect::<Vec<_>>();
     let mut drained = 0usize;
     loop {
@@ -158,7 +159,10 @@ fn drain_wake_batch(
                 hints.push(hint);
                 drained += 1;
             }
-            Ok(Some(None)) => drained += 1,
+            Ok(Some(None)) => {
+                broad = true;
+                drained += 1;
+            }
             Ok(None) => break,
             Err(WakeError::Unauthorized) => {
                 eprintln!("temper-wake: ignored unauthorized wake message");
@@ -167,7 +171,11 @@ fn drain_wake_batch(
             Err(error) => return Err(error),
         }
     }
-    Ok(hints)
+    if broad {
+        Ok(Vec::new())
+    } else {
+        Ok(hints)
+    }
 }
 
 pub async fn wait_for_wake_or_poll(

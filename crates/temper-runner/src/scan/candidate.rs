@@ -9,9 +9,9 @@ pub enum ScanMode {
     /// Normal role/work scans. When a role is supplied, only that role's
     /// subscribed queues contribute candidate queries.
     Normal,
-    /// Broader audit scans. Audit ignores the role filter, includes all queues,
+    /// Broader audit scans. Audit includes all queues for candidate discovery
     /// and adds workflow-label recovery interest while still avoiding unlabelled
-    /// closed history.
+    /// closed history; callers may still filter emitted work to one role.
     Audit,
 }
 

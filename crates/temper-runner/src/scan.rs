@@ -121,6 +121,27 @@ pub async fn scan_audit<F: Forge + ?Sized>(
     scan_inner(forge, repo, workflow, compiled, now, None, ScanMode::Audit).await
 }
 
+/// Runs an audit scan but emits work only for one role.
+pub async fn scan_role_audit<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    role: &RoleId,
+) -> Result<Vec<WorkItem>, ScanError> {
+    scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Audit,
+    )
+    .await
+}
+
 async fn scan_inner<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
@@ -130,12 +151,12 @@ async fn scan_inner<F: Forge + ?Sized>(
     role: Option<&RoleId>,
     mode: ScanMode,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    let role_filter = match (mode, role) {
-        (ScanMode::Normal, Some(id)) => match compiled.role(id) {
+    let role_filter = match role {
+        Some(id) => match compiled.role(id) {
             Some(manifest) => Some((id, manifest.queues.as_slice())),
             None => return Ok(Vec::new()),
         },
-        (ScanMode::Normal, None) | (ScanMode::Audit, _) => None,
+        None => None,
     };
 
     let queues = candidate::queues_for_scan(compiled, role, mode);

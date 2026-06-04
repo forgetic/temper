@@ -427,6 +427,95 @@ fn backend_error_in_one_repo_does_not_stop_remaining_repos() {
 }
 
 #[test]
+fn role_worker_hint_matching_ticks_only_the_hinted_repository() {
+    let forge = MemoryForge::new();
+    let repo_a = create_repo(&forge, "a");
+    let repo_b = create_repo(&forge, "b");
+    let repo_c = create_repo(&forge, "c");
+    for repo in [&repo_a, &repo_b, &repo_c] {
+        create_issue(&forge, &repo.id, &["code", "ready"]);
+    }
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = MultiRepoRoleWorker::new(
+        &workflow,
+        &compiled,
+        &forge,
+        RepositorySet::new(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()]),
+        RoleId::new("engineer"),
+        Arc::new(RecordingAgent {
+            seen: Arc::clone(&seen),
+        }),
+        ExecutionContext::new(),
+    );
+
+    let hint = ChangeHint::repo(RepositoryPath::new("acme", "b"), ChangeKind::Issue);
+    let report = block_on(worker.tick_matching_hints(ts("2026-05-29T00:00:00Z"), &[hint]));
+
+    assert!(report.failures.is_empty());
+    assert_eq!(report.scanned_repository_count(), 1);
+    assert_eq!(
+        report.scanned_repository_paths(),
+        vec!["acme/b".to_string()]
+    );
+    assert_eq!(*seen.lock().unwrap(), vec![repo_b.id.clone()]);
+}
+
+#[test]
+fn mechanical_worker_hint_matching_ticks_only_the_hinted_repository() {
+    let forge = MemoryForge::new();
+    let repo_a = create_repo(&forge, "a");
+    let repo_b = create_repo(&forge, "b");
+    let dep_a = create_issue(&forge, &repo_a.id, &["code", "ready"]);
+    let dep_b = create_issue(&forge, &repo_b.id, &["code", "ready"]);
+    close_issue(&forge, &repo_a.id, dep_a);
+    close_issue(&forge, &repo_b.id, dep_b);
+    let blocked_a = create_issue(&forge, &repo_a.id, &["code", "blocked"]);
+    let blocked_b = create_issue(&forge, &repo_b.id, &["code", "blocked"]);
+    add_issue_dependency(&forge, &repo_a.id, blocked_a, dep_a);
+    add_issue_dependency(&forge, &repo_b.id, blocked_b, dep_b);
+    let workflow = workflow();
+    let journal_a = InMemoryJournal::new();
+    let journal_b = InMemoryJournal::new();
+    let worker = MultiRepoMechanicalWorker::new(
+        &workflow,
+        &forge,
+        RepositorySet::new(vec![repo_a.clone(), repo_b.clone()]),
+        vec![
+            RepositoryJournal {
+                repository: &repo_a.id,
+                journal: &journal_a,
+            },
+            RepositoryJournal {
+                repository: &repo_b.id,
+                journal: &journal_b,
+            },
+        ],
+        lease_policy(),
+    )
+    .expect("worker builds");
+
+    let hint = ChangeHint::repo(RepositoryPath::new("acme", "b"), ChangeKind::Issue);
+    let report = block_on(worker.tick_matching_hints(ts("2026-05-29T00:00:00Z"), &[hint]));
+
+    assert!(report.failures.is_empty());
+    assert_eq!(report.scanned_repository_count(), 1);
+    assert_eq!(
+        report.scanned_repository_paths(),
+        vec!["acme/b".to_string()]
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo_a.id, blocked_a),
+        vec!["blocked".to_string(), "code".to_string()]
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo_b.id, blocked_b),
+        vec!["code".to_string(), "ready".to_string()]
+    );
+}
+
+#[test]
 fn repository_scan_order_is_deterministic_and_hints_prioritize() {
     let forge = MemoryForge::new();
     let repo_c = create_repo(&forge, "c");

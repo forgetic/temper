@@ -16,6 +16,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use temper_forge::RepositoryPath;
 
+const DEFAULT_AUDIT_INTERVAL_MS: i64 = 600_000;
+
 /// Outcome of parsing the raw argument vector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ParseOutcome {
@@ -33,7 +35,7 @@ pub const USAGE: &str = concat!(
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
     "[--agents <fake>] ",
-    "[--poll-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
+    "[--poll-ms <n>] [--audit-ms <n>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
     "[--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
     "TEMPER_FORGEJO_TOKEN (required), TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD ",
@@ -85,6 +87,7 @@ struct RawArgs {
     ci: Option<String>,
     ci_sentinel: Option<String>,
     poll_ms: Option<String>,
+    audit_ms: Option<String>,
     stop_file: Option<String>,
     run_secs: Option<String>,
     clock: Option<String>,
@@ -112,6 +115,7 @@ impl RawArgs {
             ci: None,
             ci_sentinel: None,
             poll_ms: None,
+            audit_ms: None,
             stop_file: None,
             run_secs: None,
             clock: None,
@@ -135,6 +139,7 @@ impl RawArgs {
                 "--ci" => raw.ci = Some(value_for(&flag, &mut iter)?),
                 "--ci-sentinel" => raw.ci_sentinel = Some(value_for(&flag, &mut iter)?),
                 "--poll-ms" => raw.poll_ms = Some(value_for(&flag, &mut iter)?),
+                "--audit-ms" => raw.audit_ms = Some(value_for(&flag, &mut iter)?),
                 "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
                 "--clock" => raw.clock = Some(value_for(&flag, &mut iter)?),
@@ -168,6 +173,7 @@ impl RawArgs {
             Some(raw) => Duration::milliseconds(parse_i64(&raw, "--poll-ms")?),
             None => Duration::milliseconds(50),
         };
+        let audit_interval = parse_audit_interval(self.audit_ms)?;
         let stop_file = self.stop_file.map(PathBuf::from);
         let run_secs = self
             .run_secs
@@ -229,6 +235,7 @@ impl RawArgs {
             name,
             repositories,
             poll_interval,
+            audit_interval,
             stop_file,
             run_secs,
             clock,
@@ -418,9 +425,34 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|raw| !raw.is_empty())
 }
 
+fn parse_audit_interval(raw: Option<String>) -> Result<Option<Duration>, ArgsError> {
+    let value = match raw {
+        Some(raw) => parse_i64_allow_zero(&raw, "--audit-ms")?,
+        None => DEFAULT_AUDIT_INTERVAL_MS,
+    };
+    Ok((value > 0).then(|| Duration::milliseconds(value)))
+}
+
 fn parse_i64(raw: &str, flag: &str) -> Result<i64, ArgsError> {
-    raw.parse::<i64>()
-        .map_err(|_| ArgsError::new(format!("{flag} must be an integer, got '{raw}'")))
+    let value = parse_i64_allow_zero(raw, flag)?;
+    if value <= 0 {
+        return Err(ArgsError::new(format!(
+            "{flag} must be positive, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
+fn parse_i64_allow_zero(raw: &str, flag: &str) -> Result<i64, ArgsError> {
+    let value = raw
+        .parse::<i64>()
+        .map_err(|_| ArgsError::new(format!("{flag} must be an integer, got '{raw}'")))?;
+    if value < 0 {
+        return Err(ArgsError::new(format!(
+            "{flag} must be non-negative, got {value}"
+        )));
+    }
+    Ok(value)
 }
 
 fn parse_u64(raw: &str, flag: &str) -> Result<u64, ArgsError> {

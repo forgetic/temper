@@ -102,13 +102,20 @@ Status legend: ☐ pending · ☑ done
    labelled PR discovery, summary-vs-full dependency detail, open scan state
    narrowing, and non-CI summary reads staying off the web-UI CI path.
 
-4. ☐ **Phase 4 — Hint-narrowed multi-repo ticks.**
+4. ☑ **Phase 4 — Hint-narrowed multi-repo ticks.**
    `prompts/phase-4-hint-narrowed-ticks.md`
 
-   Change production and testing worker wake ticks so known repo-specific hints
-   scan only matching repositories for the immediate wake tick. Poll/audit ticks
-   still scan the configured set. Mechanical workers get the same narrowing where
-   safe.
+   Production `temper-worker` and Forgejo `temper-testing-worker` now preserve
+   decoded wake hints and narrow immediate multi-repo wake ticks to configured
+   repositories named by known hints. Unknown or broad/no-hint wake batches fall
+   back to a broad configured-repo scan, while poll ticks remain broad normal
+   scans. Notable finding: mechanical wake ticks stay broad even for known hints
+   because cross-repo dependency recovery can require scanning a source repo when
+   the webhook came from a dependency target repo. Role audit ticks are wired
+   behind `--audit-ms` (default 600000 ms; `0` disables) and use Phase 2 audit
+   candidate discovery; mechanical audit ticks keep the broad reconciler path. Tick logs include
+   `scanned_repositories` and `scanned_repository_paths` for debugging and e2e
+   assertions.
 
 5. ☐ **Phase 5 — Faster Forgejo e2e topology.**
    `prompts/phase-5-faster-forgejo-e2e-topology.md`

@@ -1,0 +1,480 @@
+//! Forgejo worker drive loop with wake-hint narrowing.
+
+use std::time::{Duration as StdDuration, Instant};
+
+use temper_forge::{ChangeHint, Forge};
+use temper_production::wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
+use temper_runner::{
+    MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress, RepositorySet,
+    RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
+};
+use temper_workflow::{CommandJournal, RecoveryPolicy};
+
+use crate::worker_bin::args::WorkerArgs;
+use crate::worker_bin::run::{RunError, StopSignal};
+
+/// How many consecutive failing ticks abort a Forgejo worker. A real server
+/// under concurrent multi-process load returns transient `5xx`/conflict errors;
+/// a level-triggered poll worker must survive those and retry. A long run of
+/// failures means a genuine misconfiguration, so abort loudly.
+const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
+
+pub(super) struct ForgejoTickReport {
+    progress: Progress,
+    scanned_repository_count: usize,
+    scanned_repository_paths: Vec<String>,
+}
+
+impl ForgejoTickReport {
+    fn single(progress: Progress) -> Self {
+        Self {
+            progress,
+            scanned_repository_count: 1,
+            scanned_repository_paths: Vec::new(),
+        }
+    }
+
+    fn from_multi_repo(report: temper_runner::MultiRepoTickReport) -> Result<Self, WorkerError> {
+        let scanned_repository_count = report.scanned_repository_count();
+        let scanned_repository_paths = report.scanned_repository_paths();
+        let progress = report.into_worker_result()?;
+        Ok(Self {
+            progress,
+            scanned_repository_count,
+            scanned_repository_paths,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TickReason {
+    Initial,
+    Poll,
+    Wake,
+    Audit,
+}
+
+impl TickReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            TickReason::Initial => "initial",
+            TickReason::Poll => "poll",
+            TickReason::Wake => "wake",
+            TickReason::Audit => "audit",
+        }
+    }
+}
+
+#[async_trait::async_trait]
+pub(super) trait ForgejoDriveWorker: Sync {
+    async fn tick_for_reason(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        reason: TickReason,
+        hints: &[ChangeHint],
+    ) -> Result<ForgejoTickReport, WorkerError>;
+
+    fn name(&self) -> &str;
+}
+
+#[async_trait::async_trait]
+impl<F: Forge + ?Sized> ForgejoDriveWorker for RoleWorker<'_, F> {
+    async fn tick_for_reason(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        reason: TickReason,
+        _hints: &[ChangeHint],
+    ) -> Result<ForgejoTickReport, WorkerError> {
+        let progress = if reason == TickReason::Audit {
+            self.tick_audit(now).await?
+        } else {
+            Worker::tick(self, now).await?
+        };
+        Ok(ForgejoTickReport::single(progress))
+    }
+
+    fn name(&self) -> &str {
+        Worker::name(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl<F: Forge + ?Sized> ForgejoDriveWorker for MultiRepoRoleWorker<'_, F> {
+    async fn tick_for_reason(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        reason: TickReason,
+        hints: &[ChangeHint],
+    ) -> Result<ForgejoTickReport, WorkerError> {
+        let report = match reason {
+            TickReason::Wake => {
+                let known = known_hints_for(self.repositories(), hints);
+                if known.is_empty() {
+                    self.tick_hinted(now, &[]).await
+                } else {
+                    self.tick_matching_hints(now, &known).await
+                }
+            }
+            TickReason::Audit => self.tick_audit_report(now).await,
+            TickReason::Initial | TickReason::Poll => self.tick_hinted(now, &[]).await,
+        };
+        ForgejoTickReport::from_multi_repo(report)
+    }
+
+    fn name(&self) -> &str {
+        Worker::name(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl<F, J, P> ForgejoDriveWorker for MechanicalWorker<'_, F, J, P>
+where
+    F: Forge + ?Sized,
+    J: CommandJournal,
+    P: RecoveryPolicy + Send + Sync,
+{
+    async fn tick_for_reason(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        _reason: TickReason,
+        _hints: &[ChangeHint],
+    ) -> Result<ForgejoTickReport, WorkerError> {
+        Worker::tick(self, now).await.map(ForgejoTickReport::single)
+    }
+
+    fn name(&self) -> &str {
+        Worker::name(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl<F, J, P> ForgejoDriveWorker for MultiRepoMechanicalWorker<'_, F, J, P>
+where
+    F: Forge + ?Sized,
+    J: CommandJournal,
+    P: RecoveryPolicy + Clone + Send + Sync,
+{
+    async fn tick_for_reason(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        reason: TickReason,
+        hints: &[ChangeHint],
+    ) -> Result<ForgejoTickReport, WorkerError> {
+        let report = match reason {
+            TickReason::Wake => {
+                let known = known_hints_for(self.repositories(), hints);
+                if !known.is_empty() {
+                    eprintln!(
+                        "temper-testing-worker: mechanical wake uses broad scan despite configured hints to preserve cross-repo recovery"
+                    );
+                }
+                self.tick_report(now).await
+            }
+            TickReason::Initial | TickReason::Poll | TickReason::Audit => {
+                self.tick_report(now).await
+            }
+        };
+        ForgejoTickReport::from_multi_repo(report)
+    }
+
+    fn name(&self) -> &str {
+        Worker::name(self)
+    }
+}
+
+fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<ChangeHint> {
+    let mut known = Vec::new();
+    for hint in hints {
+        if repositories
+            .matching_hints(std::slice::from_ref(hint))
+            .is_empty()
+        {
+            eprintln!(
+                "temper-testing-worker: wake hint for unconfigured repo {}/{}; treating wake as broad scan if no configured hints remain",
+                hint.repo.owner, hint.repo.name
+            );
+        } else {
+            known.push(hint.clone());
+        }
+    }
+    known
+}
+
+/// Drives `worker` with a resilient wall-clock poll loop on the current Tokio
+/// runtime. Authenticated wake hints interrupt the wait; known repo hints narrow
+/// the immediate multi-repo wake tick, while polls and audits remain broad.
+pub(super) async fn drive_async<W: ForgejoDriveWorker>(
+    args: &WorkerArgs,
+    worker: &W,
+) -> Result<RunReport, RunError> {
+    let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
+    let interval = args
+        .poll_interval
+        .to_std()
+        .unwrap_or_else(|_| StdDuration::from_millis(50));
+    let wake = match args.wake_socket.clone() {
+        Some(socket) => Some(
+            WakeListener::bind(
+                WakeConfig::from_files(socket, args.wake_secret_file.clone())
+                    .map_err(|error| RunError::Backend(error.to_string()))?,
+            )
+            .map_err(|error| RunError::Backend(error.to_string()))?,
+        ),
+        None => None,
+    };
+    let audit_interval = args
+        .audit_interval
+        .and_then(|duration| duration.to_std().ok());
+    let mut next_poll_due = Instant::now() + interval;
+    let mut next_audit_due = audit_interval.map(|duration| Instant::now() + duration);
+    let mut next_tick_reason = TickReason::Initial;
+    let mut pending_hints = Vec::new();
+    let mut consecutive_failures = 0u32;
+    let mut report = RunReport {
+        ticks: 0,
+        workers: vec![WorkerRunReport {
+            name: worker.name().to_string(),
+            ticks: 0,
+            actions: 0,
+        }],
+    };
+
+    while !stop.should_stop() {
+        let tick_reason = next_tick_reason;
+        let tick_hints = if tick_reason == TickReason::Wake {
+            std::mem::take(&mut pending_hints)
+        } else {
+            Vec::new()
+        };
+        match worker
+            .tick_for_reason(chrono::Utc::now(), tick_reason, &tick_hints)
+            .await
+        {
+            Ok(tick) => {
+                consecutive_failures = 0;
+                report.ticks = report.ticks.saturating_add(1);
+                report.workers[0].ticks = report.workers[0].ticks.saturating_add(1);
+                report.workers[0].actions = report.workers[0]
+                    .actions
+                    .saturating_add(u64::from(tick.progress.actions));
+                record_completed_tick_deadline(
+                    tick_reason,
+                    interval,
+                    audit_interval,
+                    &mut next_poll_due,
+                    &mut next_audit_due,
+                );
+                eprintln!(
+                    "temper-testing-worker: worker '{}' completed tick trigger={} actions={} scanned_repositories={} scanned_repository_paths={}",
+                    worker.name(),
+                    tick_reason.as_str(),
+                    tick.progress.actions,
+                    tick.scanned_repository_count,
+                    render_repo_paths(&tick.scanned_repository_paths)
+                );
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                record_completed_tick_deadline(
+                    tick_reason,
+                    interval,
+                    audit_interval,
+                    &mut next_poll_due,
+                    &mut next_audit_due,
+                );
+                eprintln!(
+                    "temper-testing-worker: worker '{}' tick failed trigger={} \
+                     ({consecutive_failures}/{MAX_CONSECUTIVE_TICK_FAILURES}), retrying: {error}",
+                    worker.name(),
+                    tick_reason.as_str()
+                );
+                if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES {
+                    return Err(RunError::Drive(Box::new(error)));
+                }
+            }
+        }
+        if stop.should_stop() {
+            break;
+        }
+        let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
+        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_ref())
+            .await
+            .map_err(|error| RunError::Backend(error.to_string()))?
+        {
+            WakeWaitOutcome::PollDeadline => {
+                next_tick_reason = deadline_tick_reason(next_poll_due, next_audit_due)
+            }
+            WakeWaitOutcome::Stop => break,
+            WakeWaitOutcome::Wake(hints) => {
+                let wake_count = hints.len();
+                pending_hints.extend(hints);
+                eprintln!(
+                    "temper-testing-worker: worker '{}' consumed authenticated wake batch hints={wake_count}; ticking immediately",
+                    worker.name()
+                );
+                next_tick_reason = TickReason::Wake;
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+fn record_completed_tick_deadline(
+    tick_reason: TickReason,
+    poll_interval: StdDuration,
+    audit_interval: Option<StdDuration>,
+    next_poll_due: &mut Instant,
+    next_audit_due: &mut Option<Instant>,
+) {
+    let now = Instant::now();
+    *next_poll_due = now + poll_interval;
+    if tick_reason == TickReason::Audit {
+        *next_audit_due = audit_interval.map(|interval| now + interval);
+    }
+}
+
+fn wait_interval_until_next_tick(
+    next_poll_due: Instant,
+    next_audit_due: Option<Instant>,
+) -> StdDuration {
+    let now = Instant::now();
+    let next_due = next_audit_due
+        .map(|audit_due| audit_due.min(next_poll_due))
+        .unwrap_or(next_poll_due);
+    next_due.saturating_duration_since(now)
+}
+
+fn deadline_tick_reason(_next_poll_due: Instant, next_audit_due: Option<Instant>) -> TickReason {
+    let now = Instant::now();
+    if next_audit_due.is_some_and(|due| now >= due) {
+        TickReason::Audit
+    } else {
+        TickReason::Poll
+    }
+}
+
+fn render_repo_paths(paths: &[String]) -> String {
+    if paths.is_empty() {
+        "-".to_string()
+    } else {
+        paths.join(",")
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use chrono::{DateTime, Duration, Utc};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
+    use temper_forge::RepositoryPath;
+    use temper_production::wake::send_wake;
+
+    use crate::worker_bin::args::{
+        AgentsKind, Backend, ClockKind, ForgejoArgs, WorkerArgs, WorkerKind,
+    };
+
+    struct BurstWorker {
+        ticks: AtomicU64,
+        socket: PathBuf,
+    }
+
+    #[async_trait]
+    impl Worker for BurstWorker {
+        async fn tick(&self, _now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+            let tick = self.ticks.fetch_add(1, Ordering::SeqCst) + 1;
+            if tick == 1 {
+                for _ in 0..3 {
+                    send_wake(&self.socket, Some("wake-secret")).expect("wake sends");
+                }
+            }
+            Ok(Progress::unchanged())
+        }
+
+        fn name(&self) -> &str {
+            "burst-worker"
+        }
+    }
+
+    #[async_trait]
+    impl ForgejoDriveWorker for BurstWorker {
+        async fn tick_for_reason(
+            &self,
+            now: DateTime<Utc>,
+            _reason: TickReason,
+            _hints: &[ChangeHint],
+        ) -> Result<ForgejoTickReport, WorkerError> {
+            Worker::tick(self, now).await.map(ForgejoTickReport::single)
+        }
+
+        fn name(&self) -> &str {
+            Worker::name(self)
+        }
+    }
+
+    #[test]
+    fn forgejo_drive_coalesces_queued_wake_bursts() {
+        let root = temp_root("coalesced-wakes");
+        std::fs::create_dir_all(&root).expect("temp root exists");
+        let socket = root.join("worker.sock");
+        let secret_file = root.join("wake-secret");
+        let stop_file = root.join("stop");
+        std::fs::write(&secret_file, "wake-secret\n").expect("secret writes");
+        let args = WorkerArgs {
+            kind: WorkerKind::Mechanical,
+            backend: Backend::Forgejo(ForgejoArgs {
+                base_url: "http://127.0.0.1:1".into(),
+                token: "token".into(),
+                username: None,
+                password: None,
+            }),
+            root: root.clone(),
+            owner: "acme".into(),
+            name: "service".into(),
+            repositories: vec![RepositoryPath::new("acme", "service")],
+            poll_interval: Duration::seconds(60),
+            audit_interval: Some(Duration::milliseconds(600_000)),
+            stop_file: Some(stop_file.clone()),
+            run_secs: None,
+            clock: ClockKind::Wall,
+            agents: AgentsKind::Fake,
+            wake_socket: Some(socket.clone()),
+            wake_secret_file: Some(secret_file),
+        };
+        let worker = BurstWorker {
+            ticks: AtomicU64::new(0),
+            socket,
+        };
+        let stop_file_for_thread = stop_file.clone();
+        let stopper = thread::spawn(move || {
+            thread::sleep(StdDuration::from_millis(800));
+            std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime builds");
+
+        let report = runtime
+            .block_on(drive_async(&args, &worker))
+            .expect("drive succeeds");
+        stopper.join().expect("stopper joins");
+
+        assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);
+        assert_eq!(report.ticks, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "temper-testing-forgejo-{name}-{}-{}",
+            std::process::id(),
+            Utc::now()
+                .timestamp_nanos_opt()
+                .expect("timestamp has nanoseconds")
+        ))
+    }
+}

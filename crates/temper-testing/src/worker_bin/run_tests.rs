@@ -20,6 +20,7 @@ fn base_args(root: PathBuf, kind: WorkerKind) -> WorkerArgs {
         name: "service".into(),
         repositories: vec![RepositoryPath::new("acme", "service")],
         poll_interval: Duration::milliseconds(1),
+        audit_interval: Some(Duration::milliseconds(600_000)),
         stop_file: None,
         run_secs: Some(0),
         clock: ClockKind::Deterministic,

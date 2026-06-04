@@ -239,30 +239,68 @@ fn repository_display_paths(repositories: &RepositorySet) -> Vec<String> {
 
 const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
 
+struct DriveTickReport {
+    progress: temper_runner::Progress,
+    scanned_repository_count: usize,
+    scanned_repository_paths: Vec<String>,
+}
+
+impl DriveTickReport {
+    fn from_multi_repo(report: temper_runner::MultiRepoTickReport) -> Result<Self, WorkerError> {
+        let scanned_repository_count = report.scanned_repository_count();
+        let scanned_repository_paths = report.scanned_repository_paths();
+        let progress = report.into_worker_result()?;
+        Ok(Self {
+            progress,
+            scanned_repository_count,
+            scanned_repository_paths,
+        })
+    }
+}
+
 #[async_trait::async_trait]
 trait DriveWorker: Sync {
-    async fn tick_for_wake(
+    async fn tick_for_reason(
         &self,
         now: chrono::DateTime<chrono::Utc>,
+        reason: TickReason,
         hints: &[ChangeHint],
         tick_id: &str,
-    ) -> Result<temper_runner::Progress, WorkerError>;
+    ) -> Result<DriveTickReport, WorkerError>;
 
     fn name(&self) -> &str;
 }
 
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized> DriveWorker for MultiRepoRoleWorker<'_, F> {
-    async fn tick_for_wake(
+    async fn tick_for_reason(
         &self,
         now: chrono::DateTime<chrono::Utc>,
+        reason: TickReason,
         hints: &[ChangeHint],
         tick_id: &str,
-    ) -> Result<temper_runner::Progress, WorkerError> {
-        let known = known_hints_for(self.repositories(), hints);
-        self.tick_hinted_with_observability_tick_id(now, &known, tick_id)
-            .await
-            .into_worker_result()
+    ) -> Result<DriveTickReport, WorkerError> {
+        let report = match reason {
+            TickReason::Wake => {
+                let known = known_hints_for(self.repositories(), hints, "temper-worker");
+                if known.is_empty() {
+                    self.tick_hinted_with_observability_tick_id(now, &[], tick_id)
+                        .await
+                } else {
+                    self.tick_matching_hints_with_observability_tick_id(now, &known, tick_id)
+                        .await
+                }
+            }
+            TickReason::Audit => {
+                self.tick_audit_with_observability_tick_id(now, tick_id)
+                    .await
+            }
+            TickReason::Initial | TickReason::Poll => {
+                self.tick_hinted_with_observability_tick_id(now, &[], tick_id)
+                    .await
+            }
+        };
+        DriveTickReport::from_multi_repo(report)
     }
 
     fn name(&self) -> &str {
@@ -277,13 +315,28 @@ where
     J: CommandJournal,
     P: temper_workflow::RecoveryPolicy + Clone + Send + Sync,
 {
-    async fn tick_for_wake(
+    async fn tick_for_reason(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-        _hints: &[ChangeHint],
+        reason: TickReason,
+        hints: &[ChangeHint],
         _tick_id: &str,
-    ) -> Result<temper_runner::Progress, WorkerError> {
-        Worker::tick(self, now).await
+    ) -> Result<DriveTickReport, WorkerError> {
+        let report = match reason {
+            TickReason::Wake => {
+                let known = known_hints_for(self.repositories(), hints, "temper-worker");
+                if !known.is_empty() {
+                    eprintln!(
+                        "temper-worker: mechanical wake uses broad scan despite configured hints to preserve cross-repo recovery"
+                    );
+                }
+                self.tick_report(now).await
+            }
+            TickReason::Initial | TickReason::Poll | TickReason::Audit => {
+                self.tick_report(now).await
+            }
+        };
+        DriveTickReport::from_multi_repo(report)
     }
 
     fn name(&self) -> &str {
@@ -291,7 +344,11 @@ where
     }
 }
 
-fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<ChangeHint> {
+fn known_hints_for(
+    repositories: &RepositorySet,
+    hints: &[ChangeHint],
+    log_prefix: &str,
+) -> Vec<ChangeHint> {
     let mut known = Vec::new();
     for hint in hints {
         if repositories
@@ -299,7 +356,7 @@ fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<Ch
             .is_empty()
         {
             eprintln!(
-                "temper-worker: wake hint for unconfigured repo {}/{}; treating wake as broad scan",
+                "{log_prefix}: wake hint for unconfigured repo {}/{}; treating wake as broad scan if no configured hints remain",
                 hint.repo.owner, hint.repo.name
             );
         } else {
@@ -321,6 +378,11 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
         .unwrap_or_else(|_| StdDuration::from_millis(1_000));
     let wake = build_wake_listener(args)?;
     let mut consecutive_failures = 0u32;
+    let audit_interval = args
+        .audit_interval
+        .and_then(|duration| duration.to_std().ok());
+    let mut next_poll_due = Instant::now() + interval;
+    let mut next_audit_due = audit_interval.map(|duration| Instant::now() + duration);
     let mut next_tick_reason = TickReason::Initial;
     let mut pending_hints = Vec::new();
     let mut tick_sequence = 0u64;
@@ -343,28 +405,42 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
         tick_sequence = tick_sequence.saturating_add(1);
         let tick_id = production_tick_id(worker.name(), tick_reason, tick_sequence);
         match worker
-            .tick_for_wake(chrono::Utc::now(), &tick_hints, &tick_id)
+            .tick_for_reason(chrono::Utc::now(), tick_reason, &tick_hints, &tick_id)
             .await
         {
-            Ok(progress) => {
+            Ok(tick) => {
                 consecutive_failures = 0;
                 report.ticks = report.ticks.saturating_add(1);
                 report.workers[0].ticks = report.workers[0].ticks.saturating_add(1);
                 report.workers[0].actions = report.workers[0]
                     .actions
-                    .saturating_add(u64::from(progress.actions));
-                if tick_reason != TickReason::Poll || progress.actions > 0 {
-                    eprintln!(
-                        "temper-worker: worker '{}' completed tick trigger={} actions={} tick_id={}",
-                        worker.name(),
-                        tick_reason.as_str(),
-                        progress.actions,
-                        tick_id
-                    );
-                }
+                    .saturating_add(u64::from(tick.progress.actions));
+                record_completed_tick_deadline(
+                    tick_reason,
+                    interval,
+                    audit_interval,
+                    &mut next_poll_due,
+                    &mut next_audit_due,
+                );
+                eprintln!(
+                    "temper-worker: worker '{}' completed tick trigger={} actions={} tick_id={} scanned_repositories={} scanned_repository_paths={}",
+                    worker.name(),
+                    tick_reason.as_str(),
+                    tick.progress.actions,
+                    tick_id,
+                    tick.scanned_repository_count,
+                    render_repo_paths(&tick.scanned_repository_paths)
+                );
             }
             Err(error) => {
                 consecutive_failures += 1;
+                record_completed_tick_deadline(
+                    tick_reason,
+                    interval,
+                    audit_interval,
+                    &mut next_poll_due,
+                    &mut next_audit_due,
+                );
                 eprintln!(
                     "temper-worker: worker '{}' tick failed trigger={} tick_id={} \
                      ({consecutive_failures}/{MAX_CONSECUTIVE_TICK_FAILURES}), retrying: {error}",
@@ -377,11 +453,14 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
                 }
             }
         }
-        match wait_for_wake_or_poll(|| stop.should_stop(), interval, wake.as_ref())
+        let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
+        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_ref())
             .await
             .map_err(|error| RunError::Backend(error.to_string()))?
         {
-            WakeWaitOutcome::PollDeadline => next_tick_reason = TickReason::Poll,
+            WakeWaitOutcome::PollDeadline => {
+                next_tick_reason = deadline_tick_reason(next_poll_due, next_audit_due)
+            }
             WakeWaitOutcome::Stop => break,
             WakeWaitOutcome::Wake(hints) => {
                 let wake_count = hints.len();
@@ -396,6 +475,50 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
     }
 
     Ok(report)
+}
+
+fn record_completed_tick_deadline(
+    tick_reason: TickReason,
+    poll_interval: StdDuration,
+    audit_interval: Option<StdDuration>,
+    next_poll_due: &mut Instant,
+    next_audit_due: &mut Option<Instant>,
+) {
+    let now = Instant::now();
+    *next_poll_due = now + poll_interval;
+    if tick_reason == TickReason::Audit {
+        *next_audit_due = audit_interval.map(|interval| now + interval);
+    }
+}
+
+fn wait_interval_until_next_tick(
+    next_poll_due: Instant,
+    next_audit_due: Option<Instant>,
+) -> StdDuration {
+    let now = Instant::now();
+    let next_due = next_audit_due
+        .map(|audit_due| audit_due.min(next_poll_due))
+        .unwrap_or(next_poll_due);
+    next_due.saturating_duration_since(now)
+}
+
+fn deadline_tick_reason(_next_poll_due: Instant, next_audit_due: Option<Instant>) -> TickReason {
+    let now = Instant::now();
+    if next_audit_due.is_some_and(|due| now >= due) {
+        TickReason::Audit
+    } else {
+        // The wait deadline can fire a little early if the stop-check cadence
+        // races the timer; keep the normal poll path as the safe broad scan.
+        TickReason::Poll
+    }
+}
+
+fn render_repo_paths(paths: &[String]) -> String {
+    if paths.is_empty() {
+        "-".to_string()
+    } else {
+        paths.join(",")
+    }
 }
 
 fn build_wake_listener(args: &WorkerArgs) -> Result<Option<WakeListener>, RunError> {
@@ -414,6 +537,7 @@ enum TickReason {
     Initial,
     Poll,
     Wake,
+    Audit,
 }
 
 impl TickReason {
@@ -422,6 +546,7 @@ impl TickReason {
             TickReason::Initial => "initial",
             TickReason::Poll => "poll",
             TickReason::Wake => "wake",
+            TickReason::Audit => "audit",
         }
     }
 }

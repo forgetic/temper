@@ -8,6 +8,7 @@
 pub mod args;
 mod args_parse;
 pub mod forgejo;
+mod forgejo_drive;
 mod forgejo_engineer;
 mod multi_ci;
 pub mod run;

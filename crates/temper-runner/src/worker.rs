@@ -14,7 +14,7 @@ use crate::observability::{
     render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
     WorkItemSelectedEvent,
 };
-use crate::scan::{scan_role, ScanError, WorkItem};
+use crate::scan::{scan_role, scan_role_audit, ScanError, WorkItem};
 use crate::signal::CiError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -205,31 +205,68 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
         now: DateTime<Utc>,
         tick_id: &str,
     ) -> Result<Progress, WorkerError> {
-        let tools = RoleTools::new(
+        let tools = self.tools_with_observability_tick_id(tick_id);
+        self.tick_with_tools(now, &tools, RoleScanMode::Normal)
+            .await
+    }
+
+    /// Runs an audit scan for this role.
+    pub async fn tick_audit(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+        self.tick_with_tools(now, &self.tools, RoleScanMode::Audit)
+            .await
+    }
+
+    /// Runs an audit scan while attaching a production tick id to work-item logs.
+    pub async fn tick_audit_with_observability_tick_id(
+        &self,
+        now: DateTime<Utc>,
+        tick_id: &str,
+    ) -> Result<Progress, WorkerError> {
+        let tools = self.tools_with_observability_tick_id(tick_id);
+        self.tick_with_tools(now, &tools, RoleScanMode::Audit).await
+    }
+
+    fn tools_with_observability_tick_id(&self, tick_id: &str) -> RoleTools<'_, F> {
+        RoleTools::new(
             self.workflow,
             self.forge,
             self.repo,
             self.role.clone(),
             self.tools.execution_context(),
         )
-        .with_observability_tick_id(tick_id.to_string());
-        self.tick_with_tools(now, &tools).await
+        .with_observability_tick_id(tick_id.to_string())
     }
 
     async fn tick_with_tools(
         &self,
         now: DateTime<Utc>,
         tools: &RoleTools<'_, F>,
+        mode: RoleScanMode,
     ) -> Result<Progress, WorkerError> {
-        let items = scan_role(
-            self.forge,
-            self.repo,
-            self.workflow,
-            self.compiled,
-            now,
-            &self.role,
-        )
-        .await?;
+        let items = match mode {
+            RoleScanMode::Normal => {
+                scan_role(
+                    self.forge,
+                    self.repo,
+                    self.workflow,
+                    self.compiled,
+                    now,
+                    &self.role,
+                )
+                .await?
+            }
+            RoleScanMode::Audit => {
+                scan_role_audit(
+                    self.forge,
+                    self.repo,
+                    self.workflow,
+                    self.compiled,
+                    now,
+                    &self.role,
+                )
+                .await?
+            }
+        };
 
         log_role_scan(
             &self.name,
@@ -248,10 +285,17 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RoleScanMode {
+    Normal,
+    Audit,
+}
+
 #[async_trait]
 impl<F: Forge + ?Sized> Worker for RoleWorker<'_, F> {
     async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
-        self.tick_with_tools(now, &self.tools).await
+        self.tick_with_tools(now, &self.tools, RoleScanMode::Normal)
+            .await
     }
 
     fn name(&self) -> &str {

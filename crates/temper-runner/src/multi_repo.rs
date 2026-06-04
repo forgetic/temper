@@ -1,10 +1,4 @@
-//! Multi-repository runner wrappers.
-//!
-//! The existing [`RoleWorker`](crate::RoleWorker) and
-//! [`MechanicalWorker`](crate::MechanicalWorker) remain the unit of actual
-//! workflow behavior. This module adds a thin repository-set layer that orders a
-//! configured set deterministically, records repository identity in reports, and
-//! keeps ticking the remaining repositories when one repository fails.
+//! Multi-repository runner wrappers over per-repository role and mechanical workers.
 
 use crate::{Agent, MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
 use async_trait::async_trait;
@@ -19,22 +13,17 @@ use temper_workflow::{
     RecoveryPolicy, RoleId, ValidatedWorkflow,
 };
 
-/// A repository a multi-repo worker may scan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositoryTarget {
-    /// Stable backend repository id used for all Forge calls.
     pub id: RepositoryId,
-    /// Human-facing owner/name used in reports and hint matching.
     pub path: RepositoryPath,
 }
 
 impl RepositoryTarget {
-    /// Creates a repository target from its stable id and display path.
     pub fn new(id: RepositoryId, path: RepositoryPath) -> Self {
         Self { id, path }
     }
 
-    /// Returns `owner/name` for logs, errors, and assertions.
     pub fn display_path(&self) -> String {
         format!("{}/{}", self.path.owner, self.path.name)
     }
@@ -44,15 +33,12 @@ impl RepositoryTarget {
     }
 }
 
-/// Deterministic set of repositories assigned to one worker process.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepositorySet {
     repositories: Vec<RepositoryTarget>,
 }
 
 impl RepositorySet {
-    /// Creates a set, sorted by owner/name and then id. Duplicate ids are kept
-    /// only once so a worker cannot accidentally scan the same repository twice.
     pub fn new(mut repositories: Vec<RepositoryTarget>) -> Self {
         repositories.sort_by(|left, right| left.order_key().cmp(&right.order_key()));
         let mut seen = BTreeSet::new();
@@ -60,7 +46,6 @@ impl RepositorySet {
         Self { repositories }
     }
 
-    /// Resolves repository ids to display paths through the portable Forge API.
     pub async fn resolve<F, I>(forge: &F, ids: I) -> Result<Self, ForgeError>
     where
         F: Forge + ?Sized,
@@ -80,16 +65,10 @@ impl RepositorySet {
         Ok(Self::new(targets))
     }
 
-    /// Returns repositories in deterministic scan order.
     pub fn repositories(&self) -> &[RepositoryTarget] {
         &self.repositories
     }
 
-    /// Returns repositories named by hints, in deterministic set order.
-    ///
-    /// This is a narrowing helper for callers that want an early hinted pass.
-    /// Hints remain advisory: callers should still run a full scan as their
-    /// polling/liveness backstop.
     pub fn matching_hints<'a>(&'a self, hints: &[ChangeHint]) -> Vec<&'a RepositoryTarget> {
         let hinted = hinted_paths(hints);
         self.repositories
@@ -98,11 +77,6 @@ impl RepositorySet {
             .collect()
     }
 
-    /// Returns a full scan order with hinted repositories first.
-    ///
-    /// No repository is dropped. This lets a worker react to repo-specific hints
-    /// without making them authoritative; stale, missing, or duplicated hints
-    /// only affect ordering of the next broad scan.
     pub fn hinted_order<'a>(&'a self, hints: &[ChangeHint]) -> Vec<&'a RepositoryTarget> {
         let hinted = hinted_paths(hints);
         let mut ordered = Vec::with_capacity(self.repositories.len());
@@ -132,29 +106,25 @@ fn path_key(path: &RepositoryPath) -> (String, String) {
     (path.owner.clone(), path.name.clone())
 }
 
-/// Per-repository progress from a multi-repo tick.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositoryProgress {
-    /// Repository that was ticked.
     pub repository: RepositoryTarget,
-    /// Progress returned by that repository's per-repo worker.
     pub progress: Progress,
 }
 
-/// A repository failure captured after the wrapper continued scanning.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositoryFailure {
-    /// Repository that failed.
     pub repository: RepositoryTarget,
-    /// Display form of the per-repo worker error.
     pub message: String,
 }
 
-/// Report for one multi-repo worker tick.
+/// Report for one multi-repo tick, including scan-count diagnostics.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MultiRepoTickReport {
     /// Combined progress across successful repositories.
     pub progress: Progress,
+    /// Repositories attempted in scan order, including failures.
+    pub attempted_repositories: Vec<RepositoryTarget>,
     /// Per-repository successes in attempted scan order.
     pub repositories: Vec<RepositoryProgress>,
     /// Per-repository failures in attempted scan order.
@@ -162,6 +132,10 @@ pub struct MultiRepoTickReport {
 }
 
 impl MultiRepoTickReport {
+    fn record_attempt(&mut self, repository: &RepositoryTarget) {
+        self.attempted_repositories.push(repository.clone());
+    }
+
     fn record_success(&mut self, repository: RepositoryTarget, progress: Progress) {
         self.progress.changed |= progress.changed;
         self.progress.actions = self.progress.actions.saturating_add(progress.actions);
@@ -178,7 +152,19 @@ impl MultiRepoTickReport {
         });
     }
 
-    /// Converts the report into the [`Worker`] trait result shape.
+    /// Number of repositories this tick attempted to scan.
+    pub fn scanned_repository_count(&self) -> usize {
+        self.attempted_repositories.len()
+    }
+
+    /// Display paths for repositories this tick attempted to scan.
+    pub fn scanned_repository_paths(&self) -> Vec<String> {
+        self.attempted_repositories
+            .iter()
+            .map(RepositoryTarget::display_path)
+            .collect()
+    }
+
     pub fn into_worker_result(self) -> Result<Progress, WorkerError> {
         if self.failures.is_empty() {
             Ok(self.progress)
@@ -191,12 +177,9 @@ impl MultiRepoTickReport {
     }
 }
 
-/// Error returned by a multi-repo worker after it has attempted every repo.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultiRepoError {
-    /// Combined progress made by repositories that did not fail.
     pub progress: Progress,
-    /// Repository-scoped failures.
     pub failures: Vec<RepositoryFailure>,
 }
 
@@ -221,19 +204,14 @@ impl fmt::Display for MultiRepoError {
 
 impl Error for MultiRepoError {}
 
-/// Per-repository journal binding for a multi-repo mechanical worker.
 #[derive(Clone, Copy)]
 pub struct RepositoryJournal<'a, J: CommandJournal> {
-    /// Repository whose recovery commands are stored in `journal`.
     pub repository: &'a RepositoryId,
-    /// Journal dedicated to this repository.
     pub journal: &'a J,
 }
 
-/// Configuration errors building a multi-repo worker.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MultiRepoConfigError {
-    /// The mechanical worker needs one journal per repository.
     MissingJournal { repository: RepositoryTarget },
 }
 
@@ -251,7 +229,6 @@ impl fmt::Display for MultiRepoConfigError {
 
 impl Error for MultiRepoConfigError {}
 
-/// Role worker wrapper for a deterministic repository set.
 pub struct MultiRepoRoleWorker<'a, F: Forge + ?Sized> {
     name: String,
     forge: &'a F,
@@ -264,7 +241,6 @@ pub struct MultiRepoRoleWorker<'a, F: Forge + ?Sized> {
 }
 
 impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
-    /// Creates a multi-repo role worker with the default `multi-role:<id>` name.
     pub fn new(
         workflow: &'a ValidatedWorkflow,
         compiled: &'a CompiledWorkflow,
@@ -286,37 +262,101 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
         }
     }
 
-    /// Configured repository set.
     pub fn repositories(&self) -> &RepositorySet {
         &self.repositories
     }
 
-    /// Ticks every repository in deterministic order, returning a partial
-    /// report instead of stopping at the first failure.
     pub async fn tick_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
-        self.tick_repositories(now, self.repositories.iter_refs(), None)
-            .await
+        self.tick_repositories(
+            now,
+            self.repositories.iter_refs(),
+            None,
+            RoleTickMode::Normal,
+        )
+        .await
     }
 
-    /// Ticks every repository with hinted repositories first.
     pub async fn tick_hinted(
         &self,
         now: DateTime<Utc>,
         hints: &[ChangeHint],
     ) -> MultiRepoTickReport {
-        self.tick_repositories(now, self.repositories.hinted_order(hints), None)
-            .await
+        self.tick_repositories(
+            now,
+            self.repositories.hinted_order(hints),
+            None,
+            RoleTickMode::Normal,
+        )
+        .await
     }
 
-    /// Ticks hinted repositories first while attaching a production tick id to work-item logs.
+    /// Ticks only repositories matching known repo hints; empty means broad fallback is needed.
+    pub async fn tick_matching_hints(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+    ) -> MultiRepoTickReport {
+        self.tick_repositories(
+            now,
+            self.repositories.matching_hints(hints),
+            None,
+            RoleTickMode::Normal,
+        )
+        .await
+    }
+
     pub async fn tick_hinted_with_observability_tick_id(
         &self,
         now: DateTime<Utc>,
         hints: &[ChangeHint],
         tick_id: &str,
     ) -> MultiRepoTickReport {
-        self.tick_repositories(now, self.repositories.hinted_order(hints), Some(tick_id))
-            .await
+        self.tick_repositories(
+            now,
+            self.repositories.hinted_order(hints),
+            Some(tick_id),
+            RoleTickMode::Normal,
+        )
+        .await
+    }
+
+    pub async fn tick_matching_hints_with_observability_tick_id(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+        tick_id: &str,
+    ) -> MultiRepoTickReport {
+        self.tick_repositories(
+            now,
+            self.repositories.matching_hints(hints),
+            Some(tick_id),
+            RoleTickMode::Normal,
+        )
+        .await
+    }
+
+    pub async fn tick_audit_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
+        self.tick_repositories(
+            now,
+            self.repositories.iter_refs(),
+            None,
+            RoleTickMode::Audit,
+        )
+        .await
+    }
+
+    pub async fn tick_audit_with_observability_tick_id(
+        &self,
+        now: DateTime<Utc>,
+        tick_id: &str,
+    ) -> MultiRepoTickReport {
+        self.tick_repositories(
+            now,
+            self.repositories.iter_refs(),
+            Some(tick_id),
+            RoleTickMode::Audit,
+        )
+        .await
     }
 
     async fn tick_repositories(
@@ -324,9 +364,11 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
         now: DateTime<Utc>,
         repositories: Vec<&RepositoryTarget>,
         tick_id: Option<&str>,
+        mode: RoleTickMode,
     ) -> MultiRepoTickReport {
         let mut report = MultiRepoTickReport::default();
         for repository in repositories {
+            report.record_attempt(repository);
             let worker = RoleWorker::new(
                 self.workflow,
                 self.compiled,
@@ -336,10 +378,17 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
                 Arc::clone(&self.agent),
                 self.context.clone(),
             );
-            let tick_result = if let Some(tick_id) = tick_id {
-                worker.tick_with_observability_tick_id(now, tick_id).await
-            } else {
-                worker.tick(now).await
+            let tick_result = match (mode, tick_id) {
+                (RoleTickMode::Normal, Some(tick_id)) => {
+                    worker.tick_with_observability_tick_id(now, tick_id).await
+                }
+                (RoleTickMode::Normal, None) => worker.tick(now).await,
+                (RoleTickMode::Audit, Some(tick_id)) => {
+                    worker
+                        .tick_audit_with_observability_tick_id(now, tick_id)
+                        .await
+                }
+                (RoleTickMode::Audit, None) => worker.tick_audit(now).await,
             };
             match tick_result {
                 Ok(progress) => report.record_success(repository.clone(), progress),
@@ -348,6 +397,12 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
         }
         report
     }
+}
+
+#[derive(Clone, Copy)]
+enum RoleTickMode {
+    Normal,
+    Audit,
 }
 
 #[async_trait]
@@ -361,7 +416,6 @@ impl<F: Forge + ?Sized> Worker for MultiRepoRoleWorker<'_, F> {
     }
 }
 
-/// Mechanical worker wrapper for a deterministic repository set.
 pub struct MultiRepoMechanicalWorker<
     'a,
     F: Forge + ?Sized,
@@ -371,7 +425,8 @@ pub struct MultiRepoMechanicalWorker<
     name: String,
     workflow: &'a ValidatedWorkflow,
     forge: &'a F,
-    repositories: Vec<RepositoryMechanical<'a, J>>,
+    repositories: RepositorySet,
+    mechanical_repositories: Vec<RepositoryMechanical<'a, J>>,
     lease_policy: LeasePolicy,
     policy: P,
 }
@@ -386,7 +441,6 @@ where
     F: Forge + ?Sized,
     J: CommandJournal,
 {
-    /// Creates a multi-repo mechanical worker using [`DefaultRecoveryPolicy`].
     pub fn new(
         workflow: &'a ValidatedWorkflow,
         forge: &'a F,
@@ -411,7 +465,6 @@ where
     J: CommandJournal,
     P: RecoveryPolicy + Clone + Send + Sync,
 {
-    /// Creates a multi-repo mechanical worker with an injectable policy.
     pub fn with_policy(
         workflow: &'a ValidatedWorkflow,
         forge: &'a F,
@@ -440,16 +493,65 @@ where
             name: "multi-mechanical".to_string(),
             workflow,
             forge,
-            repositories: bound,
+            repositories,
+            mechanical_repositories: bound,
             lease_policy,
             policy,
         })
     }
 
-    /// Ticks every repository in deterministic order, returning partial results.
+    pub fn repositories(&self) -> &RepositorySet {
+        &self.repositories
+    }
+
     pub async fn tick_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
+        self.tick_mechanical_repositories(now, self.mechanical_repositories.iter().collect())
+            .await
+    }
+
+    pub async fn tick_hinted(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+    ) -> MultiRepoTickReport {
+        let hinted = hinted_paths(hints);
+        let mut repositories = Vec::with_capacity(self.mechanical_repositories.len());
+        for repository in &self.mechanical_repositories {
+            if hinted.contains(&path_key(&repository.target.path)) {
+                repositories.push(repository);
+            }
+        }
+        for repository in &self.mechanical_repositories {
+            if !hinted.contains(&path_key(&repository.target.path)) {
+                repositories.push(repository);
+            }
+        }
+        self.tick_mechanical_repositories(now, repositories).await
+    }
+
+    /// Ticks only repositories matching known repo hints.
+    pub async fn tick_matching_hints(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+    ) -> MultiRepoTickReport {
+        let hinted = hinted_paths(hints);
+        let repositories = self
+            .mechanical_repositories
+            .iter()
+            .filter(|repository| hinted.contains(&path_key(&repository.target.path)))
+            .collect();
+        self.tick_mechanical_repositories(now, repositories).await
+    }
+
+    async fn tick_mechanical_repositories(
+        &self,
+        now: DateTime<Utc>,
+        repositories: Vec<&RepositoryMechanical<'a, J>>,
+    ) -> MultiRepoTickReport {
         let mut report = MultiRepoTickReport::default();
-        for repository in &self.repositories {
+        for repository in repositories {
+            report.record_attempt(&repository.target);
             let worker = MechanicalWorker::with_policy(
                 self.workflow,
                 self.forge,

@@ -323,6 +323,33 @@ fn rejects_provider_auth_flags_after_smith_split() {
 }
 
 #[test]
+fn parses_audit_interval_and_allows_disabling_audit() {
+    let args = run(&[
+        "--kind",
+        "mechanical",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+        "--audit-ms",
+        "2500",
+    ]);
+    assert_eq!(args.audit_interval, Some(Duration::milliseconds(2500)));
+
+    let args = run(&[
+        "--kind",
+        "mechanical",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+        "--audit-ms",
+        "0",
+    ]);
+    assert_eq!(args.audit_interval, None);
+}
+
+#[test]
 fn parses_wake_socket_options() {
     let args = run(&[
         "--kind",
