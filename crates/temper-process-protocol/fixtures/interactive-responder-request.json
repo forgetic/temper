@@ -1,0 +1,15 @@
+{
+  "profile_id": "product-manager",
+  "conversation_id": "conversation-1",
+  "turns": [
+    {
+      "id": "turn-1",
+      "participant": { "kind": "human", "display_name": "human" },
+      "body": "Can we add a mobile chat adapter?"
+    }
+  ],
+  "context": {
+    "repository": "owner/repo",
+    "transcript_url": "https://git.example.test/owner/repo/issues/7"
+  }
+}

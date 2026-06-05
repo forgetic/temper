@@ -5,7 +5,9 @@ SDKs, or provider-auth wiring. Real LLM behavior lives outside this repository
 behind process protocols; Smith (`~/src/rust/smith`) is the reference external
 implementation used by the dogfood/example deployments.
 
-Temper keeps only provider-neutral contracts and adapters:
+Temper keeps only provider-neutral contracts and adapters. External responders
+should depend on `temper-process-protocol` or implement equivalent JSON DTOs,
+not on Temper runtime crates.
 
 - Workflow role decisions use
   [Workflow-role decision process protocol](workflow-role-decision-process-protocol.md).

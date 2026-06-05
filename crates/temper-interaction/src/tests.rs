@@ -12,8 +12,8 @@ use crate::{
     is_valid_proposal_slug, parse_transcript_session_key, render_acceptance_marker,
     render_transcript_marker, ConversationId, ConversationProfileId, ConversationReply,
     ConversationRequest, ConversationTurn, ForgeInteractionSession, ForgeSessionConfig,
-    ForgeSessionOpenOptions, InteractionError, InteractiveResponder, IssueProposal, Participant,
-    Proposal, ProposalId, ProposalKind, RawInteractionSpec,
+    ForgeSessionOpenOptions, InteractionError, InteractionProtocolError, InteractiveResponder,
+    IssueProposal, Participant, Proposal, ProposalId, ProposalKind, RawInteractionSpec,
 };
 
 const TRANSCRIPT_LABEL: &str = "product";
@@ -196,7 +196,7 @@ fn validates_deterministic_proposal_slugs() {
         assert!(!is_valid_proposal_slug(slug), "{slug} should be invalid");
         assert!(matches!(
             ProposalId::new(slug),
-            Err(InteractionError::InvalidSlug { .. })
+            Err(InteractionProtocolError::InvalidSlug { .. })
         ));
     }
 
@@ -234,7 +234,10 @@ fn rejects_malformed_issue_proposal_payloads() {
         )],
     };
 
-    assert!(matches!(reply.validate(), Err(InteractionError::Json(_))));
+    assert!(matches!(
+        reply.validate(),
+        Err(InteractionProtocolError::Json(_))
+    ));
 }
 
 #[test]
@@ -260,7 +263,7 @@ fn rejects_duplicate_proposal_ids() {
 
     assert!(matches!(
         reply.validate(),
-        Err(InteractionError::DuplicateProposalId { .. })
+        Err(InteractionProtocolError::DuplicateProposalId { .. })
     ));
 }
 

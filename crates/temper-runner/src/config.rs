@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use temper_forge::{CreatePullRequest, CreateRepository, User};
+use temper_process_protocol::workflow_role::BoundExternalTool;
 use temper_workflow::{
     CompiledWorkflow, ExecutionContext, ExternalToolId, ExternalToolManifest, RoleId, RoleManifest,
     TransitionId,
@@ -50,27 +51,17 @@ pub struct ExternalToolBinding {
     pub provider: String,
 }
 
-/// External tool metadata that survived declaration + runner binding validation.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct BoundExternalTool {
-    pub id: ExternalToolId,
-    pub description: String,
-    pub required: bool,
-    pub constraints: Vec<String>,
-    pub guidance: Option<String>,
-    pub provider: String,
-}
-
-impl BoundExternalTool {
-    fn from_manifest(manifest: &ExternalToolManifest, binding: &ExternalToolBinding) -> Self {
-        Self {
-            id: manifest.id.clone(),
-            description: manifest.description.clone(),
-            required: manifest.required,
-            constraints: manifest.constraints.clone(),
-            guidance: manifest.guidance.clone(),
-            provider: binding.provider.clone(),
-        }
+fn bound_external_tool_from_manifest(
+    manifest: &ExternalToolManifest,
+    binding: &ExternalToolBinding,
+) -> BoundExternalTool {
+    BoundExternalTool {
+        id: manifest.id.to_string(),
+        description: manifest.description.clone(),
+        required: manifest.required,
+        constraints: manifest.constraints.clone(),
+        guidance: manifest.guidance.clone(),
+        provider: binding.provider.clone(),
     }
 }
 
@@ -276,7 +267,7 @@ impl RunnerConfig {
                 role_bindings
                     .iter()
                     .find(|binding| binding.tool == manifest.id)
-                    .map(|binding| Ok(BoundExternalTool::from_manifest(manifest, binding)))
+                    .map(|binding| Ok(bound_external_tool_from_manifest(manifest, binding)))
                     .or_else(|| {
                         manifest.required.then(|| {
                             Err(ExternalToolBindingError::MissingRequired {

@@ -1,10 +1,12 @@
 # Interactive process responder protocol
 
-`temper-interaction` owns the provider-neutral process adapter because the
-protocol is only the interaction-domain wire contract plus process I/O. It has no
-pi SDK, provider-auth, Forgejo, production, workflow, or runner dependency. The
-current `ConversationRequest`/`ConversationReply` JSON shape is the v1 wire
-contract and is frozen by the fixtures below.
+`temper-process-protocol` owns the serialization-oriented
+`ConversationRequest`/`ConversationReply` DTOs, deterministic id helpers,
+proposal DTOs, and proposal validation helpers. `temper-interaction` consumes and
+re-exports those DTOs while owning the provider-neutral process adapter and
+Forge-backed transcript/acceptance runtime. The protocol crate has no pi SDK,
+provider-auth, Forgejo, production, workflow, runner, or Forge dependency. The
+current JSON shape is the v1 wire contract and is frozen by the fixtures below.
 
 ## Invocation
 
@@ -39,9 +41,9 @@ Temper writes one UTF-8 JSON `ConversationRequest` to stdin, appends a newline,
 and closes stdin. The responder writes exactly one UTF-8 JSON
 `ConversationReply` to stdout. Trailing whitespace is allowed; logs belong on
 stderr. Any extra stdout before or after the JSON value makes the reply
-malformed. Fixture examples live at
-`crates/temper-interaction/fixtures/interactive-responder-request.json` and
-`crates/temper-interaction/fixtures/interactive-responder-reply.json`.
+malformed. Canonical fixture examples live at
+`crates/temper-process-protocol/fixtures/interactive-responder-request.json` and
+`crates/temper-process-protocol/fixtures/interactive-responder-reply.json`.
 
 ```json
 {
@@ -82,10 +84,10 @@ malformed. Fixture examples live at
 ## Validation and failures
 
 Before a reply is persisted or exposed, Temper deserializes the reply through the
-generic interaction types, validates duplicate proposal ids, and decodes built-in
-`issue` proposal payloads. Proposal ids and kinds must use the deterministic slug
-rule. Issue proposals remain inert until a human explicitly accepts them through
-the interaction/proposal acceptance path.
+protocol DTOs, validates duplicate proposal ids, and decodes built-in `issue`
+proposal payloads. Proposal ids and kinds must use the deterministic slug rule.
+Issue proposals remain inert until a human explicitly accepts them through the
+interaction/proposal acceptance path.
 
 The adapter reports structured interaction errors for spawn/stdin/wait I/O,
 timeout, nonzero exit, malformed JSON, and duplicate proposal ids. A timeout

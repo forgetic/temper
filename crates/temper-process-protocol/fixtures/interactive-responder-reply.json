@@ -1,0 +1,16 @@
+{
+  "message": "I would file one issue for the adapter first.",
+  "proposals": [
+    {
+      "id": "mobile-chat-adapter",
+      "kind": "issue",
+      "title": "Add mobile chat adapter",
+      "summary": "Mobile access lets humans keep the conversation moving.",
+      "payload": {
+        "title": "Add mobile chat adapter",
+        "body": "Expose the interaction service through a mobile-friendly adapter.",
+        "rationale": "Mobile access lets humans keep the conversation moving."
+      }
+    }
+  ]
+}

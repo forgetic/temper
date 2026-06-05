@@ -88,8 +88,8 @@ pub use coding_workspace::{
     ExternalToolExecutors, CODING_WORKSPACE_TOOL_ID,
 };
 pub use config::{
-    BoundExternalTool, ExternalToolBinding, ExternalToolBindingError, PullRequestCreateBinding,
-    RoleBinding, RunnerConfig,
+    ExternalToolBinding, ExternalToolBindingError, PullRequestCreateBinding, RoleBinding,
+    RunnerConfig,
 };
 pub use driver::{
     DriveError, FixpointDriver, ManualClock, PollLoop, RunReport, WakeablePollLoop, WorkerRunReport,
@@ -111,8 +111,8 @@ pub use observability::{
     WorkItemIdentity, WorkItemSelectedEvent, WorkerCapabilitySummary, REDACTED,
 };
 pub use role_decision::{
-    AuthorizedWorkflowAction, WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply,
-    WorkflowRoleDecisionRequest, WORKFLOW_ROLE_DECISION_NO_ACTION,
+    AuthorizedWorkflowAction, BoundExternalTool, WorkflowRoleDecisionProtocolError,
+    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, WORKFLOW_ROLE_DECISION_NO_ACTION,
     WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
 };
 pub use role_decision_process::{

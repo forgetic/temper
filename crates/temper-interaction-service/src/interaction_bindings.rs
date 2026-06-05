@@ -226,7 +226,8 @@ where
     let mut responders = BTreeMap::<ResponderId, Arc<dyn InteractiveResponder>>::new();
     let mut profiles = Vec::new();
     for (raw_profile_id, binding) in &bindings.profiles {
-        let profile_id = ConversationProfileId::new(raw_profile_id.clone())?;
+        let profile_id =
+            ConversationProfileId::new(raw_profile_id.clone()).map_err(InteractionError::from)?;
         let manifest = spec.profile(&profile_id).cloned().ok_or_else(|| {
             InteractionDeploymentError::config(format!(
                 "profile `{profile_id}` is bound but not declared in the interaction spec"
@@ -245,7 +246,7 @@ where
     let default_profile = bindings
         .default_profile
         .as_ref()
-        .map(|id| ConversationProfileId::new(id.clone()))
+        .map(|id| ConversationProfileId::new(id.clone()).map_err(InteractionError::from))
         .transpose()?;
     InteractionService::new(
         bindings.forge.base_url.clone(),

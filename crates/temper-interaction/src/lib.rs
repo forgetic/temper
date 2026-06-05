@@ -1,13 +1,12 @@
 //! Provider-neutral interactive conversation primitives for Temper.
 //!
-//! This crate defines the reusable interaction-plane core: typed conversation
-//! ids, responder request/reply types, inert proposals, user-defined profile
+//! This crate defines the reusable interaction-plane core: user-defined profile
 //! validation/compilation, Forge-backed transcript sessions, durable proposal
 //! snapshots, manifest-driven acceptance, and a provider-neutral process
-//! responder adapter.
-//! Responder processes exchange the same serialized
-//! request/reply types while transcript and acceptance code own durable Forge
-//! state. This crate has no workflow, runner, production, or LLM-provider
+//! responder adapter. It consumes and re-exports the conversation ids,
+//! request/reply DTOs, and inert proposal DTOs from `temper-process-protocol` so
+//! responder processes can depend on the wire contract without this runtime
+//! crate. This crate has no workflow, runner, production, or LLM-provider
 //! dependencies.
 
 pub mod acceptance;
@@ -66,6 +65,7 @@ pub use spec::{
     RawResponderDeclaration, RawTranscriptPolicy, RawTransportCommandAction,
     RawTransportCommandDeclaration,
 };
+pub use temper_process_protocol::interaction::InteractionProtocolError;
 pub use transcript::{
     append_marker, issue_url, parse_marker_value, parse_transcript_session_key,
     render_filing_marker, render_transcript_marker, validate_marker_namespace, ForgeTranscript,
