@@ -19,13 +19,7 @@ session-start and session-closeout how-to guides.
   portable concepts.
 - Keep `temper-forge` free of concrete backend dependencies.
 - Keep `temper-workflow` focused on workflow and orchestration logic.
-- Keep LLM SDK usage outside Temper in external responder repositories such as
-  Smith; never add provider SDKs or auth-file handling to `temper-forge`,
-  `temper-workflow`, `temper-runner`, `temper-interaction`, or
-  `temper-production`. Workflow state mutations still go through runner tools
-  such as `RoleTools`.
-- Keep `temper-testing` out of production dependency graphs. It is test support
-  and may be a dev-dependency or a dependency of test-only crates.
+- Keep `temper-testing` out of production dependency graphs. It is test support.
 
 ## Rust conventions
 
@@ -78,11 +72,10 @@ cargo dev-test-quick
 ```
 
 The `cargo dev-test-quick` suite should stay fast (soft target: under about 10
-seconds on a warmed local checkout). Before ending a session, also run
-`cargo dev-test-full`, which includes every ignored test that is self-contained
-for the checkout: this includes local Forgejo tests (which download pinned
-binaries on first startup when `.cache/forgejo/` is empty), and excludes only
-tests that require real LLMs or external services. See
+seconds on a warmed local checkout).
+
+See:
+
 `docs/how-to/fast-local-iteration.md`,
 `docs/how-to/end-a-development-session.md`, and
 `docs/how-to/run-forgejo-multiprocess-e2e.md`.
