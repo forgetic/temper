@@ -49,8 +49,10 @@ POLL_MS=120000 ./run.sh start
 The launcher provisions every configured repo. It seeds exactly one parent issue
 in the first repo. The issue body contains a hidden deterministic fake-architect
 plan, so the fake architect creates one child code issue per repo. The mechanical
-worker keeps the admin token for REST mutations and uses the provisioned
-`engineer` web-UI username/password only for Forgejo 7.0.x CI reads (ADR 0019).
+worker runs as the provisioned `bot` automation user: the bot token performs REST
+mutations (merges) and the bot's web-UI username/password reads Forgejo 7.0.x CI
+status (ADR 0019). The site admin is used only for initial provisioning and never
+participates in the workflow.
 
 ## Validate logs and Forge state
 

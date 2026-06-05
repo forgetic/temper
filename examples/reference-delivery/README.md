@@ -85,10 +85,11 @@ that issue asks the fake architect to create one child code issue per repo.
 4. Fake engineers create real Forgejo PR heads and open implementation PRs.
 5. The real `forgejo-runner` runs CI for each PR head.
 6. Fake reviewers approve PRs.
-7. The mechanical worker lands PRs after reviewer approval and current-head CI;
-   it uses the admin token for REST mutations and the provisioned `engineer`
-   web-UI login only to read Forgejo 7.0.x CI status (ADR 0019). The owner role
-   does not perform normal merges.
+7. The mechanical worker lands PRs after reviewer approval and current-head CI.
+   It runs as the provisioned `bot` automation user: the bot's token performs
+   REST mutations (merges) and the bot's web-UI login reads Forgejo 7.0.x CI
+   status (ADR 0019). The setup-only site admin is not involved, and the owner
+   role does not perform normal merges.
 8. If a merge conflict is reported, mechanical automation removes `landing`, adds
    `merge-conflict`, and the fake engineer requeues after updating the PR head;
    fresh CI is still required, but a second review is not.
@@ -138,7 +139,7 @@ worker failed before binding its wake socket or the first-handoff worker ran
 before downstream sockets were ready; inspect the matching fake worker log. A PR
 stuck with `landing` usually lacks current-head CI or reviewer approval; if
 `logs/mechanical.log` mentions missing web-UI credentials for the CI read
-fallback, the mechanical worker was not launched with the provisioned `engineer`
+fallback, the mechanical worker was not launched with the provisioned `bot`
 username/password. A PR stuck with `merge-conflict` needs an engineer
 conflict-resolution push before mechanical landing retries.
 

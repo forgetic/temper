@@ -53,8 +53,12 @@ WAKE_SECRET_FILE="$SECRETS_DIR/wake-secret"
 FORGEJO_VERSION=7.0.12
 FORGEJO_RUNNER_VERSION=3.5.1
 
-ADMIN_USER=refadmin
-ADMIN_EMAIL=refadmin@example.invalid
+# Global Forgejo site admin. Used only for initial setup (bootstrapping and
+# provisioning); it never participates in the workflow. Forgejo reserves the
+# literal username `admin`, so this throwaway admin uses a valid siteadmin handle.
+# Workflow automation runs as the provisioned `bot` user instead.
+ADMIN_USER=siteadmin
+ADMIN_EMAIL=admin@example.invalid
 ADMIN_PASSWORD='Ref-Delivery-Admin-1!'
 
 CI_FALLBACK_MISSING_CREDENTIALS='no web-UI credentials configured for the CI read fallback'
@@ -200,7 +204,7 @@ load_config() {
     REPOS=${REPOS:-}
     CROSS_REPO_INTAKE=${CROSS_REPO_INTAKE:-auto}
     CROSS_REPO_INTAKE_TITLE=${CROSS_REPO_INTAKE_TITLE:-Coordinate greeting across service and canary}
-    BASE_URL=${BASE_URL:-http://127.0.0.1:3000}
+    BASE_URL=${BASE_URL:-http://127.0.0.1:4000}
     POLL_MS=${POLL_MS:-120000}
     if [ "${CI_STATUS_POLL_MS+x}" = "x" ]; then
         [ -n "$CI_STATUS_POLL_MS" ] || CI_STATUS_POLL_MS=$POLL_MS
@@ -263,7 +267,7 @@ load_config() {
     HOST=${_hostport%%:*}
     case "$_hostport" in
         *:*) PORT=${_hostport##*:} ;;
-        *)   PORT=3000 ;;
+        *)   PORT=4000 ;;
     esac
 }
 
@@ -499,13 +503,15 @@ write_cross_repo_intake_body() {
 }
 
 bootstrap_and_provision() {
-    log 'bootstrapping admin + provisioning every configured repo (org/users/tokens/repo/labels/CI/webhook) ...'
+    log 'bootstrapping setup-only site admin + provisioning every configured repo (org/users/tokens/bot/repo/labels/CI/webhook) ...'
     forgejo_cli admin user create --username "$ADMIN_USER" --password "$ADMIN_PASSWORD" \
         --email "$ADMIN_EMAIL" --admin --must-change-password=false \
         >"$LOG_DIR/admin-create.log" 2>&1 || true
     ADMIN_TOKEN=$(forgejo_cli admin user generate-access-token --username "$ADMIN_USER" \
         --scopes all --raw | tr -d '[:space:]')
     [ -n "$ADMIN_TOKEN" ] || die 'failed to mint an admin access token'
+    # The admin token is used only for provisioning below. Workflow automation
+    # (landing, CI reads) runs as the `bot` user the provisioner creates.
 
     _webhook_args=
     if [ "$WEBHOOKS" = "1" ]; then
@@ -583,12 +589,17 @@ resolve_role_identity() {
     eval "ROLE_IDENTITY_PASSWORD=\${TEMPER_FORGEJO_PASSWORD_${_key}:-}"
 }
 
-resolve_mechanical_ci_reader() {
-    resolve_role_identity engineer
-    ENGINEER_USER=$ROLE_IDENTITY_USER
-    ENGINEER_PASSWORD=$ROLE_IDENTITY_PASSWORD
-    [ -n "$ENGINEER_USER" ] || die "mechanical CI reader role 'engineer' has no username in $ROLES_ENV"
-    [ -n "$ENGINEER_PASSWORD" ] || die "mechanical CI reader role 'engineer' has no password in $ROLES_ENV"
+resolve_bot_identity() {
+    [ -f "$ROLES_ENV" ] || die "missing $ROLES_ENV"
+    # shellcheck disable=SC1090
+    . "$ROLES_ENV"
+    BOT_USER=${TEMPER_FORGEJO_BOT_USER:-}
+    BOT_TOKEN=${TEMPER_FORGEJO_BOT_TOKEN:-}
+    BOT_PASSWORD=${TEMPER_FORGEJO_BOT_PASSWORD:-}
+    [ -n "$BOT_USER" ] || die "automation user 'bot' has no username in $ROLES_ENV"
+    [ "$BOT_USER" = "bot" ] || die "automation user must be 'bot' in $ROLES_ENV, got '$BOT_USER'"
+    [ -n "$BOT_TOKEN" ] || die "automation user 'bot' has no token in $ROLES_ENV"
+    [ -n "$BOT_PASSWORD" ] || die "automation user 'bot' has no password in $ROLES_ENV"
 }
 
 launch_role_worker() {
@@ -632,9 +643,9 @@ launch_workers() {
     : >"$WORKERS_PID_FILE"
     _roles=$(sed -n 's/^TEMPER_FORGEJO_USER_\([A-Z0-9_][A-Z0-9_]*\)=.*/\1/p' "$ROLES_ENV" | tr '[:upper:]' '[:lower:]')
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
-    resolve_mechanical_ci_reader
+    resolve_bot_identity
 
-    log 'mechanical CI reader: engineer'
+    log "mechanical automation user: $BOT_USER (landing + CI reads)"
     log 'launching fake-agent role workers ...'
     _architect_role=
     for _r in $_roles; do
@@ -652,11 +663,11 @@ launch_workers() {
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     (
-        printf 'temper-testing-worker: mechanical repositories=%s ci_reader_role=engineer idle_poll_max_ms=%s\n' "$CONFIGURED_REPOS" "$IDLE_POLL_MAX_MS"
+        printf 'temper-testing-worker: mechanical repositories=%s automation_user=%s ci_reader=bot idle_poll_max_ms=%s\n' "$CONFIGURED_REPOS" "$BOT_USER" "$IDLE_POLL_MAX_MS"
         # shellcheck disable=SC2086
-        TEMPER_FORGEJO_TOKEN="$ADMIN_TOKEN" \
-        TEMPER_FORGEJO_USERNAME="$ENGINEER_USER" \
-        TEMPER_FORGEJO_PASSWORD="$ENGINEER_PASSWORD" \
+        TEMPER_FORGEJO_TOKEN="$BOT_TOKEN" \
+        TEMPER_FORGEJO_USERNAME="$BOT_USER" \
+        TEMPER_FORGEJO_PASSWORD="$BOT_PASSWORD" \
             "$TESTING_WORKER_BIN" \
             --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
             --root "$RUN_DIR/unused-store" --clock wall \
@@ -699,19 +710,21 @@ validate_contains() {
     return 1
 }
 
-validate_mechanical_ci_reader_config() {
+validate_mechanical_bot_config() {
     _ok=0
     if [ ! -f "$ROLES_ENV" ]; then
-        log "missing: $ROLES_ENV not found; cannot confirm mechanical CI reader credentials"
+        log "missing: $ROLES_ENV not found; cannot confirm bot automation credentials"
         log 'diagnosis: Forgejo 7.0.x CI reads need web-UI credentials for the mechanical landing worker (ADR 0019)'
         return 1
     fi
-    resolve_role_identity engineer
-    if [ -n "$ROLE_IDENTITY_USER" ] && [ -n "$ROLE_IDENTITY_PASSWORD" ]; then
-        log 'ok: mechanical CI reader credentials present for role engineer'
+    # shellcheck disable=SC1090
+    . "$ROLES_ENV"
+    if [ "${TEMPER_FORGEJO_BOT_USER:-}" = "bot" ] && [ -n "${TEMPER_FORGEJO_BOT_TOKEN:-}" ] \
+        && [ -n "${TEMPER_FORGEJO_BOT_PASSWORD:-}" ]; then
+        log 'ok: bot automation token + web-UI credentials present for the mechanical worker'
     else
-        log "missing: mechanical CI reader role 'engineer' username/password in $ROLES_ENV"
-        log 'diagnosis: launch mechanical with the admin REST token plus engineer TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD for the ADR-0019 CI read fallback'
+        log "missing: bot automation user token/username/password in $ROLES_ENV"
+        log 'diagnosis: provision the bot user and launch mechanical with its REST token plus TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD for landing and the ADR-0019 CI read fallback'
         _ok=1
     fi
     return "$_ok"
@@ -724,19 +737,19 @@ validate_mechanical_ci_log() {
         log 'missing: logs/mechanical.log exists for mechanical CI-read diagnostics'
         return 1
     fi
-    if ! grep -F -q 'ci_reader_role=engineer' "$_mechanical_log" 2>/dev/null; then
-        log 'missing: mechanical worker startup did not record non-secret CI reader role engineer'
-        log 'diagnosis: restart with the updated launcher so mechanical gets engineer web-UI credentials for CI reads'
+    if ! grep -F -q 'ci_reader=bot' "$_mechanical_log" 2>/dev/null; then
+        log 'missing: mechanical worker startup did not record the non-secret bot automation identity'
+        log 'diagnosis: restart with the updated launcher so mechanical runs as the bot user for landing and CI reads'
         _ok=1
     fi
     if grep -F -q "$CI_FALLBACK_MISSING_CREDENTIALS" "$_mechanical_log" 2>/dev/null; then
         log 'missing: mechanical worker reported missing Forgejo web-UI credentials for CI reads'
-        log 'diagnosis: the landing queue needs native CI; pass engineer TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD to the mechanical worker (ADR 0019)'
+        log 'diagnosis: the landing queue needs native CI; pass the bot TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD to the mechanical worker (ADR 0019)'
         _ok=1
     fi
     if grep -F -q "$CI_FALLBACK_LOGIN_FAILED" "$_mechanical_log" 2>/dev/null; then
         log 'missing: mechanical worker could not log in to Forgejo web UI for CI reads'
-        log 'diagnosis: verify the mechanical CI reader role credentials in secrets/roles.env; the admin token alone cannot read Actions on Forgejo 7.0.x'
+        log 'diagnosis: verify the bot automation credentials in secrets/roles.env; the mechanical worker uses the Owners-team bot (not the setup-only admin) for landing and Forgejo 7.0.x Actions reads'
         _ok=1
     fi
     if [ "$_ok" -eq 0 ]; then
@@ -854,7 +867,7 @@ cmd_validate_webhooks() {
     log "configured repos: $CONFIGURED_REPOS"
     log "configured POLL_MS=$POLL_MS CI_STATUS_POLL_MS=$CI_STATUS_POLL_MS IDLE_POLL_MAX_MS=$IDLE_POLL_MAX_MS; long-poll smoke expects POLL_MS=120000"
 
-    validate_mechanical_ci_reader_config || _ok=1
+    validate_mechanical_bot_config || _ok=1
     validate_mechanical_ci_log || _ok=1
 
     if [ "${VALIDATE_REPO_SPECIFIC:-0}" = "1" ]; then

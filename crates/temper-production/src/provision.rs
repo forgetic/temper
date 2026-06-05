@@ -15,6 +15,11 @@ use crate::{runner_config, workflow};
 
 const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 const LABEL_COLOR: &str = "#ededed";
+/// Automation account the mechanical worker uses for workflow actions such as
+/// landing approved, green PRs and reading Forgejo Actions status. It is kept
+/// separate from the setup-only site admin so the admin never participates in
+/// the workflow.
+pub const BOT_USER: &str = "bot";
 pub const DEFAULT_INTAKE_TITLE: &str = "Add a configurable greeting to the service banner";
 pub const DEFAULT_INTAKE_BODY: &str = "As an operator I want the service banner to show a \
 configurable greeting so I can tell environments apart at a glance.\n\n\
@@ -108,6 +113,8 @@ pub struct Provisioned {
     pub name: String,
     pub repository: RepositoryId,
     pub roles: BTreeMap<RoleId, RoleIdentity>,
+    /// The `bot` automation identity used by the mechanical worker.
+    pub automation: RoleIdentity,
 }
 
 #[derive(Debug)]
@@ -186,6 +193,20 @@ pub async fn provision_world(
         );
     }
 
+    // Automation identity for the mechanical worker. The bot joins the Owners
+    // team so it can land approved PRs and read Actions status over the web UI
+    // on Forgejo 7.0.x, keeping the setup-only site admin out of the workflow.
+    let bot_email = format!("{BOT_USER}@example.invalid");
+    forgejo_rest::create_user(&client, base_url, admin_token, BOT_USER, &bot_email).await?;
+    forgejo_rest::add_team_member(&client, base_url, admin_token, owners_team, BOT_USER).await?;
+    let bot_token = forgejo_rest::mint_user_token(&client, base_url, BOT_USER).await?;
+    let automation = RoleIdentity {
+        user: BOT_USER.to_string(),
+        email: bot_email,
+        token: bot_token,
+        password: ROLE_PASSWORD.to_string(),
+    };
+
     forgejo_rest::ensure_repo(&client, base_url, admin_token, owner, name, default_branch).await?;
     let repository = upsert_labels(base_url, admin_token, owner, name).await?;
     forgejo_rest::commit_file(
@@ -208,6 +229,7 @@ pub async fn provision_world(
         name: name.into(),
         repository,
         roles: role_map,
+        automation,
     })
 }
 
@@ -358,6 +380,20 @@ pub fn format_secrets_env(provisioned: &Provisioned) -> String {
             sh_quote(&identity.password)
         ));
     }
+    // Automation (bot) identity for the mechanical worker. Emitted under a
+    // dedicated prefix so launchers never mistake it for a role worker.
+    out.push_str(&format!(
+        "TEMPER_FORGEJO_BOT_USER={}\n",
+        sh_quote(&provisioned.automation.user)
+    ));
+    out.push_str(&format!(
+        "TEMPER_FORGEJO_BOT_TOKEN={}\n",
+        sh_quote(&provisioned.automation.token)
+    ));
+    out.push_str(&format!(
+        "TEMPER_FORGEJO_BOT_PASSWORD={}\n",
+        sh_quote(&provisioned.automation.password)
+    ));
     out
 }
 
@@ -411,7 +447,15 @@ pub async fn provision_and_seed(
         .await?;
     }
     let issue = if let Some(seed) = intake_seed {
-        Some(seed_intake_issue(base_url, admin_token, owner, name, seed).await?)
+        let seed_token = provisioned
+            .roles
+            .get(&RoleId::new("human"))
+            .map(|identity| identity.token.as_str())
+            .ok_or_else(|| ProvisionError::Shape {
+                what: "intake seed author".into(),
+                detail: "workflow provisioning did not create a human role token".into(),
+            })?;
+        Some(seed_intake_issue(base_url, seed_token, owner, name, seed).await?)
     } else {
         None
     };
@@ -503,8 +547,17 @@ mod tests {
             name: "service".into(),
             repository: RepositoryId::new("r"),
             roles,
+            automation: RoleIdentity {
+                user: BOT_USER.into(),
+                email: "bot@example.invalid".into(),
+                token: "bot-tok".into(),
+                password: "bot-pw".into(),
+            },
         });
         assert!(env.contains("TEMPER_FORGEJO_TOKEN_CODE_REVIEWER='tok'"));
         assert!(env.contains(r"TEMPER_FORGEJO_PASSWORD_CODE_REVIEWER='pw-with-'\''-quote'"));
+        assert!(env.contains("TEMPER_FORGEJO_BOT_USER='bot'"));
+        assert!(env.contains("TEMPER_FORGEJO_BOT_TOKEN='bot-tok'"));
+        assert!(env.contains("TEMPER_FORGEJO_BOT_PASSWORD='bot-pw'"));
     }
 }

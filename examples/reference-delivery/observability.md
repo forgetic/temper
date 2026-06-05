@@ -83,8 +83,9 @@ error:
 no web-UI credentials configured for the CI read fallback
 ```
 
-means the mechanical worker can mutate over REST with the admin token but cannot
+means the mechanical worker can mutate over REST with the `bot` token but cannot
 read Forgejo 7.0.x Actions status. The launcher should pass the provisioned
-`engineer` username/password as `TEMPER_FORGEJO_USERNAME` and
+`bot` username/password as `TEMPER_FORGEJO_USERNAME` and
 `TEMPER_FORGEJO_PASSWORD`; `validate-webhooks` and `validate-multi-repo` flag
-this as a targeted failure.
+this as a targeted failure. (The setup-only site admin is never used here; the
+bot is the mechanical worker's identity for both landing and CI reads.)
