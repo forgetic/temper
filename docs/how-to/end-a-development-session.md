@@ -36,8 +36,10 @@ cargo test -p temper-forge-forgejo --test live -- --ignored
 cargo test -p temper-testing -- --ignored
 ```
 
-Add `--test-threads=1` only as an optional host resource throttle when the
-machine cannot comfortably run several real Forgejo/runner processes at once.
+The `temper-testing` ignored run includes the split `forgejo_multiprocess`
+scenario tests, and default libtest parallelism is supported. Add
+`--test-threads=1` only as an optional host resource throttle when the machine
+cannot comfortably run several real Forgejo/runner processes at once.
 
 ## 3. Review documentation from the top
 

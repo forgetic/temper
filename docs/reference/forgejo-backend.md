@@ -58,9 +58,10 @@ throwaway local Forgejo from a JSON-declared cached state plus a host-mode
 explicit binary overrides first, then cached `.cache/forgejo/` binaries, then
 pinned checked downloads. Binary and state caches are process-safe: first-use
 publishers hold per-target/per-key locks, validate complete contents, and publish
-with atomic renames, while each caller receives its own runtime copy. Ignored
-Forgejo tests may use libtest's default parallelism; `--test-threads=1` is only a
-host resource throttle. State snapshots are created on demand under
+with atomic renames, while each caller receives its own runtime copy. The split
+`forgejo_multiprocess` scenarios may publish separate declared-state cache keys.
+Ignored Forgejo tests may use libtest's default parallelism; `--test-threads=1`
+is only a host resource throttle. State snapshots are created on demand under
 `.cache/forgejo/states/`.
 
 ## Identifier scheme

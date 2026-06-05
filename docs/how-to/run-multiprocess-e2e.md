@@ -105,12 +105,14 @@ This rehearsal deliberately stays on fakes so that going live is **wiring, not
 redesign**. Everything above the handle factory is `dyn Forge`, and agents only
 mutate state through the `Agent`/`RoleTools` boundary, so each swap is local.
 
-The Forgejo multi-process e2e (`plans/forgejo-e2e/`) executed the **backend** and
-**CI** swaps against a real Forgejo server + real host-mode `forgejo-runner` — see
+The Forgejo multi-process e2e
+(`crates/temper-testing/tests/forgejo_multiprocess.rs`) executes the **backend**,
+**CI**, and **webhook trigger** swaps against a real Forgejo server + real
+host-mode `forgejo-runner` — see
 [run-forgejo-multiprocess-e2e.md](run-forgejo-multiprocess-e2e.md) and
-[forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md). What it ran
-(`tests/forgejo_multiprocess.rs`) is the **same** rehearsal as this one, reusing
-the **exact** scenario seed/assert closures, with these two pieces made real:
+[forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md). It is the
+**same** rehearsal as this one, reusing the **exact** scenario seed/assert
+closures, with these pieces made real:
 
 - **Backend handle factory — ✅ done.** The `temper-testing-worker`
   `--backend forgejo` path builds a `ForgejoForge` from `--base-url` plus a
@@ -126,17 +128,12 @@ the **exact** scenario seed/assert closures, with these two pieces made real:
 - **Identity — ✅ done (for that test).** Provisioning mints a real user + token
   per role and feeds each worker its own, so `current_user` matches the
   role-to-user map the executor authorizes against.
-
+- **Triggering — ✅ done (for that test).** A production-shaped Forgejo webhook
+  trigger sends authenticated wake hints to workers; polling remains the
+  level-triggered liveness backstop (see ADR 0009 and
+  `docs/explanation/agentic-workflows.md`).
 - **Agents — split.** Temper's multi-process fixtures use deterministic fake
   agents. Production role workers require process responders, and Smith owns the
   real LLM process-boundary Forgejo proof.
-
-**Still on fakes — pending:**
-
-- **Triggering.** Add the ADR 0009 webhook/`ChangeHint` accelerator **alongside**
-  `PollLoop`, feeding the same pull→classify→plan→execute→reconcile reaction
-  path. Both topologies are still `PollLoop`-only; polling stays as the
-  level-triggered liveness backstop and webhooks only lower latency (see ADR 0009
-  and `docs/explanation/agentic-workflows.md`).
 
 No workflow semantics, scenario, queue, label, or transition definitions change.

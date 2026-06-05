@@ -161,10 +161,16 @@ Hermetic/default-process coverage:
 cargo test -p temper-testing --test multi_repo_multiprocess
 ```
 
-Live Forgejo + runner fake-agent fixture:
+Live Forgejo + runner fake-agent fixtures:
 
 ```sh
+# all split Forgejo multiprocess scenarios
 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
+
+# retry one split scenario
+cargo test -p temper-testing --test forgejo_multiprocess \
+  forgejo_multiprocess_ci_fails_then_passes_converges -- --ignored
+
 cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored
 cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored
 ```

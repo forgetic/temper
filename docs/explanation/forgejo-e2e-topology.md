@@ -18,8 +18,8 @@ single- and multi-repo wake narrowing.
 
 ## Process topology
 
-The multi-process suite boots one live world and gives each scenario isolated
-repositories, worker logs, and stop files:
+The split multi-process suite is five ignored tests. Each test owns the live
+world for one scenario:
 
 ```text
   ┌──────────────────────────────────────────────────────────┐
@@ -34,21 +34,22 @@ repositories, worker logs, and stop files:
   └───────────┘  └──────────┘  └──────────────┘      └────────────────┘
 ```
 
-- **Server**: one throwaway Forgejo (`temper_testing::forgejo_server`), Actions
-  enabled, fresh SQLite, ephemeral port, killed and removed on drop.
-- **Runner**: one real host-mode `forgejo-runner` (`--labels host:host`, **no
-  containers**) registered to the server. It is the genuine CI producer — there
-  is no fake `--kind ci` worker on Forgejo.
-- **Repositories**: fresh repo names per scenario; cross-repo fan-out alone gets
-  a second fresh repo. Older scenario repos remain visible but are not in the
-  next scenario's worker `--repo` set.
-- **Trigger**: one host-local `/forgejo/webhook` receiver is registered against
-  each scenario repository and sends authenticated Unix-datagram wakes to the
-  scenario's workers.
+- **Server**: one throwaway Forgejo per scenario
+  (`temper_testing::forgejo_server`), Actions enabled, fresh SQLite, ephemeral
+  port, killed and removed on drop.
+- **Runner**: one real host-mode `forgejo-runner` per scenario (`--labels
+  host:host`, **no containers**) registered to that server. It is the genuine CI
+  producer — there is no fake `--kind ci` worker on Forgejo.
+- **Repositories**: the scenario-specific cached state contains only the needed
+  repo names. Cross-repo fan-out gets `service-cross-repo-source` and
+  `service-cross-repo-target`.
+- **Trigger**: one host-local `/forgejo/webhook` receiver per scenario is
+  registered against that scenario's repositories and sends authenticated
+  Unix-datagram wakes to its workers.
 - **Role + mechanical workers**: per scenario, the `temper-testing-worker`
   binary, one OS process per role-with-an-agent plus one mechanical reconciler,
   launched `--backend forgejo --clock wall` with a unique stop file, wake socket,
-  and log dir. They coordinate **only** through the server.
+  and log dir. They coordinate **only** through their scenario server.
 
 ## Identity is per-token
 
@@ -120,9 +121,10 @@ remain broad backstops. The pinned Forgejo 7.0.x fixture does not surface Action
 completion as a repo webhook, so CI-reading roles use a short 1s status-poll
 fallback only for CI verdict transitions: the owner in every scenario, and the
 engineer in the CI fail→pass scenario that must observe the failed run before
-pushing the recovery commit. The shared Forgejo world removes repeated
-server/runner startup while fresh repos keep scenario state isolated, so the
-remaining runtime is mostly real CI convergence.
+pushing the recovery commit. Scenario-specific cached state removes repeated
+provisioning while keeping cleanup stack-owned per test. Libtest can run several
+scenario worlds at once by default; add a thread limit only when host CPU or I/O
+capacity is the bottleneck. The remaining runtime is mostly real CI convergence.
 
 ## Why it stays `#[ignore]`d
 
@@ -140,9 +142,9 @@ workflow logic; this covers the real-backend topology.
 
 ## Triggering status
 
-The five-scenario Forgejo multi-process suite is webhook-driven: real Forgejo
-posts to the production trigger, the trigger sends authenticated wake datagrams,
-and fake-agent Forgejo workers consume them while their normal poll backstop is
+Each split Forgejo multi-process scenario is webhook-driven: real Forgejo posts
+to the production trigger, the trigger sends authenticated wake datagrams, and
+fake-agent Forgejo workers consume them while their normal poll backstop is
 `120000` ms. The focused ignored regressions still cover the wake accelerator in
 isolation: `forgejo_webhook_wakeup` for one repo, and
 `forgejo_multi_repo_webhook` for one fixed worker set scanning two repos. Polling

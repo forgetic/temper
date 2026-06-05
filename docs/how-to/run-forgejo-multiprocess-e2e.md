@@ -1,13 +1,14 @@
 # Run the Forgejo end-to-end fixture
 
-> **Status: complete.** The full five-scenario multi-process test runs against a
-> real Forgejo server **plus a real host-mode `forgejo-runner` producing genuine
-> CI**. This is the **same** rehearsal as the filesystem
-> [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend and CI
-> swapped to real**. Temper's fixture workers use deterministic fake agents;
-> real LLM decisions live in Smith's process-responder e2e. The suite carries the
-> same webhook trigger shape as `examples/reference-delivery`; separate long-poll
-> wakeup regressions cover focused single- and multi-repo wake behavior. The design rationale
+> **Status: complete.** The full five-scenario multi-process test target runs
+> against real Forgejo servers **plus real host-mode `forgejo-runner` processes
+> producing genuine CI**. This is the **same** rehearsal as the filesystem
+> [run-multiprocess-e2e.md](run-multiprocess-e2e.md), with the **backend, CI,
+> and webhook wake path swapped to real**. Temper's fixture workers use
+> deterministic fake agents; real LLM decisions live in Smith's process-responder
+> e2e. The suite carries the same webhook trigger shape as
+> `examples/reference-delivery`; separate long-poll wakeup regressions cover
+> focused single- and multi-repo wake behavior. The design rationale
 > (topology, real CI, per-token identity, webhook wakeups) lives in
 > [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) and
 > [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
@@ -31,22 +32,33 @@ and `forgejo-runner` processes are still killed on drop for fast teardown; only
 the one-time cache publisher uses clean shutdown so the SQLite/git tree is safe
 to reuse.
 
-## One-line command (the full test)
+## All-scenarios command
 
 ```sh
 cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
 ```
 
-This starts one Forgejo server from the declared cached state **and** one
-host-mode `forgejo-runner`, then converges all five reference-delivery scenarios
-in predeclared per-scenario repos across real OS processes. It spawns real
-processes and executes CI **on this host**, so run it only where that is
-acceptable. The first run for a binary or state cache miss still pays download or
-provisioning cost; warmed runs copy the state from `.cache` to `/tmp`. Use
-`--test-threads=1` only as an optional host resource throttle if the machine
-cannot comfortably run several real Forgejo/runner processes at once. The
-per-phase smoke tests below build up to it. See
+This runs five ignored scenario tests. With libtest's default parallelism, each
+scenario starts its own Forgejo server from a scenario-specific cached state,
+host-mode `forgejo-runner`, production-shaped trigger, temp state copy, wake
+dir, and worker fleet. It spawns real processes and executes CI **on this host**,
+so run it only where that is acceptable. The first run for a binary or scenario
+state cache miss still pays download or provisioning cost; each scenario state
+can publish its own cache key, publishing is process-safe, and warmed runs copy
+from `.cache` to `/tmp`. Use `--test-threads=1` only as an optional host resource
+throttle if the machine cannot comfortably run several real Forgejo/runner
+processes at once. The per-phase smoke tests below build up to it. See
 [The multi-process test](#the-multi-process-test-phase-5) for detail.
+
+## Single-scenario retry/filter
+
+```sh
+cargo test -p temper-testing --test forgejo_multiprocess \
+  forgejo_multiprocess_ci_fails_then_passes_converges -- --ignored
+```
+
+Use the same shape with any `forgejo_multiprocess_*_converges` test name to
+retry only one scenario while keeping the same per-test live-world topology.
 
 ## Real LLM process proof
 
@@ -203,33 +215,36 @@ cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
 
 This is the Forgejo twin of `tests/multiprocess.rs`: the **same**
 one-process-per-part rehearsal, but against a real Forgejo + a real host-mode
-`forgejo-runner`. The ignored test is one serial scenario suite: it declares one
-state containing the shared admin, per-role identity/token set, all five primary
-scenario repos, and the cross-repo target repo. Each test run starts a new
-Forgejo process from a `/tmp` copy of that cached tree, starts a new runner, then
-registers dynamic webhooks for the repos against one shared production-shaped
-`/forgejo/webhook` trigger. Each scenario spawns a fresh
-`temper-testing-worker` fleet `--backend forgejo --clock wall` once per
-role-with-an-agent plus one mechanical worker (**no** `--kind ci` — the real
-runner is the CI producer). Workers use authenticated Unix wake sockets and a
-`120000` ms non-CI poll backstop; all non-CI handoffs must converge by webhook
-wake before that backstop. Because the pinned Forgejo 7.0.x fixture does not
-emit Actions-completion repo webhooks, only CI-reading role workers use a 1s
-status-poll fallback for CI verdict transitions: owner in every scenario, plus
-engineer in `ci_fails_then_passes` so it can observe the failed run and push the
-recovery commit. The driver polls the scenario's **exact** assert closure to
-observe convergence, then stops via its unique `--stop-file` sentinel and asserts
-each child exited 0.
+`forgejo-runner`. The test file exposes five ignored tests, one each for happy
+path, changes-requested retry, CI fail→pass, dependency-chain unblocking, and
+cross-repo fan-out.
 
-Scenario isolation is by repository, stop file, wake socket, and log directory;
-only the Forgejo server, runner, trigger, admin, and role users are shared within
-the one test process. The cached tree itself is never mutated directly: each run
-uses a fresh `/tmp` copy, so a panic drops the active worker fleet and then the
+Each test declares cached state for only that scenario's repositories, starts a
+new Forgejo process from a `/tmp` copy of that state, registers one host-mode
+runner, starts one production-shaped `/forgejo/webhook` trigger, registers
+webhooks for the scenario repos, and spawns a fresh `temper-testing-worker` fleet
+`--backend forgejo --clock wall` once per role-with-an-agent plus one mechanical
+worker (**no** `--kind ci` — the real runner is the CI producer). Workers use
+authenticated Unix wake sockets and a `120000` ms non-CI poll backstop; all
+non-CI handoffs must converge by webhook wake before that backstop. Because the
+pinned Forgejo 7.0.x fixture does not emit Actions-completion repo webhooks,
+only CI-reading role workers use a 1s status-poll fallback for CI verdict
+transitions: owner in every scenario, plus engineer in `ci_fails_then_passes` so
+it can observe the failed run and push the recovery commit. The driver polls the
+scenario's **exact** assert closure to observe convergence, then stops via its
+unique `--stop-file` sentinel and asserts each child exited 0.
+
+Scenario isolation is by server, runner, trigger, repository, temp state copy,
+wake dir, stop file, wake socket, log directory, and worker fleet. The
+cross-repo test uses `service-cross-repo-source` plus
+`service-cross-repo-target`; no target-name ordering workaround is needed because
+that scenario's state contains only those repositories. The cached tree itself is
+never mutated directly, so a panic drops the active worker fleet and then the
 runner/server handles without corrupting future starts.
 
 Secrets travel by env only: each role worker gets its token via
-`TEMPER_FORGEJO_TOKEN`, plus `TEMPER_FORGEJO_USERNAME`/`PASSWORD` for the
-web-UI CI read, never on argv.
+`TEMPER_FORGEJO_TOKEN`, plus `TEMPER_FORGEJO_USERNAME`/`PASSWORD` for the web-UI
+CI read, never on argv.
 
 The only per-topology differences from the filesystem test are the worker flags
 (`--backend forgejo`, `--base-url`, `--clock wall`, wake socket flags, and the
@@ -242,23 +257,25 @@ the host-mode runner has no `actions/checkout` offline.
 
 ### Expected timing and scan diagnostics
 
-On a warmed local checkout, expect one shared setup line (state copy + server
-startup, <1s runner startup) and one timing line per scenario. A cache miss also
-prints the one-time provisioning cost before the warmed path is available. Recent
-pre-cache runs finished in roughly high-80s to mid-90s total, with worker
-convergence and real CI dominating; warmed runs should reduce setup time. Each
-successful scenario also prints a worker scan summary (`ticks`,
-summed `scanned_repositories`, `ci_read_log_lines`, and last scanned paths); the
-suite enables `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback reads are
-counted.
-If times regress, first check that wake ticks are present, poll-trigger ticks are
-limited to the narrow CI status fallback roles, and multi-repo wake scans remain
-narrowed except for the mechanical worker's intentional broad recovery scan. The
-shared five-scenario fixture sets `TEMPER_WAKE_DEBOUNCE_MS=50` for its worker
-children; the production default remains 500ms for more conservative
-webhook-burst coalescing. Timeout
-panics include the same summaries, worker log tails, runner log tail, and
-per-repo CI diagnostics.
+On a warmed local checkout, each scenario test prints a world timing line
+(`state_cache_hit`, server startup, runner startup, trigger startup), a scenario
+timing line, a worker scan summary, and a final test timing line; libtest also
+reports one result per scenario. A scenario cache miss prints that state's
+one-time provisioning cost before the warmed path is available. With default
+parallelism, wall time is usually closer to the slowest scenario plus setup than
+to the sum of all scenarios; adding `--test-threads=1` serializes them only to
+throttle host load.
+
+Each successful scenario prints a worker scan summary (`ticks`, summed
+`scanned_repositories`, `ci_read_log_lines`, and last scanned paths); the suite
+enables `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` so web-UI CI fallback reads are
+counted. If times regress, first check that wake ticks are present, poll-trigger
+ticks are limited to the narrow CI status fallback roles, and multi-repo wake
+scans remain narrowed except for the mechanical worker's intentional broad
+recovery scan. Each scenario fixture sets `TEMPER_WAKE_DEBOUNCE_MS=50` for its
+worker children; the production default remains 500ms for more conservative
+webhook-burst coalescing. Timeout panics include the same summaries, worker log
+tails, runner log tail, and per-repo CI diagnostics.
 
 ## Long-poll webhook wakeup regressions
 
