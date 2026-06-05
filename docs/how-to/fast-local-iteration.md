@@ -39,6 +39,22 @@ integration tests and exposes its path through
 `CARGO_BIN_EXE_temper-testing-worker`. Set `TEMPER_TESTING_WORKER_BIN` only when
 you intentionally want to spawn a prebuilt worker binary.
 
+To prebuild every workspace test harness and integration-test binary without
+running tests:
+
+```sh
+cargo dev-test-build
+```
+
+This expands to:
+
+```sh
+cargo test --workspace --all-targets --no-run
+```
+
+Use it before the full suite when you want `cargo dev-test-full` to start with
+fresh test artifacts already compiled.
+
 For the full self-contained local suite:
 
 ```sh
