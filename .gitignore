@@ -1,10 +1,3 @@
 /target/
 /.cache/
-**/*.rs.bk
-__pycache__/
-.DS_Store
-.idea/
-.vscode/
-/.temper-pr-prep/
-/.temper-ci/
 /plans/*
