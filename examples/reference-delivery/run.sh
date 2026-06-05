@@ -149,7 +149,7 @@ cmd_stop() {
 
 # --- Config -------------------------------------------------------------------
 
-CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS CI_STATUS_POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
+CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS CI_STATUS_POLL_MS IDLE_POLL_MAX_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
 TEMPER_TESTING_WORKER_BIN TEMPER_PROVISION_BIN TEMPER_TRIGGER_BIN TEMPER_VALIDATE_BIN \
 TEMPER_BUILD_PRODUCTION TEMPER_BUILD_TESTING FAKE_ARCHITECT FAKE_REVIEWER FAKE_CI_SENTINEL"
@@ -207,6 +207,7 @@ load_config() {
     else
         CI_STATUS_POLL_MS=1000
     fi
+    IDLE_POLL_MAX_MS=${IDLE_POLL_MAX_MS:-8000}
     RUN_SECS=${RUN_SECS:-600}
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
@@ -651,7 +652,7 @@ launch_workers() {
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     (
-        printf 'temper-testing-worker: mechanical repositories=%s ci_reader_role=engineer\n' "$CONFIGURED_REPOS"
+        printf 'temper-testing-worker: mechanical repositories=%s ci_reader_role=engineer idle_poll_max_ms=%s\n' "$CONFIGURED_REPOS" "$IDLE_POLL_MAX_MS"
         # shellcheck disable=SC2086
         TEMPER_FORGEJO_TOKEN="$ADMIN_TOKEN" \
         TEMPER_FORGEJO_USERNAME="$ENGINEER_USER" \
@@ -660,7 +661,8 @@ launch_workers() {
             --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
             --root "$RUN_DIR/unused-store" --clock wall \
             --kind mechanical \
-            --poll-ms "$CI_STATUS_POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+            --poll-ms "$CI_STATUS_POLL_MS" --idle-poll-max-ms "$IDLE_POLL_MAX_MS" \
+            --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
             $_wake_args
     ) >"$LOG_DIR/mechanical.log" 2>&1 &
     _pid=$!
@@ -850,7 +852,7 @@ cmd_validate_webhooks() {
     [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
     log "validating webhook wake logs under $LOG_DIR"
     log "configured repos: $CONFIGURED_REPOS"
-    log "configured POLL_MS=$POLL_MS CI_STATUS_POLL_MS=$CI_STATUS_POLL_MS; long-poll smoke expects POLL_MS=120000"
+    log "configured POLL_MS=$POLL_MS CI_STATUS_POLL_MS=$CI_STATUS_POLL_MS IDLE_POLL_MAX_MS=$IDLE_POLL_MAX_MS; long-poll smoke expects POLL_MS=120000"
 
     validate_mechanical_ci_reader_config || _ok=1
     validate_mechanical_ci_log || _ok=1

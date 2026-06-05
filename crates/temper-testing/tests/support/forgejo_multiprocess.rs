@@ -135,7 +135,7 @@ impl WorkerFleet {
             wake_secret,
             &wake_socket,
             poll_profile.for_mechanical(),
-            &[("--kind", "mechanical")],
+            &[("--kind", "mechanical"), ("--idle-poll-max-ms", "8000")],
             &mechanical_env,
             &log,
         );

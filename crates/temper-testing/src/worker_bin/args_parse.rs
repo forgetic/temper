@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use temper_forge::RepositoryPath;
 
 const DEFAULT_AUDIT_INTERVAL_MS: i64 = 600_000;
+const DEFAULT_IDLE_POLL_MAX_MS: i64 = 60_000;
 
 /// Outcome of parsing the raw argument vector.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,8 +36,8 @@ pub const USAGE: &str = concat!(
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
     "[--agents <fake>] ",
-    "[--poll-ms <n>] [--audit-ms <n deep-audit, 0 disables>] [--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] ",
-    "[--wake-socket <path>] [--wake-secret-file <path>]\n",
+    "[--poll-ms <n>] [--idle-poll-max-ms <n mechanical idle cap>] [--audit-ms <n deep-audit, 0 disables>] ",
+    "[--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] [--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
     "TEMPER_FORGEJO_TOKEN (required), TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD ",
     "(optional, for the CI-reading role's web-UI login)",
@@ -87,6 +88,7 @@ struct RawArgs {
     ci: Option<String>,
     ci_sentinel: Option<String>,
     poll_ms: Option<String>,
+    idle_poll_max_ms: Option<String>,
     audit_ms: Option<String>,
     stop_file: Option<String>,
     run_secs: Option<String>,
@@ -115,6 +117,7 @@ impl RawArgs {
             ci: None,
             ci_sentinel: None,
             poll_ms: None,
+            idle_poll_max_ms: None,
             audit_ms: None,
             stop_file: None,
             run_secs: None,
@@ -139,6 +142,7 @@ impl RawArgs {
                 "--ci" => raw.ci = Some(value_for(&flag, &mut iter)?),
                 "--ci-sentinel" => raw.ci_sentinel = Some(value_for(&flag, &mut iter)?),
                 "--poll-ms" => raw.poll_ms = Some(value_for(&flag, &mut iter)?),
+                "--idle-poll-max-ms" => raw.idle_poll_max_ms = Some(value_for(&flag, &mut iter)?),
                 "--audit-ms" => raw.audit_ms = Some(value_for(&flag, &mut iter)?),
                 "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
@@ -173,6 +177,8 @@ impl RawArgs {
             Some(raw) => Duration::milliseconds(parse_i64(&raw, "--poll-ms")?),
             None => Duration::milliseconds(50),
         };
+        let idle_poll_max_interval =
+            parse_idle_poll_max_interval(self.idle_poll_max_ms, poll_interval)?;
         let audit_interval = parse_audit_interval(self.audit_ms)?;
         let stop_file = self.stop_file.map(PathBuf::from);
         let run_secs = self
@@ -235,6 +241,7 @@ impl RawArgs {
             name,
             repositories,
             poll_interval,
+            idle_poll_max_interval,
             audit_interval,
             stop_file,
             run_secs,
@@ -431,6 +438,21 @@ fn parse_audit_interval(raw: Option<String>) -> Result<Option<Duration>, ArgsErr
         None => DEFAULT_AUDIT_INTERVAL_MS,
     };
     Ok((value > 0).then(|| Duration::milliseconds(value)))
+}
+
+fn parse_idle_poll_max_interval(
+    raw: Option<String>,
+    poll_interval: Duration,
+) -> Result<Duration, ArgsError> {
+    let configured = match raw {
+        Some(raw) => Duration::milliseconds(parse_i64(&raw, "--idle-poll-max-ms")?),
+        None => Duration::milliseconds(DEFAULT_IDLE_POLL_MAX_MS),
+    };
+    Ok(if configured < poll_interval {
+        poll_interval
+    } else {
+        configured
+    })
 }
 
 fn parse_i64(raw: &str, flag: &str) -> Result<i64, ArgsError> {

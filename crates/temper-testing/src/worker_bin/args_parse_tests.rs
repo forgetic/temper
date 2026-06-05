@@ -323,6 +323,34 @@ fn rejects_provider_auth_flags_after_smith_split() {
 }
 
 #[test]
+fn parses_idle_poll_backoff_cap() {
+    let args = run(&[
+        "--kind",
+        "mechanical",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(
+        args.idle_poll_max_interval,
+        Duration::milliseconds(DEFAULT_IDLE_POLL_MAX_MS)
+    );
+
+    let args = run(&[
+        "--kind",
+        "mechanical",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+        "--idle-poll-max-ms",
+        "2500",
+    ]);
+    assert_eq!(args.idle_poll_max_interval, Duration::milliseconds(2500));
+}
+
+#[test]
 fn parses_audit_interval_and_allows_disabling_audit() {
     let args = run(&[
         "--kind",

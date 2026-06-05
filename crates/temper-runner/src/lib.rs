@@ -48,10 +48,11 @@
 //! - [`CiSink`] and [`CiWorker`], the test-only outside-world CI producer seam
 //!   used to seed native CI jobs for layered scenarios; real deployments rely on
 //!   provider CI and only use the engine's read side.
-//! - [`FixpointDriver`], [`PollLoop`], [`WakeablePollLoop`], and [`Stage`]/
-//!   [`InProcessStage`]/[`MultiProcessStage`], which compose workers into deterministic memory,
-//!   filesystem, and process-split rehearsal worlds while keeping per-worker
-//!   Forge identity a handle-construction concern. Integration-test support
+//! - [`FixpointDriver`], [`PollLoop`], [`WakeablePollLoop`], [`IdlePollBackoff`],
+//!   and [`Stage`]/[`InProcessStage`]/[`MultiProcessStage`], which compose workers
+//!   into deterministic memory, filesystem, and process-split rehearsal worlds
+//!   while keeping per-worker Forge identity a handle-construction concern.
+//!   Integration-test support
 //!   supplies deterministic fake reference-delivery agents behind [`Agent`];
 //!   they contain behavior only and
 //!   perform workflow mutations solely through [`RoleTools`].
@@ -64,6 +65,7 @@
 //! journal surviving a restart.
 
 pub mod agent;
+pub mod cadence;
 pub mod coding_workspace;
 pub mod config;
 pub mod driver;
@@ -79,6 +81,7 @@ pub mod trigger;
 pub mod worker;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
+pub use cadence::IdlePollBackoff;
 pub use coding_workspace::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceGuidance, CodingWorkspaceOutput,
     CodingWorkspaceRepository, CodingWorkspaceRequest, CodingWorkspaceWorkItem,

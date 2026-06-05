@@ -17,6 +17,7 @@ pub const ROLE_DECISION_CWD_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_CWD";
 pub const ROLE_DECISION_ENV_ALLOWLIST_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST";
 pub const ROLE_DECISION_TIMEOUT_ENV: &str = "TEMPER_WORKER_ROLE_DECISION_TIMEOUT_SECS";
 pub const DEFAULT_AUDIT_INTERVAL_MS: i64 = 600_000;
+pub const DEFAULT_IDLE_POLL_MAX_MS: i64 = 60_000;
 
 pub const USAGE: &str = concat!(
     "temper-worker --backend forgejo --base-url <url> (--repo <owner/name> [--repo <owner/name> ...] | --repo-list <path>) ",
@@ -24,8 +25,8 @@ pub const USAGE: &str = concat!(
     "[--role-decision-command <path>] [--role-decision-arg <arg>] ",
     "[--role-decision-env <name>] [--role-decision-cwd <path>] ",
     "[--role-decision-timeout-secs <n>] ",
-    "[--poll-ms <n>] [--audit-ms <n deep-audit, 0 disables>] [--stop-file <path>] [--run-secs <max>] ",
-    "[--wake-socket <path>] [--wake-secret-file <path>] ",
+    "[--poll-ms <n>] [--idle-poll-max-ms <n mechanical idle cap>] [--audit-ms <n deep-audit, 0 disables>] ",
+    "[--stop-file <path>] [--run-secs <max>] [--wake-socket <path>] [--wake-secret-file <path>] ",
     "[--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from TEMPER_FORGEJO_TOKEN; optional web UI credentials ",
     "come from TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD; role ",
@@ -76,6 +77,8 @@ pub struct WorkerArgs {
     /// Forge permissions on the token remain the authority for mutations.
     pub repositories: Vec<RepositoryPath>,
     pub poll_interval: Duration,
+    /// Maximum mechanical poll cadence after repeated successful no-action normal ticks.
+    pub idle_poll_max_interval: Duration,
     /// Low-frequency broad audit cadence. `None` disables audit ticks.
     pub audit_interval: Option<Duration>,
     pub stop_file: Option<PathBuf>,
@@ -98,6 +101,7 @@ impl fmt::Debug for WorkerArgs {
             .field("name", &self.name)
             .field("repositories", &self.repositories)
             .field("poll_interval", &self.poll_interval)
+            .field("idle_poll_max_interval", &self.idle_poll_max_interval)
             .field("audit_interval", &self.audit_interval)
             .field("stop_file", &self.stop_file)
             .field("run_secs", &self.run_secs)
@@ -160,6 +164,7 @@ struct RawArgs {
     role: Option<String>,
     user: Option<String>,
     poll_ms: Option<String>,
+    idle_poll_max_ms: Option<String>,
     audit_ms: Option<String>,
     stop_file: Option<String>,
     run_secs: Option<String>,
@@ -187,6 +192,7 @@ impl RawArgs {
                 "--role" => raw.role = Some(value_for(&flag, &mut iter)?),
                 "--user" => raw.user = Some(value_for(&flag, &mut iter)?),
                 "--poll-ms" => raw.poll_ms = Some(value_for(&flag, &mut iter)?),
+                "--idle-poll-max-ms" => raw.idle_poll_max_ms = Some(value_for(&flag, &mut iter)?),
                 "--audit-ms" => raw.audit_ms = Some(value_for(&flag, &mut iter)?),
                 "--stop-file" => raw.stop_file = Some(value_for(&flag, &mut iter)?),
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
@@ -257,16 +263,20 @@ impl RawArgs {
         } else {
             None
         };
+        let poll_interval = Duration::milliseconds(match self.poll_ms {
+            Some(raw) => parse_i64(&raw, "--poll-ms")?,
+            None => 1_000,
+        });
+        let idle_poll_max_interval =
+            parse_idle_poll_max_interval(self.idle_poll_max_ms, poll_interval)?;
         Ok(WorkerArgs {
             kind,
             forgejo,
             owner,
             name,
             repositories,
-            poll_interval: Duration::milliseconds(match self.poll_ms {
-                Some(raw) => parse_i64(&raw, "--poll-ms")?,
-                None => 1_000,
-            }),
+            poll_interval,
+            idle_poll_max_interval,
             audit_interval: parse_audit_interval(self.audit_ms)?,
             stop_file: self.stop_file.map(PathBuf::from),
             run_secs: self
@@ -453,6 +463,21 @@ fn parse_audit_interval(raw: Option<String>) -> Result<Option<Duration>, ArgsErr
         None => DEFAULT_AUDIT_INTERVAL_MS,
     };
     Ok((value > 0).then(|| Duration::milliseconds(value)))
+}
+
+fn parse_idle_poll_max_interval(
+    raw: Option<String>,
+    poll_interval: Duration,
+) -> Result<Duration, ArgsError> {
+    let configured = match raw {
+        Some(raw) => Duration::milliseconds(parse_i64(&raw, "--idle-poll-max-ms")?),
+        None => Duration::milliseconds(DEFAULT_IDLE_POLL_MAX_MS),
+    };
+    Ok(if configured < poll_interval {
+        poll_interval
+    } else {
+        configured
+    })
 }
 
 fn parse_i64(raw: &str, flag: &str) -> Result<i64, ArgsError> {

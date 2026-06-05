@@ -5,8 +5,8 @@ use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{ChangeHint, Forge};
 use temper_production::wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
 use temper_runner::{
-    MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress, RepositorySet,
-    RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
+    IdlePollBackoff, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
+    RepositorySet, RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
 };
 use temper_workflow::{CommandJournal, RecoveryPolicy};
 
@@ -62,6 +62,10 @@ impl TickReason {
             TickReason::Wake => "wake",
             TickReason::Audit => "audit",
         }
+    }
+
+    fn is_normal(self) -> bool {
+        matches!(self, TickReason::Initial | TickReason::Poll)
     }
 }
 
@@ -229,6 +233,13 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
     let audit_interval = args
         .audit_interval
         .and_then(|duration| duration.to_std().ok());
+    let mut idle_backoff = matches!(&args.kind, crate::worker_bin::args::WorkerKind::Mechanical)
+        .then(|| {
+            IdlePollBackoff::new(
+                interval,
+                args.idle_poll_max_interval.to_std().unwrap_or(interval),
+            )
+        });
     let mut next_poll_due = Instant::now() + interval;
     let mut next_audit_due = audit_interval.map(|duration| Instant::now() + duration);
     let mut next_tick_reason = TickReason::Initial;
@@ -261,20 +272,26 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
                 report.workers[0].actions = report.workers[0]
                     .actions
                     .saturating_add(u64::from(tick.progress.actions));
-                record_completed_tick_deadline(
+                let next_poll_delay = record_completed_tick_deadline(
                     tick_reason,
                     interval,
                     audit_interval,
+                    idle_backoff.as_mut(),
+                    Some(tick.progress),
                     &mut next_poll_due,
                     &mut next_audit_due,
                 );
                 eprintln!(
-                    "temper-testing-worker: worker '{}' completed tick trigger={} actions={} scanned_repositories={} scanned_repository_paths={}",
+                    "temper-testing-worker: worker '{}' completed tick trigger={} actions={} scanned_repositories={} scanned_repository_paths={} next_poll_ms={} idle_no_action_ticks={}",
                     worker.name(),
                     tick_reason.as_str(),
                     tick.progress.actions,
                     tick.scanned_repository_count,
-                    render_repo_paths(&tick.scanned_repository_paths)
+                    render_repo_paths(&tick.scanned_repository_paths),
+                    next_poll_delay.as_millis(),
+                    idle_backoff
+                        .as_ref()
+                        .map_or(0, IdlePollBackoff::consecutive_idle_ticks)
                 );
             }
             Err(error) => {
@@ -283,6 +300,8 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
                     tick_reason,
                     interval,
                     audit_interval,
+                    idle_backoff.as_mut(),
+                    None,
                     &mut next_poll_due,
                     &mut next_audit_due,
                 );
@@ -328,14 +347,24 @@ fn record_completed_tick_deadline(
     tick_reason: TickReason,
     poll_interval: StdDuration,
     audit_interval: Option<StdDuration>,
+    idle_backoff: Option<&mut IdlePollBackoff>,
+    progress: Option<Progress>,
     next_poll_due: &mut Instant,
     next_audit_due: &mut Option<Instant>,
-) {
+) -> StdDuration {
     let now = Instant::now();
-    *next_poll_due = now + poll_interval;
+    let poll_delay = match (idle_backoff, progress) {
+        (Some(backoff), Some(progress)) if tick_reason.is_normal() => {
+            backoff.record_normal_tick(progress)
+        }
+        (Some(backoff), _) => backoff.reset(),
+        (None, _) => poll_interval,
+    };
+    *next_poll_due = now + poll_delay;
     if tick_reason == TickReason::Audit {
         *next_audit_due = audit_interval.map(|interval| now + interval);
     }
+    poll_delay
 }
 
 fn wait_interval_until_next_tick(
@@ -373,9 +402,10 @@ mod tests {
     use chrono::{DateTime, Duration, Utc};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
     use std::thread;
-    use temper_forge::RepositoryPath;
-    use temper_production::wake::send_wake;
+    use temper_forge::{ChangeKind, RepositoryPath};
+    use temper_production::wake::send_wake_with_hint;
 
     use crate::worker_bin::args::{
         AgentsKind, Backend, ClockKind, ForgejoArgs, WorkerArgs, WorkerKind,
@@ -383,6 +413,7 @@ mod tests {
 
     struct BurstWorker {
         ticks: AtomicU64,
+        reasons: Mutex<Vec<TickReason>>,
         socket: PathBuf,
     }
 
@@ -391,8 +422,11 @@ mod tests {
         async fn tick(&self, _now: DateTime<Utc>) -> Result<Progress, WorkerError> {
             let tick = self.ticks.fetch_add(1, Ordering::SeqCst) + 1;
             if tick == 1 {
+                let hint =
+                    ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
                 for _ in 0..3 {
-                    send_wake(&self.socket, Some("wake-secret")).expect("wake sends");
+                    send_wake_with_hint(&self.socket, Some("wake-secret"), &hint)
+                        .expect("wake sends");
                 }
             }
             Ok(Progress::unchanged())
@@ -408,9 +442,10 @@ mod tests {
         async fn tick_for_reason(
             &self,
             now: DateTime<Utc>,
-            _reason: TickReason,
+            reason: TickReason,
             _hints: &[ChangeHint],
         ) -> Result<ForgejoTickReport, WorkerError> {
+            self.reasons.lock().expect("reasons lock").push(reason);
             Worker::tick(self, now).await.map(ForgejoTickReport::single)
         }
 
@@ -420,8 +455,8 @@ mod tests {
     }
 
     #[test]
-    fn forgejo_drive_coalesces_queued_wake_bursts() {
-        let root = temp_root("coalesced-wakes");
+    fn forgejo_drive_hint_wake_bypasses_idle_backoff() {
+        let root = temp_root("hint-wake-bypasses-idle");
         std::fs::create_dir_all(&root).expect("temp root exists");
         let socket = root.join("worker.sock");
         let secret_file = root.join("wake-secret");
@@ -440,6 +475,7 @@ mod tests {
             name: "service".into(),
             repositories: vec![RepositoryPath::new("acme", "service")],
             poll_interval: Duration::seconds(60),
+            idle_poll_max_interval: Duration::seconds(60),
             audit_interval: Some(Duration::milliseconds(600_000)),
             stop_file: Some(stop_file.clone()),
             run_secs: None,
@@ -450,6 +486,7 @@ mod tests {
         };
         let worker = BurstWorker {
             ticks: AtomicU64::new(0),
+            reasons: Mutex::new(Vec::new()),
             socket,
         };
         let stop_file_for_thread = stop_file.clone();
@@ -469,6 +506,10 @@ mod tests {
 
         assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);
         assert_eq!(report.ticks, 2);
+        assert_eq!(
+            *worker.reasons.lock().expect("reasons lock"),
+            vec![TickReason::Initial, TickReason::Wake]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

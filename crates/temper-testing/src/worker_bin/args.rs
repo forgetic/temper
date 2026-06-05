@@ -265,6 +265,8 @@ pub struct WorkerArgs {
     pub repositories: Vec<temper_forge::RepositoryPath>,
     /// Poll cadence between ticks.
     pub poll_interval: Duration,
+    /// Maximum Forgejo mechanical poll cadence after repeated no-action ticks.
+    pub idle_poll_max_interval: Duration,
     /// Low-frequency broad audit cadence. `None` disables audit ticks.
     pub audit_interval: Option<Duration>,
     /// Sentinel file whose existence stops the run loop.

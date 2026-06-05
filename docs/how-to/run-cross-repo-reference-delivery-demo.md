@@ -26,6 +26,7 @@ REPOS="acme/service acme/service-canary"
 CROSS_REPO_INTAKE=auto
 POLL_MS=120000
 CI_STATUS_POLL_MS=1000
+IDLE_POLL_MAX_MS=8000
 WEBHOOKS=1
 FAKE_ARCHITECT=closing
 ```
@@ -34,7 +35,8 @@ FAKE_ARCHITECT=closing
 repo. Set `CROSS_REPO_INTAKE=0` for independent per-repo intakes, or set
 `REPOS=` and `CROSS_REPO_INTAKE=0` for single-repo mode. `POLL_MS` controls role
 worker polling so webhook wakeups remain visible; `CI_STATUS_POLL_MS` controls
-the mechanical landing worker's CI-status poll backstop. Leave
+the mechanical landing worker's active CI-status poll backstop, and
+`IDLE_POLL_MAX_MS` caps no-action mechanical backoff. Leave
 `CI_STATUS_POLL_MS` blank to reuse `POLL_MS`.
 
 ## Run

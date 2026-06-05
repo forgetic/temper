@@ -20,7 +20,7 @@ The fake workers do not call Smith and do not emit role-decision process events.
 They log process-level movement such as:
 
 ```text
-temper-testing-worker: worker 'multi-role:architect' completed tick trigger=wake actions=1 scanned_repositories=1 scanned_repository_paths=acme/service
+temper-testing-worker: worker 'multi-role:architect' completed tick trigger=wake actions=1 scanned_repositories=1 scanned_repository_paths=acme/service next_poll_ms=120000 idle_no_action_ticks=0
 temper-testing-worker: worker 'multi-role:engineer' consumed authenticated wake batch hints=1; ticking immediately
 ```
 
@@ -40,7 +40,9 @@ owner.log: completed tick trigger=wake actions=0   # until the alignment cohort 
 ```
 
 Some wake-triggered ticks may report `actions=0`; that means the worker woke,
-read fresh Forge state, and found no eligible item. Mechanical logs also include
+read fresh Forge state, and found no eligible item. Mechanical `next_poll_ms`
+and `idle_no_action_ticks` show adaptive idle backoff after repeated no-action
+normal ticks; wake and audit ticks reset the idle counter. Mechanical logs also include
 `mechanical_automation_execution`, `mechanical_automation_summary`, and, after a
 merge rejection, `mechanical_automation_merge_conflict_route`; these show the
 landing queue, transition, target PR, and whether the item was applied,

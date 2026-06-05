@@ -10,7 +10,7 @@ from the compiled workflow and every mutation still goes through `Forge`.
 owner/name` or `--repo-list <path>`. The shard is not an authorization boundary:
 the Forgejo token decides what the worker may read or mutate.
 
-- `--poll-ms <n>` controls the normal poll cadence. Poll ticks scan the
+- `--poll-ms <n>` controls the active normal poll cadence. Poll ticks scan the
   configured repository set using normal bounded candidate queries. Terminal
   closed/merged history is queried only through active or recoverable labels
   (queue labels, state labels, transition labels, and gate/condition labels),
@@ -18,6 +18,12 @@ the Forgejo token decides what the worker may read or mutate.
   `implementation` label. Mechanical poll ticks run bounded reconciliation
   first, then bounded automated-queue scans for queues with `automation`
   metadata.
+- `--idle-poll-max-ms <n>` caps the adaptive idle cadence for mechanical
+  workers; the default cap is `60000` ms, raised to `--poll-ms` when the active
+  poll interval is already longer. Consecutive successful normal mechanical
+  ticks with `changed=false` and `actions=0` keep the first next poll at
+  `--poll-ms`, then double the delay up to this cap. Any action/progress, wake
+  tick, audit tick, or tick error resets the next normal poll to `--poll-ms`.
 - `--audit-ms <n>` controls the low-frequency audit cadence. The default is
   `600000` ms; `0` disables audit ticks. Role audit ticks inspect all configured
   repositories and active/recoverable workflow-labelled recovery interest, but
@@ -43,8 +49,9 @@ accelerate latency; polling and audits remain the correctness backstops.
 Completed tick logs include:
 
 ```text
-trigger=<initial|poll|wake|audit> tick_id=<id> actions=<n> \
-scanned_repositories=<n> scanned_repository_paths=<owner/repo,...>
+trigger=<initial|poll|wake|audit> actions=<n> tick_id=<id> \
+scanned_repositories=<n> scanned_repository_paths=<owner/repo,...> \
+next_poll_ms=<n> idle_no_action_ticks=<n>
 ```
 
 Use these counters to verify hint narrowing (`wake` for repo A should list repo

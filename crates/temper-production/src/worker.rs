@@ -8,13 +8,14 @@ use crate::wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutco
 use crate::worker_args::{ForgejoArgs, WorkerArgs, WorkerKind};
 use crate::worker_external_tools::configure_external_tool_executors;
 use crate::worker_role_agent::build_role_agent;
+use crate::worker_stop::StopSignal;
 use crate::{runner_config, workflow};
 use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_runner::{
-    render_worker_capability_event, MultiRepoMechanicalWorker, MultiRepoRoleWorker,
-    RepositoryJournal, RepositorySet, RepositoryTarget, RunReport, Worker, WorkerCapabilitySummary,
-    WorkerError, WorkerRunReport,
+    render_worker_capability_event, IdlePollBackoff, MultiRepoMechanicalWorker,
+    MultiRepoRoleWorker, Progress, RepositoryJournal, RepositorySet, RepositoryTarget, RunReport,
+    Worker, WorkerCapabilitySummary, WorkerError, WorkerRunReport,
 };
 use temper_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
 
@@ -385,6 +386,12 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
     let audit_interval = args
         .audit_interval
         .and_then(|duration| duration.to_std().ok());
+    let mut idle_backoff = matches!(&args.kind, WorkerKind::Mechanical).then(|| {
+        IdlePollBackoff::new(
+            interval,
+            args.idle_poll_max_interval.to_std().unwrap_or(interval),
+        )
+    });
     let mut next_poll_due = Instant::now() + interval;
     let mut next_audit_due = audit_interval.map(|duration| Instant::now() + duration);
     let mut next_tick_reason = TickReason::Initial;
@@ -419,21 +426,27 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
                 report.workers[0].actions = report.workers[0]
                     .actions
                     .saturating_add(u64::from(tick.progress.actions));
-                record_completed_tick_deadline(
+                let next_poll_delay = record_completed_tick_deadline(
                     tick_reason,
                     interval,
                     audit_interval,
+                    idle_backoff.as_mut(),
+                    Some(tick.progress),
                     &mut next_poll_due,
                     &mut next_audit_due,
                 );
                 eprintln!(
-                    "temper-worker: worker '{}' completed tick trigger={} actions={} tick_id={} scanned_repositories={} scanned_repository_paths={}",
+                    "temper-worker: worker '{}' completed tick trigger={} actions={} tick_id={} scanned_repositories={} scanned_repository_paths={} next_poll_ms={} idle_no_action_ticks={}",
                     worker.name(),
                     tick_reason.as_str(),
                     tick.progress.actions,
                     tick_id,
                     tick.scanned_repository_count,
-                    render_repo_paths(&tick.scanned_repository_paths)
+                    render_repo_paths(&tick.scanned_repository_paths),
+                    next_poll_delay.as_millis(),
+                    idle_backoff
+                        .as_ref()
+                        .map_or(0, IdlePollBackoff::consecutive_idle_ticks)
                 );
             }
             Err(error) => {
@@ -442,6 +455,8 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
                     tick_reason,
                     interval,
                     audit_interval,
+                    idle_backoff.as_mut(),
+                    None,
                     &mut next_poll_due,
                     &mut next_audit_due,
                 );
@@ -485,14 +500,24 @@ fn record_completed_tick_deadline(
     tick_reason: TickReason,
     poll_interval: StdDuration,
     audit_interval: Option<StdDuration>,
+    idle_backoff: Option<&mut IdlePollBackoff>,
+    progress: Option<Progress>,
     next_poll_due: &mut Instant,
     next_audit_due: &mut Option<Instant>,
-) {
+) -> StdDuration {
     let now = Instant::now();
-    *next_poll_due = now + poll_interval;
+    let poll_delay = match (idle_backoff, progress) {
+        (Some(backoff), Some(progress)) if tick_reason.is_normal() => {
+            backoff.record_normal_tick(progress)
+        }
+        (Some(backoff), _) => backoff.reset(),
+        (None, _) => poll_interval,
+    };
+    *next_poll_due = now + poll_delay;
     if tick_reason == TickReason::Audit {
         *next_audit_due = audit_interval.map(|interval| now + interval);
     }
+    poll_delay
 }
 
 fn wait_interval_until_next_tick(
@@ -553,28 +578,9 @@ impl TickReason {
             TickReason::Audit => "audit",
         }
     }
-}
 
-struct StopSignal {
-    stop_file: Option<std::path::PathBuf>,
-    started: Instant,
-    run_secs: Option<u64>,
-}
-
-impl StopSignal {
-    fn new(stop_file: Option<std::path::PathBuf>, run_secs: Option<u64>) -> Self {
-        Self {
-            stop_file,
-            started: Instant::now(),
-            run_secs,
-        }
-    }
-
-    fn should_stop(&self) -> bool {
-        self.stop_file.as_ref().is_some_and(|path| path.exists())
-            || self
-                .run_secs
-                .is_some_and(|seconds| self.started.elapsed().as_secs() >= seconds)
+    fn is_normal(self) -> bool {
+        matches!(self, TickReason::Initial | TickReason::Poll)
     }
 }
 

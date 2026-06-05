@@ -26,6 +26,7 @@ pub mod worker;
 pub mod worker_args;
 mod worker_external_tools;
 mod worker_role_agent;
+mod worker_stop;
 
 #[cfg(test)]
 mod dogfood_interaction_profile_tests;

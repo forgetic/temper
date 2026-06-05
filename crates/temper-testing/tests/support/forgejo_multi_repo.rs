@@ -303,7 +303,7 @@ impl WorkerFleet {
             wake_secret,
             &wake_dir.join("mechanical.sock"),
             CI_STATUS_POLL_MS,
-            &[("--kind", "mechanical")],
+            &[("--kind", "mechanical"), ("--idle-poll-max-ms", "8000")],
             &mechanical_env,
             &log,
         );

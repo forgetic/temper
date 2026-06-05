@@ -155,6 +155,79 @@ fn parses_production_safety_flags() {
 }
 
 #[test]
+fn parses_idle_poll_backoff_default_and_cap_flag() {
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(
+        args.idle_poll_max_interval,
+        Duration::milliseconds(DEFAULT_IDLE_POLL_MAX_MS)
+    );
+
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+            "--poll-ms",
+            "120000",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(args.idle_poll_max_interval, Duration::milliseconds(120000));
+
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+            "--idle-poll-max-ms",
+            "2500",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(args.idle_poll_max_interval, Duration::milliseconds(2500));
+}
+
+#[test]
 fn parses_audit_interval_and_allows_disabling_audit() {
     let outcome = parse_with_env(
         [

@@ -82,6 +82,7 @@ fn provision(root: &Path, paths: &[RepositoryPath]) {
         name: first.name.clone(),
         repositories: paths.to_vec(),
         poll_interval: chrono::Duration::milliseconds(WORKER_POLL_MS as i64),
+        idle_poll_max_interval: chrono::Duration::milliseconds(60_000),
         audit_interval: Some(chrono::Duration::milliseconds(600_000)),
         stop_file: None,
         run_secs: Some(0),

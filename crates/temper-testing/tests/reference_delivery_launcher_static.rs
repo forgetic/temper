@@ -30,6 +30,7 @@ fn mechanical_worker_gets_ci_web_ui_credentials_without_argv_secrets() {
     assert!(launch_workers.contains("ci_reader_role=engineer"));
     assert!(mechanical_spawn.contains("TEMPER_FORGEJO_PASSWORD=\"$ENGINEER_PASSWORD\""));
     assert!(mechanical_spawn.contains("--poll-ms \"$CI_STATUS_POLL_MS\""));
+    assert!(mechanical_spawn.contains("--idle-poll-max-ms \"$IDLE_POLL_MAX_MS\""));
 
     let argv = mechanical_spawn
         .split("\"$TESTING_WORKER_BIN\"")
@@ -71,6 +72,7 @@ fn validators_and_config_cover_forgejo_ci_fallback() {
     let config = read_example("config/temper.env");
 
     assert!(config.contains("CI_STATUS_POLL_MS=1000"));
+    assert!(config.contains("IDLE_POLL_MAX_MS=8000"));
     assert!(script.contains("CI_FALLBACK_MISSING_CREDENTIALS="));
     assert!(script.contains("validate_mechanical_ci_reader_config || _ok=1"));
     assert!(script.contains("validate_mechanical_ci_log || _ok=1"));
