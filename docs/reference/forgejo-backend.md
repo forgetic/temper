@@ -30,7 +30,8 @@ Default tests are offline request-shape/contract tests. Ignored live tests start
 a throwaway local Forgejo plus host-mode `forgejo-runner`; they do not read
 external Forgejo credentials. See
 [`run-forgejo-multiprocess-e2e.md`](../how-to/run-forgejo-multiprocess-e2e.md)
-for the fixture/cache model.
+for commands and [the Forgejo e2e fixture reference](forgejo-e2e-fixture.md) for
+the fixture/cache model.
 
 ## Identifier encodings
 

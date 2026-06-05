@@ -1,0 +1,85 @@
+# Workflow recovery
+
+This page records the workflow-layer recovery primitives: leases, the command
+journal, reconciliation, and application of recovery actions. For tested safety
+properties, read [robustness guarantees](robustness-guarantees.md).
+
+## Claims and leases
+
+A claim is a lease stored in workflow metadata, not permanent ownership.
+`metadata::Lease` records role, worker id, claim time, heartbeat time, and
+expiration time. A lease is expired when `now >= expires_at`.
+
+`LeasePlanner` is pure. It:
+
+- grants acquisition when no lease exists or the existing lease expired;
+- refreshes acquisition by the current holder without changing `claimed_at`;
+- rejects acquisition by a peer holding a live lease;
+- heartbeats only for the current holder;
+- releases idempotently for the holder or an empty lease.
+
+`LeaseManager` applies these decisions by rewriting the metadata block through a
+conditional body update. It captures the load-time `Version`, so reference
+backends enforce compare-and-swap lease acquisition. Clearing another worker's
+lease is a reconciler authority path, not a peer release.
+
+## Command journal
+
+`CommandJournal` records the lifecycle of a runtime command:
+
+```text
+Planned -> Applying -> Completed | Failed | Reconciled
+```
+
+`Planned` and `Applying` are incomplete states. A `CommandRecord` includes the
+caller-chosen `CommandId`, target, transition, role, planned effects, detail,
+and timestamps. The trait is async and supports idempotent append, state
+transition, get, list, and `incomplete`.
+
+`Executor::execute_journaled` previews the plan, records `Planned`, advances to
+`Applying` immediately before mutation, and finishes at `Completed` or `Failed`.
+If the process stops after mutation but before a terminal journal update, the
+next reconciler scan can repair or mark it reconciled.
+
+## Reconciliation
+
+`Reconciler::scan` is pure and deterministic over explicit artifact snapshots,
+command records, dependency status, recovery policy, and `now`. The bounded
+runtime `reconcile` path loads exact incomplete-journal targets and
+workflow-labelled candidates; `reconcile_deep_audit` is the deliberate
+all-history operator path.
+
+Findings include:
+
+- `ExpiredLease`;
+- `ImpossibleState` and other classification drift;
+- `BlockedWithoutDependencies`;
+- `PartialTransition`;
+- `StaleCommand`;
+- `DependenciesResolved`.
+
+Each finding receives one action: `RequeueLease`, `Escalate`, `Repair`,
+`MarkReconciled`, `Unblock`, or `Diagnose`. The default policy requeues expired
+leases, escalates impossible state/drift, diagnoses dependency-gated work with no
+dependencies, repairs partial transitions, marks stale commands reconciled, and
+mechanically unblocks dependency-gated work once every prerequisite has landed.
+
+Scan order is stable: per snapshot, lease and classification/dependency findings
+in snapshot order, then incomplete journal commands in journal order. Child repo
+read failures do not abort a scan; unreadable dependency targets remain not
+landed so they cannot produce a false unblock.
+
+## Applying reconciler actions
+
+`recover::Applier` routes each action through the component that owns the
+matching mutation:
+
+- `RequeueLease` -> `LeaseManager::clear`;
+- `Repair` -> executor label-effect application, then journal `Reconciled`;
+- `Unblock` -> executor label-effect application with a fresh journaled command;
+- `MarkReconciled` -> journal state transition;
+- `Escalate` / `Diagnose` -> advisory output only.
+
+Every mutating action loads fresh state and applies at most once. Re-running the
+same report is a no-op rather than a double-apply, and running scan -> apply to a
+fixpoint converges.

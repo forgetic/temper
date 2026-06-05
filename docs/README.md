@@ -31,6 +31,7 @@ Start with `reference/development-conventions.md` during session bootstrap,
 then read task-relevant reference pages.
 
 See `reference/`, including the
+[workflow layer](reference/workflow-layer.md),
 [production worker runtime](reference/production-worker.md),
 [interactive conversation interface](reference/interactive-conversation-interface.md),
 [interaction profile spec](reference/interaction-profile-spec.md),
