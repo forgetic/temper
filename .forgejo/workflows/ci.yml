@@ -12,6 +12,9 @@ on:
 jobs:
   validate:
     runs-on: host
+    defaults:
+      run:
+        working-directory: ${{ env.HOME }}/.local/state/forgejo/runner/data/temper
     steps:
       - name: Checkout
         run: |
@@ -40,16 +43,13 @@ jobs:
       - name: Lint
         run: |
           set -eu
-          cd "$HOME/.local/state/forgejo/runner/data/temper"
           cargo fmt --all
           cargo dev-clippy
       - name: Check
         run: |
           set -eu
-          cd "$HOME/.local/state/forgejo/runner/data/temper"
           cargo dev-check
       - name: Test
         run: |
           set -eu
-          cd "$HOME/.local/state/forgejo/runner/data/temper"
           cargo dev-test-quick
