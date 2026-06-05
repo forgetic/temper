@@ -46,15 +46,21 @@ fn candidate_plan_uses_workflow_labels_explicit_states_and_summary_details() {
     let plan = reconciliation_candidate_query_plan(&workflow);
     let label_count = workflow.labels().len();
 
-    assert_eq!(plan.issue_queries.len(), label_count * 2);
-    assert_eq!(plan.pull_request_queries.len(), label_count * 3);
+    let issue_terminal_count = 8;
+    let pull_request_terminal_count = 9;
+
+    assert_eq!(plan.issue_queries.len(), label_count + issue_terminal_count);
+    assert_eq!(
+        plan.pull_request_queries.len(),
+        label_count + pull_request_terminal_count * 2
+    );
     assert_eq!(
         count_issue_state(&plan.issue_queries, IssueState::Open),
         label_count
     );
     assert_eq!(
         count_issue_state(&plan.issue_queries, IssueState::Closed),
-        label_count
+        issue_terminal_count
     );
     assert_eq!(
         count_pull_request_state(&plan.pull_request_queries, PullRequestState::Open),
@@ -62,12 +68,22 @@ fn candidate_plan_uses_workflow_labels_explicit_states_and_summary_details() {
     );
     assert_eq!(
         count_pull_request_state(&plan.pull_request_queries, PullRequestState::Closed),
-        label_count
+        pull_request_terminal_count
     );
     assert_eq!(
         count_pull_request_state(&plan.pull_request_queries, PullRequestState::Merged),
-        label_count
+        pull_request_terminal_count
     );
+    assert!(!has_pull_request_query(
+        &plan.pull_request_queries,
+        PullRequestState::Merged,
+        "implementation"
+    ));
+    assert!(has_pull_request_query(
+        &plan.pull_request_queries,
+        PullRequestState::Merged,
+        "landed"
+    ));
     assert!(plan.issue_queries.iter().all(is_bounded_issue_query));
     assert!(plan
         .pull_request_queries
@@ -363,6 +379,20 @@ fn count_pull_request_state(queries: &[PullRequestQuery], state: PullRequestStat
         .iter()
         .filter(|query| query.state == Some(state))
         .count()
+}
+
+fn has_pull_request_query(
+    queries: &[PullRequestQuery],
+    state: PullRequestState,
+    label: &str,
+) -> bool {
+    queries
+        .iter()
+        .any(|query| query.state == Some(state) && has_single_label(&query.labels, label))
+}
+
+fn has_single_label(labels: &[String], label: &str) -> bool {
+    labels.len() == 1 && labels[0] == label
 }
 
 fn is_bounded_issue_query(query: &IssueQuery) -> bool {

@@ -9,8 +9,8 @@ mod support;
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
-    ItemListDetails, ItemNumber, PullRequestQuery, PullRequestUpdateState, RepositoryId,
-    UpdateIssue, UpdatePullRequest, UserId,
+    ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
+    PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
@@ -134,6 +134,21 @@ fn close_pull_request(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumb
     .expect("pull request closes");
 }
 
+fn merge_pull_request(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    block_on(forge.merge_pull_request(
+        &pull_request.id,
+        MergePullRequest {
+            method: MergeMethod::Squash,
+            commit_title: None,
+            commit_body: None,
+        },
+    ))
+    .expect("pull request merges");
+}
+
 fn add_issue_dependency(
     forge: &MemoryForge,
     repo: &RepositoryId,
@@ -181,6 +196,17 @@ fn is_bounded_issue_query(query: &IssueQuery) -> bool {
 
 fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
     query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+}
+
+fn is_terminal_implementation_query(query: &PullRequestQuery) -> bool {
+    matches!(
+        query.state,
+        Some(PullRequestState::Closed | PullRequestState::Merged)
+    ) && has_single_label(&query.labels, "implementation")
+}
+
+fn has_single_label(labels: &[String], label: &str) -> bool {
+    labels.len() == 1 && labels[0] == label
 }
 
 fn mechanical_worker<'a>(
@@ -255,14 +281,8 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
         block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("tick succeeds"),
         Progress::unchanged()
     );
-    assert_eq!(
-        counted.count(CountedForgeOp::ListIssues),
-        workflow.labels().len() * 2
-    );
-    assert_eq!(
-        counted.count(CountedForgeOp::ListPullRequests),
-        workflow.labels().len() * 3 + 3
-    );
+    assert!(counted.count(CountedForgeOp::ListIssues) > 0);
+    assert!(counted.count(CountedForgeOp::ListPullRequests) > 0);
     assert!(!counted
         .issue_queries()
         .iter()
@@ -276,6 +296,35 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
         .pull_request_queries()
         .iter()
         .all(is_bounded_pull_request_query));
+}
+
+#[test]
+fn normal_mechanical_tick_skips_terminal_implementation_only_pr_history() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    for _ in 0..100 {
+        let pull_request = create_pull_request(&forge, &repo, &["implementation"]);
+        merge_pull_request(&forge, &repo, pull_request);
+    }
+    let counted = CountingForge::new(forge.clone());
+    let workflow = workflow();
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("tick succeeds"),
+        Progress::unchanged()
+    );
+    assert!(counted
+        .pull_request_queries()
+        .iter()
+        .any(|query| query.state == Some(PullRequestState::Open)
+            && has_single_label(&query.labels, "implementation")));
+    assert!(!counted
+        .pull_request_queries()
+        .iter()
+        .any(is_terminal_implementation_query));
+    assert_eq!(counted.count(CountedForgeOp::GetPullRequestByNumber), 0);
 }
 
 #[test]

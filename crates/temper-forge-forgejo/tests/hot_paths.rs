@@ -153,27 +153,20 @@ fn assert_no_all_history_lists(requests: &[HttpRequest]) {
 #[test]
 fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
     let client = MockHttpClient::new();
-    // Issue candidate queries: open(code), open(implementation), closed(code),
-    // closed(implementation). One summary candidate proves no dependency
-    // enrichment happens on list results.
+    // Open candidate queries still cover every workflow label. Terminal queries
+    // are skipped here because both labels are pure artifact-kind identities.
+    // One summary issue candidate proves no dependency enrichment happens on
+    // list results.
     client.push_response(200, format!("[{}]", issue_json(1, "open", "", &["code"])));
     client.push_response(200, "[]");
-    client.push_response(200, "[]");
-    client.push_response(200, "[]");
-    // PR candidate queries: open(code), open(implementation), closed(code),
-    // closed(implementation), merged(code), merged(implementation). Labelled PR
-    // discovery uses the issue label index, then exact `/pulls/{number}` detail
-    // for the matching candidate only.
+    // PR discovery uses the issue label index, then exact `/pulls/{number}`
+    // detail for the matching candidate only.
     client.push_response(200, "[]");
     client.push_response(
         200,
         format!("[{}]", pr_issue_json(2, "open", "", &["implementation"])),
     );
     client.push_response(200, pull_json(2, "open", false, "", &["implementation"]));
-    client.push_response(200, "[]");
-    client.push_response(200, "[]");
-    client.push_response(200, "[]");
-    client.push_response(200, "[]");
 
     let forge = forge(client.clone());
     let workflow = workflow();
@@ -199,13 +192,10 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
         .iter()
         .filter(|request| request.path == issue_list_path() || request.path == pull_list_path())
         .collect();
-    assert_eq!(list_requests.len(), 10);
+    assert_eq!(list_requests.len(), 4);
     for request in list_requests {
         assert_eq!(request.method, HttpMethod::Get);
-        assert!(matches!(
-            query_value(request, "state"),
-            Some("open" | "closed")
-        ));
+        assert_eq!(query_value(request, "state"), Some("open"));
         assert!(query_value(request, "labels").is_some());
     }
     assert!(requests

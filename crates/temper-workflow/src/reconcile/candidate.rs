@@ -1,7 +1,7 @@
 use super::{ArtifactSnapshot, ReconcileError, Reconciler, RecoveryPolicy};
 use crate::classify::{ArtifactSource, Classifier};
-use crate::ids::ArtifactKindId;
-use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
+use crate::ids::{ArtifactKindId, LabelId};
+use crate::validated::{Effect, GateCondition, ValidatedTransition, ValidatedWorkflow};
 use crate::ArtifactTarget;
 use temper_forge::{
     Forge, Issue, IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestQuery,
@@ -19,9 +19,12 @@ pub struct ReconciliationCandidateQueryPlan {
 
 /// Plans workflow-labelled candidate queries from a validated workflow alone.
 ///
-/// Every declared workflow label is treated as OR interest. Each emitted query
-/// uses one label, an explicit state, and summary list detail, so bounded
-/// reconciliation never asks for unlabelled closed or merged history.
+/// Every declared workflow label is treated as OR interest for open artifacts.
+/// Terminal artifacts use only labels that can indicate active or recoverable
+/// workflow work for that Forge target. Each emitted query uses one label, an
+/// explicit state, and summary list detail, so bounded reconciliation never asks
+/// for unlabelled closed or merged history, nor for terminal artifacts carrying
+/// only pure artifact-kind identity labels.
 pub fn reconciliation_candidate_query_plan(
     workflow: &ValidatedWorkflow,
 ) -> ReconciliationCandidateQueryPlan {
@@ -34,9 +37,9 @@ pub fn reconciliation_candidate_query_plan(
             plan.issue_queries
                 .push(issue_query(IssueState::Open, label.clone()));
         }
-        for label in &labels {
+        for label in terminal_workflow_labels(workflow, ArtifactTarget::Issue) {
             plan.issue_queries
-                .push(issue_query(IssueState::Closed, label.clone()));
+                .push(issue_query(IssueState::Closed, label));
         }
     }
 
@@ -45,13 +48,11 @@ pub fn reconciliation_candidate_query_plan(
             plan.pull_request_queries
                 .push(pull_request_query(PullRequestState::Open, label.clone()));
         }
-        for label in &labels {
+        for label in terminal_workflow_labels(workflow, ArtifactTarget::PullRequest) {
             plan.pull_request_queries
                 .push(pull_request_query(PullRequestState::Closed, label.clone()));
-        }
-        for label in &labels {
             plan.pull_request_queries
-                .push(pull_request_query(PullRequestState::Merged, label.clone()));
+                .push(pull_request_query(PullRequestState::Merged, label));
         }
     }
 
@@ -206,6 +207,170 @@ fn workflow_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
         }
     }
     labels
+}
+
+fn terminal_workflow_labels(workflow: &ValidatedWorkflow, target: ArtifactTarget) -> Vec<String> {
+    let mut interest = Vec::new();
+
+    record_state_labels(workflow, target, &mut interest);
+    record_queue_labels(workflow, target, &mut interest);
+    record_transition_effect_labels(workflow, target, &mut interest);
+    record_gate_condition_labels(workflow, target, &mut interest);
+
+    workflow
+        .labels()
+        .iter()
+        .filter(|label| interest.contains(label))
+        .map(|label| label.as_str().to_string())
+        .collect()
+}
+
+fn record_state_labels(
+    workflow: &ValidatedWorkflow,
+    target: ArtifactTarget,
+    labels: &mut Vec<LabelId>,
+) {
+    for dimension in workflow.state_dimensions() {
+        for state in &dimension.states {
+            if !state_allows_target(workflow, state, target) {
+                continue;
+            }
+            if let Some(label) = &state.label {
+                push_label(labels, label);
+            }
+        }
+    }
+}
+
+fn record_queue_labels(
+    workflow: &ValidatedWorkflow,
+    target: ArtifactTarget,
+    labels: &mut Vec<LabelId>,
+) {
+    for queue in workflow.queues() {
+        if !queue.artifacts.iter().any(|artifact| {
+            workflow
+                .artifact_kind(artifact)
+                .is_some_and(|kind| kind.target == target)
+        }) {
+            continue;
+        }
+        for label in &queue.labels {
+            push_label(labels, label);
+        }
+        for label_set in &queue.any_of {
+            for label in &label_set.labels {
+                push_label(labels, label);
+            }
+        }
+        if let Some(condition) = &queue.condition {
+            if let Some(label) = condition_label(workflow, condition) {
+                push_label(labels, label);
+            }
+        }
+    }
+}
+
+fn record_transition_effect_labels(
+    workflow: &ValidatedWorkflow,
+    target: ArtifactTarget,
+    labels: &mut Vec<LabelId>,
+) {
+    for transition in workflow.transitions() {
+        if !transition_targets(workflow, transition, target) {
+            continue;
+        }
+        for effect in &transition.effects {
+            if let Some(label) = effect_label(effect) {
+                push_label(labels, label);
+            }
+        }
+    }
+}
+
+fn record_gate_condition_labels(
+    workflow: &ValidatedWorkflow,
+    target: ArtifactTarget,
+    labels: &mut Vec<LabelId>,
+) {
+    for gate in workflow.gates() {
+        if !workflow.transitions().iter().any(|transition| {
+            transition.requires_gates.contains(&gate.id)
+                && transition_targets(workflow, transition, target)
+        }) {
+            continue;
+        }
+        if let Some(condition) = &gate.condition {
+            if let Some(label) = condition_label(workflow, condition) {
+                push_label(labels, label);
+            }
+        }
+    }
+}
+
+fn state_allows_target(
+    workflow: &ValidatedWorkflow,
+    state: &crate::validated::ValidatedState,
+    target: ArtifactTarget,
+) -> bool {
+    state.artifacts.is_empty()
+        || state.artifacts.iter().any(|artifact| {
+            workflow
+                .artifact_kind(artifact)
+                .is_some_and(|kind| kind.target == target)
+        })
+}
+
+fn transition_targets(
+    workflow: &ValidatedWorkflow,
+    transition: &ValidatedTransition,
+    target: ArtifactTarget,
+) -> bool {
+    workflow
+        .artifact_kind(&transition.artifact)
+        .is_some_and(|kind| kind.target == target)
+}
+
+fn condition_label<'a>(
+    workflow: &'a ValidatedWorkflow,
+    condition: &'a GateCondition,
+) -> Option<&'a LabelId> {
+    match condition {
+        GateCondition::LabelPresent(label) => Some(label),
+        GateCondition::StateEquals { dimension, state } => workflow
+            .state_dimensions()
+            .iter()
+            .find(|candidate| &candidate.id == dimension)?
+            .states
+            .iter()
+            .find(|candidate| &candidate.id == state)?
+            .label
+            .as_ref(),
+        GateCondition::DependenciesResolved
+        | GateCondition::CiPassed
+        | GateCondition::CiFailed
+        | GateCondition::ReviewApproved
+        | GateCondition::ReviewChangesRequested => None,
+    }
+}
+
+fn effect_label(effect: &Effect) -> Option<&LabelId> {
+    match effect {
+        Effect::AddLabel(label) | Effect::RemoveLabel(label) => Some(label),
+        Effect::SetAssignee(_)
+        | Effect::RemoveAssignee(_)
+        | Effect::CreateComment { .. }
+        | Effect::CreatePullRequest { .. }
+        | Effect::RequestReviewers { .. }
+        | Effect::SubmitReview { .. }
+        | Effect::MergePullRequest => None,
+    }
+}
+
+fn push_label(labels: &mut Vec<LabelId>, label: &LabelId) {
+    if !labels.contains(label) {
+        labels.push(label.clone());
+    }
 }
 
 fn requires_dependency_gate(

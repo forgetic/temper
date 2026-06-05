@@ -11,14 +11,19 @@ owner/name` or `--repo-list <path>`. The shard is not an authorization boundary:
 the Forgejo token decides what the worker may read or mutate.
 
 - `--poll-ms <n>` controls the normal poll cadence. Poll ticks scan the
-  configured repository set using normal bounded candidate queries. Mechanical
-  poll ticks run bounded reconciliation first, then bounded automated-queue
-  scans for queues with `automation` metadata.
+  configured repository set using normal bounded candidate queries. Terminal
+  closed/merged history is queried only through active or recoverable labels
+  (queue labels, state labels, transition labels, and gate/condition labels),
+  not through pure artifact-kind identity labels such as a completed PR's
+  `implementation` label. Mechanical poll ticks run bounded reconciliation
+  first, then bounded automated-queue scans for queues with `automation`
+  metadata.
 - `--audit-ms <n>` controls the low-frequency audit cadence. The default is
   `600000` ms; `0` disables audit ticks. Role audit ticks inspect all configured
-  repositories and all workflow-labelled recovery interest, but still avoid
-  unlabelled closed history. Mechanical audit ticks are the explicit deep-audit
-  path and may run all-history reconciliation.
+  repositories and active/recoverable workflow-labelled recovery interest, but
+  still avoid unlabelled closed history and pure identity-only terminal labels.
+  Mechanical audit ticks are the explicit deep-audit path and may run
+  all-history reconciliation.
 - `--wake-socket <path>` plus optional `--wake-secret-file <path>` enables
   authenticated webhook wakeups. Pull-request, review, CI/status, label-change,
   and push hints are all safe triggers for the same normal scan path. A wake with

@@ -307,9 +307,14 @@ fn candidate_planner_never_builds_closed_all_queries() {
     assert!(has_issue_query(
         &audit.issue_queries,
         IssueState::Closed,
+        &["ready"]
+    ));
+    assert!(!has_issue_query(
+        &audit.issue_queries,
+        IssueState::Closed,
         &["code"]
     ));
-    assert!(has_pull_request_query(
+    assert!(!has_pull_request_query(
         &audit.pull_request_queries,
         PullRequestState::Merged,
         &["implementation"]
