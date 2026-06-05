@@ -4,7 +4,6 @@ How-to guides are focused recipes for specific tasks.
 
 Current guides:
 
-- [Start a development session](start-a-development-session.md)
 - [Iterate quickly during local development](fast-local-iteration.md)
 - [End a development session cleanly](end-a-development-session.md)
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
