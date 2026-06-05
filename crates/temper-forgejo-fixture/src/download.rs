@@ -419,21 +419,49 @@ fn env_var(key: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-/// Locates the workspace root by walking up from this crate to the dir that
+/// Locates the workspace root by walking up from runtime paths to the dir that
 /// holds the top-level `Cargo.toml` workspace manifest.
 pub(crate) fn workspace_root() -> Result<PathBuf, DownloadError> {
-    // `CARGO_MANIFEST_DIR` is `<root>/crates/temper-forgejo-fixture` at compile time.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::current_dir() {
+        candidates.push(path);
+    }
+    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        if !value.is_empty() {
+            let path = PathBuf::from(value);
+            if !candidates.iter().any(|existing| existing == &path) {
+                candidates.push(path);
+            }
+        }
+    }
+
+    find_workspace_root(candidates.clone()).ok_or_else(|| {
+        let checked = candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        DownloadError::WorkspaceRoot(format!(
+            "no workspace Cargo.toml above runtime candidates: {checked}"
+        ))
+    })
+}
+
+fn find_workspace_root(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find_map(|candidate| workspace_root_from(&candidate))
+}
+
+fn workspace_root_from(start: &Path) -> Option<PathBuf> {
+    start
         .ancestors()
-        .find(|dir| dir.join("Cargo.toml").exists() && dir.join("crates").is_dir())
+        .find(|dir| looks_like_temper_workspace_root(dir))
         .map(Path::to_path_buf)
-        .ok_or_else(|| {
-            DownloadError::WorkspaceRoot(format!(
-                "no workspace Cargo.toml above {}",
-                manifest_dir.display()
-            ))
-        })
+}
+
+fn looks_like_temper_workspace_root(dir: &Path) -> bool {
+    dir.join("Cargo.toml").is_file() && dir.join("crates").join("temper-forgejo-fixture").is_dir()
 }
 
 #[cfg(test)]
@@ -481,6 +509,17 @@ mod tests {
         let root = workspace_root().expect("workspace root resolves");
         assert!(root.join("crates").is_dir());
         assert!(root.join("Cargo.toml").is_file());
+    }
+
+    #[test]
+    fn workspace_root_search_skips_stale_candidates() {
+        let root = synthetic_workspace("stale-candidate");
+        let stale = root.join("deleted").join("crates/temper-forgejo-fixture");
+        let nested = root.join("crates/temper-forgejo-fixture/src");
+
+        assert_eq!(find_workspace_root([stale, nested]), Some(root.clone()));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -542,5 +581,17 @@ mod tests {
     #[test]
     fn hex_lower_pads_bytes() {
         assert_eq!(hex_lower(&[0x00, 0x0f, 0xff]), "000fff");
+    }
+
+    fn synthetic_workspace(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "temper-forgejo-fixture-{label}-{}-{}",
+            std::process::id(),
+            NEXT_TMP.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("crates/temper-forgejo-fixture/src")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), b"[workspace]\n").unwrap();
+        root
     }
 }

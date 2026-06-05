@@ -1,10 +1,33 @@
 use std::{fs, path::PathBuf};
 
 fn example_path(relative: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
+    workspace_root()
         .join("examples/reference-delivery")
         .join(relative)
+}
+
+fn workspace_root() -> PathBuf {
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::current_dir() {
+        candidates.push(path);
+    }
+    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        if !value.is_empty() {
+            candidates.push(PathBuf::from(value));
+        }
+    }
+    candidates
+        .into_iter()
+        .find_map(|start| {
+            start
+                .ancestors()
+                .find(|dir| {
+                    dir.join("Cargo.toml").is_file()
+                        && dir.join("examples/reference-delivery").is_dir()
+                })
+                .map(PathBuf::from)
+        })
+        .expect("workspace root resolves")
 }
 
 fn read_example(relative: &str) -> String {

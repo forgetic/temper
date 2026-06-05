@@ -486,11 +486,26 @@ fn remove_path_if_exists(path: &Path) {
 }
 
 fn workspace_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .find(|dir| dir.join("Cargo.toml").exists() && dir.join("crates").is_dir())
-        .map(Path::to_path_buf)
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::current_dir() {
+        candidates.push(path);
+    }
+    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        if !value.is_empty() {
+            candidates.push(PathBuf::from(value));
+        }
+    }
+    candidates
+        .into_iter()
+        .find_map(|start| {
+            start
+                .ancestors()
+                .find(|dir| {
+                    dir.join("Cargo.toml").is_file()
+                        && dir.join("crates/temper-forgejo-fixture").is_dir()
+                })
+                .map(Path::to_path_buf)
+        })
         .expect("workspace root resolves")
 }
 

@@ -1,12 +1,33 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn workspace_root() -> PathBuf {
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::current_dir() {
+        candidates.push(path);
+    }
+    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        if !value.is_empty() {
+            candidates.push(PathBuf::from(value));
+        }
+    }
+    candidates
+        .into_iter()
+        .find_map(|start| {
+            start
+                .ancestors()
+                .find(|dir| {
+                    dir.join("Cargo.toml").is_file()
+                        && dir.join("crates/temper-production").is_dir()
+                })
+                .map(Path::to_path_buf)
+        })
+        .expect("workspace root resolves")
+}
+
 #[test]
 fn crates_sources_do_not_reintroduce_concrete_interaction_profiles() {
-    let crates_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate has a crates parent")
-        .to_path_buf();
+    let crates_dir = workspace_root().join("crates");
     let mut hits = Vec::new();
     scan_dir(&crates_dir, &mut hits);
 
