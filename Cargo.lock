@@ -980,7 +980,6 @@ name = "temper"
 version = "0.1.0"
 dependencies = [
  "temper-production",
- "temper-testing",
 ]
 
 [[package]]

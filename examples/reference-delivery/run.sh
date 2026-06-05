@@ -281,8 +281,8 @@ resolve_binaries() {
     if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
         log "ensuring production helper binaries are current (cargo build -p $TEMPER_BUILD_PRODUCTION)..."
         ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PRODUCTION" ) || die 'cargo build failed'
-        log "ensuring fake worker binary is current (cargo build -p temper --bin temper-testing-worker --features testing-worker)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p temper --bin temper-testing-worker --features testing-worker ) || die 'cargo build failed'
+        log "ensuring fake worker binary is current (cargo build -p temper-testing --bin temper-testing-worker)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p temper-testing --bin temper-testing-worker ) || die 'cargo build failed'
     fi
 
     [ -x "$TESTING_WORKER_BIN" ] || die "fake worker binary not found: $TESTING_WORKER_BIN"

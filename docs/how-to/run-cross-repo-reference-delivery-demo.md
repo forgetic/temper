@@ -14,8 +14,9 @@ Follow `examples/reference-delivery/README.md`. In short:
 - provide the pinned Forgejo / `forgejo-runner` binaries via the shared cache or
   explicit `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY` paths;
 - run on a host that permits host-mode runner jobs;
-- let `run.sh` build the root `temper` package production helpers and
-  `temper-testing-worker`, or provide current binary overrides.
+- let `run.sh` build the root `temper` package production helpers and the
+  `temper-testing` package's `temper-testing-worker`, or provide current binary
+  overrides.
 
 ## Configure
 
