@@ -1,26 +1,15 @@
-//! Forgejo multi-process scenarios as per-scenario live-world tests.
+//! Forgejo multi-process live scenarios.
 //!
-//! This is the real-backend twin of `tests/multiprocess.rs`: deterministic fake
-//! role agents and a mechanical worker coordinate only through a real Forgejo
-//! backend while a real host-mode `forgejo-runner` produces CI. Each ignored
-//! test owns one live world for exactly the repositories needed by that scenario:
+//! Real-backend twin of `tests/multiprocess.rs`: deterministic fake agents and a
+//! mechanical worker coordinate through real Forgejo while real host-mode
+//! `forgejo-runner` produces CI. This target keeps only scenarios whose live
+//! value the fast filesystem process suite cannot cover.
 //!
-//! 1. declare cached state containing the admin, role identities, and that
-//!    scenario's repositories;
-//! 2. start a stack-owned [`ForgejoServer`] from a `/tmp` copy of that state and
-//!    register one stack-owned [`ForgejoRunner`];
-//! 3. register repo webhooks against the scenario's trigger;
-//! 4. spawn a worker fleet with unique stop file, wake sockets, and logs;
-//! 5. poll the scenario's backend-neutral assert closure to convergence while
-//!    the workers advance through webhook wakes, not their poll backstop.
+//! Each ignored test owns its Forgejo server, runner, webhook trigger, wake
+//! sockets, worker fleet, and scenario repository; drop cleanup kills children on
+//! panic.
 //!
-//! Ordinary Rust ownership performs panic cleanup: the active worker fleet is a
-//! stack value and kills children on drop, and each scenario's runner/server
-//! handles are dropped if that test panics.
-//!
-//! ```sh
-//! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
-//! ```
+//! Run with `cargo test -p temper-testing --test forgejo_multiprocess -- --ignored`.
 
 #![cfg(unix)]
 
@@ -52,39 +41,23 @@ const CI_STATUS_POLL_MS: u64 = 1_000;
 /// Backstop run length per child, in case the driver dies before stopping it.
 const WORKER_RUN_SECS: u64 = 1200;
 
+// Guards real provision -> PR -> review -> CI -> merge; filesystem cannot cover transport/merge mapping.
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn forgejo_multiprocess_happy_path_converges() {
     run_forgejo_multiprocess_variant(Variant::happy_path());
 }
 
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn forgejo_multiprocess_changes_requested_then_approved_converges() {
-    run_forgejo_multiprocess_variant(Variant::changes_requested_then_approved());
-}
-
+// Guards real forgejo-runner fail->pass CI polling; the fast tier uses fake CI.
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
 fn forgejo_multiprocess_ci_fails_then_passes_converges() {
     run_forgejo_multiprocess_variant(Variant::ci_fails_then_passes());
 }
 
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn forgejo_multiprocess_dependency_chain_mechanically_unblocked_converges() {
-    run_forgejo_multiprocess_variant(Variant::dependency_chain_mechanically_unblocked());
-}
-
-#[test]
-#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn forgejo_multiprocess_cross_repo_fanout_converges() {
-    run_forgejo_multiprocess_variant(Variant::cross_repo_fanout());
-}
-
 fn run_forgejo_multiprocess_variant(variant: Variant) {
     let test_start = Instant::now();
-    let repo_names = variant.repo_names();
+    let repo_names = vec![variant.primary_repo.to_owned()];
     let mut world = ScenarioLiveWorld::start(&repo_names);
     eprintln!(
         "forgejo_multiprocess scenario '{}' world timing: {}",
@@ -111,20 +84,14 @@ fn run_forgejo_multiprocess_variant(variant: Variant) {
     );
 }
 
-/// Drives one scenario through the true multi-process topology against a real
-/// Forgejo, asserting it converges to the same end state as the in-process
-/// scenario.
 fn run_variant(world: &mut ScenarioLiveWorld, variant: &Variant) -> ScenarioTiming {
     let scenario_start = Instant::now();
     let mut timing = ScenarioTiming::default();
 
     let provision_start = Instant::now();
-    let mut repos = vec![world.provision_repo(variant.primary_repo)];
-    if let Some(name) = variant.extra_repo {
-        repos.push(world.provision_repo(name));
-    }
+    let primary = world.provision_repo(variant.primary_repo);
+    let repos = vec![primary.clone()];
     timing.repo_provision = provision_start.elapsed();
-    let primary = repos[0].clone();
     let repo_args = repos
         .iter()
         .map(|repo| format!("{}/{}", repo.owner, repo.name))

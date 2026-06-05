@@ -5,10 +5,7 @@ use temper_forge::Forge;
 use temper_runner::{RunnerConfig, Scenario};
 use temper_testing::agents::fake_registry;
 use temper_testing::forgejo_server::{ForgejoServer, Provisioned};
-use temper_testing::scenarios::{
-    changes_requested_then_approved, ci_fails_then_passes, cross_repo_fanout_converges,
-    dependency_chain_mechanically_unblocked, happy_path,
-};
+use temper_testing::scenarios::{ci_fails_then_passes, happy_path};
 use temper_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV};
 use temper_testing::workflow;
 use temper_workflow::RoleId;
@@ -27,8 +24,6 @@ pub(crate) struct Variant {
     pub(crate) scenario: fn() -> Scenario,
     /// Fresh primary repository for this scenario.
     pub(crate) primary_repo: &'static str,
-    /// Optional second repository; only the cross-repo fan-out scenario uses it.
-    pub(crate) extra_repo: Option<&'static str>,
     /// `--architect` value passed to the architect role worker.
     pub(crate) architect: &'static str,
     /// `--reviewer` value passed to the reviewer role worker.
@@ -47,22 +42,8 @@ impl Variant {
             name: "happy_path",
             scenario: happy_path,
             primary_repo: "service-happy-path",
-            extra_repo: None,
             architect: "default",
             reviewer: "default",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        }
-    }
-
-    pub(crate) fn changes_requested_then_approved() -> Self {
-        Self {
-            name: "changes_requested_then_approved",
-            scenario: changes_requested_then_approved,
-            primary_repo: "service-review-cycle",
-            extra_repo: None,
-            architect: "default",
-            reviewer: "request-changes-then-approve",
             ci_sentinel: "present",
             ci_status_poll_roles: &["owner"],
         }
@@ -73,46 +54,11 @@ impl Variant {
             name: "ci_fails_then_passes",
             scenario: ci_fails_then_passes,
             primary_repo: "service-ci-retry",
-            extra_repo: None,
             architect: "default",
             reviewer: "default",
             ci_sentinel: "deferred",
             ci_status_poll_roles: &["engineer", "owner"],
         }
-    }
-
-    pub(crate) fn dependency_chain_mechanically_unblocked() -> Self {
-        Self {
-            name: "dependency_chain_mechanically_unblocked",
-            scenario: dependency_chain_mechanically_unblocked,
-            primary_repo: "service-dependency-chain",
-            extra_repo: None,
-            architect: "closing",
-            reviewer: "default",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        }
-    }
-
-    pub(crate) fn cross_repo_fanout() -> Self {
-        Self {
-            name: "cross_repo_fanout",
-            scenario: cross_repo_fanout_converges,
-            primary_repo: "service-cross-repo-source",
-            extra_repo: Some("service-cross-repo-target"),
-            architect: "closing",
-            reviewer: "default",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        }
-    }
-
-    pub(crate) fn repo_names(&self) -> Vec<String> {
-        [Some(self.primary_repo), self.extra_repo]
-            .into_iter()
-            .flatten()
-            .map(ToOwned::to_owned)
-            .collect()
     }
 }
 
