@@ -57,6 +57,10 @@ jobs:
         run: |
           set -eu
           cargo dev-check
+      - name: Build
+        run: |
+          set -eu
+          cargo dev-test-build
       - name: Test
         run: |
           set -eu
