@@ -340,6 +340,7 @@ pub(crate) fn apply_cpu_cap(command: &mut Command) {
 fn write_runtime_config(data_dir: &Path) -> Result<(PathBuf, String), ServerError> {
     let port = free_port()?;
     let base_url = format!("http://127.0.0.1:{port}");
+    std::fs::create_dir_all(data_dir.join("ssh"))?;
     let config_path = data_dir.join("custom/conf/app.ini");
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -427,6 +428,7 @@ fn app_ini(data_dir: &Path, port: u16, base_url: &str) -> String {
          ROOT_URL = {base_url}/\n\
          DISABLE_SSH = true\n\
          START_SSH_SERVER = false\n\
+         SSH_ROOT_PATH = {root}/ssh\n\
          OFFLINE_MODE = true\n\
          APP_DATA_PATH = {root}/data\n\
          \n\
@@ -545,6 +547,7 @@ mod tests {
         assert!(ini.contains("HTTP_PORT = 4321"));
         assert!(ini.contains("DB_TYPE = sqlite3"));
         assert!(ini.contains("INSTALL_LOCK = true"));
+        assert!(ini.contains("SSH_ROOT_PATH = /tmp/x/ssh"));
         // Actions must be enabled so a host-mode forgejo-runner has work to run.
         assert!(ini.contains("[actions]"));
         assert!(ini.contains("ENABLED = true"));

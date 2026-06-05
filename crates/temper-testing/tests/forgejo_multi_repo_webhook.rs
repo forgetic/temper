@@ -13,6 +13,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 use temper_runner::Scenario;
+use temper_testing::forgejo_runtime::{RunWorkspace, TriggerServer};
 use temper_testing::forgejo_server::{start_cached_provisioned_repositories, ForgejoRunner};
 use temper_testing::runner_config;
 use temper_testing::scenarios::{cross_repo_fanout_converges, happy_path};
@@ -82,27 +83,23 @@ fn run_webhook_variant(variant: WebhookVariant) {
         },
     ];
 
-    let run_dir = server
-        .data_dir()
-        .join(format!("multi-repo-webhook-{}", variant.second_repo));
-    let log_dir = run_dir.join("logs");
-    let wake_dir = run_dir.join("wake");
-    std::fs::create_dir_all(&log_dir).expect("log dir is created");
-    std::fs::create_dir_all(&wake_dir).expect("wake dir is created");
-    let stop_file = run_dir.join("stop");
-    let webhook_secret = run_dir.join("webhook-secret");
-    let wake_secret = run_dir.join("wake-secret");
-    std::fs::write(&webhook_secret, "webhook-secret\n").expect("webhook secret is written");
-    std::fs::write(&wake_secret, "wake-secret\n").expect("wake secret is written");
+    let workspace = RunWorkspace::new(format!(
+        "temper-forgejo-multi-repo-webhook-{}",
+        variant.second_repo
+    ));
+    let log_dir = workspace.dir("logs");
+    let wake_dir = workspace.dir("wake");
+    let worker_root_dir = workspace.dir("worker-roots");
+    let stop_file = workspace.join("stop");
+    let webhook_secret = workspace.write_file("secrets/webhook", "webhook-secret\n");
+    let wake_secret = workspace.write_file("secrets/wake", "wake-secret\n");
 
-    let trigger_addr = support::free_addr();
-    support::start_trigger(
-        trigger_addr,
+    let trigger = TriggerServer::start(
         webhook_secret.clone(),
-        wake_secret.clone(),
+        Some(wake_secret.clone()),
         wake_dir.clone(),
     );
-    support::wait_for_trigger(trigger_addr);
+    let trigger_addr = trigger.addr();
     for repo in &repos {
         support::register_webhook(
             &server,
@@ -122,6 +119,7 @@ fn run_webhook_variant(variant: WebhookVariant) {
         &wake_dir,
         &wake_secret,
         &log_dir,
+        &worker_root_dir,
         &runner_config(),
         variant.architect,
         "default",

@@ -10,15 +10,15 @@
 
 #![cfg(unix)]
 
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use temper_forge::{CiJobQuery, Forge, PullRequestQuery};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_production::trigger_args::TriggerArgs;
 use temper_runner::{RunnerConfig, Scenario};
 use temper_testing::agents::fake_registry;
+use temper_testing::forgejo_runtime::{RunWorkspace, TriggerServer};
 use temper_testing::forgejo_server::{
     start_cached_provisioned_server, ForgejoRunner, ForgejoServer, Provisioned,
 };
@@ -43,25 +43,20 @@ fn happy_path_progresses_by_webhook_wake_before_long_poll() {
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
 
-    let run_dir = server.data_dir().join("webhook-wakeup");
-    let log_dir = run_dir.join("logs");
-    let wake_dir = run_dir.join("wake");
-    std::fs::create_dir_all(&log_dir).expect("log dir is created");
-    std::fs::create_dir_all(&wake_dir).expect("wake dir is created");
-    let stop_file = run_dir.join("stop");
-    let webhook_secret = run_dir.join("webhook-secret");
-    let wake_secret = run_dir.join("wake-secret");
-    std::fs::write(&webhook_secret, "webhook-secret\n").expect("webhook secret is written");
-    std::fs::write(&wake_secret, "wake-secret\n").expect("wake secret is written");
+    let workspace = RunWorkspace::new("temper-forgejo-webhook-wakeup");
+    let log_dir = workspace.dir("logs");
+    let wake_dir = workspace.dir("wake");
+    let worker_root_dir = workspace.dir("worker-roots");
+    let stop_file = workspace.join("stop");
+    let webhook_secret = workspace.write_file("secrets/webhook", "webhook-secret\n");
+    let wake_secret = workspace.write_file("secrets/wake", "wake-secret\n");
 
-    let trigger_addr = free_addr();
-    start_trigger(
-        trigger_addr,
+    let trigger = TriggerServer::start(
         webhook_secret.clone(),
-        wake_secret.clone(),
+        Some(wake_secret.clone()),
         wake_dir.clone(),
     );
-    wait_for_trigger(trigger_addr);
+    let trigger_addr = trigger.addr();
     register_webhook(&server, &provisioned, trigger_addr, &webhook_secret);
 
     let scenario = happy_path();
@@ -73,6 +68,7 @@ fn happy_path_progresses_by_webhook_wake_before_long_poll() {
         &wake_dir,
         &wake_secret,
         &log_dir,
+        &worker_root_dir,
         &config,
     );
     workers.wait_for_initial_ticks(Duration::from_secs(20));
@@ -154,45 +150,6 @@ fn register_webhook(
         .await
     })
     .unwrap_or_else(|error| panic!("repo webhook registration failed for {url}: {error}"));
-}
-
-fn start_trigger(
-    addr: SocketAddr,
-    webhook_secret: PathBuf,
-    wake_secret: PathBuf,
-    wake_dir: PathBuf,
-) {
-    std::thread::spawn(move || {
-        let args = TriggerArgs {
-            bind: addr,
-            webhook_secret_file: webhook_secret,
-            wake_secret_file: Some(wake_secret),
-            wake_dir: Some(wake_dir),
-            wake_sockets: Vec::new(),
-        };
-        if let Err(error) = temper_production::trigger::run(&args) {
-            eprintln!("webhook wakeup test trigger exited: {error}");
-        }
-    });
-}
-
-fn wait_for_trigger(addr: SocketAddr) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if TcpStream::connect(addr).is_ok() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "trigger did not start listening at {addr}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn free_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("free TCP port binds");
-    listener.local_addr().expect("local addr is available")
 }
 
 fn seed(server: &ForgejoServer, provisioned: &Provisioned, scenario: &Scenario) {
@@ -291,19 +248,24 @@ impl WorkerFleet {
         wake_dir: &Path,
         wake_secret: &Path,
         log_dir: &Path,
+        worker_root_dir: &Path,
         config: &RunnerConfig,
     ) -> Self {
         let base = server.base_url().to_string();
         let repo = format!("{}/{}", provisioned.owner, provisioned.name);
+        std::fs::create_dir_all(worker_root_dir).expect("worker root dir creates");
         let mut workers = Vec::new();
         for role in role_workers(config) {
             let identity = provisioned
                 .role(&RoleId::new(&role))
                 .unwrap_or_else(|| panic!("role '{role}' is provisioned"));
             let log = log_dir.join(format!("{role}.log"));
+            let root = worker_root_dir.join(format!("role-{role}"));
+            std::fs::create_dir_all(&root).expect("worker root creates");
             let child = spawn_worker(
                 &base,
                 &repo,
+                &root,
                 stop_file,
                 wake_secret,
                 &wake_dir.join(format!("{role}.sock")),
@@ -327,6 +289,8 @@ impl WorkerFleet {
             });
         }
         let log = log_dir.join("mechanical.log");
+        let root = worker_root_dir.join("mechanical");
+        std::fs::create_dir_all(&root).expect("worker root creates");
         let ci_reader = provisioned
             .role(&RoleId::new("engineer"))
             .expect("engineer identity is provisioned for mechanical CI reads");
@@ -338,6 +302,7 @@ impl WorkerFleet {
         let child = spawn_worker(
             &base,
             &repo,
+            &root,
             stop_file,
             wake_secret,
             &wake_dir.join("mechanical.sock"),
@@ -420,6 +385,7 @@ fn role_workers(config: &RunnerConfig) -> Vec<String> {
 fn spawn_worker(
     base_url: &str,
     repo: &str,
+    root: &Path,
     stop_file: &Path,
     wake_secret: &Path,
     wake_socket: &Path,
@@ -438,7 +404,7 @@ fn spawn_worker(
         .arg("--repo")
         .arg(repo)
         .arg("--root")
-        .arg(std::env::temp_dir().join("temper-forgejo-webhook-unused"))
+        .arg(root)
         .arg("--clock")
         .arg("wall")
         .arg("--poll-ms")

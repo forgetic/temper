@@ -8,7 +8,7 @@
 //! from the pinned upstream release assets and checksum-verified on first use.
 //!
 //! ```sh
-//! cargo test -p temper-forge-forgejo --test live -- --ignored --test-threads=1
+//! cargo test -p temper-forge-forgejo --test live -- --ignored
 //! ```
 
 use base64::Engine;

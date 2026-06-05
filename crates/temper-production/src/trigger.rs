@@ -73,14 +73,24 @@ struct WakeDeliveryFailure {
 }
 
 pub fn run(args: &TriggerArgs) -> Result<(), TriggerError> {
+    let listener = TcpListener::bind(args.bind)?;
+    run_with_listener(args, listener)
+}
+
+/// Runs the trigger using an already-bound listener.
+///
+/// Tests use this to allocate `127.0.0.1:0` and keep the listener bound through
+/// the serving loop, avoiding the free-port allocation gap. Production still
+/// calls [`run`], which binds from [`TriggerArgs`].
+pub fn run_with_listener(args: &TriggerArgs, listener: TcpListener) -> Result<(), TriggerError> {
     let webhook_secret = read_secret(&args.webhook_secret_file)?;
     let wake_secret = args
         .wake_secret_file
         .as_ref()
         .map(|path| read_secret(path))
         .transpose()?;
-    let listener = TcpListener::bind(args.bind)?;
-    eprintln!("temper-trigger-forgejo: listening on {}", args.bind);
+    let addr = listener.local_addr()?;
+    eprintln!("temper-trigger-forgejo: listening on {addr}");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -448,6 +458,7 @@ impl HttpResponse {
 mod tests {
     use super::*;
     use crate::trigger_args::NamedSocket;
+    use std::io::{Read, Write};
     use std::path::PathBuf;
 
     fn request(body: &[u8], secret: &str, event: &str) -> HttpRequest {
@@ -541,6 +552,45 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("temp dir is created");
         dir
+    }
+
+    #[test]
+    fn run_with_listener_keeps_allocated_addr_reachable() {
+        let dir = temp_dir("bound-listener");
+        let webhook_secret = dir.join("webhook-secret");
+        let wake_secret = dir.join("wake-secret");
+        let wake_dir = dir.join("wake");
+        std::fs::write(&webhook_secret, "webhook-secret\n").expect("webhook secret writes");
+        std::fs::write(&wake_secret, "wake-secret\n").expect("wake secret writes");
+        std::fs::create_dir_all(&wake_dir).expect("wake dir creates");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener binds");
+        let addr = listener.local_addr().expect("listener has addr");
+        let args = TriggerArgs {
+            bind: addr,
+            webhook_secret_file: webhook_secret,
+            wake_secret_file: Some(wake_secret),
+            wake_dir: Some(wake_dir),
+            wake_sockets: Vec::new(),
+        };
+        std::thread::spawn(move || {
+            if let Err(error) = run_with_listener(&args, listener) {
+                eprintln!("trigger listener test exited: {error}");
+            }
+        });
+
+        let mut stream = TcpStream::connect(addr).expect("already-bound addr is reachable");
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 0\r\n\r\n")
+            .expect("request writes");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("response reads");
+        assert!(
+            response.starts_with("HTTP/1.1 401 Unauthorized"),
+            "unexpected response: {response:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]

@@ -21,14 +21,13 @@
 //! scenario panics.
 //!
 //! ```sh
-//! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+//! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
 //! ```
 
 #![cfg(unix)]
 
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::SocketAddr;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_production::trigger_args::TriggerArgs;
 use temper_runner::Scenario;
 use temper_testing::forgejo_server::{
     start_cached_provisioned_repositories, ForgejoRunner, ForgejoServer, Provisioned,
@@ -39,8 +38,8 @@ mod multiprocess_support;
 
 use multiprocess_support::{convergence_timeout, WorkerFleet, WorkerPollProfile};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use temper_testing::forgejo_runtime::{RunWorkspace, TriggerServer};
 use temper_testing::runner_config;
 use temper_testing::scenarios::{
     changes_requested_then_approved, ci_fails_then_passes, cross_repo_fanout_converges,
@@ -200,7 +199,7 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
 
     let scenario = (variant.scenario)();
 
-    let paths = scenario_paths(&primary);
+    let paths = scenario_paths(world.workspace(), variant.name);
     let _ = std::fs::remove_file(&paths.stop_file);
     let _ = std::fs::remove_dir_all(&paths.log_dir);
     world.reset_wake_dir();
@@ -221,6 +220,7 @@ fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming
         world.wake_dir(),
         world.wake_secret(),
         &paths.log_dir,
+        &paths.worker_root_dir,
         poll_profile,
         &config,
         variant.architect,
@@ -340,9 +340,11 @@ struct SharedLiveWorld {
     server: ForgejoServer,
     state: ProvisionedRepositories,
     trigger_addr: SocketAddr,
+    _trigger: TriggerServer,
     webhook_secret: String,
     wake_secret_file: PathBuf,
     wake_dir: PathBuf,
+    workspace: RunWorkspace,
     timing: WorldTiming,
 }
 
@@ -364,16 +366,15 @@ impl SharedLiveWorld {
         assert!(runner.is_running(), "runner daemon exited immediately");
 
         let trigger_start = Instant::now();
-        let trigger_paths = TriggerPaths::new(server.data_dir());
+        let workspace = RunWorkspace::new("temper-forgejo-multiprocess");
+        let trigger_paths = TriggerPaths::new(workspace.path());
         trigger_paths.write_secrets();
-        let trigger_addr = free_addr();
-        start_trigger(
-            trigger_addr,
+        let trigger = TriggerServer::start(
             trigger_paths.webhook_secret_file.clone(),
-            trigger_paths.wake_secret_file.clone(),
+            Some(trigger_paths.wake_secret_file.clone()),
             trigger_paths.wake_dir.clone(),
         );
-        wait_for_trigger(trigger_addr);
+        let trigger_addr = trigger.addr();
         let trigger_startup = trigger_start.elapsed();
 
         let timing = WorldTiming {
@@ -388,9 +389,11 @@ impl SharedLiveWorld {
             server,
             state,
             trigger_addr,
+            _trigger: trigger,
             webhook_secret: trigger_paths.webhook_secret,
             wake_secret_file: trigger_paths.wake_secret_file,
             wake_dir: trigger_paths.wake_dir,
+            workspace,
             timing,
         }
     }
@@ -428,6 +431,10 @@ impl SharedLiveWorld {
 
     fn server(&self) -> &ForgejoServer {
         &self.server
+    }
+
+    fn workspace(&self) -> &RunWorkspace {
+        &self.workspace
     }
 
     fn runner_running(&mut self) -> bool {
@@ -470,8 +477,8 @@ struct TriggerPaths {
 }
 
 impl TriggerPaths {
-    fn new(server_data_dir: &Path) -> Self {
-        let run_dir = server_data_dir.join("multiprocess-webhook");
+    fn new(workspace: &Path) -> Self {
+        let run_dir = workspace.join("trigger");
         Self {
             webhook_secret: "webhook-secret".to_string(),
             webhook_secret_file: run_dir.join("webhook-secret"),
@@ -492,45 +499,6 @@ impl TriggerPaths {
         std::fs::write(&self.wake_secret_file, "wake-secret\n").expect("wake secret is written");
         std::fs::create_dir_all(&self.wake_dir).expect("wake dir creates");
     }
-}
-
-fn start_trigger(
-    addr: SocketAddr,
-    webhook_secret: PathBuf,
-    wake_secret: PathBuf,
-    wake_dir: PathBuf,
-) {
-    std::thread::spawn(move || {
-        let args = TriggerArgs {
-            bind: addr,
-            webhook_secret_file: webhook_secret,
-            wake_secret_file: Some(wake_secret),
-            wake_dir: Some(wake_dir),
-            wake_sockets: Vec::new(),
-        };
-        if let Err(error) = temper_production::trigger::run(&args) {
-            eprintln!("forgejo multiprocess trigger exited: {error}");
-        }
-    });
-}
-
-fn wait_for_trigger(addr: SocketAddr) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if TcpStream::connect(addr).is_ok() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "trigger did not start listening at {addr}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn free_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("free TCP port binds");
-    listener.local_addr().expect("local addr is available")
 }
 
 fn register_webhook(
@@ -587,22 +555,17 @@ impl ScenarioTiming {
 struct ScenarioPaths {
     stop_file: PathBuf,
     log_dir: PathBuf,
+    worker_root_dir: PathBuf,
 }
 
-fn scenario_paths(provisioned: &Provisioned) -> ScenarioPaths {
-    let id = NEXT_SCENARIO.fetch_add(1, Ordering::SeqCst);
-    let base = format!(
-        "temper-forgejo-mp-{}-{}-{id}",
-        std::process::id(),
-        provisioned.name,
-    );
+fn scenario_paths(workspace: &RunWorkspace, name: &str) -> ScenarioPaths {
+    let scenario_dir = workspace.dir(Path::new("scenarios").join(name));
     ScenarioPaths {
-        stop_file: std::env::temp_dir().join(format!("{base}.stop")),
-        log_dir: std::env::temp_dir().join(format!("{base}-logs")),
+        stop_file: scenario_dir.join("stop"),
+        log_dir: scenario_dir.join("logs"),
+        worker_root_dir: scenario_dir.join("worker-roots"),
     }
 }
-
-static NEXT_SCENARIO: AtomicU64 = AtomicU64::new(0);
 
 /// Builds an admin-owner [`ForgejoForge`] (admin token, default repo + web-UI
 /// credentials) for seeding and asserting against the provisioned repo.

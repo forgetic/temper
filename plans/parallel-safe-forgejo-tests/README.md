@@ -107,8 +107,21 @@ Status legend: ☐ pending · ☑ done
    id, unique-dir generation has parallel unit coverage, and web startup retries
    only clear address-in-use bind races.
 
-2. ☐ **Phase 2 — Per-test runtime isolation and webhook trigger startup.**
+2. ☑ **Phase 2 — Per-test runtime isolation and webhook trigger startup.**
    `prompts/phase-2-runtime-isolation-and-trigger-startup.md`
+
+   Added a `RunWorkspace` helper in `temper-testing` with parallel uniqueness
+   coverage and moved Forgejo webhook worker roots, stop files, logs, wake
+   sockets, trigger secrets, and temporary git credentials under per-test
+   workspaces. Webhook triggers now start through
+   `temper_production::trigger::run_with_listener`, which keeps an
+   already-bound listener from port allocation through the serving loop; the
+   shared trigger helper reports the actual reachable address. The audit also
+   found Forgejo's default SSH authorized-keys path under the process user's
+   home directory; the fixture now sets `SSH_ROOT_PATH` inside each server data
+   dir so concurrent servers do not race on `~/.ssh/authorized_keys`. Fixed
+   repository names remain only inside per-test throwaway servers or the declared
+   shared multi-repo world.
 
 3. ☐ **Phase 3 — Parallel stress regressions and validation commands.**
    `prompts/phase-3-parallel-stress-regressions.md`

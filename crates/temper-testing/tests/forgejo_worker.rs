@@ -30,6 +30,7 @@
 //! directly inside this `#[tokio::test]` reactor would panic ("cannot start a
 //! runtime from within a runtime").
 
+use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_testing::worker_bin::{
     self, parse_with_env, Backend, ParseOutcome, RoleBehavior, WorkerKind, FORGEJO_PASSWORD_ENV,
@@ -54,6 +55,7 @@ async fn forgejo_role_worker_ticks_against_a_running_server() {
         .role(&RoleId::new("engineer"))
         .expect("engineer role is provisioned")
         .clone();
+    let workspace = RunWorkspace::new("temper-forgejo-worker");
 
     // The exact argv + env a Phase 4 spawner would use for this role: base URL on
     // argv, every secret in the environment. Parse it through the real parser so
@@ -73,8 +75,8 @@ async fn forgejo_role_worker_ticks_against_a_running_server() {
         format!("{}/{}", provisioned.owner, provisioned.name),
         // Root is unused by the forgejo backend but the parser still requires it.
         "--root".to_string(),
-        std::env::temp_dir()
-            .join("temper-forgejo-worker-unused")
+        workspace
+            .dir("role-worker-root")
             .to_string_lossy()
             .into_owned(),
         "--clock".to_string(),
@@ -132,7 +134,10 @@ async fn forgejo_role_worker_ticks_against_a_running_server() {
         "--repo".to_string(),
         format!("{}/{}", provisioned.owner, provisioned.name),
         "--root".to_string(),
-        "/tmp/unused".to_string(),
+        workspace
+            .dir("ci-worker-root")
+            .to_string_lossy()
+            .into_owned(),
         "--clock".to_string(),
         "wall".to_string(),
     ];

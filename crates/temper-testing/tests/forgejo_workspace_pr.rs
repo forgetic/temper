@@ -18,6 +18,7 @@ use temper_runner::{
     CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
     CodingWorkspaceWorkItem, CODING_WORKSPACE_TOOL_ID,
 };
+use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, QueueId, RoleId,
@@ -52,8 +53,8 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
     ))
     .expect("code issue creates");
 
-    let temp = TempDir::new("temper-forgejo-workspace-pr");
-    let checkout = temp.path.join("checkout");
+    let run_workspace = RunWorkspace::new("temper-forgejo-workspace-pr");
+    let checkout = run_workspace.join("checkout");
     let remote = format!(
         "{}/{}/{}.git",
         server.base_url().trim_end_matches('/'),
@@ -61,7 +62,7 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
         provisioned.name
     );
     git(
-        temp.path(),
+        run_workspace.path(),
         &["clone", &remote, checkout.to_str().expect("utf8 path")],
     );
     git(
@@ -70,7 +71,7 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
     );
     git(&checkout, &["config", "user.name", "Temper Engineer"]);
     let credentials = write_git_credentials(
-        temp.path(),
+        run_workspace.path(),
         server.base_url(),
         &engineer.user,
         &engineer.password,
@@ -167,34 +168,6 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
         safety_for_files(files.clone()),
         DiffSafety::Meaningful { files }
     );
-}
-
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(prefix: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            chrono::Utc::now()
-                .timestamp_nanos_opt()
-                .expect("timestamp has nanos")
-        ));
-        std::fs::create_dir_all(&path).expect("temp dir creates");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
 }
 
 fn write_git_credentials(root: &Path, base_url: &str, user: &str, password: &str) -> PathBuf {

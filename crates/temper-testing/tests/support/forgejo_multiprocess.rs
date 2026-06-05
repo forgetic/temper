@@ -63,6 +63,7 @@ impl WorkerFleet {
         wake_dir: &Path,
         wake_secret: &Path,
         log_dir: &Path,
+        worker_root_dir: &Path,
         poll_profile: WorkerPollProfile,
         config: &RunnerConfig,
         architect: &str,
@@ -70,6 +71,7 @@ impl WorkerFleet {
         ci_sentinel: &str,
     ) -> Self {
         let base = server.base_url().to_string();
+        std::fs::create_dir_all(worker_root_dir).expect("worker root dir creates");
         let mut workers = Vec::new();
 
         for role in role_workers(config) {
@@ -82,10 +84,13 @@ impl WorkerFleet {
                 (FORGEJO_PASSWORD_ENV, identity.password.as_str()),
             ];
             let log = log_dir.join(format!("role-{role}.log"));
+            let root = worker_root_dir.join(format!("role-{role}"));
+            std::fs::create_dir_all(&root).expect("worker root creates");
             let wake_socket = wake_dir.join(format!("{role}.sock"));
             let child = spawn_worker(
                 &base,
                 repos,
+                &root,
                 stop_file,
                 wake_secret,
                 &wake_socket,
@@ -111,6 +116,8 @@ impl WorkerFleet {
         }
 
         let log = log_dir.join("mechanical.log");
+        let root = worker_root_dir.join("mechanical");
+        std::fs::create_dir_all(&root).expect("worker root creates");
         let wake_socket = wake_dir.join("mechanical.sock");
         let ci_reader = provisioned
             .role(&RoleId::new("engineer"))
@@ -123,6 +130,7 @@ impl WorkerFleet {
         let child = spawn_worker(
             &base,
             repos,
+            &root,
             stop_file,
             wake_secret,
             &wake_socket,
@@ -247,6 +255,7 @@ fn role_workers(config: &RunnerConfig) -> Vec<String> {
 fn spawn_worker(
     base_url: &str,
     repos: &[String],
+    root: &Path,
     stop_file: &Path,
     wake_secret: &Path,
     wake_socket: &Path,
@@ -267,7 +276,7 @@ fn spawn_worker(
     }
     command
         .arg("--root")
-        .arg(std::env::temp_dir().join("temper-forgejo-mp-unused"))
+        .arg(root)
         .arg("--clock")
         .arg("wall")
         .arg("--poll-ms")

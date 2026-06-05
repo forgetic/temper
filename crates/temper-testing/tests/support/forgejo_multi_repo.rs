@@ -1,10 +1,9 @@
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use temper_forge::{CiJobQuery, Forge, PullRequestQuery, RepositoryId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_production::trigger_args::TriggerArgs;
 use temper_runner::{RunnerConfig, Scenario};
 use temper_testing::agents::fake_registry;
 use temper_testing::forgejo_server::{ForgejoServer, Provisioned};
@@ -84,45 +83,6 @@ pub fn register_webhook(
             repo.display()
         )
     });
-}
-
-pub fn start_trigger(
-    addr: SocketAddr,
-    webhook_secret: PathBuf,
-    wake_secret: PathBuf,
-    wake_dir: PathBuf,
-) {
-    std::thread::spawn(move || {
-        let args = TriggerArgs {
-            bind: addr,
-            webhook_secret_file: webhook_secret,
-            wake_secret_file: Some(wake_secret),
-            wake_dir: Some(wake_dir),
-            wake_sockets: Vec::new(),
-        };
-        if let Err(error) = temper_production::trigger::run(&args) {
-            eprintln!("multi-repo webhook test trigger exited: {error}");
-        }
-    });
-}
-
-pub fn wait_for_trigger(addr: SocketAddr) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if TcpStream::connect(addr).is_ok() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "trigger did not listen at {addr}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-pub fn free_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("free TCP port binds");
-    listener.local_addr().expect("local addr is available")
 }
 
 pub fn seed(
@@ -281,20 +241,25 @@ impl WorkerFleet {
         wake_dir: &Path,
         wake_secret: &Path,
         log_dir: &Path,
+        worker_root_dir: &Path,
         config: &RunnerConfig,
         architect: &str,
         reviewer: &str,
     ) -> Self {
         let base = server.base_url().to_string();
+        std::fs::create_dir_all(worker_root_dir).expect("worker root dir creates");
         let mut workers = Vec::new();
         for role in role_workers(config) {
             let identity = provisioned
                 .role(&RoleId::new(&role))
                 .unwrap_or_else(|| panic!("role '{role}' is provisioned"));
             let log = log_dir.join(format!("{role}.log"));
+            let root = worker_root_dir.join(format!("role-{role}"));
+            std::fs::create_dir_all(&root).expect("worker root creates");
             let child = spawn_worker(
                 &base,
                 repos,
+                &root,
                 stop_file,
                 wake_secret,
                 &wake_dir.join(format!("{role}.sock")),
@@ -320,6 +285,8 @@ impl WorkerFleet {
             });
         }
         let log = log_dir.join("mechanical.log");
+        let root = worker_root_dir.join("mechanical");
+        std::fs::create_dir_all(&root).expect("worker root creates");
         let ci_reader = provisioned
             .role(&RoleId::new("engineer"))
             .expect("engineer identity is provisioned for mechanical CI reads");
@@ -331,6 +298,7 @@ impl WorkerFleet {
         let child = spawn_worker(
             &base,
             repos,
+            &root,
             stop_file,
             wake_secret,
             &wake_dir.join("mechanical.sock"),
@@ -453,6 +421,7 @@ fn role_workers(config: &RunnerConfig) -> Vec<String> {
 fn spawn_worker(
     base_url: &str,
     repos: &[RepoTarget],
+    root: &Path,
     stop_file: &Path,
     wake_secret: &Path,
     wake_socket: &Path,
@@ -469,7 +438,7 @@ fn spawn_worker(
         .arg("--base-url")
         .arg(base_url)
         .arg("--root")
-        .arg(std::env::temp_dir().join("temper-forgejo-multi-repo-unused"))
+        .arg(root)
         .arg("--clock")
         .arg("wall")
         .arg("--poll-ms")
