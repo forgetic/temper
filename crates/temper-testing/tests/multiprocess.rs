@@ -19,7 +19,7 @@
 //!
 //! These filesystem-backed process-boundary tests are part of the default suite:
 //! they spawn real processes and detect convergence by wall-clock polling, but
-//! they are fast enough to run on every `cargo dev-test`. The deterministic
+//! they are fast enough to run on every `cargo dev-test-quick`. The deterministic
 //! in-process scenarios remain the first-line coverage; this file adds the
 //! process-boundary regression.
 

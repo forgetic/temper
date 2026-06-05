@@ -13,8 +13,8 @@ cargo test -p temper-testing --test multiprocess
 ```
 
 The single-repo scenario tests live in `crates/temper-testing/tests/multiprocess.rs`.
-They are part of the default `cargo dev-test` suite because they are fast enough
-for normal local iteration.
+They are part of the quick `cargo dev-test-quick` suite because they are fast
+enough for normal local iteration.
 
 ## Multi-repo fixed worker set
 

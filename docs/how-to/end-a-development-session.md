@@ -18,28 +18,28 @@ generated files, secrets, or unrelated changes.
 cargo fmt --all
 cargo dev-clippy
 cargo dev-check
-cargo dev-test
+cargo dev-test-quick
 ```
 
-Clippy is installed in this environment; keep its output clean. The default test
+Clippy is installed in this environment; keep its output clean. The quick test
 suite should remain fast (soft target: under about 10 seconds on a warmed local
 checkout).
 
-Then run the non-default tests that are self-contained for this checkout before
-handoff. They must be green; fix failures instead of handing them off. This means
-all ignored local-process/local-Forgejo tests; on a networked machine, first
-startup downloads pinned Forgejo binaries automatically when `.cache/forgejo/`
-is empty.
+Then run the full self-contained local suite before handoff:
 
 ```sh
-cargo test -p temper-forge-forgejo --test live -- --ignored
-cargo test -p temper-testing -- --ignored
+cargo dev-test-full
 ```
 
-The `temper-testing` ignored run includes the split `forgejo_multiprocess`
-scenario tests, and default libtest parallelism is supported. Add
-`--test-threads=1` only as an optional host resource throttle when the machine
-cannot comfortably run several real Forgejo/runner processes at once.
+It must be green; fix failures instead of handing them off. This runs the quick
+suite plus all ignored local-process/local-Forgejo tests. On a networked
+machine, first startup downloads pinned Forgejo binaries automatically when
+`.cache/forgejo/` is empty.
+
+Default libtest parallelism is supported. Use
+`cargo dev-test-full --test-threads=1` only as an optional host resource
+throttle when the machine cannot comfortably run several real Forgejo/runner
+processes at once.
 
 ## 3. Review documentation from the top
 

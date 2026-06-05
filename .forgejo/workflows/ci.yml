@@ -52,4 +52,4 @@ jobs:
         run: |
           set -eu
           cd "$HOME/.local/state/forgejo/runner/data/temper"
-          cargo dev-test
+          cargo dev-test-quick

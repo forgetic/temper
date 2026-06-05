@@ -7,5 +7,6 @@
 [alias]
 dev-check = "check --workspace --all-targets --all-features"
 dev-clippy = "clippy --workspace --all-targets --all-features"
-dev-test = "test --workspace --all-targets --all-features"
+dev-test-quick = "test --workspace --all-targets --all-features"
+dev-test-full = "test --workspace --all-targets --all-features -- --include-ignored"
 dev-doc = "doc --workspace --no-deps --all-features"
