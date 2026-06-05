@@ -41,4 +41,7 @@ jobs:
         run: |
           set -eu
           cd "$HOME/.local/state/forgejo/runner/data/temper"
+          cargo fmt --all
+          cargo dev-clippy
           cargo dev-check
+          #cargo dev-test

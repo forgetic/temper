@@ -5,7 +5,7 @@
 # reproducible resource limits.
 
 [alias]
-dev-check = "check --workspace --all-targets"
-dev-clippy = "clippy --workspace --all-targets"
-dev-test = "test --workspace --all-targets"
-dev-doc = "doc --workspace --no-deps"
+dev-check = "check --workspace --all-targets --all-features"
+dev-clippy = "clippy --workspace --all-targets --all-features"
+dev-test = "test --workspace --all-targets --all-features"
+dev-doc = "doc --workspace --no-deps --all-features"
