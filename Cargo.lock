@@ -1090,6 +1090,7 @@ dependencies = [
  "serde_json",
  "temper-forge",
  "temper-forge-memory",
+ "temper-process-protocol",
  "thiserror",
  "tokio",
 ]
@@ -1106,6 +1107,15 @@ dependencies = [
  "temper-forge-memory",
  "temper-interaction",
  "tokio",
+]
+
+[[package]]
+name = "temper-process-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1141,6 +1151,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
+ "temper-process-protocol",
  "temper-testing",
  "temper-workflow",
  "tokio",

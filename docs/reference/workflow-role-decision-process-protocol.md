@@ -9,16 +9,23 @@ process command, `smith-workflow-role-decision`.
 
 ## Types and fixtures
 
-The provider-neutral contract lives in `temper-runner`:
+The provider-neutral JSON DTO contract lives in `temper-process-protocol`:
 
 - `WorkflowRoleDecisionRequest`
 - `WorkflowRoleDecisionReply`
+- `WorkflowRoleManifest`
 - `AuthorizedWorkflowAction`
+- `BoundExternalTool`
 
-Version-1 JSON fixtures live at:
+`temper-runner` consumes and re-exports these DTOs for compatibility, but
+external responders should depend only on `temper-process-protocol` or implement
+the same JSON shapes themselves. The protocol crate has no dependency on
+Temper's runner, workflow, Forge, or backend crates.
 
-- `crates/temper-runner/fixtures/workflow-role-decision-request.json`
-- `crates/temper-runner/fixtures/workflow-role-decision-reply.json`
+Canonical version-1 JSON fixtures live at:
+
+- `crates/temper-process-protocol/fixtures/workflow-role-decision-request.json`
+- `crates/temper-process-protocol/fixtures/workflow-role-decision-reply.json`
 
 ## Invocation shape
 
@@ -31,7 +38,8 @@ A request contains:
 
 - `protocol_version` (`1` today);
 - `workflow_id`;
-- the compiled `role_manifest` Temper is enforcing;
+- the compiled `role_manifest` Temper is enforcing, serialized through the
+  protocol crate's string-id manifest mirror;
 - fresh `work_item_context` JSON, including an optional nested
   `observability` object with provider-neutral work item and decision identity
   fields;

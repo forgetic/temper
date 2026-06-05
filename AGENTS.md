@@ -11,6 +11,7 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | Path | Look here for |
 | --- | --- |
 | `crates/temper-forge/` | Portable Forge model and `Forge` trait; start here for provider-neutral issue, PR, review, dependency, CI, and change-hint API changes. |
+| `crates/temper-process-protocol/` | Serialization-only JSON DTOs and validation helpers for external workflow-role and interactive responder processes. |
 | `crates/temper-interaction/` | Provider-neutral interactive conversation domain types, inert proposals, and responder trait; keep transport, workflow, Forge mutation, and LLM-provider wiring out. |
 | `crates/temper-forge-memory/` | Fast in-memory reference backend for deterministic workflow tests and local scenarios. |
 | `crates/temper-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, and multi-process/process-split tests. |

@@ -125,7 +125,7 @@ fn bound_declared_external_tool_surfaces_manifest_metadata() {
         .expect("declared binding resolves");
 
     assert_eq!(bound.len(), 1);
-    assert_eq!(bound[0].id, tool_id("coding_workspace"));
+    assert_eq!(bound[0].id, "coding_workspace");
     assert_eq!(bound[0].provider, "workspace-local");
     assert_eq!(bound[0].description, "Edit and commit repository code.");
     assert_eq!(

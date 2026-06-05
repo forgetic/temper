@@ -1,192 +1,110 @@
-//! Provider-neutral process contract for workflow-role decisions.
+//! Re-exports and adapters for the workflow-role process protocol.
 //!
-//! A concrete role decision engine receives one serialized
-//! [`WorkflowRoleDecisionRequest`] and returns one serialized
-//! [`WorkflowRoleDecisionReply`]. The reply grants no authority by itself: runner
-//! adapters validate the chosen action against the compiled role manifest and
-//! execute only through [`crate::RoleTools`].
+//! The JSON protocol DTOs live in `temper-process-protocol` so external
+//! responders can depend on the wire contract without depending on Temper's
+//! runner, workflow engine, Forge interface, or concrete backends. This module
+//! keeps the historical `temper_runner::...` exports and converts runtime
+//! workflow manifests into the protocol mirror before invoking a process.
 
-use std::error::Error;
-use std::fmt;
+use temper_forge::ReviewDecision;
+use temper_workflow::{Effect, RoleManifest, ToolManifest};
 
-use serde_json::Value;
-use temper_workflow::{ArtifactKindId, GateId, RoleManifest, TransitionId};
+pub use temper_process_protocol::workflow_role::{
+    AuthorizedWorkflowAction, BoundExternalTool, WorkflowEffect, WorkflowExternalToolManifest,
+    WorkflowPromptManifest, WorkflowPromptSection, WorkflowReviewDecision,
+    WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
+    WorkflowRoleManifest, WorkflowRolePromptExtension, WorkflowToolManifest,
+    WORKFLOW_ROLE_DECISION_NO_ACTION, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
+};
 
-use crate::BoundExternalTool;
-
-/// Current workflow-role decision process protocol version.
-pub const WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION: u32 = 1;
-/// Sentinel action for a safe no-op decision.
-pub const WORKFLOW_ROLE_DECISION_NO_ACTION: &str = "no_action";
-
-/// One authorized workflow action exposed to a role decision engine.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AuthorizedWorkflowAction {
-    /// Action string the decision reply may choose; equal to the manifest tool
-    /// name and transition id in today's compiler output.
-    pub action: String,
-    /// Transition the action maps to.
-    pub transition: TransitionId,
-    /// Workflow artifact kind the action can operate on.
-    pub artifact: ArtifactKindId,
-    /// Gates that must be satisfied before Temper can execute the transition.
-    #[serde(default)]
-    pub requires_gates: Vec<GateId>,
-}
-
-impl AuthorizedWorkflowAction {
-    fn from_tool(tool: &temper_workflow::ToolManifest) -> Self {
-        Self {
-            action: tool.name.clone(),
-            transition: tool.transition.clone(),
-            artifact: tool.artifact.clone(),
-            requires_gates: tool.requires_gates.clone(),
-        }
-    }
-}
-
-/// Request sent by Temper to an external workflow-role decision process.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowRoleDecisionRequest {
-    /// Protocol version; currently [`WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION`].
-    pub protocol_version: u32,
-    /// Workflow id/name from the compiled workflow.
-    pub workflow_id: String,
-    /// Exact compiled role manifest Temper is enforcing for this worker.
-    pub role_manifest: RoleManifest,
-    /// Fresh work-item context JSON assembled by the runner. It must not contain
-    /// Forge credentials, provider secrets, or mutation handles.
-    pub work_item_context: Value,
-    /// Compact action list for models that should not inspect the full manifest.
-    pub authorized_actions: Vec<AuthorizedWorkflowAction>,
-    /// User-declared external tools that are both declared and runner-bound for
-    /// this role. These are metadata only; the decision process cannot execute
-    /// them through this protocol.
-    #[serde(default)]
-    pub available_external_tools: Vec<BoundExternalTool>,
-}
-
-impl WorkflowRoleDecisionRequest {
-    /// Builds a version-1 request and derives the compact action list from the
-    /// supplied role manifest.
-    pub fn new(
-        workflow_id: impl Into<String>,
-        role_manifest: RoleManifest,
-        work_item_context: Value,
-        available_external_tools: Vec<BoundExternalTool>,
-    ) -> Self {
-        let authorized_actions = role_manifest
+pub(crate) fn workflow_role_manifest_from_runtime(manifest: &RoleManifest) -> WorkflowRoleManifest {
+    WorkflowRoleManifest {
+        id: manifest.id.to_string(),
+        charter: manifest.charter.clone(),
+        prompt_extension: WorkflowRolePromptExtension {
+            guidance: manifest.prompt_extension.guidance.clone(),
+            tool_guidance: manifest.prompt_extension.tool_guidance.clone(),
+        },
+        concurrency: manifest.concurrency,
+        queues: manifest.queues.iter().map(ToString::to_string).collect(),
+        authority: manifest.authority.iter().map(ToString::to_string).collect(),
+        tools: manifest
             .tools
             .iter()
-            .map(AuthorizedWorkflowAction::from_tool)
-            .collect();
-        Self {
-            protocol_version: WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
-            workflow_id: workflow_id.into(),
-            role_manifest,
-            work_item_context,
-            authorized_actions,
-            available_external_tools,
-        }
-    }
-
-    /// Returns whether `action` is either `no_action` or one of the manifest
-    /// tool names in this request.
-    pub fn action_is_authorized(&self, action: &str) -> bool {
-        action == WORKFLOW_ROLE_DECISION_NO_ACTION
-            || self
-                .authorized_actions
+            .map(workflow_tool_from_runtime)
+            .collect(),
+        external_tools: manifest
+            .external_tools
+            .iter()
+            .map(|tool| WorkflowExternalToolManifest {
+                id: tool.id.to_string(),
+                description: tool.description.clone(),
+                required: tool.required,
+                constraints: tool.constraints.clone(),
+                guidance: tool.guidance.clone(),
+            })
+            .collect(),
+        prompt: WorkflowPromptManifest {
+            role: manifest.prompt.role.to_string(),
+            sections: manifest
+                .prompt
+                .sections
                 .iter()
-                .any(|candidate| candidate.action == action)
-    }
-
-    /// Validates a reply against this request's protocol version and action
-    /// authority. Process adapters should call this before running any tool.
-    pub fn validate_reply(
-        &self,
-        reply: &WorkflowRoleDecisionReply,
-    ) -> Result<(), WorkflowRoleDecisionProtocolError> {
-        if reply.protocol_version != self.protocol_version {
-            return Err(WorkflowRoleDecisionProtocolError::VersionMismatch {
-                expected: self.protocol_version,
-                actual: reply.protocol_version,
-            });
-        }
-        if !self.action_is_authorized(&reply.action) {
-            return Err(WorkflowRoleDecisionProtocolError::UnauthorizedAction {
-                action: reply.action.clone(),
-            });
-        }
-        Ok(())
+                .map(|section| WorkflowPromptSection {
+                    heading: section.heading.clone(),
+                    lines: section.lines.clone(),
+                })
+                .collect(),
+        },
     }
 }
 
-/// Reply returned by an external workflow-role decision process.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowRoleDecisionReply {
-    /// Protocol version echoed by the responder.
-    pub protocol_version: u32,
-    /// One manifest tool name from the request, or [`WORKFLOW_ROLE_DECISION_NO_ACTION`].
-    pub action: String,
-    /// Short rationale for logs and operator debugging. It does not grant
-    /// authority and is not interpreted by the runner.
-    #[serde(default)]
-    pub reason: String,
-}
-
-impl WorkflowRoleDecisionReply {
-    /// Builds a safe no-op reply.
-    pub fn no_action(reason: impl Into<String>) -> Self {
-        Self {
-            protocol_version: WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
-            action: WORKFLOW_ROLE_DECISION_NO_ACTION.to_string(),
-            reason: reason.into(),
-        }
-    }
-
-    /// Builds a reply choosing one manifest action.
-    pub fn action(action: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self {
-            protocol_version: WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
-            action: action.into(),
-            reason: reason.into(),
-        }
-    }
-
-    /// Returns whether this reply deliberately chooses no workflow action.
-    pub fn is_no_action(&self) -> bool {
-        self.action == WORKFLOW_ROLE_DECISION_NO_ACTION
+fn workflow_tool_from_runtime(tool: &ToolManifest) -> WorkflowToolManifest {
+    WorkflowToolManifest {
+        name: tool.name.clone(),
+        transition: tool.transition.to_string(),
+        artifact: tool.artifact.to_string(),
+        requires_gates: tool
+            .requires_gates
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        effects: tool
+            .effects
+            .iter()
+            .map(workflow_effect_from_runtime)
+            .collect(),
     }
 }
 
-/// Validation failure for a workflow-role decision reply.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WorkflowRoleDecisionProtocolError {
-    /// The reply used a different protocol version than the request.
-    VersionMismatch { expected: u32, actual: u32 },
-    /// The reply selected an action outside the manifest authority.
-    UnauthorizedAction { action: String },
-}
-
-impl fmt::Display for WorkflowRoleDecisionProtocolError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::VersionMismatch { expected, actual } => write!(
-                formatter,
-                "workflow-role decision protocol version mismatch: expected {expected}, got {actual}"
-            ),
-            Self::UnauthorizedAction { action } => write!(
-                formatter,
-                "workflow-role decision selected unauthorized action `{action}`"
-            ),
-        }
+fn workflow_effect_from_runtime(effect: &Effect) -> WorkflowEffect {
+    match effect {
+        Effect::AddLabel(label) => WorkflowEffect::AddLabel(label.to_string()),
+        Effect::RemoveLabel(label) => WorkflowEffect::RemoveLabel(label.to_string()),
+        Effect::SetAssignee(role) => WorkflowEffect::SetAssignee(role.to_string()),
+        Effect::RemoveAssignee(role) => WorkflowEffect::RemoveAssignee(role.to_string()),
+        Effect::CreateComment { body } => WorkflowEffect::CreateComment { body: body.clone() },
+        Effect::CreatePullRequest { correlation_key } => WorkflowEffect::CreatePullRequest {
+            correlation_key: correlation_key.clone(),
+        },
+        Effect::RequestReviewers { roles } => WorkflowEffect::RequestReviewers {
+            roles: roles.iter().map(ToString::to_string).collect(),
+        },
+        Effect::SubmitReview { decision } => WorkflowEffect::SubmitReview {
+            decision: workflow_review_decision_from_runtime(*decision),
+        },
+        Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
     }
 }
 
-impl Error for WorkflowRoleDecisionProtocolError {}
+fn workflow_review_decision_from_runtime(decision: ReviewDecision) -> WorkflowReviewDecision {
+    match decision {
+        ReviewDecision::Approved => WorkflowReviewDecision::Approved,
+        ReviewDecision::ChangesRequested => WorkflowReviewDecision::ChangesRequested,
+        ReviewDecision::Commented => WorkflowReviewDecision::Commented,
+        ReviewDecision::Pending => WorkflowReviewDecision::Pending,
+    }
+}
 
 #[cfg(test)]
 mod tests {

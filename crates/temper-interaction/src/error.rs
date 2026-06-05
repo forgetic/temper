@@ -3,6 +3,7 @@ use std::io;
 use std::time::Duration;
 
 use temper_forge::ForgeError;
+use temper_process_protocol::interaction::InteractionProtocolError;
 use thiserror::Error;
 
 use crate::types::{ProposalId, ProposalKind};
@@ -146,6 +147,29 @@ pub enum InteractionError {
         #[source]
         source: Box<dyn Error + Send + Sync + 'static>,
     },
+}
+
+impl From<InteractionProtocolError> for InteractionError {
+    fn from(error: InteractionProtocolError) -> Self {
+        match error {
+            InteractionProtocolError::InvalidSlug {
+                field,
+                value,
+                reason,
+            } => Self::InvalidSlug {
+                field,
+                value,
+                reason,
+            },
+            InteractionProtocolError::DuplicateProposalId { id } => {
+                Self::DuplicateProposalId { id }
+            }
+            InteractionProtocolError::UnsupportedProposalKind { id, kind } => {
+                Self::UnsupportedProposalKind { id, kind }
+            }
+            InteractionProtocolError::Json(source) => Self::Json(source),
+        }
+    }
 }
 
 impl InteractionError {

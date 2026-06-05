@@ -399,12 +399,18 @@ fn new_conversation_id(prefix: &str) -> Result<ConversationId, InteractionError>
     let timestamp = Utc::now()
         .timestamp_nanos_opt()
         .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000);
-    ConversationId::new(format!("{prefix}-{timestamp}-{}", std::process::id()))
+    Ok(ConversationId::new(format!(
+        "{prefix}-{timestamp}-{}",
+        std::process::id()
+    ))?)
 }
 
 fn legacy_conversation_id(
     prefix: &str,
     number: ItemNumber,
 ) -> Result<ConversationId, InteractionError> {
-    ConversationId::new(format!("{prefix}-issue-{}", number.get()))
+    Ok(ConversationId::new(format!(
+        "{prefix}-issue-{}",
+        number.get()
+    ))?)
 }

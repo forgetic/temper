@@ -5,7 +5,7 @@ use std::sync::Arc;
 use temper_forge::{BranchRef, CreatePullRequest, Forge, ItemNumber};
 use temper_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, Effect, ExecutionError,
-    ExecutionReport, RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
+    ExecutionReport, ExternalToolId, RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
 };
 
 use crate::{
@@ -396,7 +396,8 @@ fn coding_workspace(
     let declared = bound_external_tools
         .iter()
         .find(|tool| tool.id.as_str() == CODING_WORKSPACE_TOOL_ID)?;
-    external_tool_executors.coding_workspace_for(&manifest.id, &declared.id)
+    let tool_id = ExternalToolId::new(declared.id.clone());
+    external_tool_executors.coding_workspace_for(&manifest.id, &tool_id)
 }
 
 fn workspace_guidance(

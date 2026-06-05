@@ -18,6 +18,7 @@ use tokio::time;
 use temper_forge::Forge;
 use temper_workflow::{RoleManifest, ToolManifest};
 
+use crate::role_decision::workflow_role_manifest_from_runtime;
 use crate::role_process_tools::{build_work_item_context, run_process_action};
 use crate::{
     redacted_lossy_preview, render_role_decision_reply_event, render_role_decision_request_event,
@@ -240,7 +241,7 @@ impl WorkflowRoleDecisionProcessAgent {
     ) -> Result<WorkflowRoleDecisionRequest, AgentError> {
         Ok(WorkflowRoleDecisionRequest::new(
             self.workflow_id.clone(),
-            self.manifest.clone(),
+            workflow_role_manifest_from_runtime(&self.manifest),
             build_work_item_context(item, tools).await?,
             self.bound_external_tools.clone(),
         ))
@@ -563,7 +564,7 @@ fn declared_bound_tools(
         .filter_map(|declared| {
             bound_external_tools
                 .iter()
-                .find(|tool| tool.id == declared.id)
+                .find(|tool| tool.id == declared.id.as_str())
                 .cloned()
         })
         .collect()

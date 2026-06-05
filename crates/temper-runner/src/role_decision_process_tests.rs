@@ -166,7 +166,7 @@ fn parse_workflow(json: &str) -> ValidatedWorkflow {
 
 fn bound_coding_workspace() -> BoundExternalTool {
     BoundExternalTool {
-        id: ExternalToolId::new("coding_workspace"),
+        id: "coding_workspace".to_string(),
         description: "Edit and commit repository code.".to_string(),
         required: true,
         constraints: vec!["Only touch the checked-out repository.".to_string()],

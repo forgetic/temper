@@ -7,13 +7,15 @@
 //! consume. Because the input is validated, compilation is infallible.
 
 use crate::ids::{AcceptanceActionId, CommandId, InteractionSpecId, ResponderId};
-use crate::proposal::{IssueProposal, Proposal};
+use crate::proposal::Proposal;
 use crate::validated::{
     AcceptanceEffect, AcceptancePolicy, ProposalPayloadContract, ResponderProtocol,
     TranscriptLabelPolicy, TranscriptTargetKind, TransportCommandAction, ValidatedInteractionSpec,
     ValidatedInteractiveProfile,
 };
 use crate::{ConversationProfileId, InteractionError, Participant, ProposalKind};
+
+pub use temper_process_protocol::interaction::ProposalPayloadValidator;
 
 /// A validated interaction spec projected into runtime-facing manifests.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,26 +138,8 @@ impl ProposalManifest {
                 kind: proposal.kind.clone(),
             });
         }
-        self.payload_validator.validate(proposal)
-    }
-}
-
-/// Closed payload validators known to the compiled interaction runtime.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProposalPayloadValidator {
-    /// Payload must deserialize as an [`IssueProposal`].
-    IssueDraft,
-}
-
-impl ProposalPayloadValidator {
-    /// Validates one proposal payload.
-    pub fn validate(&self, proposal: &Proposal) -> Result<(), InteractionError> {
-        match self {
-            Self::IssueDraft => {
-                let _: IssueProposal = serde_json::from_value(proposal.payload.clone())?;
-                Ok(())
-            }
-        }
+        self.payload_validator.validate(proposal)?;
+        Ok(())
     }
 }
 
