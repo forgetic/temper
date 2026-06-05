@@ -85,7 +85,7 @@ unsafe_code = "forbid"
 # cores by default; keep `.cargo/config.toml` free of a fixed `build.jobs` value.
 [profile.dev]
 opt-level = 0
-debug = "line-tables-only"
+debug = 0
 incremental = true
 codegen-units = 256
 lto = false
@@ -95,7 +95,7 @@ debug = 0
 
 [profile.test]
 opt-level = 0
-debug = 1
+debug = 0
 incremental = true
 codegen-units = 256
 lto = false
