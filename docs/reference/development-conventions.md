@@ -60,7 +60,7 @@ reference pages.
 - Promote durable steering directly into the relevant canonical docs, tests, or
   ADRs instead of adding standalone memory registers.
 
-## Validation before handoff
+## Validation before pushing PRs
 
 Run the fast validation loop unless the task explicitly narrows it:
 
@@ -71,8 +71,14 @@ cargo dev-check
 cargo dev-test-quick
 ```
 
-The `cargo dev-test-quick` suite should stay fast (soft target: under about 10
-seconds on a warmed local checkout).
+If you're touching areas that might break or affect current Forgejo-based
+integration tests, or you are adding new Forgejo-based integration tests, run:
+
+``
+cargo dev-test-full
+```
+
+instead of ```cargo dev-test-quick```.
 
 See:
 
