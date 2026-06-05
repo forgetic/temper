@@ -26,10 +26,10 @@ authoritative for workflow state.
 
 `temper-interaction` should remain provider-neutral and have no dependency on
 external responder crates, `temper-runner`, `temper-workflow`,
-`temper-production`, or any LLM SDK. It may use the portable `temper-forge`
-trait for transcript and acceptance storage. Responders still receive no Forge
-handle, and proposals are
-data until the interaction runtime's acceptance path acts on them.
+`temper-interaction-service`, or any LLM SDK. It may use the portable
+`temper-forge` trait for transcript and acceptance storage. Responders still
+receive no Forge handle, and proposals are data until the interaction runtime's
+acceptance path acts on them.
 
 The Rust trait is an adapter interface. The preferred public extension boundary
 is the process protocol using the same serialized request/reply types; see
@@ -148,7 +148,7 @@ generic interaction contract; deployment bindings select the external responder
 process for each configured profile.
 
 The workspace root `temper` package hosts the deployable `temper-interaction`
-binary wiring. The REPL and HTTP adapter logic stays in `temper-production`,
-where it loads user-defined profile specs, compiles manifests, applies
-deployment bindings, and exposes profile-neutral conversation, proposal,
-command, transcript, and acceptance APIs.
+binary wiring. The REPL and HTTP adapter logic stays in
+`temper-interaction-service`, where it loads user-defined profile specs,
+compiles manifests, applies deployment bindings, and exposes profile-neutral
+conversation, proposal, command, transcript, and acceptance APIs.

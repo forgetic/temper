@@ -3,11 +3,11 @@
 use std::time::{Duration as StdDuration, Instant};
 
 use temper_forge::{ChangeHint, Forge};
-use temper_production::wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
 use temper_runner::{
     IdlePollBackoff, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
     RepositorySet, RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
 };
+use temper_wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
 use temper_workflow::{CommandJournal, RecoveryPolicy};
 
 use crate::worker_bin::args::WorkerArgs;
@@ -405,7 +405,7 @@ mod tests {
     use std::sync::Mutex;
     use std::thread;
     use temper_forge::{ChangeKind, RepositoryPath};
-    use temper_production::wake::send_wake_with_hint;
+    use temper_wake::send_wake_with_hint;
 
     use crate::worker_bin::args::{
         AgentsKind, Backend, ClockKind, ForgejoArgs, WorkerArgs, WorkerKind,

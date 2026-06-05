@@ -9,7 +9,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use temper_production::trigger_args::TriggerArgs;
+use temper_trigger_forgejo::trigger_args::TriggerArgs;
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 
@@ -125,7 +125,8 @@ impl TriggerServer {
         // state. Moving that bound listener into the serving thread keeps the
         // reported address reserved and reachable without a free-port gap.
         std::thread::spawn(move || {
-            if let Err(error) = temper_production::trigger::run_with_listener(&args, listener) {
+            if let Err(error) = temper_trigger_forgejo::trigger::run_with_listener(&args, listener)
+            {
                 eprintln!("Forgejo test trigger exited: {error}");
             }
         });
