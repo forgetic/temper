@@ -32,9 +32,12 @@ startup downloads pinned Forgejo binaries automatically when `.cache/forgejo/`
 is empty.
 
 ```sh
-cargo test -p temper-forge-forgejo --test live -- --ignored --test-threads=1
-cargo test -p temper-testing -- --ignored --test-threads=1
+cargo test -p temper-forge-forgejo --test live -- --ignored
+cargo test -p temper-testing -- --ignored
 ```
+
+Add `--test-threads=1` only as an optional host resource throttle when the
+machine cannot comfortably run several real Forgejo/runner processes at once.
 
 ## 3. Review documentation from the top
 

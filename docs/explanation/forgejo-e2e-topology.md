@@ -132,8 +132,11 @@ network-bound, and host-mutating. Like the `temper-forge-forgejo` live test it i
 `#[ignore]`d, so the default `cargo test` stays hermetic and deterministic. On a
 networked machine, ignored Forgejo startup downloads the pinned binaries into the
 shared `.cache/forgejo/` cache when explicit binary overrides and cached files
-are absent. The in-process scenarios remain the first-line coverage for workflow
-logic; this covers the real-backend topology.
+are absent. Those binary and state caches are process-safe, and each test gets
+unique runtime copies/paths, so libtest default parallelism is a correctness-safe
+mode. Operators may still throttle test threads when CPU or I/O capacity is the
+limiting factor. The in-process scenarios remain the first-line coverage for
+workflow logic; this covers the real-backend topology.
 
 ## Triggering status
 

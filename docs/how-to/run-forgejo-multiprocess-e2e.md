@@ -23,16 +23,18 @@ then downloads the pinned assets and verifies their SHA-256 values.
 Tests declare their required initial Forgejo state as JSON. The first run for a
 new state hash boots a fresh Forgejo, provisions that state, shuts it down
 cleanly, and saves the data tree plus fixture metadata under
-`.cache/forgejo/states/`. Each test execution then copies that cached tree to
-`/tmp` and starts a new Forgejo process against the copy. Runtime Forgejo and
-`forgejo-runner` processes are still killed on drop for fast teardown; only the
-one-time cache publisher uses clean shutdown so the SQLite/git tree is safe to
-reuse.
+`.cache/forgejo/states/`. Shared binary and state caches are protected by
+process-safe locks and atomic publish steps, so several ignored Forgejo tests may
+start with libtest's default parallelism. Each test execution copies the cached
+tree to `/tmp` and starts a new Forgejo process against the copy. Runtime Forgejo
+and `forgejo-runner` processes are still killed on drop for fast teardown; only
+the one-time cache publisher uses clean shutdown so the SQLite/git tree is safe
+to reuse.
 
 ## One-line command (the full test)
 
 ```sh
-cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
 ```
 
 This starts one Forgejo server from the declared cached state **and** one
@@ -40,7 +42,9 @@ host-mode `forgejo-runner`, then converges all five reference-delivery scenarios
 in predeclared per-scenario repos across real OS processes. It spawns real
 processes and executes CI **on this host**, so run it only where that is
 acceptable. The first run for a binary or state cache miss still pays download or
-provisioning cost; warmed runs copy the state from `.cache` to `/tmp`. The
+provisioning cost; warmed runs copy the state from `.cache` to `/tmp`. Use
+`--test-threads=1` only as an optional host resource throttle if the machine
+cannot comfortably run several real Forgejo/runner processes at once. The
 per-phase smoke tests below build up to it. See
 [The multi-process test](#the-multi-process-test-phase-5) for detail.
 
@@ -57,10 +61,11 @@ opens a PR through `RoleTools`:
 cd ~/src/rust/smith
 TEMPER_FORGEJO_E2E=1 TEMPER_FORGEJO_AGENTS=1 \
   cargo test -p smith-temper-agent-cli --test forgejo_workflow_role_e2e -- \
-  --ignored --test-threads=1
+  --ignored
 ```
 
-Run Smith's documented provider/auth preflight before enabling that gate.
+Run Smith's documented provider/auth preflight before enabling that gate; add
+`--test-threads=1` only if you need to throttle host load.
 
 ### CPU note (sustained-CPU incident + mitigation)
 
@@ -193,7 +198,7 @@ mergeability asynchronously, so the test polls); and re-running prep is a no-op.
 ## The multi-process test (Phase 5)
 
 ```sh
-cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
 ```
 
 This is the Forgejo twin of `tests/multiprocess.rs`: the **same**
@@ -260,13 +265,13 @@ per-repo CI diagnostics.
 Single repo:
 
 ```sh
-cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored
 ```
 
 Multi repo, one fixed worker set:
 
 ```sh
-cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored
 ```
 
 These wakeup regressions use the same throwaway Forgejo + real `forgejo-runner`,
@@ -292,8 +297,8 @@ to prove source-repo role-worker wakes can narrow to one configured repo even
 when provider startup noise also produces broad mixed-repo batches. Mechanical
 wake scans intentionally visit all configured repositories so cross-repo recovery
 can observe dependency-source repositories, but each per-repo reconciliation is
-bounded rather than a deep audit. Run these serially for the same CPU/isolation
-reasons as the multi-process suite.
+bounded rather than a deep audit. They are parallel-correct under libtest's
+default harness; add `--test-threads=1` only to throttle CPU/I/O on a small host.
 
 ## Running it in CI
 
@@ -313,14 +318,14 @@ tests are `#[ignore]`d, so they never fire there). The dedicated job:
    host** (no containers), so the job must run on a runner that permits spawning
    child processes and binding an ephemeral localhost port — not a locked-down
    container-only executor.
-3. **Invokes exactly:**
+3. **Invokes the ignored Forgejo suite:**
 
    ```sh
-   cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
+   cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
    ```
 
-   `--test-threads=1` is still recommended because the suite owns a real
-   server, runner, and multiple worker processes while it runs.
+   Add `--test-threads=1` only when the CI host needs resource throttling for
+   real server, runner, and worker processes; it is not required for correctness.
 
 The job should not block the default pipeline gate (it is slower and
 host-dependent); treat it as a periodic / on-demand real-backend check. The
@@ -332,7 +337,8 @@ the host can boot a server + runner before the full suite.
 Ignored/local Forgejo fixture startup resolves the pinned Forgejo **and**
 `forgejo-runner` binaries as: explicit `*_BINARY` override → cached
 `.cache/forgejo/` file → download the pinned asset and verify SHA-256. The
-cache is gitignored and reused by later runs.
+cache is gitignored and reused by later runs. Concurrent first-use downloads
+serialize per target and publish only verified complete files.
 
 | Binary | Version | SHA-256 | Source |
 | --- | --- | --- | --- |

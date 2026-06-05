@@ -149,7 +149,10 @@ cargo test -p temper-testing --test multi_repo_multiprocess
 Live Forgejo + runner fake-agent fixture:
 
 ```sh
-cargo test -p temper-testing --test forgejo_multiprocess -- --ignored --test-threads=1
-cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
-cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
+cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored
+cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored
 ```
+
+Add `--test-threads=1` only as an optional host resource throttle; Forgejo
+fixture caches and runtime paths are parallel-safe.

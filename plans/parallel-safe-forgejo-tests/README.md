@@ -123,29 +123,66 @@ Status legend: ☐ pending · ☑ done
    repository names remain only inside per-test throwaway servers or the declared
    shared multi-repo world.
 
-3. ☐ **Phase 3 — Parallel stress regressions and validation commands.**
+3. ☑ **Phase 3 — Parallel stress regressions and validation commands.**
    `prompts/phase-3-parallel-stress-regressions.md`
 
-4. ☐ **Phase 4 — Documentation, findings, and final acceptance.**
+   Added ignored stress regressions in `temper-forgejo-fixture` for concurrent
+   same-state server startup and concurrent runner registration, plus a
+   `temper-testing` regression proving parallel provisioned-state callers each
+   receive an independent live server copy. The multi-repo webhook binary was
+   validated with default libtest parallelism.
+
+4. ☑ **Phase 4 — Documentation, findings, and final acceptance.**
    `prompts/phase-4-docs-findings-and-acceptance.md`
+
+   Updated Forgejo how-to/reference/explanation docs and inline command examples
+   so serial test threads are described only as optional host resource
+   throttling. Final design and validation notes are recorded in
+   `findings.md`.
 
 ## Whole-plan acceptance criteria
 
-- Starting several ignored Forgejo fixture tests concurrently from an empty
+- ☑ Starting several ignored Forgejo fixture tests concurrently from an empty
   `.cache/forgejo/` does not corrupt binaries, leave `.part` files behind, or
   require a manual cache-population test.
-- Starting several servers concurrently from the same `ForgejoState` either
+- ☑ Starting several servers concurrently from the same `ForgejoState` either
   builds the state once or waits for the existing state, and every caller runs
   against its own `/tmp` copy.
-- Two concurrent `ForgejoRunner::register` calls in the same test process choose
+- ☑ Two concurrent `ForgejoRunner::register` calls in the same test process choose
   distinct work dirs and runner names.
-- Forgejo webhook tests can run with default libtest parallelism without trigger
+- ☑ Forgejo webhook tests can run with default libtest parallelism without trigger
   port races, shared wake sockets, shared logs, or shared stop files.
-- No Forgejo-focused docs or test-module command examples require
+- ☑ No Forgejo-focused docs or test-module command examples require
   `--test-threads=1` for correctness. Any remaining mention is explicitly framed
   as optional host resource throttling.
-- The final validation record includes at least one Forgejo test binary with
+- ☑ The final validation record includes at least one Forgejo test binary with
   multiple ignored tests run without `--test-threads=1`.
+
+## Validation notes
+
+Phase 3/4 validation on 2026-06-05 started from a warmed `.cache/forgejo/`
+binary cache and existing state snapshots. The same-state fixture stress test
+uses a unique state key and removes that key first, so it still exercised an
+empty state-cache path for that key; the reference-delivery provisioning stress
+used the warmed state cache (`cache_hits=2/2`).
+
+Commands run without `--test-threads=1`:
+
+```sh
+cargo fmt --all
+cargo test -p temper-forgejo-fixture
+cargo test -p temper-forgejo-fixture --test parallel -- --ignored --nocapture
+cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --nocapture
+cargo test -p temper-testing --test forgejo_parallel -- --ignored --nocapture
+cargo dev-check
+cargo dev-clippy
+cargo dev-test
+```
+
+All commands passed. The broader optional Forgejo suites were not rerun in this
+session to limit host CPU/I/O load after the focused stress tests and a
+representative multi-test Forgejo webhook binary passed with default libtest
+parallelism. Detailed findings are in `findings.md`.
 
 ## Relevant starting points
 

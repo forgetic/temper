@@ -66,11 +66,12 @@ cargo test -p temper-testing --test multi_repo_multiprocess
 For the live Forgejo + webhook variant, use:
 
 ```sh
-cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored --test-threads=1
+cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored
 ```
 
 These include the cross-repo fan-out scenario on the same fixed worker fleet;
-all repos still use the same compiled reference workflow.
+all repos still use the same compiled reference workflow. Add
+`--test-threads=1` only when the host needs resource throttling.
 
 ## Related
 
