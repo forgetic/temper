@@ -66,4 +66,3 @@ See:
 
 `docs/how-to/fast-local-iteration.md`,
 `docs/how-to/end-a-development-session.md`, and
-`docs/how-to/run-forgejo-multiprocess-e2e.md`.
