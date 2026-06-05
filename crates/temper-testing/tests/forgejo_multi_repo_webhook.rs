@@ -1,10 +1,17 @@
-//! Gated real-Forgejo multi-repo e2e with webhook wakeups.
+//! Gated real-Forgejo cross-repo e2e with webhook wakeups.
 //!
 //! One fixed fake-agent worker set (one role worker per role plus one mechanical
 //! worker) receives two `--repo` values, while a real throwaway Forgejo server
 //! and real host-mode `forgejo-runner` provide backend state and CI. Webhooks are
 //! registered for both repos and wake the shared worker set; the poll interval is
 //! intentionally longer than the convergence budget.
+//!
+//! The retained live case guards the real-backend path that the fast tier cannot
+//! cover: Forgejo webhook delivery to the production trigger, authenticated
+//! wake-socket routing for the hinted repository, and shared fleet wakeup before
+//! the long-poll backstop. The cross-repo business logic itself remains covered
+//! by fast filesystem/in-memory tests such as `multi_repo_multiprocess.rs`,
+//! `cross_repo_create.rs`, and `dependency_aggregation.rs`.
 
 #![cfg(unix)]
 
@@ -12,65 +19,37 @@
 mod support;
 
 use std::time::{Duration, Instant};
-use temper_runner::Scenario;
 use temper_testing::forgejo_runtime::{RunWorkspace, TriggerServer};
 use temper_testing::forgejo_server::{start_cached_provisioned_repositories, ForgejoRunner};
 use temper_testing::runner_config;
-use temper_testing::scenarios::{cross_repo_fanout_converges, happy_path};
-
-#[test]
-#[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with --ignored"]
-fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
-    run_webhook_variant(WebhookVariant {
-        second_repo: "service-beta",
-        scenario: happy_path,
-        architect: "default",
-        seed: SeedMode::EveryRepo,
-    });
-}
+use temper_testing::scenarios::cross_repo_fanout_converges;
 
 #[test]
 #[ignore = "boots real Forgejo + forgejo-runner and opens local sockets; run with --ignored"]
 fn cross_repo_fanout_converges_by_webhook_wake() {
-    run_webhook_variant(WebhookVariant {
-        second_repo: "service-canary",
-        scenario: cross_repo_fanout_converges,
-        architect: "closing",
-        seed: SeedMode::SourceRepoOnly,
-    });
+    // This is the single live multi-repo webhook guard: real Forgejo webhook ->
+    // production trigger -> authenticated wake socket -> shared worker-fleet wake
+    // before the long-poll backstop. Fast tests prove the fan-out/dependency
+    // business rules, but cannot exercise real Forgejo hook delivery or sockets.
+    run_cross_repo_fanout_webhook_wake();
 }
 
-struct WebhookVariant {
-    second_repo: &'static str,
-    scenario: fn() -> Scenario,
-    architect: &'static str,
-    seed: SeedMode,
-}
-
-#[derive(Clone, Copy)]
-enum SeedMode {
-    EveryRepo,
-    SourceRepoOnly,
-}
-
-fn run_webhook_variant(variant: WebhookVariant) {
+fn run_cross_repo_fanout_webhook_wake() {
     let config = runner_config();
-    let second_name = variant.second_repo.to_string();
-    let cached = start_cached_provisioned_repositories(&[
-        config.repository.name.clone(),
-        second_name.clone(),
-    ])
-    .expect("forgejo cached provisioned multi-repo state starts");
+    let source_name = config.repository.name.clone();
+    let target_name = "service-canary".to_string();
+    let cached = start_cached_provisioned_repositories(&[source_name.clone(), target_name.clone()])
+        .expect("forgejo cached provisioned multi-repo state starts");
     let server = cached.server;
     let provisioned = cached
         .state
-        .provisioned(&config.repository.name)
+        .provisioned(&source_name)
         .expect("primary repo is in cached state");
-    let second_repo = cached
+    let target_repo = cached
         .state
         .repositories
-        .get(&second_name)
-        .expect("second repo is in cached state")
+        .get(&target_name)
+        .expect("target repo is in cached state")
         .clone();
     let mut runner = ForgejoRunner::register(&server).expect("forgejo runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
@@ -78,15 +57,12 @@ fn run_webhook_variant(variant: WebhookVariant) {
         support::RepoTarget::from_provisioned(&provisioned),
         support::RepoTarget {
             owner: provisioned.owner.clone(),
-            name: second_name,
-            id: second_repo,
+            name: target_name,
+            id: target_repo,
         },
     ];
 
-    let workspace = RunWorkspace::new(format!(
-        "temper-forgejo-multi-repo-webhook-{}",
-        variant.second_repo
-    ));
+    let workspace = RunWorkspace::new("temper-forgejo-multi-repo-webhook-cross-repo");
     let log_dir = workspace.dir("logs");
     let wake_dir = workspace.dir("wake");
     let worker_root_dir = workspace.dir("worker-roots");
@@ -110,7 +86,7 @@ fn run_webhook_variant(variant: WebhookVariant) {
         );
     }
 
-    let scenario = (variant.scenario)();
+    let scenario = cross_repo_fanout_converges();
     let mut workers = support::WorkerFleet::spawn_with_behavior(
         &server,
         &provisioned,
@@ -120,8 +96,8 @@ fn run_webhook_variant(variant: WebhookVariant) {
         &wake_secret,
         &log_dir,
         &worker_root_dir,
-        &runner_config(),
-        variant.architect,
+        &config,
+        "closing",
         "default",
     );
     workers.wait_for_initial_ticks(Duration::from_secs(30));
@@ -129,22 +105,8 @@ fn run_webhook_variant(variant: WebhookVariant) {
     let pre_seed_log_offsets = workers.log_offsets();
 
     let started = Instant::now();
-    match variant.seed {
-        SeedMode::EveryRepo => {
-            for repo in &repos {
-                support::seed(&server, &provisioned, repo, &scenario);
-            }
-        }
-        SeedMode::SourceRepoOnly => support::seed(&server, &provisioned, &repos[0], &scenario),
-    }
-    let converged = match variant.seed {
-        SeedMode::EveryRepo => {
-            support::poll_until_all_converged(&server, &provisioned, &repos, &scenario)
-        }
-        SeedMode::SourceRepoOnly => {
-            support::poll_until_converged(&server, &provisioned, &repos[0], &scenario)
-        }
-    };
+    support::seed(&server, &provisioned, &repos[0], &scenario);
+    let converged = support::poll_until_converged(&server, &provisioned, &repos[0], &scenario);
     let elapsed = started.elapsed();
 
     support::touch(&stop_file);
@@ -181,38 +143,31 @@ fn run_webhook_variant(variant: WebhookVariant) {
         "no worker consumed an authenticated wake; logs:\n{}",
         workers.logs()
     );
-    if matches!(variant.seed, SeedMode::SourceRepoOnly) {
-        let expected_repo = repos[0].display();
-        let wake_lines = workers.wake_scan_lines_since(&pre_seed_log_offsets);
-        assert!(
-            !wake_lines.is_empty(),
-            "no completed wake scan lines found; logs:\n{}",
-            workers.logs()
-        );
-        let role_wake_lines = wake_lines
-            .into_iter()
-            .filter(|line| line.starts_with("role:"))
-            .collect::<Vec<_>>();
-        assert!(
-            role_wake_lines.iter().any(|line| {
-                line.contains("scanned_repositories=1")
-                    && line.contains(&format!("scanned_repository_paths={expected_repo}"))
-            }),
-            "no narrowed source-repo role wake found for {expected_repo}; role wake lines:\n{}\nlogs:\n{}",
-            role_wake_lines.join("\n"),
-            workers.logs()
-        );
-    }
+
+    let expected_repo = repos[0].display();
+    let wake_lines = workers.wake_scan_lines_since(&pre_seed_log_offsets);
+    assert!(
+        !wake_lines.is_empty(),
+        "no completed wake scan lines found; logs:\n{}",
+        workers.logs()
+    );
+    let role_wake_lines = wake_lines
+        .into_iter()
+        .filter(|line| line.starts_with("role:"))
+        .collect::<Vec<_>>();
+    assert!(
+        role_wake_lines.iter().any(|line| {
+            line.contains("scanned_repositories=1")
+                && line.contains(&format!("scanned_repository_paths={expected_repo}"))
+        }),
+        "no narrowed source-repo role wake found for {expected_repo}; role wake lines:\n{}\nlogs:\n{}",
+        role_wake_lines.join("\n"),
+        workers.logs()
+    );
+
     for (label, status) in &exits {
         assert!(status.success(), "worker '{label}' exited with {status:?}");
     }
-}
-
-#[test]
-#[cfg(not(unix))]
-#[ignore]
-fn one_fixed_worker_set_processes_two_forgejo_repos_by_webhook_wake() {
-    eprintln!("skipping Forgejo multi-repo webhook e2e: Unix wake sockets are required");
 }
 
 #[test]

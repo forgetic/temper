@@ -96,40 +96,6 @@ pub fn seed(
         .unwrap_or_else(|error| panic!("seeding {} failed: {error}", repo.display()));
 }
 
-pub fn poll_until_all_converged(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    repos: &[RepoTarget],
-    scenario: &Scenario,
-) -> Result<(), String> {
-    let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
-    let mut last = vec![String::new(); repos.len()];
-    loop {
-        let mut all_ok = true;
-        for (idx, repo) in repos.iter().enumerate() {
-            match assert_converged(server, provisioned, repo, scenario) {
-                Ok(()) => last[idx] = "converged".into(),
-                Err(error) => {
-                    all_ok = false;
-                    last[idx] = error;
-                }
-            }
-        }
-        if all_ok {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(repos
-                .iter()
-                .zip(last.iter())
-                .map(|(repo, error)| format!("{} => {error}", repo.display()))
-                .collect::<Vec<_>>()
-                .join("\n"));
-        }
-        std::thread::sleep(ASSERT_POLL);
-    }
-}
-
 pub fn poll_until_converged(
     server: &ForgejoServer,
     provisioned: &Provisioned,
