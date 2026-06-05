@@ -39,11 +39,6 @@ integration tests and exposes its path through
 `CARGO_BIN_EXE_temper-testing-worker`. Set `TEMPER_TESTING_WORKER_BIN` only when
 you intentionally want to spawn a prebuilt worker binary.
 
-Keep the whole quick suite fast; as a soft target for agent changes, it should
-complete in under about 10 seconds on a warmed local checkout. If a change makes
-the quick suite slower, prefer moving slow coverage behind `#[ignore]` and
-document how to run it before handoff.
-
 For the full self-contained local suite:
 
 ```sh
@@ -59,6 +54,3 @@ cargo test --workspace --all-targets -- --include-ignored
 `cargo dev-test-full` runs the quick suite plus the ignored Forgejo-based
 integration tests. It may boot throwaway Forgejo servers, host-mode
 `forgejo-runner` processes, local webhook triggers, and worker processes.
-
-Keep the whole full suite fast too; as a soft target for agent changes, it
-should complete in under about 2 minutes on a warmed local checkout.

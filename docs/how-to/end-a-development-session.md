@@ -21,25 +21,24 @@ cargo dev-check
 cargo dev-test-quick
 ```
 
-Clippy is installed in this environment; keep its output clean. The quick test
-suite should remain fast (soft target: under about 10 seconds on a warmed local
-checkout).
+If you're touching areas that might break or affect current Forgejo-based
+integration tests, or you are adding new Forgejo-based integration tests, run:
 
-Then run the full self-contained local suite before handoff:
-
-```sh
+``
 cargo dev-test-full
 ```
 
-It must be green; fix failures instead of handing them off. This runs the quick
-suite plus all ignored local-process/local-Forgejo tests. On a networked
-machine, first startup downloads pinned Forgejo binaries automatically when
-`.cache/forgejo/` is empty.
+instead of ```cargo dev-test-quick```.
 
-Default libtest parallelism is supported. Use
-`cargo dev-test-full --test-threads=1` only as an optional host resource
-throttle when the machine cannot comfortably run several real Forgejo/runner
-processes at once.
+Keep Clippy output clean.
+
+Keep the whole quick suite fast; as a soft target for agent changes, it should
+complete in under about 10 seconds on a warmed local checkout. If a change makes
+the quick suite slower, prefer moving slow coverage behind `#[ignore]` and
+document how to run it before handoff.
+
+Keep the whole full suite fast too; as a soft target for agent changes, it
+should complete in under about 2 minutes on a warmed local checkout.
 
 ## 3. Review documentation from the top
 
