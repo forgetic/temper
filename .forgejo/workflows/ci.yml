@@ -10,7 +10,7 @@ on:
       - reopened
 
 jobs:
-  check:
+  validate:
     runs-on: host
     steps:
       - name: Refresh persistent checkout
@@ -37,11 +37,15 @@ jobs:
           git checkout --force --detach FETCH_HEAD
           git reset --hard "$GITHUB_SHA"
           git clean -ffdx -e target/
-      - name: cargo dev-check
+      - name: Lint
         run: |
           set -eu
           cd "$HOME/.local/state/forgejo/runner/data/temper"
           cargo fmt --all
           cargo dev-clippy
+      - name: Check
+        run: |
+          set -eu
+          cd "$HOME/.local/state/forgejo/runner/data/temper"
           cargo dev-check
           #cargo dev-test
