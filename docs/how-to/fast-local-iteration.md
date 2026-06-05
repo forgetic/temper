@@ -13,7 +13,7 @@ cargo dev-check
 This expands to:
 
 ```sh
-cargo check --workspace --all-targets --all-features
+cargo check --workspace --all-targets
 ```
 
 `cargo check` validates types and borrow checking without producing final binaries, so it should be the default command while designing APIs and editing library code.
@@ -26,7 +26,7 @@ Clippy is installed in this environment. Run it before handoff:
 cargo dev-clippy
 ```
 
-This expands to `cargo clippy --workspace --all-targets --all-features`. Keep the lint output clean.
+This expands to `cargo clippy --workspace --all-targets`. Keep the lint output clean.
 
 ## Formatting
 
@@ -47,10 +47,10 @@ cargo dev-test-quick
 This expands to:
 
 ```sh
-cargo test --workspace --all-targets --all-features
+cargo test --workspace --all-targets
 ```
 
-`cargo dev-test-quick` enables all workspace features and runs non-ignored tests.
+`cargo dev-test-quick` runs non-ignored tests.
 It includes the fast filesystem multi-process rehearsals (`temper-testing`'s
 `multiprocess` and `multi_repo_multiprocess` tests). Cargo builds the
 `temper-testing` package's `temper-testing-worker` test-support binary for those
@@ -71,7 +71,7 @@ cargo dev-test-full
 This expands to:
 
 ```sh
-cargo test --workspace --all-targets --all-features -- --include-ignored
+cargo test --workspace --all-targets -- --include-ignored
 ```
 
 `cargo dev-test-full` runs the quick suite plus the ignored Forgejo-based
