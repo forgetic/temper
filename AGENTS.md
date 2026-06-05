@@ -21,11 +21,9 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | `src/bin/` | Workspace root `temper` package binary wiring for deployable tools, including the feature-gated testing worker; thin entrypoints delegate into library crates. |
 | `crates/temper-production/` | Production Forgejo worker, provisioning, webhook trigger, product-manager chat, external-tool bindings, and process-responder logic; deployable binary wiring lives in root `src/bin/`. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo and launch scripts. |
-| `plans/` | Roadmaps and findings; promote stable behavior into `docs/` before relying on it. |
 
 ## Documentation map
 
-- Start here for process: `docs/how-to/start-a-development-session.md`
 - Development rules and validation: `docs/reference/development-conventions.md`, `docs/how-to/fast-local-iteration.md`, and `docs/how-to/end-a-development-session.md`.
 - Contracts: `docs/reference/forge-interface.md`, `docs/reference/in-memory-backend.md`, `docs/reference/filesystem-backend.md`, `docs/reference/forgejo-backend.md`, `docs/reference/workflow-layer.md`, `docs/reference/cross-repo-workflows.md`, and `docs/reference/robustness-guarantees.md`.
 - Concepts: `docs/explanation/agentic-workflows.md`, `docs/explanation/domain-model.md`, `docs/explanation/cross-repo-workflows.md`, `docs/explanation/reference-workflow.md`, and `docs/explanation/forgejo-e2e-topology.md`.

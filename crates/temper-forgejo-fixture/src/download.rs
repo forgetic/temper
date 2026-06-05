@@ -233,6 +233,18 @@ where
 }
 
 fn http_get(url: &str) -> Result<Vec<u8>, DownloadError> {
+    // `reqwest::blocking` owns an internal Tokio runtime. If the first-use
+    // binary download is triggered from an async test, building/dropping that
+    // runtime on the reactor thread panics. Keep the blocking client entirely
+    // on a plain OS thread so sync fixture entry points remain safe no matter
+    // who calls them.
+    let url = url.to_string();
+    std::thread::spawn(move || http_get_on_thread(&url))
+        .join()
+        .map_err(|_| DownloadError::Http("download worker thread panicked".to_string()))?
+}
+
+fn http_get_on_thread(url: &str) -> Result<Vec<u8>, DownloadError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(DOWNLOAD_TIMEOUT)
         .build()

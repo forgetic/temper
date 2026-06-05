@@ -1,34 +1,63 @@
-name: dogfood-ci
+name: ci
 
 on:
-  push:
+  pull_request:
     branches:
       - main
-      - agent/**
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 jobs:
-  dev-check:
+  validate:
     runs-on: host
+    defaults:
+      run:
+        working-directory: ${{ env.HOME }}/.local/state/forgejo/runner/data/temper
     steps:
-      - name: checkout without external actions
+      - name: Checkout
         run: |
           set -eu
-          mkdir -p "$GITHUB_WORKSPACE/repo"
-          cd "$GITHUB_WORKSPACE/repo"
-          git init
-          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+
+          repo_dir="$HOME/.local/state/forgejo/runner/data/temper"
+          repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+
+          mkdir -p "$(dirname "$repo_dir")"
+
+          if [ -d "$repo_dir/.git" ]; then
+            cd "$repo_dir"
+            git remote set-url origin "$repo_url"
+          else
+            rm -rf "$repo_dir"
+            git -c http.extraheader="AUTHORIZATION: token $GITHUB_TOKEN" \
+              clone --no-checkout "$repo_url" "$repo_dir"
+            cd "$repo_dir"
+          fi
+
           git -c http.extraheader="AUTHORIZATION: token $GITHUB_TOKEN" \
-            fetch --depth=1 origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD
-      - name: cargo dev-check
+            fetch --force --prune origin "$GITHUB_REF"
+          git checkout --force --detach FETCH_HEAD
+          git reset --hard "$GITHUB_SHA"
+          # Keep the local Cargo target symlink and Forgejo fixture binary cache.
+          # `target/` does not match a symlink, so exclude `target` without a slash.
+          git clean -ffdx -e target -e .cache/forgejo
+
+          mkdir -p "$HOME/.cache/cargo-target"
+          if [ -e target ] && [ ! -L target ]; then
+            rm -rf target
+          fi
+          ln -sfn "$HOME/.cache/cargo-target" target
+      - name: Lint
         run: |
           set -eu
-          cd "$GITHUB_WORKSPACE/repo"
-          export CARGO_TARGET_DIR="$HOME/src/rust/temper/target/dogfood-ci"
+          cargo fmt --all
+          cargo dev-clippy
+      - name: Check
+        run: |
+          set -eu
           cargo dev-check
-      - name: cargo check testing worker feature
+      - name: Test
         run: |
           set -eu
-          cd "$GITHUB_WORKSPACE/repo"
-          export CARGO_TARGET_DIR="$HOME/src/rust/temper/target/dogfood-ci"
-          cargo check -p temper --bin temper-testing-worker --features testing-worker
+          cargo dev-test-full

@@ -18,28 +18,27 @@ generated files, secrets, or unrelated changes.
 cargo fmt --all
 cargo dev-clippy
 cargo dev-check
-cargo dev-test
+cargo dev-test-quick
 ```
 
-Clippy is installed in this environment; keep its output clean. The default test
-suite should remain fast (soft target: under about 10 seconds on a warmed local
-checkout).
+If you're touching areas that might break or affect current Forgejo-based
+integration tests, or you are adding new Forgejo-based integration tests, run:
 
-Then run the non-default tests that are self-contained for this checkout before
-handoff. They must be green; fix failures instead of handing them off. This means
-all ignored local-process/local-Forgejo tests; on a networked machine, first
-startup downloads pinned Forgejo binaries automatically when `.cache/forgejo/`
-is empty.
-
-```sh
-cargo test -p temper-forge-forgejo --test live -- --ignored
-cargo test -p temper-testing -- --ignored
+``
+cargo dev-test-full
 ```
 
-The `temper-testing` ignored run includes the split `forgejo_multiprocess`
-scenario tests, and default libtest parallelism is supported. Add
-`--test-threads=1` only as an optional host resource throttle when the machine
-cannot comfortably run several real Forgejo/runner processes at once.
+instead of ```cargo dev-test-quick```.
+
+Keep Clippy output clean.
+
+Keep the whole quick suite fast; as a soft target for agent changes, it should
+complete in under about 10 seconds on a warmed local checkout. If a change makes
+the quick suite slower, prefer moving slow coverage behind `#[ignore]` and
+document how to run it before handoff.
+
+Keep the whole full suite fast too; as a soft target for agent changes, it
+should complete in under about 2 minutes on a warmed local checkout.
 
 ## 3. Review documentation from the top
 
