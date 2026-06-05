@@ -18,7 +18,8 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | `crates/temper-workflow/` | Workflow definitions and runtime logic: validation, classification, compilation, planning/execution, leases, reconciliation, and recovery. |
 | `crates/temper-runner/` | Backend-agnostic worker runtime: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and external-tool seams such as `coding_workspace`. |
 | `crates/temper-testing/` | Non-production fakes, fixtures, scenario drivers, CI sinks, the testing worker binary, and gated e2e rehearsals. |
-| `crates/temper-production/` | Deployable Forgejo binaries: workers, provisioning, webhook trigger, product-manager chat, production external-tool bindings, and process-responder wiring. |
+| `src/bin/` | Workspace root `temper` package binary wiring for deployable tools; thin entrypoints delegate into library crates. |
+| `crates/temper-production/` | Production Forgejo worker, provisioning, webhook trigger, product-manager chat, external-tool bindings, and process-responder logic; deployable binary wiring lives in root `src/bin/`. |
 | `examples/reference-delivery/` | Operator-facing reference-delivery demo and launch scripts. |
 | `plans/` | Roadmaps and findings; promote stable behavior into `docs/` before relying on it. |
 

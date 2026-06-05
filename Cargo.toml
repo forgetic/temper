@@ -13,6 +13,40 @@ members = [
 ]
 resolver = "2"
 
+[package]
+name = "temper"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+temper-production = { path = "crates/temper-production" }
+
+[[bin]]
+name = "temper-worker"
+path = "src/bin/temper-worker.rs"
+
+[[bin]]
+name = "temper-provision-forgejo"
+path = "src/bin/temper-provision-forgejo.rs"
+
+[[bin]]
+name = "temper-trigger-forgejo"
+path = "src/bin/temper-trigger-forgejo.rs"
+
+[[bin]]
+name = "temper-validate-reference-delivery"
+path = "src/bin/temper-validate-reference-delivery.rs"
+
+[[bin]]
+name = "temper-interaction"
+path = "src/bin/temper-interaction.rs"
+
+[lints]
+workspace = true
+
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"

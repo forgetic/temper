@@ -147,7 +147,8 @@ Provider SDKs, auth files, prompts, and profile-specific behavior stay out of th
 generic interaction contract; deployment bindings select the external responder
 process for each configured profile.
 
-`temper-production` hosts the deployable `temper-interaction` binary plus REPL
-and HTTP adapters. Those adapters load user-defined profile specs, compile
-manifests, apply deployment bindings, and expose profile-neutral conversation,
-proposal, command, transcript, and acceptance APIs.
+The workspace root `temper` package hosts the deployable `temper-interaction`
+binary wiring. The REPL and HTTP adapter logic stays in `temper-production`,
+where it loads user-defined profile specs, compiles manifests, applies
+deployment bindings, and exposes profile-neutral conversation, proposal,
+command, transcript, and acceptance APIs.

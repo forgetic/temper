@@ -976,6 +976,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper"
+version = "0.1.0"
+dependencies = [
+ "temper-production",
+]
+
+[[package]]
 name = "temper-forge"
 version = "0.1.0"
 dependencies = [
