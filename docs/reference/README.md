@@ -4,7 +4,6 @@ Reference documentation defines exact contracts and invariants.
 
 Current reference pages:
 
-- [Development conventions](development-conventions.md)
 - [LLM responders](llm-agents.md)
 - [Forge interface](forge-interface.md)
   - [Model and query semantics](forge-interface-model.md)

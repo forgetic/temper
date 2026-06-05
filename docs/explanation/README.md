@@ -4,6 +4,7 @@ Explanation documents describe concepts, rationale, and trade-offs.
 
 Current explanation pages:
 
+- [Codebase map](codebase-map.md)
 - [Domain model](domain-model.md)
 - [Agentic workflows](agentic-workflows.md)
 - [Interactive agent interfaces](interactive-agent-interfaces.md)

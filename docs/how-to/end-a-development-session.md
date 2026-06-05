@@ -78,7 +78,7 @@ find crates -type f -name '*.rs' -print0 | xargs -0 wc -l | sort -n
 
 ## 5. Leave an explicit handoff
 
-In the final response or commit message, include:
+In the final response, commit message or Forge comment, include:
 
 - what changed
 - validation commands run
