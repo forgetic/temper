@@ -95,10 +95,17 @@ pub(crate) struct IssueDto {
 
 /// Marker object Forgejo attaches to a PR-as-issue row's `pull_request` field.
 ///
-/// Its presence (a non-null object) is the only signal the backend needs to
-/// distinguish a pull request from a genuine issue, so all fields are ignored.
+/// Its presence (a non-null object) distinguishes a pull request from a genuine
+/// issue. Forgejo 7.0.x also exposes merge-state hints here, which let labelled
+/// summary scans separate portable `closed` from `merged` without rendering the
+/// expensive pull-request detail endpoint.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-pub(crate) struct PullRequestMarkerDto {}
+pub(crate) struct PullRequestMarkerDto {
+    #[serde(default)]
+    pub merged: Option<bool>,
+    #[serde(default)]
+    pub merged_at: Option<DateTime<Utc>>,
+}
 
 impl IssueDto {
     /// Reports whether this row is a pull request masquerading as an issue.

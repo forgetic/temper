@@ -39,24 +39,6 @@ fn pr_issue_json(number: u64, body: &str) -> String {
     )
 }
 
-fn pr_json(number: u64, body: &str) -> String {
-    format!(
-        r#"{{
-            "number": {number},
-            "title": "PR {number}",
-            "body": "{body}",
-            "state": "open",
-            "merged": false,
-            "user": {{"login": "author"}},
-            "head": {{"ref": "feature-{number}", "sha": "head{number}"}},
-            "base": {{"ref": "main", "sha": "base{number}"}},
-            "labels": [{{"id":1,"name":"ready"}}],
-            "created_at": "2024-03-01T00:00:00Z",
-            "updated_at": "2024-03-02T00:00:00Z"
-        }}"#
-    )
-}
-
 #[test]
 fn issue_body_contains_filters_after_state_and_labels() {
     let client = MockHttpClient::new();
@@ -113,8 +95,6 @@ fn labelled_pull_request_body_filter_keeps_label_index_query_bounded() {
             pr_issue_json(2, "different"),
         ),
     );
-    client.push_response(200, pr_json(1, &format!("prefix {marker} suffix")));
-    client.push_response(200, pr_json(2, "different"));
     let forge = forge(client.clone());
 
     let pulls = block_on(forge.list_pull_requests(
@@ -144,4 +124,7 @@ fn labelled_pull_request_body_filter_keeps_label_index_query_bounded() {
     assert!(!requests.iter().any(|request| {
         request.path.ends_with("/pulls") && request.query.contains(&("state".into(), "all".into()))
     }));
+    assert!(!requests
+        .iter()
+        .any(|request| request.path.contains("/pulls/")));
 }

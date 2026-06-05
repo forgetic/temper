@@ -6,122 +6,18 @@ use crate::ids::{
     format_review_id, format_user_id, parse_pull_request_id, parse_repository_id, RepoCoord,
 };
 use crate::map::{map_pull_request, map_review, merge_method_token, review_event_token};
-use crate::types::{IssueDto, PullRequestDto, ReviewDto};
+use crate::types::{PullRequestDto, ReviewDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use chrono::Utc;
-use std::cmp::Ordering;
 use temper_forge::{
     Comment, CreateComment, CreatePullRequest, CreatePullRequestReview, ForgeError, ForgeResult,
-    ItemNumber, ItemSortField, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, PullRequestState, PullRequestUpdateState, RepositoryId,
-    RequestReviewers, SortDirection, UpdatePullRequest,
+    ItemNumber, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestReview,
+    PullRequestUpdateState, RepositoryId, RequestReviewers, UpdatePullRequest,
 };
 
+mod list;
+
 impl<C: HttpClient> ForgejoForge<C> {
-    /// Lists pull requests in a repository, filtered and sorted per `query`.
-    ///
-    /// Unlabelled queries use `/pulls` state filtering. Labelled queries use the
-    /// issue endpoint (`type=pulls`, `state`, `labels`) as the PR-label index,
-    /// then fetch candidate details. Body filtering stays client-side after the
-    /// existing state/label provider narrowing.
-    pub async fn list_pull_requests(
-        &self,
-        repo_id: &RepositoryId,
-        query: PullRequestQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
-        let repo = parse_repository_id(repo_id)?;
-        let mut pulls = if query.labels.is_empty() {
-            self.list_pull_requests_by_state(&repo, &query).await?
-        } else {
-            self.list_labeled_pull_requests(&repo, &query).await?
-        };
-        if query.details.dependencies {
-            for pull in &mut pulls {
-                pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
-            }
-        }
-        pulls.sort_by(|left, right| compare_pull_requests(left, right, &query));
-        Ok(pulls)
-    }
-
-    /// Lists pull requests through the `/pulls` endpoint for queries without a
-    /// label filter. Forgejo can narrow these by state provider-side.
-    async fn list_pull_requests_by_state(
-        &self,
-        repo: &RepoCoord,
-        query: &PullRequestQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
-        let path = format!("/repos/{}/pulls", repo.path_segment());
-        let base_query = vec![(
-            "state".to_string(),
-            pull_request_state_param(query.state).to_string(),
-        )];
-        let dtos: Vec<PullRequestDto> = self
-            .list_all("list pull requests", &path, base_query)
-            .await?;
-        let mut pulls: Vec<PullRequest> = dtos
-            .into_iter()
-            .map(|dto| self.materialize_pull_request(repo, dto, None))
-            .collect();
-        pulls.retain(|pull| pull_matches_query(pull, query));
-        Ok(pulls)
-    }
-
-    /// Lists labelled pull requests by first discovering labelled PR-as-issue
-    /// rows, then fetching `/pulls/{number}` only for those candidates.
-    async fn list_labeled_pull_requests(
-        &self,
-        repo: &RepoCoord,
-        query: &PullRequestQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
-        let numbers = self
-            .discover_labeled_pull_request_numbers(repo, query)
-            .await?;
-        let mut pulls = Vec::with_capacity(numbers.len());
-        for number in numbers {
-            let Some(pull) = self.fetch_pull_request(repo, number).await? else {
-                continue;
-            };
-            if pull_matches_query(&pull, query) {
-                pulls.push(pull);
-            }
-        }
-        Ok(pulls)
-    }
-
-    /// Uses Forgejo's issue endpoint as the provider-specific PR-label index.
-    /// Asks for `type=pulls`, state, and labels; no `/pulls?state=all` fallback,
-    /// so provider failures surface as diagnosable backend errors.
-    async fn discover_labeled_pull_request_numbers(
-        &self,
-        repo: &RepoCoord,
-        query: &PullRequestQuery,
-    ) -> ForgeResult<Vec<ItemNumber>> {
-        let path = format!("/repos/{}/issues", repo.path_segment());
-        let base_query = vec![
-            (
-                "state".to_string(),
-                pull_request_state_param(query.state).to_string(),
-            ),
-            ("type".to_string(), "pulls".to_string()),
-            ("labels".to_string(), query.labels.join(",")),
-        ];
-        let dtos: Vec<IssueDto> = self
-            .list_all("discover labeled pull requests", &path, base_query)
-            .await?;
-        let mut numbers = Vec::new();
-        for dto in dtos {
-            if !dto.is_pull_request() {
-                continue;
-            }
-            let number = ItemNumber::new(dto.number);
-            if !numbers.contains(&number) {
-                numbers.push(number);
-            }
-        }
-        Ok(numbers)
-    }
-
     /// Looks up a pull request by stable backend identifier.
     pub async fn get_pull_request(&self, id: &PullRequestId) -> ForgeResult<Option<PullRequest>> {
         let (repo, number) = parse_pull_request_id(id)?;
@@ -533,67 +429,4 @@ fn snippet(body: &str) -> String {
     }
     let snippet: String = trimmed.chars().take(200).collect();
     format!(": {snippet}")
-}
-
-fn pull_request_state_param(state: Option<PullRequestState>) -> &'static str {
-    match state {
-        None => "all",
-        Some(PullRequestState::Open) => "open",
-        Some(PullRequestState::Closed) | Some(PullRequestState::Merged) => "closed",
-    }
-}
-
-fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
-    if let Some(state) = query.state {
-        if pull.state != state {
-            return false;
-        }
-    }
-    if !query
-        .labels
-        .iter()
-        .all(|required| pull.labels.iter().any(|label| label == required))
-    {
-        return false;
-    }
-    if let Some(needle) = &query.body_contains {
-        if !needle.is_empty() && !pull.body.contains(needle) {
-            return false;
-        }
-    }
-    if let Some(author) = &query.author_id {
-        if &pull.author_id != author {
-            return false;
-        }
-    }
-    if let Some(assignee) = &query.assignee_id {
-        if !pull.assignees.iter().any(|candidate| candidate == assignee) {
-            return false;
-        }
-    }
-    true
-}
-
-fn compare_pull_requests(
-    left: &PullRequest,
-    right: &PullRequest,
-    query: &PullRequestQuery,
-) -> Ordering {
-    let primary = query
-        .sort
-        .map(|sort| {
-            let comparison = match sort.field {
-                ItemSortField::Number => left.number.cmp(&right.number),
-                ItemSortField::CreatedAt => left.created_at.cmp(&right.created_at),
-                ItemSortField::UpdatedAt => left.updated_at.cmp(&right.updated_at),
-            };
-            match sort.direction {
-                SortDirection::Asc => comparison,
-                SortDirection::Desc => comparison.reverse(),
-            }
-        })
-        .unwrap_or_else(|| left.number.cmp(&right.number));
-    primary
-        .then_with(|| left.number.cmp(&right.number))
-        .then_with(|| left.id.cmp(&right.id))
 }

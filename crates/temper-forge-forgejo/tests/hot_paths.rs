@@ -69,36 +69,41 @@ fn issue_json(number: u64, state: &str, body: &str, labels: &[&str]) -> String {
 }
 
 fn pr_issue_json(number: u64, state: &str, body: &str, labels: &[&str]) -> String {
-    serde_json::json!({
-        "number": number,
-        "title": format!("PR {number}"),
-        "body": body,
-        "state": state,
-        "user": { "login": "author" },
-        "labels": label_values(labels),
-        "created_at": "2024-03-01T00:00:00Z",
-        "updated_at": "2024-03-02T00:00:00Z",
-        "pull_request": { "url": format!("https://forge.example.com/{OWNER}/{REPO}/pulls/{number}") }
-    })
-    .to_string()
+    pr_issue_json_with_merge(number, state, body, labels, None)
 }
 
-fn pull_json(number: u64, state: &str, merged: bool, body: &str, labels: &[&str]) -> String {
+fn pr_issue_json_with_merge(
+    number: u64,
+    state: &str,
+    body: &str,
+    labels: &[&str],
+    merged: Option<bool>,
+) -> String {
+    let marker = match merged {
+        Some(true) => serde_json::json!({
+            "url": format!("https://forge.example.com/{OWNER}/{REPO}/pulls/{number}"),
+            "merged": true,
+            "merged_at": "2024-03-03T00:00:00Z"
+        }),
+        Some(false) => serde_json::json!({
+            "url": format!("https://forge.example.com/{OWNER}/{REPO}/pulls/{number}"),
+            "merged": false,
+            "merged_at": null
+        }),
+        None => serde_json::json!({
+            "url": format!("https://forge.example.com/{OWNER}/{REPO}/pulls/{number}")
+        }),
+    };
     serde_json::json!({
         "number": number,
         "title": format!("PR {number}"),
         "body": body,
         "state": state,
-        "merged": merged,
-        "merge_commit_sha": if merged { Some("merge-sha") } else { None },
-        "merged_at": if merged { Some("2024-03-03T00:00:00Z") } else { None },
         "user": { "login": "author" },
-        "head": { "ref": format!("feature-{number}"), "sha": format!("head{number}") },
-        "base": { "ref": "main", "sha": format!("base{number}") },
         "labels": label_values(labels),
         "created_at": "2024-03-01T00:00:00Z",
         "updated_at": "2024-03-02T00:00:00Z",
-        "closed_at": if state == "closed" { Some("2024-03-03T00:00:00Z") } else { None }
+        "pull_request": marker
     })
     .to_string()
 }
@@ -159,14 +164,13 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
     // list results.
     client.push_response(200, format!("[{}]", issue_json(1, "open", "", &["code"])));
     client.push_response(200, "[]");
-    // PR discovery uses the issue label index, then exact `/pulls/{number}`
-    // detail for the matching candidate only.
+    // PR discovery uses the issue label index directly for summary candidates;
+    // no exact `/pulls/{number}` detail is needed on the open hot path.
     client.push_response(200, "[]");
     client.push_response(
         200,
         format!("[{}]", pr_issue_json(2, "open", "", &["implementation"])),
     );
-    client.push_response(200, pull_json(2, "open", false, "", &["implementation"]));
 
     let forge = forge(client.clone());
     let workflow = workflow();
@@ -201,7 +205,7 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
     assert!(requests
         .iter()
         .all(|request| request.path != pull_list_path()));
-    assert!(requests
+    assert!(!requests
         .iter()
         .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/2")));
 }
@@ -234,22 +238,13 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
         200,
         format!(
             "[{}]",
-            pr_issue_json(
+            pr_issue_json_with_merge(
                 7,
                 "closed",
-                "body is only an index row",
-                &["implementation"]
+                &body_with_correlation(pr_key),
+                &["implementation"],
+                Some(true),
             )
-        ),
-    );
-    client.push_response(
-        200,
-        pull_json(
-            7,
-            "closed",
-            true,
-            &body_with_correlation(pr_key),
-            &["implementation"],
         ),
     );
 
@@ -337,7 +332,7 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
     assert!(!requests
         .iter()
         .any(|request| { request.path == pull_list_path() && has_query(request, "state", "all") }));
-    assert!(requests
+    assert!(!requests
         .iter()
         .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/7")));
 }

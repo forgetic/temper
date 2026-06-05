@@ -14,23 +14,6 @@ use temper_forge::{
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 
-/// Renders a PR-as-issue DTO JSON body used by labelled PR discovery.
-fn pr_issue_json(number: u64, state: &str, labels: &str) -> String {
-    format!(
-        r#"{{
-            "number": {number},
-            "title": "PR {number}",
-            "body": "body {number}",
-            "state": "{state}",
-            "user": {{"login": "author"}},
-            "labels": {labels},
-            "created_at": "2024-03-01T00:00:00Z",
-            "updated_at": "2024-03-02T00:00:00Z",
-            "pull_request": {{"url": "http://x/pulls/{number}"}}
-        }}"#
-    )
-}
-
 /// Renders a pull-request DTO JSON body with overridable fields.
 fn pr_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
     format!(
@@ -49,62 +32,6 @@ fn pr_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
             {extra}
         }}"#
     )
-}
-
-#[test]
-fn labelled_pull_request_query_uses_issue_label_index() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        format!(
-            "[{}]",
-            pr_issue_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#)
-        ),
-    );
-    client.push_response(
-        200,
-        pr_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#, ""),
-    );
-    let forge = forge(client.clone());
-
-    let query = PullRequestQuery {
-        state: Some(PullRequestState::Closed),
-        labels: vec!["ready".to_string()],
-        details: ItemListDetails::summary(),
-        ..PullRequestQuery::default()
-    };
-    let pulls = block_on(forge.list_pull_requests(&repo_id(), query)).unwrap();
-
-    assert_eq!(pulls.len(), 1);
-    assert_eq!(pulls[0].number, ItemNumber::new(1));
-    assert!(pulls[0].dependencies.is_empty());
-
-    let requests = client.recorded();
-    let discovery = &requests[0];
-    assert_eq!(discovery.method, HttpMethod::Get);
-    assert_eq!(
-        discovery.path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues")
-    );
-    assert!(discovery
-        .query
-        .contains(&("state".to_string(), "closed".to_string())));
-    assert!(discovery
-        .query
-        .contains(&("type".to_string(), "pulls".to_string())));
-    assert!(discovery
-        .query
-        .contains(&("labels".to_string(), "ready".to_string())));
-    assert_eq!(
-        requests[1].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/1")
-    );
-    assert!(!requests.iter().any(|request| {
-        request.path.ends_with("/pulls")
-            && request
-                .query
-                .contains(&("state".to_string(), "all".to_string()))
-    }));
 }
 
 #[test]

@@ -79,9 +79,12 @@ pub struct ItemSort {
 
 /// Detail flags for issue and pull-request list results.
 ///
-/// Defaults preserve the full Forge contract. Callers that only need summary
-/// fields such as labels, body, state, and assignees may request
-/// [`Self::summary`] to let backends skip expensive enrichment.
+/// Defaults preserve the full Forge contract. Callers that only need scan
+/// summary fields such as labels, body, state, and assignees may request
+/// [`Self::summary`] to let backends skip expensive enrichment and detail
+/// rendering. Pull-request branch refs, head/base SHAs, requested reviewers, and
+/// merge records may be absent or empty in summary results; use exact gets or
+/// full-detail lists when those fields matter.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ItemListDetails {
     /// Whether native dependency links should be populated in list results.

@@ -90,10 +90,16 @@ key because this filter is only a narrowing hint.
 
 Issue and pull-request list queries also carry `ItemListDetails`. The default
 is full detail (`dependencies=true`), preserving the historical contract that
-list results populate native dependency links. Callers that only need summary
-fields may set `details.dependencies=false`; then backends may skip dependency
-link enrichment and must return an empty `dependencies` vector in each listed
-item. Runner and reconciliation candidate scans use summary lists and queue- or
+list results populate native dependency links and provider detail fields. Callers
+that only need scan-summary fields may set `details.dependencies=false`; then
+backends may skip dependency link enrichment and must return an empty
+`dependencies` vector in each listed item. Summary callers should rely only on
+artifact identity, number, title/body, state, author, labels, assignees,
+timestamps, version, and the empty dependency vector. Pull-request fields that
+commonly require provider detail rendering — branch refs, head/base SHAs,
+requested reviewers, and merge records — may be absent or empty in summary list
+results; use exact `get_*` lookups or full-detail lists when those fields matter.
+Runner and reconciliation candidate scans use summary lists and queue- or
 workflow-derived `state`/`labels` filters so normal ticks do not fetch
 unlabelled closed history or terminal artifacts carrying only pure
 artifact-kind identity labels; dependency-gated paths reload exact artifacts
