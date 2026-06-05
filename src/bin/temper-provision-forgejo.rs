@@ -1,4 +1,4 @@
-use temper_production::provision_args::{self, ParseOutcome};
+use temper_forgejo_provision::provision_args::{self, ParseOutcome};
 
 fn main() {
     let args = std::env::args().skip(1);

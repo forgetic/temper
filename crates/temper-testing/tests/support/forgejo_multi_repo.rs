@@ -69,8 +69,8 @@ pub fn register_webhook(
         .to_string();
     let url = format!("http://{addr}/forgejo/webhook");
     futures_block_on(async {
-        temper_production::forgejo_rest::ensure_repo_webhook(
-            &temper_production::forgejo_rest::http_client().expect("HTTP client builds"),
+        temper_forgejo_ops::forgejo_rest::ensure_repo_webhook(
+            &temper_forgejo_ops::forgejo_rest::http_client().expect("HTTP client builds"),
             server.base_url(),
             admin_token,
             &repo.owner,

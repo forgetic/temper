@@ -9,7 +9,15 @@ members = [
     "crates/temper-forgejo-fixture",
     "crates/temper-runner",
     "crates/temper-testing",
-    "crates/temper-production",
+    "crates/temper-reference-delivery",
+    "crates/temper-wake",
+    "crates/temper-forgejo-ops",
+    "crates/temper-coding-workspace",
+    "crates/temper-interaction-service",
+    "crates/temper-trigger-forgejo",
+    "crates/temper-forgejo-provision",
+    "crates/temper-reference-delivery-validator",
+    "crates/temper-worker",
 ]
 resolver = "2"
 
@@ -25,7 +33,11 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-temper-production = { path = "crates/temper-production" }
+temper-forgejo-provision = { path = "crates/temper-forgejo-provision" }
+temper-interaction-service = { path = "crates/temper-interaction-service" }
+temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator" }
+temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo" }
+temper-worker = { path = "crates/temper-worker" }
 
 [[bin]]
 name = "temper-worker"

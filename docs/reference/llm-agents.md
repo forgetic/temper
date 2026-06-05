@@ -17,10 +17,10 @@ Temper keeps only provider-neutral contracts and adapters:
   The generic `temper-interaction` binary loads user-defined profile specs and
   deployment bindings; each binding selects a process responder command, args,
   cwd, env allow-list, and timeout for the declared responder id.
-- `temper-interaction`, `temper-runner`, and `temper-production` validate
-  request/reply shapes, authorized actions, proposal acceptance, process
-  timeouts, exit status, and redacted errors. They do not parse provider auth
-  files or call model APIs.
+- `temper-interaction`, `temper-interaction-service`, `temper-runner`, and
+  `temper-worker` validate request/reply shapes, authorized actions, proposal
+  acceptance, process timeouts, exit status, and redacted errors. They do not
+  parse provider auth files or call model APIs.
 
 Provider selection, OAuth/API-key handling, model ids, prompt implementation, and
 live provider smoke tests are external-responder concerns documented outside

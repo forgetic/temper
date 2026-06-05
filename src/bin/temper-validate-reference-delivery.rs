@@ -1,4 +1,6 @@
-use temper_production::reference_delivery_validator::{self, ParseOutcome, RunError};
+use temper_reference_delivery_validator::reference_delivery_validator::{
+    self, ParseOutcome, RunError,
+};
 
 fn main() {
     match reference_delivery_validator::parse(std::env::args().skip(1)) {

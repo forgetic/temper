@@ -15,13 +15,16 @@ async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-temper-production = { path = "../temper-production" }
+temper-coding-workspace = { path = "../temper-coding-workspace" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-forgejo-fixture = { path = "../temper-forgejo-fixture" }
+temper-forgejo-ops = { path = "../temper-forgejo-ops" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-runner = { path = "../temper-runner" }
+temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
+temper-wake = { path = "../temper-wake" }
 temper-workflow = { path = "../temper-workflow" }
 # Forgejo provisioning uses async REST under a Tokio reactor; a shared fixture
 # crate owns the blocking server/runner lifecycle and cache management.

@@ -59,7 +59,7 @@ Three separable concerns, only one of which is even a candidate for a portable
 type:
 
 1. **Receipt / verify / parse** (HTTP server, HMAC, payload schema): entirely
-   Forgejo-specific; lives in the Forgejo backend crate or a dedicated webhook
+   Forgejo-specific; lives in the dedicated `temper-trigger-forgejo` webhook
    adapter. Never in core.
 2. **Normalizing a payload into a small `ChangeHint`**
    (`{ repo, artifact kind, item number, change kind }`): may become a portable

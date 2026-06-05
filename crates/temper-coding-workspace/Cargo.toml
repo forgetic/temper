@@ -1,0 +1,19 @@
+[package]
+name = "temper-coding-workspace"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Local-git coding workspace provider and PR diff safety helpers."
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+temper-forge = { path = "../temper-forge" }
+temper-forgejo-ops = { path = "../temper-forgejo-ops" }
+temper-runner = { path = "../temper-runner" }
+temper-workflow = { path = "../temper-workflow" }
+
+[lints]
+workspace = true

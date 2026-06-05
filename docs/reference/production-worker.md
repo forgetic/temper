@@ -1,6 +1,11 @@
 # Production worker runtime
 
-This page records the operator-visible knobs on the Forgejo `temper-worker` binary.
+This page records the operator-visible knobs on the Forgejo `temper-worker`
+binary. The deployable entrypoint lives in the root `temper` package and
+delegates to `crates/temper-worker`; its wake socket support is shared through
+`crates/temper-wake`, and optional local-git edits are bound through
+`crates/temper-coding-workspace`.
+
 It complements the workflow and Forge references; workflow authority still comes
 from the compiled workflow and every mutation still goes through `Forge`.
 

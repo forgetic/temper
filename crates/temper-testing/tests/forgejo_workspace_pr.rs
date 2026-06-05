@@ -9,11 +9,11 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use temper_coding_workspace::coding_workspace::LocalGitCodingWorkspace;
+use temper_coding_workspace::pr_diff_guard::{safety_for_files, DiffSafety};
 use temper_forge::{BranchRef, CreateIssue, CreatePullRequest};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_production::coding_workspace::LocalGitCodingWorkspace;
-use temper_production::forgejo_rest;
-use temper_production::pr_diff_guard::{safety_for_files, DiffSafety};
+use temper_forgejo_ops::forgejo_rest;
 use temper_runner::{
     CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
     CodingWorkspaceWorkItem, CODING_WORKSPACE_TOOL_ID,

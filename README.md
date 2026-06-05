@@ -194,10 +194,11 @@ temper-runner
   mechanical workers
   external tool integration
         ↑
-temper-production + external responder processes
-  Forge integrations
-  provisioners
-  webhook triggers
+focused runtime crates + external responder processes
+  Forgejo worker wiring
+  provisioning and Forgejo ops
+  wake sockets and webhook triggers
+  interaction service transports
   process-bound role/chat responders
 ```
 

@@ -43,9 +43,9 @@ world for one scenario:
 - **Repositories**: the scenario-specific cached state contains only the needed
   repo names. Cross-repo fan-out gets `service-cross-repo-source` and
   `service-cross-repo-target`.
-- **Trigger**: one host-local `/forgejo/webhook` receiver per scenario is
-  registered against that scenario's repositories and sends authenticated
-  Unix-datagram wakes to its workers.
+- **Trigger**: one host-local `/forgejo/webhook` receiver per scenario
+  (`crates/temper-trigger-forgejo`) is registered against that scenario's
+  repositories and sends authenticated Unix-datagram wakes to its workers.
 - **Role + mechanical workers**: per scenario, the `temper-testing-worker`
   binary, one OS process per role-with-an-agent plus one mechanical reconciler,
   launched `--backend forgejo --clock wall` with a unique stop file, wake socket,
@@ -64,7 +64,9 @@ REST token, PR assignee `UserId`, and web-UI CI login — the role users are giv
 
 ## Provisioning boundary
 
-Provisioning is split at the same boundary production operators need:
+Provisioning is split at the same boundary production operators need. The
+reference-delivery binary delegates to `crates/temper-forgejo-provision`, while
+fixture support keeps reusable server setup local to `temper-testing`:
 `provision_role_identities` creates org + per-role users/tokens once, and
 `provision_repository` creates the `auto_init` repo, labels, and CI workflow per
 repository. `provision_world(...)` keeps the single-repo convenience path;
