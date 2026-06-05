@@ -25,13 +25,17 @@ From `examples/reference-delivery/`, edit `config/temper.env` or export env vars
 REPOS="acme/service acme/service-canary"
 CROSS_REPO_INTAKE=auto
 POLL_MS=120000
+CI_STATUS_POLL_MS=1000
 WEBHOOKS=1
 FAKE_ARCHITECT=closing
 ```
 
 `auto` enables cross-repo intake seeding when `REPOS` contains more than one
 repo. Set `CROSS_REPO_INTAKE=0` for independent per-repo intakes, or set
-`REPOS=` and `CROSS_REPO_INTAKE=0` for single-repo mode.
+`REPOS=` and `CROSS_REPO_INTAKE=0` for single-repo mode. `POLL_MS` controls role
+worker polling so webhook wakeups remain visible; `CI_STATUS_POLL_MS` controls
+the mechanical landing worker's CI-status poll backstop. Leave
+`CI_STATUS_POLL_MS` blank to reuse `POLL_MS`.
 
 ## Run
 
@@ -42,7 +46,9 @@ POLL_MS=120000 ./run.sh start
 
 The launcher provisions every configured repo. It seeds exactly one parent issue
 in the first repo. The issue body contains a hidden deterministic fake-architect
-plan, so the fake architect creates one child code issue per repo.
+plan, so the fake architect creates one child code issue per repo. The mechanical
+worker keeps the admin token for REST mutations and uses the provisioned
+`engineer` web-UI username/password only for Forgejo 7.0.x CI reads (ADR 0019).
 
 ## Validate logs and Forge state
 

@@ -57,6 +57,9 @@ ADMIN_USER=refadmin
 ADMIN_EMAIL=refadmin@example.invalid
 ADMIN_PASSWORD='Ref-Delivery-Admin-1!'
 
+CI_FALLBACK_MISSING_CREDENTIALS='no web-UI credentials configured for the CI read fallback'
+CI_FALLBACK_LOGIN_FAILED='forgejo web-ui login failed'
+
 log() { printf '[run.sh] %s\n' "$*"; }
 die() { printf '[run.sh] error: %s\n' "$*" >&2; exit 1; }
 
@@ -146,7 +149,7 @@ cmd_stop() {
 
 # --- Config -------------------------------------------------------------------
 
-CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
+CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS CI_STATUS_POLL_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
 TEMPER_TESTING_WORKER_BIN TEMPER_PROVISION_BIN TEMPER_TRIGGER_BIN TEMPER_VALIDATE_BIN \
 TEMPER_BUILD_PRODUCTION TEMPER_BUILD_TESTING FAKE_ARCHITECT FAKE_REVIEWER FAKE_CI_SENTINEL"
@@ -170,6 +173,8 @@ load_config() {
     [ -f "$CONFIG_DIR/temper.env" ] || die "missing $CONFIG_DIR/temper.env"
     _repos_was_set=${REPOS+x}
     _pre_REPOS_VALUE=${REPOS-}
+    _ci_status_poll_was_set=${CI_STATUS_POLL_MS+x}
+    _pre_CI_STATUS_POLL_MS_VALUE=${CI_STATUS_POLL_MS-}
     for _k in $CONFIG_KNOBS; do
         eval "_pre_$_k=\${$_k:-}"
     done
@@ -186,6 +191,9 @@ load_config() {
     if [ -n "$_repos_was_set" ]; then
         REPOS=${_pre_REPOS_VALUE}
     fi
+    if [ -n "$_ci_status_poll_was_set" ]; then
+        CI_STATUS_POLL_MS=${_pre_CI_STATUS_POLL_MS_VALUE}
+    fi
 
     OWNER=${OWNER:-acme}
     NAME=${NAME:-service}
@@ -194,6 +202,11 @@ load_config() {
     CROSS_REPO_INTAKE_TITLE=${CROSS_REPO_INTAKE_TITLE:-Coordinate greeting across service and canary}
     BASE_URL=${BASE_URL:-http://127.0.0.1:3000}
     POLL_MS=${POLL_MS:-120000}
+    if [ "${CI_STATUS_POLL_MS+x}" = "x" ]; then
+        [ -n "$CI_STATUS_POLL_MS" ] || CI_STATUS_POLL_MS=$POLL_MS
+    else
+        CI_STATUS_POLL_MS=1000
+    fi
     RUN_SECS=${RUN_SECS:-600}
     WEBHOOKS=${WEBHOOKS:-1}
     TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38080}
@@ -558,12 +571,31 @@ role_env_key() {
     printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_'
 }
 
+resolve_role_identity() {
+    _role=$1
+    [ -f "$ROLES_ENV" ] || die "missing $ROLES_ENV"
+    # shellcheck disable=SC1090
+    . "$ROLES_ENV"
+    _key=$(role_env_key "$_role")
+    eval "ROLE_IDENTITY_USER=\${TEMPER_FORGEJO_USER_${_key}:-}"
+    eval "ROLE_IDENTITY_TOKEN=\${TEMPER_FORGEJO_TOKEN_${_key}:-}"
+    eval "ROLE_IDENTITY_PASSWORD=\${TEMPER_FORGEJO_PASSWORD_${_key}:-}"
+}
+
+resolve_mechanical_ci_reader() {
+    resolve_role_identity engineer
+    ENGINEER_USER=$ROLE_IDENTITY_USER
+    ENGINEER_PASSWORD=$ROLE_IDENTITY_PASSWORD
+    [ -n "$ENGINEER_USER" ] || die "mechanical CI reader role 'engineer' has no username in $ROLES_ENV"
+    [ -n "$ENGINEER_PASSWORD" ] || die "mechanical CI reader role 'engineer' has no password in $ROLES_ENV"
+}
+
 launch_role_worker() {
     _role=$1
-    _key=$(role_env_key "$_role")
-    eval "_user=\${TEMPER_FORGEJO_USER_${_key}:-}"
-    eval "_token=\${TEMPER_FORGEJO_TOKEN_${_key}:-}"
-    eval "_password=\${TEMPER_FORGEJO_PASSWORD_${_key}:-}"
+    resolve_role_identity "$_role"
+    _user=$ROLE_IDENTITY_USER
+    _token=$ROLE_IDENTITY_TOKEN
+    _password=$ROLE_IDENTITY_PASSWORD
     [ -n "$_token" ] || die "no token for role '$_role' in $ROLES_ENV"
 
     _wake_args=
@@ -597,9 +629,11 @@ launch_role_worker() {
 
 launch_workers() {
     : >"$WORKERS_PID_FILE"
-    _roles=$(sed -n "s/^TEMPER_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" "$ROLES_ENV")
+    _roles=$(sed -n 's/^TEMPER_FORGEJO_USER_\([A-Z0-9_][A-Z0-9_]*\)=.*/\1/p' "$ROLES_ENV" | tr '[:upper:]' '[:lower:]')
     [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
+    resolve_mechanical_ci_reader
 
+    log 'mechanical CI reader: engineer'
     log 'launching fake-agent role workers ...'
     _architect_role=
     for _r in $_roles; do
@@ -617,14 +651,16 @@ launch_workers() {
         _wake_args="--wake-socket $_wake_socket --wake-secret-file $WAKE_SECRET_FILE"
     fi
     (
-        printf 'temper-testing-worker: mechanical repositories=%s\n' "$CONFIGURED_REPOS"
+        printf 'temper-testing-worker: mechanical repositories=%s ci_reader_role=engineer\n' "$CONFIGURED_REPOS"
         # shellcheck disable=SC2086
         TEMPER_FORGEJO_TOKEN="$ADMIN_TOKEN" \
+        TEMPER_FORGEJO_USERNAME="$ENGINEER_USER" \
+        TEMPER_FORGEJO_PASSWORD="$ENGINEER_PASSWORD" \
             "$TESTING_WORKER_BIN" \
             --backend forgejo --base-url "$BASE_URL" $WORKER_REPO_ARGS \
             --root "$RUN_DIR/unused-store" --clock wall \
             --kind mechanical \
-            --poll-ms "$POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
+            --poll-ms "$CI_STATUS_POLL_MS" --stop-file "$STOP_FILE" --run-secs "$RUN_SECS" \
             $_wake_args
     ) >"$LOG_DIR/mechanical.log" 2>&1 &
     _pid=$!
@@ -659,6 +695,52 @@ validate_contains() {
     fi
     log "missing: $_description (looked in $_file)"
     return 1
+}
+
+validate_mechanical_ci_reader_config() {
+    _ok=0
+    if [ ! -f "$ROLES_ENV" ]; then
+        log "missing: $ROLES_ENV not found; cannot confirm mechanical CI reader credentials"
+        log 'diagnosis: Forgejo 7.0.x CI reads need web-UI credentials for the mechanical landing worker (ADR 0019)'
+        return 1
+    fi
+    resolve_role_identity engineer
+    if [ -n "$ROLE_IDENTITY_USER" ] && [ -n "$ROLE_IDENTITY_PASSWORD" ]; then
+        log 'ok: mechanical CI reader credentials present for role engineer'
+    else
+        log "missing: mechanical CI reader role 'engineer' username/password in $ROLES_ENV"
+        log 'diagnosis: launch mechanical with the admin REST token plus engineer TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD for the ADR-0019 CI read fallback'
+        _ok=1
+    fi
+    return "$_ok"
+}
+
+validate_mechanical_ci_log() {
+    _ok=0
+    _mechanical_log="$LOG_DIR/mechanical.log"
+    if [ ! -f "$_mechanical_log" ]; then
+        log 'missing: logs/mechanical.log exists for mechanical CI-read diagnostics'
+        return 1
+    fi
+    if ! grep -F -q 'ci_reader_role=engineer' "$_mechanical_log" 2>/dev/null; then
+        log 'missing: mechanical worker startup did not record non-secret CI reader role engineer'
+        log 'diagnosis: restart with the updated launcher so mechanical gets engineer web-UI credentials for CI reads'
+        _ok=1
+    fi
+    if grep -F -q "$CI_FALLBACK_MISSING_CREDENTIALS" "$_mechanical_log" 2>/dev/null; then
+        log 'missing: mechanical worker reported missing Forgejo web-UI credentials for CI reads'
+        log 'diagnosis: the landing queue needs native CI; pass engineer TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD to the mechanical worker (ADR 0019)'
+        _ok=1
+    fi
+    if grep -F -q "$CI_FALLBACK_LOGIN_FAILED" "$_mechanical_log" 2>/dev/null; then
+        log 'missing: mechanical worker could not log in to Forgejo web UI for CI reads'
+        log 'diagnosis: verify the mechanical CI reader role credentials in secrets/roles.env; the admin token alone cannot read Actions on Forgejo 7.0.x'
+        _ok=1
+    fi
+    if [ "$_ok" -eq 0 ]; then
+        log 'ok: mechanical CI read fallback reported no missing/unusable web-UI credentials'
+    fi
+    return "$_ok"
 }
 
 validate_repo_specific_logs() {
@@ -768,7 +850,10 @@ cmd_validate_webhooks() {
     [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
     log "validating webhook wake logs under $LOG_DIR"
     log "configured repos: $CONFIGURED_REPOS"
-    log "configured POLL_MS=$POLL_MS; long-poll smoke expects POLL_MS=120000"
+    log "configured POLL_MS=$POLL_MS CI_STATUS_POLL_MS=$CI_STATUS_POLL_MS; long-poll smoke expects POLL_MS=120000"
+
+    validate_mechanical_ci_reader_config || _ok=1
+    validate_mechanical_ci_log || _ok=1
 
     if [ "${VALIDATE_REPO_SPECIFIC:-0}" = "1" ]; then
         validate_repo_specific_logs || _ok=1
@@ -806,17 +891,17 @@ cmd_validate_webhooks() {
             _consumed_text=no
             _ok=1
         fi
-        if grep -q 'completed tick actions=' "$_log" 2>/dev/null; then
+        if grep -E -q 'completed tick .*actions=' "$_log" 2>/dev/null; then
             _ticks=$((_ticks + 1))
             _tick_text=yes
         else
             _tick_text=no
             _ok=1
         fi
-        if grep -E -q 'completed tick actions=[1-9][0-9]*' "$_log" 2>/dev/null; then
+        if grep -E -q 'completed tick .*actions=[1-9][0-9]*' "$_log" 2>/dev/null; then
             _progress=$((_progress + 1))
         fi
-        if grep -q 'completed tick actions=0' "$_log" 2>/dev/null; then
+        if grep -E -q 'completed tick .*actions=0' "$_log" 2>/dev/null; then
             _no_work=$((_no_work + 1))
         fi
         log "worker $_name: consumed_wake=$_consumed_text tick=$_tick_text"

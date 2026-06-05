@@ -20,8 +20,8 @@ The fake workers do not call Smith and do not emit role-decision process events.
 They log process-level movement such as:
 
 ```text
-temper-testing-worker: worker 'role:architect' completed tick actions=1
-temper-testing-worker: worker 'role:engineer' consumed authenticated wake batch hints=1; ticking immediately
+temper-testing-worker: worker 'multi-role:architect' completed tick trigger=wake actions=1 scanned_repositories=1 scanned_repository_paths=acme/service
+temper-testing-worker: worker 'multi-role:engineer' consumed authenticated wake batch hints=1; ticking immediately
 ```
 
 ## Minimal movement trail
@@ -32,11 +32,11 @@ For the default two-repo run, expect:
 provision.log: repo=acme/service cross_repo_parent_url=...
 trigger.log: webhook accepted repo=acme/service ...
 trigger.log: wake_delivery outcome=sent ...
-architect.log: completed tick actions=1
-engineer.log: completed tick actions=1
-reviewer.log: completed tick actions=1
-mechanical.log: completed tick actions=...
-owner.log: completed tick actions=0   # until the alignment cohort activates
+architect.log: completed tick trigger=wake actions=1
+engineer.log: completed tick trigger=wake actions=1
+reviewer.log: completed tick trigger=wake actions=1
+mechanical.log: completed tick trigger=poll actions=...
+owner.log: completed tick trigger=wake actions=0   # until the alignment cohort activates
 ```
 
 Some wake-triggered ticks may report `actions=0`; that means the worker woke,
@@ -73,3 +73,16 @@ diagnosis: architect blocked the parent but no fan-out side effects were recorde
 If webhook delivery reports persistent `outcome=no_sockets`, a webhook arrived
 before workers created their Unix wake sockets or a worker failed during startup;
 inspect the corresponding worker log.
+
+If PRs remain labelled `landing`, inspect `logs/mechanical.log`. The ADR-0019
+error:
+
+```text
+no web-UI credentials configured for the CI read fallback
+```
+
+means the mechanical worker can mutate over REST with the admin token but cannot
+read Forgejo 7.0.x Actions status. The launcher should pass the provisioned
+`engineer` username/password as `TEMPER_FORGEJO_USERNAME` and
+`TEMPER_FORGEJO_PASSWORD`; `validate-webhooks` and `validate-multi-repo` flag
+this as a targeted failure.

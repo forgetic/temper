@@ -86,7 +86,9 @@ that issue asks the fake architect to create one child code issue per repo.
 5. The real `forgejo-runner` runs CI for each PR head.
 6. Fake reviewers approve PRs.
 7. The mechanical worker lands PRs after reviewer approval and current-head CI;
-   the owner role does not perform normal merges.
+   it uses the admin token for REST mutations and the provisioned `engineer`
+   web-UI login only to read Forgejo 7.0.x CI status (ADR 0019). The owner role
+   does not perform normal merges.
 8. If a merge conflict is reported, mechanical automation removes `landing`, adds
    `merge-conflict`, and the fake engineer requeues after updating the PR head;
    fresh CI is still required, but a second review is not.
@@ -101,7 +103,12 @@ Edit `config/temper.env` or export variables before launch:
 
 - `REPOS="owner/a owner/b"` — fixed repo set scanned by every worker.
 - `CROSS_REPO_INTAKE=auto|1|0` — one parent fan-out issue or independent intakes.
-- `POLL_MS=120000` — long-poll mode; webhooks should wake workers promptly.
+- `POLL_MS=120000` — long-poll mode for role workers; webhooks should wake
+  workers promptly.
+- `CI_STATUS_POLL_MS=1000` — narrow mechanical landing/CI-status poll backstop;
+  leave blank to reuse `POLL_MS`. Forgejo 7.0.x does not emit Actions-completion
+  webhooks, so this keeps green approved PRs moving without shortening role
+  long-poll mode.
 - `WEBHOOKS=1|0` — enable/disable local webhook trigger.
 - `FAKE_ARCHITECT=closing|default` — `closing` is best for cross-repo convergence.
 - `FAKE_REVIEWER=default|request-changes-then-approve`.
@@ -119,14 +126,17 @@ state.
 ```
 
 The multi-repo validator checks provisioning logs, webhook delivery/wake logs,
-fake worker logs, and live Forge state for the parent/child dependency shape.
-See `observability.md` for log names and expected event trails, including
-`mechanical_automation_*` entries for landing and conflict routing. Persistent
-`wake_delivery outcome=no_sockets` usually means a worker failed before binding
-its wake socket or the first-handoff worker ran before downstream sockets were
-ready; inspect the matching fake worker log. A PR stuck with `landing` usually
-lacks current-head CI or reviewer approval; a PR stuck with `merge-conflict`
-needs an engineer conflict-resolution push before mechanical landing retries.
+fake worker logs, mechanical CI-read diagnostics, and live Forge state for the
+parent/child dependency shape. See `observability.md` for log names and expected
+event trails, including `mechanical_automation_*` entries for landing and
+conflict routing. Persistent `wake_delivery outcome=no_sockets` usually means a
+worker failed before binding its wake socket or the first-handoff worker ran
+before downstream sockets were ready; inspect the matching fake worker log. A PR
+stuck with `landing` usually lacks current-head CI or reviewer approval; if
+`logs/mechanical.log` mentions missing web-UI credentials for the CI read
+fallback, the mechanical worker was not launched with the provisioned `engineer`
+username/password. A PR stuck with `merge-conflict` needs an engineer
+conflict-resolution push before mechanical landing retries.
 
 If a run is force-killed, clean up possible orphans:
 
