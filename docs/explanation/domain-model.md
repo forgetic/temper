@@ -48,7 +48,7 @@ Regular pull-request updates may open or close a pull request but cannot mark it
 
 ## Concurrency tokens
 
-Issues and pull requests carry a `Version`: an opaque, monotonic optimistic-concurrency token. It advances on every successful mutation of the artifact record, so a caller can capture the version at read time and pass it back as a conditional-update precondition. The update applies only if the stored version still matches; otherwise it is a conflict and nothing changes. This is a portable optimistic-concurrency primitive (an ETag-style row version), not a timestamp, so it never collides when two mutations share a clock value. See ADR 0013 and the [Forge interface reference](../reference/forge-interface.md).
+Issues and pull requests carry a `Version`: an opaque, monotonic optimistic-concurrency token. It advances on every successful mutation of the artifact record, so a caller can capture the version at read time and pass it back as a conditional-update precondition. The update applies only if the stored version still matches; otherwise it is a conflict and nothing changes. This is a portable optimistic-concurrency primitive (an ETag-style row version), not a timestamp, so it never collides when two mutations share a clock value. See ADR 0013 and the [Forge concurrency reference](../reference/forge-interface-concurrency.md).
 
 ## Workflow relations
 

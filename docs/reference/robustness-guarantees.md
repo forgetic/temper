@@ -50,8 +50,9 @@ is supplied explicitly, so the suite is reproducible.
 ## Lease acquisition is compare-and-swap
 
 Lease acquisition closes its lost-update window with the portable
-optimistic-concurrency primitive (ADR 0013, `docs/reference/forge-interface.md`).
-`LeaseManager` captures the artifact's `Version` at load time and writes the
+optimistic-concurrency primitive (ADR 0013,
+`docs/reference/forge-interface-concurrency.md`). `LeaseManager` captures the
+artifact's `Version` at load time and writes the
 lease conditionally on it (`expected_version`), so the read-then-write gap is no
 longer a lost update:
 

@@ -157,7 +157,7 @@ All current Forge trait methods are implemented. The filesystem backend does not
 
 ## Optimistic concurrency
 
-`update_issue` and `update_pull_request` honour the shared `expected_version` precondition (see ADR 0013 and the [Forge interface reference](forge-interface.md#optimistic-concurrency)). When `expected_version` is `Some` and does not equal the stored `version`, the call returns `ForgeError::Conflict` before advancing the logical clock or writing any file, so a rejected compare-and-swap leaves the store untouched. When it is `None`, the update is unconditional. Stored records carry a `version` field; a record written before versioning existed deserializes as `Version::INITIAL`. The in-memory backend uses the same logic and messages.
+`update_issue` and `update_pull_request` honour the shared `expected_version` precondition (see ADR 0013 and the [Forge concurrency reference](forge-interface-concurrency.md)). When `expected_version` is `Some` and does not equal the stored `version`, the call returns `ForgeError::Conflict` before advancing the logical clock or writing any file, so a rejected compare-and-swap leaves the store untouched. When it is `None`, the update is unconditional. Stored records carry a `version` field; a record written before versioning existed deserializes as `Version::INITIAL`. The in-memory backend uses the same logic and messages.
 
 ## Consistency guarantees
 

@@ -137,7 +137,7 @@ time then review ID, matching the filesystem backend.
 ## Optimistic concurrency
 
 `update_issue` and `update_pull_request` honour the shared `expected_version`
-precondition (see ADR 0013 and the [Forge interface reference](forge-interface.md#optimistic-concurrency)).
+precondition (see ADR 0013 and the [Forge concurrency reference](forge-interface-concurrency.md)).
 When `expected_version` is `Some` and does not equal the stored version, the call
 returns `ForgeError::Conflict` before advancing the logical clock or mutating any
 state, so a rejected compare-and-swap leaves the store untouched. When it is

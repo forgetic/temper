@@ -99,41 +99,17 @@ keep it fast enough for the default suite. The deterministic in-process scenario
 remain the first-line coverage for workflow logic; this test covers the
 *topology*.
 
-## To swap fakes for real, change only this
+## Forgejo twin
 
 This rehearsal deliberately stays on fakes so that going live is **wiring, not
 redesign**. Everything above the handle factory is `dyn Forge`, and agents only
-mutate state through the `Agent`/`RoleTools` boundary, so each swap is local.
+mutate state through the `Agent`/`RoleTools` boundary.
 
-The Forgejo multi-process e2e
-(`crates/temper-testing/tests/forgejo_multiprocess.rs`) executes the **backend**,
-**CI**, and **webhook trigger** swaps against a real Forgejo server + real
-host-mode `forgejo-runner` — see
-[run-forgejo-multiprocess-e2e.md](run-forgejo-multiprocess-e2e.md) and
-[forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md). It is the
-**same** rehearsal as this one, reusing the **exact** scenario seed/assert
-closures, with these pieces made real:
-
-- **Backend handle factory — ✅ done.** The `temper-testing-worker`
-  `--backend forgejo` path builds a `ForgejoForge` from `--base-url` plus a
-  per-role token (env `TEMPER_FORGEJO_TOKEN`) instead of `FilesystemForge`.
-  Nothing above changed because it is all `dyn Forge`. (`worker_bin/forgejo.rs`.)
-- **CI — ✅ done.** A real host-mode `forgejo-runner` is the CI producer; the
-  `--kind ci` fake worker is **dropped** on Forgejo. The engine reads real
-  verdicts through `list_ci_jobs`, which falls back to a **password/web-UI client**
-  on Forgejo 7.0.x (`TEMPER_FORGEJO_USERNAME`/`PASSWORD`; ADR 0019).
-- **Clock — ✅ done (for that test).** Forgejo workers run `--clock wall`; the
-  deterministic `ManualClock` seam (which keeps `owner_alignment`'s `max_age`
-  from mis-firing against epoch-based logical timestamps) is filesystem-only.
-- **Identity — ✅ done (for that test).** Provisioning mints a real user + token
-  per role and feeds each worker its own, so `current_user` matches the
-  role-to-user map the executor authorizes against.
-- **Triggering — ✅ done (for that test).** A production-shaped Forgejo webhook
-  trigger sends authenticated wake hints to workers; polling remains the
-  level-triggered liveness backstop (see ADR 0009 and
-  `docs/explanation/agentic-workflows.md`).
-- **Agents — split.** Temper's multi-process fixtures use deterministic fake
-  agents. Production role workers require process responders, and Smith owns the
-  real LLM process-boundary Forgejo proof.
-
-No workflow semantics, scenario, queue, label, or transition definitions change.
+The Forgejo multi-process e2e target is the same rehearsal with a real Forgejo
+backend, real host-mode `forgejo-runner` CI, wall-clock workers, per-role Forgejo
+identities, and the production webhook wake path. It reuses the exact scenario
+seed/assert closures; only backend, CI, identity, clock, and trigger wiring
+change. Run it with
+[run-forgejo-multiprocess-e2e.md](run-forgejo-multiprocess-e2e.md) and load
+[forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md) for the
+non-obvious real-backend quirks.
