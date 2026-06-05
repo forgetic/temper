@@ -13,7 +13,7 @@ jobs:
   validate:
     runs-on: host
     steps:
-      - name: Refresh persistent checkout
+      - name: Checkout
         run: |
           set -eu
 
@@ -48,4 +48,8 @@ jobs:
           set -eu
           cd "$HOME/.local/state/forgejo/runner/data/temper"
           cargo dev-check
-          #cargo dev-test
+      - name: Test
+        run: |
+          set -eu
+          cd "$HOME/.local/state/forgejo/runner/data/temper"
+          cargo dev-test
