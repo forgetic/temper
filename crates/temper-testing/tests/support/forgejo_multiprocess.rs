@@ -10,6 +10,9 @@ use temper_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJ
 use temper_testing::workflow;
 use temper_workflow::RoleId;
 
+#[path = "worker_binary.rs"]
+mod worker_binary;
+
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub fn convergence_timeout() -> Duration {
@@ -312,7 +315,7 @@ fn spawn_worker(
     log_path: &Path,
 ) -> Child {
     let log = std::fs::File::create(log_path).expect("worker log opens");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"));
+    let mut command = Command::new(worker_binary::temper_testing_worker());
     command
         .arg("--backend")
         .arg("forgejo")

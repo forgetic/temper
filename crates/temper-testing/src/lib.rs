@@ -7,8 +7,9 @@
 //! `RunnerConfig`/repo/user helpers plus the bundled reference-delivery fixture
 //! loader.
 //!
-//! It is **never** a normal (non-dev) dependency of a production crate; it is a
-//! dev-dependency of `temper-runner` (and a dependency of other test crates).
+//! It is kept out of the default production dependency graph; it is a
+//! dev-dependency of `temper-runner`, a dependency of other test crates, and an
+//! optional root-package dependency only behind test-only features.
 //! Crate-specific helpers that only one crate uses stay local to that crate
 //! (for example `CrashForge` in `temper-workflow` tests and the Forgejo mock
 //! HTTP seam in `temper-forge-forgejo`).

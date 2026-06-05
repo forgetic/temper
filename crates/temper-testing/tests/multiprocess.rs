@@ -1,6 +1,6 @@
 //! True one-process-per-part multi-process rehearsal of the reference-delivery
-//! workflow, across all five scenarios (Phases 4–5 of
-//! `docs/explanation/multiprocess-e2e-roadmap.md`).
+//! workflow, across all five scenarios documented in
+//! `docs/how-to/run-multiprocess-e2e.md`.
 //!
 //! Unlike the in-process `MultiProcessStage` sketch — which still runs every
 //! worker in one OS process — these tests spawn the `temper-testing-worker`
@@ -39,6 +39,9 @@ use temper_testing::scenarios::{
 };
 use temper_testing::worker_bin::{self, WorkerArgs, WorkerKind};
 use temper_testing::{block_on, runner_config, workflow};
+
+#[path = "support/worker_binary.rs"]
+mod worker_binary;
 
 /// How long to wait for the multi-process world to converge before failing.
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -435,7 +438,7 @@ fn spawn_worker(
     stop_file: &Path,
     extra: &[(&str, &str)],
 ) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"));
+    let mut command = Command::new(worker_binary::temper_testing_worker());
     command.arg("--root").arg(root);
     for repo in repos {
         command.arg("--repo").arg(display(repo));

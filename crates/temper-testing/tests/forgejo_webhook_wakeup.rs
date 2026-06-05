@@ -27,6 +27,9 @@ use temper_testing::worker_bin::{FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJ
 use temper_testing::{runner_config, workflow};
 use temper_workflow::RoleId;
 
+#[path = "support/worker_binary.rs"]
+mod worker_binary;
+
 const LONG_POLL_MS: u64 = 120_000;
 const CI_STATUS_POLL_MS: u64 = 1_000;
 const WAKE_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -395,7 +398,7 @@ fn spawn_worker(
     log_path: &Path,
 ) -> Child {
     let log = std::fs::File::create(log_path).expect("worker log opens");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"));
+    let mut command = Command::new(worker_binary::temper_testing_worker());
     command
         .arg("--backend")
         .arg("forgejo")

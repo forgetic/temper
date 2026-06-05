@@ -156,7 +156,7 @@ cmd_stop() {
 CONFIG_KNOBS="OWNER NAME REPOS CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL POLL_MS CI_STATUS_POLL_MS IDLE_POLL_MAX_MS RUN_SECS WEBHOOKS TRIGGER_BIND WEBHOOK_URL \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
 TEMPER_TESTING_WORKER_BIN TEMPER_PROVISION_BIN TEMPER_TRIGGER_BIN TEMPER_VALIDATE_BIN \
-TEMPER_BUILD_PRODUCTION TEMPER_BUILD_TESTING FAKE_ARCHITECT FAKE_REVIEWER FAKE_CI_SENTINEL"
+TEMPER_BUILD_PRODUCTION FAKE_ARCHITECT FAKE_REVIEWER FAKE_CI_SENTINEL"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -224,7 +224,6 @@ load_config() {
     TEMPER_TRIGGER_BIN=${TEMPER_TRIGGER_BIN:-}
     TEMPER_VALIDATE_BIN=${TEMPER_VALIDATE_BIN:-}
     TEMPER_BUILD_PRODUCTION=${TEMPER_BUILD_PRODUCTION:-temper}
-    TEMPER_BUILD_TESTING=${TEMPER_BUILD_TESTING:-temper-testing}
     FAKE_ARCHITECT=${FAKE_ARCHITECT:-closing}
     FAKE_REVIEWER=${FAKE_REVIEWER:-default}
     FAKE_CI_SENTINEL=${FAKE_CI_SENTINEL:-present}
@@ -282,8 +281,8 @@ resolve_binaries() {
     if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
         log "ensuring production helper binaries are current (cargo build -p $TEMPER_BUILD_PRODUCTION)..."
         ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PRODUCTION" ) || die 'cargo build failed'
-        log "ensuring fake worker binary is current (cargo build -p $TEMPER_BUILD_TESTING --bin temper-testing-worker)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_TESTING" --bin temper-testing-worker ) || die 'cargo build failed'
+        log "ensuring fake worker binary is current (cargo build -p temper --bin temper-testing-worker --features testing-worker)..."
+        ( cd "$WORKSPACE_ROOT" && cargo build -p temper --bin temper-testing-worker --features testing-worker ) || die 'cargo build failed'
     fi
 
     [ -x "$TESTING_WORKER_BIN" ] || die "fake worker binary not found: $TESTING_WORKER_BIN"

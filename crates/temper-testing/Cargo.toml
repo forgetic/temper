@@ -6,10 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 description = "Reusable non-production testing machinery shared across Temper crates."
 
-[[bin]]
-name = "temper-testing-worker"
-path = "src/bin/temper-testing-worker.rs"
-
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true

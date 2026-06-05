@@ -2,8 +2,8 @@
 //!
 //! The binary is a thin entry point; the parsing, worker construction, and run
 //! loop live here so the default test suite can exercise the wiring without
-//! spawning a process. See `docs/explanation/multiprocess-e2e-roadmap.md`
-//! (Phase 3) for the role of this fake worker in the multi-process rehearsal.
+//! spawning a process. See `docs/how-to/run-multiprocess-e2e.md` for the role of
+//! this fake worker in the multi-process rehearsal.
 
 pub mod args;
 mod args_parse;

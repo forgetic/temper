@@ -18,6 +18,9 @@ use temper_testing::scenarios::happy_path;
 use temper_testing::worker_bin::{self, WorkerArgs, WorkerKind};
 use temper_testing::{block_on, runner_config, workflow};
 
+#[path = "support/worker_binary.rs"]
+mod worker_binary;
+
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(45);
 const ASSERT_POLL: Duration = Duration::from_millis(100);
 const WORKER_POLL_MS: u64 = 20;
@@ -278,7 +281,7 @@ fn spawn_worker(
     stop_file: &Path,
     extra: &[(&str, &str)],
 ) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"));
+    let mut command = Command::new(worker_binary::temper_testing_worker());
     command.arg("--root").arg(root);
     for repo in repos {
         command.arg("--repo").arg(display(repo));

@@ -45,9 +45,11 @@ cargo dev-test
 ```
 
 `cargo dev-test` includes the fast filesystem multi-process rehearsals
-(`temper-testing`'s `multiprocess` and `multi_repo_multiprocess` tests). Keep the
-whole default suite fast; as a soft target for agent changes, it should complete
-in under about 10 seconds on a warmed local checkout. If a change makes the
+(`temper-testing`'s `multiprocess` and `multi_repo_multiprocess` tests). Those
+rehearsals build the root package's feature-gated `temper-testing-worker` on
+demand when Cargo did not already provide a binary path. Keep the whole default
+suite fast; as a soft target for agent changes, it should complete in under
+about 10 seconds on a warmed local checkout. If a change makes the
 default suite slower, prefer moving slow coverage behind `#[ignore]` and document
 how to run it before handoff.
 

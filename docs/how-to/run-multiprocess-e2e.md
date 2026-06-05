@@ -57,8 +57,10 @@ Each scenario test (`run_variant`):
 2. Provisions the repository and labels, and seeds the issue — in-process,
    through the same library code and the **exact** scenario seed closure the
    in-process scenarios use.
-3. Spawns one OS process per moving part via
-   `Command::new(env!("CARGO_BIN_EXE_temper-testing-worker"))`:
+3. Spawns one OS process per moving part via the root package's
+   feature-gated `temper-testing-worker` binary (the test helper builds
+   `cargo build -p temper --bin temper-testing-worker --features testing-worker`
+   on demand when Cargo did not provide a binary path):
    - one `--kind role` worker for each role-with-an-agent (derived from the
      compiled workflow ∩ registered fake agents ∩ `RunnerConfig` bindings — never
      a hardcoded list), each carrying the scenario's `--architect`/`--reviewer`

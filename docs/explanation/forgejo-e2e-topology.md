@@ -2,8 +2,8 @@
 
 This explains the durable design of the Forgejo multi-process end-to-end
 rehearsal — the **real-backend twin** of the filesystem
-[multi-process rehearsal](multiprocess-e2e-roadmap.md). It is the design record
-that outlives `plans/` (which is gitignored). The how-to to run it is
+[multi-process rehearsal](../how-to/run-multiprocess-e2e.md). It is the design
+record that outlives `plans/` (which is gitignored). The how-to to run it is
 [run-forgejo-multiprocess-e2e.md](../how-to/run-forgejo-multiprocess-e2e.md);
 the CI-read decision is [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
 
