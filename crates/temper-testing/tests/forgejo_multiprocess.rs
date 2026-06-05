@@ -1,24 +1,22 @@
-//! Forgejo multi-process scenarios against one shared live Forgejo world.
+//! Forgejo multi-process scenarios as per-scenario live-world tests.
 //!
 //! This is the real-backend twin of `tests/multiprocess.rs`: deterministic fake
 //! role agents and a mechanical worker coordinate only through a real Forgejo
-//! backend while a real host-mode `forgejo-runner` produces CI. The suite keeps
-//! real-backend coverage but avoids rebooting Forgejo for every scenario:
+//! backend while a real host-mode `forgejo-runner` produces CI. Each ignored
+//! test owns one live world for exactly the repositories needed by that scenario:
 //!
-//! 1. declare one cached state containing the admin, role identities, and all
-//!    scenario repositories;
-//! 2. start one [`ForgejoServer`] from a `/tmp` copy of that state and register
-//!    one [`ForgejoRunner`];
-//! 3. register repo webhooks against one shared trigger;
-//! 4. spawn a fresh worker fleet per scenario with unique stop file, wake
-//!    sockets, and logs;
+//! 1. declare cached state containing the admin, role identities, and that
+//!    scenario's repositories;
+//! 2. start a stack-owned [`ForgejoServer`] from a `/tmp` copy of that state and
+//!    register one stack-owned [`ForgejoRunner`];
+//! 3. register repo webhooks against the scenario's trigger;
+//! 4. spawn a worker fleet with unique stop file, wake sockets, and logs;
 //! 5. poll the scenario's backend-neutral assert closure to convergence while
 //!    the workers advance through webhook wakes, not their poll backstop.
 //!
-//! The five scenarios are collapsed into one ignored test so ordinary Rust
-//! ownership performs panic cleanup: the active worker fleet is a stack value and
-//! kills children on drop, and the shared runner/server handles are dropped if any
-//! scenario panics.
+//! Ordinary Rust ownership performs panic cleanup: the active worker fleet is a
+//! stack value and kills children on drop, and each scenario's runner/server
+//! handles are dropped if that test panics.
 //!
 //! ```sh
 //! cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
@@ -36,15 +34,11 @@ use temper_testing::forgejo_server::{
 #[path = "support/forgejo_multiprocess.rs"]
 mod multiprocess_support;
 
-use multiprocess_support::{convergence_timeout, WorkerFleet, WorkerPollProfile};
+use multiprocess_support::{convergence_timeout, Variant, WorkerFleet, WorkerPollProfile};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use temper_testing::forgejo_runtime::{RunWorkspace, TriggerServer};
 use temper_testing::runner_config;
-use temper_testing::scenarios::{
-    changes_requested_then_approved, ci_fails_then_passes, cross_repo_fanout_converges,
-    dependency_chain_mechanically_unblocked, happy_path,
-};
 
 /// How often the driver re-runs the assert closure while polling.
 const ASSERT_POLL: Duration = Duration::from_secs(1);
@@ -58,130 +52,69 @@ const CI_STATUS_POLL_MS: u64 = 1_000;
 /// Backstop run length per child, in case the driver dies before stopping it.
 const WORKER_RUN_SECS: u64 = 1200;
 
-#[derive(Clone, Copy)]
-struct Variant {
-    /// Stable name used in logs, repo names, and panic messages.
-    name: &'static str,
-    /// The scenario whose seed/assert closures the driver reuses.
-    scenario: fn() -> Scenario,
-    /// Fresh primary repository for this scenario.
-    primary_repo: &'static str,
-    /// Optional second repository; only the cross-repo fan-out scenario uses it.
-    extra_repo: Option<&'static str>,
-    /// `--architect` value passed to the architect role worker.
-    architect: &'static str,
-    /// `--reviewer` value passed to the reviewer role worker.
-    reviewer: &'static str,
-    /// `--ci-sentinel` value passed to the engineer role worker.
-    ci_sentinel: &'static str,
-    /// Role workers allowed to use the narrow CI status-poll fallback. Mechanical
-    /// landing also uses that fallback; all other workers keep the long
-    /// webhook-only poll backstop.
-    ci_status_poll_roles: &'static [&'static str],
+#[test]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
+fn forgejo_multiprocess_happy_path_converges() {
+    run_forgejo_multiprocess_variant(Variant::happy_path());
 }
 
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
-fn forgejo_multiprocess_scenarios_converge_against_shared_forgejo_world() {
-    let suite_start = Instant::now();
-    let mut world = SharedLiveWorld::start();
+fn forgejo_multiprocess_changes_requested_then_approved_converges() {
+    run_forgejo_multiprocess_variant(Variant::changes_requested_then_approved());
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
+fn forgejo_multiprocess_ci_fails_then_passes_converges() {
+    run_forgejo_multiprocess_variant(Variant::ci_fails_then_passes());
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
+fn forgejo_multiprocess_dependency_chain_mechanically_unblocked_converges() {
+    run_forgejo_multiprocess_variant(Variant::dependency_chain_mechanically_unblocked());
+}
+
+#[test]
+#[ignore = "boots a real Forgejo + host-mode runner and spawns OS processes; run with --ignored"]
+fn forgejo_multiprocess_cross_repo_fanout_converges() {
+    run_forgejo_multiprocess_variant(Variant::cross_repo_fanout());
+}
+
+fn run_forgejo_multiprocess_variant(variant: Variant) {
+    let test_start = Instant::now();
+    let repo_names = variant.repo_names();
+    let mut world = ScenarioLiveWorld::start(&repo_names);
     eprintln!(
-        "forgejo_multiprocess shared world timing: {}",
+        "forgejo_multiprocess scenario '{}' world timing: {}",
+        variant.name,
         world.timing.render()
     );
 
-    let mut scenario_total = Duration::ZERO;
-    for variant in variants() {
-        let timing = run_variant(&mut world, &variant);
-        scenario_total += timing.total;
-        eprintln!(
-            "forgejo_multiprocess scenario '{}' timing: {}",
-            variant.name,
-            timing.render()
-        );
-    }
+    let timing = run_variant(&mut world, &variant);
+    eprintln!(
+        "forgejo_multiprocess scenario '{}' timing: {}",
+        variant.name,
+        timing.render()
+    );
 
     let world_teardown_start = Instant::now();
     drop(world);
     let world_teardown = world_teardown_start.elapsed();
     eprintln!(
-        "forgejo_multiprocess suite timing: scenarios={scenario_total:?} \
+        "forgejo_multiprocess test '{}' timing: scenario={} \
          world_teardown={world_teardown:?} total={:?}",
-        suite_start.elapsed()
+        variant.name,
+        timing.render(),
+        test_start.elapsed()
     );
-}
-
-fn variants() -> [Variant; 5] {
-    [
-        Variant {
-            name: "happy_path",
-            scenario: happy_path,
-            primary_repo: "service-happy-path",
-            extra_repo: None,
-            architect: "default",
-            reviewer: "default",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        },
-        Variant {
-            name: "changes_requested_then_approved",
-            scenario: changes_requested_then_approved,
-            primary_repo: "service-review-cycle",
-            extra_repo: None,
-            architect: "default",
-            reviewer: "request-changes-then-approve",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        },
-        Variant {
-            name: "ci_fails_then_passes",
-            scenario: ci_fails_then_passes,
-            primary_repo: "service-ci-retry",
-            extra_repo: None,
-            architect: "default",
-            reviewer: "default",
-            ci_sentinel: "deferred",
-            ci_status_poll_roles: &["engineer", "owner"],
-        },
-        Variant {
-            name: "dependency_chain_mechanically_unblocked",
-            scenario: dependency_chain_mechanically_unblocked,
-            primary_repo: "service-dependency-chain",
-            extra_repo: None,
-            architect: "closing",
-            reviewer: "default",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        },
-        Variant {
-            name: "cross_repo_fanout",
-            scenario: cross_repo_fanout_converges,
-            primary_repo: "service-cross-repo-source",
-            // `cross_repo_targets` chooses the first visible repo other than the
-            // source by owner/name, so keep the scenario's intended target before
-            // the single-repo scenario names from earlier in this shared world.
-            extra_repo: Some("aaa-cross-repo-target"),
-            architect: "closing",
-            reviewer: "default",
-            ci_sentinel: "present",
-            ci_status_poll_roles: &["owner"],
-        },
-    ]
-}
-
-fn declared_repo_names() -> Vec<String> {
-    variants()
-        .into_iter()
-        .flat_map(|variant| [Some(variant.primary_repo), variant.extra_repo])
-        .flatten()
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 /// Drives one scenario through the true multi-process topology against a real
 /// Forgejo, asserting it converges to the same end state as the in-process
 /// scenario.
-fn run_variant(world: &mut SharedLiveWorld, variant: &Variant) -> ScenarioTiming {
+fn run_variant(world: &mut ScenarioLiveWorld, variant: &Variant) -> ScenarioTiming {
     let scenario_start = Instant::now();
     let mut timing = ScenarioTiming::default();
 
@@ -334,7 +267,7 @@ fn unexpected_poll_triggers(workers: &WorkerFleet, allowed_roles: &[&str]) -> Ve
         .collect()
 }
 
-struct SharedLiveWorld {
+struct ScenarioLiveWorld {
     // Drop runner before server so the daemon cannot keep polling a dead Forgejo.
     runner: ForgejoRunner,
     server: ForgejoServer,
@@ -348,12 +281,11 @@ struct SharedLiveWorld {
     timing: WorldTiming,
 }
 
-impl SharedLiveWorld {
-    fn start() -> Self {
+impl ScenarioLiveWorld {
+    fn start(repo_names: &[String]) -> Self {
         let total_start = Instant::now();
         let server_start = Instant::now();
-        let repo_names = declared_repo_names();
-        let cached = start_cached_provisioned_repositories(&repo_names)
+        let cached = start_cached_provisioned_repositories(repo_names)
             .expect("forgejo cached provisioned scenario state starts");
         let cache_hit = cached.cache_hit;
         let server = cached.server;
@@ -401,7 +333,7 @@ impl SharedLiveWorld {
     fn provision_repo(&self, name: &str) -> Provisioned {
         let provisioned = self.state.provisioned(name).unwrap_or_else(|| {
             panic!(
-                "declared cached Forgejo state did not contain repo {}/{name}",
+                "scenario cached Forgejo state did not contain repo {}/{name}",
                 self.state.roles.owner
             )
         });
