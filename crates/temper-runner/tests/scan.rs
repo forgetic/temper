@@ -44,6 +44,48 @@ const REVIEW_ONLY_FIXTURE: &str = r#"
 }
 "#;
 
+// A workflow that models raw human intake: a default (catch-all) `intake` issue
+// kind with no identifying labels, and a mechanical queue with no label filter
+// that stamps any unlabeled issue `untriaged` via `mark_untriaged`. This is the
+// first step of the target intake flow (issue #35): an unlabeled human issue is
+// admitted by the default kind and mechanically transitioned to `untriaged`.
+const INTAKE_DEFAULT_FIXTURE: &str = r#"
+{
+  "name": "intake-default",
+  "roles": [
+    { "id": "mechanical" }
+  ],
+  "labels": [
+    { "id": "untriaged" },
+    { "id": "code" }
+  ],
+  "artifact_kinds": [
+    { "id": "intake", "target": "issue", "identifying_labels": [] },
+    { "id": "code", "target": "issue", "identifying_labels": ["code"] }
+  ],
+  "transitions": [
+    {
+      "id": "mark_untriaged",
+      "artifact": "intake",
+      "roles": ["mechanical"],
+      "effects": [
+        { "kind": "add_label", "label": "untriaged" }
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "id": "raw_intake",
+      "artifact": "intake",
+      "automation": {
+        "actor": "mechanical",
+        "transition": "mark_untriaged"
+      }
+    }
+  ]
+}
+"#;
+
 const DEPENDENCY_QUEUE_FIXTURE: &str = r#"
 {
   "name": "dependency-queue",
@@ -511,4 +553,62 @@ fn dependency_gated_queue_fetches_dependency_state() {
         .all(|query| query.details == ItemListDetails::summary()));
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
     assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
+}
+
+#[test]
+fn unlabeled_issue_is_serviced_by_the_mechanical_intake_queue() {
+    // A freshly filed human issue carries no labels at all. The default `intake`
+    // kind admits it, and the empty-label `raw_intake` queue services it
+    // mechanically, planning `mark_untriaged` to stamp the `untriaged` label.
+    // This is intake flow step 1->2 (issue #35): unlabeled issue -> untriaged.
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &[]);
+    let workflow = workflow_from_json(INTAKE_DEFAULT_FIXTURE);
+    let compiled = workflow.compile();
+
+    assert_eq!(
+        block_on(scan_automated_queues(
+            &forge,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+        ))
+        .expect("scan succeeds"),
+        vec![AutomatedWorkItem {
+            queue: QueueId::new("raw_intake"),
+            actor: RoleId::new("mechanical"),
+            transition: temper_workflow::TransitionId::new("mark_untriaged"),
+            executor: None,
+            outcomes: std::collections::BTreeMap::new(),
+            target: ArtifactSource::Issue { number },
+            kind: ArtifactKindId::new("intake"),
+        }]
+    );
+}
+
+#[test]
+fn labeled_issue_is_not_serviced_by_the_default_intake_queue() {
+    // A labeled issue classifies as its specific kind (`code`), not the default
+    // catch-all `intake`. The empty-label intake queue selects only intake
+    // artifacts, so a `code` issue is left for its own queues: the default kind
+    // does not change behavior for labeled issues.
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let _ = create_issue(&forge, &repo, &["code"]);
+    let workflow = workflow_from_json(INTAKE_DEFAULT_FIXTURE);
+    let compiled = workflow.compile();
+
+    assert_eq!(
+        block_on(scan_automated_queues(
+            &forge,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+        ))
+        .expect("scan succeeds"),
+        Vec::new(),
+    );
 }
