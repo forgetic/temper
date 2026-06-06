@@ -120,6 +120,7 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
             tool_guidance: Some(format!("Use {CODING_WORKSPACE_TOOL_ID} for the PR head.")),
             tool_constraints: vec!["No bookkeeping-only diffs.".to_string()],
         },
+        allowed_verdicts: Vec::new(),
         checkout: WorkspaceCheckout::Writable,
     }))
     .expect("workspace produces and pushes a head");

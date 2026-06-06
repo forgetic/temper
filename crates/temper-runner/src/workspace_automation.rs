@@ -140,6 +140,11 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
         branch_hint: pr_branch_hint(&item.kind, number),
         correlation_key: correlation_key.clone(),
         guidance: automation_guidance(actor, executor_id.as_str()),
+        allowed_verdicts: item
+            .outcomes
+            .keys()
+            .map(|verdict| verdict.as_str().to_string())
+            .collect(),
         checkout,
     };
     let output =

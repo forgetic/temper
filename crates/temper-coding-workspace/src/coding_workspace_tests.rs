@@ -61,7 +61,18 @@ fn request() -> CodingWorkspaceRequest {
             tool_guidance: Some("Use docs/product-change.md for this fixture.".to_string()),
             tool_constraints: vec!["No .temper-only diffs.".to_string()],
         },
+        allowed_verdicts: Vec::new(),
         checkout: temper_runner::WorkspaceCheckout::Writable,
+    }
+}
+
+/// A request like [`request`] but declaring an explicit verdict vocabulary, for
+/// the cases that exercise the allowed-verdicts surface (context payload and the
+/// provider's out-of-vocabulary rejection).
+fn request_with_allowed_verdicts(allowed: &[&str]) -> CodingWorkspaceRequest {
+    CodingWorkspaceRequest {
+        allowed_verdicts: allowed.iter().map(|verdict| verdict.to_string()).collect(),
+        ..request()
     }
 }
 
@@ -432,6 +443,86 @@ fn checkout_mode_is_exposed_to_the_command() {
     assert_eq!(
         output.verdict,
         Some(temper_workflow::VerdictId::new("read_only"))
+    );
+}
+
+#[test]
+fn context_file_exposes_allowed_verdicts() {
+    let repo = TestRepo::new("allowed-verdicts-context");
+    // The command reads the context file and only emits a verdict when the
+    // declared vocabulary is present there, proving the request surfaced it.
+    let workspace = local_workspace(
+        &repo.path,
+        "if grep -q '\"allowed_verdicts\"' \"$TEMPER_CODING_WORKSPACE_CONTEXT\" && \
+            grep -q 'ready_code' \"$TEMPER_CODING_WORKSPACE_CONTEXT\" && \
+            grep -q 'needs_breakdown' \"$TEMPER_CODING_WORKSPACE_CONTEXT\"; then \
+             printf '{\"verdict\":\"ready_code\"}' > \"$TEMPER_CODING_WORKSPACE_RESULT\"; \
+         else \
+             printf '{\"verdict\":\"missing\"}' > \"$TEMPER_CODING_WORKSPACE_RESULT\"; \
+         fi",
+    );
+
+    let output = workspace
+        .produce(request_with_allowed_verdicts(&[
+            "ready_code",
+            "needs_breakdown",
+        ]))
+        .expect("verdict path succeeds when the vocabulary is surfaced");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("ready_code")),
+        "the command saw allowed_verdicts in the context file"
+    );
+}
+
+#[test]
+fn out_of_vocabulary_verdict_is_rejected_with_declared_set() {
+    let repo = TestRepo::new("out-of-vocab-verdict");
+    // The command emits a verdict the action never declared. The provider must
+    // reject it here, naming the declared vocabulary, rather than handing a
+    // doomed verdict to the runner.
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '{\"verdict\":\"needs_design\"}' > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let error = workspace
+        .produce(request_with_allowed_verdicts(&["ready_code"]))
+        .expect_err("an undeclared verdict is rejected at the provider");
+
+    assert!(
+        error.contains("needs_design"),
+        "error names the offending verdict: {error}"
+    );
+    assert!(
+        error.contains("ready_code"),
+        "error names the declared vocabulary: {error}"
+    );
+    assert!(
+        error.contains("not in the action's declared verdicts"),
+        "error explains the constraint: {error}"
+    );
+}
+
+#[test]
+fn in_vocabulary_verdict_is_accepted() {
+    let repo = TestRepo::new("in-vocab-verdict");
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '{\"verdict\":\"ready_code\"}' > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(request_with_allowed_verdicts(&[
+            "ready_code",
+            "needs_breakdown",
+        ]))
+        .expect("a declared verdict passes the provider check");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("ready_code"))
     );
 }
 

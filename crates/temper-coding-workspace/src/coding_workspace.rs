@@ -225,6 +225,28 @@ impl LocalGitCodingWorkspace {
         // guard, the commit, and the push; tolerate an empty working tree; return
         // a verdict-only output carrying any routed body/review_body/children.
         if let Some(verdict) = result.verdict_id() {
+            // Reject an out-of-vocabulary verdict here, at the provider, with a
+            // message that names the declared option set. The runner re-checks
+            // the verdict against the action's `outcomes` map and would also
+            // reject it, but only with the routing key; failing here surfaces
+            // the operator's mistake earlier and points at the allowed
+            // vocabulary the workspace was handed. When the action declares no
+            // verdict vocabulary (a pure head action) there is nothing to
+            // validate against, so leave that case to the runner.
+            if !request.allowed_verdicts.is_empty()
+                && !request
+                    .allowed_verdicts
+                    .iter()
+                    .any(|allowed| allowed == verdict.as_str())
+            {
+                return Err(format!(
+                    "coding workspace command returned verdict `{}` for {}, which is not in the \
+                     action's declared verdicts [{}]",
+                    verdict.as_str(),
+                    request.correlation_key,
+                    request.allowed_verdicts.join(", "),
+                ));
+            }
             let mut output = CodingWorkspaceOutput::new(
                 String::new(),
                 request.base_branch,
@@ -520,6 +542,11 @@ fn write_context_file(request: &CodingWorkspaceRequest) -> Result<PathBuf, Strin
         "branch_hint": request.branch_hint,
         "correlation_key": request.correlation_key,
         "checkout": checkout_mode_token(request.checkout),
+        // The verdict vocabulary the action declares. A workspace command that
+        // emits a verdict must pick one of these; emitting anything else fails
+        // the tick. The bound agent reads this to constrain itself to the
+        // workflow's declared option set rather than guessing a verdict.
+        "allowed_verdicts": request.allowed_verdicts,
         "guidance": {
             "role_guidance": request.guidance.role_guidance,
             "tool_guidance": request.guidance.tool_guidance,
