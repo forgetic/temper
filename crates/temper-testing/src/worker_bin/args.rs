@@ -70,6 +70,23 @@ pub enum ReviewerKind {
     RequestChangesThenApprove,
 }
 
+/// Which workflow's fake agent set a `role` worker registers (`--profile`).
+///
+/// The agent set must match the workflow shape the worker drives (the bundled
+/// reference-delivery default, or a `--workflow` selection). `reference` uses the
+/// full architect/engineer/reviewer/owner/human fakes; `basic` uses the
+/// basic-delivery architect/engineer pair (no reviewer/owner/human), whose
+/// transitions differ structurally (a single `triage_intake_to_code` / `open_pr`
+/// rather than the reference fan-out + `claim_code`/`request_review` sequence).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum ProfileKind {
+    /// The reference-delivery fakes (the default; preserves existing behavior).
+    #[default]
+    Reference,
+    /// The basic-delivery fakes (architect + engineer only).
+    Basic,
+}
+
 /// Whether the Forgejo engineer seeds the CI sentinel (`ci-ok`) at PR-open time
 /// or withholds it until the fix commit (`--ci-sentinel`).
 ///
@@ -100,9 +117,11 @@ pub enum CiSentinelKind {
 /// affect the filesystem topology.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub struct RoleBehavior {
-    /// Architect variant.
+    /// Which workflow's fake agent set to register (`--profile`).
+    pub profile: ProfileKind,
+    /// Architect variant (reference profile only).
     pub architect: ArchitectKind,
-    /// Reviewer variant.
+    /// Reviewer variant (reference profile only).
     pub reviewer: ReviewerKind,
     /// Forgejo engineer CI-sentinel policy (`--ci-sentinel`).
     pub ci_sentinel: CiSentinelKind,

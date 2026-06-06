@@ -70,6 +70,28 @@ pub fn workflow() -> ValidatedWorkflow {
     temper_reference_delivery::workflow()
 }
 
+/// The bundled **basic-delivery** workflow — the minimal, no-human-in-the-loop
+/// shape exercised by the basic-delivery fakes ([`agents::BasicArchitect`] /
+/// [`agents::BasicEngineer`]).
+///
+/// Loaded from the same fixture the `temper-workflow` confirmation tests use, so
+/// the fakes and the fixture-shape tests agree on one document. Validated at call
+/// time; a malformed bundled fixture is a build/test bug, hence the panics.
+pub fn basic_delivery_workflow() -> ValidatedWorkflow {
+    const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
+    let spec: temper_workflow::RawWorkflowSpec =
+        serde_json::from_str(FIXTURE).expect("basic-delivery fixture is valid JSON");
+    spec.validate().expect("basic-delivery fixture validates")
+}
+
+/// Runner config derived from [`basic_delivery_workflow`].
+///
+/// basic-delivery binds only the queue-subscribing roles `architect`/`engineer`;
+/// `mechanical` is queue-less and stays unbound (see [`runner_config_for_workflow`]).
+pub fn basic_delivery_runner_config() -> RunnerConfig {
+    runner_config_for_workflow(&basic_delivery_workflow())
+}
+
 /// Resolves the workflow the worker operates against: the file at `path` when
 /// supplied (the runtime `--workflow` selection), otherwise the bundled
 /// reference-delivery default. Errors are reported against `path` so an operator

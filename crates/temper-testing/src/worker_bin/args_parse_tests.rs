@@ -133,12 +133,78 @@ fn parses_role_behavior_variants() {
             role: "reviewer".into(),
             user: "reviewer".into(),
             behavior: RoleBehavior {
+                profile: ProfileKind::Reference,
                 architect: ArchitectKind::Closing,
                 reviewer: ReviewerKind::RequestChangesThenApprove,
                 ci_sentinel: CiSentinelKind::Present,
             },
         }
     );
+}
+
+#[test]
+fn profile_defaults_to_reference() {
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    let WorkerKind::Role { behavior, .. } = args.kind else {
+        panic!("expected a role worker");
+    };
+    assert_eq!(behavior.profile, ProfileKind::Reference);
+}
+
+#[test]
+fn parses_basic_profile() {
+    let args = run(&[
+        "--kind",
+        "role",
+        "--role",
+        "engineer",
+        "--user",
+        "engineer",
+        "--profile",
+        "basic",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    let WorkerKind::Role { behavior, .. } = args.kind else {
+        panic!("expected a role worker");
+    };
+    assert_eq!(behavior.profile, ProfileKind::Basic);
+}
+
+#[test]
+fn rejects_unknown_profile() {
+    let error = parse_env(
+        &[
+            "--kind",
+            "role",
+            "--role",
+            "engineer",
+            "--user",
+            "engineer",
+            "--profile",
+            "fancy",
+            "--root",
+            "/tmp/x",
+            "--repo",
+            "acme/service",
+        ],
+        &[],
+    )
+    .expect_err("an unknown --profile value must be rejected");
+    assert!(error.to_string().contains("--profile"));
 }
 
 #[test]
