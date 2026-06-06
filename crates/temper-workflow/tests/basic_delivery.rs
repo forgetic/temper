@@ -12,16 +12,17 @@
 //! fixture check; it exercises validation, classification, queue matching, and
 //! transition planning against the fixture, not a live Forgejo run.
 //!
-//! Note: the `intake_author` workflow knob (the `{ "kind": "site_admin" }`
-//! sketch in the parent plan) is owned by sibling task W2 and is not yet a field
-//! of `RawWorkflowSpec` (which is `deny_unknown_fields`). The fixture therefore
-//! omits it for now; W2 adds the field and updates the fixture to set it.
+//! Note: the `intake_author` workflow knob is set to `site_admin` here. The
+//! basic-delivery shape has no `human` role, so intake must be seeded by the
+//! provisioning admin identity; `temper-provision-forgejo` resolves
+//! `IntakeAuthor::SiteAdmin` to the admin token. This keeps the canonical spec
+//! byte-for-byte aligned with the Smith `config/workflow.json`.
 
 use temper_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use temper_workflow::{
     compile, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier, GateCondition, GateId,
-    GateSignals, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, ReviewStatus, RoleId,
-    TransitionId, ValidatedWorkflow, VerdictId, WorkflowEffect,
+    GateSignals, IntakeAuthor, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, ReviewStatus,
+    RoleId, TransitionId, ValidatedWorkflow, VerdictId, WorkflowEffect,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/basic-delivery.json");
@@ -121,6 +122,10 @@ fn tool_outcome(
 fn basic_delivery_fixture_validates_with_expected_shape() {
     let workflow = fixture_workflow();
     assert_eq!(workflow.name(), "basic-delivery");
+
+    // basic-delivery has no `human` role, so intake is seeded by the site admin:
+    // the knob resolves to `IntakeAuthor::SiteAdmin`.
+    assert_eq!(workflow.intake_author(), Some(&IntakeAuthor::SiteAdmin));
 
     // Exactly three roles drive the run: architect, engineer, mechanical. No
     // reviewer, owner, or human role exists in this minimal shape.
