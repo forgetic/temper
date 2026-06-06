@@ -8,7 +8,7 @@
 
 use super::args::{
     AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
-    ClockKind, ForgejoArgs, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
+    ClockKind, ForgejoArgs, ProfileKind, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
     FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, WORKFLOW_FILE_ENV,
 };
 use chrono::Duration;
@@ -33,6 +33,7 @@ pub const USAGE: &str = concat!(
     "temper-testing-worker --kind <provision|role|mechanical|ci> --root <path> ",
     "--repo <owner/name> [--repo <owner/name> ...] [--backend <filesystem|forgejo>] [--base-url <url>] ",
     "[--role <id> --user <handle>] ",
+    "[--profile <reference|basic>] ",
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
     "[--agents <fake>] ",
@@ -86,6 +87,7 @@ struct RawArgs {
     repos: Vec<String>,
     role: Option<String>,
     user: Option<String>,
+    profile: Option<String>,
     architect: Option<String>,
     reviewer: Option<String>,
     ci: Option<String>,
@@ -116,6 +118,7 @@ impl RawArgs {
             repos: Vec::new(),
             role: None,
             user: None,
+            profile: None,
             architect: None,
             reviewer: None,
             ci: None,
@@ -142,6 +145,7 @@ impl RawArgs {
                 "--repo" => raw.repos.push(value_for(&flag, &mut iter)?),
                 "--role" => raw.role = Some(value_for(&flag, &mut iter)?),
                 "--user" => raw.user = Some(value_for(&flag, &mut iter)?),
+                "--profile" => raw.profile = Some(value_for(&flag, &mut iter)?),
                 "--architect" => raw.architect = Some(value_for(&flag, &mut iter)?),
                 "--reviewer" => raw.reviewer = Some(value_for(&flag, &mut iter)?),
                 "--ci" => raw.ci = Some(value_for(&flag, &mut iter)?),
@@ -279,6 +283,7 @@ impl RawArgs {
                 let role = require_ref(self.role.as_deref(), "--role (required for --kind role)")?;
                 let user = require_ref(self.user.as_deref(), "--user (required for --kind role)")?;
                 let behavior = RoleBehavior {
+                    profile: parse_profile(self.profile.as_deref())?,
                     architect: parse_architect(self.architect.as_deref())?,
                     reviewer: parse_reviewer(self.reviewer.as_deref())?,
                     ci_sentinel: parse_ci_sentinel(self.ci_sentinel.as_deref())?,
@@ -351,6 +356,16 @@ fn parse_ci(ci: Option<&str>) -> Result<CiPolicyKind, ArgsError> {
         Some("fixed-fail") => Ok(CiPolicyKind::FixedFail),
         Some(other) => Err(ArgsError::new(format!(
             "unknown --ci '{other}'; expected pass|fail-then-pass|fixed-fail"
+        ))),
+    }
+}
+
+fn parse_profile(profile: Option<&str>) -> Result<ProfileKind, ArgsError> {
+    match profile {
+        None | Some("reference") => Ok(ProfileKind::Reference),
+        Some("basic") => Ok(ProfileKind::Basic),
+        Some(other) => Err(ArgsError::new(format!(
+            "unknown --profile '{other}'; expected reference|basic"
         ))),
     }
 }

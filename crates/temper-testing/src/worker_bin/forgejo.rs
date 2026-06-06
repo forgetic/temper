@@ -30,9 +30,9 @@ use temper_runner::{
 };
 use temper_workflow::{InMemoryJournal, LeasePolicy, RoleId};
 
-use crate::worker_bin::args::{ForgejoArgs, RoleBehavior, WorkerArgs, WorkerKind};
+use crate::worker_bin::args::{ForgejoArgs, ProfileKind, RoleBehavior, WorkerArgs, WorkerKind};
 use crate::worker_bin::forgejo_drive::drive_async;
-use crate::worker_bin::forgejo_engineer::ForgejoEngineer;
+use crate::worker_bin::forgejo_engineer::{ForgejoBasicEngineer, ForgejoEngineer};
 use crate::worker_bin::run::{
     registry_for, resolve_repository, resolve_repository_set, resolve_workflow_and_config,
     upsert_labels, RunError,
@@ -185,15 +185,23 @@ fn registry_with_forgejo_engineer(
     behavior: RoleBehavior,
 ) -> temper_runner::AgentRegistry<dyn Forge> {
     let mut registry = registry_for(behavior);
-    let engineer = ForgejoEngineer::new(
-        forgejo.base_url.clone(),
-        forgejo.token.clone(),
-        behavior.ci_sentinel,
-    );
-    registry.insert(
-        RoleId::new(ENGINEER_ROLE),
-        Arc::new(engineer) as Arc<dyn Agent<dyn Forge>>,
-    );
+    // The engineer transition differs by profile (reference `claim_code` +
+    // explicit open + `request_review` vs basic single `open_pr`), so the Forgejo
+    // engineer wrapping the matching state machine differs too; the prep
+    // side-effects (real PR head + CI sentinel) are identical.
+    let engineer: Arc<dyn Agent<dyn Forge>> = match behavior.profile {
+        ProfileKind::Reference => Arc::new(ForgejoEngineer::new(
+            forgejo.base_url.clone(),
+            forgejo.token.clone(),
+            behavior.ci_sentinel,
+        )),
+        ProfileKind::Basic => Arc::new(ForgejoBasicEngineer::new(
+            forgejo.base_url.clone(),
+            forgejo.token.clone(),
+            behavior.ci_sentinel,
+        )),
+    };
+    registry.insert(RoleId::new(ENGINEER_ROLE), engineer);
     registry
 }
 

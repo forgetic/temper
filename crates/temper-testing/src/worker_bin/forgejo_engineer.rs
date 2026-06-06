@@ -28,7 +28,7 @@ use temper_forge::{CreatePullRequest, Forge};
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::ArtifactSource;
 
-use crate::agents::{engineer_service, EnginePrep};
+use crate::agents::{basic_engineer_service, engineer_service, EnginePrep};
 use crate::forgejo_server::{
     commit_ci_sentinel, commit_conflict_resolution_update, prepare_pull_request_head,
 };
@@ -159,5 +159,37 @@ impl<F: Forge + ?Sized> Agent<F> for ForgejoEngineer {
         // Reuse the `FakeEngineer` state machine verbatim (see `engineer_service`);
         // only the prep hook — this type — differs from the filesystem topology.
         engineer_service(item, tools, self).await
+    }
+}
+
+/// The engineer role for the **basic-delivery** workflow on the real Forgejo
+/// backend.
+///
+/// It is the Forgejo counterpart of the backend-neutral
+/// [`BasicEngineer`](crate::agents::BasicEngineer): it drives the shared
+/// [`basic_engineer_service`] state machine (single `open_pr`, then
+/// `address_ci_failure`) and supplies the same Forgejo [`EnginePrep`]
+/// side-effects as [`ForgejoEngineer`] — a real PR head branch + `ci-ok`
+/// sentinel before the PR-creating transition, and a fresh head SHA on CI
+/// failure. Only the engineer *transition* differs from the reference topology;
+/// the prep is identical, so it is reused by composition.
+pub(crate) struct ForgejoBasicEngineer {
+    prep: ForgejoEngineer,
+}
+
+impl ForgejoBasicEngineer {
+    pub(crate) fn new(base_url: String, token: String, sentinel: CiSentinelKind) -> Self {
+        Self {
+            prep: ForgejoEngineer::new(base_url, token, sentinel),
+        }
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Agent<F> for ForgejoBasicEngineer {
+    async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
+        // Reuse the `BasicEngineer` state machine verbatim; only the prep hook —
+        // the wrapped `ForgejoEngineer` — differs from the filesystem topology.
+        basic_engineer_service(item, tools, &self.prep).await
     }
 }

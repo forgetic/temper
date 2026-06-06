@@ -23,6 +23,27 @@ pub struct FakeArchitect;
 #[derive(Clone, Debug, Default)]
 pub struct FakeEngineer;
 
+/// The architect fake for the **basic-delivery** workflow.
+///
+/// basic-delivery has no design/breakdown branch: the architect's only outcome
+/// is to rewrite an `untriaged` intake issue into a `code` + `ready` issue with
+/// a crisp body. It runs the routed terminal transition `triage_intake_to_code`
+/// directly, binding the rewritten body through the same keyed `set_body`
+/// runtime seam that [`FakeArchitect`] uses for the reference workflow — there is
+/// no fan-out, no `needs_design`/`needs_breakdown`, and no second transition.
+#[derive(Clone, Debug, Default)]
+pub struct BasicArchitect;
+
+/// The engineer fake for the **basic-delivery** workflow.
+///
+/// basic-delivery fulfils the PR with a single `open_pr` transition that carries
+/// a `create_pull_request` effect, rather than the reference workflow's explicit
+/// `claim_code` → `open_pull_request` → `request_review` sequence. The resulting
+/// PR is labelled `implementation`, which drops it straight into the `landing`
+/// queue (no review gate). On `pr_ci_failed` it runs `address_ci_failure`.
+#[derive(Clone, Debug, Default)]
+pub struct BasicEngineer;
+
 #[derive(Clone, Debug, Default)]
 pub struct ClosingArchitect;
 
@@ -105,6 +126,35 @@ where
     fake_registry_with(FakeArchitect, FakeReviewer)
 }
 
+/// Registry for the **basic-delivery** workflow.
+///
+/// basic-delivery binds only the queue-subscribing roles `architect` and
+/// `engineer`; `mechanical` is queue-less (serviced by the mechanical worker,
+/// not a role worker) and there is no reviewer/owner/human. Registering only the
+/// two role agents keeps this set aligned with the fixture's role shape.
+pub fn basic_fake_registry<F>() -> AgentRegistry<F>
+where
+    F: Forge + ?Sized + 'static,
+{
+    basic_fake_registry_with(BasicEngineer)
+}
+
+/// Registry for the basic-delivery workflow with a caller-supplied engineer.
+///
+/// The Forgejo worker path swaps in a Forgejo-backed engineer (real PR head + CI
+/// sentinel) while keeping the backend-neutral [`BasicArchitect`]; the
+/// filesystem/memory path uses the plain [`BasicEngineer`].
+pub fn basic_fake_registry_with<F, E>(engineer: E) -> AgentRegistry<F>
+where
+    F: Forge + ?Sized + 'static,
+    E: Agent<F> + 'static,
+{
+    let mut registry = AgentRegistry::new();
+    registry.register(RoleId::new("architect"), BasicArchitect);
+    registry.register(RoleId::new("engineer"), engineer);
+    registry
+}
+
 pub fn fake_registry_with<F, A, R>(architect: A, reviewer: R) -> AgentRegistry<F>
 where
     F: Forge + ?Sized + 'static,
@@ -138,6 +188,20 @@ impl<F: Forge + ?Sized> Agent<F> for ClosingArchitect {
 impl<F: Forge + ?Sized> Agent<F> for FakeEngineer {
     async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
         engineer_service(item, tools, &NoPrep).await
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Agent<F> for BasicArchitect {
+    async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
+        basic_architect_service(item, tools).await
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Agent<F> for BasicEngineer {
+    async fn service(&self, item: &WorkItem, tools: &RoleTools<'_, F>) -> Result<bool, AgentError> {
+        basic_engineer_service(item, tools, &NoPrep).await
     }
 }
 
@@ -300,6 +364,123 @@ async fn service_architect<F: Forge + ?Sized>(
         return Ok(reconciled);
     }
     Ok(false)
+}
+
+/// Correlation key for the `set_body` rewrite the basic architect binds when it
+/// runs `triage_intake_to_code`.
+fn basic_triage_body_key(number: ItemNumber) -> String {
+    format!("triage-intake-code-{}", number.get())
+}
+
+/// The basic-delivery architect state machine.
+///
+/// On the `triage`/`intake` queue it runs the single routed terminal transition
+/// `triage_intake_to_code`, binding a rewritten crisp body through the keyed
+/// `set_body` runtime seam (effect index 0 — the transition declares exactly one
+/// `set_body`). Unlike [`service_architect`] there is no fan-out and no second
+/// triage branch: the one outcome marks the issue `code` + `ready`.
+async fn basic_architect_service<F: Forge + ?Sized>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+) -> Result<bool, AgentError> {
+    if item.queue.as_str() != "triage" || item.kind.as_str() != "intake" {
+        return Ok(false);
+    }
+    let ArtifactSource::Issue { number } = item.target else {
+        return Ok(false);
+    };
+    let Some(issue) = tools.get_issue(number).await? else {
+        return Ok(false);
+    };
+    let body = basic_triaged_body(&issue.title, &issue.body);
+    run_set_body_or_ignore_stale(
+        tools,
+        item.target,
+        "triage_intake_to_code",
+        0,
+        basic_triage_body_key(number),
+        body,
+    )
+    .await
+}
+
+/// Builds the rewritten code-spec body the basic architect authors when it
+/// triages an intake issue. It is deliberately a non-empty, deterministic
+/// rewrite of the intake context so the `set_body` effect has real content.
+fn basic_triaged_body(title: &str, intake_body: &str) -> String {
+    let context = if intake_body.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\n## Intake context\n\n{}", intake_body.trim())
+    };
+    format!("## Code spec\n\nImplement: {title}{context}")
+}
+
+/// The basic-delivery engineer state machine, shared by [`BasicEngineer`] and the
+/// Forgejo basic-engineer wrapper. `prep` injects backend-specific side effects
+/// (real PR head + CI sentinel) at the two moments a real provider needs them;
+/// the no-op [`NoPrep`] keeps the filesystem/memory behavior deterministic.
+///
+/// It differs structurally from [`engineer_service`]: ready code is fulfilled by
+/// a **single** `open_pr` transition whose `create_pull_request` effect (index 0
+/// — the only PR-create on the transition) is bound through the keyed runtime
+/// seam, rather than an explicit `claim_code` + `open_pull_request` +
+/// `request_review` sequence. `pr_ci_failed` runs `address_ci_failure`.
+pub(crate) async fn basic_engineer_service<F, P>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+    prep: &P,
+) -> Result<bool, AgentError>
+where
+    F: Forge + ?Sized,
+    P: EnginePrep<F>,
+{
+    if item.queue.as_str() == "code_ready" && item.kind.as_str() == "code" {
+        return basic_service_ready_code(item, tools, prep).await;
+    }
+    if item.queue.as_str() == "pr_ci_failed" {
+        prep.before_address_ci_failure(tools, item.target).await?;
+        return run_or_ignore_stale(tools, item.target, "address_ci_failure").await;
+    }
+    Ok(false)
+}
+
+async fn basic_service_ready_code<F, P>(
+    item: &WorkItem,
+    tools: &RoleTools<'_, F>,
+    prep: &P,
+) -> Result<bool, AgentError>
+where
+    F: Forge + ?Sized,
+    P: EnginePrep<F>,
+{
+    let ArtifactSource::Issue { number } = item.target else {
+        return Ok(false);
+    };
+    let Some(issue) = tools.get_issue(number).await? else {
+        return Ok(false);
+    };
+    if !issue.labels.iter().any(|label| label == "ready") {
+        return Ok(false);
+    }
+
+    // Reuse the reference implementation-PR shape: the `implementation` label
+    // drops the opened PR straight into the `landing` queue (no review gate).
+    let input = implementation_pr_input(tools, number, &issue.title);
+    // Backend-specific prep (e.g. create the head branch + a differing commit on
+    // real Forgejo) must run before the PR-creating transition; a no-op on the
+    // filesystem/memory backends.
+    prep.before_open_pr(tools, &input).await?;
+    let correlation_key = format!("pr-for-code-{}", number.get());
+    run_pull_request_create_or_ignore_stale(
+        tools,
+        item.target,
+        "open_pr",
+        0,
+        correlation_key,
+        input,
+    )
+    .await
 }
 
 struct FanOutResult {
@@ -524,6 +705,61 @@ async fn run_or_ignore_stale<F: Forge + ?Sized>(
     transition: &str,
 ) -> Result<bool, AgentError> {
     match tools.run(target, &TransitionId::new(transition)).await {
+        Ok(_) => Ok(true),
+        Err(error) if stale_execution(&error) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Runs `transition` binding `body` into the keyed `set_body` runtime seam at
+/// `effect_index`, treating a stale-state failure as a quiet skip so the next
+/// tick retries against fresh state (mirrors [`run_or_ignore_stale`]).
+async fn run_set_body_or_ignore_stale<F: Forge + ?Sized>(
+    tools: &RoleTools<'_, F>,
+    target: ArtifactSource,
+    transition: &str,
+    effect_index: usize,
+    correlation_key: String,
+    body: String,
+) -> Result<bool, AgentError> {
+    match tools
+        .run_with_set_body_at(
+            target,
+            &TransitionId::new(transition),
+            effect_index,
+            correlation_key,
+            body,
+        )
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(error) if stale_execution(&error) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Runs `transition` binding `input` into the keyed `create_pull_request`
+/// runtime seam at `effect_index`, treating a stale-state failure as a quiet
+/// skip so the next tick retries against fresh state (mirrors
+/// [`run_or_ignore_stale`]).
+async fn run_pull_request_create_or_ignore_stale<F: Forge + ?Sized>(
+    tools: &RoleTools<'_, F>,
+    target: ArtifactSource,
+    transition: &str,
+    effect_index: usize,
+    correlation_key: String,
+    input: temper_forge::CreatePullRequest,
+) -> Result<bool, AgentError> {
+    match tools
+        .run_with_pull_request_create_at(
+            target,
+            &TransitionId::new(transition),
+            effect_index,
+            correlation_key,
+            input,
+        )
+        .await
+    {
         Ok(_) => Ok(true),
         Err(error) if stale_execution(&error) => Ok(false),
         Err(error) => Err(error.into()),

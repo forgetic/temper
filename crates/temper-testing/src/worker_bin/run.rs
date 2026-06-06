@@ -42,12 +42,12 @@ use temper_runner::{
 use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId, ValidatedWorkflow};
 
 use crate::agents::{
-    fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
+    basic_fake_registry, fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
     RequestChangesThenApproveReviewer,
 };
 use crate::worker_bin::args::{
-    ArchitectKind, Backend, CiPolicyKind, ClockKind, ReviewerKind, RoleBehavior, WorkerArgs,
-    WorkerKind,
+    ArchitectKind, Backend, CiPolicyKind, ClockKind, ProfileKind, ReviewerKind, RoleBehavior,
+    WorkerArgs, WorkerKind,
 };
 use crate::worker_bin::multi_ci::MultiRepoCiWorker;
 use crate::{block_on, resolve_workflow, runner_config_for_workflow, WorkflowLoadError};
@@ -272,19 +272,24 @@ fn run_role(
 /// scenario wiring in `temper-runner/tests/end_to_end.rs`, so the same
 /// scenarios converge across both topologies.
 pub(super) fn registry_for(behavior: RoleBehavior) -> AgentRegistry<dyn Forge> {
-    match (behavior.architect, behavior.reviewer) {
-        (ArchitectKind::Default, ReviewerKind::Default) => {
-            fake_registry_with(FakeArchitect, FakeReviewer)
-        }
-        (ArchitectKind::Default, ReviewerKind::RequestChangesThenApprove) => {
-            fake_registry_with(FakeArchitect, RequestChangesThenApproveReviewer::new())
-        }
-        (ArchitectKind::Closing, ReviewerKind::Default) => {
-            fake_registry_with(ClosingArchitect, FakeReviewer)
-        }
-        (ArchitectKind::Closing, ReviewerKind::RequestChangesThenApprove) => {
-            fake_registry_with(ClosingArchitect, RequestChangesThenApproveReviewer::new())
-        }
+    match behavior.profile {
+        // basic-delivery binds only architect + engineer (no reviewer/owner/human);
+        // its architect/reviewer knobs do not apply, so they are ignored here.
+        ProfileKind::Basic => basic_fake_registry(),
+        ProfileKind::Reference => match (behavior.architect, behavior.reviewer) {
+            (ArchitectKind::Default, ReviewerKind::Default) => {
+                fake_registry_with(FakeArchitect, FakeReviewer)
+            }
+            (ArchitectKind::Default, ReviewerKind::RequestChangesThenApprove) => {
+                fake_registry_with(FakeArchitect, RequestChangesThenApproveReviewer::new())
+            }
+            (ArchitectKind::Closing, ReviewerKind::Default) => {
+                fake_registry_with(ClosingArchitect, FakeReviewer)
+            }
+            (ArchitectKind::Closing, ReviewerKind::RequestChangesThenApprove) => {
+                fake_registry_with(ClosingArchitect, RequestChangesThenApproveReviewer::new())
+            }
+        },
     }
 }
 
