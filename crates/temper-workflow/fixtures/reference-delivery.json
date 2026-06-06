@@ -471,9 +471,6 @@
         {
           "kind": "remove_label",
           "label": "untriaged"
-        },
-        {
-          "kind": "create_pull_request"
         }
       ]
     },

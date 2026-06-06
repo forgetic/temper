@@ -16,9 +16,9 @@ use crate::{
     execution_error_diagnostic_classes, execution_error_failure_class,
     postcondition_outcome_for_error, render_action_dispatch_event,
     render_transition_execution_event, ActionDispatchEvent, AgentError, BoundExternalTool,
-    CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
-    CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools, TransitionExecutionEvent, WorkItem,
-    WorkItemIdentity, WorkspaceCheckout,
+    CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceOutput, CodingWorkspaceRepository,
+    CodingWorkspaceRequest, CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools,
+    TransitionExecutionEvent, WorkItem, WorkItemIdentity, WorkspaceCheckout,
 };
 
 pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
@@ -70,11 +70,10 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
     work_item_context: &serde_json::Value,
 ) -> Result<bool, AgentError> {
     let identity = tools.work_item_identity(item);
-    // The single configured workspace fills a pull-request head, so a
-    // create-pull-request action is workspace-backed. Dispatch resolves the
-    // executor generically (any declared external tool the runner bound a
-    // workspace for) rather than gating on the `coding_workspace` id; verdict
-    // and effect routing generalize this in later parts of the series.
+    // An action is workspace-backed by declaration: it declares `outcomes` (the
+    // verdict→transition routing) and/or creates a pull-request head. Dispatch
+    // resolves the executor generically (any declared external tool the runner
+    // bound a workspace for) rather than gating on the `coding_workspace` id.
     let needs_workspace = action_is_workspace_backed(tool);
     let workspace = needs_workspace
         .then(|| workspace_executor(manifest, bound_external_tools, external_tool_executors))
@@ -108,7 +107,7 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
         let Some(resolved) = workspace else {
             return Ok(false);
         };
-        return run_pull_request_create_tool(
+        return run_workspace_action(
             manifest,
             bound_external_tools,
             item,
@@ -122,7 +121,18 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
     run_or_ignore_stale(tools, item.target, &tool.transition, &identity).await
 }
 
-async fn run_pull_request_create_tool<F: Forge + ?Sized>(
+/// Runs a workspace-backed action: invoke the bound workspace, then route on
+/// the returned verdict through the action's `outcomes`.
+///
+/// The action is workspace-backed by declaration (see
+/// [`action_is_workspace_backed`]). With no verdict the action's own transition
+/// runs and produces a pull-request head (the engineer `open_pr` default); a
+/// verdict selects the declared outcome transition instead — an escalation, a
+/// content-bearing rewrite (`set_body` / `attach_review`), or another mechanical
+/// transition. The pull-request-create effect-shape checks apply only on the
+/// no-verdict head route, so a verdict-routed review/triage action that declares
+/// no `create_pull_request` effect dispatches its workspace and routes normally.
+async fn run_workspace_action<F: Forge + ?Sized>(
     manifest: &RoleManifest,
     bound_external_tools: &[BoundExternalTool],
     item: &WorkItem,
@@ -138,42 +148,8 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
     } = resolved;
     let identity = tools.work_item_identity(item);
     let identity = &identity;
-    if create_pull_request_count(tool) != 1 {
-        log_transition_custom(
-            identity,
-            &tool.transition,
-            "failed",
-            false,
-            Some("external_executor_unsupported_effect_shape"),
-            "not_checked",
-        );
-        return Err(AgentError::message(format!(
-            "coding workspace supports exactly one CreatePullRequest effect for action '{}'",
-            tool.name
-        )));
-    }
-    let ArtifactSource::Issue { number } = item.target else {
-        log_transition_custom(
-            identity,
-            &tool.transition,
-            "stale_no_op",
-            true,
-            Some("target_not_issue"),
-            "not_checked",
-        );
-        return Ok(false);
-    };
-    let Some(issue) = tools.get_issue(number).await? else {
-        log_transition_custom(
-            identity,
-            &tool.transition,
-            "stale_no_op",
-            true,
-            Some("target_missing"),
-            "not_checked",
-        );
-        return Ok(false);
-    };
+
+    let number = target_number(item.target);
     let repository = match tools.get_repository().await? {
         Some(repository) => repository,
         None => {
@@ -240,7 +216,8 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
     // verdict the action's own transition runs and the head produces a PR (the
     // default "produce a head" behavior). With a verdict, the engine runs the
     // declared outcome transition instead — e.g. the engineer escalates with
-    // `needs_architect` instead of looping on an empty diff.
+    // `needs_architect` instead of looping on an empty diff, or the reviewer
+    // routes `approve` / `changes` / `escalate`.
     let routed = match &output.verdict {
         Some(verdict) => match tool.outcomes.get(verdict) {
             Some(transition) => transition.clone(),
@@ -261,66 +238,23 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         },
         None => tool.transition.clone(),
     };
-    let routes_to_pr_create = routed == tool.transition;
 
-    if routes_to_pr_create {
-        // PR-create path: the workspace head must be a real, non-empty diff.
-        if output.branch.trim().is_empty() {
-            log_transition_custom(
-                identity,
-                &tool.transition,
-                "failed",
-                false,
-                Some("external_executor_invalid_output"),
-                "not_checked",
-            );
-            return Err(AgentError::message(
-                "coding workspace returned an empty PR head branch",
-            ));
-        }
-        if output.changed_files.is_empty() {
-            log_transition_custom(
-                identity,
-                &tool.transition,
-                "failed",
-                false,
-                Some("external_executor_invalid_output"),
-                "not_checked",
-            );
-            return Err(AgentError::message(
-                "coding workspace returned no changed files for PR head",
-            ));
-        }
-        let input = workspace_pull_request_input(
-            tools.repo().clone(),
-            number,
-            &issue.title,
-            output,
+    if routed == tool.transition {
+        // No-verdict head route: the action's own transition opens a PR from the
+        // workspace head. This is the engineer `open_pr` default. The
+        // create-pull-request effect-shape and non-empty-diff guards apply only
+        // here, so a verdict-routed action that declares no PR effect never trips
+        // them.
+        return run_pull_request_head(
+            tools,
+            item,
+            tool,
+            identity,
             base_branch,
-        );
-        return match tools
-            .run_with_pull_request_create_at(
-                item.target,
-                &tool.transition,
-                0,
-                correlation_key,
-                input,
-            )
-            .await
-        {
-            Ok(report) => {
-                log_transition_success(identity, &report);
-                Ok(true)
-            }
-            Err(error) if stale_execution(&error) => {
-                log_transition_error(identity, &tool.transition, &error, true);
-                Ok(false)
-            }
-            Err(error) => {
-                log_transition_error(identity, &tool.transition, &error, false);
-                Err(error.into())
-            }
-        };
+            correlation_key,
+            output,
+        )
+        .await;
     }
 
     // Verdict routed to a non-PR-create outcome transition (e.g. escalation, or
@@ -329,7 +263,7 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
     // review body the workspace produced is bound through the keyed runtime
     // seam so the routed transition's `set_body` / `attach_review` effects can
     // consume the work product. An empty diff here is the escalation signal,
-    // not an error, so the head guards above do not apply.
+    // not an error, so the head guards do not apply.
     log_verdict_route(identity, &tool.transition, &routed, output.verdict.as_ref());
     if output.body.is_some() || output.review_body.is_some() {
         let content_key = workspace_content_key(&item.kind, &routed, target_number(item.target));
@@ -348,6 +282,111 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         );
     }
     run_or_ignore_stale(tools, item.target, &routed, identity).await
+}
+
+/// Opens a pull request from the workspace head on the no-verdict default route.
+///
+/// This is the engineer `open_pr` path: the action declares exactly one
+/// `create_pull_request` effect, targets an issue, and the workspace returns a
+/// real, non-empty diff. The guards here are scoped to this route so that a
+/// verdict-routed review/triage action — which declares no PR effect and always
+/// routes through `outcomes` — never reaches them.
+async fn run_pull_request_head<F: Forge + ?Sized>(
+    tools: &RoleTools<'_, F>,
+    item: &WorkItem,
+    tool: &ToolManifest,
+    identity: &WorkItemIdentity,
+    base_branch: String,
+    correlation_key: String,
+    output: CodingWorkspaceOutput,
+) -> Result<bool, AgentError> {
+    if create_pull_request_count(tool) != 1 {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "failed",
+            false,
+            Some("external_executor_unsupported_effect_shape"),
+            "not_checked",
+        );
+        return Err(AgentError::message(format!(
+            "coding workspace supports exactly one CreatePullRequest effect for action '{}'",
+            tool.name
+        )));
+    }
+    let ArtifactSource::Issue { number } = item.target else {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "stale_no_op",
+            true,
+            Some("target_not_issue"),
+            "not_checked",
+        );
+        return Ok(false);
+    };
+    let Some(issue) = tools.get_issue(number).await? else {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "stale_no_op",
+            true,
+            Some("target_missing"),
+            "not_checked",
+        );
+        return Ok(false);
+    };
+    // The workspace head must be a real, non-empty diff.
+    if output.branch.trim().is_empty() {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "failed",
+            false,
+            Some("external_executor_invalid_output"),
+            "not_checked",
+        );
+        return Err(AgentError::message(
+            "coding workspace returned an empty PR head branch",
+        ));
+    }
+    if output.changed_files.is_empty() {
+        log_transition_custom(
+            identity,
+            &tool.transition,
+            "failed",
+            false,
+            Some("external_executor_invalid_output"),
+            "not_checked",
+        );
+        return Err(AgentError::message(
+            "coding workspace returned no changed files for PR head",
+        ));
+    }
+    let input = workspace_pull_request_input(
+        tools.repo().clone(),
+        number,
+        &issue.title,
+        output,
+        base_branch,
+    );
+    match tools
+        .run_with_pull_request_create_at(item.target, &tool.transition, 0, correlation_key, input)
+        .await
+    {
+        Ok(report) => {
+            log_transition_success(identity, &report);
+            Ok(true)
+        }
+        Err(error) if stale_execution(&error) => {
+            log_transition_error(identity, &tool.transition, &error, true);
+            Ok(false)
+        }
+        Err(error) => {
+            log_transition_error(identity, &tool.transition, &error, false);
+            Err(error.into())
+        }
+    }
 }
 
 fn log_verdict_route(
@@ -511,12 +550,20 @@ struct ResolvedWorkspace<'a> {
 
 /// Whether `tool`'s action is backed by a workspace executor.
 ///
-/// The single configured workspace fills a pull-request head, so today an
-/// action is workspace-backed exactly when it creates a pull request. Later
-/// parts of the series replace this effect-shape inference with an explicit
-/// per-action executor/verdict declaration.
+/// An action is workspace-backed when it **declares** workspace behavior, not
+/// when its effects happen to create a pull request. The declaration is the
+/// action's `outcomes` map: a workspace-backed action runs its executor and
+/// routes the returned verdict through `outcomes`. The create-pull-request head
+/// remains workspace-backed as the no-verdict default (the engineer `open_pr`
+/// path), so an action that creates a PR is still treated as workspace-backed
+/// even with no declared `outcomes`.
+///
+/// This replaces the earlier effect-shape inference (`creates a PR`), which made
+/// a verdict-routed review action (only `remove_label`, no `create_pull_request`)
+/// silently skip its workspace, and forced a bare `create_pull_request` marker
+/// onto triage actions that never open a PR.
 fn action_is_workspace_backed(tool: &ToolManifest) -> bool {
-    create_pull_request_count(tool) > 0
+    !tool.outcomes.is_empty() || create_pull_request_count(tool) > 0
 }
 
 /// Resolves a workspace executor for `manifest`'s role from the runner-bound
@@ -593,4 +640,85 @@ fn create_pull_request_count(tool: &ToolManifest) -> usize {
         .iter()
         .filter(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use temper_workflow::{ArtifactKindId, LabelId, TransitionId, VerdictId};
+
+    fn tool(name: &str, effects: Vec<Effect>, outcomes: Vec<(&str, &str)>) -> ToolManifest {
+        ToolManifest {
+            name: name.to_string(),
+            transition: TransitionId::new(name),
+            artifact: ArtifactKindId::new("artifact"),
+            requires_gates: Vec::new(),
+            effects,
+            outcomes: outcomes
+                .into_iter()
+                .map(|(verdict, transition)| {
+                    (VerdictId::new(verdict), TransitionId::new(transition))
+                })
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn verdict_routed_action_without_pr_effect_is_workspace_backed() {
+        // `review_pr`: only `remove_label`, no `create_pull_request`, but it
+        // declares `outcomes`. It must be workspace-backed by declaration.
+        let review_pr = tool(
+            "review_pr",
+            vec![Effect::RemoveLabel(LabelId::new("needs-reviewer"))],
+            vec![
+                ("approve", "approve_review"),
+                ("changes", "request_changes_with_review"),
+                ("escalate", "request_architect_input"),
+            ],
+        );
+        assert!(action_is_workspace_backed(&review_pr));
+    }
+
+    #[test]
+    fn pr_head_action_is_workspace_backed() {
+        // `open_pr`: the engineer head path declares a real `create_pull_request`
+        // (here also an `outcomes` escalation, but the PR effect alone suffices).
+        let open_pr = tool(
+            "open_pr",
+            vec![
+                Effect::AddLabel(LabelId::new("in-progress")),
+                Effect::CreatePullRequest {
+                    correlation_key: None,
+                },
+            ],
+            vec![("needs_architect", "request_code_architect_input")],
+        );
+        assert!(action_is_workspace_backed(&open_pr));
+
+        // The same head path with no declared outcomes is still workspace-backed
+        // by its create-pull-request effect.
+        let plain_head = tool(
+            "open_pr",
+            vec![Effect::CreatePullRequest {
+                correlation_key: None,
+            }],
+            Vec::new(),
+        );
+        assert!(action_is_workspace_backed(&plain_head));
+    }
+
+    #[test]
+    fn plain_mechanical_action_is_not_workspace_backed() {
+        // A mechanical action: no `outcomes`, no `create_pull_request`.
+        let mechanical = tool(
+            "approve_review",
+            vec![
+                Effect::RemoveLabel(LabelId::new("needs-reviewer")),
+                Effect::AddLabel(LabelId::new("landing")),
+            ],
+            Vec::new(),
+        );
+        assert!(!action_is_workspace_backed(&mechanical));
+    }
 }
