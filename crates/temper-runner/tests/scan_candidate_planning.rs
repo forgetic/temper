@@ -322,6 +322,49 @@ fn candidate_planner_never_builds_closed_all_queries() {
 }
 
 #[test]
+fn automated_reference_plan_permits_single_default_kind_open_all_issue_query() {
+    // The mechanical/automated scan is label-bounded, with one deliberate
+    // exception: the reference workflow's default-kind `raw_intake` automation
+    // queue carries no label, so raw human intake is discovered with a single
+    // state-bounded open-all issue listing (open + summary, never closed
+    // history). Landing's automation query stays label-bounded.
+    let workflow = workflow_from_json(REFERENCE_FIXTURE);
+    let compiled = workflow.compile();
+    let plan = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
+
+    let open_all_issue_queries: Vec<&IssueQuery> = plan
+        .issue_queries
+        .iter()
+        .filter(|query| query.labels.is_empty())
+        .collect();
+    assert_eq!(
+        open_all_issue_queries.len(),
+        1,
+        "exactly one default-kind open-all issue listing"
+    );
+    let open_all = open_all_issue_queries[0];
+    assert_eq!(open_all.state, Some(IssueState::Open));
+    assert_eq!(open_all.details, ItemListDetails::summary());
+
+    // No closed history is ever listed open-ended.
+    assert!(plan
+        .issue_queries
+        .iter()
+        .all(|query| !(query.state == Some(IssueState::Closed) && query.labels.is_empty())));
+
+    // The landing automation queue stays label-bounded.
+    assert!(plan
+        .pull_request_queries
+        .iter()
+        .all(|query| !query.labels.is_empty()));
+    assert!(has_pull_request_query(
+        &plan.pull_request_queries,
+        PullRequestState::Open,
+        &["landing"]
+    ));
+}
+
+#[test]
 fn overlapping_candidate_queries_deduplicate_artifacts() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

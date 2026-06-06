@@ -75,6 +75,20 @@ activation policy plus Phase 14's multi-kind and disjunctive matching.
   carries the judgment and the workspace produces the work product. This resolves
   the capstone of #27 (ADR 0022) and folds in the default-kind classification and
   validation support from #35.
+- **Live mechanical servicing of default-kind intake (#35).** The reference
+  workflow declares a label-less `raw_intake` automation queue that selects the
+  default `intake` kind and runs the mechanical `mark_untriaged` transition, so a
+  freshly filed unlabeled human issue is stamped `untriaged` by the live
+  mechanical loop and then picked up by the architect's `design_triage` queue —
+  no seeded-intake label or out-of-band `mark_untriaged` invocation required. The
+  bounded-scan policy is extended by exactly one deliberate exception: discovering
+  raw intake costs a single state-bounded open-all issue listing per tick (open +
+  summary, never closed history). Re-running the stamp on an already-`untriaged`
+  issue is a `ContradictedPrecondition` no-op (`unchanged`, no churn), and once
+  triaged the issue classifies as `code`/`design`/`epic` and leaves the queue.
+  Covered by `reference_delivery::reference_fixture_validates_with_expected_shape`,
+  `scan_candidate_planning::automated_reference_plan_permits_single_default_kind_open_all_issue_query`,
+  and the `mechanical_worker`/`filesystem_hints` bounded-scan assertions.
 
 ## Remaining limitations
 
@@ -90,14 +104,3 @@ activation policy plus Phase 14's multi-kind and disjunctive matching.
   conservatively routes an open/unmerged PR to `merge-conflict` after such a
   rejection until the backend can distinguish textual conflicts from policy
   failures.
-- **Live mechanical servicing of default-kind intake.** The default `intake`
-  kind and the `mark_untriaged` mechanical transition are declared, validate, and
-  plan, so the unlabeled-intake step is expressible end to end. Driving it from
-  the *live* mechanical loop would require a queue with no label filter, and the
-  mechanical/automated scan path is deliberately label-bounded (no open-all issue
-  scan per tick; see `mechanical_automation`, `mechanical_worker`, and
-  `filesystem_hints` tests). Extending the bounded-scan policy to permit one
-  state-bounded open-all query for a declared default-kind automation queue is
-  the remaining runtime piece of #35; until then a freshly filed unlabeled issue
-  is stamped via the seeded-intake path or an explicit `mark_untriaged`
-  invocation rather than by a per-tick mechanical queue.

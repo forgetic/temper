@@ -190,8 +190,18 @@ fn expired_lease_body() -> String {
     })
 }
 
+// The mechanical scan stays label-bounded with one deliberate exception: the
+// reference workflow's default-kind `raw_intake` automation queue has no label
+// to filter on, so discovering raw human intake costs a single state-bounded
+// open-all issue listing (open + summary, never closed history). See the
+// reference-workflow gap record.
 fn is_bounded_issue_query(query: &IssueQuery) -> bool {
-    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+    query.details == ItemListDetails::summary()
+        && match query.state {
+            Some(IssueState::Open) => true,
+            Some(_) => !query.labels.is_empty(),
+            None => false,
+        }
 }
 
 fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
@@ -296,6 +306,23 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
         .pull_request_queries()
         .iter()
         .all(is_bounded_pull_request_query));
+    // The only open-all issue listing is the default-kind `raw_intake`
+    // automation queue's single state-bounded scan; everything else is
+    // label-bounded and no closed history is listed open-ended.
+    let open_all_issue_queries: Vec<IssueQuery> = counted
+        .issue_queries()
+        .into_iter()
+        .filter(|query| query.labels.is_empty())
+        .collect();
+    assert_eq!(
+        open_all_issue_queries.len(),
+        1,
+        "exactly one default-kind open-all issue listing per mechanical tick"
+    );
+    assert!(open_all_issue_queries
+        .iter()
+        .all(|query| query.state == Some(IssueState::Open)
+            && query.details == ItemListDetails::summary()));
 }
 
 #[test]
@@ -331,7 +358,12 @@ fn normal_mechanical_tick_skips_terminal_implementation_only_pr_history() {
 fn deep_audit_tick_finds_unlabelled_expired_lease() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
+    // Closed + unlabelled: no bounded query targets it — reconciliation lists by
+    // workflow label and the default-kind `raw_intake` automation open-all lists
+    // only open issues — so the bounded tick leaves the expired lease untouched
+    // and only a deep audit's all-history listing finds it.
     let issue = create_issue_with_body(&forge, &repo, &[], expired_lease_body());
+    close_issue(&forge, &repo, issue);
     let counted = CountingForge::new(forge.clone());
     let workflow = workflow();
     let journal = InMemoryJournal::new();

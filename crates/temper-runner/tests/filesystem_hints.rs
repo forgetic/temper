@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{
     CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequestReview, Forge,
-    IssueQuery, ItemListDetails, PullRequest, PullRequestId, PullRequestQuery, PullRequestState,
-    RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
+    IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestId, PullRequestQuery,
+    PullRequestState, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,
+    UpdatePullRequest, UserId,
 };
 use temper_forge_filesystem::FilesystemForge;
 use temper_runner::{
@@ -173,8 +174,18 @@ fn pull_request_is_merged(forge: &FilesystemForge, id: &PullRequestId) -> bool {
         .is_some_and(|pr| pr.state == PullRequestState::Merged)
 }
 
+// The mechanical scan stays label-bounded with one deliberate exception: the
+// reference workflow's default-kind `raw_intake` automation queue has no label
+// to filter on, so discovering raw human intake costs a single state-bounded
+// open-all issue listing (open + summary, never closed history). See the
+// reference-workflow gap record.
 fn is_bounded_issue_query(query: &IssueQuery) -> bool {
-    query.state.is_some() && !query.labels.is_empty() && query.details == ItemListDetails::summary()
+    query.details == ItemListDetails::summary()
+        && match query.state {
+            Some(IssueState::Open) => true,
+            Some(_) => !query.labels.is_empty(),
+            None => false,
+        }
 }
 
 fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {

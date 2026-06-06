@@ -5,8 +5,20 @@
       "id": "architect",
       "charter": "Turn requests into epics, design issues, and ready code issues; resolve needs-architect items; reconcile landed PRs.",
       "prompt": {
-        "guidance": "Use triage_to_code for untriaged intake that can become one ready code issue. Use triage_to_design when more design is needed. Use reconcile_landed for landed implementation PRs. Do not invent child issues or repository fan-out without an explicit user-authored plan or external tool binding."
+        "guidance": "Use triage_intake to triage untriaged intake. The triage workspace reads the issue and returns a verdict that the engine routes: ready_code rewrites the body into a crisp code spec, needs_design rewrites it into a design proposal, and needs_breakdown plans dependent child issues. Use reconcile_landed for landed implementation PRs."
       },
+      "external_tools": [
+        {
+          "id": "triage_workspace",
+          "description": "Read the intake issue and any linked context, then author either a rewritten body (code spec or design proposal) or a plan of dependent child issues, and return a verdict that routes the triage.",
+          "required": false,
+          "constraints": [
+            "Only read the work-item context and repository; never mutate Forge state.",
+            "Return one of the declared verdicts; the engine applies the routed transition's effects."
+          ],
+          "guidance": "Use this from triage_intake. If it is not bound, choose no_action for intake triage."
+        }
+      ],
       "concurrency": 1,
       "queues": [
         "design_triage",
@@ -18,8 +30,7 @@
       "id": "engineer",
       "charter": "Claim ready code issues, implement them, open PRs, address failed review or CI gates, resolve merge conflicts, and escalate to the architect when a ready code issue cannot be implemented as specified.",
       "prompt": {
-        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. For ready code, use open_pr after the coding workspace has produced a real product diff; do not use claim_code by itself unless another tool has already handled PR creation. The coding workspace may return a needs_architect verdict instead of a diff when the issue cannot be implemented as specified; that verdict routes open_pr to request_code_architect_input so the issue is escalated to the architect rather than looping on an empty diff. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after pushing a conflict-resolution PR head. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work.",
-        "tool_guidance": "The coding_workspace tool must prepare a real implementation branch before open_pr. Do not open implementation PRs from .temper-pr-prep, .temper-ci, or other bookkeeping-only diffs."
+        "guidance": "Use open_pr for ready code: the coding workspace must produce a real product diff and the engine opens a PR from the head it produces. When the issue cannot be implemented as specified the workspace returns a needs_architect verdict, which routes open_pr to request_code_architect_input so the issue is escalated rather than looping on an empty diff. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after pushing a conflict-resolution PR head."
       },
       "external_tools": [
         {
@@ -43,10 +54,22 @@
     },
     {
       "id": "reviewer",
-      "charter": "Statically review PRs against the contract catalog; approve or request changes.",
+      "charter": "Review PRs against the contract catalog by reading the real diff and CI; approve, request changes, or escalate.",
       "prompt": {
-        "guidance": "Use approve_review only when the PR satisfies the stated contract and has a meaningful implementation diff. Use request_changes when the PR is incomplete, unsafe, or bookkeeping-only."
+        "guidance": "Use review_pr to review a PR. The review workspace reads the real diff and CI result and returns a verdict the engine routes: approve queues mechanical landing, changes submits a native review carrying the authored review body, and escalate flags the architect. Decide from the diff and CI, not from the PR summary."
       },
+      "external_tools": [
+        {
+          "id": "review_workspace",
+          "description": "Read the pull request's real diff and CI result, judge it against the stated contract, and author a review body plus a verdict.",
+          "required": false,
+          "constraints": [
+            "Read the diff and CI through the granted read capabilities; never mutate Forge state.",
+            "Return one of the declared verdicts; the engine submits the native review and applies the routed effects."
+          ],
+          "guidance": "Use this from review_pr. If it is not bound, choose no_action for review work."
+        }
+      ],
       "concurrency": 2,
       "queues": [
         "pr_needs_review"
@@ -159,9 +182,7 @@
     {
       "id": "intake",
       "target": "issue",
-      "identifying_labels": [
-        "untriaged"
-      ]
+      "identifying_labels": []
     },
     {
       "id": "epic",
@@ -311,6 +332,14 @@
   ],
   "queues": [
     {
+      "id": "raw_intake",
+      "artifact": "intake",
+      "automation": {
+        "actor": "mechanical",
+        "transition": "mark_untriaged"
+      }
+    },
+    {
       "id": "design_triage",
       "artifact": "intake",
       "labels": [
@@ -414,6 +443,111 @@
     }
   ],
   "transitions": [
+    {
+      "id": "mark_untriaged",
+      "artifact": "intake",
+      "roles": [
+        "mechanical"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "untriaged"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "outcomes": {
+        "ready_code": "triage_intake_to_code",
+        "needs_design": "triage_intake_to_design",
+        "needs_breakdown": "triage_intake_breakdown"
+      },
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "create_pull_request"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake_to_code",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "set_body",
+          "correlation_key": "triage-intake-code"
+        },
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "code"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake_to_design",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "set_body",
+          "correlation_key": "triage-intake-design"
+        },
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "design"
+        },
+        {
+          "kind": "add_label",
+          "label": "needs-owner"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake_breakdown",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "create_issues",
+          "correlation_key": "triage-intake-breakdown"
+        },
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "epic"
+        }
+      ]
+    },
     {
       "id": "triage_to_code",
       "artifact": "intake",
@@ -734,6 +868,24 @@
       ]
     },
     {
+      "id": "review_pr",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "outcomes": {
+        "approve": "approve_review",
+        "changes": "request_changes_with_review",
+        "escalate": "request_architect_input"
+      },
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-reviewer"
+        }
+      ]
+    },
+    {
       "id": "approve_review",
       "artifact": "implementation_pr",
       "roles": [
@@ -768,6 +920,24 @@
         {
           "kind": "submit_review",
           "decision": "changes_requested"
+        }
+      ]
+    },
+    {
+      "id": "request_changes_with_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "reviewer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-reviewer"
+        },
+        {
+          "kind": "attach_review",
+          "decision": "changes_requested",
+          "correlation_key": "review-changes"
         }
       ]
     },

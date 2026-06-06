@@ -332,6 +332,14 @@
   ],
   "queues": [
     {
+      "id": "raw_intake",
+      "artifact": "intake",
+      "automation": {
+        "actor": "mechanical",
+        "transition": "mark_untriaged"
+      }
+    },
+    {
       "id": "design_triage",
       "artifact": "intake",
       "labels": [

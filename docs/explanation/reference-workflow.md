@@ -51,12 +51,12 @@ in [reference-workflow-gaps.md](reference-workflow-gaps.md) and
 
 `intake` is the default (catch-all) issue kind: it declares no identifying
 labels, so a freshly filed human issue with no labels is admitted as a normal
-work item rather than left unclassified. The mechanical `mark_untriaged`
-transition stamps such an issue `untriaged`, after which the architect's
-`design_triage` queue services it. Human intake is therefore expressed from
-declaration, without absence-of-type inference or a provider-specific adapter.
-(Driving `mark_untriaged` from the live mechanical loop is the remaining runtime
-piece of #35; see [reference-workflow-gaps.md](reference-workflow-gaps.md).)
+work item rather than left unclassified. The label-less `raw_intake` automation
+queue runs the mechanical `mark_untriaged` transition to stamp such an issue
+`untriaged`, after which the architect's `design_triage` queue services it. Human
+intake is therefore expressed from declaration, without absence-of-type
+inference or a provider-specific adapter, and the live mechanical loop drives it
+per tick (see [reference-workflow-gaps.md](reference-workflow-gaps.md)).
 
 ## State and routing labels
 

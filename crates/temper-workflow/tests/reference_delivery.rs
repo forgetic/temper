@@ -114,7 +114,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.roles().len(), 6);
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
-    assert_eq!(workflow.queues().len(), 12);
+    assert_eq!(workflow.queues().len(), 13);
     assert_eq!(workflow.transitions().len(), 33);
     assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
@@ -219,6 +219,30 @@ fn reference_fixture_validates_with_expected_shape() {
         .expect("mark_untriaged transition is declared");
     assert_eq!(mark_untriaged.artifact, ArtifactKindId::new("intake"));
     assert!(mark_untriaged.roles.contains(&RoleId::new("mechanical")));
+
+    // The `raw_intake` queue is what drives `mark_untriaged` from the live
+    // mechanical scan: it selects the default-kind intake with no label filter
+    // and runs the mechanical stamp. Without it, freshly filed unlabeled intake
+    // never receives `untriaged` and the architect's `design_triage` queue never
+    // matches, stalling the whole pipeline.
+    let raw_intake = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "raw_intake")
+        .expect("raw_intake mechanical queue is declared");
+    assert!(raw_intake.labels.is_empty());
+    assert!(raw_intake
+        .artifacts
+        .contains(&ArtifactKindId::new("intake")));
+    let raw_intake_automation = raw_intake
+        .automation
+        .as_ref()
+        .expect("raw_intake queue is mechanically serviced");
+    assert_eq!(raw_intake_automation.actor, RoleId::new("mechanical"));
+    assert_eq!(
+        raw_intake_automation.transition,
+        TransitionId::new("mark_untriaged")
+    );
 }
 
 #[test]
