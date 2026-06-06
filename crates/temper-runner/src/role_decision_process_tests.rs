@@ -661,6 +661,139 @@ async fn workspace_verdict_routes_open_pr_to_escalation_without_pr_create() {
     );
 }
 
+/// An `open_pr`-style action whose `ready_code` verdict routes to a content
+/// transition that rewrites the artifact body via `set_body`.
+fn set_body_workflow_with_outcomes() -> ValidatedWorkflow {
+    parse_workflow(
+        r#"{
+            "name": "generic-agent-test",
+            "roles": [{
+                "id": "banana",
+                "prompt": {"guidance": "Triage the intake."},
+                "external_tools": [{
+                    "id": "coding_workspace",
+                    "description": "Analyze and author content.",
+                    "required": true,
+                    "constraints": ["Only touch the checked-out repository."],
+                    "guidance": "Rewrite the intake into a crisp spec or escalate."
+                }],
+                "queues": ["todo"]
+            }],
+            "labels": [{"id": "task"}, {"id": "todo"}, {"id": "in-progress"}, {"id": "ready"}],
+            "artifact_kinds": [{
+                "id": "task",
+                "target": "issue",
+                "identifying_labels": ["task"]
+            }],
+            "queues": [{"id": "todo", "artifact": "task", "labels": ["todo"]}],
+            "transitions": [
+                {
+                    "id": "triage_intake",
+                    "artifact": "task",
+                    "roles": ["banana"],
+                    "outcomes": {"ready_code": "rewrite_body"},
+                    "effects": [
+                        {"kind": "remove_label", "label": "todo"},
+                        {"kind": "add_label", "label": "in-progress"},
+                        {"kind": "create_pull_request"}
+                    ]
+                },
+                {
+                    "id": "rewrite_body",
+                    "artifact": "task",
+                    "roles": ["banana"],
+                    "effects": [
+                        {"kind": "set_body"},
+                        {"kind": "remove_label", "label": "todo"},
+                        {"kind": "add_label", "label": "ready"}
+                    ]
+                }
+            ]
+        }"#,
+    )
+}
+
+/// A workspace that returns a verdict plus an authored body (the `set_body`
+/// work product), with no implementable diff.
+struct BodyWorkspace {
+    verdict: temper_workflow::VerdictId,
+    body: String,
+}
+
+#[async_trait]
+impl CodingWorkspace for BodyWorkspace {
+    async fn produce_head(
+        &self,
+        request: CodingWorkspaceRequest,
+    ) -> Result<CodingWorkspaceOutput, CodingWorkspaceError> {
+        Ok(CodingWorkspaceOutput::new(
+            request.branch_hint,
+            request.base_branch,
+            "rewrote intake into a crisp spec",
+            Vec::new(),
+            Vec::new(),
+        )
+        .with_verdict(self.verdict.clone())
+        .with_body(self.body.clone()))
+    }
+}
+
+async fn issue_body(fixture: &Fixture) -> String {
+    fixture
+        .forge
+        .get_issue_by_number(&fixture.repo, fixture.issue.number)
+        .await
+        .expect("issue lookup succeeds")
+        .expect("issue exists")
+        .body
+}
+
+#[tokio::test]
+async fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
+    let fixture = fixture_from_workflow(&["task", "todo"], set_body_workflow_with_outcomes()).await;
+    let authored = "# Crisp spec\n\nImplementable, authored by the architect workspace.";
+    let workspace: Arc<dyn CodingWorkspace> = Arc::new(BodyWorkspace {
+        verdict: temper_workflow::VerdictId::new("ready_code"),
+        body: authored.to_string(),
+    });
+    let executors = ExternalToolExecutors::new().with_workspace(
+        RoleId::new("banana"),
+        ExternalToolId::new("coding_workspace"),
+        workspace,
+    );
+    let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        "generic-agent-test",
+        fixture.manifest.clone(),
+        inline_config(
+            r#"printf '%s' '{"protocol_version":1,"action":"triage_intake","reason":"intake ready"}'"#,
+        ),
+        vec![bound_coding_workspace()],
+        executors,
+    )
+    .expect("process config validates");
+
+    let changed = agent
+        .service(&fixture.item, &tools(&fixture))
+        .await
+        .expect("verdict routing to set_body succeeds");
+
+    assert!(changed);
+    // The routed `rewrite_body` transition ran: the authored body was written
+    // and the `ready` label added; the `create_pull_request` action did NOT run
+    // (no `in-progress` label, no PR opened).
+    assert_eq!(issue_body(&fixture).await, authored);
+    assert_eq!(labels(&fixture).await, vec!["ready", "task"]);
+    let pull_requests = fixture
+        .forge
+        .list_pull_requests(&fixture.repo, PullRequestQuery::default())
+        .await
+        .expect("PR list succeeds");
+    assert!(
+        pull_requests.is_empty(),
+        "a content rewrite must not open a pull request"
+    );
+}
+
 #[tokio::test]
 async fn workspace_undeclared_verdict_is_an_error() {
     let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow_with_outcomes()).await;

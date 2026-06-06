@@ -45,6 +45,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .await?;
         self.apply_reviews(loaded, &plan.transition, &prepared.reviews)
             .await?;
+        self.apply_attach_reviews(loaded, &prepared.attach_reviews)
+            .await?;
         self.apply_merge(repo_id, loaded, prepared.merge).await?;
         let committed = self.apply_update(loaded, prepared).await?;
         if let Some(state) = committed {
@@ -166,6 +168,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     fn prepare_effects(&self, plan: &TransitionPlan) -> Result<PreparedEffects, ExecutionError> {
         let mut prepared = PreparedEffects::default();
         let mut pull_request_create_index = 0;
+        let mut set_body_index = 0;
+        let mut attach_review_index = 0;
         for effect in &plan.effects {
             match effect {
                 WorkflowEffect::AddLabel(label) => {
@@ -225,6 +229,54 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 }
                 WorkflowEffect::SubmitReview { decision } => {
                     prepared.reviews.push(*decision);
+                }
+                WorkflowEffect::SetBody { correlation_key: _ } => {
+                    let effect_index = set_body_index;
+                    set_body_index += 1;
+                    // The authored body is the runtime work product; an effect
+                    // with no bound body fails before any mutation, exactly like
+                    // a `CreatePullRequest` with no bound create input. The
+                    // correlation key is accepted for symmetry but `set_body`
+                    // overwrites and so is naturally idempotent across retries.
+                    let body = self
+                        .context
+                        .set_body(&plan.transition, effect_index)
+                        .map(str::to_string)
+                        .ok_or_else(|| ExecutionError::UnresolvedSetBody {
+                            transition: plan.transition.clone(),
+                            effect_index,
+                        })?;
+                    prepared.body = Some(body);
+                }
+                WorkflowEffect::AttachReview {
+                    decision,
+                    correlation_key,
+                } => {
+                    let effect_index = attach_review_index;
+                    attach_review_index += 1;
+                    let correlation_key = correlation_key
+                        .clone()
+                        .or_else(|| {
+                            self.context
+                                .attach_review_correlation_key(&plan.transition, effect_index)
+                                .map(str::to_string)
+                        })
+                        .ok_or_else(|| ExecutionError::MissingCorrelationKey {
+                            effect: effect.clone(),
+                        })?;
+                    let body = self
+                        .context
+                        .attach_review(&plan.transition, effect_index)
+                        .map(str::to_string)
+                        .ok_or_else(|| ExecutionError::UnresolvedAttachReview {
+                            transition: plan.transition.clone(),
+                            effect_index,
+                        })?;
+                    prepared.attach_reviews.push(PreparedAttachReview {
+                        decision: *decision,
+                        correlation_key,
+                        body,
+                    });
                 }
                 WorkflowEffect::MergePullRequest => {
                     prepared.merge = true;
@@ -340,6 +392,51 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         }))
     }
 
+    /// Submits each `AttachReview` effect's native review at most once.
+    ///
+    /// Unlike [`apply_reviews`](Self::apply_reviews), the review carries an
+    /// agent-authored body from the workspace work product, and the idempotency
+    /// marker is keyed by the effect's correlation key (a work-item-scoped
+    /// token) so a retry after a crash dedupes even from a different worker —
+    /// the same discipline [`apply_pull_request_creates`](Self::apply_pull_request_creates)
+    /// uses for content-bearing creates.
+    async fn apply_attach_reviews(
+        &self,
+        loaded: &Loaded,
+        reviews: &[PreparedAttachReview],
+    ) -> Result<(), ExecutionError> {
+        let Loaded::PullRequest { id, .. } = loaded else {
+            if reviews.is_empty() {
+                return Ok(());
+            }
+            return Err(ExecutionError::UnsupportedEffect {
+                effect: WorkflowEffect::AttachReview {
+                    decision: reviews
+                        .first()
+                        .map(|review| review.decision)
+                        .unwrap_or(ReviewDecision::Commented),
+                    correlation_key: None,
+                },
+            });
+        };
+        for review in reviews {
+            let key = attach_review_key(&review.correlation_key);
+            if self.review_exists(id, &key).await? {
+                continue;
+            }
+            self.forge
+                .submit_pull_request_review(
+                    id,
+                    CreatePullRequestReview {
+                        decision: review.decision,
+                        body: Some(attach_review_body_with_marker(&review.body, &key)),
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Posts each planned comment at most once, guarded by a deterministic
     /// marker so a retry never duplicates a comment.
     async fn apply_comments(
@@ -397,6 +494,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         match loaded {
             Loaded::Issue { id, .. } => {
                 let update = UpdateIssue {
+                    body: prepared.body,
                     add_labels: prepared.add_labels,
                     remove_labels: prepared.remove_labels,
                     add_assignees: prepared.add_assignees,
@@ -411,6 +509,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
             Loaded::PullRequest { id, .. } => {
                 let update = UpdatePullRequest {
+                    body: prepared.body,
                     add_labels: prepared.add_labels,
                     remove_labels: prepared.remove_labels,
                     add_assignees: prepared.add_assignees,
@@ -480,6 +579,10 @@ struct PreparedEffects {
     pull_request_creates: Vec<PreparedPullRequestCreate>,
     review_requests: Vec<UserId>,
     reviews: Vec<ReviewDecision>,
+    attach_reviews: Vec<PreparedAttachReview>,
+    /// Agent-authored body to write onto the target, folded into the same
+    /// atomic label/assignee commit update. The last `SetBody` effect wins.
+    body: Option<String>,
     /// Whether the plan requests merging the target pull request.
     merge: bool,
 }
@@ -491,37 +594,55 @@ struct PreparedPullRequestCreate {
     input: CreatePullRequest,
 }
 
+/// A concrete, idempotent native-review submission prepared from an
+/// `AttachReview` effect plus the runtime [`crate::context::ExecutionContext`].
+///
+/// The decision is portable workflow vocabulary; the body is the agent-authored
+/// work product. The correlation key makes the submission at-most-once across
+/// retries through the review idempotency marker.
+struct PreparedAttachReview {
+    decision: ReviewDecision,
+    correlation_key: String,
+    body: String,
+}
+
 fn validate_pull_request_effects(
     loaded: &Loaded,
     prepared: &PreparedEffects,
 ) -> Result<(), ExecutionError> {
     if matches!(loaded, Loaded::PullRequest { .. })
-        || (prepared.review_requests.is_empty() && prepared.reviews.is_empty())
+        || (prepared.review_requests.is_empty()
+            && prepared.reviews.is_empty()
+            && prepared.attach_reviews.is_empty())
     {
         return Ok(());
     }
-    let effect = if prepared.review_requests.is_empty() {
-        WorkflowEffect::SubmitReview {
-            decision: prepared
-                .reviews
-                .first()
-                .copied()
-                .unwrap_or(ReviewDecision::Commented),
-        }
-    } else {
+    let effect = if !prepared.review_requests.is_empty() {
         WorkflowEffect::RequestReviewers { roles: Vec::new() }
+    } else if let Some(decision) = prepared.reviews.first().copied() {
+        WorkflowEffect::SubmitReview { decision }
+    } else {
+        WorkflowEffect::AttachReview {
+            decision: prepared
+                .attach_reviews
+                .first()
+                .map(|review| review.decision)
+                .unwrap_or(ReviewDecision::Commented),
+            correlation_key: None,
+        }
     };
     Err(ExecutionError::UnsupportedEffect { effect })
 }
 
 impl PreparedEffects {
-    /// Returns `true` when the single label/assignee update would change
+    /// Returns `true` when the single label/assignee/body update would change
     /// anything, so a comment-only transition never issues an empty mutation.
     fn has_update(&self) -> bool {
         !(self.add_labels.is_empty()
             && self.remove_labels.is_empty()
             && self.add_assignees.is_empty()
-            && self.remove_assignees.is_empty())
+            && self.remove_assignees.is_empty()
+            && self.body.is_none())
     }
 }
 
@@ -563,4 +684,21 @@ fn review_key(transition: &TransitionId, index: usize) -> String {
 
 fn review_marker(key: &str) -> String {
     format!("{REVIEW_MARKER_PREFIX}{key}{REVIEW_MARKER_SUFFIX}")
+}
+
+/// Idempotency key for an `AttachReview` submission.
+///
+/// Keyed by the effect's correlation key — a work-item-scoped token, not the
+/// transition/index pair — so a retry dedupes the authored review even when a
+/// different worker resumes after a crash.
+fn attach_review_key(correlation_key: &str) -> String {
+    format!("attach-review:{correlation_key}")
+}
+
+/// Appends the review idempotency marker to an agent-authored review body.
+///
+/// The marker is an HTML comment, so it renders invisibly in Forge markdown
+/// while remaining searchable by [`review_marker`] / [`review_exists`].
+fn attach_review_body_with_marker(body: &str, key: &str) -> String {
+    format!("{body}\n\n{}", review_marker(key))
 }

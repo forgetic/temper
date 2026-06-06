@@ -244,10 +244,33 @@ pub enum Effect {
     RemoveLabel(LabelId),
     SetAssignee(RoleId),
     RemoveAssignee(RoleId),
-    CreateComment { body: String },
-    CreatePullRequest { correlation_key: Option<String> },
-    RequestReviewers { roles: Vec<RoleId> },
-    SubmitReview { decision: ReviewDecision },
+    CreateComment {
+        body: String,
+    },
+    CreatePullRequest {
+        correlation_key: Option<String>,
+    },
+    RequestReviewers {
+        roles: Vec<RoleId>,
+    },
+    SubmitReview {
+        decision: ReviewDecision,
+    },
+    /// Write an agent-authored body onto the current artifact. The body text
+    /// comes from the workspace work product through a keyed runtime-input seam,
+    /// exactly as `CreatePullRequest` reads its head; the optional correlation
+    /// key identifies retries of the same authored write.
+    SetBody {
+        correlation_key: Option<String>,
+    },
+    /// Submit a native pull-request review carrying the work product's review
+    /// body. The decision is declared workflow vocabulary (which transition
+    /// submits which verdict); the body text is supplied at runtime through the
+    /// same keyed seam. The optional correlation key identifies retries.
+    AttachReview {
+        decision: ReviewDecision,
+        correlation_key: Option<String>,
+    },
     MergePullRequest,
 }
 

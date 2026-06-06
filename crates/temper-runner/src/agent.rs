@@ -188,6 +188,89 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
             .await
     }
 
+    /// Runs a workflow transition with a runtime agent-authored body and
+    /// correlation key for one `SetBody` effect.
+    ///
+    /// The body is the workspace work product written onto the target artifact,
+    /// supplied through the same keyed runtime-input seam that
+    /// [`run_with_pull_request_create_at`](Self::run_with_pull_request_create_at)
+    /// uses for a pull-request head.
+    pub async fn run_with_set_body_at(
+        &self,
+        target: ArtifactSource,
+        transition: &TransitionId,
+        effect_index: usize,
+        correlation_key: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Result<ExecutionReport, ExecutionError> {
+        let mut context = self.context.clone();
+        context.set_set_body_at(transition.clone(), effect_index, body);
+        context.set_set_body_correlation_key_at(transition.clone(), effect_index, correlation_key);
+        Executor::with_context(self.workflow, self.forge, context)
+            .execute(self.repo, target, transition, &self.role)
+            .await
+    }
+
+    /// Runs a workflow transition with a runtime agent-authored review body and
+    /// correlation key for one `AttachReview` effect.
+    ///
+    /// The review body is the workspace work product carried into a native
+    /// pull-request review; the decision is declared by the effect. This is the
+    /// review counterpart of
+    /// [`run_with_pull_request_create_at`](Self::run_with_pull_request_create_at).
+    pub async fn run_with_attach_review_at(
+        &self,
+        target: ArtifactSource,
+        transition: &TransitionId,
+        effect_index: usize,
+        correlation_key: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Result<ExecutionReport, ExecutionError> {
+        let mut context = self.context.clone();
+        context.set_attach_review_at(transition.clone(), effect_index, body);
+        context.set_attach_review_correlation_key_at(
+            transition.clone(),
+            effect_index,
+            correlation_key,
+        );
+        Executor::with_context(self.workflow, self.forge, context)
+            .execute(self.repo, target, transition, &self.role)
+            .await
+    }
+
+    /// Runs `transition`, binding whichever content-bearing work-product slots
+    /// are present into the runtime seam for one `SetBody` / `AttachReview`
+    /// effect each.
+    ///
+    /// This is the verdict-routed counterpart of the pull-request-create path:
+    /// a workspace verdict routes to a content-bearing transition, and the
+    /// authored body / review body it produced are bound here so the routed
+    /// transition's `set_body` / `attach_review` effects can apply. Slots left
+    /// `None` bind nothing; the executor then fails any declared effect that has
+    /// no input, exactly as it does for an unbound pull-request create.
+    pub async fn run_with_workspace_content(
+        &self,
+        target: ArtifactSource,
+        transition: &TransitionId,
+        correlation_key: impl Into<String>,
+        body: Option<String>,
+        review_body: Option<String>,
+    ) -> Result<ExecutionReport, ExecutionError> {
+        let correlation_key = correlation_key.into();
+        let mut context = self.context.clone();
+        if let Some(body) = body {
+            context.set_set_body_at(transition.clone(), 0, body);
+            context.set_set_body_correlation_key_at(transition.clone(), 0, correlation_key.clone());
+        }
+        if let Some(review_body) = review_body {
+            context.set_attach_review_at(transition.clone(), 0, review_body);
+            context.set_attach_review_correlation_key_at(transition.clone(), 0, correlation_key);
+        }
+        Executor::with_context(self.workflow, self.forge, context)
+            .execute(self.repo, target, transition, &self.role)
+            .await
+    }
+
     /// Idempotently opens or finds a pull request for `correlation_key`.
     ///
     /// This wraps [`Executor::ensure_pull_request`], the runtime-keyed creation

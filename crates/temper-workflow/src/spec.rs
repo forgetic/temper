@@ -323,6 +323,26 @@ pub enum RawEffect {
     RequestReviewers { roles: Vec<String> },
     /// Submit a native pull-request review as the backend client's current user.
     SubmitReview { decision: ReviewDecision },
+    /// Write an agent-authored body onto the target artifact.
+    ///
+    /// `correlation_key`, when present, identifies retries of the same authored
+    /// write. The body text itself comes from the workspace work product through
+    /// a runtime-input seam at execution time, not from this declaration.
+    SetBody {
+        #[serde(default)]
+        correlation_key: Option<String>,
+    },
+    /// Submit a native pull-request review carrying a runtime-supplied body.
+    ///
+    /// `decision` is the portable review verdict this transition submits;
+    /// `correlation_key`, when present, identifies retries. The review body
+    /// comes from the workspace work product through a runtime-input seam at
+    /// execution time.
+    AttachReview {
+        decision: ReviewDecision,
+        #[serde(default)]
+        correlation_key: Option<String>,
+    },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
 }

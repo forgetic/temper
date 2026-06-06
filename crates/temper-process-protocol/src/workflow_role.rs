@@ -26,10 +26,25 @@ pub enum WorkflowEffect {
     RemoveLabel(String),
     SetAssignee(String),
     RemoveAssignee(String),
-    CreateComment { body: String },
-    CreatePullRequest { correlation_key: Option<String> },
-    RequestReviewers { roles: Vec<String> },
-    SubmitReview { decision: WorkflowReviewDecision },
+    CreateComment {
+        body: String,
+    },
+    CreatePullRequest {
+        correlation_key: Option<String>,
+    },
+    RequestReviewers {
+        roles: Vec<String>,
+    },
+    SubmitReview {
+        decision: WorkflowReviewDecision,
+    },
+    SetBody {
+        correlation_key: Option<String>,
+    },
+    AttachReview {
+        decision: WorkflowReviewDecision,
+        correlation_key: Option<String>,
+    },
     MergePullRequest,
 }
 

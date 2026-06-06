@@ -12,6 +12,13 @@
 //! effect may carry a static correlation key; when it does not, the matching
 //! runtime key and [`temper_forge::CreatePullRequest`] input are supplied here.
 //!
+//! The content-bearing `SetBody` and `AttachReview` effects share the same
+//! shape: the effect declares only an optional correlation key, while the
+//! agent-authored content (the new artifact body, or the review body) comes from
+//! the workspace work product through the matching keyed runtime-input seam
+//! supplied here. This mirrors `CreatePullRequest`: the spec stays portable and
+//! the concrete authored text is bound where the runtime actually mutates.
+//!
 //! Keeping these bindings out of the spec and planner preserves the layering:
 //! the spec and plan stay portable and backend-agnostic, while concrete
 //! identity and branch choices are supplied where the runtime actually mutates a
@@ -34,6 +41,10 @@ pub struct ExecutionContext {
     assignees: BTreeMap<RoleId, UserId>,
     pull_request_creates: BTreeMap<(TransitionId, usize), CreatePullRequest>,
     pull_request_correlation_keys: BTreeMap<(TransitionId, usize), String>,
+    set_body_inputs: BTreeMap<(TransitionId, usize), String>,
+    set_body_correlation_keys: BTreeMap<(TransitionId, usize), String>,
+    attach_review_inputs: BTreeMap<(TransitionId, usize), String>,
+    attach_review_correlation_keys: BTreeMap<(TransitionId, usize), String>,
 }
 
 impl ExecutionContext {
@@ -146,6 +157,162 @@ impl ExecutionContext {
         index: usize,
     ) -> Option<&str> {
         self.pull_request_correlation_keys
+            .get(&(transition.clone(), index))
+            .map(String::as_str)
+    }
+
+    /// Binds the `index`-th `SetBody` effect in `transition` to the
+    /// agent-authored body text, returning `self` for chaining.
+    pub fn with_set_body_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        body: impl Into<String>,
+    ) -> Self {
+        self.set_set_body_at(transition, index, body);
+        self
+    }
+
+    /// Binds the first `SetBody` effect in `transition` to the agent-authored
+    /// body text.
+    pub fn set_set_body(&mut self, transition: TransitionId, body: impl Into<String>) -> &mut Self {
+        self.set_set_body_at(transition, 0, body)
+    }
+
+    /// Binds the `index`-th `SetBody` effect in `transition` to the
+    /// agent-authored body text.
+    pub fn set_set_body_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        body: impl Into<String>,
+    ) -> &mut Self {
+        self.set_body_inputs
+            .insert((transition, index), body.into());
+        self
+    }
+
+    /// Binds the `index`-th `SetBody` effect in `transition` to a runtime
+    /// correlation key, returning `self` for chaining.
+    pub fn with_set_body_correlation_key_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> Self {
+        self.set_set_body_correlation_key_at(transition, index, correlation_key);
+        self
+    }
+
+    /// Binds the `index`-th `SetBody` effect in `transition` to a runtime
+    /// correlation key.
+    pub fn set_set_body_correlation_key_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> &mut Self {
+        self.set_body_correlation_keys
+            .insert((transition, index), correlation_key.into());
+        self
+    }
+
+    /// Resolves the body bound for the `index`-th `SetBody` effect in
+    /// `transition`, if any.
+    pub fn set_body(&self, transition: &TransitionId, index: usize) -> Option<&str> {
+        self.set_body_inputs
+            .get(&(transition.clone(), index))
+            .map(String::as_str)
+    }
+
+    /// Resolves the runtime correlation key bound for the `index`-th `SetBody`
+    /// effect in `transition`, if any.
+    pub fn set_body_correlation_key(
+        &self,
+        transition: &TransitionId,
+        index: usize,
+    ) -> Option<&str> {
+        self.set_body_correlation_keys
+            .get(&(transition.clone(), index))
+            .map(String::as_str)
+    }
+
+    /// Binds the `index`-th `AttachReview` effect in `transition` to the
+    /// agent-authored review body, returning `self` for chaining.
+    pub fn with_attach_review_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        body: impl Into<String>,
+    ) -> Self {
+        self.set_attach_review_at(transition, index, body);
+        self
+    }
+
+    /// Binds the first `AttachReview` effect in `transition` to the
+    /// agent-authored review body.
+    pub fn set_attach_review(
+        &mut self,
+        transition: TransitionId,
+        body: impl Into<String>,
+    ) -> &mut Self {
+        self.set_attach_review_at(transition, 0, body)
+    }
+
+    /// Binds the `index`-th `AttachReview` effect in `transition` to the
+    /// agent-authored review body.
+    pub fn set_attach_review_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        body: impl Into<String>,
+    ) -> &mut Self {
+        self.attach_review_inputs
+            .insert((transition, index), body.into());
+        self
+    }
+
+    /// Binds the `index`-th `AttachReview` effect in `transition` to a runtime
+    /// correlation key, returning `self` for chaining.
+    pub fn with_attach_review_correlation_key_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> Self {
+        self.set_attach_review_correlation_key_at(transition, index, correlation_key);
+        self
+    }
+
+    /// Binds the `index`-th `AttachReview` effect in `transition` to a runtime
+    /// correlation key.
+    pub fn set_attach_review_correlation_key_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> &mut Self {
+        self.attach_review_correlation_keys
+            .insert((transition, index), correlation_key.into());
+        self
+    }
+
+    /// Resolves the review body bound for the `index`-th `AttachReview` effect
+    /// in `transition`, if any.
+    pub fn attach_review(&self, transition: &TransitionId, index: usize) -> Option<&str> {
+        self.attach_review_inputs
+            .get(&(transition.clone(), index))
+            .map(String::as_str)
+    }
+
+    /// Resolves the runtime correlation key bound for the `index`-th
+    /// `AttachReview` effect in `transition`, if any.
+    pub fn attach_review_correlation_key(
+        &self,
+        transition: &TransitionId,
+        index: usize,
+    ) -> Option<&str> {
+        self.attach_review_correlation_keys
             .get(&(transition.clone(), index))
             .map(String::as_str)
     }

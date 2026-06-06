@@ -93,6 +93,16 @@ fn workflow_effect_from_runtime(effect: &Effect) -> WorkflowEffect {
         Effect::SubmitReview { decision } => WorkflowEffect::SubmitReview {
             decision: workflow_review_decision_from_runtime(*decision),
         },
+        Effect::SetBody { correlation_key } => WorkflowEffect::SetBody {
+            correlation_key: correlation_key.clone(),
+        },
+        Effect::AttachReview {
+            decision,
+            correlation_key,
+        } => WorkflowEffect::AttachReview {
+            decision: workflow_review_decision_from_runtime(*decision),
+            correlation_key: correlation_key.clone(),
+        },
         Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
     }
 }

@@ -80,6 +80,16 @@ pub struct CodingWorkspaceOutput {
     /// declared `outcomes` map. `None` keeps today's behavior: the action's
     /// own transition runs and the workspace head produces a pull request.
     pub verdict: Option<VerdictId>,
+    /// Optional agent-authored body for a `set_body` effect on the routed
+    /// transition (e.g. an architect rewriting an intake into a crisp code
+    /// issue). Consumed through the keyed runtime-input seam; `None` when the
+    /// routed transition declares no `set_body`.
+    pub body: Option<String>,
+    /// Optional agent-authored review body for an `attach_review` effect on the
+    /// routed transition (a reviewer's native review prose). Consumed through
+    /// the keyed runtime-input seam; `None` when the routed transition declares
+    /// no `attach_review`.
+    pub review_body: Option<String>,
 }
 
 impl CodingWorkspaceOutput {
@@ -99,6 +109,8 @@ impl CodingWorkspaceOutput {
             changed_files,
             labels,
             verdict: None,
+            body: None,
+            review_body: None,
         }
     }
 
@@ -106,6 +118,20 @@ impl CodingWorkspaceOutput {
     /// transition declared by the action.
     pub fn with_verdict(mut self, verdict: VerdictId) -> Self {
         self.verdict = Some(verdict);
+        self
+    }
+
+    /// Returns this output carrying an agent-authored body for a `set_body`
+    /// effect on the routed transition.
+    pub fn with_body(mut self, body: impl Into<String>) -> Self {
+        self.body = Some(body.into());
+        self
+    }
+
+    /// Returns this output carrying an agent-authored review body for an
+    /// `attach_review` effect on the routed transition.
+    pub fn with_review_body(mut self, review_body: impl Into<String>) -> Self {
+        self.review_body = Some(review_body.into());
         self
     }
 }

@@ -315,11 +315,30 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         };
     }
 
-    // Verdict routed to a non-PR-create outcome transition (e.g. escalation).
-    // The (possibly empty) head is discarded; the routed transition applies its
-    // own effects with no runtime PR-create input. An empty diff here is the
-    // escalation signal, not an error, so the head guards above do not apply.
+    // Verdict routed to a non-PR-create outcome transition (e.g. escalation, or
+    // a content-bearing rewrite). The (possibly empty) head is discarded; the
+    // routed transition applies its own effects. Any agent-authored body /
+    // review body the workspace produced is bound through the keyed runtime
+    // seam so the routed transition's `set_body` / `attach_review` effects can
+    // consume the work product. An empty diff here is the escalation signal,
+    // not an error, so the head guards above do not apply.
     log_verdict_route(identity, &tool.transition, &routed, output.verdict.as_ref());
+    if output.body.is_some() || output.review_body.is_some() {
+        let content_key = workspace_content_key(&item.kind, &routed, target_number(item.target));
+        return run_or_ignore_stale_with(
+            tools
+                .run_with_workspace_content(
+                    item.target,
+                    &routed,
+                    content_key,
+                    output.body,
+                    output.review_body,
+                )
+                .await,
+            identity,
+            &routed,
+        );
+    }
     run_or_ignore_stale(tools, item.target, &routed, identity).await
 }
 
@@ -351,22 +370,53 @@ fn run_or_ignore_stale<'a, F: Forge + ?Sized + 'a>(
     transition: &'a TransitionId,
     identity: &'a WorkItemIdentity,
 ) -> impl std::future::Future<Output = Result<bool, AgentError>> + 'a {
-    async move {
-        match tools.run(target, transition).await {
-            Ok(report) => {
-                log_transition_success(identity, &report);
-                Ok(true)
-            }
-            Err(error) if stale_execution(&error) => {
-                log_transition_error(identity, transition, &error, true);
-                Ok(false)
-            }
-            Err(error) => {
-                log_transition_error(identity, transition, &error, false);
-                Err(error.into())
-            }
+    async move { run_or_ignore_stale_with(tools.run(target, transition).await, identity, transition) }
+}
+
+/// Maps an already-computed transition execution result to the runner's
+/// stale/success/failure logging contract, mirroring [`run_or_ignore_stale`]
+/// for callers that ran the transition through a content-binding seam.
+fn run_or_ignore_stale_with(
+    result: Result<ExecutionReport, ExecutionError>,
+    identity: &WorkItemIdentity,
+    transition: &TransitionId,
+) -> Result<bool, AgentError> {
+    match result {
+        Ok(report) => {
+            log_transition_success(identity, &report);
+            Ok(true)
+        }
+        Err(error) if stale_execution(&error) => {
+            log_transition_error(identity, transition, &error, true);
+            Ok(false)
+        }
+        Err(error) => {
+            log_transition_error(identity, transition, &error, false);
+            Err(error.into())
         }
     }
+}
+
+/// Returns the artifact item number a work-item target points at.
+fn target_number(target: ArtifactSource) -> ItemNumber {
+    match target {
+        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number,
+    }
+}
+
+/// Deterministic correlation key for content-bearing effects on a routed
+/// transition, scoped to the work item and routed transition so retries dedupe.
+fn workspace_content_key(
+    kind: &ArtifactKindId,
+    routed: &TransitionId,
+    number: ItemNumber,
+) -> String {
+    format!(
+        "content-{}-{}-{}",
+        safe_fragment(kind.as_str()),
+        safe_fragment(routed.as_str()),
+        number.get()
+    )
 }
 
 fn log_action_dispatch(

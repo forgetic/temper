@@ -77,6 +77,8 @@ fn apply_label_effects(
             | Effect::CreatePullRequest { .. }
             | Effect::RequestReviewers { .. }
             | Effect::SubmitReview { .. }
+            | Effect::SetBody { .. }
+            | Effect::AttachReview { .. }
             | Effect::MergePullRequest => {}
         }
     }

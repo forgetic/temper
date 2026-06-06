@@ -199,6 +199,18 @@ pub enum ExecutionError {
         transition: TransitionId,
         effect_index: usize,
     },
+    /// A `SetBody` effect has no agent-authored body bound in the
+    /// [`ExecutionContext`]. Reported before any mutation.
+    UnresolvedSetBody {
+        transition: TransitionId,
+        effect_index: usize,
+    },
+    /// An `AttachReview` effect has no agent-authored review body bound in the
+    /// [`ExecutionContext`]. Reported before any mutation.
+    UnresolvedAttachReview {
+        transition: TransitionId,
+        effect_index: usize,
+    },
     /// A postcondition did not hold after the effects were applied.
     PostconditionFailed { postcondition: Postcondition },
     /// A backend operation failed.
@@ -250,6 +262,20 @@ impl std::fmt::Display for ExecutionError {
             } => write!(
                 formatter,
                 "no pull-request create input is bound for transition `{transition}` create effect #{effect_index}"
+            ),
+            ExecutionError::UnresolvedSetBody {
+                transition,
+                effect_index,
+            } => write!(
+                formatter,
+                "no authored body is bound for transition `{transition}` set-body effect #{effect_index}"
+            ),
+            ExecutionError::UnresolvedAttachReview {
+                transition,
+                effect_index,
+            } => write!(
+                formatter,
+                "no authored review body is bound for transition `{transition}` attach-review effect #{effect_index}"
             ),
             ExecutionError::PostconditionFailed { postcondition } => {
                 write!(

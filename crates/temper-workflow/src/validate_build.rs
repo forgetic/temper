@@ -205,6 +205,16 @@ fn build_effect(effect: &RawEffect) -> Effect {
         RawEffect::SubmitReview { decision } => Effect::SubmitReview {
             decision: *decision,
         },
+        RawEffect::SetBody { correlation_key } => Effect::SetBody {
+            correlation_key: correlation_key.clone(),
+        },
+        RawEffect::AttachReview {
+            decision,
+            correlation_key,
+        } => Effect::AttachReview {
+            decision: *decision,
+            correlation_key: correlation_key.clone(),
+        },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
     }
 }
