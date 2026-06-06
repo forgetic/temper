@@ -103,6 +103,9 @@ fn workflow_effect_from_runtime(effect: &Effect) -> WorkflowEffect {
             decision: workflow_review_decision_from_runtime(*decision),
             correlation_key: correlation_key.clone(),
         },
+        Effect::CreateIssues { correlation_key } => WorkflowEffect::CreateIssues {
+            correlation_key: correlation_key.clone(),
+        },
         Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
     }
 }

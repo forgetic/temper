@@ -45,6 +45,9 @@ pub enum WorkflowEffect {
         decision: WorkflowReviewDecision,
         correlation_key: Option<String>,
     },
+    CreateIssues {
+        correlation_key: Option<String>,
+    },
     MergePullRequest,
 }
 

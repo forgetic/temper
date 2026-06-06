@@ -29,6 +29,63 @@ use crate::ids::{RoleId, TransitionId};
 use std::collections::BTreeMap;
 use temper_forge::{CreatePullRequest, UserId};
 
+/// One workspace-authored child artifact bound for a `CreateIssues` effect.
+///
+/// The child's content (title/body/labels) and its declared sibling
+/// dependencies are the workspace work product, supplied through the keyed
+/// runtime-input seam exactly as a pull-request head is for `CreatePullRequest`.
+/// The parent relation is not carried here: the executor links every child back
+/// to the artifact the transition acts on.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CreateIssuesChild {
+    /// Caller-chosen stable identifier for this child within the effect.
+    ///
+    /// It seeds the child's per-child correlation key (so a retry resolves the
+    /// same child instead of duplicating it) and lets sibling children reference
+    /// this one in their [`dependencies`](Self::dependencies).
+    pub slug: String,
+    /// Authored child title.
+    pub title: String,
+    /// Authored child body. The executor stamps the correlation key and parent
+    /// back-reference into the body's workflow metadata block before creating.
+    pub body: String,
+    /// Labels to create the child with (e.g. `code` + `ready`).
+    pub labels: Vec<String>,
+    /// Slugs of sibling children in the same effect that must land before this
+    /// one. Recorded as fallback dependency relations once both children exist,
+    /// reusing the cross-repo aggregation stance (non-atomic on real forges).
+    pub dependencies: Vec<String>,
+}
+
+impl CreateIssuesChild {
+    /// Builds a child with no labels or dependencies.
+    pub fn new(slug: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            slug: slug.into(),
+            title: title.into(),
+            body: body.into(),
+            labels: Vec::new(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    /// Sets the child's labels, returning `self` for chaining.
+    pub fn with_labels(mut self, labels: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.labels = labels.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the slugs of sibling children this child depends on, returning
+    /// `self` for chaining.
+    pub fn with_dependencies(
+        mut self,
+        dependencies: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.dependencies = dependencies.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
 /// Runtime context for a transition execution.
 ///
 /// It resolves assignee roles to Forge users and supplies concrete
@@ -45,6 +102,8 @@ pub struct ExecutionContext {
     set_body_correlation_keys: BTreeMap<(TransitionId, usize), String>,
     attach_review_inputs: BTreeMap<(TransitionId, usize), String>,
     attach_review_correlation_keys: BTreeMap<(TransitionId, usize), String>,
+    create_issues_inputs: BTreeMap<(TransitionId, usize), Vec<CreateIssuesChild>>,
+    create_issues_correlation_keys: BTreeMap<(TransitionId, usize), String>,
 }
 
 impl ExecutionContext {
@@ -313,6 +372,90 @@ impl ExecutionContext {
         index: usize,
     ) -> Option<&str> {
         self.attach_review_correlation_keys
+            .get(&(transition.clone(), index))
+            .map(String::as_str)
+    }
+
+    /// Binds the `index`-th `CreateIssues` effect in `transition` to the
+    /// workspace-authored children, returning `self` for chaining.
+    pub fn with_create_issues_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        children: impl IntoIterator<Item = CreateIssuesChild>,
+    ) -> Self {
+        self.set_create_issues_at(transition, index, children);
+        self
+    }
+
+    /// Binds the first `CreateIssues` effect in `transition` to the
+    /// workspace-authored children.
+    pub fn set_create_issues(
+        &mut self,
+        transition: TransitionId,
+        children: impl IntoIterator<Item = CreateIssuesChild>,
+    ) -> &mut Self {
+        self.set_create_issues_at(transition, 0, children)
+    }
+
+    /// Binds the `index`-th `CreateIssues` effect in `transition` to the
+    /// workspace-authored children.
+    pub fn set_create_issues_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        children: impl IntoIterator<Item = CreateIssuesChild>,
+    ) -> &mut Self {
+        self.create_issues_inputs
+            .insert((transition, index), children.into_iter().collect());
+        self
+    }
+
+    /// Binds the `index`-th `CreateIssues` effect in `transition` to a runtime
+    /// base correlation key, returning `self` for chaining.
+    pub fn with_create_issues_correlation_key_at(
+        mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> Self {
+        self.set_create_issues_correlation_key_at(transition, index, correlation_key);
+        self
+    }
+
+    /// Binds the `index`-th `CreateIssues` effect in `transition` to a runtime
+    /// base correlation key.
+    pub fn set_create_issues_correlation_key_at(
+        &mut self,
+        transition: TransitionId,
+        index: usize,
+        correlation_key: impl Into<String>,
+    ) -> &mut Self {
+        self.create_issues_correlation_keys
+            .insert((transition, index), correlation_key.into());
+        self
+    }
+
+    /// Resolves the children bound for the `index`-th `CreateIssues` effect in
+    /// `transition`, if any.
+    pub fn create_issues(
+        &self,
+        transition: &TransitionId,
+        index: usize,
+    ) -> Option<&[CreateIssuesChild]> {
+        self.create_issues_inputs
+            .get(&(transition.clone(), index))
+            .map(Vec::as_slice)
+    }
+
+    /// Resolves the runtime base correlation key bound for the `index`-th
+    /// `CreateIssues` effect in `transition`, if any.
+    pub fn create_issues_correlation_key(
+        &self,
+        transition: &TransitionId,
+        index: usize,
+    ) -> Option<&str> {
+        self.create_issues_correlation_keys
             .get(&(transition.clone(), index))
             .map(String::as_str)
     }

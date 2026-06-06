@@ -352,6 +352,21 @@ pub enum RawEffect {
         #[serde(default)]
         correlation_key: Option<String>,
     },
+    /// Create one-or-many child issues from the workspace work product.
+    ///
+    /// The children — their authored titles, bodies, labels, and the
+    /// parent/dependency relations between them — come from the workspace work
+    /// product through a runtime-input seam at execution time, not from this
+    /// declaration. This is the principled, in-workflow form of architect
+    /// fan-out: one verdict drives a plan of dependent children.
+    ///
+    /// `correlation_key`, when present, is the base key under which the children
+    /// are made idempotent; each child derives a stable per-child key from it so
+    /// a retry reuses the existing children instead of duplicating them.
+    CreateIssues {
+        #[serde(default)]
+        correlation_key: Option<String>,
+    },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
 }

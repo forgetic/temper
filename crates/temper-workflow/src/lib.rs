@@ -112,7 +112,7 @@ pub use compile::{
     compile, CompiledWorkflow, ExternalToolManifest, LabelManifest, LabelSpec, LabelUsage,
     PromptManifest, PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
 };
-pub use context::ExecutionContext;
+pub use context::{CreateIssuesChild, ExecutionContext};
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use execute::{
     CorrelationLookupPlan, EnsureOutcome, ExecutionError, ExecutionReport, Executor,

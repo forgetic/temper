@@ -18,8 +18,8 @@ use temper_forge::{
 };
 use temper_workflow::{
     parse_metadata_block, replace_metadata_block, ArtifactRef, ArtifactSource,
-    CorrelationLookupPlan, EnsureOutcome, ExecutionContext, ExecutionError, ExecutionReport,
-    Executor, RoleId, TransitionId, ValidatedWorkflow, WorkflowMetadata,
+    CorrelationLookupPlan, CreateIssuesChild, EnsureOutcome, ExecutionContext, ExecutionError,
+    ExecutionReport, Executor, RoleId, TransitionId, ValidatedWorkflow, WorkflowMetadata,
 };
 
 /// Error returned by an [`Agent`] while servicing a work item.
@@ -266,6 +266,38 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
             context.set_attach_review_at(transition.clone(), 0, review_body);
             context.set_attach_review_correlation_key_at(transition.clone(), 0, correlation_key);
         }
+        Executor::with_context(self.workflow, self.forge, context)
+            .execute(self.repo, target, transition, &self.role)
+            .await
+    }
+
+    /// Runs `transition`, binding the workspace-authored children into the
+    /// runtime seam for one `CreateIssues` effect.
+    ///
+    /// This is the multi-artifact counterpart of the pull-request-create path:
+    /// a workspace verdict routes to a transition whose `create_issues` effect
+    /// fans out a plan of dependent children, and the children it authored
+    /// (titles/bodies/labels and the dependency relations between them) are
+    /// bound here so the effect can apply. The children land independently and
+    /// idempotently under `base_correlation_key`, each linked back to the target
+    /// artifact as parent — exactly as
+    /// [`run_with_pull_request_create_at`](Self::run_with_pull_request_create_at)
+    /// binds a pull-request head.
+    pub async fn run_with_create_issues_at(
+        &self,
+        target: ArtifactSource,
+        transition: &TransitionId,
+        effect_index: usize,
+        base_correlation_key: impl Into<String>,
+        children: impl IntoIterator<Item = CreateIssuesChild>,
+    ) -> Result<ExecutionReport, ExecutionError> {
+        let mut context = self.context.clone();
+        context.set_create_issues_at(transition.clone(), effect_index, children);
+        context.set_create_issues_correlation_key_at(
+            transition.clone(),
+            effect_index,
+            base_correlation_key,
+        );
         Executor::with_context(self.workflow, self.forge, context)
             .execute(self.repo, target, transition, &self.role)
             .await

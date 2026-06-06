@@ -216,6 +216,9 @@ fn build_effect(effect: &RawEffect) -> Effect {
             decision: *decision,
             correlation_key: correlation_key.clone(),
         },
+        RawEffect::CreateIssues { correlation_key } => Effect::CreateIssues {
+            correlation_key: correlation_key.clone(),
+        },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
     }
 }

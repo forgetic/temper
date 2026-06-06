@@ -4,8 +4,9 @@ use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMeta
 use std::collections::BTreeSet;
 use std::sync::{Condvar, Mutex, OnceLock};
 use temper_forge::{
-    CreateIssue, CreatePullRequest, Forge, Issue, IssueId, IssueQuery, IssueState, ItemListDetails,
-    PullRequest, PullRequestId, PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue,
+    CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, IssueState,
+    ItemListDetails, PullRequest, PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
+    UpdateIssue,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -55,6 +56,69 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .create_issue(repo_id, CreateIssue { body, ..input })
             .await?;
         Ok(EnsureOutcome::Created(created))
+    }
+
+    /// Idempotently records a fallback dependency relation on an issue.
+    ///
+    /// Adds `dependency` to the issue's workflow metadata `dependencies` list
+    /// under a compare-and-swap retry, returning `true` when the link was newly
+    /// recorded and `false` when it was already present. This is the
+    /// metadata-fallback form of an [ADR 0011] dependency relation, reused by
+    /// `create_issues` to link sibling children (the cross-repo aggregation
+    /// stance: non-atomic on real forges, idempotent across retries).
+    pub async fn ensure_issue_dependency_metadata(
+        &self,
+        issue_id: &IssueId,
+        dependency: &ArtifactRef,
+    ) -> Result<bool, ExecutionError> {
+        for _ in 0..3 {
+            let issue =
+                self.forge
+                    .get_issue(issue_id)
+                    .await?
+                    .ok_or_else(|| ExecutionError::Backend {
+                        message: format!("issue {issue_id:?} vanished while linking dependency"),
+                    })?;
+            let mut metadata = parse_metadata_block(&issue.body)
+                .map_err(|error| ExecutionError::Backend {
+                    message: format!("invalid issue workflow metadata: {error}"),
+                })?
+                .unwrap_or_default();
+            if metadata
+                .dependencies
+                .iter()
+                .any(|candidate| candidate == dependency)
+            {
+                return Ok(false);
+            }
+            metadata.dependencies.push(dependency.clone());
+            let body = replace_metadata_block(&issue.body, &metadata).map_err(|error| {
+                ExecutionError::Backend {
+                    message: format!("could not update issue workflow metadata: {error}"),
+                }
+            })?;
+            match self
+                .forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        body: Some(body),
+                        expected_version: Some(issue.version),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ExecutionError::Backend {
+            message: format!(
+                "could not add dependency metadata to issue {issue_id:?} after concurrent updates"
+            ),
+        })
     }
 
     /// Idempotently ensures a pull request exists for a correlation key.
