@@ -90,12 +90,27 @@ optional:
   "body": "rewritten issue body",   // optional; consumed by a routed set_body
   "review_body": "review prose",    // optional; consumed by a routed attach_review
   "labels": ["implementation"],     // optional; overrides default PR labels (head path)
-  "children": []                    // optional; reserved for dependent children
+  "children": [                     // optional; consumed by a routed create_issues
+    {
+      "slug": "api",                // stable id; seeds the child's correlation key
+      "title": "Add the HTTP API",  // authored child title
+      "body": "…",                  // authored child body
+      "labels": ["code", "ready"],  // labels to create the child with
+      "depends_on": []              // slugs of sibling children that must land first
+    }
+  ]
 }
 ```
 
 Unknown keys are rejected, so a typo fails loudly rather than being silently
-ignored.
+ignored. Each `children` entry is one dependent child artifact: when the verdict
+routes to a transition that declares a `create_issues` effect (e.g. an architect
+`needs_breakdown` verdict routing an intake to a breakdown transition), the
+provider hands the authored children to that effect. Children land idempotently
+under a deterministic per-effect key, each linked back to the routed artifact as
+parent, and a child naming a sibling slug in `depends_on` records that dependency
+once both exist. `children` is ignored on the head path and when the routed
+transition declares no `create_issues`.
 
 The provider chooses one of two paths based on whether `verdict` is present:
 

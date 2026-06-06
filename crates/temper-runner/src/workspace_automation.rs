@@ -21,8 +21,8 @@
 
 use temper_forge::{Forge, RepositoryId};
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, ExecutionContext, ExecutionError, Executor, RoleManifest,
-    TransitionId, ValidatedWorkflow, VerdictId,
+    ArtifactSource, CompiledWorkflow, Effect, ExecutionContext, ExecutionError, Executor,
+    RoleManifest, TransitionId, ValidatedWorkflow, VerdictId,
 };
 
 use crate::scan::AutomatedWorkItem;
@@ -181,14 +181,22 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
         return run_routed(workflow, forge, context, repo, item, &item.transition).await;
     }
 
-    // A verdict routed to a non-PR-create outcome transition (escalation, or a
-    // content-bearing rewrite). The head is discarded; any authored body or
-    // review body is bound through the same keyed runtime seam the role path
-    // uses, so the routed transition's `set_body` / `attach_review` effects can
-    // consume the work product. An empty diff here is the escalation signal,
-    // not an error.
+    // A verdict routed to a non-PR-create outcome transition (escalation, a
+    // content-bearing rewrite, or an issue breakdown). The head is discarded;
+    // any authored body / review body / children is bound through the same keyed
+    // runtime seam the role path uses, so the routed transition's `set_body` /
+    // `attach_review` / `create_issues` effects can consume the work product. An
+    // empty diff here is the escalation signal, not an error.
     let mut context = ExecutionContext::new();
-    if output.body.is_some() || output.review_body.is_some() {
+    let routed_create_issues_index = create_issues_effect_index(workflow, &routed);
+    if !output.children.is_empty() {
+        if let Some(effect_index) = routed_create_issues_index {
+            let content_key =
+                workspace_content_key(&item.kind, &routed, target_number(item.target));
+            context.set_create_issues_at(routed.clone(), effect_index, output.children);
+            context.set_create_issues_correlation_key_at(routed.clone(), effect_index, content_key);
+        }
+    } else if output.body.is_some() || output.review_body.is_some() {
         let content_key = workspace_content_key(&item.kind, &routed, target_number(item.target));
         if let Some(body) = output.body {
             context.set_set_body_at(routed.clone(), 0, body);
@@ -200,6 +208,25 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
         }
     }
     run_routed(workflow, forge, context, repo, item, &routed).await
+}
+
+/// Per-kind index of the first `CreateIssues` effect declared by `transition` in
+/// `workflow`, if any.
+///
+/// The executor counts effect indices per kind, so the first (and, in practice,
+/// only) `create_issues` effect on a transition is index `0`.
+fn create_issues_effect_index(
+    workflow: &ValidatedWorkflow,
+    transition: &TransitionId,
+) -> Option<usize> {
+    let declares_create_issues = workflow
+        .transitions()
+        .iter()
+        .find(|candidate| &candidate.id == transition)?
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::CreateIssues { .. }));
+    declares_create_issues.then_some(0)
 }
 
 /// Applies `routed` under the actor's authority with a content/PR-bound
@@ -272,4 +299,197 @@ fn is_stale(error: &ExecutionError) -> bool {
             | ExecutionError::TargetStale { .. }
             | ExecutionError::Classification(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery};
+    use temper_forge_memory::MemoryForge;
+    use temper_workflow::{
+        parse_metadata_block, ArtifactKindId, ArtifactRef, CreateIssuesChild, ExternalToolId,
+        QueueId, RawWorkflowSpec, RoleId,
+    };
+
+    use crate::{
+        CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
+    };
+
+    /// A queue automation whose `needs_breakdown` verdict routes to a transition
+    /// that fans the intake out into dependent children via `create_issues`.
+    const BREAKDOWN_WORKFLOW: &str = r#"{
+        "name": "architect-automation",
+        "roles": [{
+            "id": "architect",
+            "external_tools": [{
+                "id": "coding_workspace",
+                "description": "Analyze and author a breakdown.",
+                "required": true,
+                "constraints": ["Only touch the checked-out repository."],
+                "guidance": "Break the intake into children."
+            }]
+        }],
+        "labels": [{"id": "intake"}, {"id": "triaging"}, {"id": "planned"}, {"id": "code"}, {"id": "ready"}],
+        "artifact_kinds": [{"id": "epic", "target": "issue", "identifying_labels": ["intake"]}],
+        "queues": [{"id": "intake_triage", "artifact": "epic", "labels": ["triaging"]}],
+        "transitions": [
+            {
+                "id": "triage_intake",
+                "artifact": "epic",
+                "roles": ["architect"],
+                "outcomes": {"needs_breakdown": "triage_intake_breakdown"},
+                "effects": [{"kind": "remove_label", "label": "triaging"}]
+            },
+            {
+                "id": "triage_intake_breakdown",
+                "artifact": "epic",
+                "roles": ["architect"],
+                "effects": [
+                    {"kind": "create_issues"},
+                    {"kind": "remove_label", "label": "triaging"},
+                    {"kind": "add_label", "label": "planned"}
+                ]
+            }
+        ]
+    }"#;
+
+    fn workflow() -> ValidatedWorkflow {
+        let spec: RawWorkflowSpec = serde_json::from_str(BREAKDOWN_WORKFLOW).expect("json parses");
+        spec.validate().expect("workflow validates")
+    }
+
+    /// A workspace that returns a verdict plus authored dependent children, with
+    /// no diff — the architect breakdown shape on the automation path.
+    struct ChildrenWorkspace {
+        verdict: VerdictId,
+        children: Vec<CreateIssuesChild>,
+    }
+
+    #[async_trait]
+    impl CodingWorkspace for ChildrenWorkspace {
+        async fn produce_head(
+            &self,
+            request: CodingWorkspaceRequest,
+        ) -> Result<CodingWorkspaceOutput, CodingWorkspaceError> {
+            Ok(CodingWorkspaceOutput::new(
+                request.branch_hint,
+                request.base_branch,
+                "broke the intake into dependent children",
+                Vec::new(),
+                Vec::new(),
+            )
+            .with_verdict(self.verdict.clone())
+            .with_children(self.children.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn automation_verdict_routes_to_create_issues_and_fans_out_children() {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(CreateRepository {
+                owner: "acme".to_string(),
+                name: "service".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
+            .await
+            .expect("repo created")
+            .id;
+        let epic = forge
+            .create_issue(
+                &repo,
+                CreateIssue {
+                    title: "Epic".to_string(),
+                    body: "raw human epic".to_string(),
+                    labels: vec!["intake".to_string(), "triaging".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("epic created")
+            .number;
+
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let workspace: Arc<dyn CodingWorkspace> = Arc::new(ChildrenWorkspace {
+            verdict: VerdictId::new("needs_breakdown"),
+            children: vec![
+                CreateIssuesChild::new("api", "Add the API", "Author the API.")
+                    .with_labels(["code", "ready"]),
+                CreateIssuesChild::new("ui", "Add the UI", "Consume the API.")
+                    .with_labels(["code", "ready"])
+                    .with_dependencies(["api"]),
+            ],
+        });
+        let executors = ExternalToolExecutors::new().with_workspace(
+            RoleId::new("architect"),
+            ExternalToolId::new("coding_workspace"),
+            workspace,
+        );
+
+        let item = AutomatedWorkItem {
+            queue: QueueId::new("intake_triage"),
+            actor: RoleId::new("architect"),
+            transition: TransitionId::new("triage_intake"),
+            executor: Some(ExternalToolId::new("coding_workspace")),
+            outcomes: BTreeMap::from([(
+                VerdictId::new("needs_breakdown"),
+                TransitionId::new("triage_intake_breakdown"),
+            )]),
+            target: ArtifactSource::Issue { number: epic },
+            kind: ArtifactKindId::new("epic"),
+        };
+
+        let outcome =
+            execute_workspace_automation(&workflow, &compiled, &executors, &forge, &repo, &item)
+                .await
+                .expect("workspace automation routes to the breakdown");
+
+        assert!(matches!(
+            outcome,
+            WorkspaceAutomationOutcome::Applied { routed }
+                if routed == TransitionId::new("triage_intake_breakdown")
+        ));
+
+        // The children fanned out under the intake as parent, the sibling
+        // dependency was recorded, and the parent's `planned` label flip applied.
+        let parent_ref = ArtifactRef::same_repo(epic);
+        let mut created: Vec<_> = forge
+            .list_issues(&repo, IssueQuery::default())
+            .await
+            .expect("issues list")
+            .into_iter()
+            .filter(|issue| {
+                parse_metadata_block(&issue.body)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|metadata| metadata.parents.contains(&parent_ref))
+            })
+            .collect();
+        created.sort_by(|a, b| a.title.cmp(&b.title));
+        assert_eq!(created.len(), 2, "two children fanned out under the intake");
+        assert_eq!(created[0].title, "Add the API");
+        assert_eq!(created[1].title, "Add the UI");
+
+        let api_number = created[0].number;
+        let ui_meta = parse_metadata_block(&created[1].body)
+            .expect("metadata parses")
+            .expect("metadata exists");
+        assert!(ui_meta
+            .dependencies
+            .contains(&ArtifactRef::same_repo(api_number)));
+
+        let parent = forge
+            .get_issue_by_number(&repo, epic)
+            .await
+            .expect("lookup")
+            .expect("epic exists");
+        assert!(parent.labels.iter().any(|label| label == "planned"));
+    }
 }
