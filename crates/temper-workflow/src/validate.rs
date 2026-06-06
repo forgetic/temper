@@ -6,7 +6,7 @@
 //! checks (contradictory effects, unsatisfiable gates, tool-authority limits).
 
 use crate::diagnostics::{Diagnostic, ReferenceSite, SymbolKind};
-use crate::spec::{RawEffect, RawGateCondition, RawTransition, RawWorkflowSpec};
+use crate::spec::{RawEffect, RawGateCondition, RawIntakeAuthor, RawTransition, RawWorkflowSpec};
 use crate::validate_build::build_validated;
 use crate::validated::ValidatedWorkflow;
 use crate::ValidationErrors;
@@ -344,6 +344,16 @@ fn check_references(
                 diagnostics,
             );
         }
+    }
+
+    if let Some(RawIntakeAuthor::Role { role }) = &spec.intake_author {
+        check_reference(
+            declared.roles,
+            role,
+            SymbolKind::Role,
+            ReferenceSite::IntakeAuthor,
+            diagnostics,
+        );
     }
 }
 

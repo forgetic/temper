@@ -39,6 +39,11 @@ pub struct RawWorkflowSpec {
     pub gates: Vec<RawGate>,
     #[serde(default)]
     pub relations: Vec<RawRelation>,
+    /// Who is expected to file intake (the "external filer"). When seeding an
+    /// intake issue, provisioning authors it as this identity. `None` keeps the
+    /// legacy behavior of authoring as the `human` role.
+    #[serde(default)]
+    pub intake_author: Option<RawIntakeAuthor>,
 }
 
 impl RawWorkflowSpec {
@@ -49,6 +54,19 @@ impl RawWorkflowSpec {
     pub fn validate(&self) -> Result<ValidatedWorkflow, ValidationErrors> {
         validate(self)
     }
+}
+
+/// Declares who is expected to file intake into the workflow.
+///
+/// JSON forms: `{ "kind": "role", "role": "human" }` for a provisioned workflow
+/// role, or `{ "kind": "site_admin" }` for the provisioning admin identity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RawIntakeAuthor {
+    /// A provisioned workflow role (e.g. `human`) that authors the intake issue.
+    Role { role: String },
+    /// The provisioning admin identity (the "external filer") authors the intake.
+    SiteAdmin,
 }
 
 /// Role declaration: an actor authority and its work queues.

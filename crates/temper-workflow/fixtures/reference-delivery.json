@@ -1,5 +1,6 @@
 {
   "name": "reference-delivery",
+  "intake_author": { "kind": "role", "role": "human" },
   "roles": [
     {
       "id": "architect",

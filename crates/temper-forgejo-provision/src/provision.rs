@@ -7,7 +7,7 @@ use std::path::Path;
 use temper_forge::{CreateIssue, IssueQuery, ItemNumber, RepositoryId, RepositoryPath};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_runner::RoleBinding;
-use temper_workflow::{ArtifactTarget, Effect, RoleId, ValidatedWorkflow};
+use temper_workflow::{ArtifactTarget, Effect, IntakeAuthor, RoleId, ValidatedWorkflow};
 
 use crate::forgejo_prep::commit_ci_sentinel;
 use temper_forgejo_ops::forgejo_rest::{self, RestError, ROLE_PASSWORD};
@@ -466,19 +466,46 @@ pub async fn provision_and_seed(
         .await?;
     }
     let issue = if let Some(seed) = intake_seed {
-        let seed_token = provisioned
-            .roles
-            .get(&RoleId::new("human"))
-            .map(|identity| identity.token.as_str())
-            .ok_or_else(|| ProvisionError::Shape {
-                what: "intake seed author".into(),
-                detail: "workflow provisioning did not create a human role token".into(),
-            })?;
+        let seed_token = resolve_intake_seed_token(workflow, &provisioned, admin_token)?;
         Some(seed_intake_issue(base_url, seed_token, owner, name, seed, workflow).await?)
     } else {
         None
     };
     Ok((provisioned, issue))
+}
+
+/// Resolves the token that authors the seeded intake issue from the workflow's
+/// `intake_author` knob.
+///
+/// - `SiteAdmin` uses the provisioning admin token (the "external filer").
+/// - `Role(r)` uses that role's minted token; errors if the role was not
+///   provisioned.
+/// - `None` keeps the legacy `human`-role lookup for back-compat.
+fn resolve_intake_seed_token<'a>(
+    workflow: &ValidatedWorkflow,
+    provisioned: &'a Provisioned,
+    admin_token: &'a str,
+) -> Result<&'a str> {
+    match workflow.intake_author() {
+        Some(IntakeAuthor::SiteAdmin) => Ok(admin_token),
+        Some(IntakeAuthor::Role(role)) => role_seed_token(provisioned, role),
+        None => role_seed_token(provisioned, &RoleId::new("human")),
+    }
+}
+
+/// Looks up a provisioned role's minted token, erroring if the role was not
+/// provisioned.
+fn role_seed_token<'a>(provisioned: &'a Provisioned, role: &RoleId) -> Result<&'a str> {
+    provisioned
+        .roles
+        .get(role)
+        .map(|identity| identity.token.as_str())
+        .ok_or_else(|| ProvisionError::Shape {
+            what: "intake seed author".into(),
+            detail: format!(
+                "workflow provisioning did not create a `{role}` role token for intake authoring"
+            ),
+        })
 }
 
 #[cfg(unix)]
@@ -585,5 +612,94 @@ mod tests {
         assert!(env.contains("TEMPER_FORGEJO_BOT_USER='bot'"));
         assert!(env.contains("TEMPER_FORGEJO_BOT_TOKEN='bot-tok'"));
         assert!(env.contains("TEMPER_FORGEJO_BOT_PASSWORD='bot-pw'"));
+    }
+
+    /// Builds a `Provisioned` whose role map contains the given role ids, each
+    /// with a token of `<role>-tok`.
+    fn provisioned_with_roles(role_ids: &[&str]) -> Provisioned {
+        let mut roles = BTreeMap::new();
+        for id in role_ids {
+            roles.insert(
+                RoleId::new(*id),
+                RoleIdentity {
+                    user: (*id).into(),
+                    email: format!("{id}@example.invalid"),
+                    token: format!("{id}-tok"),
+                    password: ROLE_PASSWORD.into(),
+                },
+            );
+        }
+        Provisioned {
+            owner: "acme".into(),
+            name: "service".into(),
+            repository: RepositoryId::new("r"),
+            roles,
+            automation: RoleIdentity {
+                user: BOT_USER.into(),
+                email: "bot@example.invalid".into(),
+                token: "bot-tok".into(),
+                password: "bot-pw".into(),
+            },
+        }
+    }
+
+    /// Builds a minimal validated workflow carrying the given `intake_author`
+    /// knob and a single declared role.
+    fn workflow_with_intake_author(
+        author: Option<temper_workflow::RawIntakeAuthor>,
+    ) -> ValidatedWorkflow {
+        let spec = temper_workflow::RawWorkflowSpec {
+            name: "knob-test".into(),
+            roles: vec![temper_workflow::RawRole {
+                id: "human".into(),
+                ..Default::default()
+            }],
+            intake_author: author,
+            ..Default::default()
+        };
+        spec.validate().expect("minimal spec should validate")
+    }
+
+    #[test]
+    fn site_admin_intake_author_resolves_to_admin_token() {
+        // Acceptance: a workflow whose intake author is the site admin seeds
+        // even when no `human` role was provisioned.
+        let workflow =
+            workflow_with_intake_author(Some(temper_workflow::RawIntakeAuthor::SiteAdmin));
+        let provisioned = provisioned_with_roles(&["architect"]);
+        let token = resolve_intake_seed_token(&workflow, &provisioned, "admin-tok")
+            .expect("site_admin author resolves to the admin token");
+        assert_eq!(token, "admin-tok");
+    }
+
+    #[test]
+    fn role_intake_author_resolves_to_role_token() {
+        let workflow = workflow_with_intake_author(Some(temper_workflow::RawIntakeAuthor::Role {
+            role: "human".into(),
+        }));
+        let provisioned = provisioned_with_roles(&["human"]);
+        let token = resolve_intake_seed_token(&workflow, &provisioned, "admin-tok")
+            .expect("role author resolves to that role's minted token");
+        assert_eq!(token, "human-tok");
+    }
+
+    #[test]
+    fn role_intake_author_errors_when_role_not_provisioned() {
+        let workflow = workflow_with_intake_author(Some(temper_workflow::RawIntakeAuthor::Role {
+            role: "human".into(),
+        }));
+        let provisioned = provisioned_with_roles(&["architect"]);
+        let error = resolve_intake_seed_token(&workflow, &provisioned, "admin-tok")
+            .expect_err("missing role token must error");
+        assert!(matches!(error, ProvisionError::Shape { .. }));
+    }
+
+    #[test]
+    fn absent_intake_author_falls_back_to_human_role() {
+        let workflow = workflow_with_intake_author(None);
+        let provisioned = provisioned_with_roles(&["human"]);
+        let token = resolve_intake_seed_token(&workflow, &provisioned, "admin-tok")
+            .expect("legacy human fallback resolves");
+        assert_eq!(token, "human-tok");
     }
 }
