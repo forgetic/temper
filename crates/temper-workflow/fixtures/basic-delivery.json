@@ -1,5 +1,6 @@
 {
   "name": "basic-delivery",
+  "intake_author": { "kind": "site_admin" },
   "roles": [
     {
       "id": "architect",
