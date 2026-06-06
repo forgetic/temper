@@ -193,6 +193,7 @@ async fn run_workspace_action<F: Forge + ?Sized>(
         branch_hint: pr_branch_hint(&item.kind, number),
         correlation_key: correlation_key.clone(),
         guidance: workspace_guidance(manifest, bound_external_tools, executor_tool_id),
+        allowed_verdicts: allowed_verdicts(tool),
         checkout,
     };
     let output = match workspace.produce_head(request).await {
@@ -668,6 +669,16 @@ fn create_pull_request_count(tool: &ToolManifest) -> usize {
         .count()
 }
 
+/// The verdict vocabulary an action declares: the keys of its `outcomes` map,
+/// as plain strings, for the workspace request and context. Empty for a pure
+/// head action with no declared `outcomes`.
+fn allowed_verdicts(tool: &ToolManifest) -> Vec<String> {
+    tool.outcomes
+        .keys()
+        .map(|verdict| verdict.as_str().to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,6 +743,35 @@ mod tests {
             Vec::new(),
         );
         assert!(action_is_workspace_backed(&plain_head));
+    }
+
+    #[test]
+    fn allowed_verdicts_are_the_declared_outcome_keys() {
+        // A triage action declaring two outcomes surfaces exactly those verdict
+        // keys, sorted by the BTreeMap's ordering, for the workspace request.
+        let triage = tool(
+            "triage_intake",
+            vec![Effect::RemoveLabel(LabelId::new("untriaged"))],
+            vec![
+                ("ready_code", "mark_ready_code"),
+                ("needs_breakdown", "break_down_intake"),
+            ],
+        );
+        assert_eq!(
+            allowed_verdicts(&triage),
+            vec!["needs_breakdown".to_string(), "ready_code".to_string()],
+        );
+
+        // A pure head action with no declared outcomes surfaces an empty
+        // vocabulary, so the provider defers verdict validation to the runner.
+        let open_pr = tool(
+            "open_pr",
+            vec![Effect::CreatePullRequest {
+                correlation_key: None,
+            }],
+            Vec::new(),
+        );
+        assert!(allowed_verdicts(&open_pr).is_empty());
     }
 
     #[test]

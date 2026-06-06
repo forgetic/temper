@@ -55,6 +55,15 @@ The command runs in the checkout. It receives the work item and user guidance in
 The LLM does not receive shell or file tools; it can only choose the authorized
 workflow action, after which the runner invokes this configured provider.
 
+The context JSON includes an `allowed_verdicts` array: the verdict vocabulary the
+action declares (the keys of its compiled `outcomes` map). This is the **only**
+set of verdicts the command may write to the result file (§3) — emitting anything
+else fails the tick. A bound agent should read `allowed_verdicts` and constrain
+itself to that set rather than guessing a verdict, so the workflow stays the
+single source of truth for the action's options. The array is empty for a pure
+head action that declares no `outcomes` (the engineer `open_pr` default), where
+no verdict is expected at all.
+
 ### Per-tool checkout capability
 
 Different workspace ids need different checkouts, so the worker grants each id a
@@ -119,7 +128,10 @@ The provider chooses one of two paths based on whether `verdict` is present:
   PR exactly as before. A `labels` or `summary` value in the result file
   overrides the configured PR labels and the default changed-files summary; the
   PR is still opened from the committed diff.
-- **`verdict` present** → the **verdict path**. The provider **skips** the diff
+- **`verdict` present** → the **verdict path**. The verdict must be one of the
+  action's declared `allowed_verdicts` (surfaced in the context, §2); the provider
+  rejects an out-of-vocabulary verdict here, naming the declared set, rather than
+  handing a doomed verdict to the runner. The provider **skips** the diff
   guard, the commit, and the push, and tolerates an empty working tree. It
   returns a verdict-only output (empty branch) that routes through the action's
   declared `outcomes` map, carrying any `body` (for a routed `set_body`) and

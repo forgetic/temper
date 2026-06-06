@@ -100,6 +100,16 @@ pub struct CodingWorkspaceRequest {
     /// Correlation key the workflow runtime will use when opening/finding the PR.
     pub correlation_key: String,
     pub guidance: CodingWorkspaceGuidance,
+    /// The verdict vocabulary the action declares — the keys of the action's
+    /// compiled `outcomes` map. This is the *only* set of verdicts the routed
+    /// transition can consume; a workspace command that emits a verdict outside
+    /// it fails the tick with an undeclared-verdict error. Surfaced into the
+    /// workspace request and context so a bound agent (e.g. an architect
+    /// constrained to a single triage outcome) can read its allowed options and
+    /// only emit one of them, rather than relying on the model to never pick an
+    /// unmapped verdict. Empty for a pure head action that declares no
+    /// `outcomes` (the engineer `open_pr` default).
+    pub allowed_verdicts: Vec<String>,
     /// How the provider should prepare its checkout for this invocation
     /// (writable head path, read-only analysis, or read-only with the PR diff).
     /// Defaults to [`WorkspaceCheckout::Writable`], today's behavior.
