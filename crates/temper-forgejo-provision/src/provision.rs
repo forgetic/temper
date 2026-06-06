@@ -519,6 +519,30 @@ fn restrict_permissions(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Reads a provisioned role's minted token back out of a secrets file written
+/// by [`write_secrets_file`]/[`format_secrets_env`].
+///
+/// This supports seed-only provisioning runs, where the entry issue is filed in
+/// a second pass (after the workers are up) and the authoring role's token must
+/// be recovered from the secrets file produced by the earlier provision pass.
+pub fn role_token_from_secrets_file(path: &Path, role: &RoleId) -> Result<String> {
+    let contents = std::fs::read_to_string(path)?;
+    let key = env_role_key(role.as_str());
+    let needle = format!("TEMPER_FORGEJO_TOKEN_{key}=");
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix(&needle) {
+            return Ok(sh_unquote(rest.trim()));
+        }
+    }
+    Err(ProvisionError::Shape {
+        what: "intake seed author".into(),
+        detail: format!(
+            "no token for role `{role}` found in {} (expected TEMPER_FORGEJO_TOKEN_{key})",
+            path.display()
+        ),
+    })
+}
+
 fn env_role_key(role: &str) -> String {
     role.chars()
         .map(|ch| {
@@ -533,6 +557,36 @@ fn env_role_key(role: &str) -> String {
 
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Reverses [`sh_quote`]: parses a POSIX single-quote-escaped shell word back to
+/// its literal value. Tokens never contain quotes in practice, but this stays
+/// faithful so it round-trips any value `sh_quote` can emit.
+fn sh_unquote(value: &str) -> String {
+    let mut out = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => {
+                while let Some(&next) = chars.peek() {
+                    if next == '\'' {
+                        chars.next();
+                        break;
+                    }
+                    out.push(next);
+                    chars.next();
+                }
+            }
+            '\\' => {
+                if let Some(&next) = chars.peek() {
+                    out.push(next);
+                    chars.next();
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -581,6 +635,46 @@ mod tests {
         let workflow = temper_reference_delivery::workflow();
         assert!(intake_labels(&workflow).is_empty());
         assert!(has_default_issue_kind(&workflow));
+    }
+
+    #[test]
+    fn role_token_round_trips_through_secrets_file() {
+        let mut roles = BTreeMap::new();
+        roles.insert(
+            RoleId::new("code-reviewer"),
+            RoleIdentity {
+                user: "reviewer".into(),
+                email: "reviewer@example.invalid".into(),
+                token: "tok-with-'-quote".into(),
+                password: ROLE_PASSWORD.into(),
+            },
+        );
+        let env = format_secrets_env(&Provisioned {
+            owner: "acme".into(),
+            name: "service".into(),
+            repository: RepositoryId::new("r"),
+            roles,
+            automation: RoleIdentity {
+                user: BOT_USER.into(),
+                email: "bot@example.invalid".into(),
+                token: "bot-tok".into(),
+                password: "bot-pw".into(),
+            },
+        });
+        let dir = std::env::temp_dir().join(format!("temper-seed-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("roles.env");
+        write_secrets_file(&path, &env).expect("write secrets file");
+
+        let token = role_token_from_secrets_file(&path, &RoleId::new("code-reviewer"))
+            .expect("recovers the role token");
+        assert_eq!(token, "tok-with-'-quote");
+
+        let missing = role_token_from_secrets_file(&path, &RoleId::new("architect"))
+            .expect_err("absent role errors");
+        assert!(matches!(missing, ProvisionError::Shape { .. }));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

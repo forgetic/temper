@@ -3,6 +3,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use temper_workflow::{IntakeAuthor, RoleId};
+
 use crate::provision::{self, ProvisionError};
 
 pub const ADMIN_TOKEN_ENV: &str = "TEMPER_FORGEJO_ADMIN_TOKEN";
@@ -12,7 +14,10 @@ pub const USAGE: &str = concat!(
     "temper-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path> ",
     "[--workflow <path>] ",
     "[--webhook-url <url> --webhook-secret-file <path>] ",
-    "[--seed-intake yes|no] [--intake-title <title>] [--intake-body-file <path>]\n",
+    "[--seed-intake yes|no] [--seed-only] [--intake-title <title>] [--intake-body-file <path>]\n",
+    "  --seed-only files just the intake issue (no org/users/repo/labels/CI/webhook work), ",
+    "reusing the role tokens already written to --out; pair it with a first ",
+    "--seed-intake no pass so the entry issue can be filed after the workers are up\n",
     "  the admin token comes from TEMPER_FORGEJO_ADMIN_TOKEN (required), never argv; ",
     "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to the ",
     "bundled reference-delivery workflow when unset"
@@ -35,6 +40,9 @@ pub struct ProvisionArgs {
     pub webhook_url: Option<String>,
     pub webhook_secret_file: Option<PathBuf>,
     pub seed_intake: bool,
+    /// File only the intake issue, skipping all org/users/repo/labels/CI/webhook
+    /// provisioning. The authoring role's token is recovered from `out`.
+    pub seed_only: bool,
     pub intake_title: Option<String>,
     pub intake_body_file: Option<PathBuf>,
     /// Workflow document to provision against. `None` uses the bundled
@@ -54,6 +62,7 @@ impl fmt::Debug for ProvisionArgs {
             .field("webhook_url", &self.webhook_url)
             .field("webhook_secret_file", &self.webhook_secret_file)
             .field("seed_intake", &self.seed_intake)
+            .field("seed_only", &self.seed_only)
             .field("intake_title", &self.intake_title)
             .field("intake_body_file", &self.intake_body_file)
             .field("workflow_file", &self.workflow_file)
@@ -134,6 +143,7 @@ where
     let mut webhook_url = None;
     let mut webhook_secret_file = None;
     let mut seed_intake = true;
+    let mut seed_only = false;
     let mut intake_title = None;
     let mut intake_body_file = None;
     let mut workflow_file = None;
@@ -149,6 +159,7 @@ where
             "--webhook-url" => webhook_url = Some(value_for(&flag, &mut iter)?),
             "--webhook-secret-file" => webhook_secret_file = Some(value_for(&flag, &mut iter)?),
             "--seed-intake" => seed_intake = parse_bool(&value_for(&flag, &mut iter)?)?,
+            "--seed-only" => seed_only = true,
             "--intake-title" => intake_title = Some(value_for(&flag, &mut iter)?),
             "--intake-body-file" => intake_body_file = Some(value_for(&flag, &mut iter)?),
             other => {
@@ -165,6 +176,11 @@ where
                 "missing required environment variable {ADMIN_TOKEN_ENV}"
             ))
         })?;
+    if seed_only && !seed_intake {
+        return Err(ArgsError::new(
+            "--seed-only files the intake issue and so cannot be combined with --seed-intake no",
+        ));
+    }
     Ok(ParseOutcome::Run(ProvisionArgs {
         base_url: require(base_url, "--base-url")?,
         owner: require(owner, "--owner")?,
@@ -174,6 +190,7 @@ where
         webhook_url,
         webhook_secret_file: webhook_secret_file.map(PathBuf::from),
         seed_intake,
+        seed_only,
         intake_title,
         intake_body_file: intake_body_file.map(PathBuf::from),
         workflow_file: non_empty(workflow_file)
@@ -186,23 +203,34 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| (!value.trim().is_empty()).then_some(value))
 }
 
-pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+fn build_runtime() -> Result<tokio::runtime::Runtime, RunError> {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|err| RunError::Runtime(err.to_string()))?;
+        .map_err(|err| RunError::Runtime(err.to_string()))
+}
+
+fn intake_seed_from_args(args: &ProvisionArgs) -> Result<provision::IntakeIssueSeed, RunError> {
+    Ok(provision::IntakeIssueSeed {
+        title: args
+            .intake_title
+            .clone()
+            .unwrap_or_else(|| provision::DEFAULT_INTAKE_TITLE.into()),
+        body: match &args.intake_body_file {
+            Some(path) => std::fs::read_to_string(path)?,
+            None => provision::DEFAULT_INTAKE_BODY.into(),
+        },
+    })
+}
+
+pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
+    if args.seed_only {
+        return run_seed_only(args);
+    }
+    let runtime = build_runtime()?;
     let workflow = temper_reference_delivery::resolve_workflow(args.workflow_file.as_ref())?;
     let intake_seed = if args.seed_intake {
-        Some(provision::IntakeIssueSeed {
-            title: args
-                .intake_title
-                .clone()
-                .unwrap_or_else(|| provision::DEFAULT_INTAKE_TITLE.into()),
-            body: match &args.intake_body_file {
-                Some(path) => std::fs::read_to_string(path)?,
-                None => provision::DEFAULT_INTAKE_BODY.into(),
-            },
-        })
+        Some(intake_seed_from_args(args)?)
     } else {
         None
     };
@@ -227,6 +255,37 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         provisioned.roles.len(),
         intake,
         args.out.display(),
+    ))
+}
+
+/// Files only the intake issue, assuming an earlier `--seed-intake no` pass
+/// already provisioned the org/users/repo/labels/CI/webhook and wrote `--out`.
+///
+/// This lets a launcher start the workers (and the wake trigger) first, then
+/// file the entry issue so its creation webhook proves the wake path — instead
+/// of the workers only discovering a pre-seeded issue on their next poll.
+fn run_seed_only(args: &ProvisionArgs) -> Result<String, RunError> {
+    let runtime = build_runtime()?;
+    let workflow = temper_reference_delivery::resolve_workflow(args.workflow_file.as_ref())?;
+    let seed = intake_seed_from_args(args)?;
+    let token = match workflow.intake_author() {
+        Some(IntakeAuthor::SiteAdmin) => args.admin_token.clone(),
+        Some(IntakeAuthor::Role(role)) => {
+            provision::role_token_from_secrets_file(&args.out, role)?
+        }
+        None => provision::role_token_from_secrets_file(&args.out, &RoleId::new("human"))?,
+    };
+    let number = runtime.block_on(provision::seed_intake_issue(
+        &args.base_url,
+        &token,
+        &args.owner,
+        &args.name,
+        &seed,
+        &workflow,
+    ))?;
+    Ok(format!(
+        "seeded {}/{}: intake issue #{number}",
+        args.owner, args.name,
     ))
 }
 
@@ -334,6 +393,56 @@ mod tests {
         assert!(!args.seed_intake);
         assert_eq!(args.intake_title.as_deref(), Some("Custom intake"));
         assert_eq!(args.intake_body_file, Some(PathBuf::from("body.md")));
+    }
+
+    #[test]
+    fn parse_seed_only_keeps_seeding_enabled() {
+        let outcome = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+                "--seed-only",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string()),
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert!(args.seed_only);
+        assert!(args.seed_intake);
+    }
+
+    #[test]
+    fn parse_rejects_seed_only_with_seed_intake_no() {
+        let error = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+                "--seed-only",
+                "--seed-intake",
+                "no",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--seed-only"));
     }
 
     #[test]
