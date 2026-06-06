@@ -112,6 +112,166 @@ fn local_git_workspace_rejects_synthetic_only_diff() {
 }
 
 #[test]
+fn workspace_result_parses_full_protocol() {
+    let result = WorkspaceResult::parse(
+        r#"{
+            "verdict": "ready_code",
+            "summary": "one-line summary",
+            "body": "rewritten issue body",
+            "review_body": "review prose",
+            "labels": ["implementation"],
+            "children": [{"title": "child"}]
+        }"#,
+    )
+    .expect("valid protocol parses")
+    .expect("non-empty file yields a result");
+
+    assert_eq!(result.verdict.as_deref(), Some("ready_code"));
+    assert_eq!(result.summary.as_deref(), Some("one-line summary"));
+    assert_eq!(result.body.as_deref(), Some("rewritten issue body"));
+    assert_eq!(result.review_body.as_deref(), Some("review prose"));
+    assert_eq!(result.labels, Some(vec!["implementation".to_string()]));
+    assert_eq!(result.children.len(), 1);
+    assert_eq!(
+        result.verdict_id(),
+        Some(temper_workflow::VerdictId::new("ready_code"))
+    );
+}
+
+#[test]
+fn workspace_result_empty_file_is_absent() {
+    assert_eq!(WorkspaceResult::parse("   \n").expect("blank parses"), None);
+    assert_eq!(WorkspaceResult::parse("").expect("empty parses"), None);
+
+    // An empty JSON object is a present-but-inert result: no verdict, no
+    // overrides — the head path stays in effect.
+    let result = WorkspaceResult::parse("{}")
+        .expect("empty object parses")
+        .expect("empty object is a present result");
+    assert_eq!(result, WorkspaceResult::default());
+    assert_eq!(result.verdict_id(), None);
+}
+
+#[test]
+fn workspace_result_rejects_unknown_fields() {
+    let error =
+        WorkspaceResult::parse(r#"{"verdct": "typo"}"#).expect_err("unknown field is rejected");
+    assert!(error.contains("failed to parse coding workspace result file"));
+}
+
+#[test]
+fn no_result_file_keeps_head_path_unchanged() {
+    let repo = TestRepo::new("no-result-head");
+    // The command writes a real diff and never touches the result file.
+    let workspace = local_workspace(
+        &repo.path,
+        "mkdir -p docs && printf 'real change\n' > docs/product-change.md",
+    );
+
+    let output = workspace
+        .produce(request())
+        .expect("head path still opens a PR");
+
+    assert!(output.verdict.is_none());
+    assert_eq!(output.branch, "agent/pr-for-code-7");
+    assert_eq!(output.changed_files, vec!["docs/product-change.md"]);
+    assert_eq!(output.labels, vec!["implementation", "needs-reviewer"]);
+    let head = git(&repo.path, &["log", "--oneline", "-1"]).expect("git log succeeds");
+    assert!(head.contains("Implement pr-for-code-7"));
+    assert!(changed_files(&repo.path)
+        .expect("status succeeds")
+        .is_empty());
+}
+
+#[test]
+fn empty_result_file_keeps_head_path_unchanged() {
+    let repo = TestRepo::new("empty-result-head");
+    // Writing an empty result file is equivalent to writing none at all.
+    let workspace = local_workspace(
+        &repo.path,
+        "mkdir -p docs && printf 'real change\n' > docs/product-change.md && \
+         : > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(request())
+        .expect("empty result keeps the head path");
+
+    assert!(output.verdict.is_none());
+    assert_eq!(output.changed_files, vec!["docs/product-change.md"]);
+    let head = git(&repo.path, &["log", "--oneline", "-1"]).expect("git log succeeds");
+    assert!(head.contains("Implement pr-for-code-7"));
+}
+
+#[test]
+fn verdict_result_skips_commit_push_and_tolerates_empty_tree() {
+    let repo = TestRepo::new("verdict-approve");
+    let head_before = git(&repo.path, &["rev-parse", "HEAD"]).expect("HEAD resolves");
+    // Approve with no diff: the canonical reviewer path.
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '{\"verdict\":\"approve\"}' > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(request())
+        .expect("verdict path tolerates an empty tree");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("approve"))
+    );
+    assert!(output.branch.is_empty(), "verdict output carries no branch");
+    assert!(output.changed_files.is_empty());
+    assert_eq!(output.base_branch, "main");
+
+    // No commit and no push happened: HEAD is unchanged.
+    let head_after = git(&repo.path, &["rev-parse", "HEAD"]).expect("HEAD resolves");
+    assert_eq!(head_before, head_after, "verdict path makes no commit");
+}
+
+#[test]
+fn verdict_result_carries_body_and_review_body() {
+    let repo = TestRepo::new("verdict-content");
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '%s' '{\"verdict\":\"ready_code\",\"body\":\"new body\",\
+         \"review_body\":\"looks good\"}' > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace.produce(request()).expect("verdict path succeeds");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("ready_code"))
+    );
+    assert_eq!(output.body.as_deref(), Some("new body"));
+    assert_eq!(output.review_body.as_deref(), Some("looks good"));
+}
+
+#[test]
+fn head_path_applies_labels_and_summary_override() {
+    let repo = TestRepo::new("head-override");
+    let workspace = local_workspace(
+        &repo.path,
+        "mkdir -p docs && printf 'real change\n' > docs/product-change.md && \
+         printf '%s' '{\"summary\":\"custom summary\",\"labels\":[\"docs\",\"fast-track\"]}' \
+         > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(request())
+        .expect("override flows into the head output");
+
+    assert!(output.verdict.is_none());
+    assert_eq!(output.summary, "custom summary");
+    assert_eq!(output.labels, vec!["docs", "fast-track"]);
+    // Override does not bypass the head flow: a real PR branch is still produced.
+    assert_eq!(output.branch, "agent/pr-for-code-7");
+    assert_eq!(output.changed_files, vec!["docs/product-change.md"]);
+}
+
+#[test]
 fn env_binding_is_absent_until_workspace_root_is_configured() {
     let workspace = LocalGitCodingWorkspace::from_env(|_| None).expect("empty env is valid");
 
