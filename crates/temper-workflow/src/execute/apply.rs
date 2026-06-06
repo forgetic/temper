@@ -13,13 +13,15 @@
 //! parent module docs for why pre-commit effects are ordered this way.
 
 use super::{ExecutionError, Executor, Loaded};
+use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
+use crate::context::CreateIssuesChild;
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
 use std::collections::HashSet;
 use temper_forge::{
-    CreateComment, CreatePullRequest, CreatePullRequestReview, Forge, RepositoryId,
-    RequestReviewers, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
+    CreateComment, CreateIssue, CreatePullRequest, CreatePullRequestReview, Forge, ItemNumber,
+    RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -40,6 +42,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         self.apply_comments(loaded, &plan.transition, &prepared.comments)
             .await?;
         self.apply_pull_request_creates(repo_id, &prepared.pull_request_creates)
+            .await?;
+        self.apply_issue_creates(repo_id, plan.target, &prepared.issue_creates)
             .await?;
         self.apply_review_requests(loaded, &prepared.review_requests)
             .await?;
@@ -170,6 +174,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         let mut pull_request_create_index = 0;
         let mut set_body_index = 0;
         let mut attach_review_index = 0;
+        let mut create_issues_index = 0;
         for effect in &plan.effects {
             match effect {
                 WorkflowEffect::AddLabel(label) => {
@@ -278,6 +283,38 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                         body,
                     });
                 }
+                WorkflowEffect::CreateIssues { correlation_key } => {
+                    let effect_index = create_issues_index;
+                    create_issues_index += 1;
+                    // A create is not naturally idempotent, so — like
+                    // `CreatePullRequest` — a base correlation key is required:
+                    // each child derives a stable per-child key from it so a
+                    // retry resolves the existing children instead of
+                    // duplicating them.
+                    let base_correlation_key = correlation_key
+                        .clone()
+                        .or_else(|| {
+                            self.context
+                                .create_issues_correlation_key(&plan.transition, effect_index)
+                                .map(str::to_string)
+                        })
+                        .ok_or_else(|| ExecutionError::MissingCorrelationKey {
+                            effect: effect.clone(),
+                        })?;
+                    let children = self
+                        .context
+                        .create_issues(&plan.transition, effect_index)
+                        .map(<[CreateIssuesChild]>::to_vec)
+                        .ok_or_else(|| ExecutionError::UnresolvedCreateIssues {
+                            transition: plan.transition.clone(),
+                            effect_index,
+                        })?;
+                    validate_child_dependencies(&plan.transition, effect_index, &children)?;
+                    prepared.issue_creates.push(PreparedCreateIssues {
+                        base_correlation_key,
+                        children,
+                    });
+                }
                 WorkflowEffect::MergePullRequest => {
                     prepared.merge = true;
                 }
@@ -313,6 +350,74 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         for create in creates {
             self.ensure_pull_request(repo_id, &create.correlation_key, create.input.clone())
                 .await?;
+        }
+        Ok(())
+    }
+
+    /// Creates the workspace-authored child issues idempotently before the
+    /// label commit point, then links the declared sibling dependencies.
+    ///
+    /// Each child lands independently through
+    /// [`ensure_issue_with_parent`](Self::ensure_issue_with_parent), carrying a
+    /// parent back-reference to the artifact the transition acts on and a stable
+    /// per-child correlation key derived from the effect's base key. The fan-out
+    /// is non-atomic on real forges (the cross-repo aggregation stance): if a
+    /// create lands but a later child or the source label flip crashes, retrying
+    /// reuses the same keys and resolves the existing children instead of
+    /// duplicating them. Sibling dependency relations are recorded only after
+    /// every child exists, so a dependency target's number is always known.
+    async fn apply_issue_creates(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        creates: &[PreparedCreateIssues],
+    ) -> Result<(), ExecutionError> {
+        for create in creates {
+            let parent = ArtifactRef::same_repo(target_number(target));
+            let mut numbers_by_slug = std::collections::BTreeMap::<String, ItemNumber>::new();
+            // First pass: every child exists and carries its parent back-reference.
+            for child in &create.children {
+                let correlation_key =
+                    child_correlation_key(&create.base_correlation_key, &child.slug);
+                let outcome = self
+                    .ensure_issue_with_parent(
+                        repo_id,
+                        &correlation_key,
+                        Some(parent.clone()),
+                        CreateIssue {
+                            title: child.title.clone(),
+                            body: child.body.clone(),
+                            labels: child.labels.clone(),
+                            assignees: Vec::new(),
+                        },
+                    )
+                    .await?;
+                numbers_by_slug.insert(child.slug.clone(), outcome.into_artifact().number);
+            }
+            // Second pass: link sibling dependencies now that all numbers resolve.
+            for child in &create.children {
+                if child.dependencies.is_empty() {
+                    continue;
+                }
+                let child_number = numbers_by_slug[&child.slug];
+                let child_issue = self
+                    .forge
+                    .get_issue_by_number(repo_id, child_number)
+                    .await?
+                    .ok_or(ExecutionError::TargetMissing {
+                        target: ArtifactSource::Issue {
+                            number: child_number,
+                        },
+                    })?;
+                for dependency_slug in &child.dependencies {
+                    let dependency_number = numbers_by_slug[dependency_slug];
+                    self.ensure_issue_dependency_metadata(
+                        &child_issue.id,
+                        &ArtifactRef::same_repo(dependency_number),
+                    )
+                    .await?;
+                }
+            }
         }
         Ok(())
     }
@@ -577,6 +682,7 @@ struct PreparedEffects {
     remove_assignees: Vec<UserId>,
     comments: Vec<String>,
     pull_request_creates: Vec<PreparedPullRequestCreate>,
+    issue_creates: Vec<PreparedCreateIssues>,
     review_requests: Vec<UserId>,
     reviews: Vec<ReviewDecision>,
     attach_reviews: Vec<PreparedAttachReview>,
@@ -606,6 +712,18 @@ struct PreparedAttachReview {
     body: String,
 }
 
+/// A concrete, idempotent multi-artifact issue-create request prepared from a
+/// `CreateIssues` effect plus the runtime [`crate::context::ExecutionContext`].
+///
+/// The children are the workspace work product; the base correlation key seeds
+/// each child's per-child key so the whole fan-out is at-most-once across
+/// retries. Sibling dependency slugs have already been validated to reference a
+/// child in the same effect.
+struct PreparedCreateIssues {
+    base_correlation_key: String,
+    children: Vec<CreateIssuesChild>,
+}
+
 fn validate_pull_request_effects(
     loaded: &Loaded,
     prepared: &PreparedEffects,
@@ -632,6 +750,52 @@ fn validate_pull_request_effects(
         }
     };
     Err(ExecutionError::UnsupportedEffect { effect })
+}
+
+/// Returns the Forge item number of a transition target.
+fn target_number(target: ArtifactSource) -> ItemNumber {
+    match target {
+        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number,
+    }
+}
+
+/// Builds a stable per-child correlation key from the effect's base key and a
+/// child slug.
+///
+/// Length prefixes keep the composition collision-free even when the base key
+/// or slug contain separators, so re-running the same effect recomputes the
+/// same per-child key and resolves the existing child instead of duplicating it.
+fn child_correlation_key(base_correlation_key: &str, slug: &str) -> String {
+    format!(
+        "{}:{}/child:{}:{}",
+        base_correlation_key.len(),
+        base_correlation_key,
+        slug.len(),
+        slug
+    )
+}
+
+/// Validates that every child's declared sibling dependency names another child
+/// bound in the same effect, before any mutation.
+fn validate_child_dependencies(
+    transition: &TransitionId,
+    effect_index: usize,
+    children: &[CreateIssuesChild],
+) -> Result<(), ExecutionError> {
+    let slugs: HashSet<&str> = children.iter().map(|child| child.slug.as_str()).collect();
+    for child in children {
+        for dependency in &child.dependencies {
+            if !slugs.contains(dependency.as_str()) {
+                return Err(ExecutionError::UnknownCreateIssuesDependency {
+                    transition: transition.clone(),
+                    effect_index,
+                    slug: child.slug.clone(),
+                    dependency: dependency.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 impl PreparedEffects {

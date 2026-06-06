@@ -500,6 +500,7 @@ impl<'a> Planner<'a> {
                     | Effect::SubmitReview { .. }
                     | Effect::SetBody { .. }
                     | Effect::AttachReview { .. }
+                    | Effect::CreateIssues { .. }
                     | Effect::MergePullRequest => None,
                 });
                 let mut any = false;
@@ -548,6 +549,9 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
             decision: *decision,
             correlation_key: correlation_key.clone(),
         },
+        Effect::CreateIssues { correlation_key } => WorkflowEffect::CreateIssues {
+            correlation_key: correlation_key.clone(),
+        },
         Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
     }
 }
@@ -565,6 +569,7 @@ fn to_postcondition(effect: &Effect) -> Option<Postcondition> {
         | Effect::SubmitReview { .. }
         | Effect::SetBody { .. }
         | Effect::AttachReview { .. }
+        | Effect::CreateIssues { .. }
         | Effect::MergePullRequest => None,
     }
 }

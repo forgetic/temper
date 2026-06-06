@@ -56,6 +56,12 @@ pub enum WorkflowEffect {
         decision: ReviewDecision,
         correlation_key: Option<String>,
     },
+    /// Create one-or-many child artifacts from the workspace work product. The
+    /// children (authored titles/bodies/labels and the parent/dependency
+    /// relations between them) come from runtime context in the execution phase,
+    /// exactly as `CreatePullRequest` reads its head. The optional correlation
+    /// key is the base under which each child is made idempotent across retries.
+    CreateIssues { correlation_key: Option<String> },
     /// Set or refresh the claim lease on the target artifact.
     ///
     /// Placeholder: leases are modeled in [`crate::metadata`] but no transition

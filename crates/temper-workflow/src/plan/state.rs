@@ -79,6 +79,7 @@ fn apply_label_effects(
             | Effect::SubmitReview { .. }
             | Effect::SetBody { .. }
             | Effect::AttachReview { .. }
+            | Effect::CreateIssues { .. }
             | Effect::MergePullRequest => {}
         }
     }

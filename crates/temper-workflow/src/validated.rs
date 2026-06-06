@@ -277,6 +277,15 @@ pub enum Effect {
         decision: ReviewDecision,
         correlation_key: Option<String>,
     },
+    /// Create one-or-many child artifacts with workspace-authored
+    /// titles/bodies/labels and declared parent/dependency relations. The
+    /// children come from the workspace work product through a keyed
+    /// runtime-input seam, exactly as `CreatePullRequest` reads its head; the
+    /// optional correlation key is the base under which each child is made
+    /// idempotent across retries.
+    CreateIssues {
+        correlation_key: Option<String>,
+    },
     MergePullRequest,
 }
 

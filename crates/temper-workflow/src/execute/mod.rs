@@ -211,6 +211,20 @@ pub enum ExecutionError {
         transition: TransitionId,
         effect_index: usize,
     },
+    /// A `CreateIssues` effect has no workspace-authored children bound in the
+    /// [`ExecutionContext`]. Reported before any mutation.
+    UnresolvedCreateIssues {
+        transition: TransitionId,
+        effect_index: usize,
+    },
+    /// A `CreateIssues` child referenced a sibling dependency slug that no other
+    /// bound child in the same effect declares. Reported before any mutation.
+    UnknownCreateIssuesDependency {
+        transition: TransitionId,
+        effect_index: usize,
+        slug: String,
+        dependency: String,
+    },
     /// A postcondition did not hold after the effects were applied.
     PostconditionFailed { postcondition: Postcondition },
     /// A backend operation failed.
@@ -276,6 +290,22 @@ impl std::fmt::Display for ExecutionError {
             } => write!(
                 formatter,
                 "no authored review body is bound for transition `{transition}` attach-review effect #{effect_index}"
+            ),
+            ExecutionError::UnresolvedCreateIssues {
+                transition,
+                effect_index,
+            } => write!(
+                formatter,
+                "no authored children are bound for transition `{transition}` create-issues effect #{effect_index}"
+            ),
+            ExecutionError::UnknownCreateIssuesDependency {
+                transition,
+                effect_index,
+                slug,
+                dependency,
+            } => write!(
+                formatter,
+                "create-issues child `{slug}` in transition `{transition}` effect #{effect_index} depends on unknown sibling `{dependency}`"
             ),
             ExecutionError::PostconditionFailed { postcondition } => {
                 write!(
