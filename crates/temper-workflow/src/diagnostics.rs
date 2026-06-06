@@ -186,6 +186,13 @@ pub enum Diagnostic {
         artifact: String,
         queue_artifacts: Vec<String>,
     },
+    /// A queue automation declares a workspace executor id that the actor role
+    /// does not declare among its external tools.
+    QueueAutomationExecutorUndeclared {
+        queue: String,
+        actor: String,
+        executor: String,
+    },
     /// A queue automation outcome transition does not authorize the declared actor.
     QueueAutomationOutcomeUnauthorized {
         queue: String,
@@ -230,6 +237,7 @@ impl Diagnostic {
             | Diagnostic::EmptyQueueArtifacts { .. }
             | Diagnostic::QueueAutomationUnauthorized { .. }
             | Diagnostic::QueueAutomationArtifactMismatch { .. }
+            | Diagnostic::QueueAutomationExecutorUndeclared { .. }
             | Diagnostic::QueueAutomationOutcomeUnauthorized { .. }
             | Diagnostic::QueueAutomationOutcomeArtifactMismatch { .. }
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
@@ -275,6 +283,14 @@ impl fmt::Display for Diagnostic {
                 formatter,
                 "automation for queue `{queue}` uses transition `{transition}` on artifact `{artifact}`, which is not selected by the queue ({})",
                 queue_artifacts.join(", ")
+            ),
+            Diagnostic::QueueAutomationExecutorUndeclared {
+                queue,
+                actor,
+                executor,
+            } => write!(
+                formatter,
+                "automation for queue `{queue}` declares workspace executor `{executor}`, but actor role `{actor}` does not declare that external tool"
             ),
             Diagnostic::QueueAutomationOutcomeUnauthorized {
                 queue,

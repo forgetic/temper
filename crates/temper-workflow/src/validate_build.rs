@@ -127,6 +127,7 @@ fn build_queue_automation(automation: &RawQueueAutomation) -> QueueAutomation {
     QueueAutomation {
         actor: RoleId::new(&automation.actor),
         transition: TransitionId::new(&automation.transition),
+        executor: automation.executor.as_deref().map(ExternalToolId::new),
         outcomes: build_outcomes(
             &automation.outcomes,
             automation.on_merge_conflict.as_deref(),

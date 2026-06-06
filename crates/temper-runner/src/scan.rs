@@ -16,8 +16,8 @@ use temper_forge::{Forge, ForgeError, Issue, PullRequest, RepositoryId};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     queue_active, ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
-    ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, TransitionId,
-    ValidatedWorkflow, VerdictId,
+    ExecutionError, ExternalToolId, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds,
+    TransitionId, ValidatedWorkflow, VerdictId,
 };
 
 pub use candidate::{candidate_query_plan, CandidateQueryPlan, ScanMode};
@@ -44,6 +44,11 @@ pub struct AutomatedWorkItem {
     pub actor: RoleId,
     /// Transition declared by the queue automation metadata.
     pub transition: TransitionId,
+    /// Optional workspace executor (declared external-tool id) that services
+    /// this automation directly. When set, the mechanical worker invokes the
+    /// workspace bound for `actor` under this id and routes on its verdict
+    /// through `outcomes`; when `None` the worker runs `transition` directly.
+    pub executor: Option<ExternalToolId>,
     /// Verdict id -> transition id routing declared by the automation. The
     /// merge-conflict fallback lives here under the built-in merge-conflict
     /// verdict (see [`VerdictId::merge_conflict`]).
@@ -343,6 +348,7 @@ fn automated_work_items(
                 queue: queue.id.clone(),
                 actor: automation.actor.clone(),
                 transition: automation.transition.clone(),
+                executor: automation.executor.clone(),
                 outcomes: automation.outcomes.clone(),
                 target: member.source,
                 kind: member.kind.clone(),

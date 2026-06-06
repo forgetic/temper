@@ -221,6 +221,15 @@ pub struct RawQueueAutomation {
     pub actor: String,
     /// Transition to run for matched active queue members.
     pub transition: String,
+    /// Optional external-tool id of a workspace executor that services this
+    /// automation directly, instead of running `transition` mechanically. When
+    /// set, the mechanical worker invokes the workspace bound for `actor` under
+    /// this id, then routes on the workspace's returned verdict through
+    /// `outcomes` (ADR 0022 §D). The id must be declared on the `actor` role's
+    /// `external_tools`. When unset the automation runs `transition` directly,
+    /// as before.
+    #[serde(default)]
+    pub executor: Option<String>,
     /// Optional fallback transition to run when the primary transition fails
     /// because the PR cannot be merged cleanly. This is sugar over `outcomes`:
     /// it desugars into an outcome keyed by the built-in merge-conflict verdict.
