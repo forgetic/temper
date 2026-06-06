@@ -508,6 +508,8 @@ fn effect_label(effect: &Effect) -> Option<&LabelId> {
         | Effect::CreatePullRequest { .. }
         | Effect::RequestReviewers { .. }
         | Effect::SubmitReview { .. }
+        | Effect::SetBody { .. }
+        | Effect::AttachReview { .. }
         | Effect::MergePullRequest => None,
     }
 }

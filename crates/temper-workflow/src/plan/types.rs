@@ -43,6 +43,19 @@ pub enum WorkflowEffect {
     RequestReviewers { roles: Vec<RoleId> },
     /// Submit a native pull-request review decision.
     SubmitReview { decision: ReviewDecision },
+    /// Write an agent-authored body onto the target artifact. The optional
+    /// correlation key identifies retries; the body text comes from runtime
+    /// context (the workspace work product) in the execution phase, exactly as
+    /// `CreatePullRequest` reads its head, branch, and title.
+    SetBody { correlation_key: Option<String> },
+    /// Submit a native pull-request review carrying a runtime-supplied body.
+    /// The decision is portable workflow vocabulary; the body comes from runtime
+    /// context (the workspace work product) in the execution phase. The optional
+    /// correlation key identifies retries.
+    AttachReview {
+        decision: ReviewDecision,
+        correlation_key: Option<String>,
+    },
     /// Set or refresh the claim lease on the target artifact.
     ///
     /// Placeholder: leases are modeled in [`crate::metadata`] but no transition

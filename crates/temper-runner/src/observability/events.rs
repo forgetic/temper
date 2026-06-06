@@ -253,6 +253,8 @@ pub fn execution_error_failure_class(error: &ExecutionError) -> String {
         ExecutionError::UnresolvedPullRequestCreate { .. } => {
             "unresolved_pull_request_create".to_string()
         }
+        ExecutionError::UnresolvedSetBody { .. } => "unresolved_set_body".to_string(),
+        ExecutionError::UnresolvedAttachReview { .. } => "unresolved_attach_review".to_string(),
         ExecutionError::PostconditionFailed { .. } => "postcondition_failed".to_string(),
         ExecutionError::Backend { .. } => "backend".to_string(),
     }
@@ -380,6 +382,8 @@ fn summarize_effect(effect: &WorkflowEffect) -> String {
                 .join(",")
         ),
         WorkflowEffect::SubmitReview { decision } => format!("submit_review:{decision:?}"),
+        WorkflowEffect::SetBody { .. } => "set_body".to_string(),
+        WorkflowEffect::AttachReview { decision, .. } => format!("attach_review:{decision:?}"),
         WorkflowEffect::UpdateLease { .. } => "update_lease".to_string(),
         WorkflowEffect::ReleaseLease => "release_lease".to_string(),
         WorkflowEffect::MergePullRequest => "merge_pull_request".to_string(),

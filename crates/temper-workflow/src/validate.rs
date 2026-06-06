@@ -628,6 +628,8 @@ fn effect_label(effect: &RawEffect) -> Option<&str> {
         | RawEffect::CreatePullRequest { .. }
         | RawEffect::RequestReviewers { .. }
         | RawEffect::SubmitReview { .. }
+        | RawEffect::SetBody { .. }
+        | RawEffect::AttachReview { .. }
         | RawEffect::MergePullRequest => None,
     }
 }
@@ -642,6 +644,8 @@ fn effect_roles(effect: &RawEffect) -> Vec<&str> {
         | RawEffect::CreateComment { .. }
         | RawEffect::CreatePullRequest { .. }
         | RawEffect::SubmitReview { .. }
+        | RawEffect::SetBody { .. }
+        | RawEffect::AttachReview { .. }
         | RawEffect::MergePullRequest => Vec::new(),
     }
 }
