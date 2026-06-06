@@ -87,6 +87,49 @@ jobs:
           PY
 "#;
 
+/// How provisioned identities (role users + the `bot`) are granted access to
+/// the target repo.
+///
+/// Defaults to [`AccessScope::OrgOwners`], reproducing today's throwaway-repo
+/// behavior. [`AccessScope::RepoCollaborator`] is the narrower scope used when
+/// provisioning onto a shared org (e.g. `ai`, which also hosts `temper`): it
+/// confers access to a single repository instead of every repo in the org.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AccessScope {
+    /// Add every role user and the `bot` to the org **Owners** team. This makes
+    /// them owners of *every* repo in the org — correct only for a throwaway
+    /// org dedicated to one demo run.
+    #[default]
+    OrgOwners,
+    /// Grant each identity a repo-scoped collaborator permission on the target
+    /// repo and never touch the Owners team. Role users and the `bot` all get
+    /// `write` — enough for the bot to merge approved PRs and read Actions
+    /// status over the web UI (ADR-0019); `admin` is intentionally not used
+    /// absent a concrete need.
+    RepoCollaborator,
+}
+
+/// Options that tune [`provision_world`] away from its throwaway-repo defaults.
+///
+/// Both fields default to today's behavior, so `ProvisionOptions::default()`
+/// leaves the throwaway `reference-delivery` / `basic-delivery` flows unchanged.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProvisionOptions {
+    /// Provision onto a repo that must already exist: require the repo up front
+    /// (erroring if absent), and skip the marker CI commit and the CI sentinel
+    /// commit so the repo's own `.forgejo/workflows/ci.yml` and history are
+    /// never touched. Labels, the webhook, and `enable_actions` still apply.
+    pub existing_repo: bool,
+    /// How role users and the `bot` are granted access to the repo.
+    pub access: AccessScope,
+}
+
+/// The repo-scoped collaborator permission granted to role users and the `bot`
+/// under [`AccessScope::RepoCollaborator`]. `write` lets the bot merge approved,
+/// green PRs and read Actions status over the web UI (ADR-0019); `admin` is
+/// intentionally avoided until a concrete need appears.
+const REPO_COLLABORATOR_PERMISSION: &str = "write";
+
 #[derive(Clone)]
 pub struct RoleIdentity {
     pub user: String,
@@ -172,17 +215,31 @@ pub async fn provision_world(
     roles: &[RoleBinding],
     default_branch: &str,
     workflow: &ValidatedWorkflow,
+    options: ProvisionOptions,
 ) -> Result<Provisioned> {
     let client = forgejo_rest::http_client()?;
+    // The org must exist under both access scopes; only the Owners-team
+    // membership differs.
     forgejo_rest::ensure_org(&client, base_url, admin_token, owner).await?;
-    let owners_team = forgejo_rest::owners_team_id(&client, base_url, admin_token, owner).await?;
+    let owners_team = match options.access {
+        AccessScope::OrgOwners => {
+            Some(forgejo_rest::owners_team_id(&client, base_url, admin_token, owner).await?)
+        }
+        AccessScope::RepoCollaborator => None,
+    };
 
+    // Create the users (and mint their tokens) first. Repo-scoped collaborator
+    // grants need the target repo to exist, so under `RepoCollaborator` access
+    // is granted after `ensure_repo`/`require_repo` below; under `OrgOwners` the
+    // team membership is added here, before the repo, exactly as before.
     let mut role_map = BTreeMap::new();
     for binding in roles {
         let login = binding.user.handle.clone();
         let email = format!("{login}@example.invalid");
         forgejo_rest::create_user(&client, base_url, admin_token, &login, &email).await?;
-        forgejo_rest::add_team_member(&client, base_url, admin_token, owners_team, &login).await?;
+        if let Some(team) = owners_team {
+            forgejo_rest::add_team_member(&client, base_url, admin_token, team, &login).await?;
+        }
         let token = forgejo_rest::mint_user_token(&client, base_url, &login).await?;
         role_map.insert(
             binding.role.clone(),
@@ -195,12 +252,16 @@ pub async fn provision_world(
         );
     }
 
-    // Automation identity for the mechanical worker. The bot joins the Owners
-    // team so it can land approved PRs and read Actions status over the web UI
-    // on Forgejo 7.0.x, keeping the setup-only site admin out of the workflow.
+    // Automation identity for the mechanical worker. Under `OrgOwners` the bot
+    // joins the Owners team so it can land approved PRs and read Actions status
+    // over the web UI on Forgejo 7.0.x, keeping the setup-only site admin out of
+    // the workflow; under `RepoCollaborator` it gets the same capability scoped
+    // to this repo (granted after the repo is ensured below).
     let bot_email = format!("{BOT_USER}@example.invalid");
     forgejo_rest::create_user(&client, base_url, admin_token, BOT_USER, &bot_email).await?;
-    forgejo_rest::add_team_member(&client, base_url, admin_token, owners_team, BOT_USER).await?;
+    if let Some(team) = owners_team {
+        forgejo_rest::add_team_member(&client, base_url, admin_token, team, BOT_USER).await?;
+    }
     let bot_token = forgejo_rest::mint_user_token(&client, base_url, BOT_USER).await?;
     let automation = RoleIdentity {
         user: BOT_USER.to_string(),
@@ -209,22 +270,65 @@ pub async fn provision_world(
         password: ROLE_PASSWORD.to_string(),
     };
 
-    forgejo_rest::ensure_repo(&client, base_url, admin_token, owner, name, default_branch).await?;
+    // `--existing-repo` requires a pre-existing repo and must never create one
+    // or rewrite its CI/history; the throwaway path creates the repo as before.
+    if options.existing_repo {
+        forgejo_rest::require_repo(&client, base_url, admin_token, owner, name).await?;
+    } else {
+        forgejo_rest::ensure_repo(&client, base_url, admin_token, owner, name, default_branch)
+            .await?;
+    }
+
+    // Under repo-scoped access, grant each identity collaborator `write` on the
+    // now-existing repo instead of org ownership.
+    if matches!(options.access, AccessScope::RepoCollaborator) {
+        for identity in role_map.values() {
+            forgejo_rest::add_repo_collaborator(
+                &client,
+                base_url,
+                admin_token,
+                owner,
+                name,
+                &identity.user,
+                REPO_COLLABORATOR_PERMISSION,
+            )
+            .await?;
+        }
+        forgejo_rest::add_repo_collaborator(
+            &client,
+            base_url,
+            admin_token,
+            owner,
+            name,
+            BOT_USER,
+            REPO_COLLABORATOR_PERMISSION,
+        )
+        .await?;
+    }
+
     let repository = upsert_labels(base_url, admin_token, owner, name, workflow).await?;
-    forgejo_rest::commit_file(
-        &client,
-        base_url,
-        admin_token,
-        owner,
-        name,
-        WORKFLOW_PATH,
-        CI_WORKFLOW,
-        "add CI workflow (runs-on: host)",
-        default_branch,
-    )
-    .await?;
+
+    // The marker CI commit and the sentinel commit mutate the repo's history;
+    // skip both when provisioning onto a repo that owns its own CI. Actions
+    // enablement is idempotent and wanted in every mode.
+    if !options.existing_repo {
+        forgejo_rest::commit_file(
+            &client,
+            base_url,
+            admin_token,
+            owner,
+            name,
+            WORKFLOW_PATH,
+            CI_WORKFLOW,
+            "add CI workflow (runs-on: host)",
+            default_branch,
+        )
+        .await?;
+    }
     forgejo_rest::enable_actions(&client, base_url, admin_token, owner, name).await?;
-    commit_ci_sentinel(base_url, admin_token, owner, name, default_branch).await?;
+    if !options.existing_repo {
+        commit_ci_sentinel(base_url, admin_token, owner, name, default_branch).await?;
+    }
 
     Ok(Provisioned {
         owner: owner.into(),
@@ -434,6 +538,7 @@ pub async fn provision_and_seed(
     webhook_secret_file: Option<&Path>,
     intake_seed: Option<&IntakeIssueSeed>,
     workflow: &ValidatedWorkflow,
+    options: ProvisionOptions,
 ) -> Result<(Provisioned, Option<ItemNumber>)> {
     let config = runner_config_for(workflow, repo_input());
     let provisioned = provision_world(
@@ -444,6 +549,7 @@ pub async fn provision_and_seed(
         &config.role_bindings,
         &config.repository.default_branch,
         workflow,
+        options,
     )
     .await?;
     if let Some(webhook_url) = webhook_url {
@@ -592,6 +698,16 @@ fn sh_unquote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provision_options_default_is_back_compat() {
+        // Defaults must reproduce today's throwaway behavior: create the repo
+        // (and commit CI) and join the Owners team.
+        let options = ProvisionOptions::default();
+        assert!(!options.existing_repo);
+        assert_eq!(options.access, AccessScope::OrgOwners);
+        assert_eq!(AccessScope::default(), AccessScope::OrgOwners);
+    }
 
     #[test]
     fn ci_workflow_uses_commit_message_marker() {

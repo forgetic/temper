@@ -15,5 +15,15 @@ temper-runner = { path = "../temper-runner" }
 temper-workflow = { path = "../temper-workflow" }
 tokio = { version = "1", features = ["rt", "time"] }
 
+[dev-dependencies]
+# Boots a throwaway Forgejo (admin bootstrap + lifecycle) so the ignored
+# behavior tests can drive the production `provision_world` against a real
+# backend. Dev-only: production provisioning never depends on the test fixture.
+temper-testing = { path = "../temper-testing" }
+reqwest = { workspace = true, features = ["json"] }
+serde_json.workspace = true
+base64 = "0.22"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
 [lints]
 workspace = true
