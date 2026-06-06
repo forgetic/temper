@@ -185,7 +185,7 @@ fn external_tool_binding_for_unknown_role_fails() {
 fn executable_tool_provider_requires_runner_metadata_binding() {
     let compiled = compiled_workflow(false);
     let config = RunnerConfig::new(repo_input());
-    let executors = ExternalToolExecutors::new().with_coding_workspace(
+    let executors = ExternalToolExecutors::new().with_workspace(
         role_id(),
         tool_id("coding_workspace"),
         Arc::new(DummyWorkspace),
@@ -212,7 +212,7 @@ fn executable_tool_provider_validates_when_declared_and_bound() {
         tool_id("coding_workspace"),
         "workspace-local",
     );
-    let executors = ExternalToolExecutors::new().with_coding_workspace(
+    let executors = ExternalToolExecutors::new().with_workspace(
         role_id(),
         tool_id("coding_workspace"),
         Arc::new(DummyWorkspace),

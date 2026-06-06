@@ -504,7 +504,7 @@ async fn process_agent_uses_coding_workspace_for_pr_actions() {
     let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow()).await;
     let workspace = Arc::new(FixtureWorkspace::default());
     let workspace_provider: Arc<dyn CodingWorkspace> = workspace.clone();
-    let executors = ExternalToolExecutors::new().with_coding_workspace(
+    let executors = ExternalToolExecutors::new().with_workspace(
         RoleId::new("banana"),
         ExternalToolId::new("coding_workspace"),
         workspace_provider,

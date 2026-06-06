@@ -5,7 +5,7 @@ use std::sync::Arc;
 use temper_forge::{BranchRef, CreatePullRequest, Forge, ItemNumber};
 use temper_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, Effect, ExecutionError,
-    ExecutionReport, ExternalToolId, RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
+    ExecutionReport, RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
 };
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     render_transition_execution_event, ActionDispatchEvent, AgentError, BoundExternalTool,
     CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
     CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools, TransitionExecutionEvent, WorkItem,
-    WorkItemIdentity, CODING_WORKSPACE_TOOL_ID,
+    WorkItemIdentity,
 };
 
 pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
@@ -66,14 +66,28 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
     work_item_context: &serde_json::Value,
 ) -> Result<bool, AgentError> {
     let identity = tools.work_item_identity(item);
-    let needs_workspace = tool_creates_pull_request(tool) && declares_coding_workspace(manifest);
+    // The single configured workspace fills a pull-request head, so a
+    // create-pull-request action is workspace-backed. Dispatch resolves the
+    // executor generically (any declared external tool the runner bound a
+    // workspace for) rather than gating on the `coding_workspace` id; verdict
+    // and effect routing generalize this in later parts of the series.
+    let needs_workspace = action_is_workspace_backed(tool);
     let workspace = needs_workspace
-        .then(|| coding_workspace(manifest, bound_external_tools, external_tool_executors))
+        .then(|| workspace_executor(manifest, bound_external_tools, external_tool_executors))
+        .flatten();
+    let executor_id = needs_workspace
+        .then(|| {
+            workspace
+                .as_ref()
+                .map(|resolved| resolved.tool_id)
+                .or_else(|| workspace_executor_hint(manifest))
+        })
         .flatten();
     log_action_dispatch(
         &identity,
         tool,
         needs_workspace,
+        executor_id,
         needs_workspace.then_some(workspace.is_some()),
         if needs_workspace && workspace.is_none() {
             "no_op"
@@ -87,7 +101,7 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
         },
     );
     if needs_workspace {
-        let Some(workspace) = workspace else {
+        let Some(resolved) = workspace else {
             return Ok(false);
         };
         return run_pull_request_create_tool(
@@ -97,7 +111,8 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
             tools,
             tool,
             work_item_context,
-            workspace,
+            resolved.tool_id,
+            resolved.workspace,
         )
         .await;
     }
@@ -111,6 +126,7 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
     tools: &RoleTools<'_, F>,
     tool: &ToolManifest,
     work_item_context: &serde_json::Value,
+    executor_tool_id: &str,
     workspace: Arc<dyn CodingWorkspace>,
 ) -> Result<bool, AgentError> {
     let identity = tools.work_item_identity(item);
@@ -193,7 +209,7 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         base_branch: base_branch.clone(),
         branch_hint: pr_branch_hint(&item.kind, number),
         correlation_key: correlation_key.clone(),
-        guidance: workspace_guidance(manifest, bound_external_tools),
+        guidance: workspace_guidance(manifest, bound_external_tools, executor_tool_id),
     };
     let output = match workspace.produce_head(request).await {
         Ok(output) => output,
@@ -291,6 +307,7 @@ fn log_action_dispatch(
     identity: &WorkItemIdentity,
     tool: &ToolManifest,
     external_executor_required: bool,
+    external_executor_id: Option<&str>,
     external_executor_available: Option<bool>,
     outcome: &str,
     no_op_reason: Option<&str>,
@@ -302,7 +319,7 @@ fn log_action_dispatch(
             selected_action: &tool.name,
             transition: &tool.transition,
             external_executor_required,
-            external_executor_id: external_executor_required.then_some(CODING_WORKSPACE_TOOL_ID),
+            external_executor_id,
             external_executor_available,
             outcome,
             no_op_reason,
@@ -381,28 +398,63 @@ fn stale_execution(error: &ExecutionError) -> bool {
     )
 }
 
-fn declares_coding_workspace(manifest: &RoleManifest) -> bool {
-    manifest
-        .external_tools
-        .iter()
-        .any(|tool| tool.id.as_str() == CODING_WORKSPACE_TOOL_ID)
+/// A workspace executor resolved for an action, plus the executor id (declared
+/// external-tool id) it was bound under, for observability and guidance lookup.
+struct ResolvedWorkspace<'a> {
+    tool_id: &'a str,
+    workspace: Arc<dyn CodingWorkspace>,
 }
 
-fn coding_workspace(
-    manifest: &RoleManifest,
+/// Whether `tool`'s action is backed by a workspace executor.
+///
+/// The single configured workspace fills a pull-request head, so today an
+/// action is workspace-backed exactly when it creates a pull request. Later
+/// parts of the series replace this effect-shape inference with an explicit
+/// per-action executor/verdict declaration.
+fn action_is_workspace_backed(tool: &ToolManifest) -> bool {
+    create_pull_request_count(tool) > 0
+}
+
+/// Resolves a workspace executor for `manifest`'s role from the runner-bound
+/// external tools, keyed by executor id.
+///
+/// This is role-agnostic: it returns the first declared external tool that is
+/// both bound and backed by a registered workspace executor, rather than
+/// matching a hardcoded `coding_workspace` id.
+fn workspace_executor<'a>(
+    manifest: &'a RoleManifest,
     bound_external_tools: &[BoundExternalTool],
     external_tool_executors: &ExternalToolExecutors,
-) -> Option<Arc<dyn CodingWorkspace>> {
-    let declared = bound_external_tools
-        .iter()
-        .find(|tool| tool.id.as_str() == CODING_WORKSPACE_TOOL_ID)?;
-    let tool_id = ExternalToolId::new(declared.id.clone());
-    external_tool_executors.coding_workspace_for(&manifest.id, &tool_id)
+) -> Option<ResolvedWorkspace<'a>> {
+    manifest.external_tools.iter().find_map(|declared| {
+        if !bound_external_tools
+            .iter()
+            .any(|bound| bound.id.as_str() == declared.id.as_str())
+        {
+            return None;
+        }
+        external_tool_executors
+            .workspace_for(&manifest.id, &declared.id)
+            .map(|workspace| ResolvedWorkspace {
+                tool_id: declared.id.as_str(),
+                workspace,
+            })
+    })
+}
+
+/// Best-effort executor id for observability when no workspace executor is
+/// bound: the role's first declared external tool, if any.
+fn workspace_executor_hint(manifest: &RoleManifest) -> Option<&str> {
+    manifest
+        .external_tools
+        .first()
+        .map(|declared| declared.id.as_str())
 }
 
 fn workspace_guidance(
     manifest: &RoleManifest,
     bound_external_tools: &[BoundExternalTool],
+    executor_tool_id: &str,
 ) -> CodingWorkspaceGuidance {
     let role_guidance = manifest
         .charter
@@ -414,12 +466,12 @@ fn workspace_guidance(
     let tool_guidance = manifest.prompt_extension.tool_guidance.clone().or_else(|| {
         bound_external_tools
             .iter()
-            .find(|tool| tool.id.as_str() == CODING_WORKSPACE_TOOL_ID)
+            .find(|tool| tool.id.as_str() == executor_tool_id)
             .and_then(|tool| tool.guidance.clone())
     });
     let tool_constraints = bound_external_tools
         .iter()
-        .find(|tool| tool.id.as_str() == CODING_WORKSPACE_TOOL_ID)
+        .find(|tool| tool.id.as_str() == executor_tool_id)
         .map(|tool| tool.constraints.clone())
         .unwrap_or_default();
     CodingWorkspaceGuidance {
@@ -427,10 +479,6 @@ fn workspace_guidance(
         tool_guidance,
         tool_constraints,
     }
-}
-
-fn tool_creates_pull_request(tool: &ToolManifest) -> bool {
-    create_pull_request_count(tool) > 0
 }
 
 fn create_pull_request_count(tool: &ToolManifest) -> usize {

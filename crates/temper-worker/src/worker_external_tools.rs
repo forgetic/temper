@@ -29,7 +29,7 @@ pub(crate) fn configure_external_tool_executors(
                 tool.clone(),
                 "local-git-coding-workspace",
             );
-            executors.add_coding_workspace(role.id.clone(), tool, Arc::clone(&workspace));
+            executors.add_workspace(role.id.clone(), tool, Arc::clone(&workspace));
             bound += 1;
         }
     }
