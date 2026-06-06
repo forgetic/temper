@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use temper_forge::RepositoryId;
-use temper_workflow::{ArtifactKindId, ArtifactSource, ExternalToolId, QueueId, RoleId};
+use temper_workflow::{ArtifactKindId, ArtifactSource, ExternalToolId, QueueId, RoleId, VerdictId};
 
 use crate::{ExternalToolBindingError, RunnerConfig};
 
@@ -76,10 +76,15 @@ pub struct CodingWorkspaceOutput {
     pub changed_files: Vec<String>,
     /// Labels the created PR should carry in addition to workflow metadata.
     pub labels: Vec<String>,
+    /// Optional typed verdict selecting the outcome transition via the action's
+    /// declared `outcomes` map. `None` keeps today's behavior: the action's
+    /// own transition runs and the workspace head produces a pull request.
+    pub verdict: Option<VerdictId>,
 }
 
 impl CodingWorkspaceOutput {
-    /// Builds an output for a same-repository head branch.
+    /// Builds an output for a same-repository head branch with no verdict (the
+    /// default "produce a head" behavior).
     pub fn new(
         branch: impl Into<String>,
         base_branch: impl Into<String>,
@@ -93,7 +98,15 @@ impl CodingWorkspaceOutput {
             summary: summary.into(),
             changed_files,
             labels,
+            verdict: None,
         }
+    }
+
+    /// Returns this output carrying a typed verdict that selects the outcome
+    /// transition declared by the action.
+    pub fn with_verdict(mut self, verdict: VerdictId) -> Self {
+        self.verdict = Some(verdict);
+        self
     }
 }
 

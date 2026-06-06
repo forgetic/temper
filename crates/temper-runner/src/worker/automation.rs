@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, ExecutionError, Executor, PlanDiagnostic, TransitionId,
-    ValidatedWorkflow,
+    ValidatedWorkflow, VerdictId,
 };
 
 #[derive(Default)]
@@ -86,7 +86,7 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
                 );
             }
             Err(error) => {
-                if route_merge_conflict(
+                if route_verdict(
                     &context,
                     executor,
                     &item,
@@ -136,7 +136,23 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
     Ok(progress)
 }
 
-async fn route_merge_conflict<F: Forge + ?Sized>(
+/// Maps an execution error from the primary automation transition to the
+/// built-in verdict the engine derives from it, if any. Today the only
+/// engine-derived automation verdict is the merge-conflict verdict; this is the
+/// first instance of the verdict -> transition routing mechanism (ADR 0022 §B).
+fn verdict_for_error(error: &ExecutionError) -> Option<VerdictId> {
+    match error {
+        ExecutionError::MergeConflict { .. } => Some(VerdictId::merge_conflict()),
+        _ => None,
+    }
+}
+
+/// Routes a primary-transition failure to the outcome transition declared for
+/// the verdict the engine derives from the error, if the automation declares
+/// one. Behavior, logging, and counts match the original merge-conflict
+/// routing; the merge-conflict verdict is its first (and currently only)
+/// engine-derived instance.
+async fn route_verdict<F: Forge + ?Sized>(
     context: &AutomationContext<'_>,
     executor: &Executor<'_, F>,
     item: &AutomatedWorkItem,
@@ -144,10 +160,13 @@ async fn route_merge_conflict<F: Forge + ?Sized>(
     counts: &mut AutomationCounts,
     progress: &mut Progress,
 ) -> Result<bool, WorkerError> {
+    let Some(verdict) = verdict_for_error(error) else {
+        return Ok(false);
+    };
     let ExecutionError::MergeConflict { target, message } = error else {
         return Ok(false);
     };
-    let Some(fallback) = item.on_merge_conflict.as_ref() else {
+    let Some(fallback) = item.outcomes.get(&verdict) else {
         return Ok(false);
     };
     let summary = provider_message_summary(message);

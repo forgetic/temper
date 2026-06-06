@@ -2,7 +2,7 @@
 
 use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
-    TransitionId,
+    TransitionId, VerdictId,
 };
 use crate::spec::{RawEffect, RawGateCondition, RawQueueAutomation, RawWorkflowSpec};
 use crate::validated::{
@@ -11,6 +11,7 @@ use crate::validated::{
     ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
 use chrono::Duration;
+use std::collections::BTreeMap;
 
 /// Converts a checked spec into the typed validated model.
 pub(crate) fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
@@ -126,8 +127,29 @@ fn build_queue_automation(automation: &RawQueueAutomation) -> QueueAutomation {
     QueueAutomation {
         actor: RoleId::new(&automation.actor),
         transition: TransitionId::new(&automation.transition),
-        on_merge_conflict: automation.on_merge_conflict.as_ref().map(TransitionId::new),
+        outcomes: build_outcomes(
+            &automation.outcomes,
+            automation.on_merge_conflict.as_deref(),
+        ),
     }
+}
+
+/// Builds the verdict -> transition outcome map, desugaring `on_merge_conflict`
+/// into the built-in merge-conflict verdict. An explicit `outcomes` entry for
+/// that verdict takes precedence over the sugar.
+fn build_outcomes(
+    outcomes: &BTreeMap<String, String>,
+    on_merge_conflict: Option<&str>,
+) -> BTreeMap<VerdictId, TransitionId> {
+    let mut map: BTreeMap<VerdictId, TransitionId> = outcomes
+        .iter()
+        .map(|(verdict, transition)| (VerdictId::new(verdict), TransitionId::new(transition)))
+        .collect();
+    if let Some(fallback) = on_merge_conflict {
+        map.entry(VerdictId::merge_conflict())
+            .or_insert_with(|| TransitionId::new(fallback));
+    }
+    map
 }
 
 fn build_transition(transition: &crate::spec::RawTransition) -> ValidatedTransition {
@@ -137,6 +159,7 @@ fn build_transition(transition: &crate::spec::RawTransition) -> ValidatedTransit
         roles: transition.roles.iter().map(RoleId::new).collect(),
         requires_gates: transition.requires_gates.iter().map(GateId::new).collect(),
         effects: transition.effects.iter().map(build_effect).collect(),
+        outcomes: build_outcomes(&transition.outcomes, None),
     }
 }
 

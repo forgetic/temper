@@ -6,7 +6,7 @@ use temper_workflow::{
     compile, render_metadata_block, ArtifactKindId, ArtifactRef, CiStatus, ClassifiedArtifact,
     ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals, LabelId,
     PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId,
-    ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
+    ValidatedWorkflow, VerdictId, WorkflowEffect, WorkflowMetadata,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/reference-delivery.json");
@@ -113,7 +113,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
     assert_eq!(workflow.queues().len(), 12);
-    assert_eq!(workflow.transitions().len(), 24);
+    assert_eq!(workflow.transitions().len(), 26);
     assert_eq!(workflow.gates().len(), 3);
     assert_eq!(workflow.relations().len(), 5);
     assert!(workflow
@@ -163,8 +163,8 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(automation.actor, RoleId::new("mechanical"));
     assert_eq!(automation.transition, TransitionId::new("land_pr"));
     assert_eq!(
-        automation.on_merge_conflict,
-        Some(TransitionId::new("route_merge_conflict"))
+        automation.merge_conflict(),
+        Some(&TransitionId::new("route_merge_conflict"))
     );
     let owner_alignment = workflow
         .queues()
@@ -268,8 +268,33 @@ fn reference_fixture_compiles_every_role() {
     assert_eq!(automation.actor, RoleId::new("mechanical"));
     assert_eq!(automation.transition, TransitionId::new("land_pr"));
     assert_eq!(
-        automation.on_merge_conflict,
-        Some(TransitionId::new("route_merge_conflict"))
+        automation.merge_conflict(),
+        Some(&TransitionId::new("route_merge_conflict"))
+    );
+
+    let open_pr = compiled
+        .roles()
+        .iter()
+        .find(|role| role.id.as_str() == "engineer")
+        .expect("engineer role is compiled")
+        .tools
+        .iter()
+        .find(|tool| tool.name == "open_pr")
+        .expect("engineer has the open_pr tool");
+    assert_eq!(
+        open_pr.outcomes.get(&VerdictId::new("needs_architect")),
+        Some(&TransitionId::new("request_code_architect_input")),
+        "open_pr routes the needs_architect verdict to the code-artifact escalation transition"
+    );
+    let escalation = compiled
+        .transitions()
+        .iter()
+        .find(|transition| transition.id.as_str() == "request_code_architect_input")
+        .expect("escalation transition is compiled");
+    assert_eq!(
+        escalation.artifact,
+        ArtifactKindId::new("code"),
+        "escalation transition is legal on the open_pr artifact (code)"
     );
 }
 

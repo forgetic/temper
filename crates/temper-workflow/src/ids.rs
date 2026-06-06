@@ -69,3 +69,16 @@ define_spec_id!(
     ExternalToolId,
     "Identifier for a user-declared external tool."
 );
+define_spec_id!(
+    VerdictId,
+    "Identifier for a workflow verdict token. Verdict ids are workflow vocabulary; the engine treats them as opaque tokens and only validates, at compile time, that each maps to a transition that is legal for the action's artifact/role."
+);
+
+impl VerdictId {
+    /// The built-in verdict the engine derives from a merge-conflict execution
+    /// outcome. The `on_merge_conflict` queue-automation sugar desugars to an
+    /// outcome keyed by this id, making it the first instance of verdict routing.
+    pub fn merge_conflict() -> Self {
+        Self::new("merge_conflict")
+    }
+}

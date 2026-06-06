@@ -431,7 +431,10 @@ fn ci_gated_automated_queue_fetches_ci_and_matches() {
             queue: QueueId::new("landing"),
             actor: RoleId::new("mechanical"),
             transition: temper_workflow::TransitionId::new("land_pr"),
-            on_merge_conflict: Some(temper_workflow::TransitionId::new("route_merge_conflict")),
+            outcomes: std::collections::BTreeMap::from([(
+                temper_workflow::VerdictId::merge_conflict(),
+                temper_workflow::TransitionId::new("route_merge_conflict"),
+            )]),
             target: ArtifactSource::PullRequest { number },
             kind: ArtifactKindId::new("implementation_pr"),
         }]

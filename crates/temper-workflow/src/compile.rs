@@ -19,7 +19,7 @@
 
 use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
-    TransitionId,
+    TransitionId, VerdictId,
 };
 use crate::plan::SignalNeeds;
 use crate::prompt::build_prompt;
@@ -28,6 +28,7 @@ use crate::validated::{
     ValidatedTransition, ValidatedWorkflow,
 };
 use chrono::Duration;
+use std::collections::BTreeMap;
 
 pub use crate::prompt::{PromptManifest, PromptSection};
 
@@ -130,6 +131,11 @@ pub struct ToolManifest {
     pub requires_gates: Vec<GateId>,
     /// Effects the tool applies when it runs.
     pub effects: Vec<Effect>,
+    /// Verdict id -> transition id routing for a workspace-backed action. When
+    /// the action's workspace returns a verdict, the runner runs the mapped
+    /// transition instead of this tool's transition. Empty unless declared.
+    #[serde(default)]
+    pub outcomes: BTreeMap<VerdictId, TransitionId>,
 }
 
 /// User-declared non-workflow tool metadata.
@@ -170,6 +176,9 @@ pub struct TransitionManifest {
     pub roles: Vec<RoleId>,
     pub requires_gates: Vec<GateId>,
     pub effects: Vec<Effect>,
+    /// Verdict id -> transition id routing declared on this transition. Empty
+    /// unless declared.
+    pub outcomes: BTreeMap<VerdictId, TransitionId>,
 }
 
 /// The labels a workflow needs, each annotated with why it is needed.
@@ -265,6 +274,7 @@ fn compile_transitions(workflow: &ValidatedWorkflow) -> Vec<TransitionManifest> 
             roles: transition.roles.clone(),
             requires_gates: transition.requires_gates.clone(),
             effects: transition.effects.clone(),
+            outcomes: transition.outcomes.clone(),
         })
         .collect()
 }
@@ -312,6 +322,7 @@ fn compile_role(
             artifact: transition.artifact.clone(),
             requires_gates: transition.requires_gates.clone(),
             effects: transition.effects.clone(),
+            outcomes: transition.outcomes.clone(),
         })
         .collect();
 
