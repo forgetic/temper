@@ -131,9 +131,13 @@ pub trait CodingWorkspace: Send + Sync {
 }
 
 /// Executable external-tool providers available to role agents.
+///
+/// Registration and lookup are role-agnostic and keyed by executor id (the
+/// declared external-tool id), not by a single hardcoded `coding_workspace`
+/// seam. `coding_workspace` is simply one configured workspace executor.
 #[derive(Clone, Default)]
 pub struct ExternalToolExecutors {
-    coding_workspaces: Vec<CodingWorkspaceBinding>,
+    workspaces: Vec<WorkspaceBinding>,
 }
 
 impl ExternalToolExecutors {
@@ -142,25 +146,25 @@ impl ExternalToolExecutors {
         Self::default()
     }
 
-    /// Adds a coding-workspace provider for `role`/`tool`.
-    pub fn with_coding_workspace(
+    /// Registers a workspace provider for `role` under executor id `tool`.
+    pub fn with_workspace(
         mut self,
         role: RoleId,
         tool: ExternalToolId,
         workspace: Arc<dyn CodingWorkspace>,
     ) -> Self {
-        self.add_coding_workspace(role, tool, workspace);
+        self.add_workspace(role, tool, workspace);
         self
     }
 
-    /// Adds a coding-workspace provider for `role`/`tool`.
-    pub fn add_coding_workspace(
+    /// Registers a workspace provider for `role` under executor id `tool`.
+    pub fn add_workspace(
         &mut self,
         role: RoleId,
         tool: ExternalToolId,
         workspace: Arc<dyn CodingWorkspace>,
     ) -> &mut Self {
-        self.coding_workspaces.push(CodingWorkspaceBinding {
+        self.workspaces.push(WorkspaceBinding {
             role,
             tool,
             workspace,
@@ -168,13 +172,14 @@ impl ExternalToolExecutors {
         self
     }
 
-    /// Returns the coding-workspace provider for `role`/`tool`, if one is bound.
-    pub fn coding_workspace_for(
+    /// Returns the workspace provider registered for `role` under executor id
+    /// `tool`, if one is bound.
+    pub fn workspace_for(
         &self,
         role: &RoleId,
         tool: &ExternalToolId,
     ) -> Option<Arc<dyn CodingWorkspace>> {
-        self.coding_workspaces
+        self.workspaces
             .iter()
             .find(|binding| &binding.role == role && &binding.tool == tool)
             .map(|binding| Arc::clone(&binding.workspace))
@@ -189,7 +194,7 @@ impl ExternalToolExecutors {
         compiled: &temper_workflow::CompiledWorkflow,
         config: &RunnerConfig,
     ) -> Result<(), ExternalToolBindingError> {
-        for binding in &self.coding_workspaces {
+        for binding in &self.workspaces {
             let role = compiled.role(&binding.role).ok_or_else(|| {
                 ExternalToolBindingError::UnknownRole {
                     role: binding.role.clone(),
@@ -217,7 +222,7 @@ impl ExternalToolExecutors {
 }
 
 #[derive(Clone)]
-struct CodingWorkspaceBinding {
+struct WorkspaceBinding {
     role: RoleId,
     tool: ExternalToolId,
     workspace: Arc<dyn CodingWorkspace>,
