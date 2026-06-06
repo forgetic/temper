@@ -159,6 +159,15 @@ pub const FORGEJO_USERNAME_ENV: &str = "TEMPER_FORGEJO_USERNAME";
 /// passed via env, never argv.
 pub const FORGEJO_PASSWORD_ENV: &str = "TEMPER_FORGEJO_PASSWORD";
 
+/// Environment variable carrying the workflow document path (`--workflow`).
+///
+/// Mirrors the production worker's `TEMPER_WORKFLOW_FILE` (see
+/// `temper-worker`'s `WORKFLOW_FILE_ENV`). The flag wins when both are set; when
+/// neither is set the worker uses the bundled reference-delivery workflow,
+/// reproducing today's default behavior. Unlike the Forgejo credentials this is
+/// not a secret, but it is read through the same env seam for parity.
+pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
+
 /// Which Forge backend a worker process builds its handle against (`--backend`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum BackendKind {
@@ -282,6 +291,10 @@ pub struct WorkerArgs {
     pub wake_socket: Option<PathBuf>,
     /// Optional file containing the local wake secret accepted on `wake_socket`.
     pub wake_secret_file: Option<PathBuf>,
+    /// Workflow document to operate against (`--workflow` / `TEMPER_WORKFLOW_FILE`).
+    /// `None` uses the bundled reference-delivery workflow, reproducing today's
+    /// default behavior byte-for-byte.
+    pub workflow_file: Option<PathBuf>,
 }
 
 /// An argument-parsing failure with a user-facing message.

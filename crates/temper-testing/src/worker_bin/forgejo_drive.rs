@@ -483,6 +483,7 @@ mod tests {
             agents: AgentsKind::Fake,
             wake_socket: Some(socket.clone()),
             wake_secret_file: Some(secret_file),
+            workflow_file: None,
         };
         let worker = BurstWorker {
             ticks: AtomicU64::new(0),

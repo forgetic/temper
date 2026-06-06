@@ -34,9 +34,9 @@ use crate::worker_bin::args::{ForgejoArgs, RoleBehavior, WorkerArgs, WorkerKind}
 use crate::worker_bin::forgejo_drive::drive_async;
 use crate::worker_bin::forgejo_engineer::ForgejoEngineer;
 use crate::worker_bin::run::{
-    registry_for, resolve_repository, resolve_repository_set, upsert_labels, RunError,
+    registry_for, resolve_repository, resolve_repository_set, resolve_workflow_and_config,
+    upsert_labels, RunError,
 };
-use crate::{runner_config, workflow};
 
 /// Workflow role id of the engineer, the one role whose Forgejo behavior differs
 /// from its filesystem fake (it must prep PR heads and push CI fix commits).
@@ -66,9 +66,8 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
             user: _,
             behavior,
         } => {
-            let workflow = workflow();
+            let (workflow, config) = resolve_workflow_and_config(args)?;
             let compiled = workflow.compile();
-            let config = runner_config();
             let role_id = RoleId::new(role);
 
             let registry = registry_with_forgejo_engineer(forgejo, *behavior);
@@ -106,8 +105,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
             }
         }
         WorkerKind::Mechanical => {
-            let workflow = workflow();
-            let config = runner_config();
+            let (workflow, config) = resolve_workflow_and_config(args)?;
             if args.repositories.len() == 1 {
                 let repo = resolve_repository(&forge, &args.owner, &args.name).await?;
                 let journal = InMemoryJournal::new();
@@ -209,7 +207,7 @@ fn registry_with_forgejo_engineer(
 /// backend-agnostic Forge interface. It does **not** create users or mint
 /// tokens — that needs forgejo-specific admin flows that live in Temper.
 async fn provision(forge: &ForgejoForge, args: &WorkerArgs) -> Result<(), RunError> {
-    let workflow = workflow();
+    let (workflow, _config) = resolve_workflow_and_config(args)?;
     let compiled = workflow.compile();
     let repo = resolve_repository(forge, &args.owner, &args.name).await?;
     upsert_labels(forge, &repo, &compiled).await?;

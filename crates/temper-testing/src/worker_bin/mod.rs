@@ -17,5 +17,6 @@ pub use args::{
     parse, parse_with_env, AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind,
     CiPolicyKind, CiSentinelKind, ClockKind, ForgejoArgs, ParseOutcome, ReviewerKind, RoleBehavior,
     WorkerArgs, WorkerKind, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, USAGE,
+    WORKFLOW_FILE_ENV,
 };
 pub use run::{run, RunError};

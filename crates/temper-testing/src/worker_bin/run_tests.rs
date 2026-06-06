@@ -1,5 +1,6 @@
 use super::*;
 use crate::worker_bin::args::{AgentsKind, WorkerArgs};
+use crate::{runner_config, workflow};
 use temper_runner::Worker;
 
 fn temp_root(suite: &str) -> PathBuf {
@@ -28,6 +29,7 @@ fn base_args(root: PathBuf, kind: WorkerKind) -> WorkerArgs {
         agents: AgentsKind::Fake,
         wake_socket: None,
         wake_secret_file: None,
+        workflow_file: None,
     }
 }
 

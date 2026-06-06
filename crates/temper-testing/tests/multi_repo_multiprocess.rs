@@ -93,6 +93,7 @@ fn provision(root: &Path, paths: &[RepositoryPath]) {
         agents: worker_bin::AgentsKind::Fake,
         wake_socket: None,
         wake_secret_file: None,
+        workflow_file: None,
     };
     worker_bin::run(&args).expect("multi-repo provisioning succeeds");
 }

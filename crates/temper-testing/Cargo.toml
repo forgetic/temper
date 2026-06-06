@@ -22,6 +22,10 @@ temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-forgejo-fixture = { path = "../temper-forgejo-fixture" }
 temper-forgejo-ops = { path = "../temper-forgejo-ops" }
 temper-forge-memory = { path = "../temper-forge-memory" }
+# Reuse the generalized workflow loader (`load_workflow`/`resolve_workflow`) and
+# the workflow-derived runner config (`runner_config_for`) behind the worker's
+# runtime `--workflow` flag, rather than duplicating them here.
+temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-runner = { path = "../temper-runner" }
 temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
 temper-wake = { path = "../temper-wake" }

@@ -23,8 +23,9 @@ pub mod scenarios;
 pub mod worker_bin;
 pub mod world;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge::{
@@ -33,9 +34,14 @@ use temper_forge::{
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::RunnerConfig;
-use temper_workflow::{RawWorkflowSpec, RoleId};
+use temper_workflow::ValidatedWorkflow;
 
-const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
+// The runtime workflow loader and the workflow-derived runner config are shared
+// with the deployable reference-delivery binaries; reuse them rather than
+// re-bundling the fixture or re-deriving the role bindings here. The
+// re-export keeps the historic `temper-testing` symbols (`WorkflowLoadError`)
+// importable from this crate.
+pub use temper_reference_delivery::WorkflowLoadError;
 
 struct NoopWake;
 
@@ -57,18 +63,26 @@ pub fn ts(value: &str) -> DateTime<Utc> {
     value.parse().expect("valid RFC 3339 timestamp")
 }
 
-pub fn workflow() -> temper_workflow::ValidatedWorkflow {
-    let spec: RawWorkflowSpec = serde_json::from_str(FIXTURE).expect("fixture parses");
-    spec.validate().expect("reference fixture validates")
+/// The bundled reference-delivery workflow (the worker's default when no
+/// `--workflow` is given). Delegates to the shared reference-delivery loader so
+/// the testing fakes and the deployable binaries agree on the default document.
+pub fn workflow() -> ValidatedWorkflow {
+    temper_reference_delivery::workflow()
+}
+
+/// Resolves the workflow the worker operates against: the file at `path` when
+/// supplied (the runtime `--workflow` selection), otherwise the bundled
+/// reference-delivery default. Errors are reported against `path` so an operator
+/// can see which file failed and why (read, parse, or validation), without
+/// leaking any secret.
+pub fn resolve_workflow(
+    path: Option<impl AsRef<Path>>,
+) -> Result<ValidatedWorkflow, WorkflowLoadError> {
+    temper_reference_delivery::resolve_workflow(path)
 }
 
 pub fn repo_input() -> CreateRepository {
-    CreateRepository {
-        owner: "acme".into(),
-        name: "service".into(),
-        default_branch: "main".into(),
-        description: None,
-    }
+    temper_reference_delivery::repo_input()
 }
 
 pub fn new_repo(forge: &MemoryForge) -> RepositoryId {
@@ -97,15 +111,24 @@ pub fn actor_user(role: &str) -> User {
     user(role, role)
 }
 
+/// Runner config for the bundled reference-delivery default.
+///
+/// Equivalent to `runner_config_for_workflow(&workflow())`; it derives role→user
+/// bindings from the workflow's queue-subscribing roles, so the default binds
+/// exactly architect/engineer/reviewer/owner/human (mechanical is queue-less and
+/// has no role worker).
 pub fn runner_config() -> RunnerConfig {
-    RunnerConfig::new(repo_input())
-        .with_role_binding(RoleId::new("architect"), actor_user("architect"))
-        .with_role_binding(RoleId::new("engineer"), actor_user("engineer"))
-        .with_role_binding(RoleId::new("reviewer"), actor_user("reviewer"))
-        .with_role_binding(RoleId::new("owner"), actor_user("owner"))
-        .with_role_binding(RoleId::new("human"), actor_user("human"))
-        .with_lease_ttl(Duration::minutes(30))
-        .with_poll_interval(Duration::seconds(1))
+    runner_config_for_workflow(&workflow())
+}
+
+/// Derives a runner config from any validated workflow, against [`repo_input`].
+///
+/// Role bindings come from the workflow's queue-subscribing roles (Forge user id
+/// == role id, the demo provisioning convention), so a runtime-selected workflow
+/// binds its own roles. A basic-delivery spec, for example, binds only
+/// `architect`/`engineer`; `mechanical` stays queue-less and unbound.
+pub fn runner_config_for_workflow(workflow: &ValidatedWorkflow) -> RunnerConfig {
+    temper_reference_delivery::runner_config_for(workflow, repo_input())
 }
 
 pub fn create_issue(
