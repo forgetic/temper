@@ -74,6 +74,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
 
     check_state_dimensions(spec, &labels, &artifacts, &mut diagnostics);
     check_role_external_tools(spec, &mut diagnostics);
+    check_default_artifact_kinds(spec, &mut diagnostics);
     check_queue_automation_contract(spec, &roles, &mut diagnostics);
     check_transition_outcome_contract(spec, &mut diagnostics);
 
@@ -555,6 +556,30 @@ fn automation_outcome_references(
         }
     }
     references
+}
+
+/// Checks that each Forge target declares at most one default (catch-all)
+/// artifact kind — one with no identifying labels. The default kind admits any
+/// artifact of its target that no labeled kind claims (raw human intake), so two
+/// defaults for the same target would make classification ambiguous.
+fn check_default_artifact_kinds(spec: &RawWorkflowSpec, diagnostics: &mut Vec<Diagnostic>) {
+    let mut defaults_by_target: HashMap<crate::ArtifactTarget, Vec<String>> = HashMap::new();
+    for kind in &spec.artifact_kinds {
+        if kind.identifying_labels.is_empty() {
+            defaults_by_target
+                .entry(kind.target)
+                .or_default()
+                .push(kind.id.clone());
+        }
+    }
+    for (target, kinds) in defaults_by_target {
+        if kinds.len() > 1 {
+            diagnostics.push(Diagnostic::MultipleDefaultArtifactKinds {
+                target: target.to_string(),
+                kinds,
+            });
+        }
+    }
 }
 
 /// Checks semantic consistency of per-transition outcome routing (the

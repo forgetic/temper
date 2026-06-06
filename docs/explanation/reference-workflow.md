@@ -35,9 +35,9 @@ in [reference-workflow-gaps.md](reference-workflow-gaps.md) and
 
 | Role | Purpose | Primary queues |
 | --- | --- | --- |
-| `architect` | Triage requests, create design/code work, resolve architect escalations, reconcile landed PRs. | `design_triage`, `needs_architect`, `landed_inbox` |
-| `engineer` | Claim ready code work, implement, open PRs, address review/CI/conflict returns. | `code_ready`, `pr_changes_requested`, `pr_ci_failed`, `pr_merge_conflict` |
-| `reviewer` | Review PRs against the contract and approve or request changes. | `pr_needs_review` |
+| `architect` | Triage intake through the `triage_intake` workspace, create design/code work, resolve architect escalations, reconcile landed PRs. | `design_triage`, `needs_architect`, `landed_inbox` |
+| `engineer` | Claim ready code work, implement and open PRs through the coding workspace, address review/CI/conflict returns. | `code_ready`, `pr_changes_requested`, `pr_ci_failed`, `pr_merge_conflict` |
+| `reviewer` | Review PRs through the `review_pr` workspace against the contract and the real diff/CI; approve, request changes, or escalate. | `pr_needs_review` |
 | `owner` | Resolve design feedback and run holistic alignment review. | `needs_owner`, `owner_alignment` |
 | `human` | Resolve explicit non-agent judgment requests. | `needs_human` |
 | `mechanical` | Land approved/green PRs and route merge conflicts; not an LLM worker. | automated `landing` queue |
@@ -49,8 +49,14 @@ in [reference-workflow-gaps.md](reference-workflow-gaps.md) and
 - `code` issue: implementation workstream owned by the engineer.
 - `implementation_pr` pull request: change produced for a code issue.
 
-Human-filed issues enter with an explicit `untriaged` label so intake is a normal
-queue match rather than absence-of-type inference.
+`intake` is the default (catch-all) issue kind: it declares no identifying
+labels, so a freshly filed human issue with no labels is admitted as a normal
+work item rather than left unclassified. The mechanical `mark_untriaged`
+transition stamps such an issue `untriaged`, after which the architect's
+`design_triage` queue services it. Human intake is therefore expressed from
+declaration, without absence-of-type inference or a provider-specific adapter.
+(Driving `mark_untriaged` from the live mechanical loop is the remaining runtime
+piece of #35; see [reference-workflow-gaps.md](reference-workflow-gaps.md).)
 
 ## State and routing labels
 
@@ -96,6 +102,32 @@ Closing the produced code issue on PR merge is not automatic in the engine. The
 demo/dependency scenarios use architect-side landed reconciliation to close the
 code issue and clear `in-progress`, making native issue-closed state observable
 to dependency gates.
+
+## Workspace-backed roles
+
+Three roles act through a sandboxed workspace (ADR 0022): the workspace analyses
+with granted tools, produces a work product, and returns a verdict that the
+engine routes to a transition through the action's `outcomes` map. The engine
+treats verdict ids as opaque vocabulary and owns transition legality and effect
+application; the workspace never mutates Forge.
+
+- **Architect `triage_intake`** routes `ready_code` to `triage_intake_to_code`
+  (rewrite the body with `set_body` into a crisp code spec, then `code` +
+  `ready`), `needs_design` to `triage_intake_to_design` (author a design proposal
+  body, then `design` + `needs-owner`), and `needs_breakdown` to
+  `triage_intake_breakdown` (`create_issues` for dependent children, with the
+  parent kept as an epic plan record).
+- **Engineer `open_pr`** opens a PR from the head the coding workspace produces,
+  or routes the `needs_architect` verdict to `request_code_architect_input` so an
+  unimplementable issue escalates instead of looping on an empty diff.
+- **Reviewer `review_pr`** reads the real diff and CI and routes `approve` to
+  `approve_review`, `changes` to `request_changes_with_review` (a native
+  `attach_review` carrying the authored review body), and `escalate` to
+  `request_architect_input`.
+
+These declarations replace the earlier prompt workarounds — the reviewer no
+longer approves from the PR summary, and the engineer no longer relies on prose
+to explain that `open_pr` is what produces the diff.
 
 ## Escalation and human loop
 

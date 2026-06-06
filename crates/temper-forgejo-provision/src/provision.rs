@@ -242,7 +242,11 @@ pub async fn seed_intake_issue(
 ) -> Result<ItemNumber> {
     let workflow = workflow();
     let labels = intake_labels(&workflow);
-    if labels.is_empty() {
+    // An empty label set is valid when the workflow declares a default
+    // (catch-all) issue kind: the entry issue is seeded as raw human intake with
+    // no labels, and a mechanical queue stamps it (e.g. `untriaged`) so a triage
+    // role picks it up. Only error when there is no intake entry point at all.
+    if labels.is_empty() && !has_default_issue_kind(&workflow) {
         return Err(ProvisionError::Shape {
             what: "intake labels".into(),
             detail: "workflow declares no queued entry issue artifact".into(),
@@ -317,6 +321,16 @@ pub fn intake_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether the workflow declares a default (catch-all) issue kind — one with no
+/// identifying labels. Such a kind admits raw human intake filed with no labels;
+/// the entry issue is seeded unlabeled and a mechanical queue stamps it.
+pub fn has_default_issue_kind(workflow: &ValidatedWorkflow) -> bool {
+    workflow
+        .artifact_kinds()
+        .iter()
+        .any(|kind| kind.target == ArtifactTarget::Issue && kind.identifying_labels.is_empty())
 }
 
 async fn upsert_labels(
@@ -527,7 +541,13 @@ mod tests {
 
     #[test]
     fn intake_labels_resolve_to_entry_issue() {
-        assert_eq!(intake_labels(&workflow()), vec!["untriaged".to_string()]);
+        // The reference workflow now models raw human intake: the `intake` kind
+        // is the default (catch-all) issue kind with no identifying labels, so a
+        // freshly filed issue carries no labels and a mechanical queue stamps it.
+        // `intake_labels` therefore resolves to no labels, and the workflow still
+        // declares a default issue kind, so seeding does not error.
+        assert!(intake_labels(&workflow()).is_empty());
+        assert!(has_default_issue_kind(&workflow()));
     }
 
     #[test]

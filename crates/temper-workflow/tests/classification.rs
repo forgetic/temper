@@ -409,3 +409,64 @@ fn metadata_target_mismatch_is_diagnosed() {
         }
     )));
 }
+
+/// A workflow whose issue target declares a default (catch-all) `intake` kind
+/// with no identifying labels, plus a labeled `code` kind. Raw human intake (an
+/// issue with no labels) classifies as `intake`; labeled issues still prefer the
+/// specific kind.
+fn workflow_with_default_kind() -> ValidatedWorkflow {
+    let json = r#"{
+        "name": "default-kind",
+        "labels": [{"id": "code"}, {"id": "untriaged"}],
+        "artifact_kinds": [
+            {"id": "intake", "target": "issue", "identifying_labels": []},
+            {"id": "code", "target": "issue", "identifying_labels": ["code"]}
+        ]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("fixture parses");
+    spec.validate().expect("fixture validates")
+}
+
+#[test]
+fn unlabeled_issue_classifies_as_the_default_kind() {
+    let workflow = workflow_with_default_kind();
+    let classifier = Classifier::new(&workflow);
+
+    let artifact = classifier
+        .classify_issue(&issue(1, &[], ""))
+        .expect("an unlabeled issue is admitted by the default kind");
+
+    assert_eq!(artifact.kind, ArtifactKindId::new("intake"));
+    assert_eq!(artifact.target, ArtifactTarget::Issue);
+}
+
+#[test]
+fn labeled_issue_prefers_specific_kind_over_default() {
+    let workflow = workflow_with_default_kind();
+    let classifier = Classifier::new(&workflow);
+
+    // A `code` label is a more specific match than the catch-all default.
+    let artifact = classifier
+        .classify_issue(&issue(1, &["code"], ""))
+        .expect("a labeled issue classifies as its specific kind");
+
+    assert_eq!(artifact.kind, ArtifactKindId::new("code"));
+}
+
+#[test]
+fn default_kind_does_not_admit_a_foreign_target() {
+    let workflow = workflow_with_default_kind();
+    let classifier = Classifier::new(&workflow);
+
+    // The default kind is for the issue target only; an unlabeled pull request
+    // has no default kind and stays unclassified.
+    let error = classifier
+        .classify_pull_request(&pull_request(1, &[], ""))
+        .expect_err("no default pull-request kind is declared");
+
+    assert!(error
+        .diagnostics()
+        .contains(&ClassificationDiagnostic::Unclassified {
+            target: ArtifactTarget::PullRequest,
+        }));
+}
