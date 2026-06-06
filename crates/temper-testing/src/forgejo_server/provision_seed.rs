@@ -44,7 +44,11 @@ pub async fn seed_intake_issue(
 ) -> Result<ItemNumber> {
     let workflow = workflow();
     let labels = intake_labels(&workflow);
-    if labels.is_empty() {
+    // An empty label set is valid when the workflow declares a default
+    // (catch-all) issue kind: the entry issue is seeded as raw human intake with
+    // no labels, and a mechanical queue stamps it (e.g. `untriaged`) so a triage
+    // role picks it up. Only error when there is no intake entry point at all.
+    if labels.is_empty() && !has_default_issue_kind(&workflow) {
         return Err(ProvisionError::Shape {
             what: "intake labels".into(),
             detail: "workflow declares no entry issue artifact for an intake queue".into(),
@@ -89,10 +93,11 @@ pub async fn seed_intake_issue(
 /// and that **some queue filters on** (so a role actually draws it). The first
 /// such artifact kind (in declaration order) supplies the intake labels.
 ///
-/// For the reference workflow this resolves to the `intake` artifact's
-/// `untriaged` label: `untriaged` is removed by triage transitions but added by
-/// none, and the `design_triage` queue filters on it. An `epic` artifact is also
-/// entry-only but no queue filters on it, so it is correctly excluded.
+/// For the reference workflow this resolves to no labels: `intake` is now the
+/// default (catch-all) issue kind with no identifying labels, so raw human
+/// intake is seeded unlabeled and the mechanical `mark_untriaged` transition
+/// stamps it `untriaged`. A workflow that instead declares a labeled entry kind
+/// still resolves to that kind's entry labels.
 pub fn intake_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
     // Labels produced by some transition (target of an `add_label` effect).
     let produced: BTreeSet<&str> = workflow
@@ -137,18 +142,30 @@ pub fn intake_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Whether the workflow declares a default (catch-all) issue kind — one with no
+/// identifying labels. Such a kind admits raw human intake filed with no labels;
+/// the entry issue is seeded unlabeled and a mechanical queue stamps it.
+pub fn has_default_issue_kind(workflow: &ValidatedWorkflow) -> bool {
+    workflow
+        .artifact_kinds()
+        .iter()
+        .any(|kind| kind.target == ArtifactTarget::Issue && kind.identifying_labels.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn intake_labels_resolve_to_the_entry_issue_artifact() {
-        // The reference workflow's intake artifact is `untriaged`: an entry label
-        // no transition produces, filtered by the triage queue. `epic` is also
-        // entry-only but no queue draws it, so it must not be chosen.
+        // The reference workflow now models raw human intake: `intake` is the
+        // default (catch-all) issue kind with no identifying labels, so the entry
+        // issue is seeded unlabeled and the mechanical `mark_untriaged` transition
+        // stamps it `untriaged`. `intake_labels` resolves to no labels, and the
+        // workflow still declares a default issue kind so seeding does not error.
         let workflow = workflow();
-        let labels = intake_labels(&workflow);
-        assert_eq!(labels, vec!["untriaged".to_string()]);
+        assert!(intake_labels(&workflow).is_empty());
+        assert!(has_default_issue_kind(&workflow));
     }
 
     #[test]

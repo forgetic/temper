@@ -224,6 +224,10 @@ pub enum Diagnostic {
         expected: String,
         actual: String,
     },
+    /// More than one artifact kind for the same Forge target declares no
+    /// identifying labels. A target may have at most one default (catch-all)
+    /// kind, so the engine cannot decide which one admits an unlabeled artifact.
+    MultipleDefaultArtifactKinds { target: String, kinds: Vec<String> },
 }
 
 impl Diagnostic {
@@ -241,7 +245,8 @@ impl Diagnostic {
             | Diagnostic::QueueAutomationOutcomeUnauthorized { .. }
             | Diagnostic::QueueAutomationOutcomeArtifactMismatch { .. }
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
-            | Diagnostic::TransitionOutcomeArtifactMismatch { .. } => Severity::Error,
+            | Diagnostic::TransitionOutcomeArtifactMismatch { .. }
+            | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
         }
     }
 }
@@ -328,6 +333,11 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "transition `{transition}` routes verdict `{verdict}` to transition `{outcome_transition}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
+            ),
+            Diagnostic::MultipleDefaultArtifactKinds { target, kinds } => write!(
+                formatter,
+                "Forge target `{target}` declares more than one default artifact kind (no identifying labels): {}",
+                kinds.join(", ")
             ),
         }
     }

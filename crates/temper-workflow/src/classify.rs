@@ -389,6 +389,14 @@ impl<'a> Classifier<'a> {
             .collect();
 
         let Some(max) = matches.iter().map(|k| k.identifying_labels.len()).max() else {
+            // No labeled kind matched. If the target declares a default
+            // (catch-all) kind — one with empty identifying labels — classify as
+            // that, so raw human intake (an issue with no labels) is admitted as
+            // a normal work item. Validation guarantees at most one default per
+            // target, so this lookup is unambiguous.
+            if let Some(default) = self.default_kind(target) {
+                return Some(default.id.clone());
+            }
             diagnostics.push(ClassificationDiagnostic::Unclassified { target });
             return None;
         };
@@ -409,6 +417,19 @@ impl<'a> Classifier<'a> {
             });
             None
         }
+    }
+
+    /// The default (catch-all) artifact kind for `target`, if one is declared.
+    ///
+    /// A default kind is one with no identifying labels: it admits any artifact
+    /// of the target that no more specific labeled kind claims. Validation
+    /// rejects more than one default per target, so the first match is the only
+    /// match.
+    fn default_kind(&self, target: ArtifactTarget) -> Option<&ValidatedArtifactKind> {
+        self.workflow
+            .artifact_kinds()
+            .iter()
+            .find(|kind| kind.target == target && kind.identifying_labels.is_empty())
     }
 
     fn resolve_relations(
