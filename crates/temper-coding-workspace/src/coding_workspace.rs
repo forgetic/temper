@@ -12,10 +12,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use temper_runner::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
 };
+use temper_workflow::VerdictId;
 
 use crate::pr_diff_guard::{safety_for_files, DiffSafety};
 
@@ -24,6 +26,66 @@ pub const WORKSPACE_COMMAND_ENV: &str = "TEMPER_CODING_WORKSPACE_COMMAND";
 pub const WORKSPACE_REMOTE_ENV: &str = "TEMPER_CODING_WORKSPACE_REMOTE";
 pub const WORKSPACE_PUSH_ENV: &str = "TEMPER_CODING_WORKSPACE_PUSH";
 pub const WORKSPACE_PR_LABELS_ENV: &str = "TEMPER_CODING_WORKSPACE_PR_LABELS";
+
+/// Env var naming the provider-created result file the edit command may write to
+/// report a verdict and/or content back to the workspace. The command always
+/// receives this path alongside [`WORKSPACE_CONTEXT_ENV`]; writing the file is
+/// optional. When the file is absent, empty, or carries no `verdict`, the
+/// provider keeps today's head flow.
+pub const WORKSPACE_RESULT_ENV: &str = "TEMPER_CODING_WORKSPACE_RESULT";
+
+/// The shared result protocol an edit command may write to
+/// `TEMPER_CODING_WORKSPACE_RESULT`. Every field is optional; an empty object is
+/// equivalent to writing no file at all. Defined once with serde so later parts
+/// of the operator path (e.g. T4 (#46) `children` wiring) can extend it cleanly.
+///
+/// See `docs/how-to/configure-coding-workspace.md` for the operator-facing
+/// contract.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceResult {
+    /// Typed verdict selecting the outcome transition declared by the action.
+    /// `None` (omitted/null) keeps the default head path: commit, push, open PR.
+    /// When present, the provider skips the commit/push and tolerates an empty
+    /// working tree, returning a verdict-only output.
+    pub verdict: Option<String>,
+    /// One-line summary for the PR body and logs on the head path. Falls back to
+    /// the changed-files list when absent.
+    pub summary: Option<String>,
+    /// Agent-rewritten issue body consumed by a routed `set_body` effect.
+    pub body: Option<String>,
+    /// Agent-authored review prose consumed by a routed `attach_review` effect.
+    pub review_body: Option<String>,
+    /// Overrides the default PR labels on the head path. `None` keeps the
+    /// provider-configured labels.
+    pub labels: Option<Vec<String>>,
+    /// Dependent child artifacts (see T4 (#46)). Parsed and retained here so the
+    /// protocol is stable; threading into the output is a later part's job.
+    #[serde(default)]
+    pub children: Vec<serde_json::Value>,
+}
+
+impl WorkspaceResult {
+    /// Parses a result file's contents. An empty/whitespace-only file is treated
+    /// as an absent result (the default head path).
+    fn parse(contents: &str) -> Result<Option<Self>, String> {
+        if contents.trim().is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_str(contents)
+            .map(Some)
+            .map_err(|error| format!("failed to parse coding workspace result file: {error}"))
+    }
+
+    /// The verdict as a typed [`VerdictId`], if a non-empty verdict was set.
+    fn verdict_id(&self) -> Option<VerdictId> {
+        self.verdict
+            .as_deref()
+            .map(str::trim)
+            .filter(|verdict| !verdict.is_empty())
+            .map(VerdictId::new)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalGitCodingWorkspace {
@@ -98,9 +160,46 @@ impl LocalGitCodingWorkspace {
             &request.base_branch,
         )?;
         let context_file = write_context_file(&request)?;
-        let command_result = run_edit_command(&self.root, &self.command, &request, &context_file);
+        let result_file = result_file_path();
+        let command_result = run_edit_command(
+            &self.root,
+            &self.command,
+            &request,
+            &context_file,
+            &result_file,
+        );
         let _ = std::fs::remove_file(&context_file);
+        let result = read_result_file(&result_file);
+        let _ = std::fs::remove_file(&result_file);
         command_result?;
+        let result = result?.unwrap_or_default();
+
+        // Verdict path: an external command emitted a typed verdict (e.g. a
+        // reviewer's approve, an architect's rewrite). Skip the diff guard, the
+        // commit, and the push; tolerate an empty working tree; return a
+        // verdict-only output carrying any routed body/review_body. `children`
+        // is parsed but not yet threaded (T4 (#46)).
+        if let Some(verdict) = result.verdict_id() {
+            let mut output = CodingWorkspaceOutput::new(
+                String::new(),
+                request.base_branch,
+                verdict_summary(&result, &verdict),
+                Vec::new(),
+                self.pr_labels.clone(),
+            )
+            .with_verdict(verdict);
+            if let Some(body) = result.body {
+                output = output.with_body(body);
+            }
+            if let Some(review_body) = result.review_body {
+                output = output.with_review_body(review_body);
+            }
+            return Ok(output);
+        }
+
+        // Head path: no verdict. Enforce the diff guard, commit, push, and open a
+        // PR exactly as before, applying any `labels`/`summary` override from the
+        // result file.
         let changed_files = changed_files(&self.root)?;
         ensure_meaningful_diff(&changed_files)?;
         git(&self.root, &["add", "--all"])?;
@@ -123,15 +222,55 @@ impl LocalGitCodingWorkspace {
                 ],
             )?;
         }
-        let summary = format!("updated {}", changed_files.join(", "));
+        let summary = result
+            .summary
+            .filter(|summary| !summary.trim().is_empty())
+            .unwrap_or_else(|| format!("updated {}", changed_files.join(", ")));
+        let labels = result.labels.unwrap_or_else(|| self.pr_labels.clone());
         Ok(CodingWorkspaceOutput::new(
             branch,
             request.base_branch,
             summary,
             changed_files,
-            self.pr_labels.clone(),
+            labels,
         ))
     }
+}
+
+/// A provider-created result-file path in the system temp dir, unique per
+/// process and call so concurrent workspaces never collide.
+fn result_file_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "temper-coding-workspace-result-{}-{}.json",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ))
+}
+
+/// Reads and parses the result file the edit command may have written. A missing
+/// file is a normal absent result (the default head path); an unreadable but
+/// present file, or malformed JSON, is an error.
+fn read_result_file(path: &Path) -> Result<Option<WorkspaceResult>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => WorkspaceResult::parse(&contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "failed to read coding workspace result file {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+/// One-line summary for a verdict-only output: the result's own summary if it
+/// set one, else a generic note naming the verdict.
+fn verdict_summary(result: &WorkspaceResult, verdict: &VerdictId) -> String {
+    result
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("workspace verdict {}", verdict.as_str()))
 }
 
 #[async_trait]
@@ -195,11 +334,13 @@ fn run_edit_command(
     command: &[String],
     request: &CodingWorkspaceRequest,
     context_file: &Path,
+    result_file: &Path,
 ) -> Result<(), String> {
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..])
         .current_dir(root)
         .env("TEMPER_CODING_WORKSPACE_CONTEXT", context_file)
+        .env(WORKSPACE_RESULT_ENV, result_file)
         .env("TEMPER_CODING_WORKSPACE_BRANCH", &request.branch_hint)
         .env("TEMPER_CODING_WORKSPACE_BASE", &request.base_branch)
         .env(

@@ -48,7 +48,46 @@ The command runs in the checkout. It receives the work item and user guidance in
 The LLM does not receive shell or file tools; it can only choose the authorized
 workflow action, after which the runner invokes this configured provider.
 
-## 3. Safety behavior
+## 3. Report a result (verdict / content)
+
+The command also receives `TEMPER_CODING_WORKSPACE_RESULT`: a path to a
+provider-created result file the command **may** write to report a verdict and/or
+content back to the workspace. Writing it is optional — leave it untouched to keep
+the default behavior. When written, it is a single JSON object; every field is
+optional:
+
+```jsonc
+{
+  "verdict": "ready_code",          // optional; omit/null ⇒ default head path
+  "summary": "one-line summary",    // optional; falls back to changed-files list
+  "body": "rewritten issue body",   // optional; consumed by a routed set_body
+  "review_body": "review prose",    // optional; consumed by a routed attach_review
+  "labels": ["implementation"],     // optional; overrides default PR labels (head path)
+  "children": []                    // optional; reserved for dependent children
+}
+```
+
+Unknown keys are rejected, so a typo fails loudly rather than being silently
+ignored.
+
+The provider chooses one of two paths based on whether `verdict` is present:
+
+- **No result file / empty file / no `verdict`** → the **head path**. The
+  provider enforces the diff guard (§4), commits, pushes the branch, and opens a
+  PR exactly as before. A `labels` or `summary` value in the result file
+  overrides the configured PR labels and the default changed-files summary; the
+  PR is still opened from the committed diff.
+- **`verdict` present** → the **verdict path**. The provider **skips** the diff
+  guard, the commit, and the push, and tolerates an empty working tree. It
+  returns a verdict-only output (empty branch) that routes through the action's
+  declared `outcomes` map, carrying any `body` (for a routed `set_body`) and
+  `review_body` (for a routed `attach_review`). This is how an external command
+  emits e.g. a reviewer `approve` with no diff, or an architect rewrite.
+
+`changed_files` is always computed by the provider from `git status` on the head
+path; the command never reports it.
+
+## 4. Safety behavior
 
 The workspace must leave a real non-bookkeeping diff. Production rejects empty or
 synthetic-only changes such as `.temper-pr-prep/`, `.temper-ci/`, or the demo CI
