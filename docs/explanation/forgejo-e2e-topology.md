@@ -79,6 +79,43 @@ its queue labels from the compiled workflow. The production
 `TEMPER_FORGEJO_ADMIN_TOKEN` and writes per-role user/token/password secrets to a
 `0600` POSIX-sourceable file without printing secrets.
 
+### Provisioning onto an existing, content-bearing repo
+
+The defaults above are built for **throwaway** repos on a dedicated org: they
+create the repo, commit a marker CI workflow (`.forgejo/workflows/ci.yml`) plus a
+sentinel onto `main`, and add every identity to the org **Owners** team. Two
+flags relax that for a **real, pre-existing** target — e.g. running basic-delivery
+against `ai/smith` on the shared `ai` org (which also hosts `temper`). Both
+default to today's behavior, so throwaway flows are unchanged.
+
+- `--existing-repo` provisions onto a repo that **must already exist**. It checks
+  the repo up front (`GET /repos/{owner}/{name}`) and errors clearly if absent
+  instead of silently creating a bare repo. It **skips** the marker CI commit and
+  the sentinel commit, so the repo's own `.forgejo/workflows/ci.yml` and history
+  are never touched; labels, the webhook, and `enable_actions` (all idempotent)
+  still apply.
+- `--access org-owners|repo-collaborator` selects how identities are granted
+  access (default `org-owners`, today's behavior). `repo-collaborator` never
+  touches the Owners team; instead it grants each role user **and** the `bot` a
+  repo-scoped `write` collaborator permission on the target repo. `write` is
+  enough for the bot to merge approved, green PRs and read Actions status over the
+  web UI ([ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md)); `admin` is
+  intentionally avoided until a concrete need appears.
+
+The intended Smith caller pairs both with `--seed-intake no` (intake issues are
+filed separately by the `agent` user):
+
+```sh
+TEMPER_FORGEJO_ADMIN_TOKEN=<agent admin token> temper-provision-forgejo \
+  --base-url http://127.0.0.1:3000 --owner ai --name smith \
+  --existing-repo --access repo-collaborator \
+  --workflow ~/.config/smith/workflow.json \
+  --webhook-url http://127.0.0.1:<trigger-port>/forgejo/webhook \
+  --webhook-secret-file ~/.config/smith/secrets/webhook-secret \
+  --seed-intake no \
+  --out ~/.config/smith/secrets/roles.env
+```
+
 ## Real CI: producing and reading
 
 **Producing.** The provisioned repo commits `.forgejo/workflows/ci.yml`

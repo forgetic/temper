@@ -1072,11 +1072,15 @@ dependencies = [
 name = "temper-forgejo-provision"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "reqwest",
+ "serde_json",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forgejo-ops",
  "temper-reference-delivery",
  "temper-runner",
+ "temper-testing",
  "temper-workflow",
  "tokio",
 ]

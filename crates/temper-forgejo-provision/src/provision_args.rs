@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use temper_workflow::{IntakeAuthor, RoleId};
 
-use crate::provision::{self, ProvisionError};
+use crate::provision::{self, AccessScope, ProvisionError, ProvisionOptions};
 
 pub const ADMIN_TOKEN_ENV: &str = "TEMPER_FORGEJO_ADMIN_TOKEN";
 pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
@@ -14,10 +14,19 @@ pub const USAGE: &str = concat!(
     "temper-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path> ",
     "[--workflow <path>] ",
     "[--webhook-url <url> --webhook-secret-file <path>] ",
-    "[--seed-intake yes|no] [--seed-only] [--intake-title <title>] [--intake-body-file <path>]\n",
+    "[--seed-intake yes|no] [--seed-only] [--intake-title <title>] [--intake-body-file <path>] ",
+    "[--existing-repo] [--access org-owners|repo-collaborator]\n",
     "  --seed-only files just the intake issue (no org/users/repo/labels/CI/webhook work), ",
     "reusing the role tokens already written to --out; pair it with a first ",
     "--seed-intake no pass so the entry issue can be filed after the workers are up\n",
+    "  --existing-repo provisions onto a repo that must already exist: it never ",
+    "creates the repo and never commits CI (the marker workflow or the sentinel), ",
+    "so the repo's own .forgejo/workflows/ci.yml and history stay untouched; it ",
+    "still ensures labels, the webhook, and Actions enablement\n",
+    "  --access selects how identities are granted access (default org-owners, ",
+    "today's behavior): org-owners adds every role user and the bot to the org ",
+    "Owners team; repo-collaborator instead grants each a repo-scoped write ",
+    "collaborator permission and never touches the Owners team\n",
     "  the admin token comes from TEMPER_FORGEJO_ADMIN_TOKEN (required), never argv; ",
     "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to the ",
     "bundled reference-delivery workflow when unset"
@@ -48,6 +57,12 @@ pub struct ProvisionArgs {
     /// Workflow document to provision against. `None` uses the bundled
     /// reference-delivery workflow, reproducing today's default behavior.
     pub workflow_file: Option<PathBuf>,
+    /// Provision onto a repo that must already exist: skip repo creation and the
+    /// CI/sentinel commits. Defaults to `false` (throwaway behavior).
+    pub existing_repo: bool,
+    /// How role users and the `bot` are granted access. Defaults to
+    /// [`AccessScope::OrgOwners`] (today's behavior).
+    pub access: AccessScope,
 }
 
 impl fmt::Debug for ProvisionArgs {
@@ -66,6 +81,8 @@ impl fmt::Debug for ProvisionArgs {
             .field("intake_title", &self.intake_title)
             .field("intake_body_file", &self.intake_body_file)
             .field("workflow_file", &self.workflow_file)
+            .field("existing_repo", &self.existing_repo)
+            .field("access", &self.access)
             .finish()
     }
 }
@@ -147,6 +164,8 @@ where
     let mut intake_title = None;
     let mut intake_body_file = None;
     let mut workflow_file = None;
+    let mut existing_repo = false;
+    let mut access = AccessScope::default();
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
@@ -160,6 +179,8 @@ where
             "--webhook-secret-file" => webhook_secret_file = Some(value_for(&flag, &mut iter)?),
             "--seed-intake" => seed_intake = parse_bool(&value_for(&flag, &mut iter)?)?,
             "--seed-only" => seed_only = true,
+            "--existing-repo" => existing_repo = true,
+            "--access" => access = parse_access(&value_for(&flag, &mut iter)?)?,
             "--intake-title" => intake_title = Some(value_for(&flag, &mut iter)?),
             "--intake-body-file" => intake_body_file = Some(value_for(&flag, &mut iter)?),
             other => {
@@ -196,6 +217,8 @@ where
         workflow_file: non_empty(workflow_file)
             .or_else(|| non_empty(env(WORKFLOW_FILE_ENV)))
             .map(PathBuf::from),
+        existing_repo,
+        access,
     }))
 }
 
@@ -243,6 +266,10 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         args.webhook_secret_file.as_deref(),
         intake_seed.as_ref(),
         &workflow,
+        ProvisionOptions {
+            existing_repo: args.existing_repo,
+            access: args.access,
+        },
     ))?;
     provision::write_secrets_file(&args.out, &provision::format_secrets_env(&provisioned))?;
     let intake = issue
@@ -305,6 +332,16 @@ fn parse_bool(value: &str) -> Result<bool, ArgsError> {
         "no" | "false" | "0" => Ok(false),
         other => Err(ArgsError::new(format!(
             "--seed-intake expects yes|no, got '{other}'"
+        ))),
+    }
+}
+
+fn parse_access(value: &str) -> Result<AccessScope, ArgsError> {
+    match value {
+        "org-owners" => Ok(AccessScope::OrgOwners),
+        "repo-collaborator" => Ok(AccessScope::RepoCollaborator),
+        other => Err(ArgsError::new(format!(
+            "--access expects org-owners|repo-collaborator, got '{other}'"
         ))),
     }
 }
@@ -441,6 +478,113 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("--seed-only"));
+    }
+
+    /// Parses a minimal valid invocation with the given extra args appended,
+    /// returning the resulting `ProvisionArgs`. Panics if parsing yields `Help`.
+    fn parse_args(extra: &[&str]) -> ProvisionArgs {
+        let mut argv = vec![
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--owner",
+            "acme",
+            "--name",
+            "service",
+            "--out",
+            "roles.env",
+        ];
+        argv.extend_from_slice(extra);
+        let outcome = parse_with_env(argv.into_iter().map(String::from), |key| {
+            (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string())
+        })
+        .expect("parses");
+        match outcome {
+            ParseOutcome::Run(args) => args,
+            ParseOutcome::Help => panic!("expected run"),
+        }
+    }
+
+    #[test]
+    fn parse_defaults_existing_repo_and_access_to_back_compat() {
+        // No flags ⇒ throwaway behavior: create the repo (existing_repo=false)
+        // and join the Owners team (AccessScope::OrgOwners).
+        let args = parse_args(&[]);
+        assert!(!args.existing_repo);
+        assert_eq!(args.access, AccessScope::OrgOwners);
+    }
+
+    #[test]
+    fn parse_existing_repo_flag() {
+        let args = parse_args(&["--existing-repo"]);
+        assert!(args.existing_repo);
+        // `--existing-repo` does not change the access default.
+        assert_eq!(args.access, AccessScope::OrgOwners);
+    }
+
+    #[test]
+    fn parse_access_org_owners_and_repo_collaborator() {
+        assert_eq!(
+            parse_args(&["--access", "org-owners"]).access,
+            AccessScope::OrgOwners
+        );
+        assert_eq!(
+            parse_args(&["--access", "repo-collaborator"]).access,
+            AccessScope::RepoCollaborator
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unknown_access_value() {
+        let error = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+                "--access",
+                "owner",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string()),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("--access"), "names the flag: {message}");
+        assert!(
+            message.contains("org-owners") && message.contains("repo-collaborator"),
+            "lists both options: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_existing_repo_does_not_conflict_with_seed_flags() {
+        // `--existing-repo` and `--access` compose with the seed knobs; the
+        // intended Smith caller pairs `--existing-repo --access repo-collaborator`
+        // with `--seed-intake no`.
+        let args = parse_args(&[
+            "--existing-repo",
+            "--access",
+            "repo-collaborator",
+            "--seed-intake",
+            "no",
+        ]);
+        assert!(args.existing_repo);
+        assert_eq!(args.access, AccessScope::RepoCollaborator);
+        assert!(!args.seed_intake);
+    }
+
+    #[test]
+    fn parse_redacts_token_but_shows_new_flags_in_debug() {
+        let args = parse_args(&["--existing-repo", "--access", "repo-collaborator"]);
+        let rendered = format!("{args:?}");
+        assert!(!rendered.contains("admin-secret"));
+        assert!(rendered.contains("existing_repo: true"));
+        assert!(rendered.contains("RepoCollaborator"));
     }
 
     #[test]

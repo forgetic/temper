@@ -416,6 +416,70 @@ pub async fn enable_actions(
     json_ok(resp, "enable actions").await.map(|_| ())
 }
 
+/// Confirms an org repository already exists, erroring clearly if it is absent.
+///
+/// Used by `--existing-repo` provisioning to refuse silently creating a bare
+/// repo when the operator named a real target that does not exist (e.g. a typo).
+/// A `404` becomes a distinct, actionable error rather than a generic API
+/// failure; any other non-success status is surfaced verbatim.
+pub async fn require_repo(
+    client: &Client,
+    base: &str,
+    token: &str,
+    owner: &str,
+    name: &str,
+) -> Result<()> {
+    let resp = client
+        .get(format!("{base}/api/v1/repos/{owner}/{name}"))
+        .header("Authorization", format!("token {token}"))
+        .send()
+        .await
+        .map_err(http_err)?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    if status.as_u16() == 404 {
+        return Err(RestError::Api {
+            what: "require existing repo".into(),
+            status: 404,
+            body: format!(
+                "repository {owner}/{name} does not exist; --existing-repo requires a \
+                 pre-existing repo and never creates one"
+            ),
+        });
+    }
+    Err(api_error(resp, "require existing repo", status).await)
+}
+
+/// Grants a repo-scoped collaborator permission on `owner/name` to `login`.
+///
+/// `permission` is one of `"read" | "write" | "admin"`. Routed through
+/// `accept_or_conflict` so re-granting an already-collaborating user on a re-run
+/// is benign. This is the repo-scoped alternative to Owners-team membership used
+/// by `--access repo-collaborator`: it confers access to a single repository
+/// instead of every repo in the org.
+pub async fn add_repo_collaborator(
+    client: &Client,
+    base: &str,
+    token: &str,
+    owner: &str,
+    name: &str,
+    login: &str,
+    permission: &str,
+) -> Result<()> {
+    let resp = client
+        .put(format!(
+            "{base}/api/v1/repos/{owner}/{name}/collaborators/{login}"
+        ))
+        .header("Authorization", format!("token {token}"))
+        .json(&json!({ "permission": permission }))
+        .send()
+        .await
+        .map_err(http_err)?;
+    accept_or_conflict(resp, "add repo collaborator").await
+}
+
 fn http_err(err: reqwest::Error) -> RestError {
     RestError::Http(err.to_string())
 }
