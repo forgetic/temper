@@ -9,7 +9,7 @@
 use super::args::{
     AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
     ClockKind, ForgejoArgs, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
-    FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV,
+    FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, WORKFLOW_FILE_ENV,
 };
 use chrono::Duration;
 use std::collections::BTreeSet;
@@ -36,11 +36,14 @@ pub const USAGE: &str = concat!(
     "[--architect <default|closing>] [--reviewer <default|request-changes-then-approve>] ",
     "[--ci <pass|fail-then-pass|fixed-fail>] [--ci-sentinel <present|deferred>] ",
     "[--agents <fake>] ",
+    "[--workflow <path>] ",
     "[--poll-ms <n>] [--idle-poll-max-ms <n mechanical idle cap>] [--audit-ms <n deep-audit, 0 disables>] ",
     "[--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] [--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
     "TEMPER_FORGEJO_TOKEN (required), TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD ",
-    "(optional, for the CI-reading role's web-UI login)",
+    "(optional, for the CI-reading role's web-UI login); ",
+    "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to ",
+    "the bundled reference-delivery workflow when unset",
 );
 
 /// Parses the process argument vector (excluding the program name).
@@ -96,6 +99,7 @@ struct RawArgs {
     agents: Option<String>,
     wake_socket: Option<String>,
     wake_secret_file: Option<String>,
+    workflow_file: Option<String>,
 }
 
 impl RawArgs {
@@ -125,6 +129,7 @@ impl RawArgs {
             agents: None,
             wake_socket: None,
             wake_secret_file: None,
+            workflow_file: None,
         };
         let mut iter = args.into_iter();
         while let Some(flag) = iter.next() {
@@ -148,6 +153,7 @@ impl RawArgs {
                 "--run-secs" => raw.run_secs = Some(value_for(&flag, &mut iter)?),
                 "--clock" => raw.clock = Some(value_for(&flag, &mut iter)?),
                 "--agents" => raw.agents = Some(value_for(&flag, &mut iter)?),
+                "--workflow" => raw.workflow_file = Some(value_for(&flag, &mut iter)?),
                 "--wake-socket" => raw.wake_socket = Some(value_for(&flag, &mut iter)?),
                 "--wake-secret-file" => raw.wake_secret_file = Some(value_for(&flag, &mut iter)?),
                 other => {
@@ -249,6 +255,12 @@ impl RawArgs {
             agents,
             wake_socket: non_empty(self.wake_socket).map(PathBuf::from),
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
+            // The flag wins over the env var, matching the production worker
+            // (`temper-worker`'s `WORKFLOW_FILE_ENV`); `None` means the bundled
+            // reference-delivery default.
+            workflow_file: non_empty(self.workflow_file)
+                .or_else(|| non_empty_env(env, WORKFLOW_FILE_ENV))
+                .map(PathBuf::from),
         })
     }
 

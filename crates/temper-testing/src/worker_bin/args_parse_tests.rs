@@ -417,3 +417,95 @@ fn rejects_bad_agents() {
     .unwrap_err();
     assert!(error.to_string().contains("--agents"));
 }
+
+#[test]
+fn workflow_defaults_to_none() {
+    // With neither the flag nor the env var, the worker uses the bundled
+    // reference-delivery default (`None`), preserving today's behavior.
+    let args = run(&[
+        "--kind",
+        "provision",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+    ]);
+    assert_eq!(args.workflow_file, None);
+}
+
+#[test]
+fn parses_workflow_flag() {
+    let args = run(&[
+        "--kind",
+        "provision",
+        "--root",
+        "/tmp/x",
+        "--repo",
+        "acme/service",
+        "--workflow",
+        "/tmp/basic-delivery.json",
+    ]);
+    assert_eq!(
+        args.workflow_file,
+        Some(PathBuf::from("/tmp/basic-delivery.json"))
+    );
+}
+
+#[test]
+fn workflow_falls_back_to_env() {
+    // No flag: the env var supplies the workflow path.
+    let args = run_env(
+        &[
+            "--kind",
+            "provision",
+            "--root",
+            "/tmp/x",
+            "--repo",
+            "acme/service",
+        ],
+        &[(WORKFLOW_FILE_ENV, "/env/workflow.json")],
+    );
+    assert_eq!(
+        args.workflow_file,
+        Some(PathBuf::from("/env/workflow.json"))
+    );
+}
+
+#[test]
+fn workflow_flag_beats_env() {
+    // Both set: the flag wins, mirroring the production worker.
+    let args = run_env(
+        &[
+            "--kind",
+            "provision",
+            "--root",
+            "/tmp/x",
+            "--repo",
+            "acme/service",
+            "--workflow",
+            "/flag/workflow.json",
+        ],
+        &[(WORKFLOW_FILE_ENV, "/env/workflow.json")],
+    );
+    assert_eq!(
+        args.workflow_file,
+        Some(PathBuf::from("/flag/workflow.json"))
+    );
+}
+
+#[test]
+fn empty_workflow_env_is_ignored() {
+    // A blank env value is treated as unset, leaving the bundled default.
+    let args = run_env(
+        &[
+            "--kind",
+            "provision",
+            "--root",
+            "/tmp/x",
+            "--repo",
+            "acme/service",
+        ],
+        &[(WORKFLOW_FILE_ENV, "   ")],
+    );
+    assert_eq!(args.workflow_file, None);
+}

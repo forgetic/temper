@@ -3,8 +3,10 @@
 //! Each invocation builds one Forge handle, resolves the repository by its
 //! owner/name path, constructs the matching runner worker, and drives it with a
 //! [`PollLoop`] until a stop signal fires. The worker set and labels are derived
-//! from the compiled reference workflow and [`RunnerConfig`]; nothing here
-//! hardcodes role, queue, or label names.
+//! from the resolved workflow and its [`RunnerConfig`] (the bundled
+//! reference-delivery default, or the `--workflow <path>` /
+//! `TEMPER_WORKFLOW_FILE` selection — see [`resolve_workflow_and_config`]);
+//! nothing here hardcodes role, queue, or label names.
 //!
 //! # Backend seam
 //!
@@ -37,7 +39,7 @@ use temper_runner::{
     ManualClock, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, PollLoop,
     RepositoryJournal, RepositorySet, RepositoryTarget, RoleWorker, RunReport, RunnerConfig,
 };
-use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId};
+use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId, ValidatedWorkflow};
 
 use crate::agents::{
     fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
@@ -48,7 +50,7 @@ use crate::worker_bin::args::{
     WorkerKind,
 };
 use crate::worker_bin::multi_ci::MultiRepoCiWorker;
-use crate::{block_on, runner_config, workflow};
+use crate::{block_on, resolve_workflow, runner_config_for_workflow, WorkflowLoadError};
 use temper_runner::AgentRegistry;
 
 /// Errors that abort a worker invocation with a non-zero exit.
@@ -66,6 +68,11 @@ pub enum RunError {
     ///
     /// The message must never contain a token or password.
     Backend(String),
+    /// The runtime-selected `--workflow` file could not be read, parsed, or
+    /// validated. The message names the file and the reason; it never contains a
+    /// secret (workflow files are not secret, and the loader echoes only the
+    /// path plus the read/parse/validation detail).
+    Workflow(WorkflowLoadError),
 }
 
 impl fmt::Display for RunError {
@@ -80,6 +87,7 @@ impl fmt::Display for RunError {
             }
             RunError::Drive(error) => write!(formatter, "worker run failed: {error}"),
             RunError::Backend(message) => write!(formatter, "backend setup failed: {message}"),
+            RunError::Workflow(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -89,6 +97,7 @@ impl Error for RunError {
         match self {
             RunError::Forge(error) => Some(error),
             RunError::Drive(error) => Some(error.as_ref()),
+            RunError::Workflow(error) => Some(error),
             RunError::RepositoryMissing { .. }
             | RunError::UnknownRole { .. }
             | RunError::Backend(_) => None,
@@ -100,6 +109,27 @@ impl From<ForgeError> for RunError {
     fn from(error: ForgeError) -> Self {
         Self::Forge(error)
     }
+}
+
+impl From<WorkflowLoadError> for RunError {
+    fn from(error: WorkflowLoadError) -> Self {
+        Self::Workflow(error)
+    }
+}
+
+/// Resolves the worker's workflow + derived runner config from `args`.
+///
+/// `--workflow <path>` (or `TEMPER_WORKFLOW_FILE`) selects the file; with neither
+/// set this returns the bundled reference-delivery default, byte-for-byte
+/// identical to the historic `crate::workflow()` / `crate::runner_config()`. The
+/// runner config derives its role→user bindings from the workflow's
+/// queue-subscribing roles, so a runtime-selected spec binds its own roles.
+pub(super) fn resolve_workflow_and_config(
+    args: &WorkerArgs,
+) -> Result<(ValidatedWorkflow, RunnerConfig), RunError> {
+    let workflow = resolve_workflow(args.workflow_file.as_ref())?;
+    let config = runner_config_for_workflow(&workflow);
+    Ok((workflow, config))
 }
 
 /// Runs the worker described by `args` to completion, blocking on async work.
@@ -134,10 +164,10 @@ fn run_filesystem(args: &WorkerArgs) -> Result<RunReport, RunError> {
 /// Creates the repository and upserts every label the workflow declares.
 async fn provision(args: &WorkerArgs) -> Result<(), RunError> {
     let forge = FilesystemForge::new(&args.root);
-    let workflow = workflow();
+    let (workflow, config) = resolve_workflow_and_config(args)?;
     let compiled = workflow.compile();
     for path in &args.repositories {
-        let repo = ensure_repository(&forge, path).await?;
+        let repo = ensure_repository(&forge, path, &config).await?;
         upsert_labels(&forge, &repo, &compiled).await?;
     }
     Ok(())
@@ -146,6 +176,7 @@ async fn provision(args: &WorkerArgs) -> Result<(), RunError> {
 async fn ensure_repository(
     forge: &FilesystemForge,
     path: &RepositoryPath,
+    config: &RunnerConfig,
 ) -> Result<RepositoryId, RunError> {
     if let Some(repo) = forge.get_repository_by_path(path).await? {
         return Ok(repo.id);
@@ -154,7 +185,7 @@ async fn ensure_repository(
         .create_repository(CreateRepository {
             owner: path.owner.clone(),
             name: path.name.clone(),
-            default_branch: runner_config().repository.default_branch,
+            default_branch: config.repository.default_branch.clone(),
             description: None,
         })
         .await?;
@@ -190,9 +221,8 @@ fn run_role(
     user_handle: &str,
     behavior: RoleBehavior,
 ) -> Result<RunReport, RunError> {
-    let workflow = workflow();
+    let (workflow, config) = resolve_workflow_and_config(args)?;
     let compiled = workflow.compile();
-    let config = runner_config();
     let role_id = RoleId::new(role);
 
     let registry = registry_for(behavior);
@@ -270,8 +300,7 @@ pub(super) fn resolve_role_user(
 }
 
 fn run_mechanical(args: &WorkerArgs) -> Result<RunReport, RunError> {
-    let workflow = workflow();
-    let config = runner_config();
+    let (workflow, config) = resolve_workflow_and_config(args)?;
     let forge = FilesystemForge::new(&args.root);
     if args.repositories.len() == 1 {
         let repo = block_on(resolve_repository(&forge, &args.owner, &args.name))?;

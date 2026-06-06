@@ -1176,6 +1176,7 @@ dependencies = [
  "temper-forge-memory",
  "temper-forgejo-fixture",
  "temper-forgejo-ops",
+ "temper-reference-delivery",
  "temper-runner",
  "temper-trigger-forgejo",
  "temper-wake",
