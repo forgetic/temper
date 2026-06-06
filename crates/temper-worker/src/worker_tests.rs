@@ -214,7 +214,7 @@ fn production_role_wake_with_known_hint_scans_only_that_repo() {
             ))
             .expect("issue creates");
     }
-    let workflow = workflow();
+    let workflow = temper_reference_delivery::workflow();
     let compiled = workflow.compile();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let worker = MultiRepoRoleWorker::new(

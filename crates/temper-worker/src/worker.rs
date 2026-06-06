@@ -11,7 +11,7 @@ use crate::worker_stop::StopSignal;
 use crate::worker_tick::{production_tick_id, TickReason};
 use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_reference_delivery::{runner_config, workflow};
+use temper_reference_delivery::{repo_input, resolve_workflow, runner_config_for};
 use temper_runner::{
     render_worker_capability_event, IdlePollBackoff, MultiRepoMechanicalWorker,
     MultiRepoRoleWorker, Progress, RepositoryJournal, RepositorySet, RepositoryTarget, RunReport,
@@ -84,9 +84,10 @@ async fn run_role(
     forge: &ForgejoForge,
     role: &str,
 ) -> Result<RunReport, RunError> {
-    let workflow = workflow();
+    let workflow = resolve_workflow(args.workflow_file.as_ref())
+        .map_err(|error| RunError::Backend(error.to_string()))?;
     let compiled = workflow.compile();
-    let mut config = runner_config();
+    let mut config = runner_config_for(&workflow, repo_input());
     let external_tool_executors =
         configure_external_tool_executors(&compiled, &mut config).map_err(RunError::Backend)?;
     let role_id = RoleId::new(role);
@@ -148,9 +149,10 @@ async fn run_role(
 }
 
 async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {
-    let workflow = workflow();
+    let workflow = resolve_workflow(args.workflow_file.as_ref())
+        .map_err(|error| RunError::Backend(error.to_string()))?;
     let compiled = workflow.compile();
-    let mut config = runner_config();
+    let mut config = runner_config_for(&workflow, repo_input());
     // Bind workspace executors so workspace-backed queue automations can run the
     // workspace directly and route on its verdict (ADR 0022 §D), instead of only
     // the LLM role-decision path configuring executors. Unbound automations

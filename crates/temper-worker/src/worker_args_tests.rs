@@ -413,3 +413,117 @@ fn help_short_circuits_without_env() {
         ParseOutcome::Help
     );
 }
+
+#[test]
+fn workflow_file_defaults_to_none_for_back_compat() {
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(args.workflow_file, None);
+}
+
+#[test]
+fn parses_workflow_flag_override() {
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+            "--workflow",
+            "config/workflow.json",
+        ]
+        .into_iter()
+        .map(String::from),
+        env,
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(
+        args.workflow_file,
+        Some(PathBuf::from("config/workflow.json"))
+    );
+}
+
+#[test]
+fn workflow_file_falls_back_to_env() {
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+        ]
+        .into_iter()
+        .map(String::from),
+        |key| match key {
+            FORGEJO_TOKEN_ENV => Some("secret-token".into()),
+            WORKFLOW_FILE_ENV => Some("/etc/temper/basic-delivery.json".into()),
+            _ => None,
+        },
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(
+        args.workflow_file,
+        Some(PathBuf::from("/etc/temper/basic-delivery.json"))
+    );
+}
+
+#[test]
+fn workflow_flag_takes_precedence_over_env() {
+    let outcome = parse_with_env(
+        [
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--repo",
+            "acme/service",
+            "--kind",
+            "mechanical",
+            "--workflow",
+            "from-flag.json",
+        ]
+        .into_iter()
+        .map(String::from),
+        |key| match key {
+            FORGEJO_TOKEN_ENV => Some("secret-token".into()),
+            WORKFLOW_FILE_ENV => Some("from-env.json".into()),
+            _ => None,
+        },
+    )
+    .expect("parses");
+    let ParseOutcome::Run(args) = outcome else {
+        panic!("expected run")
+    };
+    assert_eq!(args.workflow_file, Some(PathBuf::from("from-flag.json")));
+}
