@@ -6,12 +6,16 @@ use std::path::PathBuf;
 use crate::provision::{self, ProvisionError};
 
 pub const ADMIN_TOKEN_ENV: &str = "TEMPER_FORGEJO_ADMIN_TOKEN";
+pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
 
 pub const USAGE: &str = concat!(
     "temper-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path> ",
+    "[--workflow <path>] ",
     "[--webhook-url <url> --webhook-secret-file <path>] ",
     "[--seed-intake yes|no] [--intake-title <title>] [--intake-body-file <path>]\n",
-    "  the admin token comes from TEMPER_FORGEJO_ADMIN_TOKEN (required), never argv"
+    "  the admin token comes from TEMPER_FORGEJO_ADMIN_TOKEN (required), never argv; ",
+    "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to the ",
+    "bundled reference-delivery workflow when unset"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +37,9 @@ pub struct ProvisionArgs {
     pub seed_intake: bool,
     pub intake_title: Option<String>,
     pub intake_body_file: Option<PathBuf>,
+    /// Workflow document to provision against. `None` uses the bundled
+    /// reference-delivery workflow, reproducing today's default behavior.
+    pub workflow_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for ProvisionArgs {
@@ -49,6 +56,7 @@ impl fmt::Debug for ProvisionArgs {
             .field("seed_intake", &self.seed_intake)
             .field("intake_title", &self.intake_title)
             .field("intake_body_file", &self.intake_body_file)
+            .field("workflow_file", &self.workflow_file)
             .finish()
     }
 }
@@ -73,6 +81,7 @@ impl std::error::Error for ArgsError {}
 #[derive(Debug)]
 pub enum RunError {
     Runtime(String),
+    Workflow(temper_reference_delivery::WorkflowLoadError),
     Provision(ProvisionError),
 }
 
@@ -80,6 +89,7 @@ impl fmt::Display for RunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RunError::Runtime(why) => write!(formatter, "failed to start async runtime: {why}"),
+            RunError::Workflow(error) => write!(formatter, "{error}"),
             RunError::Provision(error) => write!(formatter, "{error}"),
         }
     }
@@ -90,6 +100,12 @@ impl std::error::Error for RunError {}
 impl From<ProvisionError> for RunError {
     fn from(error: ProvisionError) -> Self {
         Self::Provision(error)
+    }
+}
+
+impl From<temper_reference_delivery::WorkflowLoadError> for RunError {
+    fn from(error: temper_reference_delivery::WorkflowLoadError) -> Self {
+        Self::Workflow(error)
     }
 }
 
@@ -120,6 +136,7 @@ where
     let mut seed_intake = true;
     let mut intake_title = None;
     let mut intake_body_file = None;
+    let mut workflow_file = None;
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
@@ -128,6 +145,7 @@ where
             "--owner" => owner = Some(value_for(&flag, &mut iter)?),
             "--name" => name = Some(value_for(&flag, &mut iter)?),
             "--out" => out = Some(value_for(&flag, &mut iter)?),
+            "--workflow" => workflow_file = Some(value_for(&flag, &mut iter)?),
             "--webhook-url" => webhook_url = Some(value_for(&flag, &mut iter)?),
             "--webhook-secret-file" => webhook_secret_file = Some(value_for(&flag, &mut iter)?),
             "--seed-intake" => seed_intake = parse_bool(&value_for(&flag, &mut iter)?)?,
@@ -158,7 +176,14 @@ where
         seed_intake,
         intake_title,
         intake_body_file: intake_body_file.map(PathBuf::from),
+        workflow_file: non_empty(workflow_file)
+            .or_else(|| non_empty(env(WORKFLOW_FILE_ENV)))
+            .map(PathBuf::from),
     }))
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| (!value.trim().is_empty()).then_some(value))
 }
 
 pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
@@ -166,6 +191,7 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         .enable_all()
         .build()
         .map_err(|err| RunError::Runtime(err.to_string()))?;
+    let workflow = temper_reference_delivery::resolve_workflow(args.workflow_file.as_ref())?;
     let intake_seed = if args.seed_intake {
         Some(provision::IntakeIssueSeed {
             title: args
@@ -188,6 +214,7 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         args.webhook_url.as_deref(),
         args.webhook_secret_file.as_deref(),
         intake_seed.as_ref(),
+        &workflow,
     ))?;
     provision::write_secrets_file(&args.out, &provision::format_secrets_env(&provisioned))?;
     let intake = issue
@@ -307,5 +334,84 @@ mod tests {
         assert!(!args.seed_intake);
         assert_eq!(args.intake_title.as_deref(), Some("Custom intake"));
         assert_eq!(args.intake_body_file, Some(PathBuf::from("body.md")));
+    }
+
+    #[test]
+    fn parse_defaults_workflow_file_to_none() {
+        let outcome = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string()),
+        )
+        .expect("parses");
+        let ParseOutcome::Run(args) = outcome else {
+            panic!("expected run")
+        };
+        assert_eq!(args.workflow_file, None);
+    }
+
+    #[test]
+    fn parse_accepts_workflow_flag_with_env_fallback_and_precedence() {
+        // Flag override.
+        let ParseOutcome::Run(args) = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+                "--workflow",
+                "from-flag.json",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| match key {
+                ADMIN_TOKEN_ENV => Some("admin-secret".to_string()),
+                WORKFLOW_FILE_ENV => Some("from-env.json".to_string()),
+                _ => None,
+            },
+        )
+        .expect("parses") else {
+            panic!("expected run")
+        };
+        assert_eq!(args.workflow_file, Some(PathBuf::from("from-flag.json")));
+
+        // Env fallback when the flag is absent.
+        let ParseOutcome::Run(args) = parse_with_env(
+            [
+                "--base-url",
+                "http://127.0.0.1:3000",
+                "--owner",
+                "acme",
+                "--name",
+                "service",
+                "--out",
+                "roles.env",
+            ]
+            .into_iter()
+            .map(String::from),
+            |key| match key {
+                ADMIN_TOKEN_ENV => Some("admin-secret".to_string()),
+                WORKFLOW_FILE_ENV => Some("from-env.json".to_string()),
+                _ => None,
+            },
+        )
+        .expect("parses") else {
+            panic!("expected run")
+        };
+        assert_eq!(args.workflow_file, Some(PathBuf::from("from-env.json")));
     }
 }

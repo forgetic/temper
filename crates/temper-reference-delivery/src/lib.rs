@@ -5,17 +5,101 @@
 //! and runner defaults. Runtime processes compose it with narrower production
 //! crates instead of depending on an aggregate production crate.
 
+use std::error::Error;
+use std::fmt;
+use std::path::Path;
+
 use chrono::Duration;
 use temper_forge::{CreateRepository, User, UserId};
 use temper_runner::RunnerConfig;
-use temper_workflow::RawWorkflowSpec;
+use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
+/// Failure loading a runtime-selected workflow from a file.
+#[derive(Debug)]
+pub enum WorkflowLoadError {
+    /// The workflow file could not be read.
+    Read {
+        path: String,
+        source: std::io::Error,
+    },
+    /// The workflow file is not valid JSON for [`RawWorkflowSpec`].
+    Parse { path: String, detail: String },
+    /// The workflow parsed but failed static validation.
+    Validate { path: String, detail: String },
+}
+
+impl fmt::Display for WorkflowLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkflowLoadError::Read { path, source } => {
+                write!(formatter, "failed to read workflow file {path}: {source}")
+            }
+            WorkflowLoadError::Parse { path, detail } => {
+                write!(
+                    formatter,
+                    "workflow file {path} is not valid JSON: {detail}"
+                )
+            }
+            WorkflowLoadError::Validate { path, detail } => {
+                write!(
+                    formatter,
+                    "workflow file {path} failed validation:\n{detail}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for WorkflowLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            WorkflowLoadError::Read { source, .. } => Some(source),
+            WorkflowLoadError::Parse { .. } | WorkflowLoadError::Validate { .. } => None,
+        }
+    }
+}
+
 /// Loads the bundled reference-delivery workflow used by the demo binaries.
-pub fn workflow() -> temper_workflow::ValidatedWorkflow {
+pub fn workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec = serde_json::from_str(FIXTURE).expect("fixture parses");
     spec.validate().expect("reference fixture validates")
+}
+
+/// Loads and validates a workflow from `path`.
+///
+/// This is the runtime workflow source behind the binaries' `--workflow` flag.
+/// Errors are reported against `path` so an operator can see which file failed
+/// and why (read, parse, or validation).
+pub fn load_workflow(path: impl AsRef<Path>) -> Result<ValidatedWorkflow, WorkflowLoadError> {
+    let path = path.as_ref();
+    let display = path.display().to_string();
+    let contents = std::fs::read_to_string(path).map_err(|source| WorkflowLoadError::Read {
+        path: display.clone(),
+        source,
+    })?;
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(&contents).map_err(|error| WorkflowLoadError::Parse {
+            path: display.clone(),
+            detail: error.to_string(),
+        })?;
+    spec.validate()
+        .map_err(|errors| WorkflowLoadError::Validate {
+            path: display,
+            detail: errors.to_string(),
+        })
+}
+
+/// Resolves the workflow to operate against: the file at `path` when supplied,
+/// otherwise the bundled reference-delivery fixture (back-compat default).
+pub fn resolve_workflow(
+    path: Option<impl AsRef<Path>>,
+) -> Result<ValidatedWorkflow, WorkflowLoadError> {
+    match path {
+        Some(path) => load_workflow(path),
+        None => Ok(workflow()),
+    }
 }
 
 /// Reference-delivery repository input.
@@ -46,8 +130,21 @@ pub fn actor_user(role: &str) -> User {
 /// worker or role-decision process. The demo provisioning convention keeps Forge
 /// user id == role id.
 pub fn runner_config() -> RunnerConfig {
-    let workflow = workflow();
-    let mut config = RunnerConfig::new(repo_input())
+    runner_config_for(&workflow(), repo_input())
+}
+
+/// Derives a runner config from any validated workflow and repository input.
+///
+/// Role→actor bindings come from the workflow's roles that subscribe to queues
+/// (the demo provisioning convention keeps Forge user id == role id), so a
+/// runtime-selected workflow binds its own roles without another hard-coded id.
+/// Repository identity/branch come from the caller (the provision/worker CLI
+/// args, or [`repo_input`] as a sane default).
+pub fn runner_config_for(
+    workflow: &ValidatedWorkflow,
+    repository: CreateRepository,
+) -> RunnerConfig {
+    let mut config = RunnerConfig::new(repository)
         .with_lease_ttl(Duration::minutes(30))
         .with_poll_interval(Duration::seconds(1));
     for role in workflow
@@ -58,4 +155,62 @@ pub fn runner_config() -> RunnerConfig {
         config.set_role_binding(role.id.clone(), actor_user(role.id.as_str()));
     }
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REFERENCE_FIXTURE_PATH: &str = "../temper-workflow/fixtures/reference-delivery.json";
+
+    #[test]
+    fn resolve_workflow_defaults_to_bundled_reference() {
+        let resolved = resolve_workflow(None::<&Path>).expect("default resolves");
+        assert_eq!(resolved, workflow());
+    }
+
+    #[test]
+    fn load_workflow_reads_and_validates_a_file() {
+        let loaded = load_workflow(REFERENCE_FIXTURE_PATH).expect("fixture loads");
+        // The on-disk reference fixture is the same document the binaries bundle,
+        // so an explicit `--workflow <reference>` reproduces the default exactly.
+        assert_eq!(loaded, workflow());
+    }
+
+    #[test]
+    fn resolve_workflow_loads_the_given_file() {
+        let resolved =
+            resolve_workflow(Some(REFERENCE_FIXTURE_PATH)).expect("explicit path resolves");
+        assert_eq!(resolved, workflow());
+    }
+
+    #[test]
+    fn load_workflow_reports_a_missing_file() {
+        let error = load_workflow("/definitely/not/here.json").unwrap_err();
+        assert!(matches!(error, WorkflowLoadError::Read { .. }));
+        assert!(error.to_string().contains("/definitely/not/here.json"));
+    }
+
+    #[test]
+    fn runner_config_for_binds_each_queue_subscribing_role() {
+        let workflow = workflow();
+        let config = runner_config_for(&workflow, repo_input());
+        // Every role with at least one queue gets a binding whose Forge user id
+        // equals the role id (the demo provisioning convention).
+        for role in workflow.roles().iter().filter(|r| !r.queues.is_empty()) {
+            let binding = config
+                .role_binding(&role.id)
+                .expect("queue-subscribing role is bound");
+            assert_eq!(binding.user.id.as_str(), role.id.as_str());
+        }
+        assert_eq!(config.repository, repo_input());
+    }
+
+    #[test]
+    fn runner_config_for_matches_legacy_runner_config() {
+        assert_eq!(
+            runner_config_for(&workflow(), repo_input()),
+            runner_config()
+        );
+    }
 }

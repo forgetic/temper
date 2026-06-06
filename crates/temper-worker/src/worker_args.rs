@@ -8,6 +8,7 @@ use std::time::Duration as StdDuration;
 use temper_forge::RepositoryPath;
 use temper_runner::WorkflowRoleDecisionProcessConfig;
 
+pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
 pub const FORGEJO_TOKEN_ENV: &str = "TEMPER_FORGEJO_TOKEN";
 pub const FORGEJO_USERNAME_ENV: &str = "TEMPER_FORGEJO_USERNAME";
 pub const FORGEJO_PASSWORD_ENV: &str = "TEMPER_FORGEJO_PASSWORD";
@@ -23,6 +24,7 @@ pub const USAGE: &str = concat!(
     "temper-worker --backend forgejo --base-url <url> ",
     "(--repo <owner/name> [--repo <owner/name> ...] | --repo-list <path>) ",
     "--kind <role|mechanical> [--role <id> --user <handle>] ",
+    "[--workflow <path>] ",
     "[--role-decision-command <path>] [--role-decision-arg <arg>] ",
     "[--role-decision-env <name>] [--role-decision-cwd <path>] ",
     "[--role-decision-timeout-secs <n>] ",
@@ -32,7 +34,9 @@ pub const USAGE: &str = concat!(
     "[--wake-secret-file <path>] [--allow-bookkeeping-only-pr]\n",
     "  forgejo token comes from TEMPER_FORGEJO_TOKEN; optional web UI credentials ",
     "come from TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD; role ",
-    "decision process config comes from TEMPER_WORKER_ROLE_DECISION_*"
+    "decision process config comes from TEMPER_WORKER_ROLE_DECISION_*; ",
+    "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to ",
+    "the bundled reference-delivery workflow when unset"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +95,9 @@ pub struct WorkerArgs {
     /// Allows guarded role agents to approve PRs whose changed files are only
     /// Temper bookkeeping paths. Intended only with synthetic demos.
     pub allow_bookkeeping_only_pr: bool,
+    /// Workflow document to operate against. `None` uses the bundled
+    /// reference-delivery workflow, reproducing today's default behavior.
+    pub workflow_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for WorkerArgs {
@@ -114,6 +121,7 @@ impl fmt::Debug for WorkerArgs {
                 &self.role_decision_process.as_ref().map(|_| "<configured>"),
             )
             .field("allow_bookkeeping_only_pr", &self.allow_bookkeeping_only_pr)
+            .field("workflow_file", &self.workflow_file)
             .finish()
     }
 }
@@ -174,6 +182,7 @@ struct RawArgs {
     wake_secret_file: Option<String>,
     role_decision: RawRoleDecisionProcessArgs,
     allow_bookkeeping_only_pr: bool,
+    workflow_file: Option<String>,
 }
 
 impl RawArgs {
@@ -212,6 +221,7 @@ impl RawArgs {
                 "--role-decision-timeout-secs" => {
                     raw.role_decision.timeout_secs = Some(value_for(&flag, &mut iter)?)
                 }
+                "--workflow" => raw.workflow_file = Some(value_for(&flag, &mut iter)?),
                 "--allow-bookkeeping-only-pr" => raw.allow_bookkeeping_only_pr = true,
                 other => {
                     return Err(ArgsError::new(format!(
@@ -291,6 +301,9 @@ impl RawArgs {
             wake_secret_file: non_empty(self.wake_secret_file).map(PathBuf::from),
             role_decision_process,
             allow_bookkeeping_only_pr: self.allow_bookkeeping_only_pr,
+            workflow_file: non_empty(self.workflow_file)
+                .or_else(|| non_empty_env(env, WORKFLOW_FILE_ENV))
+                .map(PathBuf::from),
         })
     }
 

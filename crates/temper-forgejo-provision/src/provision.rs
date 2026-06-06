@@ -11,7 +11,7 @@ use temper_workflow::{ArtifactTarget, Effect, RoleId, ValidatedWorkflow};
 
 use crate::forgejo_prep::commit_ci_sentinel;
 use temper_forgejo_ops::forgejo_rest::{self, RestError, ROLE_PASSWORD};
-use temper_reference_delivery::{runner_config, workflow};
+use temper_reference_delivery::{repo_input, runner_config_for};
 
 const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 const LABEL_COLOR: &str = "#ededed";
@@ -163,6 +163,7 @@ impl From<std::io::Error> for ProvisionError {
 
 pub type Result<T> = std::result::Result<T, ProvisionError>;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn provision_world(
     base_url: &str,
     admin_token: &str,
@@ -170,6 +171,7 @@ pub async fn provision_world(
     name: &str,
     roles: &[RoleBinding],
     default_branch: &str,
+    workflow: &ValidatedWorkflow,
 ) -> Result<Provisioned> {
     let client = forgejo_rest::http_client()?;
     forgejo_rest::ensure_org(&client, base_url, admin_token, owner).await?;
@@ -208,7 +210,7 @@ pub async fn provision_world(
     };
 
     forgejo_rest::ensure_repo(&client, base_url, admin_token, owner, name, default_branch).await?;
-    let repository = upsert_labels(base_url, admin_token, owner, name).await?;
+    let repository = upsert_labels(base_url, admin_token, owner, name, workflow).await?;
     forgejo_rest::commit_file(
         &client,
         base_url,
@@ -239,14 +241,14 @@ pub async fn seed_intake_issue(
     owner: &str,
     name: &str,
     seed: &IntakeIssueSeed,
+    workflow: &ValidatedWorkflow,
 ) -> Result<ItemNumber> {
-    let workflow = workflow();
-    let labels = intake_labels(&workflow);
+    let labels = intake_labels(workflow);
     // An empty label set is valid when the workflow declares a default
     // (catch-all) issue kind: the entry issue is seeded as raw human intake with
     // no labels, and a mechanical queue stamps it (e.g. `untriaged`) so a triage
     // role picks it up. Only error when there is no intake entry point at all.
-    if labels.is_empty() && !has_default_issue_kind(&workflow) {
+    if labels.is_empty() && !has_default_issue_kind(workflow) {
         return Err(ProvisionError::Shape {
             what: "intake labels".into(),
             detail: "workflow declares no queued entry issue artifact".into(),
@@ -338,6 +340,7 @@ async fn upsert_labels(
     admin_token: &str,
     owner: &str,
     name: &str,
+    workflow: &ValidatedWorkflow,
 ) -> Result<RepositoryId> {
     use temper_forge::UpsertLabel;
 
@@ -351,7 +354,6 @@ async fn upsert_labels(
             detail: format!("{owner}/{name} not readable after creation"),
         })?;
 
-    let workflow = workflow();
     let compiled = workflow.compile();
     for label in compiled.labels().labels() {
         forge
@@ -422,6 +424,7 @@ pub fn write_secrets_file(path: &Path, contents: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn provision_and_seed(
     base_url: &str,
     admin_token: &str,
@@ -430,8 +433,9 @@ pub async fn provision_and_seed(
     webhook_url: Option<&str>,
     webhook_secret_file: Option<&Path>,
     intake_seed: Option<&IntakeIssueSeed>,
+    workflow: &ValidatedWorkflow,
 ) -> Result<(Provisioned, Option<ItemNumber>)> {
-    let config = runner_config();
+    let config = runner_config_for(workflow, repo_input());
     let provisioned = provision_world(
         base_url,
         admin_token,
@@ -439,6 +443,7 @@ pub async fn provision_and_seed(
         name,
         &config.role_bindings,
         &config.repository.default_branch,
+        workflow,
     )
     .await?;
     if let Some(webhook_url) = webhook_url {
@@ -469,7 +474,7 @@ pub async fn provision_and_seed(
                 what: "intake seed author".into(),
                 detail: "workflow provisioning did not create a human role token".into(),
             })?;
-        Some(seed_intake_issue(base_url, seed_token, owner, name, seed).await?)
+        Some(seed_intake_issue(base_url, seed_token, owner, name, seed, workflow).await?)
     } else {
         None
     };
@@ -546,8 +551,9 @@ mod tests {
         // freshly filed issue carries no labels and a mechanical queue stamps it.
         // `intake_labels` therefore resolves to no labels, and the workflow still
         // declares a default issue kind, so seeding does not error.
-        assert!(intake_labels(&workflow()).is_empty());
-        assert!(has_default_issue_kind(&workflow()));
+        let workflow = temper_reference_delivery::workflow();
+        assert!(intake_labels(&workflow).is_empty());
+        assert!(has_default_issue_kind(&workflow));
     }
 
     #[test]
