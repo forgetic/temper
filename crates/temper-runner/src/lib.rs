@@ -87,7 +87,7 @@ pub use cadence::IdlePollBackoff;
 pub use coding_workspace::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceGuidance, CodingWorkspaceOutput,
     CodingWorkspaceRepository, CodingWorkspaceRequest, CodingWorkspaceWorkItem,
-    ExternalToolExecutors, CODING_WORKSPACE_TOOL_ID,
+    ExternalToolExecutors, WorkspaceCheckout, CODING_WORKSPACE_TOOL_ID,
 };
 pub use config::{
     ExternalToolBinding, ExternalToolBindingError, PullRequestCreateBinding, RoleBinding,

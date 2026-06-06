@@ -61,6 +61,15 @@ fn request() -> CodingWorkspaceRequest {
             tool_guidance: Some("Use docs/product-change.md for this fixture.".to_string()),
             tool_constraints: vec!["No .temper-only diffs.".to_string()],
         },
+        checkout: temper_runner::WorkspaceCheckout::Writable,
+    }
+}
+
+/// A request like [`request`] but for a read-only checkout capability.
+fn read_only_request(checkout: temper_runner::WorkspaceCheckout) -> CodingWorkspaceRequest {
+    CodingWorkspaceRequest {
+        checkout,
+        ..request()
     }
 }
 
@@ -269,6 +278,73 @@ fn head_path_applies_labels_and_summary_override() {
     // Override does not bypass the head flow: a real PR branch is still produced.
     assert_eq!(output.branch, "agent/pr-for-code-7");
     assert_eq!(output.changed_files, vec!["docs/product-change.md"]);
+}
+
+#[test]
+fn read_only_checkout_returns_verdict_without_committing() {
+    let repo = TestRepo::new("read-only-verdict");
+    let head_before = git(&repo.path, &["rev-parse", "HEAD"]).expect("HEAD resolves");
+    // A read-only command (e.g. an architect triaging) writes only a verdict.
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '{\"verdict\":\"ready_code\",\"body\":\"crisp spec\"}' \
+         > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(read_only_request(
+            temper_runner::WorkspaceCheckout::ReadOnly,
+        ))
+        .expect("read-only verdict path succeeds");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("ready_code"))
+    );
+    assert_eq!(output.body.as_deref(), Some("crisp spec"));
+    let head_after = git(&repo.path, &["rev-parse", "HEAD"]).expect("HEAD resolves");
+    assert_eq!(head_before, head_after, "read-only path makes no commit");
+}
+
+#[test]
+fn read_only_checkout_rejects_a_head_with_no_verdict() {
+    let repo = TestRepo::new("read-only-no-verdict");
+    // A read-only command must route a verdict; producing a diff without one is
+    // a misconfiguration the provider rejects rather than committing.
+    let workspace = local_workspace(
+        &repo.path,
+        "mkdir -p docs && printf 'change\n' > docs/product-change.md",
+    );
+
+    let error = workspace
+        .produce(read_only_request(
+            temper_runner::WorkspaceCheckout::ReadOnly,
+        ))
+        .expect_err("a read-only checkout cannot produce a head");
+
+    assert!(error.contains("read-only workspace checkout returned no verdict"));
+}
+
+#[test]
+fn checkout_mode_is_exposed_to_the_command() {
+    let repo = TestRepo::new("checkout-mode-env");
+    // The command can read its granted capability and route accordingly.
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '{\"verdict\":\"%s\"}' \"$TEMPER_CODING_WORKSPACE_CHECKOUT\" \
+         > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(read_only_request(
+            temper_runner::WorkspaceCheckout::ReadOnly,
+        ))
+        .expect("verdict path succeeds");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("read_only"))
+    );
 }
 
 #[test]

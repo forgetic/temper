@@ -20,6 +20,43 @@ use crate::{ExternalToolBindingError, RunnerConfig};
 /// Conventional id for the coding-workspace external tool declaration.
 pub const CODING_WORKSPACE_TOOL_ID: &str = "coding_workspace";
 
+/// How a workspace should prepare its checkout for one invocation.
+///
+/// This is a small, role-agnostic capability hint the runner threads to the
+/// provider per request. The engine never maps tool ids to roles; the operator
+/// wiring chooses a checkout per declared external-tool id (see
+/// `temper-worker`'s `configure_external_tool_executors`), and the default keeps
+/// today's write-in-checkout behavior so an unrecognized id is never surprised
+/// by a read-only tree.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WorkspaceCheckout {
+    /// Writable checkout at `base_branch`, branch pushed on the head path. This
+    /// is the engineer/coding-workspace behavior and the default.
+    #[default]
+    Writable,
+    /// Read-only checkout at `base_branch`; the command analyses but never
+    /// commits or pushes (e.g. an architect triaging an intake issue).
+    ReadOnly,
+    /// Read-only checkout with both the pull request's head **and** base fetched
+    /// so the command can compute the real diff (`git diff base...head`); never
+    /// commits or pushes (e.g. a reviewer judging a PR).
+    PullRequestReadOnly,
+}
+
+impl WorkspaceCheckout {
+    /// Whether this checkout permits committing and pushing a branch (the head
+    /// path). Read-only checkouts return a verdict-only result instead.
+    pub fn is_writable(self) -> bool {
+        matches!(self, WorkspaceCheckout::Writable)
+    }
+
+    /// Whether this checkout needs the pull request's head fetched in addition
+    /// to its base so the command can compute the real diff.
+    pub fn needs_pull_request_head(self) -> bool {
+        matches!(self, WorkspaceCheckout::PullRequestReadOnly)
+    }
+}
+
 /// Repository information a workspace may use to prepare a checkout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodingWorkspaceRepository {
@@ -61,6 +98,10 @@ pub struct CodingWorkspaceRequest {
     /// Correlation key the workflow runtime will use when opening/finding the PR.
     pub correlation_key: String,
     pub guidance: CodingWorkspaceGuidance,
+    /// How the provider should prepare its checkout for this invocation
+    /// (writable head path, read-only analysis, or read-only with the PR diff).
+    /// Defaults to [`WorkspaceCheckout::Writable`], today's behavior.
+    pub checkout: WorkspaceCheckout,
 }
 
 /// Head and metadata produced by a coding workspace.
@@ -185,7 +226,8 @@ impl ExternalToolExecutors {
         Self::default()
     }
 
-    /// Registers a workspace provider for `role` under executor id `tool`.
+    /// Registers a workspace provider for `role` under executor id `tool` with
+    /// the default [`WorkspaceCheckout::Writable`] capability.
     pub fn with_workspace(
         mut self,
         role: RoleId,
@@ -196,17 +238,44 @@ impl ExternalToolExecutors {
         self
     }
 
-    /// Registers a workspace provider for `role` under executor id `tool`.
+    /// Registers a workspace provider for `role` under executor id `tool` with
+    /// an explicit checkout capability.
+    pub fn with_workspace_checkout(
+        mut self,
+        role: RoleId,
+        tool: ExternalToolId,
+        workspace: Arc<dyn CodingWorkspace>,
+        checkout: WorkspaceCheckout,
+    ) -> Self {
+        self.add_workspace_checkout(role, tool, workspace, checkout);
+        self
+    }
+
+    /// Registers a workspace provider for `role` under executor id `tool` with
+    /// the default [`WorkspaceCheckout::Writable`] capability.
     pub fn add_workspace(
         &mut self,
         role: RoleId,
         tool: ExternalToolId,
         workspace: Arc<dyn CodingWorkspace>,
     ) -> &mut Self {
+        self.add_workspace_checkout(role, tool, workspace, WorkspaceCheckout::default())
+    }
+
+    /// Registers a workspace provider for `role` under executor id `tool` with
+    /// an explicit checkout capability.
+    pub fn add_workspace_checkout(
+        &mut self,
+        role: RoleId,
+        tool: ExternalToolId,
+        workspace: Arc<dyn CodingWorkspace>,
+        checkout: WorkspaceCheckout,
+    ) -> &mut Self {
         self.workspaces.push(WorkspaceBinding {
             role,
             tool,
             workspace,
+            checkout,
         });
         self
     }
@@ -218,10 +287,20 @@ impl ExternalToolExecutors {
         role: &RoleId,
         tool: &ExternalToolId,
     ) -> Option<Arc<dyn CodingWorkspace>> {
+        self.binding_for(role, tool)
+            .map(|binding| Arc::clone(&binding.workspace))
+    }
+
+    /// Returns the checkout capability registered for `role` under executor id
+    /// `tool`, if one is bound.
+    pub fn checkout_for(&self, role: &RoleId, tool: &ExternalToolId) -> Option<WorkspaceCheckout> {
+        self.binding_for(role, tool).map(|binding| binding.checkout)
+    }
+
+    fn binding_for(&self, role: &RoleId, tool: &ExternalToolId) -> Option<&WorkspaceBinding> {
         self.workspaces
             .iter()
             .find(|binding| &binding.role == role && &binding.tool == tool)
-            .map(|binding| Arc::clone(&binding.workspace))
     }
 
     /// Validates executable providers against the workflow declaration and
@@ -265,4 +344,5 @@ struct WorkspaceBinding {
     role: RoleId,
     tool: ExternalToolId,
     workspace: Arc<dyn CodingWorkspace>,
+    checkout: WorkspaceCheckout,
 }

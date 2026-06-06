@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use temper_runner::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
+    WorkspaceCheckout,
 };
 use temper_workflow::VerdictId;
 
@@ -152,13 +153,22 @@ impl LocalGitCodingWorkspace {
         ensure_git_worktree(&self.root)?;
         ensure_clean(&self.root)?;
         let branch = request.branch_hint.clone();
+        // The checkout capability bounds what the provider may do. A read-only
+        // checkout never pushes even when the workspace is push-configured, and
+        // a PR-targeted read-only checkout additionally fetches the pull
+        // request's head so the command can compute the real diff.
+        let checkout = request.checkout;
+        let fetch_remote = self.push;
         checkout_branch(
             &self.root,
             &self.remote,
-            self.push,
+            fetch_remote,
             &branch,
             &request.base_branch,
         )?;
+        if checkout.needs_pull_request_head() {
+            fetch_pull_request_head(&self.root, &self.remote, fetch_remote, &request)?;
+        }
         let context_file = write_context_file(&request)?;
         let result_file = result_file_path();
         let command_result = run_edit_command(
@@ -197,9 +207,20 @@ impl LocalGitCodingWorkspace {
             return Ok(output);
         }
 
-        // Head path: no verdict. Enforce the diff guard, commit, push, and open a
-        // PR exactly as before, applying any `labels`/`summary` override from the
-        // result file.
+        // Head path: no verdict. A read-only checkout has no head to produce, so
+        // a missing verdict there is a misconfigured command, not a head; fail
+        // loudly rather than committing into a tree the operator declared
+        // read-only.
+        if !checkout.is_writable() {
+            return Err(format!(
+                "read-only workspace checkout returned no verdict for {}; a read-only \
+                 command must write a verdict to the result file",
+                request.correlation_key
+            ));
+        }
+
+        // Enforce the diff guard, commit, push, and open a PR exactly as before,
+        // applying any `labels`/`summary` override from the result file.
         let changed_files = changed_files(&self.root)?;
         ensure_meaningful_diff(&changed_files)?;
         git(&self.root, &["add", "--all"])?;
@@ -313,20 +334,73 @@ fn ensure_clean(root: &Path) -> Result<(), String> {
 fn checkout_branch(
     root: &Path,
     remote: &str,
-    push: bool,
+    fetch_remote: bool,
     branch: &str,
     base_branch: &str,
 ) -> Result<(), String> {
     if branch.trim().is_empty() || base_branch.trim().is_empty() {
         return Err("workspace branch and base branch must be non-empty".to_string());
     }
-    let base_ref = if push {
+    let base_ref = if fetch_remote {
         git(root, &["fetch", remote, base_branch])?;
         format!("{remote}/{base_branch}")
     } else {
         base_branch.to_string()
     };
     git(root, &["checkout", "-B", branch, &base_ref]).map(|_| ())
+}
+
+/// Fetches the pull request's head into `TEMPER_CODING_WORKSPACE_PR_HEAD_REF` so
+/// a PR-targeted read-only command can compute the real diff against the base
+/// (`git diff <base> <pr-head-ref>`). Uses Forgejo/Gitea's `refs/pull/N/head`
+/// convention. When the workspace is configured without a remote fetch (local
+/// tests), this is a no-op: there is no remote to fetch the PR head from.
+fn fetch_pull_request_head(
+    root: &Path,
+    remote: &str,
+    fetch_remote: bool,
+    request: &CodingWorkspaceRequest,
+) -> Result<(), String> {
+    if !fetch_remote {
+        return Ok(());
+    }
+    let Some(number) = pull_request_number(request) else {
+        // A PR-read-only checkout for a non-PR target has no head to fetch; the
+        // base checkout already happened, so leave it to the command.
+        return Ok(());
+    };
+    let local_ref = pull_request_local_ref(number);
+    git(
+        root,
+        &[
+            "fetch",
+            remote,
+            &format!("refs/pull/{number}/head:{local_ref}"),
+        ],
+    )
+    .map(|_| ())
+}
+
+/// The local ref name a fetched pull-request head is stored under.
+fn pull_request_local_ref(number: u64) -> String {
+    format!("refs/temper/pr/{number}/head")
+}
+
+/// The pull-request number a request targets, if its work item points at a PR.
+fn pull_request_number(request: &CodingWorkspaceRequest) -> Option<u64> {
+    match request.work_item.target {
+        temper_workflow::ArtifactSource::PullRequest { number } => Some(number.get()),
+        temper_workflow::ArtifactSource::Issue { .. } => None,
+    }
+}
+
+/// Stable token naming a checkout capability for the command's environment.
+fn checkout_mode_token(checkout: WorkspaceCheckout) -> &'static str {
+    match checkout {
+        WorkspaceCheckout::Writable => "writable",
+        WorkspaceCheckout::ReadOnly => "read_only",
+        WorkspaceCheckout::PullRequestReadOnly => "pull_request_read_only",
+    }
 }
 
 fn run_edit_command(
@@ -344,6 +418,10 @@ fn run_edit_command(
         .env("TEMPER_CODING_WORKSPACE_BRANCH", &request.branch_hint)
         .env("TEMPER_CODING_WORKSPACE_BASE", &request.base_branch)
         .env(
+            "TEMPER_CODING_WORKSPACE_CHECKOUT",
+            checkout_mode_token(request.checkout),
+        )
+        .env(
             "TEMPER_CODING_WORKSPACE_REPOSITORY",
             format!("{}/{}", request.repository.owner, request.repository.name),
         )
@@ -351,6 +429,16 @@ fn run_edit_command(
             "TEMPER_CODING_WORKSPACE_CORRELATION_KEY",
             &request.correlation_key,
         );
+    // A PR-targeted read-only checkout fetched the pull request's head; tell the
+    // command the local ref so it can compute `git diff <base> <pr-head>`.
+    if request.checkout.needs_pull_request_head() {
+        if let Some(number) = pull_request_number(request) {
+            cmd.env(
+                "TEMPER_CODING_WORKSPACE_PR_HEAD_REF",
+                pull_request_local_ref(number),
+            );
+        }
+    }
     let output = cmd
         .output()
         .map_err(|error| format!("failed to run coding workspace command: {error}"))?;
@@ -388,6 +476,7 @@ fn write_context_file(request: &CodingWorkspaceRequest) -> Result<PathBuf, Strin
         "base_branch": request.base_branch,
         "branch_hint": request.branch_hint,
         "correlation_key": request.correlation_key,
+        "checkout": checkout_mode_token(request.checkout),
         "guidance": {
             "role_guidance": request.guidance.role_guidance,
             "tool_guidance": request.guidance.tool_guidance,

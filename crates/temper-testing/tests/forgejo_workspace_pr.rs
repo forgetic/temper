@@ -16,7 +16,7 @@ use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_forgejo_ops::forgejo_rest;
 use temper_runner::{
     CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
-    CodingWorkspaceWorkItem, CODING_WORKSPACE_TOOL_ID,
+    CodingWorkspaceWorkItem, WorkspaceCheckout, CODING_WORKSPACE_TOOL_ID,
 };
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::start_cached_provisioned_server;
@@ -120,6 +120,7 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
             tool_guidance: Some(format!("Use {CODING_WORKSPACE_TOOL_ID} for the PR head.")),
             tool_constraints: vec!["No bookkeeping-only diffs.".to_string()],
         },
+        checkout: WorkspaceCheckout::Writable,
     }))
     .expect("workspace produces and pushes a head");
     assert_eq!(output.changed_files, vec!["src/banner.txt"]);
