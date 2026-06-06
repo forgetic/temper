@@ -6,9 +6,9 @@ use temper_forge::{
 };
 use temper_workflow::{
     compile, render_metadata_block, ArtifactKindId, ArtifactRef, CiStatus, ClassifiedArtifact,
-    ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals, LabelId,
-    PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId,
-    ValidatedWorkflow, VerdictId, WorkflowEffect, WorkflowMetadata,
+    ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals,
+    IntakeAuthor, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus,
+    RoleId, TransitionId, ValidatedWorkflow, VerdictId, WorkflowEffect, WorkflowMetadata,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/reference-delivery.json");
@@ -111,6 +111,12 @@ fn classify_pr_updated_at(
 fn reference_fixture_validates_with_expected_shape() {
     let workflow = fixture_workflow();
     assert_eq!(workflow.name(), "reference-delivery");
+    // The reference workflow seeds intake as the `human` role, so the knob is
+    // set explicitly and behavior is unchanged.
+    assert_eq!(
+        workflow.intake_author(),
+        Some(&IntakeAuthor::Role("human".into()))
+    );
     assert_eq!(workflow.roles().len(), 6);
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);

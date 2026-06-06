@@ -32,6 +32,7 @@ pub struct ValidatedWorkflow {
     transitions: Vec<ValidatedTransition>,
     gates: Vec<ValidatedGate>,
     relations: Vec<ValidatedRelation>,
+    intake_author: Option<IntakeAuthor>,
 }
 
 impl ValidatedWorkflow {
@@ -48,6 +49,7 @@ impl ValidatedWorkflow {
         transitions: Vec<ValidatedTransition>,
         gates: Vec<ValidatedGate>,
         relations: Vec<ValidatedRelation>,
+        intake_author: Option<IntakeAuthor>,
     ) -> Self {
         Self {
             name,
@@ -59,6 +61,7 @@ impl ValidatedWorkflow {
             transitions,
             gates,
             relations,
+            intake_author,
         }
     }
 
@@ -111,6 +114,26 @@ impl ValidatedWorkflow {
     pub fn relations(&self) -> &[ValidatedRelation] {
         &self.relations
     }
+
+    /// Returns who is expected to file intake, if the workflow declares it.
+    ///
+    /// `None` means the workflow did not set the knob; provisioning then keeps
+    /// the legacy behavior of authoring intake as the `human` role.
+    pub fn intake_author(&self) -> Option<&IntakeAuthor> {
+        self.intake_author.as_ref()
+    }
+}
+
+/// Who is expected to file intake into the workflow (the "external filer").
+///
+/// The validated form references a declared role by typed [`RoleId`]; validation
+/// guarantees the `Role` variant names a role the workflow declares.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IntakeAuthor {
+    /// A provisioned workflow role authors the intake issue.
+    Role(RoleId),
+    /// The provisioning admin identity authors the intake issue.
+    SiteAdmin,
 }
 
 /// A validated role with typed queue references.

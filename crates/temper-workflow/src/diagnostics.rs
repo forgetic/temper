@@ -95,6 +95,8 @@ pub enum ReferenceSite {
     RelationTarget { relation: String },
     /// A gate's external condition referenced a label or state.
     GateCondition { gate: String },
+    /// The workflow's `intake_author` referenced a role.
+    IntakeAuthor,
 }
 
 impl fmt::Display for ReferenceSite {
@@ -152,6 +154,7 @@ impl fmt::Display for ReferenceSite {
             ReferenceSite::GateTransition { gate } | ReferenceSite::GateCondition { gate } => {
                 write!(formatter, "gate `{gate}`")
             }
+            ReferenceSite::IntakeAuthor => write!(formatter, "intake author"),
         }
     }
 }

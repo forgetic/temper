@@ -4,9 +4,11 @@ use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId, VerdictId,
 };
-use crate::spec::{RawEffect, RawGateCondition, RawQueueAutomation, RawWorkflowSpec};
+use crate::spec::{
+    RawEffect, RawGateCondition, RawIntakeAuthor, RawQueueAutomation, RawWorkflowSpec,
+};
 use crate::validated::{
-    Effect, ExternalToolDeclaration, GateCondition, QueueAutomation, QueueLabelSet,
+    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAutomation, QueueLabelSet,
     RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
     ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
 };
@@ -73,6 +75,8 @@ pub(crate) fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         })
         .collect();
 
+    let intake_author = spec.intake_author.as_ref().map(build_intake_author);
+
     ValidatedWorkflow::new(
         spec.name.clone(),
         roles,
@@ -83,7 +87,15 @@ pub(crate) fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
         transitions,
         gates,
         relations,
+        intake_author,
     )
+}
+
+fn build_intake_author(author: &RawIntakeAuthor) -> IntakeAuthor {
+    match author {
+        RawIntakeAuthor::Role { role } => IntakeAuthor::Role(RoleId::new(role)),
+        RawIntakeAuthor::SiteAdmin => IntakeAuthor::SiteAdmin,
+    }
 }
 
 fn build_state_dimension(dimension: &crate::spec::RawStateDimension) -> ValidatedStateDimension {
