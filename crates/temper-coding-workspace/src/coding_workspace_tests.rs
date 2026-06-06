@@ -259,6 +259,94 @@ fn verdict_result_carries_body_and_review_body() {
 }
 
 #[test]
+fn workspace_result_parses_children_protocol() {
+    let result = WorkspaceResult::parse(
+        r#"{
+            "verdict": "needs_breakdown",
+            "children": [
+                {"slug": "api", "title": "Add the API", "body": "api body", "labels": ["code"]},
+                {"slug": "ui", "title": "Add the UI", "body": "ui body", "depends_on": ["api"]}
+            ]
+        }"#,
+    )
+    .expect("valid children protocol parses")
+    .expect("non-empty file yields a result");
+
+    assert_eq!(result.children.len(), 2);
+    assert_eq!(
+        result.children[0],
+        WorkspaceResultChild {
+            slug: "api".to_string(),
+            title: "Add the API".to_string(),
+            body: "api body".to_string(),
+            labels: vec!["code".to_string()],
+            depends_on: Vec::new(),
+        }
+    );
+    assert_eq!(result.children[1].slug, "ui");
+    assert_eq!(result.children[1].depends_on, vec!["api".to_string()]);
+}
+
+#[test]
+fn workspace_result_child_rejects_unknown_fields() {
+    let error = WorkspaceResult::parse(r#"{"children": [{"ttile": "typo"}]}"#)
+        .expect_err("unknown child field is rejected");
+    assert!(error.contains("failed to parse coding workspace result file"));
+}
+
+#[test]
+fn workspace_result_child_maps_to_create_issues_child() {
+    let child = WorkspaceResultChild {
+        slug: "ui".to_string(),
+        title: "Add the UI".to_string(),
+        body: "ui body".to_string(),
+        labels: vec!["code".to_string(), "ready".to_string()],
+        depends_on: vec!["api".to_string()],
+    };
+
+    let mapped = child.into_create_issues_child();
+
+    assert_eq!(
+        mapped,
+        CreateIssuesChild::new("ui", "Add the UI", "ui body")
+            .with_labels(["code", "ready"])
+            .with_dependencies(["api"])
+    );
+}
+
+#[test]
+fn verdict_result_carries_children() {
+    let repo = TestRepo::new("verdict-children");
+    // An architect breakdown: a verdict plus authored dependent children, no diff.
+    let workspace = local_workspace(
+        &repo.path,
+        "printf '%s' '{\"verdict\":\"needs_breakdown\",\"children\":[\
+         {\"slug\":\"api\",\"title\":\"Add the API\",\"body\":\"api body\",\"labels\":[\"code\"]},\
+         {\"slug\":\"ui\",\"title\":\"Add the UI\",\"body\":\"ui body\",\"depends_on\":[\"api\"]}]}' \
+         > \"$TEMPER_CODING_WORKSPACE_RESULT\"",
+    );
+
+    let output = workspace
+        .produce(read_only_request(
+            temper_runner::WorkspaceCheckout::ReadOnly,
+        ))
+        .expect("verdict path with children succeeds");
+
+    assert_eq!(
+        output.verdict,
+        Some(temper_workflow::VerdictId::new("needs_breakdown"))
+    );
+    assert!(output.branch.is_empty());
+    assert_eq!(
+        output.children,
+        vec![
+            CreateIssuesChild::new("api", "Add the API", "api body").with_labels(["code"]),
+            CreateIssuesChild::new("ui", "Add the UI", "ui body").with_dependencies(["api"]),
+        ]
+    );
+}
+
+#[test]
 fn head_path_applies_labels_and_summary_override() {
     let repo = TestRepo::new("head-override");
     let workspace = local_workspace(

@@ -257,14 +257,40 @@ async fn run_workspace_action<F: Forge + ?Sized>(
         .await;
     }
 
-    // Verdict routed to a non-PR-create outcome transition (e.g. escalation, or
-    // a content-bearing rewrite). The (possibly empty) head is discarded; the
-    // routed transition applies its own effects. Any agent-authored body /
-    // review body the workspace produced is bound through the keyed runtime
-    // seam so the routed transition's `set_body` / `attach_review` effects can
-    // consume the work product. An empty diff here is the escalation signal,
-    // not an error, so the head guards do not apply.
+    // Verdict routed to a non-PR-create outcome transition (e.g. escalation, a
+    // content-bearing rewrite, or an issue breakdown). The (possibly empty) head
+    // is discarded; the routed transition applies its own effects. Any
+    // agent-authored body / review body / children the workspace produced is
+    // bound through the keyed runtime seam so the routed transition's `set_body`
+    // / `attach_review` / `create_issues` effects can consume the work product.
+    // An empty diff here is the escalation signal, not an error, so the head
+    // guards do not apply.
     log_verdict_route(identity, &tool.transition, &routed, output.verdict.as_ref());
+
+    // Breakdown route: the routed transition declares `create_issues` and the
+    // workspace authored the dependent children. Bind them under the
+    // deterministic content key so a retry resolves the same children rather
+    // than duplicating them.
+    if !output.children.is_empty() {
+        if let Some(effect_index) = tools.create_issues_effect_index(&routed) {
+            let content_key =
+                workspace_content_key(&item.kind, &routed, target_number(item.target));
+            return run_or_ignore_stale_with(
+                tools
+                    .run_with_create_issues_at(
+                        item.target,
+                        &routed,
+                        effect_index,
+                        content_key,
+                        output.children,
+                    )
+                    .await,
+                identity,
+                &routed,
+            );
+        }
+    }
+
     if output.body.is_some() || output.review_body.is_some() {
         let content_key = workspace_content_key(&item.kind, &routed, target_number(item.target));
         return run_or_ignore_stale_with(

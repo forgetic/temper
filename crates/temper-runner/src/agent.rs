@@ -151,6 +151,26 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         &self.role
     }
 
+    /// Per-kind index of the first `CreateIssues` effect declared by
+    /// `transition`, if any.
+    ///
+    /// The executor counts effect indices per kind, so the first (and, in
+    /// practice, only) `create_issues` effect on a transition is index `0`. The
+    /// verdict-routed children-binding path uses this to decide whether the
+    /// routed transition can consume workspace-authored children before binding
+    /// them through the runtime seam.
+    pub fn create_issues_effect_index(&self, transition: &TransitionId) -> Option<usize> {
+        let declares_create_issues = self
+            .workflow
+            .transitions()
+            .iter()
+            .find(|candidate| &candidate.id == transition)?
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, temper_workflow::Effect::CreateIssues { .. }));
+        declares_create_issues.then_some(0)
+    }
+
     /// Runs a workflow transition for this role against `target`.
     ///
     /// The executor reloads and re-plans against fresh Forge state, so stale or

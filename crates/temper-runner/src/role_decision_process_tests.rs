@@ -793,6 +793,162 @@ async fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
     );
 }
 
+/// A triage action whose `needs_breakdown` verdict routes to a transition that
+/// fans the intake out into dependent children via `create_issues`.
+fn create_issues_workflow_with_outcomes() -> ValidatedWorkflow {
+    parse_workflow(
+        r#"{
+            "name": "generic-agent-test",
+            "roles": [{
+                "id": "banana",
+                "prompt": {"guidance": "Triage the intake."},
+                "external_tools": [{
+                    "id": "coding_workspace",
+                    "description": "Analyze and author a breakdown.",
+                    "required": true,
+                    "constraints": ["Only touch the checked-out repository."],
+                    "guidance": "Rewrite the intake or break it into children."
+                }],
+                "queues": ["todo"]
+            }],
+            "labels": [{"id": "task"}, {"id": "todo"}, {"id": "planned"}, {"id": "code"}, {"id": "ready"}],
+            "artifact_kinds": [{
+                "id": "task",
+                "target": "issue",
+                "identifying_labels": ["task"]
+            }],
+            "queues": [{"id": "todo", "artifact": "task", "labels": ["todo"]}],
+            "transitions": [
+                {
+                    "id": "triage_intake",
+                    "artifact": "task",
+                    "roles": ["banana"],
+                    "outcomes": {"needs_breakdown": "triage_intake_breakdown"},
+                    "effects": [
+                        {"kind": "remove_label", "label": "todo"}
+                    ]
+                },
+                {
+                    "id": "triage_intake_breakdown",
+                    "artifact": "task",
+                    "roles": ["banana"],
+                    "effects": [
+                        {"kind": "create_issues"},
+                        {"kind": "remove_label", "label": "todo"},
+                        {"kind": "add_label", "label": "planned"}
+                    ]
+                }
+            ]
+        }"#,
+    )
+}
+
+/// A workspace that returns a verdict plus authored dependent children (the
+/// `create_issues` work product), with no implementable diff.
+struct ChildrenWorkspace {
+    verdict: temper_workflow::VerdictId,
+    children: Vec<temper_workflow::CreateIssuesChild>,
+}
+
+#[async_trait]
+impl CodingWorkspace for ChildrenWorkspace {
+    async fn produce_head(
+        &self,
+        request: CodingWorkspaceRequest,
+    ) -> Result<CodingWorkspaceOutput, CodingWorkspaceError> {
+        Ok(CodingWorkspaceOutput::new(
+            request.branch_hint,
+            request.base_branch,
+            "broke the intake into dependent children",
+            Vec::new(),
+            Vec::new(),
+        )
+        .with_verdict(self.verdict.clone())
+        .with_children(self.children.clone()))
+    }
+}
+
+#[tokio::test]
+async fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
+    let fixture =
+        fixture_from_workflow(&["task", "todo"], create_issues_workflow_with_outcomes()).await;
+    let children = vec![
+        temper_workflow::CreateIssuesChild::new("api", "Add the API", "Author the API.")
+            .with_labels(["code", "ready"]),
+        temper_workflow::CreateIssuesChild::new("ui", "Add the UI", "Consume the API.")
+            .with_labels(["code", "ready"])
+            .with_dependencies(["api"]),
+    ];
+    let workspace: Arc<dyn CodingWorkspace> = Arc::new(ChildrenWorkspace {
+        verdict: temper_workflow::VerdictId::new("needs_breakdown"),
+        children,
+    });
+    let executors = ExternalToolExecutors::new().with_workspace(
+        RoleId::new("banana"),
+        ExternalToolId::new("coding_workspace"),
+        workspace,
+    );
+    let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        "generic-agent-test",
+        fixture.manifest.clone(),
+        inline_config(
+            r#"printf '%s' '{"protocol_version":1,"action":"triage_intake","reason":"needs breakdown"}'"#,
+        ),
+        vec![bound_coding_workspace()],
+        executors,
+    )
+    .expect("process config validates");
+
+    let changed = agent
+        .service(&fixture.item, &tools(&fixture))
+        .await
+        .expect("verdict routing to create_issues succeeds");
+
+    assert!(changed);
+
+    // The routed `triage_intake_breakdown` transition ran: the authored children
+    // fanned out under the intake as parent, with the sibling dependency
+    // recorded, and the parent's co-declared `planned` label flip applied.
+    let parent_ref = temper_workflow::ArtifactRef::same_repo(fixture.issue.number);
+    let mut created: Vec<_> = fixture
+        .forge
+        .list_issues(&fixture.repo, temper_forge::IssueQuery::default())
+        .await
+        .expect("issues list")
+        .into_iter()
+        .filter(|issue| {
+            temper_workflow::parse_metadata_block(&issue.body)
+                .ok()
+                .flatten()
+                .is_some_and(|metadata| metadata.parents.contains(&parent_ref))
+        })
+        .collect();
+    created.sort_by(|a, b| a.title.cmp(&b.title));
+    assert_eq!(created.len(), 2, "two children fanned out under the intake");
+    assert_eq!(created[0].title, "Add the API");
+    assert_eq!(created[1].title, "Add the UI");
+
+    // The UI child depends on the API child's number.
+    let api_number = created[0].number;
+    let ui_meta = temper_workflow::parse_metadata_block(&created[1].body)
+        .expect("metadata parses")
+        .expect("metadata exists");
+    assert!(ui_meta
+        .dependencies
+        .contains(&temper_workflow::ArtifactRef::same_repo(api_number)));
+
+    assert_eq!(labels(&fixture).await, vec!["planned", "task"]);
+    let pull_requests = fixture
+        .forge
+        .list_pull_requests(&fixture.repo, PullRequestQuery::default())
+        .await
+        .expect("PR list succeeds");
+    assert!(
+        pull_requests.is_empty(),
+        "a breakdown must not open a pull request"
+    );
+}
+
 #[tokio::test]
 async fn workspace_undeclared_verdict_is_an_error() {
     let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow_with_outcomes()).await;

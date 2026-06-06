@@ -18,7 +18,7 @@ use temper_runner::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
     WorkspaceCheckout,
 };
-use temper_workflow::VerdictId;
+use temper_workflow::{CreateIssuesChild, VerdictId};
 
 use crate::pr_diff_guard::{safety_for_files, DiffSafety};
 
@@ -60,10 +60,46 @@ pub struct WorkspaceResult {
     /// Overrides the default PR labels on the head path. `None` keeps the
     /// provider-configured labels.
     pub labels: Option<Vec<String>>,
-    /// Dependent child artifacts (see T4 (#46)). Parsed and retained here so the
-    /// protocol is stable; threading into the output is a later part's job.
+    /// Dependent child artifacts consumed by a routed `create_issues` effect
+    /// (e.g. an architect `needs_breakdown` verdict fanning an intake out into
+    /// authored code issues). Each child carries its own title/body/labels and
+    /// may name sibling children it `depends_on`. Threaded into the output's
+    /// `children` on the verdict path.
     #[serde(default)]
-    pub children: Vec<serde_json::Value>,
+    pub children: Vec<WorkspaceResultChild>,
+}
+
+/// One workspace-authored child artifact in the result protocol.
+///
+/// This is the operator-facing wire shape; it maps to the runtime
+/// [`CreateIssuesChild`] the routed `create_issues` effect consumes. The
+/// operator-facing dependency field is `depends_on` (sibling slugs); it maps to
+/// `CreateIssuesChild::dependencies`.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceResultChild {
+    /// Stable identifier for this child within the effect. Seeds the child's
+    /// per-child correlation key and lets siblings reference it in `depends_on`.
+    pub slug: String,
+    /// Authored child title.
+    pub title: String,
+    /// Authored child body.
+    pub body: String,
+    /// Labels to create the child with (e.g. `code`, `ready`).
+    pub labels: Vec<String>,
+    /// Slugs of sibling children in the same effect that must land before this
+    /// one.
+    pub depends_on: Vec<String>,
+}
+
+impl WorkspaceResultChild {
+    /// Maps the wire child onto the runtime [`CreateIssuesChild`] the
+    /// `create_issues` effect consumes.
+    fn into_create_issues_child(self) -> CreateIssuesChild {
+        CreateIssuesChild::new(self.slug, self.title, self.body)
+            .with_labels(self.labels)
+            .with_dependencies(self.depends_on)
+    }
 }
 
 impl WorkspaceResult {
@@ -185,10 +221,9 @@ impl LocalGitCodingWorkspace {
         let result = result?.unwrap_or_default();
 
         // Verdict path: an external command emitted a typed verdict (e.g. a
-        // reviewer's approve, an architect's rewrite). Skip the diff guard, the
-        // commit, and the push; tolerate an empty working tree; return a
-        // verdict-only output carrying any routed body/review_body. `children`
-        // is parsed but not yet threaded (T4 (#46)).
+        // reviewer's approve, an architect's rewrite or breakdown). Skip the diff
+        // guard, the commit, and the push; tolerate an empty working tree; return
+        // a verdict-only output carrying any routed body/review_body/children.
         if let Some(verdict) = result.verdict_id() {
             let mut output = CodingWorkspaceOutput::new(
                 String::new(),
@@ -203,6 +238,14 @@ impl LocalGitCodingWorkspace {
             }
             if let Some(review_body) = result.review_body {
                 output = output.with_review_body(review_body);
+            }
+            if !result.children.is_empty() {
+                output = output.with_children(
+                    result
+                        .children
+                        .into_iter()
+                        .map(WorkspaceResultChild::into_create_issues_child),
+                );
             }
             return Ok(output);
         }

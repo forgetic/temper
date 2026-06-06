@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use temper_forge::RepositoryId;
-use temper_workflow::{ArtifactKindId, ArtifactSource, ExternalToolId, QueueId, RoleId, VerdictId};
+use temper_workflow::{
+    ArtifactKindId, ArtifactSource, CreateIssuesChild, ExternalToolId, QueueId, RoleId, VerdictId,
+};
 
 use crate::{ExternalToolBindingError, RunnerConfig};
 
@@ -131,6 +133,12 @@ pub struct CodingWorkspaceOutput {
     /// the keyed runtime-input seam; `None` when the routed transition declares
     /// no `attach_review`.
     pub review_body: Option<String>,
+    /// Workspace-authored dependent child artifacts for a `create_issues` effect
+    /// on the routed transition (e.g. an architect's `needs_breakdown` verdict
+    /// fanning an intake out into authored code issues). Consumed through the
+    /// keyed runtime-input seam exactly as `body` / `review_body` are; empty when
+    /// the routed transition declares no `create_issues`.
+    pub children: Vec<CreateIssuesChild>,
 }
 
 impl CodingWorkspaceOutput {
@@ -152,6 +160,7 @@ impl CodingWorkspaceOutput {
             verdict: None,
             body: None,
             review_body: None,
+            children: Vec::new(),
         }
     }
 
@@ -173,6 +182,13 @@ impl CodingWorkspaceOutput {
     /// `attach_review` effect on the routed transition.
     pub fn with_review_body(mut self, review_body: impl Into<String>) -> Self {
         self.review_body = Some(review_body.into());
+        self
+    }
+
+    /// Returns this output carrying workspace-authored children for a
+    /// `create_issues` effect on the routed transition.
+    pub fn with_children(mut self, children: impl IntoIterator<Item = CreateIssuesChild>) -> Self {
+        self.children = children.into_iter().collect();
         self
     }
 }
