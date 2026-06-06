@@ -77,8 +77,10 @@ pub enum ReferenceSite {
     QueueAutomationActor { queue: String },
     /// A queue automation block referenced its primary transition.
     QueueAutomationTransition { queue: String },
-    /// A queue automation block referenced its merge-conflict fallback transition.
-    QueueAutomationConflictFallback { queue: String },
+    /// A queue automation outcome referenced a transition for a verdict.
+    QueueAutomationOutcome { queue: String, verdict: String },
+    /// A transition outcome referenced a transition for a verdict.
+    TransitionOutcome { transition: String, verdict: String },
     /// An artifact kind's `labels` list referenced a label.
     ArtifactLabel { artifact: String },
     /// A state's `label` referenced a label.
@@ -116,9 +118,23 @@ impl fmt::Display for ReferenceSite {
             | ReferenceSite::QueueLabel { queue }
             | ReferenceSite::QueueCondition { queue } => write!(formatter, "queue `{queue}`"),
             ReferenceSite::QueueAutomationActor { queue }
-            | ReferenceSite::QueueAutomationTransition { queue }
-            | ReferenceSite::QueueAutomationConflictFallback { queue } => {
+            | ReferenceSite::QueueAutomationTransition { queue } => {
                 write!(formatter, "automation for queue `{queue}`")
+            }
+            ReferenceSite::QueueAutomationOutcome { queue, verdict } => {
+                write!(
+                    formatter,
+                    "outcome `{verdict}` of automation for queue `{queue}`"
+                )
+            }
+            ReferenceSite::TransitionOutcome {
+                transition,
+                verdict,
+            } => {
+                write!(
+                    formatter,
+                    "outcome `{verdict}` of transition `{transition}`"
+                )
             }
             ReferenceSite::ArtifactLabel { artifact } => {
                 write!(formatter, "artifact kind `{artifact}`")
@@ -170,10 +186,34 @@ pub enum Diagnostic {
         artifact: String,
         queue_artifacts: Vec<String>,
     },
-    /// A queue automation conflict fallback acts on a different artifact kind than the primary transition.
-    QueueAutomationConflictFallbackArtifactMismatch {
+    /// A queue automation outcome transition does not authorize the declared actor.
+    QueueAutomationOutcomeUnauthorized {
         queue: String,
-        fallback: String,
+        verdict: String,
+        actor: String,
+        transition: String,
+    },
+    /// A queue automation outcome transition acts on a different artifact kind than the primary transition.
+    QueueAutomationOutcomeArtifactMismatch {
+        queue: String,
+        verdict: String,
+        transition: String,
+        expected: String,
+        actual: String,
+    },
+    /// A transition outcome routes to a transition that does not authorize the
+    /// primary transition's roles.
+    TransitionOutcomeUnauthorized {
+        transition: String,
+        verdict: String,
+        outcome_transition: String,
+    },
+    /// A transition outcome routes to a transition on a different artifact kind
+    /// than the primary transition.
+    TransitionOutcomeArtifactMismatch {
+        transition: String,
+        verdict: String,
+        outcome_transition: String,
         expected: String,
         actual: String,
     },
@@ -190,7 +230,10 @@ impl Diagnostic {
             | Diagnostic::EmptyQueueArtifacts { .. }
             | Diagnostic::QueueAutomationUnauthorized { .. }
             | Diagnostic::QueueAutomationArtifactMismatch { .. }
-            | Diagnostic::QueueAutomationConflictFallbackArtifactMismatch { .. } => Severity::Error,
+            | Diagnostic::QueueAutomationOutcomeUnauthorized { .. }
+            | Diagnostic::QueueAutomationOutcomeArtifactMismatch { .. }
+            | Diagnostic::TransitionOutcomeUnauthorized { .. }
+            | Diagnostic::TransitionOutcomeArtifactMismatch { .. } => Severity::Error,
         }
     }
 }
@@ -233,14 +276,42 @@ impl fmt::Display for Diagnostic {
                 "automation for queue `{queue}` uses transition `{transition}` on artifact `{artifact}`, which is not selected by the queue ({})",
                 queue_artifacts.join(", ")
             ),
-            Diagnostic::QueueAutomationConflictFallbackArtifactMismatch {
+            Diagnostic::QueueAutomationOutcomeUnauthorized {
                 queue,
-                fallback,
+                verdict,
+                actor,
+                transition,
+            } => write!(
+                formatter,
+                "automation for queue `{queue}` routes verdict `{verdict}` to transition `{transition}`, but that transition does not authorize actor `{actor}`"
+            ),
+            Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+                queue,
+                verdict,
+                transition,
                 expected,
                 actual,
             } => write!(
                 formatter,
-                "automation for queue `{queue}` uses conflict fallback `{fallback}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
+                "automation for queue `{queue}` routes verdict `{verdict}` to transition `{transition}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
+            ),
+            Diagnostic::TransitionOutcomeUnauthorized {
+                transition,
+                verdict,
+                outcome_transition,
+            } => write!(
+                formatter,
+                "transition `{transition}` routes verdict `{verdict}` to transition `{outcome_transition}`, but that transition shares none of the primary transition's roles"
+            ),
+            Diagnostic::TransitionOutcomeArtifactMismatch {
+                transition,
+                verdict,
+                outcome_transition,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "transition `{transition}` routes verdict `{verdict}` to transition `{outcome_transition}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
             ),
         }
     }

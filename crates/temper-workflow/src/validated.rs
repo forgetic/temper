@@ -9,10 +9,11 @@
 use crate::artifact::ArtifactTarget;
 use crate::ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
-    TransitionId,
+    TransitionId, VerdictId,
 };
 use crate::relation::RelationKind;
 use chrono::Duration;
+use std::collections::BTreeMap;
 use temper_forge::ReviewDecision;
 
 /// A workflow that has passed static validation.
@@ -210,7 +211,23 @@ pub struct ValidatedQueue {
 pub struct QueueAutomation {
     pub actor: RoleId,
     pub transition: TransitionId,
-    pub on_merge_conflict: Option<TransitionId>,
+    /// Verdict id -> transition id routing. The merge-conflict fallback (the
+    /// `on_merge_conflict` sugar) lives here under the built-in merge-conflict
+    /// verdict; see [`VerdictId::merge_conflict`].
+    pub outcomes: BTreeMap<VerdictId, TransitionId>,
+}
+
+impl QueueAutomation {
+    /// Returns the transition the built-in merge-conflict verdict routes to, if
+    /// the automation declares one (the first instance of verdict routing).
+    pub fn merge_conflict(&self) -> Option<&TransitionId> {
+        self.outcomes.get(&VerdictId::merge_conflict())
+    }
+
+    /// Returns the transition a verdict routes to, if declared.
+    pub fn outcome(&self, verdict: &VerdictId) -> Option<&TransitionId> {
+        self.outcomes.get(verdict)
+    }
 }
 
 /// One AND-clause in a queue's disjunctive label filter.
@@ -242,6 +259,9 @@ pub struct ValidatedTransition {
     pub roles: Vec<RoleId>,
     pub requires_gates: Vec<GateId>,
     pub effects: Vec<Effect>,
+    /// Verdict id -> transition id routing for a workspace-backed action that
+    /// exposes this transition as a tool. Empty unless declared.
+    pub outcomes: BTreeMap<VerdictId, TransitionId>,
 }
 
 /// A validated relation declaration with typed artifact-kind endpoints.

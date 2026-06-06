@@ -75,6 +75,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     check_state_dimensions(spec, &labels, &artifacts, &mut diagnostics);
     check_role_external_tools(spec, &mut diagnostics);
     check_queue_automation_contract(spec, &roles, &mut diagnostics);
+    check_transition_outcome_contract(spec, &mut diagnostics);
 
     if diagnostics.is_empty() {
         Ok(build_validated(spec))
@@ -234,13 +235,14 @@ fn check_references(
                 },
                 diagnostics,
             );
-            if let Some(fallback) = &automation.on_merge_conflict {
+            for (verdict, transition) in automation_outcome_references(automation) {
                 check_reference(
                     declared.transitions,
-                    fallback,
+                    &transition,
                     SymbolKind::Transition,
-                    ReferenceSite::QueueAutomationConflictFallback {
+                    ReferenceSite::QueueAutomationOutcome {
                         queue: queue.id.clone(),
+                        verdict,
                     },
                     diagnostics,
                 );
@@ -303,6 +305,18 @@ fn check_references(
                     diagnostics,
                 );
             }
+        }
+        for (verdict, target) in &transition.outcomes {
+            check_reference(
+                declared.transitions,
+                target,
+                SymbolKind::Transition,
+                ReferenceSite::TransitionOutcome {
+                    transition: transition.id.clone(),
+                    verdict: verdict.clone(),
+                },
+                diagnostics,
+            );
         }
     }
 
@@ -485,28 +499,88 @@ fn check_queue_automation_contract(
             check_queue_automation_artifact(&queue.id, &queue.artifacts, transition, diagnostics);
         }
 
-        if let Some(fallback_id) = &automation.on_merge_conflict {
-            let Some(fallback) = transitions.get(fallback_id.as_str()).copied() else {
+        for (verdict, outcome_id) in automation_outcome_references(automation) {
+            let Some(outcome) = transitions.get(outcome_id.as_str()).copied() else {
                 continue;
             };
-            check_queue_automation_authority(
-                &queue.id,
-                &automation.actor,
-                actor_declared,
-                fallback,
-                diagnostics,
-            );
+            if actor_declared && !outcome.roles.contains(&automation.actor) {
+                diagnostics.push(Diagnostic::QueueAutomationOutcomeUnauthorized {
+                    queue: queue.id.clone(),
+                    verdict: verdict.clone(),
+                    actor: automation.actor.clone(),
+                    transition: outcome.id.clone(),
+                });
+            }
             if let Some(primary) = primary {
-                if fallback.artifact != primary.artifact {
-                    diagnostics.push(
-                        Diagnostic::QueueAutomationConflictFallbackArtifactMismatch {
-                            queue: queue.id.clone(),
-                            fallback: fallback.id.clone(),
-                            expected: primary.artifact.clone(),
-                            actual: fallback.artifact.clone(),
-                        },
-                    );
+                if outcome.artifact != primary.artifact {
+                    diagnostics.push(Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+                        queue: queue.id.clone(),
+                        verdict: verdict.clone(),
+                        transition: outcome.id.clone(),
+                        expected: primary.artifact.clone(),
+                        actual: outcome.artifact.clone(),
+                    });
                 }
+            }
+        }
+    }
+}
+
+/// The verdict id -> transition id outcome references declared by a queue
+/// automation, with `on_merge_conflict` desugared into the built-in
+/// merge-conflict verdict. An explicit `outcomes` entry wins over the sugar.
+fn automation_outcome_references(
+    automation: &crate::spec::RawQueueAutomation,
+) -> Vec<(String, String)> {
+    let mut references: Vec<(String, String)> = automation
+        .outcomes
+        .iter()
+        .map(|(verdict, transition)| (verdict.clone(), transition.clone()))
+        .collect();
+    if let Some(fallback) = &automation.on_merge_conflict {
+        let verdict = crate::ids::VerdictId::merge_conflict().as_str().to_string();
+        if !references.iter().any(|(existing, _)| *existing == verdict) {
+            references.push((verdict, fallback.clone()));
+        }
+    }
+    references
+}
+
+/// Checks semantic consistency of per-transition outcome routing (the
+/// workspace-verdict path for role-decision actions).
+fn check_transition_outcome_contract(spec: &RawWorkflowSpec, diagnostics: &mut Vec<Diagnostic>) {
+    let transitions: HashMap<&str, &RawTransition> = spec
+        .transitions
+        .iter()
+        .map(|transition| (transition.id.as_str(), transition))
+        .collect();
+
+    for transition in &spec.transitions {
+        for (verdict, outcome_id) in &transition.outcomes {
+            let Some(outcome) = transitions.get(outcome_id.as_str()).copied() else {
+                continue;
+            };
+            let shares_role = transition.roles.iter().any(|role| {
+                outcome
+                    .roles
+                    .iter()
+                    .any(|outcome_role| outcome_role == role)
+            });
+            if !transition.roles.is_empty() && !outcome.roles.is_empty() && !shares_role {
+                diagnostics.push(Diagnostic::TransitionOutcomeUnauthorized {
+                    transition: transition.id.clone(),
+                    verdict: verdict.clone(),
+                    outcome_transition: outcome.id.clone(),
+                });
+            }
+            if outcome.artifact != transition.artifact {
+                diagnostics.push(Diagnostic::TransitionOutcomeArtifactMismatch {
+                    transition: transition.id.clone(),
+                    verdict: verdict.clone(),
+                    outcome_transition: outcome.id.clone(),
+                    expected: transition.artifact.clone(),
+                    actual: outcome.artifact.clone(),
+                });
             }
         }
     }

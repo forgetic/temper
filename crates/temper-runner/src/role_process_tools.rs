@@ -5,7 +5,7 @@ use std::sync::Arc;
 use temper_forge::{BranchRef, CreatePullRequest, Forge, ItemNumber};
 use temper_workflow::{
     render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, Effect, ExecutionError,
-    ExecutionReport, RoleManifest, ToolManifest, TransitionId, WorkflowMetadata,
+    ExecutionReport, RoleManifest, ToolManifest, TransitionId, VerdictId, WorkflowMetadata,
 };
 
 use crate::{
@@ -227,56 +227,122 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
             )));
         }
     };
-    if output.branch.trim().is_empty() {
-        log_transition_custom(
-            identity,
-            &tool.transition,
-            "failed",
-            false,
-            Some("external_executor_invalid_output"),
-            "not_checked",
+
+    // Resolve the transition the workspace verdict routes to, if any. With no
+    // verdict the action's own transition runs and the head produces a PR (the
+    // default "produce a head" behavior). With a verdict, the engine runs the
+    // declared outcome transition instead — e.g. the engineer escalates with
+    // `needs_architect` instead of looping on an empty diff.
+    let routed = match &output.verdict {
+        Some(verdict) => match tool.outcomes.get(verdict) {
+            Some(transition) => transition.clone(),
+            None => {
+                log_transition_custom(
+                    identity,
+                    &tool.transition,
+                    "failed",
+                    false,
+                    Some("external_executor_undeclared_verdict"),
+                    "not_checked",
+                );
+                return Err(AgentError::message(format!(
+                    "coding workspace returned undeclared verdict `{verdict}` for action '{}'",
+                    tool.name
+                )));
+            }
+        },
+        None => tool.transition.clone(),
+    };
+    let routes_to_pr_create = routed == tool.transition;
+
+    if routes_to_pr_create {
+        // PR-create path: the workspace head must be a real, non-empty diff.
+        if output.branch.trim().is_empty() {
+            log_transition_custom(
+                identity,
+                &tool.transition,
+                "failed",
+                false,
+                Some("external_executor_invalid_output"),
+                "not_checked",
+            );
+            return Err(AgentError::message(
+                "coding workspace returned an empty PR head branch",
+            ));
+        }
+        if output.changed_files.is_empty() {
+            log_transition_custom(
+                identity,
+                &tool.transition,
+                "failed",
+                false,
+                Some("external_executor_invalid_output"),
+                "not_checked",
+            );
+            return Err(AgentError::message(
+                "coding workspace returned no changed files for PR head",
+            ));
+        }
+        let input = workspace_pull_request_input(
+            tools.repo().clone(),
+            number,
+            &issue.title,
+            output,
+            base_branch,
         );
-        return Err(AgentError::message(
-            "coding workspace returned an empty PR head branch",
-        ));
+        return match tools
+            .run_with_pull_request_create_at(
+                item.target,
+                &tool.transition,
+                0,
+                correlation_key,
+                input,
+            )
+            .await
+        {
+            Ok(report) => {
+                log_transition_success(identity, &report);
+                Ok(true)
+            }
+            Err(error) if stale_execution(&error) => {
+                log_transition_error(identity, &tool.transition, &error, true);
+                Ok(false)
+            }
+            Err(error) => {
+                log_transition_error(identity, &tool.transition, &error, false);
+                Err(error.into())
+            }
+        };
     }
-    if output.changed_files.is_empty() {
-        log_transition_custom(
+
+    // Verdict routed to a non-PR-create outcome transition (e.g. escalation).
+    // The (possibly empty) head is discarded; the routed transition applies its
+    // own effects with no runtime PR-create input. An empty diff here is the
+    // escalation signal, not an error, so the head guards above do not apply.
+    log_verdict_route(identity, &tool.transition, &routed, output.verdict.as_ref());
+    run_or_ignore_stale(tools, item.target, &routed, identity).await
+}
+
+fn log_verdict_route(
+    identity: &WorkItemIdentity,
+    action_transition: &TransitionId,
+    routed: &TransitionId,
+    verdict: Option<&VerdictId>,
+) {
+    let verdict = verdict.map(VerdictId::as_str).unwrap_or("");
+    eprintln!(
+        "{}",
+        render_action_dispatch_event(&ActionDispatchEvent {
             identity,
-            &tool.transition,
-            "failed",
-            false,
-            Some("external_executor_invalid_output"),
-            "not_checked",
-        );
-        return Err(AgentError::message(
-            "coding workspace returned no changed files for PR head",
-        ));
-    }
-    let input = workspace_pull_request_input(
-        tools.repo().clone(),
-        number,
-        &issue.title,
-        output,
-        base_branch,
+            selected_action: action_transition.as_str(),
+            transition: routed,
+            external_executor_required: true,
+            external_executor_id: None,
+            external_executor_available: Some(true),
+            outcome: "verdict_routed",
+            no_op_reason: (!verdict.is_empty()).then_some(verdict),
+        })
     );
-    match tools
-        .run_with_pull_request_create_at(item.target, &tool.transition, 0, correlation_key, input)
-        .await
-    {
-        Ok(report) => {
-            log_transition_success(identity, &report);
-            Ok(true)
-        }
-        Err(error) if stale_execution(&error) => {
-            log_transition_error(identity, &tool.transition, &error, true);
-            Ok(false)
-        }
-        Err(error) => {
-            log_transition_error(identity, &tool.transition, &error, false);
-            Err(error.into())
-        }
-    }
 }
 
 fn run_or_ignore_stale<'a, F: Forge + ?Sized + 'a>(

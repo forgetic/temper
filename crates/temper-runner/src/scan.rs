@@ -8,6 +8,7 @@
 mod candidate;
 
 use chrono::{DateTime, Utc};
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -16,7 +17,7 @@ use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     queue_active, ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
     ExecutionError, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds, TransitionId,
-    ValidatedWorkflow,
+    ValidatedWorkflow, VerdictId,
 };
 
 pub use candidate::{candidate_query_plan, CandidateQueryPlan, ScanMode};
@@ -43,8 +44,10 @@ pub struct AutomatedWorkItem {
     pub actor: RoleId,
     /// Transition declared by the queue automation metadata.
     pub transition: TransitionId,
-    /// Optional fallback transition declared for merge-conflict routing.
-    pub on_merge_conflict: Option<TransitionId>,
+    /// Verdict id -> transition id routing declared by the automation. The
+    /// merge-conflict fallback lives here under the built-in merge-conflict
+    /// verdict (see [`VerdictId::merge_conflict`]).
+    pub outcomes: BTreeMap<VerdictId, TransitionId>,
     /// Forge artifact to service.
     pub target: ArtifactSource,
     /// Workflow artifact kind resolved during classification.
@@ -340,7 +343,7 @@ fn automated_work_items(
                 queue: queue.id.clone(),
                 actor: automation.actor.clone(),
                 transition: automation.transition.clone(),
-                on_merge_conflict: automation.on_merge_conflict.clone(),
+                outcomes: automation.outcomes.clone(),
                 target: member.source,
                 kind: member.kind.clone(),
             });

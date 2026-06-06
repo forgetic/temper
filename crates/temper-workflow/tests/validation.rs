@@ -126,6 +126,7 @@ fn valid_spec() -> RawWorkflowSpec {
                         label: "in-progress".to_string(),
                     },
                 ],
+                outcomes: Default::default(),
             },
             RawTransition {
                 id: "approve_review".to_string(),
@@ -135,6 +136,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 effects: vec![RawEffect::AddLabel {
                     label: "review-approved".to_string(),
                 }],
+                outcomes: Default::default(),
             },
         ],
         gates: vec![RawGate {

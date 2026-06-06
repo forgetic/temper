@@ -1,9 +1,10 @@
 //! Tests for queue automation metadata and validation.
 
+use std::collections::BTreeMap;
 use temper_workflow::{
     ArtifactTarget, Diagnostic, QueueAutomation, RawArtifactKind, RawLabel, RawQueue,
     RawQueueAutomation, RawRole, RawTransition, RawWorkflowSpec, ReferenceSite, RoleId, SymbolKind,
-    TransitionId,
+    TransitionId, VerdictId,
 };
 
 fn role(id: &str) -> RawRole {
@@ -40,6 +41,7 @@ fn automated_spec() -> RawWorkflowSpec {
                 actor: "mechanical".to_string(),
                 transition: "land_pr".to_string(),
                 on_merge_conflict: Some("route_merge_conflict".to_string()),
+                outcomes: BTreeMap::new(),
             }),
             ..RawQueue::default()
         }],
@@ -114,6 +116,7 @@ fn raw_spec_loads_queue_automation_block() {
             actor: "mechanical".to_string(),
             transition: "land_pr".to_string(),
             on_merge_conflict: Some("route_merge_conflict".to_string()),
+            outcomes: BTreeMap::new(),
         })
     );
 }
@@ -152,7 +155,10 @@ fn minimal_automated_queue_validates() {
         Some(QueueAutomation {
             actor: RoleId::new("mechanical"),
             transition: TransitionId::new("land_pr"),
-            on_merge_conflict: Some(TransitionId::new("route_merge_conflict")),
+            outcomes: BTreeMap::from([(
+                VerdictId::merge_conflict(),
+                TransitionId::new("route_merge_conflict"),
+            )]),
         })
     );
 }
@@ -234,19 +240,21 @@ fn invalid_conflict_fallback_is_diagnosed() {
     let errors = spec.validate().expect_err("invalid fallback fails");
     assert!(errors
         .diagnostics()
-        .contains(&Diagnostic::QueueAutomationUnauthorized {
+        .contains(&Diagnostic::QueueAutomationOutcomeUnauthorized {
             queue: "landing".to_string(),
+            verdict: "merge_conflict".to_string(),
             actor: "mechanical".to_string(),
             transition: "route_merge_conflict".to_string(),
         }));
-    assert!(errors.diagnostics().contains(
-        &Diagnostic::QueueAutomationConflictFallbackArtifactMismatch {
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::QueueAutomationOutcomeArtifactMismatch {
             queue: "landing".to_string(),
-            fallback: "route_merge_conflict".to_string(),
+            verdict: "merge_conflict".to_string(),
+            transition: "route_merge_conflict".to_string(),
             expected: "implementation_pr".to_string(),
             actual: "work_item".to_string(),
-        }
-    ));
+        }));
 }
 
 #[test]
@@ -260,8 +268,9 @@ fn unknown_conflict_fallback_is_diagnosed() {
         .contains(&Diagnostic::UndeclaredReference {
             expected: SymbolKind::Transition,
             id: "missing_fallback".to_string(),
-            site: ReferenceSite::QueueAutomationConflictFallback {
+            site: ReferenceSite::QueueAutomationOutcome {
                 queue: "landing".to_string(),
+                verdict: "merge_conflict".to_string(),
             },
         }));
 }
@@ -281,8 +290,171 @@ fn compile_exposes_automation_metadata_in_queue_manifest() {
         Some(QueueAutomation {
             actor: RoleId::new("mechanical"),
             transition: TransitionId::new("land_pr"),
-            on_merge_conflict: Some(TransitionId::new("route_merge_conflict")),
+            outcomes: BTreeMap::from([(
+                VerdictId::merge_conflict(),
+                TransitionId::new("route_merge_conflict"),
+            )]),
         })
     );
     assert!(queue.subscribers.is_empty());
+}
+
+#[test]
+fn general_automation_outcome_validates_and_compiles() {
+    let mut spec = automated_spec();
+    let automation = automation_mut(&mut spec);
+    automation.on_merge_conflict = None;
+    automation
+        .outcomes
+        .insert("rejected".to_string(), "route_merge_conflict".to_string());
+
+    let workflow = spec.validate().expect("general outcome validates");
+    let queue = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "landing")
+        .expect("queue exists");
+    let automation = queue.automation.as_ref().expect("automation present");
+    assert_eq!(
+        automation.outcome(&VerdictId::new("rejected")),
+        Some(&TransitionId::new("route_merge_conflict"))
+    );
+    assert_eq!(automation.merge_conflict(), None);
+}
+
+#[test]
+fn unauthorized_general_outcome_is_diagnosed() {
+    let mut spec = automated_spec();
+    let automation = automation_mut(&mut spec);
+    automation.on_merge_conflict = None;
+    automation
+        .outcomes
+        .insert("rejected".to_string(), "route_merge_conflict".to_string());
+    // Strip the actor from the outcome transition (transitions[1]).
+    spec.transitions[1].roles.clear();
+
+    let errors = spec.validate().expect_err("unauthorized outcome fails");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::QueueAutomationOutcomeUnauthorized {
+            queue: "landing".to_string(),
+            verdict: "rejected".to_string(),
+            actor: "mechanical".to_string(),
+            transition: "route_merge_conflict".to_string(),
+        }));
+}
+
+#[test]
+fn general_outcome_artifact_mismatch_is_diagnosed() {
+    let mut spec = automated_spec();
+    add_issue_artifact_kind(&mut spec);
+    let automation = automation_mut(&mut spec);
+    automation.on_merge_conflict = None;
+    automation
+        .outcomes
+        .insert("rejected".to_string(), "route_merge_conflict".to_string());
+    spec.transitions[1].artifact = "work_item".to_string();
+
+    let errors = spec
+        .validate()
+        .expect_err("outcome artifact mismatch fails");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+            queue: "landing".to_string(),
+            verdict: "rejected".to_string(),
+            transition: "route_merge_conflict".to_string(),
+            expected: "implementation_pr".to_string(),
+            actual: "work_item".to_string(),
+        }));
+}
+
+#[test]
+fn transition_outcome_routing_validates() {
+    let mut spec = automated_spec();
+    // Route a verdict from the primary transition to the (same artifact/actor)
+    // secondary transition.
+    spec.transitions[0]
+        .outcomes
+        .insert("escalate".to_string(), "route_merge_conflict".to_string());
+
+    let workflow = spec.validate().expect("transition outcome validates");
+    let routed = workflow
+        .transitions()
+        .iter()
+        .find(|transition| transition.id.as_str() == "land_pr")
+        .expect("primary transition exists");
+    assert_eq!(
+        routed.outcomes.get(&VerdictId::new("escalate")),
+        Some(&TransitionId::new("route_merge_conflict"))
+    );
+}
+
+#[test]
+fn unknown_transition_outcome_is_diagnosed() {
+    let mut spec = automated_spec();
+    spec.transitions[0]
+        .outcomes
+        .insert("escalate".to_string(), "missing_outcome".to_string());
+
+    let errors = spec
+        .validate()
+        .expect_err("unknown transition outcome fails");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::UndeclaredReference {
+            expected: SymbolKind::Transition,
+            id: "missing_outcome".to_string(),
+            site: ReferenceSite::TransitionOutcome {
+                transition: "land_pr".to_string(),
+                verdict: "escalate".to_string(),
+            },
+        }));
+}
+
+#[test]
+fn transition_outcome_artifact_mismatch_is_diagnosed() {
+    let mut spec = automated_spec();
+    add_issue_artifact_kind(&mut spec);
+    spec.transitions[0]
+        .outcomes
+        .insert("escalate".to_string(), "route_merge_conflict".to_string());
+    // Make the outcome transition act on a different artifact than the primary.
+    spec.transitions[1].artifact = "work_item".to_string();
+
+    let errors = spec
+        .validate()
+        .expect_err("transition outcome artifact mismatch fails");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::TransitionOutcomeArtifactMismatch {
+            transition: "land_pr".to_string(),
+            verdict: "escalate".to_string(),
+            outcome_transition: "route_merge_conflict".to_string(),
+            expected: "implementation_pr".to_string(),
+            actual: "work_item".to_string(),
+        }));
+}
+
+#[test]
+fn unauthorized_transition_outcome_is_diagnosed() {
+    let mut spec = automated_spec();
+    spec.transitions[0]
+        .outcomes
+        .insert("escalate".to_string(), "route_merge_conflict".to_string());
+    // The primary transition authorizes `mechanical`; give the outcome a
+    // disjoint role set so no role is shared.
+    spec.transitions[1].roles = vec!["other".to_string()];
+    spec.roles.push(role("other"));
+
+    let errors = spec
+        .validate()
+        .expect_err("unauthorized transition outcome fails");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::TransitionOutcomeUnauthorized {
+            transition: "land_pr".to_string(),
+            verdict: "escalate".to_string(),
+            outcome_transition: "route_merge_conflict".to_string(),
+        }));
 }

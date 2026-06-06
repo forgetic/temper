@@ -222,9 +222,18 @@ pub struct RawQueueAutomation {
     /// Transition to run for matched active queue members.
     pub transition: String,
     /// Optional fallback transition to run when the primary transition fails
-    /// because the PR cannot be merged cleanly.
+    /// because the PR cannot be merged cleanly. This is sugar over `outcomes`:
+    /// it desugars into an outcome keyed by the built-in merge-conflict verdict.
     #[serde(default)]
     pub on_merge_conflict: Option<String>,
+    /// General verdict id -> transition id routing for this automation.
+    ///
+    /// Verdict ids are opaque workflow vocabulary; the engine validates only
+    /// that each maps to a transition legal for the actor on the queue's
+    /// artifact. `on_merge_conflict` desugars into an entry keyed by the
+    /// built-in merge-conflict verdict.
+    #[serde(default)]
+    pub outcomes: std::collections::BTreeMap<String, String>,
 }
 
 /// One AND-clause in a queue's disjunctive label filter.
@@ -270,6 +279,14 @@ pub struct RawTransition {
     /// Effects applied when the transition runs.
     #[serde(default)]
     pub effects: Vec<RawEffect>,
+    /// Verdict id -> transition id routing for a workspace-backed action that
+    /// exposes this transition as a tool. When the action's workspace returns a
+    /// verdict, the engine runs the mapped transition instead of this one.
+    ///
+    /// Verdict ids are opaque workflow vocabulary; the engine validates only
+    /// that each maps to a transition legal for this action's artifact/role.
+    #[serde(default)]
+    pub outcomes: std::collections::BTreeMap<String, String>,
 }
 
 /// A raw transition effect.

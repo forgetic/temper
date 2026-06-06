@@ -16,9 +16,9 @@
     },
     {
       "id": "engineer",
-      "charter": "Claim ready code issues, implement them, open PRs, address failed review or CI gates, and resolve merge conflicts.",
+      "charter": "Claim ready code issues, implement them, open PRs, address failed review or CI gates, resolve merge conflicts, and escalate to the architect when a ready code issue cannot be implemented as specified.",
       "prompt": {
-        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. For ready code, use open_pr after the coding workspace has produced a real product diff; do not use claim_code by itself unless another tool has already handled PR creation. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after pushing a conflict-resolution PR head. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work.",
+        "guidance": "Advance ready code only when a declared coding workspace or test fixture supplies the implementation path. For ready code, use open_pr after the coding workspace has produced a real product diff; do not use claim_code by itself unless another tool has already handled PR creation. The coding workspace may return a needs_architect verdict instead of a diff when the issue cannot be implemented as specified; that verdict routes open_pr to request_code_architect_input so the issue is escalated to the architect rather than looping on an empty diff. Use address_review_changes for PRs with changes requested, address_ci_failure for PRs whose CI failed before landing approval, address_landing_ci_failure for PRs whose landing-approved head later fails CI, and resolve_merge_conflict after pushing a conflict-resolution PR head. If the needed code-editing or PR-head work is not available in the manifest context, choose no_action instead of creating bookkeeping-only work.",
         "tool_guidance": "The coding_workspace tool must prepare a real implementation branch before open_pr. Do not open implementation PRs from .temper-pr-prep, .temper-ci, or other bookkeeping-only diffs."
       },
       "external_tools": [
@@ -391,7 +391,9 @@
       "automation": {
         "actor": "mechanical",
         "transition": "land_pr",
-        "on_merge_conflict": "route_merge_conflict"
+        "outcomes": {
+          "merge_conflict": "route_merge_conflict"
+        }
       }
     },
     {
@@ -578,6 +580,9 @@
       "roles": [
         "engineer"
       ],
+      "outcomes": {
+        "needs_architect": "request_code_architect_input"
+      },
       "effects": [
         {
           "kind": "remove_label",
@@ -593,6 +598,44 @@
         },
         {
           "kind": "create_pull_request"
+        }
+      ]
+    },
+    {
+      "id": "request_code_architect_input",
+      "artifact": "code",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "ready"
+        },
+        {
+          "kind": "remove_label",
+          "label": "in-progress"
+        },
+        {
+          "kind": "add_label",
+          "label": "needs-architect"
+        }
+      ]
+    },
+    {
+      "id": "resolve_code_architect_request",
+      "artifact": "code",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "needs-architect"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
         }
       ]
     },
