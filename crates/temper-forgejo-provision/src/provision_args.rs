@@ -270,9 +270,7 @@ fn run_seed_only(args: &ProvisionArgs) -> Result<String, RunError> {
     let seed = intake_seed_from_args(args)?;
     let token = match workflow.intake_author() {
         Some(IntakeAuthor::SiteAdmin) => args.admin_token.clone(),
-        Some(IntakeAuthor::Role(role)) => {
-            provision::role_token_from_secrets_file(&args.out, role)?
-        }
+        Some(IntakeAuthor::Role(role)) => provision::role_token_from_secrets_file(&args.out, role)?,
         None => provision::role_token_from_secrets_file(&args.out, &RoleId::new("human"))?,
     };
     let number = runtime.block_on(provision::seed_intake_issue(
