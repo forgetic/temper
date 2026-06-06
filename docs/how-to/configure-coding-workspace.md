@@ -32,8 +32,8 @@ prompt/context until a runner binds them.
 
 ## 2. Bind the production local-git provider
 
-`temper-worker` binds `coding_workspace` when these environment variables are
-present:
+`temper-worker` binds the local-git workspace provider when these environment
+variables are present:
 
 ```sh
 export TEMPER_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
@@ -43,10 +43,37 @@ export TEMPER_CODING_WORKSPACE_PUSH=1              # default; set 0 for local te
 export TEMPER_CODING_WORKSPACE_PR_LABELS=implementation,needs-reviewer
 ```
 
+The worker binds the provider for **every declared workspace external-tool id**,
+not just `coding_workspace`. Any role-declared id equal to `coding_workspace` or
+ending in `_workspace` (e.g. `triage_workspace`, `review_workspace`) is bound to
+this provider, deduped per `(role, id)`. Non-workspace external tools are left
+unbound for a different provider. When the env above is set but no role declares
+any workspace id, the worker logs a diagnostic and binds nothing.
+
 The command runs in the checkout. It receives the work item and user guidance in
 `TEMPER_CODING_WORKSPACE_CONTEXT` (JSON), plus branch/base/correlation env vars.
 The LLM does not receive shell or file tools; it can only choose the authorized
 workflow action, after which the runner invokes this configured provider.
+
+### Per-tool checkout capability
+
+Different workspace ids need different checkouts, so the worker grants each id a
+checkout capability keyed off the tool id (never the role — the engine stays
+role-agnostic). The provider receives the capability per invocation and exposes
+it to the command as `TEMPER_CODING_WORKSPACE_CHECKOUT`:
+
+| Tool id (convention) | Capability | `…CHECKOUT` | Checkout behavior |
+| --- | --- | --- | --- |
+| `coding_workspace` (and any other `*_workspace`) | writable | `writable` | Writable checkout at `base`; the head path commits and pushes a branch. |
+| `triage_workspace` | read-only | `read_only` | Read-only checkout at `base`; the command must route a verdict and never commits. |
+| `review_workspace` | PR read-only | `pull_request_read_only` | Read-only checkout with the PR head fetched (`TEMPER_CODING_WORKSPACE_PR_HEAD_REF`) **and** base so the command can compute `git diff <base> <pr-head-ref>`; never commits. |
+
+A read-only command (`read_only` or `pull_request_read_only`) **must** write a
+`verdict` to the result file (§3): producing a diff without a verdict in a
+read-only checkout is a misconfiguration and the provider fails loudly rather
+than committing into a tree the operator declared read-only. The reviewer's CI
+status is read from the granted work-item context; richer CI enrichment of that
+context is a follow-up.
 
 ## 3. Report a result (verdict / content)
 

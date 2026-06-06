@@ -18,7 +18,7 @@ use crate::{
     render_transition_execution_event, ActionDispatchEvent, AgentError, BoundExternalTool,
     CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
     CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools, TransitionExecutionEvent, WorkItem,
-    WorkItemIdentity,
+    WorkItemIdentity, WorkspaceCheckout,
 };
 
 pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
@@ -115,8 +115,7 @@ pub(crate) async fn run_process_action<F: Forge + ?Sized>(
             tools,
             tool,
             work_item_context,
-            resolved.tool_id,
-            resolved.workspace,
+            resolved,
         )
         .await;
     }
@@ -130,9 +129,13 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
     tools: &RoleTools<'_, F>,
     tool: &ToolManifest,
     work_item_context: &serde_json::Value,
-    executor_tool_id: &str,
-    workspace: Arc<dyn CodingWorkspace>,
+    resolved: ResolvedWorkspace<'_>,
 ) -> Result<bool, AgentError> {
+    let ResolvedWorkspace {
+        tool_id: executor_tool_id,
+        workspace,
+        checkout,
+    } = resolved;
     let identity = tools.work_item_identity(item);
     let identity = &identity;
     if create_pull_request_count(tool) != 1 {
@@ -214,6 +217,7 @@ async fn run_pull_request_create_tool<F: Forge + ?Sized>(
         branch_hint: pr_branch_hint(&item.kind, number),
         correlation_key: correlation_key.clone(),
         guidance: workspace_guidance(manifest, bound_external_tools, executor_tool_id),
+        checkout,
     };
     let output = match workspace.produce_head(request).await {
         Ok(output) => output,
@@ -497,10 +501,12 @@ fn stale_execution(error: &ExecutionError) -> bool {
 }
 
 /// A workspace executor resolved for an action, plus the executor id (declared
-/// external-tool id) it was bound under, for observability and guidance lookup.
+/// external-tool id) it was bound under, for observability and guidance lookup,
+/// and the checkout capability the runner bound it with.
 struct ResolvedWorkspace<'a> {
     tool_id: &'a str,
     workspace: Arc<dyn CodingWorkspace>,
+    checkout: WorkspaceCheckout,
 }
 
 /// Whether `tool`'s action is backed by a workspace executor.
@@ -531,12 +537,15 @@ fn workspace_executor<'a>(
         {
             return None;
         }
-        external_tool_executors
-            .workspace_for(&manifest.id, &declared.id)
-            .map(|workspace| ResolvedWorkspace {
-                tool_id: declared.id.as_str(),
-                workspace,
-            })
+        let workspace = external_tool_executors.workspace_for(&manifest.id, &declared.id)?;
+        let checkout = external_tool_executors
+            .checkout_for(&manifest.id, &declared.id)
+            .unwrap_or_default();
+        Some(ResolvedWorkspace {
+            tool_id: declared.id.as_str(),
+            workspace,
+            checkout,
+        })
     })
 }
 

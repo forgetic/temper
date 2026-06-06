@@ -72,6 +72,9 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
             reason: "executor_unavailable",
         });
     };
+    let checkout = executors
+        .checkout_for(&item.actor, executor_id)
+        .unwrap_or_default();
     let Some(actor) = compiled.role(&item.actor) else {
         return Ok(WorkspaceAutomationOutcome::Skipped {
             reason: "actor_role_missing",
@@ -137,6 +140,7 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
         branch_hint: pr_branch_hint(&item.kind, number),
         correlation_key: correlation_key.clone(),
         guidance: automation_guidance(actor, executor_id.as_str()),
+        checkout,
     };
     let output =
         workspace
