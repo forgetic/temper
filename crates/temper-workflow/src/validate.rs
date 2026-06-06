@@ -499,6 +499,17 @@ fn check_queue_automation_contract(
             check_queue_automation_artifact(&queue.id, &queue.artifacts, transition, diagnostics);
         }
 
+        if let Some(executor) = &automation.executor {
+            check_queue_automation_executor(
+                spec,
+                &queue.id,
+                &automation.actor,
+                actor_declared,
+                executor,
+                diagnostics,
+            );
+        }
+
         for (verdict, outcome_id) in automation_outcome_references(automation) {
             let Some(outcome) = transitions.get(outcome_id.as_str()).copied() else {
                 continue;
@@ -614,6 +625,36 @@ fn check_queue_automation_artifact(
             transition: transition.id.clone(),
             artifact: transition.artifact.clone(),
             queue_artifacts: queue_artifacts.to_vec(),
+        });
+    }
+}
+
+/// Checks that a workspace-backed automation's `executor` id is declared on the
+/// actor role's external tools, mirroring the role-decision contract that an
+/// executor must be a declared external tool of the role that invokes it. The
+/// check is skipped when the actor role itself is undeclared (already
+/// diagnosed) so a single missing role does not cascade.
+fn check_queue_automation_executor(
+    spec: &RawWorkflowSpec,
+    queue: &str,
+    actor: &str,
+    actor_declared: bool,
+    executor: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !actor_declared {
+        return;
+    }
+    let declares_executor = spec
+        .roles
+        .iter()
+        .find(|role| role.id == actor)
+        .is_some_and(|role| role.external_tools.iter().any(|tool| tool.id == executor));
+    if !declares_executor {
+        diagnostics.push(Diagnostic::QueueAutomationExecutorUndeclared {
+            queue: queue.to_string(),
+            actor: actor.to_string(),
+            executor: executor.to_string(),
         });
     }
 }

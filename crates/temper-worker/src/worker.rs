@@ -150,7 +150,21 @@ async fn run_role(
 async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {
     let workflow = workflow();
     let compiled = workflow.compile();
-    let config = runner_config();
+    let mut config = runner_config();
+    // Bind workspace executors so workspace-backed queue automations can run the
+    // workspace directly and route on its verdict (ADR 0022 §D), instead of only
+    // the LLM role-decision path configuring executors. Unbound automations
+    // simply no-op until a binding exists, so this is safe even when the coding
+    // workspace env is unset.
+    let external_tool_executors =
+        configure_external_tool_executors(&compiled, &mut config).map_err(RunError::Backend)?;
+    let mut bound_external_tool_ids = config
+        .external_tools
+        .iter()
+        .map(|binding| binding.tool.to_string())
+        .collect::<Vec<_>>();
+    bound_external_tool_ids.sort();
+    bound_external_tool_ids.dedup();
     let repositories = resolve_repositories(forge, &args.repositories).await?;
     ensure_workflow_labels(forge, &repositories, &compiled).await?;
     log_repository_set("mechanical", "mechanical", &repositories);
@@ -161,7 +175,7 @@ async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunRe
         repositories: repository_display_paths(&repositories),
         responder_mode: "none".to_string(),
         authorized_actions: Vec::new(),
-        bound_external_tool_ids: Vec::new(),
+        bound_external_tool_ids,
     });
     let journals: Vec<InMemoryJournal> = repositories
         .repositories()
@@ -184,7 +198,8 @@ async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunRe
         journal_bindings,
         LeasePolicy::new(config.lease_ttl),
     )
-    .map_err(|error| RunError::Backend(error.to_string()))?;
+    .map_err(|error| RunError::Backend(error.to_string()))?
+    .with_external_tool_executors(external_tool_executors);
     drive_async(args, &worker).await
 }
 

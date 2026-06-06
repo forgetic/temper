@@ -2,12 +2,16 @@
 
 use std::sync::Arc;
 
-use temper_forge::{BranchRef, CreatePullRequest, Forge, ItemNumber};
+use temper_forge::Forge;
 use temper_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, Effect, ExecutionError,
-    ExecutionReport, RoleManifest, ToolManifest, TransitionId, VerdictId, WorkflowMetadata,
+    ArtifactSource, Effect, ExecutionError, ExecutionReport, RoleManifest, ToolManifest,
+    TransitionId, VerdictId,
 };
 
+use crate::workspace_request::{
+    pr_branch_hint, pr_correlation_key, target_number, workspace_content_key,
+    workspace_pull_request_input,
+};
 use crate::{
     execution_error_diagnostic_classes, execution_error_failure_class,
     postcondition_outcome_for_error, render_action_dispatch_event,
@@ -397,28 +401,6 @@ fn run_or_ignore_stale_with(
     }
 }
 
-/// Returns the artifact item number a work-item target points at.
-fn target_number(target: ArtifactSource) -> ItemNumber {
-    match target {
-        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number,
-    }
-}
-
-/// Deterministic correlation key for content-bearing effects on a routed
-/// transition, scoped to the work item and routed transition so retries dedupe.
-fn workspace_content_key(
-    kind: &ArtifactKindId,
-    routed: &TransitionId,
-    number: ItemNumber,
-) -> String {
-    format!(
-        "content-{}-{}-{}",
-        safe_fragment(kind.as_str()),
-        safe_fragment(routed.as_str()),
-        number.get()
-    )
-}
-
 fn log_action_dispatch(
     identity: &WorkItemIdentity,
     tool: &ToolManifest,
@@ -602,72 +584,4 @@ fn create_pull_request_count(tool: &ToolManifest) -> usize {
         .iter()
         .filter(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
         .count()
-}
-
-fn pr_correlation_key(kind: &ArtifactKindId, number: ItemNumber) -> String {
-    format!("pr-for-{}-{}", safe_fragment(kind.as_str()), number.get())
-}
-
-fn pr_branch_hint(kind: &ArtifactKindId, number: ItemNumber) -> String {
-    format!("agent/{}", pr_correlation_key(kind, number))
-}
-
-fn safe_fragment(value: &str) -> String {
-    let safe: String = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    if safe.is_empty() {
-        "work".to_string()
-    } else {
-        safe
-    }
-}
-
-fn workspace_pull_request_input(
-    repo: temper_forge::RepositoryId,
-    code_number: ItemNumber,
-    issue_title: &str,
-    output: crate::CodingWorkspaceOutput,
-    default_base_branch: String,
-) -> CreatePullRequest {
-    let metadata = WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("implementation_pr")),
-        parents: vec![ArtifactRef::same_repo(code_number)],
-        ..WorkflowMetadata::default()
-    };
-    let summary = output.summary.trim();
-    let body = format!(
-        "Workspace-produced implementation for issue #{code_number}.\n\nSummary: {}\n\n{}",
-        if summary.is_empty() {
-            "(none)"
-        } else {
-            summary
-        },
-        render_metadata_block(&metadata)
-    );
-    CreatePullRequest {
-        title: format!("Implement #{code_number}: {issue_title}"),
-        body,
-        source: BranchRef {
-            repository_id: repo.clone(),
-            branch: output.branch,
-        },
-        target: BranchRef {
-            repository_id: repo,
-            branch: if output.base_branch.trim().is_empty() {
-                default_base_branch
-            } else {
-                output.base_branch
-            },
-        },
-        labels: output.labels,
-        assignees: Vec::new(),
-    }
 }

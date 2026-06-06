@@ -11,6 +11,7 @@
 mod automation;
 
 use crate::agent::{Agent, AgentError, RoleTools};
+use crate::coding_workspace::ExternalToolExecutors;
 use crate::observability::{
     render_mechanical_reconciliation_event, render_scan_summary_event,
     render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
@@ -330,6 +331,10 @@ pub struct MechanicalWorker<
     lease_manager: LeaseManager<'a, F>,
     journal: &'a J,
     policy: P,
+    /// Workspace executors the actor roles of workspace-backed automations can
+    /// invoke. Empty when no executor is bound; such automations no-op until a
+    /// binding exists, never failing the tick.
+    external_tool_executors: ExternalToolExecutors,
     advisory_actions: AtomicU64,
 }
 
@@ -382,8 +387,17 @@ where
             lease_manager: LeaseManager::new(forge, lease_policy),
             journal,
             policy,
+            external_tool_executors: ExternalToolExecutors::new(),
             advisory_actions: AtomicU64::new(0),
         }
+    }
+
+    /// Binds workspace executors this worker can invoke from workspace-backed
+    /// queue automations. Without this the worker runs only no-executor
+    /// automations; workspace-backed ones no-op until a binding exists.
+    pub fn with_external_tool_executors(mut self, executors: ExternalToolExecutors) -> Self {
+        self.external_tool_executors = executors;
+        self
     }
 
     /// Number of advisory recovery actions observed across ticks.
@@ -445,6 +459,7 @@ where
             self.workflow,
             &self.compiled,
             &self.executor,
+            &self.external_tool_executors,
             self.forge,
             now,
         )

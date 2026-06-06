@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 use temper_workflow::{
-    ArtifactTarget, Diagnostic, QueueAutomation, RawArtifactKind, RawLabel, RawQueue,
-    RawQueueAutomation, RawRole, RawTransition, RawWorkflowSpec, ReferenceSite, RoleId, SymbolKind,
-    TransitionId, VerdictId,
+    ArtifactTarget, Diagnostic, QueueAutomation, RawArtifactKind, RawExternalTool, RawLabel,
+    RawQueue, RawQueueAutomation, RawRole, RawTransition, RawWorkflowSpec, ReferenceSite, RoleId,
+    SymbolKind, TransitionId, VerdictId,
 };
 
 fn role(id: &str) -> RawRole {
@@ -42,6 +42,7 @@ fn automated_spec() -> RawWorkflowSpec {
                 transition: "land_pr".to_string(),
                 on_merge_conflict: Some("route_merge_conflict".to_string()),
                 outcomes: BTreeMap::new(),
+                ..RawQueueAutomation::default()
             }),
             ..RawQueue::default()
         }],
@@ -117,6 +118,7 @@ fn raw_spec_loads_queue_automation_block() {
             transition: "land_pr".to_string(),
             on_merge_conflict: Some("route_merge_conflict".to_string()),
             outcomes: BTreeMap::new(),
+            ..RawQueueAutomation::default()
         })
     );
 }
@@ -155,6 +157,7 @@ fn minimal_automated_queue_validates() {
         Some(QueueAutomation {
             actor: RoleId::new("mechanical"),
             transition: TransitionId::new("land_pr"),
+            executor: None,
             outcomes: BTreeMap::from([(
                 VerdictId::merge_conflict(),
                 TransitionId::new("route_merge_conflict"),
@@ -230,6 +233,52 @@ fn automation_transition_artifact_mismatch_is_diagnosed() {
         }));
 }
 
+/// Declares an external tool with `tool_id` on the actor role of the helper
+/// spec, so a workspace-backed automation can reference it as its `executor`.
+fn declare_actor_external_tool(spec: &mut RawWorkflowSpec, tool_id: &str) {
+    spec.roles[0].external_tools.push(RawExternalTool {
+        id: tool_id.to_string(),
+        description: "workspace executor".to_string(),
+        ..RawExternalTool::default()
+    });
+}
+
+#[test]
+fn automation_executor_undeclared_on_actor_is_diagnosed() {
+    let mut spec = automated_spec();
+    // The automation names a workspace executor that the actor role never
+    // declares among its external tools.
+    automation_mut(&mut spec).executor = Some("coding_workspace".to_string());
+
+    let errors = spec.validate().expect_err("undeclared executor fails");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::QueueAutomationExecutorUndeclared {
+            queue: "landing".to_string(),
+            actor: "mechanical".to_string(),
+            executor: "coding_workspace".to_string(),
+        }));
+}
+
+#[test]
+fn automation_executor_declared_on_actor_validates() {
+    let mut spec = automated_spec();
+    declare_actor_external_tool(&mut spec, "coding_workspace");
+    automation_mut(&mut spec).executor = Some("coding_workspace".to_string());
+
+    let workflow = spec.validate().expect("declared executor validates");
+    let automation = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "landing")
+        .and_then(|queue| queue.automation.clone())
+        .expect("landing queue has automation");
+    assert_eq!(
+        automation.executor.as_ref().map(|id| id.as_str()),
+        Some("coding_workspace"),
+    );
+}
+
 #[test]
 fn invalid_conflict_fallback_is_diagnosed() {
     let mut spec = automated_spec();
@@ -290,6 +339,7 @@ fn compile_exposes_automation_metadata_in_queue_manifest() {
         Some(QueueAutomation {
             actor: RoleId::new("mechanical"),
             transition: TransitionId::new("land_pr"),
+            executor: None,
             outcomes: BTreeMap::from([(
                 VerdictId::merge_conflict(),
                 TransitionId::new("route_merge_conflict"),

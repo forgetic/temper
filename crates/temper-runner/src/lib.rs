@@ -79,6 +79,8 @@ pub mod signal;
 pub mod stage;
 pub mod trigger;
 pub mod worker;
+mod workspace_automation;
+mod workspace_request;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use cadence::IdlePollBackoff;

@@ -1,6 +1,8 @@
 //! Multi-repository runner wrappers over per-repository role and mechanical workers.
 
-use crate::{Agent, MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
+use crate::{
+    Agent, ExternalToolExecutors, MechanicalWorker, Progress, RoleWorker, Worker, WorkerError,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -429,6 +431,7 @@ pub struct MultiRepoMechanicalWorker<
     mechanical_repositories: Vec<RepositoryMechanical<'a, J>>,
     lease_policy: LeasePolicy,
     policy: P,
+    external_tool_executors: ExternalToolExecutors,
 }
 
 struct RepositoryMechanical<'a, J: CommandJournal> {
@@ -497,7 +500,16 @@ where
             mechanical_repositories: bound,
             lease_policy,
             policy,
+            external_tool_executors: ExternalToolExecutors::new(),
         })
+    }
+
+    /// Binds workspace executors the per-repo mechanical workers can invoke from
+    /// workspace-backed queue automations. Cloned into each per-repo worker on
+    /// every tick.
+    pub fn with_external_tool_executors(mut self, executors: ExternalToolExecutors) -> Self {
+        self.external_tool_executors = executors;
+        self
     }
 
     pub fn repositories(&self) -> &RepositorySet {
@@ -569,7 +581,8 @@ where
                 repository.journal,
                 self.lease_policy,
                 self.policy.clone(),
-            );
+            )
+            .with_external_tool_executors(self.external_tool_executors.clone());
             let tick = match mode {
                 ReconciliationMode::Bounded => worker.tick(now).await,
                 ReconciliationMode::DeepAudit => worker.tick_deep_audit(now).await,

@@ -211,6 +211,12 @@ pub struct ValidatedQueue {
 pub struct QueueAutomation {
     pub actor: RoleId,
     pub transition: TransitionId,
+    /// Optional workspace executor (declared external-tool id) that services
+    /// this automation directly. When set, the mechanical worker invokes the
+    /// workspace bound for `actor` under this id and routes on its returned
+    /// verdict through `outcomes`, instead of running `transition` mechanically
+    /// (ADR 0022 §D). When `None` the automation runs `transition` directly.
+    pub executor: Option<ExternalToolId>,
     /// Verdict id -> transition id routing. The merge-conflict fallback (the
     /// `on_merge_conflict` sugar) lives here under the built-in merge-conflict
     /// verdict; see [`VerdictId::merge_conflict`].

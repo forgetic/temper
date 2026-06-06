@@ -3,6 +3,8 @@ use crate::observability::{
     execution_error_diagnostic_classes, execution_error_failure_class, StructuredEvent,
 };
 use crate::scan::{scan_automated_queues, AutomatedWorkItem};
+use crate::workspace_automation::{execute_workspace_automation, WorkspaceAutomationOutcome};
+use crate::ExternalToolExecutors;
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_workflow::{
@@ -15,6 +17,7 @@ struct AutomationCounts {
     candidates: usize,
     applied: usize,
     merge_conflicts_routed: usize,
+    workspace_routed: usize,
     unchanged: usize,
     gate_not_satisfied: usize,
     errors: usize,
@@ -38,12 +41,14 @@ struct AutomationContext<'a> {
     workflow_id: &'a str,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
     worker: &str,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
     executor: &Executor<'_, F>,
+    executors: &ExternalToolExecutors,
     forge: &F,
     now: DateTime<Utc>,
 ) -> Result<Progress, WorkerError> {
@@ -68,6 +73,20 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
     };
 
     for item in items {
+        if item.executor.is_some() {
+            run_workspace_item(
+                &context,
+                workflow,
+                compiled,
+                executors,
+                forge,
+                &item,
+                &mut counts,
+                &mut progress,
+            )
+            .await?;
+            continue;
+        }
         match executor
             .execute(repo, item.target, &item.transition, &item.actor)
             .await
@@ -134,6 +153,61 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
         progress,
     );
     Ok(progress)
+}
+
+/// Services one workspace-backed automated item: invokes the bound workspace,
+/// routes on its verdict through the action's `outcomes`, and records the
+/// outcome. An unbound executor or a stale work item is a quiet no-op (the next
+/// tick retries); a genuine execution failure surfaces as the tick error after
+/// the summary is logged, exactly as the direct-execute path does.
+#[allow(clippy::too_many_arguments)]
+async fn run_workspace_item<F: Forge + ?Sized>(
+    context: &AutomationContext<'_>,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    executors: &ExternalToolExecutors,
+    forge: &F,
+    item: &AutomatedWorkItem,
+    counts: &mut AutomationCounts,
+    progress: &mut Progress,
+) -> Result<(), WorkerError> {
+    match execute_workspace_automation(workflow, compiled, executors, forge, context.repo, item)
+        .await
+    {
+        Ok(WorkspaceAutomationOutcome::Applied { routed }) => {
+            counts.applied = counts.applied.saturating_add(1);
+            counts.workspace_routed = counts.workspace_routed.saturating_add(1);
+            progress.record(true);
+            log_workspace_item(context, item, &routed, "routed", None, Vec::new());
+            Ok(())
+        }
+        Ok(WorkspaceAutomationOutcome::Skipped { reason }) => {
+            counts.unchanged = counts.unchanged.saturating_add(1);
+            log_workspace_item(context, item, &item.transition, reason, None, Vec::new());
+            Ok(())
+        }
+        Err(error) => {
+            counts.errors = counts.errors.saturating_add(1);
+            let failure_class = execution_error_failure_class(&error);
+            let diagnostics = execution_error_diagnostic_classes(&error);
+            log_workspace_item(
+                context,
+                item,
+                &item.transition,
+                "error",
+                Some(&failure_class),
+                diagnostics,
+            );
+            log_automation_summary(
+                context.worker,
+                context.repo,
+                context.workflow_id,
+                counts,
+                *progress,
+            );
+            Err(error.into())
+        }
+    }
 }
 
 /// Maps an execution error from the primary automation transition to the
@@ -360,6 +434,45 @@ fn log_merge_conflict_route(
     eprintln!("{}", event.render());
 }
 
+fn log_workspace_item(
+    context: &AutomationContext<'_>,
+    item: &AutomatedWorkItem,
+    routed: &TransitionId,
+    outcome: &str,
+    failure_class: Option<&str>,
+    diagnostic_classes: Vec<String>,
+) {
+    let (artifact_type, artifact_number) = source_parts(item.target);
+    let executor = item
+        .executor
+        .as_ref()
+        .map(|id| id.as_str())
+        .unwrap_or_default();
+    let mut event = StructuredEvent::new("mechanical_automation_workspace_execution")
+        .string("worker_kind", "mechanical")
+        .string("worker", context.worker)
+        .string("repo", context.repo.to_string())
+        .string("workflow_id", context.workflow_id)
+        .string("queue", item.queue.to_string())
+        .string("executor", executor)
+        .string("primary_transition", item.transition.to_string())
+        .string("routed_transition", routed.to_string())
+        .string("actor", item.actor.to_string())
+        .string("artifact_type", artifact_type)
+        .number("artifact_number", artifact_number.get())
+        .string("artifact_kind", item.kind.to_string())
+        .string("outcome", outcome);
+    if let Some(failure_class) = failure_class {
+        event = event.string("failure_class", failure_class);
+    }
+    if !diagnostic_classes.is_empty() {
+        event = event
+            .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
+            .string_array("diagnostic_classes", diagnostic_classes);
+    }
+    eprintln!("{}", event.render());
+}
+
 fn provider_message_summary(message: &str) -> String {
     let collapsed = message.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
@@ -393,6 +506,10 @@ fn log_automation_summary(
             .number(
                 "merge_conflict_routed_count",
                 saturating_u64(counts.merge_conflicts_routed),
+            )
+            .number(
+                "workspace_routed_count",
+                saturating_u64(counts.workspace_routed),
             )
             .number("unchanged_count", saturating_u64(counts.unchanged_total()))
             .number("stale_unchanged_count", saturating_u64(counts.unchanged))
