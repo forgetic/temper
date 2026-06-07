@@ -16,7 +16,6 @@ use temper_forgejo_ops::forgejo_rest::{self, RestError};
 
 const COMMENT_MARKER: &str = "<!-- temper:dogfood-pr-diff-guard -->";
 const IGNORED_PREFIXES: &[&str] = &[".temper-pr-prep/", ".temper-ci/"];
-const IGNORED_PATHS: &[&str] = &[".forgejo/workflows/ci.yml"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiffSafety {
@@ -48,7 +47,6 @@ pub fn is_ignored_internal_path(path: &str) -> bool {
     IGNORED_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
-        || IGNORED_PATHS.contains(&path)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -217,11 +215,41 @@ mod tests {
             safety_for_files(vec![
                 ".temper-pr-prep/agent-pr-for-code-5.txt".into(),
                 ".temper-ci/agent-pr-for-code-5.txt".into(),
-                ".forgejo/workflows/ci.yml".into(),
             ]),
             DiffSafety::BookkeepingOnly {
                 files: vec![
                     ".temper-pr-prep/agent-pr-for-code-5.txt".into(),
+                    ".temper-ci/agent-pr-for-code-5.txt".into(),
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_forgejo_workflow_file_as_meaningful() {
+        assert_eq!(
+            safety_for_files(vec![".forgejo/workflows/ci.yml".into()]),
+            DiffSafety::Meaningful {
+                files: vec![".forgejo/workflows/ci.yml".into()]
+            }
+        );
+        assert_eq!(
+            safety_for_files(vec![".forgejo/workflows/release.yml".into()]),
+            DiffSafety::Meaningful {
+                files: vec![".forgejo/workflows/release.yml".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_forgejo_workflow_file_as_meaningful_with_internal_files() {
+        assert_eq!(
+            safety_for_files(vec![
+                ".temper-ci/agent-pr-for-code-5.txt".into(),
+                ".forgejo/workflows/ci.yml".into(),
+            ]),
+            DiffSafety::Meaningful {
+                files: vec![
                     ".temper-ci/agent-pr-for-code-5.txt".into(),
                     ".forgejo/workflows/ci.yml".into(),
                 ]

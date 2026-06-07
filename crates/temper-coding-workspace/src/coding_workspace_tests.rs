@@ -116,6 +116,21 @@ fn local_git_workspace_accepts_product_code_or_docs_diff() {
 }
 
 #[test]
+fn local_git_workspace_accepts_forgejo_workflow_only_diff() {
+    let repo = TestRepo::new("forgejo-workflow");
+    let workspace = local_workspace(
+        &repo.path,
+        "mkdir -p .forgejo/workflows && printf 'on: push\n' > .forgejo/workflows/ci.yml",
+    );
+
+    let output = workspace
+        .produce(request())
+        .expect("Forgejo workflow diff is accepted");
+
+    assert_eq!(output.changed_files, vec![".forgejo/workflows/ci.yml"]);
+}
+
+#[test]
 fn local_git_workspace_rejects_synthetic_only_diff() {
     let repo = TestRepo::new("synthetic");
     let workspace = local_workspace(
