@@ -7,7 +7,7 @@
 
 use crate::config::{RoleBinding, RunnerConfig};
 use crate::driver::{DriveError, FixpointDriver, ManualClock, RunReport};
-use crate::{AgentRegistry, MechanicalWorker, RoleWorker, Worker};
+use crate::{AgentRegistry, MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
 use async_trait::async_trait;
 use std::error::Error;
 use std::fmt;
@@ -15,7 +15,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use temper_forge::{Forge, ForgeError, RepositoryId, UpsertLabel};
-use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, ValidatedWorkflow};
+use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId, ValidatedWorkflow};
 
 /// Default tick budget used by [`run_scenario`].
 pub const DEFAULT_SCENARIO_BUDGET: u64 = 100;
@@ -182,6 +182,39 @@ where
 
 type IdentityFactory<F> = Arc<dyn Fn(&F, &RoleBinding) -> F + Send + Sync>;
 type ProcessHandleFactory<F> = Arc<dyn for<'a> Fn(&F, WorkerProcess<'a>) -> F + Send + Sync>;
+
+struct RoleAuditWorker<'a, F: Forge + ?Sized> {
+    name: String,
+    inner: RoleWorker<'a, F>,
+}
+
+impl<'a, F: Forge + ?Sized> RoleAuditWorker<'a, F> {
+    fn new(role: &RoleId, inner: RoleWorker<'a, F>) -> Self {
+        Self {
+            name: format!("role-audit:{role}"),
+            inner,
+        }
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Worker for RoleAuditWorker<'_, F> {
+    async fn tick(&self, now: chrono::DateTime<chrono::Utc>) -> Result<Progress, WorkerError> {
+        self.inner.tick_audit(now).await
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+fn role_uses_test_audit_backstop(role: &RoleId) -> bool {
+    // The deterministic in-process scenario stages have no wall-clock audit
+    // cadence. Run the reference architect's audit path as an explicit test
+    // backstop so terminal recovery queues such as `landed_inbox` remain covered
+    // even though normal role scans intentionally skip closed/merged artifacts.
+    role.as_str() == "architect"
+}
 
 /// Worker slot requesting its own Forge handle in a process-split stage.
 #[derive(Clone, Copy, Debug)]
@@ -431,6 +464,20 @@ where
                 Arc::clone(agent),
                 self.config.execution_context(role),
             )));
+            if role_uses_test_audit_backstop(role) {
+                workers.push(Box::new(RoleAuditWorker::new(
+                    role,
+                    RoleWorker::new(
+                        &self.workflow,
+                        &self.compiled,
+                        forge,
+                        &self.repo,
+                        role.clone(),
+                        Arc::clone(agent),
+                        self.config.execution_context(role),
+                    ),
+                )));
+            }
         }
 
         for (factory, forge) in self.extra_worker_factories.iter().zip(extra_forges.iter()) {
@@ -495,6 +542,20 @@ where
                 Arc::clone(agent),
                 self.config.execution_context(role),
             )));
+            if role_uses_test_audit_backstop(role) {
+                workers.push(Box::new(RoleAuditWorker::new(
+                    role,
+                    RoleWorker::new(
+                        &self.workflow,
+                        &self.compiled,
+                        forge,
+                        &self.repo,
+                        role.clone(),
+                        Arc::clone(agent),
+                        self.config.execution_context(role),
+                    ),
+                )));
+            }
         }
 
         for factory in &self.extra_worker_factories {

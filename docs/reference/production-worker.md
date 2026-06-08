@@ -15,14 +15,12 @@ from the compiled workflow and every mutation still goes through `Forge`.
 owner/name` or `--repo-list <path>`. The shard is not an authorization boundary:
 the Forgejo token decides what the worker may read or mutate.
 
-- `--poll-ms <n>` controls the active normal poll cadence. Poll ticks scan the
-  configured repository set using normal bounded candidate queries. Terminal
-  closed/merged history is queried only through active or recoverable labels
-  (queue labels, state labels, transition labels, and gate/condition labels),
-  not through pure artifact-kind identity labels such as a completed PR's
-  `implementation` label. Mechanical poll ticks run bounded reconciliation
-  first, then bounded automated-queue scans for queues with `automation`
-  metadata.
+- `--poll-ms <n>` controls the active normal poll cadence. Role poll ticks scan
+  the configured repository set using open-state queue candidate queries only;
+  they do not list closed issues or closed/merged pull requests. Mechanical poll
+  ticks run bounded reconciliation first, where workflow-labelled terminal
+  recovery remains available, then run automated-queue scans for queues with
+  `automation` metadata using the same open-state active candidate rule.
 - `--idle-poll-max-ms <n>` caps the adaptive idle cadence for mechanical
   workers; the default cap is `60000` ms, raised to `--poll-ms` when the active
   poll interval is already longer. Consecutive successful normal mechanical

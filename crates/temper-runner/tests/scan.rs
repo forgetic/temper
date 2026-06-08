@@ -10,7 +10,8 @@ use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, IssueState, ItemListDetails, ItemNumber,
-    RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UserId,
+    MergeMethod, MergePullRequest, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,
+    UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{scan, scan_automated_queues, scan_role, AutomatedWorkItem, WorkItem};
@@ -219,6 +220,21 @@ fn seed_ci(
             updated_at: ts("2026-05-29T00:01:00Z"),
         }],
     );
+}
+
+fn merge_pr(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) {
+    let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    block_on(forge.merge_pull_request(
+        &pull_request.id,
+        MergePullRequest {
+            method: MergeMethod::Squash,
+            commit_title: None,
+            commit_body: None,
+        },
+    ))
+    .expect("pull request merges");
 }
 
 fn submit_review(
@@ -484,6 +500,29 @@ fn ci_gated_automated_queue_fetches_ci_and_matches() {
     );
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 1);
     assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
+}
+
+#[test]
+fn merged_landing_pr_with_passing_ci_is_not_an_automated_work_item() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let number = create_pr(&forge, &repo, &["implementation", "landing", "landed"]);
+    seed_ci(&forge, &repo, number, CiJobConclusion::Success);
+    merge_pr(&forge, &repo, number);
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let counting = CountingForge::new(forge.clone());
+
+    assert!(block_on(scan_automated_queues(
+        &counting,
+        &repo,
+        &workflow,
+        &compiled,
+        ts("2026-05-29T00:00:00Z"),
+    ))
+    .expect("scan succeeds")
+    .is_empty());
+    assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
 }
 
 #[test]

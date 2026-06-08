@@ -31,9 +31,9 @@ pub struct CandidateQueryPlan {
 
 /// Plans Forge list queries from queue interest.
 ///
-/// Open candidates are queried by open state. Closed issue and closed/merged PR
-/// candidates are queried only with non-empty queue or audit/recovery labels, so
-/// normal scans never request all closed history.
+/// Active queue candidates are queried by open state. Closed issue and
+/// closed/merged PR candidates are queried only for audit/recovery interest, so
+/// normal and automated scans never request terminal history.
 pub fn candidate_query_plan(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
@@ -93,7 +93,6 @@ struct CandidateQueryBuilder {
 impl CandidateQueryBuilder {
     fn add_queue_interest(&mut self, target: ArtifactTarget, label_sets: &[Vec<String>]) {
         self.add_open_interest(target, label_sets);
-        self.add_closed_interest(target, label_sets);
     }
 
     fn add_recovery_interest(&mut self, target: ArtifactTarget, label_sets: &[Vec<String>]) {
@@ -113,12 +112,6 @@ impl CandidateQueryBuilder {
             } else {
                 self.push_open_labels(target, labels.clone());
             }
-        }
-    }
-
-    fn add_closed_interest(&mut self, target: ArtifactTarget, label_sets: &[Vec<String>]) {
-        for labels in label_sets.iter().filter(|labels| !labels.is_empty()) {
-            self.push_closed_labels(target, labels.clone());
         }
     }
 

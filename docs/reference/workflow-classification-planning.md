@@ -75,11 +75,13 @@ count reaches `min_depth` or the oldest timestamped member is at least `max_age`
 old. `max_age` uses the Forge `updated_at` timestamp; snapshots without a
 timestamp cannot satisfy the age branch.
 
-Runner scans derive Forge list queries from subscribed queue interests, prune
-cheap label/kind candidates first, and read dependency/CI/review signals only
-when a cheap-matched queue or transition needs them. Bounded reconciliation uses
-workflow-labelled candidates and exact journal targets; deep audit is the
-explicit all-history operator path.
+Runner active scans derive open-state Forge list queries from subscribed queue
+interests, prune cheap label/kind candidates first, and read dependency/CI/review
+signals only when a cheap-matched queue or transition needs them. Normal role
+scans and normal automated-queue scans do not list closed issues or
+closed/merged pull requests. Bounded reconciliation and audit scans use
+workflow-labelled terminal candidates for recovery; deep audit is the explicit
+all-history operator path.
 
 ## Gates and runtime signals
 

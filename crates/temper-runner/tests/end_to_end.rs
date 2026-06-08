@@ -17,7 +17,7 @@ use temper_runner::{
     MultiRepoRoleWorker, Progress, RepositoryJournal, RepositorySet, RepositoryTarget, Scenario,
     Stage, StageError, Worker, WorkerError,
 };
-use temper_workflow::{InMemoryJournal, LeasePolicy};
+use temper_workflow::{InMemoryJournal, LeasePolicy, RoleId};
 
 use temper_testing::agents::{
     fake_registry, fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
@@ -45,10 +45,12 @@ fn end_to_end_reference_delivery_happy_path_converges() {
     // Expected fake-driven loop: intake -> triage_to_code (architect) ->
     // claim_code + create PR + request_review (engineer) -> CI passes
     // (CiWorker) + approve_review (reviewer) -> land_pr (mechanical) ->
-    // reconcile_landed (architect) -> quiescent. The scenario deliberately
-    // accepts two current seams: the produced code issue may stay open after
-    // merge, and the single PR keeps `alignment` because owner_alignment needs
-    // a cohort of five (or max_age) before it activates.
+    // reconcile_landed (architect audit) -> quiescent. Normal role scans skip
+    // terminal merged PRs; the deterministic stage adds the architect audit
+    // backstop to cover that recovery path. The scenario deliberately accepts
+    // two current seams: the produced code issue may stay open after merge, and
+    // the single PR keeps `alignment` because owner_alignment needs a cohort of
+    // five (or max_age) before it activates.
     let memory_stage =
         block_on(full_reference_stage(runner_config())).expect("memory stage builds");
     assert_mechanical_landed_without_owner_merge(&assert_scenario_converges(
@@ -349,12 +351,59 @@ where
             Arc::clone(agent),
             config.execution_context(&role.id),
         )));
+        if role_uses_test_audit_backstop(&role.id) {
+            workers.push(Box::new(MultiRepoRoleAuditWorker::new(
+                &role.id,
+                MultiRepoRoleWorker::new(
+                    &workflow,
+                    &compiled,
+                    role_forge,
+                    repo_set.clone(),
+                    role.id.clone(),
+                    Arc::clone(agent),
+                    config.execution_context(&role.id),
+                ),
+            )));
+        }
     }
     workers.push(Box::new(MultiRepoPassCiWorker::new(
         forge, ci_repos, ci_sink,
     )));
     let worker_refs: Vec<&dyn Worker> = workers.iter().map(|worker| worker.as_ref()).collect();
     Ok(FixpointDriver::new(worker_refs).run(budget).await?)
+}
+
+struct MultiRepoRoleAuditWorker<'a, F: Forge + ?Sized> {
+    name: String,
+    inner: MultiRepoRoleWorker<'a, F>,
+}
+
+impl<'a, F: Forge + ?Sized> MultiRepoRoleAuditWorker<'a, F> {
+    fn new(role: &RoleId, inner: MultiRepoRoleWorker<'a, F>) -> Self {
+        Self {
+            name: format!("multi-role-audit:{role}"),
+            inner,
+        }
+    }
+}
+
+#[async_trait]
+impl<F: Forge + ?Sized> Worker for MultiRepoRoleAuditWorker<'_, F> {
+    async fn tick(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+        self.inner.tick_audit_report(now).await.into_worker_result()
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+fn role_uses_test_audit_backstop(role: &RoleId) -> bool {
+    // Cross-repo scenario tests use the same fixed-point driver as the
+    // single-repo test stages, so give the reference architect an explicit audit
+    // worker to cover terminal recovery queues after normal scans skip merged
+    // pull requests.
+    role.as_str() == "architect"
 }
 
 struct MultiRepoPassCiWorker<'a, F: Forge + ?Sized, S> {

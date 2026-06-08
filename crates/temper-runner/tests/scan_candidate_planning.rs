@@ -14,7 +14,7 @@ use temper_forge::{
     ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
-use temper_runner::{candidate_query_plan, scan_role, ScanMode, WorkItem};
+use temper_runner::{candidate_query_plan, scan_role, scan_role_audit, ScanMode, WorkItem};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
 
 const REFERENCE_FIXTURE: &str =
@@ -267,16 +267,12 @@ fn has_pull_request_query(
 }
 
 #[test]
-fn candidate_planner_never_builds_closed_all_queries() {
+fn active_candidate_plans_omit_terminal_queries() {
     let workflow = workflow_from_json(PLANNER_FIXTURE);
     let compiled = workflow.compile();
     let role = RoleId::new("engineer");
 
     let normal = candidate_query_plan(&workflow, &compiled, Some(&role), ScanMode::Normal);
-    assert!(closed_issue_queries_have_labels(&normal.issue_queries));
-    assert!(closed_pull_request_queries_have_labels(
-        &normal.pull_request_queries
-    ));
     assert!(has_issue_query(
         &normal.issue_queries,
         IssueState::Open,
@@ -284,9 +280,13 @@ fn candidate_planner_never_builds_closed_all_queries() {
     ));
     assert!(has_issue_query(
         &normal.issue_queries,
-        IssueState::Closed,
+        IssueState::Open,
         &["ready", "bug"]
     ));
+    assert!(!normal
+        .issue_queries
+        .iter()
+        .any(|query| query.state == Some(IssueState::Closed)));
     assert!(has_pull_request_query(
         &normal.pull_request_queries,
         PullRequestState::Open,
@@ -296,8 +296,18 @@ fn candidate_planner_never_builds_closed_all_queries() {
         matches!(
             query.state,
             Some(PullRequestState::Closed | PullRequestState::Merged)
-        ) && query.labels.is_empty()
+        )
     }));
+
+    let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
+    assert!(automated.issue_queries.is_empty());
+    assert!(automated.pull_request_queries.is_empty());
+}
+
+#[test]
+fn audit_candidate_plan_keeps_terminal_workflow_label_recovery_queries() {
+    let workflow = workflow_from_json(PLANNER_FIXTURE);
+    let compiled = workflow.compile();
 
     let audit = candidate_query_plan(&workflow, &compiled, None, ScanMode::Audit);
     assert!(closed_issue_queries_have_labels(&audit.issue_queries));
@@ -346,11 +356,11 @@ fn automated_reference_plan_permits_single_default_kind_open_all_issue_query() {
     assert_eq!(open_all.state, Some(IssueState::Open));
     assert_eq!(open_all.details, ItemListDetails::summary());
 
-    // No closed history is ever listed open-ended.
+    // No terminal history is listed during active mechanical automation scans.
     assert!(plan
         .issue_queries
         .iter()
-        .all(|query| !(query.state == Some(IssueState::Closed) && query.labels.is_empty())));
+        .all(|query| query.state != Some(IssueState::Closed)));
 
     // The landing automation queue stays label-bounded.
     assert!(plan
@@ -362,6 +372,12 @@ fn automated_reference_plan_permits_single_default_kind_open_all_issue_query() {
         PullRequestState::Open,
         &["landing"]
     ));
+    assert!(!plan.pull_request_queries.iter().any(|query| {
+        matches!(
+            query.state,
+            Some(PullRequestState::Closed | PullRequestState::Merged)
+        )
+    }));
 }
 
 #[test]
@@ -390,7 +406,7 @@ fn overlapping_candidate_queries_deduplicate_artifacts() {
             kind: ArtifactKindId::new("code"),
         }]
     );
-    assert_eq!(counting.count(CountedForgeOp::ListIssues), 4);
+    assert_eq!(counting.count(CountedForgeOp::ListIssues), 2);
 }
 
 #[test]
@@ -486,7 +502,7 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
     assert!(closed_pull_request_queries_have_labels(
         &counting.pull_request_queries()
     ));
-    assert_eq!(counting.count(CountedForgeOp::ListIssues), 2);
+    assert_eq!(counting.count(CountedForgeOp::ListIssues), 1);
     assert!(!counting
         .issue_queries()
         .iter()
@@ -500,25 +516,43 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
 }
 
 #[test]
-fn merged_pr_with_landed_queue_label_is_still_found() {
+fn merged_pr_with_landed_queue_label_is_only_found_by_audit_scan() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let number = create_pr(&forge, &repo, &["implementation", "landed"]);
     merge_pr(&forge, &repo, number);
     let workflow = workflow_from_json(REFERENCE_FIXTURE);
     let compiled = workflow.compile();
-    let counting = CountingForge::new(forge.clone());
+    let normal_counting = CountingForge::new(forge.clone());
 
+    assert!(block_on(scan_role(
+        &normal_counting,
+        &repo,
+        &workflow,
+        &compiled,
+        ts("2026-05-29T00:00:00Z"),
+        &RoleId::new("architect"),
+    ))
+    .expect("normal scan succeeds")
+    .is_empty());
+    assert!(!normal_counting.pull_request_queries().iter().any(|query| {
+        matches!(
+            query.state,
+            Some(PullRequestState::Closed | PullRequestState::Merged)
+        )
+    }));
+
+    let audit_counting = CountingForge::new(forge.clone());
     assert_eq!(
-        block_on(scan_role(
-            &counting,
+        block_on(scan_role_audit(
+            &audit_counting,
             &repo,
             &workflow,
             &compiled,
             ts("2026-05-29T00:00:00Z"),
             &RoleId::new("architect"),
         ))
-        .expect("scan succeeds"),
+        .expect("audit scan succeeds"),
         vec![WorkItem {
             queue: QueueId::new("landed_inbox"),
             role: RoleId::new("architect"),
@@ -527,11 +561,10 @@ fn merged_pr_with_landed_queue_label_is_still_found() {
         }]
     );
     assert!(has_pull_request_query(
-        &counting.pull_request_queries(),
+        &audit_counting.pull_request_queries(),
         PullRequestState::Merged,
         &["landed"]
     ));
-    assert!(counting.count(CountedForgeOp::ListPullRequests) > 0);
 }
 
 #[test]
