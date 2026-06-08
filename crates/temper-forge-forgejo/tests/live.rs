@@ -12,6 +12,7 @@
 //! ```
 
 use base64::Engine;
+use bench_forgejo::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use temper_forge::{
@@ -19,7 +20,6 @@ use temper_forge::{
     PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ReqwestHttpClient};
-use temper_forgejo_fixture::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError};
 
 const ADMIN_USER: &str = "liveadmin";
 const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";

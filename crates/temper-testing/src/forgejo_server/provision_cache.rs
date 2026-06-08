@@ -1,6 +1,6 @@
 //! Cached reference-delivery Forgejo worlds.
 //!
-//! This module turns the reusable generic cache in `temper-forgejo-fixture` into
+//! This module turns the reusable generic cache in `bench-forgejo` into
 //! Temper's concrete reference-delivery state: admin token, org, role users,
 //! labels, CI workflow, and one or more initialized repositories.
 
