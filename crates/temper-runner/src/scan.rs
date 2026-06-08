@@ -135,6 +135,28 @@ pub async fn scan_role<F: Forge + ?Sized>(
     .await
 }
 
+/// Wake-triggered scan for one role. Queue scoping stays role-bounded while
+/// adding narrow terminal/recovery interest for workflow labels.
+pub async fn scan_role_wake<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    role: &RoleId,
+) -> Result<Vec<WorkItem>, ScanError> {
+    scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Wake,
+    )
+    .await
+}
+
 /// Scans active queues that declare mechanical automation metadata.
 ///
 /// The scan is read-only and bounded by the automated queues' candidate query

@@ -16,9 +16,9 @@ mod worker_binary;
 
 pub const LONG_POLL_MS: u64 = 120_000;
 const CI_STATUS_POLL_MS: u64 = 1_000;
-pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
+pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 const ASSERT_POLL: Duration = Duration::from_secs(1);
-const WORKER_RUN_SECS: u64 = 240;
+const WORKER_RUN_SECS: u64 = 180;
 
 #[derive(Clone)]
 pub struct RepoTarget {

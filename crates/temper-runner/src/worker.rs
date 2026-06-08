@@ -17,7 +17,7 @@ use crate::observability::{
     render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
     StructuredEvent, WorkItemSelectedEvent,
 };
-use crate::scan::{scan_role, scan_role_audit, ScanError, WorkItem};
+use crate::scan::{scan_role, scan_role_audit, scan_role_wake, ScanError, WorkItem};
 use crate::signal::CiError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -220,6 +220,22 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
             .await
     }
 
+    /// Runs a wake scan for this role.
+    pub async fn tick_wake(&self, now: DateTime<Utc>) -> Result<Progress, WorkerError> {
+        self.tick_with_tools(now, &self.tools, RoleScanMode::Wake)
+            .await
+    }
+
+    /// Runs a wake scan while attaching a production tick id to work-item logs.
+    pub async fn tick_wake_with_observability_tick_id(
+        &self,
+        now: DateTime<Utc>,
+        tick_id: &str,
+    ) -> Result<Progress, WorkerError> {
+        let tools = self.tools_with_observability_tick_id(tick_id);
+        self.tick_with_tools(now, &tools, RoleScanMode::Wake).await
+    }
+
     /// Runs an audit scan while attaching a production tick id to work-item logs.
     pub async fn tick_audit_with_observability_tick_id(
         &self,
@@ -250,6 +266,17 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
         let items = match mode {
             RoleScanMode::Normal => {
                 scan_role(
+                    self.forge,
+                    self.repo,
+                    self.workflow,
+                    self.compiled,
+                    now,
+                    &self.role,
+                )
+                .await?
+            }
+            RoleScanMode::Wake => {
+                scan_role_wake(
                     self.forge,
                     self.repo,
                     self.workflow,
@@ -292,6 +319,7 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
 #[derive(Clone, Copy)]
 enum RoleScanMode {
     Normal,
+    Wake,
     Audit,
 }
 

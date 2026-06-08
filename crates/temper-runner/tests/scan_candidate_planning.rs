@@ -14,7 +14,9 @@ use temper_forge::{
     ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
-use temper_runner::{candidate_query_plan, scan_role, scan_role_audit, ScanMode, WorkItem};
+use temper_runner::{
+    candidate_query_plan, scan_role, scan_role_audit, scan_role_wake, ScanMode, WorkItem,
+};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
 
 const REFERENCE_FIXTURE: &str =
@@ -332,6 +334,43 @@ fn audit_candidate_plan_keeps_terminal_workflow_label_recovery_queries() {
 }
 
 #[test]
+fn wake_candidate_plan_keeps_terminal_recovery_but_preserves_role_queue_scope() {
+    let workflow = workflow_from_json(PLANNER_FIXTURE);
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+
+    let wake = candidate_query_plan(&workflow, &compiled, Some(&role), ScanMode::Wake);
+    assert!(has_issue_query(
+        &wake.issue_queries,
+        IssueState::Open,
+        &["ready", "urgent"]
+    ));
+    assert!(has_issue_query(
+        &wake.issue_queries,
+        IssueState::Open,
+        &["ready", "bug"]
+    ));
+    assert!(has_issue_query(
+        &wake.issue_queries,
+        IssueState::Closed,
+        &["ready"]
+    ));
+    assert!(has_pull_request_query(
+        &wake.pull_request_queries,
+        PullRequestState::Open,
+        &[]
+    ));
+    assert!(closed_issue_queries_have_labels(&wake.issue_queries));
+    assert!(closed_pull_request_queries_have_labels(
+        &wake.pull_request_queries
+    ));
+
+    let broad_wake = candidate_query_plan(&workflow, &compiled, None, ScanMode::Wake);
+    assert_eq!(wake.issue_queries, broad_wake.issue_queries);
+    assert_eq!(wake.pull_request_queries, broad_wake.pull_request_queries);
+}
+
+#[test]
 fn automated_reference_plan_permits_single_default_kind_open_all_issue_query() {
     // The mechanical/automated scan is label-bounded, with one deliberate
     // exception: the reference workflow's default-kind `raw_intake` automation
@@ -516,7 +555,7 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
 }
 
 #[test]
-fn merged_pr_with_landed_queue_label_is_only_found_by_audit_scan() {
+fn merged_pr_with_landed_queue_label_is_found_by_wake_and_audit_scans() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let number = create_pr(&forge, &repo, &["implementation", "landed"]);
@@ -541,6 +580,30 @@ fn merged_pr_with_landed_queue_label_is_only_found_by_audit_scan() {
             Some(PullRequestState::Closed | PullRequestState::Merged)
         )
     }));
+
+    let wake_counting = CountingForge::new(forge.clone());
+    assert_eq!(
+        block_on(scan_role_wake(
+            &wake_counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("architect"),
+        ))
+        .expect("wake scan succeeds"),
+        vec![WorkItem {
+            queue: QueueId::new("landed_inbox"),
+            role: RoleId::new("architect"),
+            target: ArtifactSource::PullRequest { number },
+            kind: ArtifactKindId::new("implementation_pr"),
+        }]
+    );
+    assert!(has_pull_request_query(
+        &wake_counting.pull_request_queries(),
+        PullRequestState::Merged,
+        &["landed"]
+    ));
 
     let audit_counting = CountingForge::new(forge.clone());
     assert_eq!(

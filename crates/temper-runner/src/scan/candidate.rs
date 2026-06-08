@@ -10,6 +10,10 @@ pub enum ScanMode {
     /// Normal role/work scans. When a role is supplied, only that role's
     /// subscribed queues contribute candidate queries.
     Normal,
+    /// Wake-triggered role/work scans. Queue scoping matches [`ScanMode::Normal`],
+    /// but bounded workflow-label terminal/recovery interest is added so webhook
+    /// wakes can react to closed/merged artifacts promptly.
+    Wake,
     /// Normal mechanical automation scans. Only queues that declare automation
     /// metadata contribute candidate queries, and no audit/recovery interest is
     /// added.
@@ -51,7 +55,7 @@ pub fn candidate_query_plan(
         }
     }
 
-    if mode == ScanMode::Audit {
+    if matches!(mode, ScanMode::Audit | ScanMode::Wake) {
         let targets = workflow_targets(workflow);
         for target in targets {
             let recovery_label_sets = terminal_workflow_label_sets(workflow, target);
@@ -72,8 +76,8 @@ pub(crate) fn queues_for_scan<'a>(
         .iter()
         .filter(|queue| match (mode, role) {
             (ScanMode::Automated, _) => queue.automation.is_some(),
-            (ScanMode::Audit, _) | (ScanMode::Normal, None) => true,
-            (ScanMode::Normal, Some(role)) => compiled
+            (ScanMode::Audit, _) | (ScanMode::Normal, None) | (ScanMode::Wake, None) => true,
+            (ScanMode::Normal | ScanMode::Wake, Some(role)) => compiled
                 .role(role)
                 .is_some_and(|manifest| manifest.queues.contains(&queue.id)),
         })

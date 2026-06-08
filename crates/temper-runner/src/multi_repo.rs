@@ -337,6 +337,39 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
         .await
     }
 
+    pub async fn tick_wake_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
+        self.tick_repositories(now, self.repositories.iter_refs(), None, RoleTickMode::Wake)
+            .await
+    }
+
+    pub async fn tick_hinted_wake(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+    ) -> MultiRepoTickReport {
+        self.tick_repositories(
+            now,
+            self.repositories.hinted_order(hints),
+            None,
+            RoleTickMode::Wake,
+        )
+        .await
+    }
+
+    pub async fn tick_matching_hints_wake(
+        &self,
+        now: DateTime<Utc>,
+        hints: &[ChangeHint],
+    ) -> MultiRepoTickReport {
+        self.tick_repositories(
+            now,
+            self.repositories.matching_hints(hints),
+            None,
+            RoleTickMode::Wake,
+        )
+        .await
+    }
+
     pub async fn tick_audit_report(&self, now: DateTime<Utc>) -> MultiRepoTickReport {
         self.tick_repositories(
             now,
@@ -385,6 +418,12 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
                     worker.tick_with_observability_tick_id(now, tick_id).await
                 }
                 (RoleTickMode::Normal, None) => worker.tick(now).await,
+                (RoleTickMode::Wake, Some(tick_id)) => {
+                    worker
+                        .tick_wake_with_observability_tick_id(now, tick_id)
+                        .await
+                }
+                (RoleTickMode::Wake, None) => worker.tick_wake(now).await,
                 (RoleTickMode::Audit, Some(tick_id)) => {
                     worker
                         .tick_audit_with_observability_tick_id(now, tick_id)
@@ -404,6 +443,7 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
 #[derive(Clone, Copy)]
 enum RoleTickMode {
     Normal,
+    Wake,
     Audit,
 }
 
