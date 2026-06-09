@@ -614,11 +614,13 @@ where
     ) -> MultiRepoTickReport {
         let mut report = MultiRepoTickReport::default();
         for repository in &self.mechanical_repositories {
-            let repo_targets: Vec<_> = targets
+            let mut repo_targets: Vec<_> = targets
                 .iter()
                 .filter(|(path, _, _)| path_key(path) == path_key(&repository.target.path))
                 .map(|(_, item, kind)| (*item, *kind))
                 .collect();
+            repo_targets.sort();
+            repo_targets.dedup();
             if repo_targets.is_empty() {
                 continue;
             }
