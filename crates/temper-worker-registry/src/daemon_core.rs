@@ -16,6 +16,15 @@ use temper_worker_protocol::{
 
 use crate::{DispatchCoordinator, WorkItem};
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueuedJob {
+    pub job_id: String,
+    pub role: String,
+    pub repo: String,
+    pub artifact: Artifact,
+    pub job_payload: serde_json::Value,
+}
+
 #[derive(Debug, Default)]
 pub struct DaemonCore {
     coordinator: DispatchCoordinator,
@@ -53,6 +62,23 @@ impl DaemonCore {
             repo,
         });
         self.job_context.insert(job_id, (artifact, job_payload));
+    }
+
+    pub fn queued_jobs(&self) -> Vec<QueuedJob> {
+        self.coordinator
+            .pending()
+            .iter()
+            .filter_map(|item| {
+                let (artifact, job_payload) = self.job_context.get(&item.job_id)?.clone();
+                Some(QueuedJob {
+                    job_id: item.job_id.clone(),
+                    role: item.role.clone(),
+                    repo: item.repo.clone(),
+                    artifact,
+                    job_payload,
+                })
+            })
+            .collect()
     }
 
     pub fn handle(&mut self, msg: WorkerProtocolMessage) -> Option<WorkerProtocolMessage> {

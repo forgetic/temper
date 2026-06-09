@@ -167,6 +167,10 @@ impl DispatchCoordinator {
         self.pending.len()
     }
 
+    pub fn pending(&self) -> &VecDeque<WorkItem> {
+        &self.pending
+    }
+
     pub fn in_flight_len(&self) -> usize {
         self.assigned.len()
     }
