@@ -2,7 +2,7 @@
 
 //! Standalone async daemon transport for the Worker/Daemon wire protocol.
 
-use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     body::Bytes,
@@ -15,10 +15,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use temper_runner::WorkItem;
-use temper_worker_protocol::{Artifact, ErrorCode, Poll, WorkerProtocolMessage};
+use temper_worker_protocol::{Artifact, ErrorCode, JobResult, Poll, WorkerProtocolMessage};
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
-use temper_worker_registry::DaemonCore;
+use temper_worker_registry::{DaemonCore, InFlightJob};
 use temper_workflow::ArtifactSource;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -26,6 +26,26 @@ use tokio::{
 };
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
+
+/// Pluggable seam invoked when the daemon accepts a worker `result`.
+///
+/// The default implementation is a no-op. A later phase will provide a
+/// lease-gated, role-authored Forge applier. Implementations are invoked off the
+/// serial core task, so they may perform async I/O without blocking the
+/// single-owner `DaemonCore` loop.
+#[async_trait::async_trait]
+pub trait ResultApplier: Send + Sync {
+    async fn apply(&self, job: InFlightJob, result: JobResult);
+}
+
+/// Default applier that preserves existing daemon transport behavior.
+#[derive(Debug, Default)]
+pub struct NoopApplier;
+
+#[async_trait::async_trait]
+impl ResultApplier for NoopApplier {
+    async fn apply(&self, _job: InFlightJob, _result: JobResult) {}
+}
 
 /// Daemon-owned role-decision context serialized into a worker assignment.
 /// This starts minimal for Phase 2f-i and can be extended later when the real
@@ -95,6 +115,10 @@ enum DaemonCommand {
         msg: WorkerProtocolMessage,
         reply: oneshot::Sender<Option<WorkerProtocolMessage>>,
     },
+    Result {
+        result: JobResult,
+        reply: oneshot::Sender<Option<WorkerProtocolMessage>>,
+    },
     Poll {
         poll: Poll,
         deadline: TokioInstant,
@@ -124,6 +148,7 @@ struct PollWaiter {
 async fn run_core(
     mut rx: mpsc::UnboundedReceiver<DaemonCommand>,
     cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
+    applier: Arc<dyn ResultApplier>,
 ) {
     let mut core = DaemonCore::new();
     let mut waiters = BTreeMap::new();
@@ -133,6 +158,25 @@ async fn run_core(
         match command {
             DaemonCommand::Message { msg, reply } => {
                 let _ = reply.send(core.handle(msg));
+            }
+            DaemonCommand::Result { result, reply } => {
+                // Capture full job context before the core completes and forgets the job.
+                let in_flight = core.in_flight_job(&result.job_id);
+                let response = core.handle(WorkerProtocolMessage::Result(result.clone()));
+
+                // Apply only when the core accepted/completed the in-flight job. Unknown,
+                // never-assigned, version-mismatched, and double-sent results must not run
+                // the applier.
+                if let (Some(job), Some(WorkerProtocolMessage::Release(_))) =
+                    (in_flight, response.as_ref())
+                {
+                    let applier = applier.clone();
+                    tokio::spawn(async move {
+                        applier.apply(job, result).await;
+                    });
+                }
+
+                let _ = reply.send(response);
             }
             DaemonCommand::Poll {
                 poll,
@@ -220,8 +264,12 @@ fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
 
 impl Daemon {
     pub fn new() -> Self {
+        Self::with_applier(Arc::new(NoopApplier))
+    }
+
+    pub fn with_applier(applier: Arc<dyn ResultApplier>) -> Self {
         let (cmd_tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_core(rx, cmd_tx.clone()));
+        tokio::spawn(run_core(rx, cmd_tx.clone(), applier));
 
         Self {
             cmd_tx,
@@ -323,6 +371,23 @@ async fn handle_message(State(state): State<DaemonState>, body: Bytes) -> Respon
 
             match rx.await {
                 Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        WorkerProtocolMessage::Result(result) => {
+            let (reply, rx) = oneshot::channel();
+
+            if state
+                .cmd_tx
+                .send(DaemonCommand::Result { result, reply })
+                .is_err()
+            {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
+            match rx.await {
+                Ok(Some(reply)) => (StatusCode::OK, Json(reply)).into_response(),
+                Ok(None) => StatusCode::NO_CONTENT.into_response(),
                 Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             }
         }
