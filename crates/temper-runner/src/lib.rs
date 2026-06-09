@@ -123,7 +123,7 @@ pub use role_decision_process::{
 };
 pub use scan::{
     candidate_query_plan, scan, scan_audit, scan_automated_queues, scan_role, scan_role_audit,
-    AutomatedWorkItem, CandidateQueryPlan, ScanError, ScanMode, WorkItem,
+    scan_role_wake, AutomatedWorkItem, CandidateQueryPlan, ScanError, ScanMode, WorkItem,
 };
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{

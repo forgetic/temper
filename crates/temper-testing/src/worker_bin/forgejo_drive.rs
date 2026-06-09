@@ -89,10 +89,10 @@ impl<F: Forge + ?Sized> ForgejoDriveWorker for RoleWorker<'_, F> {
         reason: TickReason,
         _hints: &[ChangeHint],
     ) -> Result<ForgejoTickReport, WorkerError> {
-        let progress = if reason == TickReason::Audit {
-            self.tick_audit(now).await?
-        } else {
-            Worker::tick(self, now).await?
+        let progress = match reason {
+            TickReason::Wake => self.tick_wake(now).await?,
+            TickReason::Audit => self.tick_audit(now).await?,
+            TickReason::Initial | TickReason::Poll => Worker::tick(self, now).await?,
         };
         Ok(ForgejoTickReport::single(progress))
     }
@@ -114,9 +114,9 @@ impl<F: Forge + ?Sized> ForgejoDriveWorker for MultiRepoRoleWorker<'_, F> {
             TickReason::Wake => {
                 let known = known_hints_for(self.repositories(), hints);
                 if known.is_empty() {
-                    self.tick_hinted(now, &[]).await
+                    self.tick_hinted_wake(now, &[]).await
                 } else {
-                    self.tick_matching_hints(now, &known).await
+                    self.tick_matching_hints_wake(now, &known).await
                 }
             }
             TickReason::Audit => self.tick_audit_report(now).await,

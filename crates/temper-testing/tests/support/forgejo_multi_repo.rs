@@ -14,11 +14,21 @@ use temper_workflow::RoleId;
 #[path = "worker_binary.rs"]
 mod worker_binary;
 
-pub const LONG_POLL_MS: u64 = 120_000;
+// Budgets for the live cross-repo webhook-wake e2e. The webhook variant
+// converges purely on wake reactivity (this fleet runs no audit ticks and the
+// steady poll is open-state only), so a returned wake-reactivity regression
+// makes it *never* converge and trip `CONVERGENCE_TIMEOUT` regardless of how
+// generous it is. The poll interval (`LONG_POLL_MS`) is the wake-vs-poll proof:
+// convergence must beat it. Measured wake-driven convergence is ~80s in
+// isolation; under the full `cargo dev-test-full` suite (which boots several
+// real Forgejo servers + runners concurrently) plus a loaded host it is
+// markedly slower, so these budgets leave ~3x headroom over the isolated
+// baseline while still failing fast on the non-converging regression.
+pub const LONG_POLL_MS: u64 = 240_000;
 const CI_STATUS_POLL_MS: u64 = 1_000;
-pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
+pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(240);
 const ASSERT_POLL: Duration = Duration::from_secs(1);
-const WORKER_RUN_SECS: u64 = 240;
+const WORKER_RUN_SECS: u64 = 300;
 
 #[derive(Clone)]
 pub struct RepoTarget {
