@@ -189,7 +189,7 @@ fn validators_and_config_cover_forgejo_ci_fallback() {
     let script = read_example("run.sh");
     let config = read_example("config/temper.env");
 
-    assert!(config.contains("CI_STATUS_POLL_MS=1000"));
+    assert!(config.contains("CI_STATUS_POLL_MS=30000"));
     assert!(config.contains("IDLE_POLL_MAX_MS=8000"));
     assert!(config.contains("FAKE_CI_SENTINEL=present"));
     assert!(script.contains("CI_FALLBACK_MISSING_CREDENTIALS="));

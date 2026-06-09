@@ -209,7 +209,7 @@ load_config() {
     if [ "${CI_STATUS_POLL_MS+x}" = "x" ]; then
         [ -n "$CI_STATUS_POLL_MS" ] || CI_STATUS_POLL_MS=$POLL_MS
     else
-        CI_STATUS_POLL_MS=1000
+        CI_STATUS_POLL_MS=30000
     fi
     IDLE_POLL_MAX_MS=${IDLE_POLL_MAX_MS:-8000}
     RUN_SECS=${RUN_SECS:-600}
