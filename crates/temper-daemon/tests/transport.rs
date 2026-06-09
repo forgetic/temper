@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::future::IntoFuture;
+use std::time::Instant;
+use std::{future::IntoFuture, time::Duration};
 
 use axum::http::StatusCode;
 use serde_json::json;
@@ -39,13 +40,17 @@ fn register(
     })
 }
 
-fn poll(worker_id: &str) -> WorkerProtocolMessage {
+fn poll_with_wait(worker_id: &str, max_wait_ms: u64) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Poll(Poll {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         free_capacity: 1,
-        max_wait_ms: Some(30_000),
+        max_wait_ms: Some(max_wait_ms),
     })
+}
+
+fn poll(worker_id: &str) -> WorkerProtocolMessage {
+    poll_with_wait(worker_id, 30_000)
 }
 
 fn heartbeat(worker_id: &str) -> WorkerProtocolMessage {
@@ -146,7 +151,7 @@ async fn register_then_poll_returns_assignment_when_matching_work_exists() {
 }
 
 #[tokio::test]
-async fn poll_with_no_work_returns_poll_timeout_immediately() {
+async fn poll_with_no_work_blocks_then_returns_poll_timeout() {
     let (_, url) = spawn().await;
     let client = reqwest::Client::new();
     assert_eq!(
@@ -159,10 +164,18 @@ async fn poll_with_no_work_returns_poll_timeout_immediately() {
         .status(),
         StatusCode::NO_CONTENT
     );
+
+    let started = Instant::now();
     assert_error(
-        post_json(&client, &url, &poll("worker-a")).await,
+        post_json(&client, &url, &poll_with_wait("worker-a", 300)).await,
         ErrorCode::PollTimeout,
     );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "elapsed: {elapsed:?}"
+    );
+    assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
 }
 
 #[tokio::test]
@@ -179,7 +192,7 @@ async fn poll_matches_worker_capability_only() {
     )
     .await;
     assert_error(
-        post_json(&client, &url, &poll("engineer-a")).await,
+        post_json(&client, &url, &poll_with_wait("engineer-a", 300)).await,
         ErrorCode::PollTimeout,
     );
     let _ = post(
@@ -194,6 +207,75 @@ async fn poll_matches_worker_capability_only() {
     }
 }
 
+#[tokio::test]
+async fn enqueue_mid_poll_wakes_and_assigns_promptly() {
+    let (daemon, url) = spawn().await;
+    let client = reqwest::Client::new();
+    let _ = post(
+        &client,
+        &url,
+        &register("worker-a", "engineer", "ai/temper", 1),
+    )
+    .await;
+
+    let poll_client = client.clone();
+    let poll_url = url.clone();
+    let poll_task = tokio::spawn(async move {
+        let started = Instant::now();
+        let reply = post_json(&poll_client, &poll_url, &poll_with_wait("worker-a", 5_000)).await;
+        (reply, started.elapsed())
+    });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    daemon
+        .enqueue_job(
+            "job-1",
+            "engineer",
+            "ai/temper",
+            artifact(),
+            json!({"prompt":"implement"}),
+        )
+        .await;
+
+    let (reply, elapsed) = poll_task.await.expect("poll task completes");
+    match reply {
+        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+        other => panic!("expected assign, got {other:?}"),
+    }
+    assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
+}
+
+#[tokio::test]
+async fn saturated_worker_blocks_then_returns_poll_timeout() {
+    let (daemon, url) = spawn().await;
+    let client = reqwest::Client::new();
+    let _ = post(
+        &client,
+        &url,
+        &register("worker-a", "engineer", "ai/temper", 1),
+    )
+    .await;
+    daemon
+        .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({}))
+        .await;
+
+    match post_json(&client, &url, &poll("worker-a")).await {
+        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+        other => panic!("expected assign, got {other:?}"),
+    }
+
+    let started = Instant::now();
+    assert_error(
+        post_json(&client, &url, &poll_with_wait("worker-a", 300)).await,
+        ErrorCode::PollTimeout,
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "elapsed: {elapsed:?}"
+    );
+    assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
+}
 #[tokio::test]
 async fn result_release_frees_capacity() {
     let (daemon, url) = spawn().await;

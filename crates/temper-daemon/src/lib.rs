@@ -2,7 +2,11 @@
 
 //! Standalone async daemon transport for the Worker/Daemon wire protocol.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Bytes,
@@ -12,20 +16,24 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use temper_worker_protocol::{Artifact, WorkerProtocolMessage};
+use temper_worker_protocol::{Artifact, ErrorCode, Poll, WorkerProtocolMessage};
 use temper_worker_registry::DaemonCore;
 use tokio::sync::{Mutex, Notify};
+
+pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
 
 #[derive(Clone)]
 struct DaemonState {
     core: Arc<Mutex<DaemonCore>>,
     notify: Arc<Notify>,
+    max_poll_wait_ms: u64,
 }
 
 #[derive(Clone)]
 pub struct Daemon {
     core: Arc<Mutex<DaemonCore>>,
     notify: Arc<Notify>,
+    max_poll_wait_ms: u64,
 }
 
 impl Daemon {
@@ -33,6 +41,7 @@ impl Daemon {
         Self {
             core: Arc::new(Mutex::new(DaemonCore::new())),
             notify: Arc::new(Notify::new()),
+            max_poll_wait_ms: DEFAULT_MAX_POLL_WAIT_MS,
         }
     }
 
@@ -55,6 +64,7 @@ impl Daemon {
         let state = DaemonState {
             core: Arc::clone(&self.core),
             notify: Arc::clone(&self.notify),
+            max_poll_wait_ms: self.max_poll_wait_ms,
         };
 
         Router::new()
@@ -74,15 +84,56 @@ async fn handle_message(State(state): State<DaemonState>, body: Bytes) -> Respon
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    let _notify = Arc::clone(&state.notify);
-    let reply = {
-        let mut core = state.core.lock().await;
-        core.handle(msg)
-    };
+    match msg {
+        WorkerProtocolMessage::Poll(poll) => long_poll(&state, poll).await,
+        other => {
+            let reply = {
+                let mut core = state.core.lock().await;
+                core.handle(other)
+            };
 
-    match reply {
-        Some(reply) => (StatusCode::OK, Json(reply)).into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
+            match reply {
+                Some(reply) => (StatusCode::OK, Json(reply)).into_response(),
+                None => StatusCode::NO_CONTENT.into_response(),
+            }
+        }
+    }
+}
+
+async fn long_poll(state: &DaemonState, poll: Poll) -> Response {
+    let requested = poll.max_wait_ms.unwrap_or(state.max_poll_wait_ms);
+    let wait_ms = requested.min(state.max_poll_wait_ms);
+    let deadline = Instant::now() + Duration::from_millis(wait_ms);
+
+    loop {
+        let notified = state.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        let reply = {
+            let mut core = state.core.lock().await;
+            core.handle(WorkerProtocolMessage::Poll(poll.clone()))
+        };
+
+        match reply {
+            Some(WorkerProtocolMessage::Error(error)) if error.code == ErrorCode::PollTimeout => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return (StatusCode::OK, Json(WorkerProtocolMessage::Error(error)))
+                        .into_response();
+                }
+
+                tokio::select! {
+                    _ = notified => {}
+                    _ = tokio::time::sleep(remaining) => {
+                        return (StatusCode::OK, Json(WorkerProtocolMessage::Error(error)))
+                            .into_response();
+                    }
+                }
+            }
+            Some(reply) => return (StatusCode::OK, Json(reply)).into_response(),
+            None => return StatusCode::NO_CONTENT.into_response(),
+        }
     }
 }
 
