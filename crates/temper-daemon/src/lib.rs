@@ -15,13 +15,16 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temper_forge::{Forge, ForgeError, RepositoryId};
+use temper_forge::{Forge, ForgeError, ItemNumber, RepositoryId, RepositoryPath};
 use temper_runner::{scan_role, scan_role_wake, ScanError, WorkItem};
 use temper_worker_protocol::{Artifact, ErrorCode, JobResult, Poll, WorkerProtocolMessage};
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
 use temper_worker_registry::{DaemonCore, InFlightJob};
-use temper_workflow::{ArtifactSource, CompiledWorkflow, RoleId, ValidatedWorkflow};
+use temper_workflow::{
+    ArtifactSource, CompiledWorkflow, LeaseError, LeaseManager, LeasePolicy, RoleId,
+    ValidatedWorkflow,
+};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{sleep_until, Instant as TokioInstant},
@@ -41,10 +44,10 @@ pub enum RoleFeedMode {
 
 /// Pluggable seam invoked when the daemon accepts a worker `result`.
 ///
-/// The default implementation is a no-op. A later phase will provide a
-/// lease-gated, role-authored Forge applier. Implementations are invoked off the
-/// serial core task, so they may perform async I/O without blocking the
-/// single-owner `DaemonCore` loop.
+/// The default implementation is a no-op. Use [`LeaseApplier`] to compose a
+/// lease-gated Forge decorator around a concrete role-authored applier.
+/// Implementations are invoked off the serial core task, so they may perform
+/// async I/O without blocking the single-owner `DaemonCore` loop.
 #[async_trait::async_trait]
 pub trait ResultApplier: Send + Sync {
     async fn apply(&self, job: InFlightJob, result: JobResult);
@@ -57,6 +60,111 @@ pub struct NoopApplier;
 #[async_trait::async_trait]
 impl ResultApplier for NoopApplier {
     async fn apply(&self, _job: InFlightJob, _result: JobResult) {}
+}
+
+/// Lease-gated [`ResultApplier`] decorator for daemon-owned result application.
+///
+/// The decorator resolves the completed worker job's Forge artifact, acquires
+/// the workflow lease for that `(artifact, role)` as the daemon owner, invokes
+/// the inner applier only while that lease is held, and then releases the lease
+/// best-effort. Duplicate or double-dispatched results that lose the lease race
+/// no-op without disturbing the peer's live lease.
+pub struct LeaseApplier<F: Forge> {
+    forge: Arc<F>,
+    policy: LeasePolicy,
+    owner: String,
+    inner: Arc<dyn ResultApplier>,
+}
+
+impl<F: Forge> LeaseApplier<F> {
+    pub fn new(
+        forge: Arc<F>,
+        policy: LeasePolicy,
+        owner: impl Into<String>,
+        inner: Arc<dyn ResultApplier>,
+    ) -> Self {
+        Self {
+            forge,
+            policy,
+            owner: owner.into(),
+            inner,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
+    async fn apply(&self, job: InFlightJob, result: JobResult) {
+        let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
+            eprintln!(
+                "temper-daemon: lease applier could not resolve target for job_id={} repo={} artifact.kind={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            );
+            return;
+        };
+
+        let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
+        match manager
+            .acquire(
+                &repo_id,
+                target,
+                RoleId::new(job.role.clone()),
+                self.owner.clone(),
+                Utc::now(),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(LeaseError::Conflict(_) | LeaseError::Contended { .. }) => return,
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: lease applier could not acquire lease for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
+                    job.job_id, job.repo, job.artifact.kind, job.artifact.item
+                );
+                return;
+            }
+        }
+
+        self.inner.apply(job.clone(), result).await;
+
+        if let Err(error) = manager.release(&repo_id, target, &self.owner).await {
+            eprintln!(
+                "temper-daemon: lease applier could not release lease for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
+                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            );
+        }
+    }
+}
+
+async fn resolve_target<F: Forge + ?Sized>(
+    forge: &F,
+    job: &InFlightJob,
+) -> Option<(RepositoryId, ArtifactSource)> {
+    let (owner, name) = job.repo.split_once('/')?;
+
+    let repository = match forge
+        .get_repository_by_path(&RepositoryPath::new(owner, name))
+        .await
+    {
+        Ok(Some(repository)) => repository,
+        Ok(None) => return None,
+        Err(error) => {
+            eprintln!(
+                "temper-daemon: lease applier repository lookup failed for job_id={} repo={}: {error}",
+                job.job_id, job.repo
+            );
+            return None;
+        }
+    };
+
+    let number = job.artifact.item.as_u64().map(ItemNumber::new)?;
+    let target = match job.artifact.kind.as_str() {
+        "issue" => ArtifactSource::Issue { number },
+        "pull_request" => ArtifactSource::PullRequest { number },
+        _ => return None,
+    };
+
+    Some((repository.id, target))
 }
 
 /// Daemon-owned role-decision context serialized into a worker assignment.

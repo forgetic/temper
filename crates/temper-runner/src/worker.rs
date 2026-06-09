@@ -477,7 +477,7 @@ where
                             for parent in metadata
                                 .parents
                                 .iter()
-                                .filter(|parent| parent.is_in_repository(&self.repo))
+                                .filter(|parent| parent.is_in_repository(self.repo))
                             {
                                 if let Some(issue) = self
                                     .forge
