@@ -479,6 +479,67 @@ fn render_repo_paths(paths: &[String]) -> String {
     }
 }
 
+#[cfg(test)]
+mod targeting_tests {
+    use super::*;
+
+    fn item_hint(n: u64, kind: ChangeKind) -> ChangeHint {
+        ChangeHint::item(
+            RepositoryPath::new("ai", "temper"),
+            ItemNumber::new(n),
+            kind,
+        )
+    }
+
+    #[test]
+    fn routable_item_hints_return_targets() {
+        let hints = [item_hint(7, ChangeKind::Ci), item_hint(7, ChangeKind::Ci)];
+
+        let out = targeted_hints_for_path(None, &hints).expect("routable hints target items");
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, RepositoryPath::new("ai", "temper"));
+        assert_eq!(out[0].1, ItemNumber::new(7));
+        assert_eq!(out[0].2, ChangeKind::Ci);
+    }
+
+    #[test]
+    fn missing_item_falls_back() {
+        let hints = [ChangeHint::repo(
+            RepositoryPath::new("ai", "temper"),
+            ChangeKind::Ci,
+        )];
+
+        assert!(targeted_hints_for_path(None, &hints).is_none());
+    }
+
+    #[test]
+    fn unroutable_kind_falls_back() {
+        assert!(targeted_hints_for_path(None, &[item_hint(7, ChangeKind::Push)]).is_none());
+        assert!(targeted_hints_for_path(None, &[item_hint(7, ChangeKind::Unknown)]).is_none());
+    }
+
+    #[test]
+    fn wrong_single_repo_falls_back() {
+        let other = RepositoryPath::new("ai", "other");
+
+        assert!(targeted_hints_for_path(Some(&other), &[item_hint(7, ChangeKind::Ci)]).is_none());
+    }
+
+    #[test]
+    fn over_cap_falls_back_but_exact_cap_targets() {
+        let exactly_cap: Vec<ChangeHint> = (1..=MECHANICAL_TARGETED_WAKE_CAP as u64)
+            .map(|n| item_hint(n, ChangeKind::Ci))
+            .collect();
+        assert!(targeted_hints_for_path(None, &exactly_cap).is_some());
+
+        let over_cap: Vec<ChangeHint> = (1..=(MECHANICAL_TARGETED_WAKE_CAP as u64 + 1))
+            .map(|n| item_hint(n, ChangeKind::Ci))
+            .collect();
+        assert!(targeted_hints_for_path(None, &over_cap).is_none());
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
