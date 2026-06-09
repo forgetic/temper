@@ -16,14 +16,20 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use temper_forge::{Forge, ForgeError, ItemNumber, RepositoryId, RepositoryPath};
-use temper_runner::{scan_role, scan_role_wake, ScanError, WorkItem};
-use temper_worker_protocol::{Artifact, ErrorCode, JobResult, Poll, WorkerProtocolMessage};
+use temper_runner::{
+    scan_role, scan_role_wake,
+    workspace_request::{implementation_pr_pull_request_input, pr_correlation_key},
+    ScanError, WorkItem,
+};
+use temper_worker_protocol::{
+    Artifact, ErrorCode, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
+};
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
 use temper_worker_registry::{DaemonCore, InFlightJob};
 use temper_workflow::{
-    ArtifactSource, CompiledWorkflow, LeaseError, LeaseManager, LeasePolicy, RoleId,
-    ValidatedWorkflow,
+    ArtifactKindId, ArtifactSource, CompiledWorkflow, Executor, LeaseError, LeaseManager,
+    LeasePolicy, RoleId, ValidatedWorkflow,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -60,6 +66,161 @@ pub struct NoopApplier;
 #[async_trait::async_trait]
 impl ResultApplier for NoopApplier {
     async fn apply(&self, _job: InFlightJob, _result: JobResult) {}
+}
+
+/// Forge-backed success applier for daemon-accepted worker results.
+///
+/// This inner applier turns a successful issue-targeted worker result carrying a
+/// branch into the same implementation-PR creation input the runner workspace
+/// paths use, then calls [`Executor::ensure_pull_request`] with the deterministic
+/// workspace correlation key. It deliberately does not acquire or release leases;
+/// compose it under [`LeaseApplier`] when real daemon application is enabled.
+pub struct ForgeApplier<F: Forge> {
+    forge: Arc<F>,
+    workflow: Arc<ValidatedWorkflow>,
+}
+
+impl<F: Forge> ForgeApplier<F> {
+    pub fn new(forge: Arc<F>, workflow: Arc<ValidatedWorkflow>) -> Self {
+        Self { forge, workflow }
+    }
+}
+
+#[async_trait::async_trait]
+impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
+    async fn apply(&self, job: InFlightJob, result: JobResult) {
+        if result.status != ResultStatus::Success {
+            return;
+        }
+
+        let Some(branch) = result.branch else {
+            eprintln!(
+                "temper-daemon: forge applier ignored success result without branch for job_id={} repo={} artifact.kind={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            );
+            return;
+        };
+        if branch.name.trim().is_empty() {
+            eprintln!(
+                "temper-daemon: forge applier ignored success result with blank branch for job_id={} repo={} artifact.kind={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            );
+            return;
+        }
+        let branch_name = branch.name;
+
+        if job.artifact.kind != "issue" {
+            eprintln!(
+                "temper-daemon: forge applier ignored non-issue job for job_id={} repo={} artifact.kind={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            );
+            return;
+        }
+
+        let Some(number) = job.artifact.item.as_u64().map(ItemNumber::new) else {
+            eprintln!(
+                "temper-daemon: forge applier ignored job with non-numeric issue item for job_id={} repo={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.item
+            );
+            return;
+        };
+
+        let Some((owner, name)) = job.repo.split_once('/') else {
+            eprintln!(
+                "temper-daemon: forge applier ignored job with malformed repo path for job_id={} repo={}",
+                job.job_id, job.repo
+            );
+            return;
+        };
+        let repository = match self
+            .forge
+            .get_repository_by_path(&RepositoryPath::new(owner, name))
+            .await
+        {
+            Ok(Some(repository)) => repository,
+            Ok(None) => {
+                eprintln!(
+                    "temper-daemon: forge applier repository not found for job_id={} repo={} issue={}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier repository lookup failed for job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+        };
+
+        let context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier could not parse JobContext for job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+        };
+        let source_kind = ArtifactKindId::new(context.artifact_kind);
+
+        let issue = match self.forge.get_issue_by_number(&repository.id, number).await {
+            Ok(Some(issue)) => issue,
+            Ok(None) => {
+                eprintln!(
+                    "temper-daemon: forge applier source issue not found for job_id={} repo={} issue={}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier issue lookup failed for job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+        };
+
+        let base_branch = if repository.default_branch.trim().is_empty() {
+            "main".to_string()
+        } else {
+            repository.default_branch.clone()
+        };
+        let labels = self
+            .workflow
+            .artifact_kind(&ArtifactKindId::new("implementation_pr"))
+            .map(|kind| {
+                kind.identifying_labels
+                    .iter()
+                    .map(|label| label.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let summary = result.summary.unwrap_or_default();
+        let input = implementation_pr_pull_request_input(
+            repository.id.clone(),
+            number,
+            &issue.title,
+            branch_name,
+            base_branch,
+            &summary,
+            labels,
+        );
+        let correlation_key = pr_correlation_key(&source_kind, number);
+
+        if let Err(error) = Executor::new(self.workflow.as_ref(), self.forge.as_ref())
+            .ensure_pull_request(&repository.id, &correlation_key, input)
+            .await
+        {
+            eprintln!(
+                "temper-daemon: forge applier ensure_pull_request failed for job_id={} repo={} issue={} correlation_key={}: {error}",
+                job.job_id, job.repo, number, correlation_key
+            );
+        }
+    }
 }
 
 /// Lease-gated [`ResultApplier`] decorator for daemon-owned result application.
