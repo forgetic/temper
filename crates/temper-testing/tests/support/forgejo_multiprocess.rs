@@ -16,7 +16,11 @@ mod worker_binary;
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub fn convergence_timeout() -> Duration {
-    CONVERGENCE_TIMEOUT
+    std::env::var("TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(CONVERGENCE_TIMEOUT)
 }
 
 #[derive(Clone, Copy)]

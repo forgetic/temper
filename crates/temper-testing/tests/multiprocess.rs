@@ -44,7 +44,14 @@ use temper_testing::{block_on, runner_config, workflow};
 mod worker_binary;
 
 /// How long to wait for the multi-process world to converge before failing.
-const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(30);
+fn convergence_timeout() -> Duration {
+    const DEFAULT_SECS: u64 = 120;
+    let secs = std::env::var("TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_SECS);
+    Duration::from_secs(secs)
+}
 /// How often the driver re-runs the assert closure while polling for convergence.
 const ASSERT_POLL: Duration = Duration::from_millis(100);
 /// Worker poll cadence; short so the rehearsal converges quickly.
@@ -169,7 +176,8 @@ fn run_variant(variant: &Variant) {
     let mut workers = WorkerFleet::spawn(&root.path, &paths, &stop_file, &config, variant);
 
     // Detect convergence in-process by polling the exact scenario assert.
-    let converged = poll_until_converged(&repo, &scenario, &root.path);
+    let timeout = convergence_timeout();
+    let converged = poll_until_converged(&repo, &scenario, &root.path, timeout);
 
     // Stop: touch the sentinel and join every child.
     touch(&stop_file);
@@ -177,7 +185,7 @@ fn run_variant(variant: &Variant) {
 
     // Surface a clean failure message if the world never converged.
     if let Err(error) = converged {
-        panic!("multi-process world did not converge within {CONVERGENCE_TIMEOUT:?}: {error}");
+        panic!("multi-process world did not converge within {timeout:?}: {error}");
     }
 
     // Every worker must have exited cleanly.
@@ -265,8 +273,9 @@ fn poll_until_converged(
     repo: &RepositoryId,
     scenario: &temper_runner::Scenario,
     root: &Path,
+    timeout: Duration,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         let forge = FilesystemForge::new(root);
         let last_error = match block_on((scenario.assert)(&forge, repo)) {

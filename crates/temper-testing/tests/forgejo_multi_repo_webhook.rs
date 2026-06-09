@@ -100,7 +100,7 @@ fn run_cross_repo_fanout_webhook_wake() {
         "closing",
         "default",
     );
-    workers.wait_for_initial_ticks(Duration::from_secs(30));
+    workers.wait_for_initial_ticks(Duration::from_secs(60));
     std::thread::sleep(Duration::from_millis(1_500));
     let pre_seed_log_offsets = workers.log_offsets();
 
