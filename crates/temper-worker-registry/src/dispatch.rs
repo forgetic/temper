@@ -92,6 +92,44 @@ impl DispatchCoordinator {
         Some(assignment)
     }
 
+    /// Pull-model placement for a specific requesting worker.
+    pub fn dispatch_for_worker(&mut self, worker_id: &str) -> Option<Assignment> {
+        match self.registry.free_capacity(worker_id) {
+            Some(free_capacity) if free_capacity > 0 && self.registry.is_healthy(worker_id) => {}
+            _ => return None,
+        }
+
+        let index = self
+            .pending
+            .iter()
+            .position(|item| self.registry.can_handle(worker_id, &item.role, &item.repo))?;
+
+        let item = self
+            .pending
+            .remove(index)
+            .expect("pending index came from iterating pending queue");
+
+        if self
+            .registry
+            .record_assignment(worker_id, &item.job_id)
+            .is_err()
+        {
+            self.pending.push_front(item);
+            return None;
+        }
+
+        let assignment = Assignment {
+            job_id: item.job_id.clone(),
+            worker_id: worker_id.to_string(),
+            role: item.role.clone(),
+            repo: item.repo.clone(),
+        };
+        self.assigned
+            .insert(item.job_id.clone(), (worker_id.to_string(), item));
+
+        Some(assignment)
+    }
+
     pub fn dispatch_ready(&mut self) -> Vec<Assignment> {
         let mut assignments = Vec::new();
         while let Some(assignment) = self.dispatch_next() {
@@ -179,6 +217,102 @@ mod tests {
         );
         assert_eq!(coordinator.pending_len(), 0);
         assert_eq!(coordinator.in_flight_len(), 1);
+    }
+
+    #[test]
+    fn dispatch_for_worker_assigns_a_matching_item_to_the_requesting_worker() {
+        let mut coordinator = DispatchCoordinator::new();
+        coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+        coordinator.register(&register("worker-b", "engineer", "ai/temper", 1));
+        coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+
+        assert_eq!(
+            coordinator.dispatch_for_worker("worker-a"),
+            Some(Assignment {
+                job_id: "job-1".to_string(),
+                worker_id: "worker-a".to_string(),
+                role: "engineer".to_string(),
+                repo: "ai/temper".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_for_worker_skips_items_the_worker_cannot_handle() {
+        let mut coordinator = DispatchCoordinator::new();
+        coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+        coordinator.enqueue(work("job-1", "architect", "ai/temper"));
+        coordinator.enqueue(work("job-2", "engineer", "ai/temper"));
+
+        assert_eq!(
+            coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+            "job-2"
+        );
+        assert_eq!(coordinator.pending_len(), 1);
+        assert_eq!(coordinator.dispatch_next(), None);
+    }
+
+    #[test]
+    fn dispatch_for_worker_returns_none_when_saturated() {
+        let mut coordinator = DispatchCoordinator::new();
+        coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+        coordinator
+            .registry_mut()
+            .record_assignment("worker-a", "job-in-flight")
+            .unwrap();
+        coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+
+        assert_eq!(coordinator.dispatch_for_worker("worker-a"), None);
+        assert_eq!(coordinator.pending_len(), 1);
+    }
+
+    #[test]
+    fn dispatch_for_worker_returns_none_for_unknown_or_unhealthy_worker() {
+        let mut coordinator = DispatchCoordinator::new();
+        coordinator.enqueue(work("job-1", "engineer", "ai/temper"));
+        assert_eq!(coordinator.dispatch_for_worker("missing"), None);
+
+        coordinator.register(&register("worker-a", "engineer", "ai/temper", 1));
+        coordinator.registry_mut().mark_unhealthy("worker-a");
+        assert_eq!(coordinator.dispatch_for_worker("worker-a"), None);
+        assert_eq!(coordinator.pending_len(), 1);
+    }
+
+    #[test]
+    fn dispatch_for_worker_is_fifo_among_handleable_items() {
+        let mut coordinator = DispatchCoordinator::new();
+        coordinator.register(&register("worker-a", "engineer", "ai/temper", 3));
+        coordinator.enqueue(work("job-1", "architect", "ai/temper"));
+        coordinator.enqueue(work("job-2", "engineer", "ai/temper"));
+        coordinator.enqueue(work("job-3", "reviewer", "ai/temper"));
+        coordinator.enqueue(work("job-4", "engineer", "ai/temper"));
+
+        assert_eq!(
+            coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+            "job-2"
+        );
+        assert_eq!(
+            coordinator.dispatch_for_worker("worker-a").unwrap().job_id,
+            "job-4"
+        );
+        assert_eq!(coordinator.pending_len(), 2);
+    }
+
+    #[test]
+    fn two_workers_each_only_receive_their_capability_items() {
+        let mut coordinator = DispatchCoordinator::new();
+        coordinator.register(&register("engineer-worker", "engineer", "ai/temper", 1));
+        coordinator.register(&register("architect-worker", "architect", "ai/temper", 1));
+        coordinator.enqueue(work("job-engineer", "engineer", "ai/temper"));
+        coordinator.enqueue(work("job-architect", "architect", "ai/temper"));
+
+        let engineer = coordinator.dispatch_for_worker("engineer-worker").unwrap();
+        assert_eq!(engineer.job_id, "job-engineer");
+        assert_eq!(engineer.worker_id, "engineer-worker");
+
+        let architect = coordinator.dispatch_for_worker("architect-worker").unwrap();
+        assert_eq!(architect.job_id, "job-architect");
+        assert_eq!(architect.worker_id, "architect-worker");
     }
 
     #[test]
