@@ -17,7 +17,9 @@ use crate::observability::{
     render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
     StructuredEvent, WorkItemSelectedEvent,
 };
-use crate::scan::{scan_role, scan_role_audit, scan_role_wake, ScanError, WorkItem};
+use crate::scan::{
+    scan_role, scan_role_audit, scan_role_wake, targeted_automated_work_items, ScanError, WorkItem,
+};
 use crate::signal::CiError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -25,7 +27,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use temper_forge::{Forge, ForgeError, RepositoryId};
+use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
 use temper_workflow::{
     Applier, ApplyError, ApplyOutcome, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext,
     ExecutionError, Executor, LeaseManager, LeasePolicy, ReconcileError, ReconciliationMode,
@@ -436,6 +438,94 @@ where
     /// Command journal this worker reconciles and updates.
     pub fn journal(&self) -> &J {
         self.journal
+    }
+
+    /// Repository path configured for this single-repository worker.
+    pub async fn repository_path(&self) -> Result<temper_forge::RepositoryPath, WorkerError> {
+        let repository = self
+            .forge
+            .get_repository(self.repo)
+            .await?
+            .ok_or_else(|| ForgeError::NotFound(format!("repository {}", self.repo)))?;
+        Ok(temper_forge::RepositoryPath::new(
+            repository.owner,
+            repository.name,
+        ))
+    }
+
+    /// Evaluates one changed artifact using exact fetch-by-number APIs.
+    pub async fn tick_artifact(
+        &self,
+        now: DateTime<Utc>,
+        item: ItemNumber,
+        kind: ChangeKind,
+    ) -> Result<Progress, WorkerError> {
+        let classifier = temper_workflow::Classifier::new(self.workflow);
+        let classified = match kind {
+            ChangeKind::Ci | ChangeKind::PullRequest => self
+                .forge
+                .get_pull_request_by_number(self.repo, item)
+                .await?
+                .and_then(|pull_request| classifier.classify_pull_request(&pull_request).ok()),
+            // Issue-like events are routed to issues deterministically. Review
+            // hints may come from PR review webhooks, but providers also emit a
+            // PullRequest/Ci hint for PR state; keeping Review issue-routed
+            // avoids guessing across artifact namespaces.
+            ChangeKind::Issue | ChangeKind::Label | ChangeKind::Review | ChangeKind::Comment => {
+                self.forge
+                    .get_issue_by_number(self.repo, item)
+                    .await?
+                    .and_then(|issue| classifier.classify_issue(&issue).ok())
+            }
+            ChangeKind::Push | ChangeKind::Unknown => return Ok(Progress::unchanged()),
+        };
+        let Some(classified) = classified else {
+            return Ok(Progress::unchanged());
+        };
+        let automation_items = targeted_automated_work_items(
+            self.forge,
+            self.repo,
+            self.workflow,
+            &self.compiled,
+            classified,
+            now,
+        )
+        .await?;
+        automation::execute_automated_items(
+            &self.name,
+            self.repo,
+            self.workflow,
+            &self.compiled,
+            &self.executor,
+            &self.external_tool_executors,
+            self.forge,
+            automation_items,
+        )
+        .await
+    }
+
+    /// Runs bounded reconciliation using exactly the supplied artifact snapshots.
+    pub async fn reconcile_targeted_snapshots(
+        &self,
+        now: DateTime<Utc>,
+        snapshots: Vec<temper_workflow::ArtifactSnapshot>,
+    ) -> Result<Progress, WorkerError> {
+        let reconciler = self.workflow.reconciler(&self.policy);
+        let report = reconciler
+            .reconcile_bounded(self.forge, self.repo, self.journal, snapshots, now)
+            .await?;
+        let outcome = if report.is_clean() {
+            ApplyOutcome::default()
+        } else {
+            log_mechanical_reconciliation(&self.name, self.repo, &report);
+            Applier::new(&self.executor, &self.lease_manager, self.journal)
+                .apply_report(self.repo, &report, now)
+                .await?
+        };
+        Ok(Progress {
+            changed: !outcome.applied.is_empty(),
+            actions: saturating_u32(outcome.applied.len()),
+        })
     }
 
     /// Runs the explicit all-history deep audit path once.

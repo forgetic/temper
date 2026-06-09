@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryId, RepositoryPath};
+use temper_forge::{
+    ChangeHint, ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId, RepositoryPath,
+};
 use temper_workflow::{
     CommandJournal, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext, LeasePolicy,
     ReconciliationMode, RecoveryPolicy, RoleId, ValidatedWorkflow,
@@ -603,6 +605,54 @@ where
             .collect();
         self.tick_mechanical_repositories(now, repositories, ReconciliationMode::Bounded)
             .await
+    }
+
+    pub async fn tick_targeted(
+        &self,
+        now: DateTime<Utc>,
+        targets: &[(RepositoryPath, ItemNumber, ChangeKind)],
+    ) -> MultiRepoTickReport {
+        let mut report = MultiRepoTickReport::default();
+        for repository in &self.mechanical_repositories {
+            let repo_targets: Vec<_> = targets
+                .iter()
+                .filter(|(path, _, _)| path_key(path) == path_key(&repository.target.path))
+                .map(|(_, item, kind)| (*item, *kind))
+                .collect();
+            if repo_targets.is_empty() {
+                continue;
+            }
+            report.record_attempt(&repository.target);
+            let worker = MechanicalWorker::with_policy(
+                self.workflow,
+                self.forge,
+                &repository.target.id,
+                repository.journal,
+                self.lease_policy,
+                self.policy.clone(),
+            )
+            .with_external_tool_executors(self.external_tool_executors.clone());
+            let mut progress = Progress::unchanged();
+            let mut failure = None;
+            for (item, kind) in repo_targets {
+                match worker.tick_artifact(now, item, kind).await {
+                    Ok(item_progress) => {
+                        progress.changed |= item_progress.changed;
+                        progress.actions = progress.actions.saturating_add(item_progress.actions);
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = failure {
+                report.record_failure(repository.target.clone(), error);
+            } else {
+                report.record_success(repository.target.clone(), progress);
+            }
+        }
+        report
     }
 
     async fn tick_mechanical_repositories(

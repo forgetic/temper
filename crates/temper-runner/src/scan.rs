@@ -179,6 +179,26 @@ pub async fn scan_automated_queues<F: Forge + ?Sized>(
     Ok(automated_work_items(&queues, &artifacts, now))
 }
 
+/// Returns automated queue items for one already-classified artifact, reusing
+/// the same signal read, queue matching, activity and automation metadata logic
+/// as the broad automated scan.
+pub async fn targeted_automated_work_items<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    classified: ClassifiedArtifact,
+    now: DateTime<Utc>,
+) -> Result<Vec<AutomatedWorkItem>, ScanError> {
+    let queues = candidate::queues_for_scan(compiled, None, ScanMode::Automated);
+    if queues.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut artifacts = Vec::new();
+    push_candidate(forge, repo, workflow, &queues, classified, &mut artifacts).await?;
+    Ok(automated_work_items(&queues, &artifacts, now))
+}
+
 /// Runs a broad audit scan for all workflow queues and workflow-labelled
 /// recovery interest while still avoiding unlabelled closed history.
 pub async fn scan_audit<F: Forge + ?Sized>(

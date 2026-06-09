@@ -61,6 +61,23 @@ pub(crate) async fn execute_automated_queues<F: Forge + ?Sized>(
     }
 
     let items = scan_automated_queues(forge, repo, workflow, compiled, now).await?;
+    execute_automated_items(
+        worker, repo, workflow, compiled, executor, executors, forge, items,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
+    worker: &str,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    executor: &Executor<'_, F>,
+    executors: &ExternalToolExecutors,
+    forge: &F,
+    items: Vec<AutomatedWorkItem>,
+) -> Result<Progress, WorkerError> {
     let mut counts = AutomationCounts {
         candidates: items.len(),
         ..AutomationCounts::default()
