@@ -1,0 +1,12 @@
+{
+  "protocol_version": 1,
+  "type": "assign",
+  "job_id": "job-123",
+  "role": "coder",
+  "repo": "ai/temper",
+  "artifact": {
+    "item": 89,
+    "kind": "issue"
+  },
+  "job_payload": {}
+}

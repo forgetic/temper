@@ -1,0 +1,14 @@
+{
+  "protocol_version": 1,
+  "type": "register",
+  "worker_id": "worker-1",
+  "capabilities": [
+    {
+      "role": "coder",
+      "repo": "ai/temper"
+    }
+  ],
+  "capacity": {
+    "max_concurrent_jobs": 1
+  }
+}

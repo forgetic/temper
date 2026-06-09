@@ -1,0 +1,7 @@
+{
+  "protocol_version": 1,
+  "type": "lease-ack",
+  "worker_id": "worker-1",
+  "job_id": "job-123",
+  "disposition": "released"
+}
