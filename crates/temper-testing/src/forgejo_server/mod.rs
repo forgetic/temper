@@ -1,7 +1,7 @@
 //! Temper-specific provisioning layered on the shared throwaway Forgejo fixture.
 //!
 //! The process lifecycle, pinned-binary cache, and host-mode runner live in
-//! `temper_forgejo_fixture`. This module re-exports those types under the
+//! `bench_forgejo`. This module re-exports those types under the
 //! historical `temper_testing::forgejo_server` path and adds the Temper workflow
 //! provisioning, seed, and PR-prep helpers used by ignored e2e tests.
 
@@ -11,6 +11,9 @@ mod provision_cache;
 mod provision_rest;
 pub mod provision_seed;
 
+pub use bench_forgejo::{
+    download, CachedForgejo, ForgejoRunner, ForgejoServer, ForgejoState, RunnerError, ServerError,
+};
 pub use pr_prep::{
     commit_ci_sentinel, commit_conflict_resolution_update, prepare_pull_request_head,
 };
@@ -23,6 +26,3 @@ pub use provision_cache::{
     CachedProvisionedServer, CachedProvisionedWorld, ProvisionedRepositories,
 };
 pub use provision_seed::{intake_labels, seed_intake_issue};
-pub use temper_forgejo_fixture::{
-    download, CachedForgejo, ForgejoRunner, ForgejoServer, ForgejoState, RunnerError, ServerError,
-};

@@ -6,6 +6,16 @@ fixtures. For commands, read
 For design rationale, read
 [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md).
 
+## Crate boundary
+
+Generic Forgejo fixture internals live in the sibling `ai/bench` repository's
+`bench-forgejo` crate: process lifecycle, pinned binary download/cache handling,
+state-cache mechanics, and host-mode runner support. Temper-specific
+provisioning remains in `temper-testing::forgejo_server` and related Temper
+crates; that module re-exports the generic fixture types under Temper's existing
+public path and layers on reference-delivery org, role, label, workflow, and PR
+preparation helpers.
+
 ## Process and cache model
 
 Each test execution copies a cached Forgejo state tree to `/tmp`, starts a fresh
@@ -23,10 +33,11 @@ local and gitignored.
 
 ## Pinned binaries
 
-| Binary | Version | SHA-256 | Source |
-| --- | --- | --- | --- |
-| Forgejo server | `7.0.12` | `ecd25535250aeb8073fdef1a0c9e92f288de1c0cdde24c95a3b61ead6bc9cf7c` | `https://codeberg.org/forgejo/forgejo/releases/download/v7.0.12/forgejo-7.0.12-linux-amd64` |
-| `forgejo-runner` | `3.5.1` | `e2f36aa8149a0e883b5713398aa185c88a827fc0527d5cd2e2b05b88c9ba0b36` | `https://code.forgejo.org/forgejo/runner/releases/download/v3.5.1/forgejo-runner-3.5.1-linux-amd64` |
+The pinned Forgejo server and `forgejo-runner` asset constants are owned by
+`bench-forgejo`. Run bench's fixture command (for example, `bench forgejo
+download`) or the bench crate's own tests (for example, `cargo test -p
+bench-forgejo ...` from the bench checkout) when you need to pre-stage or verify
+generic fixture downloads outside Temper.
 
 Both assets are `linux-amd64`; the server is SQLite and statically linked.
 Partial downloads are never published. Offline machines should point binary
@@ -34,17 +45,21 @@ overrides at pre-downloaded files.
 
 ## Environment knobs
 
-| Variable | Effect |
-| --- | --- |
-| `TEMPER_FORGEJO_BINARY` | Absolute path to a pre-downloaded server binary; skips cache lookup and checksum. |
-| `TEMPER_FORGEJO_VERSION` | Override the pinned server version in the default URL. |
-| `TEMPER_FORGEJO_URL` | Override the server download URL when paired with `TEMPER_FORGEJO_SHA256`. |
-| `TEMPER_FORGEJO_SHA256` | Override the expected server checksum. |
-| `TEMPER_FORGEJO_RUNNER_BINARY` | Absolute path to a pre-downloaded runner binary; skips cache lookup and checksum. |
-| `TEMPER_FORGEJO_RUNNER_VERSION` | Override the pinned runner version in the default URL. |
-| `TEMPER_FORGEJO_RUNNER_URL` | Override the runner URL when paired with `TEMPER_FORGEJO_RUNNER_SHA256`. |
-| `TEMPER_FORGEJO_RUNNER_SHA256` | Override the expected runner checksum. |
-| `TEMPER_FORGEJO_GOMAXPROCS` | `GOMAXPROCS` for spawned server/runner processes; default `2`, empty opts out. |
+`BENCH_FORGEJO_*` is the canonical namespace for generic fixture binary/cache
+settings. `bench-forgejo` still honors the old `TEMPER_FORGEJO_*` fixture
+variables as deprecated legacy aliases so existing Temper scripts keep working.
+
+| Canonical variable | Legacy alias | Effect |
+| --- | --- | --- |
+| `BENCH_FORGEJO_BINARY` | `TEMPER_FORGEJO_BINARY` | Absolute path to a pre-downloaded server binary; skips cache lookup and checksum. |
+| `BENCH_FORGEJO_VERSION` | `TEMPER_FORGEJO_VERSION` | Override the pinned server version in the default URL. |
+| `BENCH_FORGEJO_URL` | `TEMPER_FORGEJO_URL` | Override the server download URL when paired with the checksum override. |
+| `BENCH_FORGEJO_SHA256` | `TEMPER_FORGEJO_SHA256` | Override the expected server checksum. |
+| `BENCH_FORGEJO_RUNNER_BINARY` | `TEMPER_FORGEJO_RUNNER_BINARY` | Absolute path to a pre-downloaded runner binary; skips cache lookup and checksum. |
+| `BENCH_FORGEJO_RUNNER_VERSION` | `TEMPER_FORGEJO_RUNNER_VERSION` | Override the pinned runner version in the default URL. |
+| `BENCH_FORGEJO_RUNNER_URL` | `TEMPER_FORGEJO_RUNNER_URL` | Override the runner URL when paired with the runner checksum override. |
+| `BENCH_FORGEJO_RUNNER_SHA256` | `TEMPER_FORGEJO_RUNNER_SHA256` | Override the expected runner checksum. |
+| `BENCH_FORGEJO_GOMAXPROCS` | `TEMPER_FORGEJO_GOMAXPROCS` | `GOMAXPROCS` for spawned server/runner processes; default `2`, empty opts out. |
 
 Remove `.cache/forgejo/states/` to force state reprovisioning while keeping the
 binary cache.

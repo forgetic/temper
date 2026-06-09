@@ -101,7 +101,7 @@ Add `--test-threads=1` only if you need to throttle host load.
 
 The throwaway Forgejo web server can consume sustained CPU under this workload.
 Temper caps `GOMAXPROCS` for spawned server and runner processes by default
-(`TEMPER_FORGEJO_GOMAXPROCS=2`; set it empty to opt out).
+(`BENCH_FORGEJO_GOMAXPROCS=2`; the legacy alias `TEMPER_FORGEJO_GOMAXPROCS` is still supported; set it empty to opt out).
 
 If a run is killed with `SIGKILL`, Rust drop guards do not run. Clean up orphaned
 processes and temp trees before retrying:
@@ -117,7 +117,7 @@ rm -rf /tmp/temper-forgejo-*
 Keep this suite separate from the default hermetic job. A dedicated job should:
 
 1. allow pinned-binary resolution or pre-stage binaries with
-   `TEMPER_FORGEJO_BINARY` and `TEMPER_FORGEJO_RUNNER_BINARY`;
+   `BENCH_FORGEJO_BINARY` and `BENCH_FORGEJO_RUNNER_BINARY` (or the legacy `TEMPER_FORGEJO_*` aliases);
 2. run on a host that permits child processes, localhost ports, and host-mode CI
    jobs (no containers required by the runner label);
 3. invoke:

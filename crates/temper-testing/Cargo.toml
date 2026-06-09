@@ -19,7 +19,7 @@ temper-coding-workspace = { path = "../temper-coding-workspace" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
-temper-forgejo-fixture = { path = "../temper-forgejo-fixture" }
+bench-forgejo = { path = "../../../bench/crates/bench-forgejo" }
 temper-forgejo-ops = { path = "../temper-forgejo-ops" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 # Reuse the generalized workflow loader (`load_workflow`/`resolve_workflow`) and
