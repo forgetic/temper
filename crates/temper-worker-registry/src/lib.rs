@@ -8,7 +8,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod daemon_core;
 pub mod dispatch;
+pub use daemon_core::DaemonCore;
 pub use dispatch::{Assignment, DispatchCoordinator, WorkItem};
 
 use temper_worker_protocol::{Capability, Register};
