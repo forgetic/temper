@@ -1230,6 +1230,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "temper-workflow"
 version = "0.1.0"
 dependencies = [
