@@ -2,11 +2,7 @@
 
 //! Standalone async daemon transport for the Worker/Daemon wire protocol.
 
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use axum::{
     body::Bytes,
@@ -20,9 +16,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use temper_runner::WorkItem;
 use temper_worker_protocol::{Artifact, ErrorCode, Poll, WorkerProtocolMessage};
+#[cfg(test)]
+use temper_worker_registry::daemon_core::QueuedJob;
 use temper_worker_registry::DaemonCore;
 use temper_workflow::ArtifactSource;
-use tokio::sync::{Mutex, Notify};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::{sleep_until, Instant as TokioInstant},
+};
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
 
@@ -79,23 +80,151 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
 
 #[derive(Clone)]
 struct DaemonState {
-    core: Arc<Mutex<DaemonCore>>,
-    notify: Arc<Notify>,
+    cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
     max_poll_wait_ms: u64,
 }
 
 #[derive(Clone)]
 pub struct Daemon {
-    core: Arc<Mutex<DaemonCore>>,
-    notify: Arc<Notify>,
+    cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
     max_poll_wait_ms: u64,
+}
+
+enum DaemonCommand {
+    Message {
+        msg: WorkerProtocolMessage,
+        reply: oneshot::Sender<Option<WorkerProtocolMessage>>,
+    },
+    Poll {
+        poll: Poll,
+        deadline: TokioInstant,
+        reply: oneshot::Sender<WorkerProtocolMessage>,
+    },
+    ExpirePoll {
+        id: u64,
+    },
+    EnqueueJob {
+        job_id: String,
+        role: String,
+        repo: String,
+        artifact: Artifact,
+        job_payload: serde_json::Value,
+    },
+    #[cfg(test)]
+    QueuedJobs {
+        reply: oneshot::Sender<Vec<QueuedJob>>,
+    },
+}
+
+struct PollWaiter {
+    poll: Poll,
+    reply: oneshot::Sender<WorkerProtocolMessage>,
+}
+
+async fn run_core(
+    mut rx: mpsc::UnboundedReceiver<DaemonCommand>,
+    cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
+) {
+    let mut core = DaemonCore::new();
+    let mut waiters = BTreeMap::new();
+    let mut next_id = 0_u64;
+
+    while let Some(command) = rx.recv().await {
+        match command {
+            DaemonCommand::Message { msg, reply } => {
+                let _ = reply.send(core.handle(msg));
+            }
+            DaemonCommand::Poll {
+                poll,
+                deadline,
+                reply,
+            } => {
+                let response = core
+                    .handle(WorkerProtocolMessage::Poll(poll.clone()))
+                    .expect("poll messages produce a response");
+
+                if is_poll_timeout(&response) {
+                    let id = next_id;
+                    next_id = next_id.wrapping_add(1);
+                    waiters.insert(id, PollWaiter { poll, reply });
+
+                    let timer_tx = cmd_tx.clone();
+                    tokio::spawn(async move {
+                        sleep_until(deadline).await;
+                        let _ = timer_tx.send(DaemonCommand::ExpirePoll { id });
+                    });
+                } else {
+                    let _ = reply.send(response);
+                }
+            }
+            DaemonCommand::ExpirePoll { id } => {
+                if let Some(waiter) = waiters.remove(&id) {
+                    let response = core
+                        .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
+                        .expect("poll messages produce a response");
+                    let _ = waiter.reply.send(response);
+                }
+            }
+            DaemonCommand::EnqueueJob {
+                job_id,
+                role,
+                repo,
+                artifact,
+                job_payload,
+            } => {
+                core.enqueue_job(job_id, role, repo, artifact, job_payload);
+                fulfil_waiters(&mut core, &mut waiters);
+            }
+            #[cfg(test)]
+            DaemonCommand::QueuedJobs { reply } => {
+                let _ = reply.send(core.queued_jobs());
+            }
+        }
+    }
+}
+
+fn fulfil_waiters(core: &mut DaemonCore, waiters: &mut BTreeMap<u64, PollWaiter>) {
+    let ids = waiters.keys().copied().collect::<Vec<_>>();
+
+    for id in ids {
+        let Some(waiter) = waiters.get(&id) else {
+            continue;
+        };
+
+        if waiter.reply.is_closed() {
+            waiters.remove(&id);
+            continue;
+        }
+
+        let response = core
+            .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
+            .expect("poll messages produce a response");
+
+        if is_poll_timeout(&response) {
+            continue;
+        }
+
+        let waiter = waiters
+            .remove(&id)
+            .expect("waiter exists after successful poll response");
+        let _ = waiter.reply.send(response);
+    }
+}
+
+fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
+    matches!(
+        message,
+        WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout
+    )
 }
 
 impl Daemon {
     pub fn new() -> Self {
+        let (cmd_tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(run_core(rx, cmd_tx.clone()));
+
         Self {
-            core: Arc::new(Mutex::new(DaemonCore::new())),
-            notify: Arc::new(Notify::new()),
+            cmd_tx,
             max_poll_wait_ms: DEFAULT_MAX_POLL_WAIT_MS,
         }
     }
@@ -108,11 +237,13 @@ impl Daemon {
         artifact: Artifact,
         job_payload: serde_json::Value,
     ) {
-        {
-            let mut core = self.core.lock().await;
-            core.enqueue_job(job_id, role, repo, artifact, job_payload);
-        }
-        self.notify.notify_waiters();
+        let _ = self.cmd_tx.send(DaemonCommand::EnqueueJob {
+            job_id: job_id.into(),
+            role: role.into(),
+            repo: repo.into(),
+            artifact,
+            job_payload,
+        });
     }
 
     /// Map a scanned `WorkItem` to a job and enqueue it.
@@ -130,8 +261,13 @@ impl Daemon {
 
     #[cfg(test)]
     async fn queued_jobs(&self) -> Vec<WorkItemJob> {
-        let core = self.core.lock().await;
-        core.queued_jobs()
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DaemonCommand::QueuedJobs { reply })
+            .expect("daemon core task is running");
+
+        rx.await
+            .expect("daemon core task replies with queued jobs")
             .into_iter()
             .map(|job| WorkItemJob {
                 job_id: job.job_id,
@@ -145,8 +281,7 @@ impl Daemon {
 
     pub fn router(&self) -> Router {
         let state = DaemonState {
-            core: Arc::clone(&self.core),
-            notify: Arc::clone(&self.notify),
+            cmd_tx: self.cmd_tx.clone(),
             max_poll_wait_ms: self.max_poll_wait_ms,
         };
 
@@ -168,56 +303,60 @@ async fn handle_message(State(state): State<DaemonState>, body: Bytes) -> Respon
     };
 
     match msg {
-        WorkerProtocolMessage::Poll(poll) => long_poll(&state, poll).await,
-        other => {
-            let reply = {
-                let mut core = state.core.lock().await;
-                core.handle(other)
-            };
+        WorkerProtocolMessage::Poll(poll) => {
+            let requested = poll.max_wait_ms.unwrap_or(state.max_poll_wait_ms);
+            let wait_ms = requested.min(state.max_poll_wait_ms);
+            let deadline = TokioInstant::now() + Duration::from_millis(wait_ms);
+            let (reply, rx) = oneshot::channel();
 
-            match reply {
-                Some(reply) => (StatusCode::OK, Json(reply)).into_response(),
-                None => StatusCode::NO_CONTENT.into_response(),
+            if state
+                .cmd_tx
+                .send(DaemonCommand::Poll {
+                    poll,
+                    deadline,
+                    reply,
+                })
+                .is_err()
+            {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
+            match rx.await {
+                Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        other => {
+            let (reply, rx) = oneshot::channel();
+
+            if state
+                .cmd_tx
+                .send(DaemonCommand::Message { msg: other, reply })
+                .is_err()
+            {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
+            match rx.await {
+                Ok(Some(reply)) => (StatusCode::OK, Json(reply)).into_response(),
+                Ok(None) => StatusCode::NO_CONTENT.into_response(),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             }
         }
     }
 }
 
-async fn long_poll(state: &DaemonState, poll: Poll) -> Response {
-    let requested = poll.max_wait_ms.unwrap_or(state.max_poll_wait_ms);
-    let wait_ms = requested.min(state.max_poll_wait_ms);
-    let deadline = Instant::now() + Duration::from_millis(wait_ms);
+pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    eprintln!("temper-daemon: serving on {}", listener.local_addr()?);
 
-    loop {
-        let notified = state.notify.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-
-        let reply = {
-            let mut core = state.core.lock().await;
-            core.handle(WorkerProtocolMessage::Poll(poll.clone()))
-        };
-
-        match reply {
-            Some(WorkerProtocolMessage::Error(error)) if error.code == ErrorCode::PollTimeout => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return (StatusCode::OK, Json(WorkerProtocolMessage::Error(error)))
-                        .into_response();
-                }
-
-                tokio::select! {
-                    _ = notified => {}
-                    _ = tokio::time::sleep(remaining) => {
-                        return (StatusCode::OK, Json(WorkerProtocolMessage::Error(error)))
-                            .into_response();
-                    }
-                }
+    axum::serve(listener, daemon.router())
+        .with_graceful_shutdown(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
             }
-            Some(reply) => return (StatusCode::OK, Json(reply)).into_response(),
-            None => return StatusCode::NO_CONTENT.into_response(),
-        }
-    }
+        })
+        .await
 }
 
 #[cfg(test)]
@@ -302,17 +441,4 @@ mod tests {
 
         assert_eq!(daemon.queued_jobs().await, vec![expected]);
     }
-}
-
-pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    eprintln!("temper-daemon: serving on {}", listener.local_addr()?);
-
-    axum::serve(listener, daemon.router())
-        .with_graceful_shutdown(async {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
-            }
-        })
-        .await
 }
