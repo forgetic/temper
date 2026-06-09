@@ -8,6 +8,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod dispatch;
+pub use dispatch::{Assignment, DispatchCoordinator, WorkItem};
+
 use temper_worker_protocol::{Capability, Register};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
