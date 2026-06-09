@@ -145,10 +145,9 @@ Edit `config/temper.env` or export variables before launch:
 - `OWNER=acme` / `NAME=service` — the single repo provisioned and scanned.
 - `POLL_MS=120000` — long-poll mode for role workers; webhooks should wake
   workers promptly.
-- `CI_STATUS_POLL_MS=1000` — narrow active mechanical landing/CI-status poll
-  backstop; leave blank to reuse `POLL_MS`. Forgejo 7.0.x does not emit
-  Actions-completion webhooks, so this keeps green PRs moving without shortening
-  role long-poll mode.
+- `CI_STATUS_POLL_MS=30000` — slow mechanical landing/CI-status missed-event
+  backstop; leave blank to reuse `POLL_MS`. CI/PR webhooks and targeted wakes
+  provide prompt landing/CI reactivity without shortening role long-poll mode.
 - `IDLE_POLL_MAX_MS=8000` — cap for adaptive mechanical idle backoff.
 - `WEBHOOKS=1|0` — enable/disable the local webhook trigger.
 - `FAKE_CI_SENTINEL=present|deferred` — make the first PR head's CI pass, or force
