@@ -171,6 +171,11 @@ impl DispatchCoordinator {
         &self.pending
     }
 
+    /// The in-flight work item for `job_id`, if currently assigned.
+    pub fn assigned_work_item(&self, job_id: &str) -> Option<&WorkItem> {
+        self.assigned.get(job_id).map(|(_worker_id, item)| item)
+    }
+
     pub fn in_flight_len(&self) -> usize {
         self.assigned.len()
     }
