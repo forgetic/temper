@@ -9,8 +9,10 @@ description = "Standalone async daemon serving the Worker/Daemon wire protocol o
 [dependencies]
 async-trait = { workspace = true }
 axum = { workspace = true }
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+temper-forge = { path = "../temper-forge" }
 temper-runner = { path = "../temper-runner" }
 temper-worker-protocol = { path = "../temper-worker-protocol" }
 temper-worker-registry = { path = "../temper-worker-registry" }
@@ -19,7 +21,7 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time", "net", "sig
 
 [dev-dependencies]
 reqwest = { workspace = true }
-temper-forge = { path = "../temper-forge" }
+temper-forge-memory = { path = "../temper-forge-memory" }
 
 [[bin]]
 name = "temper-daemon"
