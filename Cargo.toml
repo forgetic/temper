@@ -4,6 +4,7 @@ members = [
     "crates/temper-forge",
     "crates/temper-process-protocol",
     "crates/temper-worker-protocol",
+    "crates/temper-worker-registry",
     "crates/temper-interaction",
     "crates/temper-forge-filesystem",
     "crates/temper-forge-memory",
