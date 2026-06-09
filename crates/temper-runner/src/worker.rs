@@ -29,9 +29,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
 use temper_workflow::{
-    Applier, ApplyError, ApplyOutcome, CompiledWorkflow, DefaultRecoveryPolicy, ExecutionContext,
-    ExecutionError, Executor, LeaseManager, LeasePolicy, ReconcileError, ReconciliationMode,
-    RecoveryPolicy, RoleId, ValidatedWorkflow,
+    parse_metadata_block, Applier, ApplyError, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow,
+    DefaultRecoveryPolicy, ExecutionContext, ExecutionError, Executor, LeaseManager, LeasePolicy,
+    ReconcileError, ReconciliationMode, RecoveryPolicy, RoleId, ValidatedWorkflow,
 };
 
 /// Progress made by one worker tick.
@@ -461,12 +461,39 @@ where
         kind: ChangeKind,
     ) -> Result<Progress, WorkerError> {
         let classifier = temper_workflow::Classifier::new(self.workflow);
+        let mut targeted_snapshots = Vec::new();
         let classified = match kind {
-            ChangeKind::Ci | ChangeKind::PullRequest => self
-                .forge
-                .get_pull_request_by_number(self.repo, item)
-                .await?
-                .and_then(|pull_request| classifier.classify_pull_request(&pull_request).ok()),
+            ChangeKind::Ci | ChangeKind::PullRequest => {
+                let pull_request = self
+                    .forge
+                    .get_pull_request_by_number(self.repo, item)
+                    .await?;
+                if let Some(pull_request) = pull_request {
+                    targeted_snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
+                    if matches!(kind, ChangeKind::PullRequest) {
+                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
+                            .map_err(|error| ForgeError::Backend(error.to_string()))?
+                        {
+                            for parent in metadata
+                                .parents
+                                .iter()
+                                .filter(|parent| parent.is_in_repository(&self.repo))
+                            {
+                                if let Some(issue) = self
+                                    .forge
+                                    .get_issue_by_number(self.repo, parent.number)
+                                    .await?
+                                {
+                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
+                                }
+                            }
+                        }
+                    }
+                    classifier.classify_pull_request(&pull_request).ok()
+                } else {
+                    None
+                }
+            }
             // Issue-like events are routed to issues deterministically. Review
             // hints may come from PR review webhooks, but providers also emit a
             // PullRequest/Ci hint for PR state; keeping Review issue-routed
@@ -491,7 +518,7 @@ where
             now,
         )
         .await?;
-        automation::execute_automated_items(
+        let automation_progress = automation::execute_automated_items(
             &self.name,
             self.repo,
             self.workflow,
@@ -501,7 +528,19 @@ where
             self.forge,
             automation_items,
         )
-        .await
+        .await?;
+        if targeted_snapshots.is_empty() {
+            return Ok(automation_progress);
+        }
+        let reconciliation_progress = self
+            .reconcile_targeted_snapshots(now, targeted_snapshots)
+            .await?;
+        Ok(Progress {
+            changed: automation_progress.changed || reconciliation_progress.changed,
+            actions: automation_progress
+                .actions
+                .saturating_add(reconciliation_progress.actions),
+        })
     }
 
     /// Runs bounded reconciliation using exactly the supplied artifact snapshots.

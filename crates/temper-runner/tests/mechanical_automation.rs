@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
 use temper_forge::{
-    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
-    ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState, PullRequestUpdateState,
-    RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
+    BranchRef, ChangeKind, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery,
+    IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
+    PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
@@ -426,6 +426,43 @@ fn automated_queue_scan_keeps_normal_tick_bounded() {
         .pull_request_queries()
         .iter()
         .all(is_bounded_pull_request_query));
+}
+
+#[test]
+fn targeted_ci_wake_lands_pr_without_terminal_list_queries() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let ready = create_pull_request(&forge, &repo, &["implementation", "landing", "approved"]);
+    let counted = CountingForge::new(forge.clone());
+    let workflow = workflow_from_json(AUTOMATED_PR_WORKFLOW);
+    let journal = InMemoryJournal::new();
+    let worker = MechanicalWorker::new(&workflow, &counted, &repo, &journal, lease_policy());
+
+    let progress =
+        block_on(worker.tick_artifact(ts("2026-05-29T00:00:00Z"), ready, ChangeKind::Ci))
+            .expect("targeted CI tick succeeds");
+
+    assert_eq!(
+        progress,
+        Progress {
+            changed: true,
+            actions: 1
+        }
+    );
+    assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
+    assert!(counted.count(CountedForgeOp::GetPullRequestByNumber) >= 1);
+    assert_eq!(
+        pull_request_state(&forge, &repo, ready),
+        PullRequestState::Merged
+    );
+    assert!(counted
+        .issue_queries()
+        .iter()
+        .all(|query| query.state != Some(IssueState::Closed)));
+    assert!(counted.pull_request_queries().iter().all(|query| !matches!(
+        query.state,
+        Some(PullRequestState::Closed | PullRequestState::Merged)
+    )));
 }
 
 #[test]
