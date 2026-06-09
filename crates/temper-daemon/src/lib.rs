@@ -12,20 +12,32 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temper_runner::WorkItem;
+use temper_forge::{Forge, ForgeError, RepositoryId};
+use temper_runner::{scan_role, scan_role_wake, ScanError, WorkItem};
 use temper_worker_protocol::{Artifact, ErrorCode, JobResult, Poll, WorkerProtocolMessage};
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
 use temper_worker_registry::{DaemonCore, InFlightJob};
-use temper_workflow::ArtifactSource;
+use temper_workflow::{ArtifactSource, CompiledWorkflow, RoleId, ValidatedWorkflow};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{sleep_until, Instant as TokioInstant},
 };
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
+
+/// Which read-only scan the daemon feed runs for a role.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RoleFeedMode {
+    /// Steady-state active-queue scan (`scan_role`). This is the default mode.
+    #[default]
+    Normal,
+    /// Wake-triggered scan (`scan_role_wake`).
+    Wake,
+}
 
 /// Pluggable seam invoked when the daemon accepts a worker `result`.
 ///
@@ -307,6 +319,38 @@ impl Daemon {
         .await;
     }
 
+    /// Scans `repo` for `role`'s active queue work and enqueues each resulting
+    /// `WorkItem` into the daemon for dispatch. Returns the number of scanned
+    /// items; the daemon/registry dedupes already-pending or in-flight jobs by
+    /// `job_id`, so repeated feeds for an unchanged ready artifact do not
+    /// double-dispatch.
+    ///
+    /// The protocol `repo` label is the artifact repository's `owner/name` path,
+    /// matching worker registered capability `repo` values.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
+        &self,
+        forge: &F,
+        repo: &RepositoryId,
+        workflow: &ValidatedWorkflow,
+        compiled: &CompiledWorkflow,
+        now: DateTime<Utc>,
+        role: &RoleId,
+        mode: RoleFeedMode,
+    ) -> Result<usize, ScanError> {
+        let repo_label = repo_label(forge, repo).await?;
+        let items: Vec<WorkItem> = match mode {
+            RoleFeedMode::Normal => scan_role(forge, repo, workflow, compiled, now, role).await?,
+            RoleFeedMode::Wake => {
+                scan_role_wake(forge, repo, workflow, compiled, now, role).await?
+            }
+        };
+        for item in &items {
+            self.enqueue_work_item(&repo_label, item).await;
+        }
+        Ok(items.len())
+    }
+
     #[cfg(test)]
     async fn queued_jobs(&self) -> Vec<WorkItemJob> {
         let (reply, rx) = oneshot::channel();
@@ -343,6 +387,18 @@ impl Default for Daemon {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resolves the `owner/name` protocol repo label for a scanned `RepositoryId`.
+async fn repo_label<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+) -> Result<String, ScanError> {
+    let repository = forge
+        .get_repository(repo)
+        .await?
+        .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
+    Ok(format!("{}/{}", repository.owner, repository.name))
 }
 
 async fn handle_message(State(state): State<DaemonState>, body: Bytes) -> Response {
