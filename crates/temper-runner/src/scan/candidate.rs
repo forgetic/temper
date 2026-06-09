@@ -8,11 +8,15 @@ use temper_workflow::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScanMode {
     /// Normal role/work scans. When a role is supplied, only that role's
-    /// subscribed queues contribute candidate queries.
+    /// subscribed queues contribute candidate queries. Bounded workflow-label
+    /// terminal/recovery interest is included so terminal transitions fire on
+    /// poll-only fleets (no wake, no audit) too.
     Normal,
-    /// Wake-triggered role/work scans. Queue scoping matches [`ScanMode::Normal`],
-    /// but bounded workflow-label terminal/recovery interest is added so webhook
-    /// wakes can react to closed/merged artifacts promptly.
+    /// Wake-triggered role/work scans. Identical query planning to
+    /// [`ScanMode::Normal`] (role queue scoping plus bounded workflow-label
+    /// terminal/recovery interest); retained as a distinct reason so the
+    /// Forgejo event path can route wakes to an immediate recovery-inclusive
+    /// tick.
     Wake,
     /// Normal mechanical automation scans. Only queues that declare automation
     /// metadata contribute candidate queries, and no audit/recovery interest is
@@ -35,9 +39,13 @@ pub struct CandidateQueryPlan {
 
 /// Plans Forge list queries from queue interest.
 ///
-/// Active queue candidates are queried by open state. Closed issue and
-/// closed/merged PR candidates are queried only for audit/recovery interest, so
-/// normal and automated scans never request terminal history.
+/// Active queue candidates are queried by open state. Bounded terminal
+/// (closed issue / closed-or-merged PR) recovery queries over workflow labels
+/// are added for every role scan mode (`Normal`, `Wake`, `Audit`) so terminal
+/// transitions keyed on closed/merged artifacts fire even on poll-only fleets
+/// that run neither wakes nor audits. The mechanical `Automated` hot-poll path
+/// stays open-only so the 1s mechanical poll never issues closed/merged
+/// queries (the high-CPU path).
 pub fn candidate_query_plan(
     workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
@@ -55,7 +63,7 @@ pub fn candidate_query_plan(
         }
     }
 
-    if matches!(mode, ScanMode::Audit | ScanMode::Wake) {
+    if !matches!(mode, ScanMode::Automated) {
         let targets = workflow_targets(workflow);
         for target in targets {
             let recovery_label_sets = terminal_workflow_label_sets(workflow, target);

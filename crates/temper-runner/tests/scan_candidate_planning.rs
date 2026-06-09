@@ -269,11 +269,12 @@ fn has_pull_request_query(
 }
 
 #[test]
-fn active_candidate_plans_omit_terminal_queries() {
+fn normal_candidate_plan_keeps_open_queues_and_bounded_terminal_recovery() {
     let workflow = workflow_from_json(PLANNER_FIXTURE);
     let compiled = workflow.compile();
     let role = RoleId::new("engineer");
 
+    // Normal role scans keep their open queue interest...
     let normal = candidate_query_plan(&workflow, &compiled, Some(&role), ScanMode::Normal);
     assert!(has_issue_query(
         &normal.issue_queries,
@@ -285,25 +286,37 @@ fn active_candidate_plans_omit_terminal_queries() {
         IssueState::Open,
         &["ready", "bug"]
     ));
-    assert!(!normal
-        .issue_queries
-        .iter()
-        .any(|query| query.state == Some(IssueState::Closed)));
     assert!(has_pull_request_query(
         &normal.pull_request_queries,
         PullRequestState::Open,
         &[]
     ));
-    assert!(!normal.pull_request_queries.iter().any(|query| {
+    // ...and now also carry the same bounded, label-scoped terminal recovery
+    // queries as wake/audit so poll-only fleets converge terminal transitions.
+    // Unlabelled closed history is still never requested.
+    assert!(closed_issue_queries_have_labels(&normal.issue_queries));
+    assert!(closed_pull_request_queries_have_labels(
+        &normal.pull_request_queries
+    ));
+    assert!(has_issue_query(
+        &normal.issue_queries,
+        IssueState::Closed,
+        &["ready"]
+    ));
+
+    // The mechanical automated hot-poll path stays open-only: no closed/merged
+    // queries on the 1s poll.
+    let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
+    assert!(!automated
+        .issue_queries
+        .iter()
+        .any(|query| query.state == Some(IssueState::Closed)));
+    assert!(!automated.pull_request_queries.iter().any(|query| {
         matches!(
             query.state,
             Some(PullRequestState::Closed | PullRequestState::Merged)
         )
     }));
-
-    let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
-    assert!(automated.issue_queries.is_empty());
-    assert!(automated.pull_request_queries.is_empty());
 }
 
 #[test]
@@ -445,7 +458,19 @@ fn overlapping_candidate_queries_deduplicate_artifacts() {
             kind: ArtifactKindId::new("code"),
         }]
     );
-    assert_eq!(counting.count(CountedForgeOp::ListIssues), 2);
+    // The overlapping open `any_of` branches still deduplicate to a single work
+    // item. The total issue-list count also covers the bounded terminal-label
+    // recovery queries now included on Normal role scans.
+    assert_eq!(
+        counting
+            .issue_queries()
+            .iter()
+            .filter(|query| query.state == Some(IssueState::Open) && query.labels.is_empty())
+            .count(),
+        0,
+        "no unlabelled open-all issue listing for this role"
+    );
+    assert!(counting.count(CountedForgeOp::ListIssues) >= 2);
 }
 
 #[test]
@@ -541,7 +566,9 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
     assert!(closed_pull_request_queries_have_labels(
         &counting.pull_request_queries()
     ));
-    assert_eq!(counting.count(CountedForgeOp::ListIssues), 1);
+    // Bounded terminal-label recovery queries are label-scoped, so unlabelled
+    // closed history is never requested regardless of how much of it exists, and
+    // the abundant unlabelled closed issues/PRs never pollute the scan result.
     assert!(!counting
         .issue_queries()
         .iter()
@@ -555,31 +582,41 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
 }
 
 #[test]
-fn merged_pr_with_landed_queue_label_is_found_by_wake_and_audit_scans() {
+fn merged_pr_with_landed_queue_label_is_found_by_role_scans() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let number = create_pr(&forge, &repo, &["implementation", "landed"]);
     merge_pr(&forge, &repo, number);
     let workflow = workflow_from_json(REFERENCE_FIXTURE);
     let compiled = workflow.compile();
-    let normal_counting = CountingForge::new(forge.clone());
+    let expected = vec![WorkItem {
+        queue: QueueId::new("landed_inbox"),
+        role: RoleId::new("architect"),
+        target: ArtifactSource::PullRequest { number },
+        kind: ArtifactKindId::new("implementation_pr"),
+    }];
 
-    assert!(block_on(scan_role(
-        &normal_counting,
-        &repo,
-        &workflow,
-        &compiled,
-        ts("2026-05-29T00:00:00Z"),
-        &RoleId::new("architect"),
-    ))
-    .expect("normal scan succeeds")
-    .is_empty());
-    assert!(!normal_counting.pull_request_queries().iter().any(|query| {
-        matches!(
-            query.state,
-            Some(PullRequestState::Closed | PullRequestState::Merged)
-        )
-    }));
+    // Normal role scans now also surface the merged `landed` PR via the bounded
+    // terminal-label recovery query, so poll-only fleets converge the terminal
+    // `reconcile_landed` transition without needing a wake or audit.
+    let normal_counting = CountingForge::new(forge.clone());
+    assert_eq!(
+        block_on(scan_role(
+            &normal_counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+            &RoleId::new("architect"),
+        ))
+        .expect("normal scan succeeds"),
+        expected
+    );
+    assert!(has_pull_request_query(
+        &normal_counting.pull_request_queries(),
+        PullRequestState::Merged,
+        &["landed"]
+    ));
 
     let wake_counting = CountingForge::new(forge.clone());
     assert_eq!(
