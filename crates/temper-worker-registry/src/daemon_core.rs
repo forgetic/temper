@@ -25,6 +25,15 @@ pub struct QueuedJob {
     pub job_payload: serde_json::Value,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct InFlightJob {
+    pub job_id: String,
+    pub role: String,
+    pub repo: String,
+    pub artifact: Artifact,
+    pub job_payload: serde_json::Value,
+}
+
 #[derive(Debug, Default)]
 pub struct DaemonCore {
     coordinator: DispatchCoordinator,
@@ -79,6 +88,21 @@ impl DaemonCore {
                 })
             })
             .collect()
+    }
+
+    /// Full context of a currently in-flight (assigned, not yet completed) job,
+    /// recoverable until `handle(Result)` completes it. `None` if the job is
+    /// pending (not yet dispatched), unknown, or already completed.
+    pub fn in_flight_job(&self, job_id: &str) -> Option<InFlightJob> {
+        let item = self.coordinator.assigned_work_item(job_id)?;
+        let (artifact, job_payload) = self.job_context.get(job_id)?.clone();
+        Some(InFlightJob {
+            job_id: job_id.to_string(),
+            role: item.role.clone(),
+            repo: item.repo.clone(),
+            artifact,
+            job_payload,
+        })
     }
 
     pub fn handle(&mut self, msg: WorkerProtocolMessage) -> Option<WorkerProtocolMessage> {
@@ -258,6 +282,70 @@ mod tests {
             }
             other => panic!("expected protocol error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn assigned_job_is_recoverable_as_in_flight() {
+        let mut core = DaemonCore::new();
+        core.coordinator_mut()
+            .register(&register("worker-a", "engineer", "ai/temper", 1));
+        let artifact = artifact();
+        let payload = json!({"k":1});
+        core.enqueue_job(
+            "job-1",
+            "engineer",
+            "ai/temper",
+            artifact.clone(),
+            payload.clone(),
+        );
+
+        match core.handle(poll("worker-a")) {
+            Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
+        }
+
+        assert_eq!(
+            core.in_flight_job("job-1"),
+            Some(InFlightJob {
+                job_id: "job-1".to_string(),
+                role: "engineer".to_string(),
+                repo: "ai/temper".to_string(),
+                artifact,
+                job_payload: payload,
+            })
+        );
+    }
+
+    #[test]
+    fn pending_job_is_not_in_flight() {
+        let mut core = DaemonCore::new();
+        core.enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"k":1}));
+
+        assert_eq!(core.in_flight_job("job-1"), None);
+    }
+
+    #[test]
+    fn completed_job_is_no_longer_in_flight() {
+        let mut core = DaemonCore::new();
+        core.coordinator_mut()
+            .register(&register("worker-a", "engineer", "ai/temper", 1));
+        core.enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"k":1}));
+
+        match core.handle(poll("worker-a")) {
+            Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
+        }
+        let _ = core.handle(result("worker-a", "job-1"));
+
+        assert_eq!(core.in_flight_job("job-1"), None);
+    }
+
+    #[test]
+    fn unknown_job_is_not_in_flight_or_assigned() {
+        let core = DaemonCore::new();
+
+        assert_eq!(core.in_flight_job("nope"), None);
+        assert_eq!(core.coordinator().assigned_work_item("nope"), None);
     }
 
     #[test]
