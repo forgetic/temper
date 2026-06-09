@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/temper-daemon",
     "crates/temper-workflow",
     "crates/temper-forge",
     "crates/temper-process-protocol",
@@ -70,6 +71,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.76"
 
 [workspace.dependencies]
+axum = "0.7"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
