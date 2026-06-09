@@ -70,6 +70,14 @@ impl WorkerRegistry {
             .map(|(worker_id, _)| worker_id.clone())
     }
 
+    /// True iff `worker_id` is registered, healthy, and its capabilities cover
+    /// `(role, repo)`. Does not consider capacity.
+    pub fn can_handle(&self, worker_id: &str, role: &str, repo: &str) -> bool {
+        self.workers
+            .get(worker_id)
+            .is_some_and(|entry| entry.healthy && entry.can_handle(role, repo))
+    }
+
     pub fn record_assignment(
         &mut self,
         worker_id: &str,
@@ -175,6 +183,35 @@ mod tests {
             registry.assign_candidate("engineer", "ai/temper"),
             Some("worker-a".to_string())
         );
+    }
+
+    #[test]
+    fn can_handle_true_for_registered_capable_healthy_worker() {
+        let mut registry = WorkerRegistry::new();
+        registry.register(&register("worker-a", "engineer", "ai/temper", 0));
+
+        assert!(registry.can_handle("worker-a", "engineer", "ai/temper"));
+    }
+
+    #[test]
+    fn can_handle_false_for_wrong_role_or_repo() {
+        let mut registry = WorkerRegistry::new();
+        registry.register(&register("worker-a", "engineer", "ai/temper", 1));
+
+        assert!(!registry.can_handle("worker-a", "architect", "ai/temper"));
+        assert!(!registry.can_handle("worker-a", "engineer", "ai/smith"));
+    }
+
+    #[test]
+    fn can_handle_false_for_unknown_or_unhealthy_worker() {
+        let mut registry = WorkerRegistry::new();
+
+        assert!(!registry.can_handle("missing", "engineer", "ai/temper"));
+
+        registry.register(&register("worker-a", "engineer", "ai/temper", 1));
+        registry.mark_unhealthy("worker-a");
+
+        assert!(!registry.can_handle("worker-a", "engineer", "ai/temper"));
     }
 
     #[test]

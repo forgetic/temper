@@ -1239,6 +1239,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-registry"
+version = "0.1.0"
+dependencies = [
+ "temper-worker-protocol",
+]
+
+[[package]]
 name = "temper-workflow"
 version = "0.1.0"
 dependencies = [
