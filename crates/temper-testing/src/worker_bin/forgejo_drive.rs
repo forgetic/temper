@@ -2,7 +2,7 @@
 
 use std::time::{Duration as StdDuration, Instant};
 
-use temper_forge::{ChangeHint, Forge};
+use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_runner::{
     IdlePollBackoff, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
     RepositorySet, RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
@@ -18,6 +18,7 @@ use crate::worker_bin::run::{RunError, StopSignal};
 /// a level-triggered poll worker must survive those and retry. A long run of
 /// failures means a genuine misconfiguration, so abort loudly.
 const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
+const MECHANICAL_TARGETED_WAKE_CAP: usize = 32;
 
 pub(super) struct ForgejoTickReport {
     progress: Progress,
@@ -141,12 +142,23 @@ where
         &self,
         now: chrono::DateTime<chrono::Utc>,
         reason: TickReason,
-        _hints: &[ChangeHint],
+        hints: &[ChangeHint],
     ) -> Result<ForgejoTickReport, WorkerError> {
-        let progress = if reason == TickReason::Audit {
-            self.tick_deep_audit(now).await?
-        } else {
-            Worker::tick(self, now).await?
+        let progress = match reason {
+            TickReason::Audit => self.tick_deep_audit(now).await?,
+            TickReason::Initial | TickReason::Poll => Worker::tick(self, now).await?,
+            TickReason::Wake => match targeted_single_repo_hints(self, hints).await? {
+                Some(targets) => {
+                    let mut progress = Progress::unchanged();
+                    for (item, kind) in targets {
+                        let item_progress = self.tick_artifact(now, item, kind).await?;
+                        progress.changed |= item_progress.changed;
+                        progress.actions = progress.actions.saturating_add(item_progress.actions);
+                    }
+                    progress
+                }
+                None => Worker::tick(self, now).await?,
+            },
         };
         Ok(ForgejoTickReport::single(progress))
     }
@@ -170,15 +182,10 @@ where
         hints: &[ChangeHint],
     ) -> Result<ForgejoTickReport, WorkerError> {
         let report = match reason {
-            TickReason::Wake => {
-                let known = known_hints_for(self.repositories(), hints);
-                if !known.is_empty() {
-                    eprintln!(
-                        "temper-testing-worker: mechanical wake scans all configured repositories with bounded reconciliation to preserve cross-repo recovery"
-                    );
-                }
-                self.tick_report(now).await
-            }
+            TickReason::Wake => match targeted_multi_repo_hints(self.repositories(), hints) {
+                Some(targets) => self.tick_targeted(now, &targets).await,
+                None => self.tick_report(now).await,
+            },
             TickReason::Audit => self.tick_deep_audit_report(now).await,
             TickReason::Initial | TickReason::Poll => self.tick_report(now).await,
         };
@@ -187,6 +194,83 @@ where
 
     fn name(&self) -> &str {
         Worker::name(self)
+    }
+}
+
+async fn targeted_single_repo_hints<F, J, P>(
+    worker: &MechanicalWorker<'_, F, J, P>,
+    hints: &[ChangeHint],
+) -> Result<Option<Vec<(ItemNumber, ChangeKind)>>, WorkerError>
+where
+    F: Forge + ?Sized,
+    J: CommandJournal,
+    P: RecoveryPolicy + Send + Sync,
+{
+    let repo_path = worker.repository_path().await?;
+    let targets = targeted_hints_for_path(Some(&repo_path), hints).map(|items| {
+        items
+            .into_iter()
+            .map(|(_, item, kind)| (item, kind))
+            .collect()
+    });
+    Ok(targets)
+}
+
+fn targeted_multi_repo_hints(
+    repositories: &RepositorySet,
+    hints: &[ChangeHint],
+) -> Option<Vec<(RepositoryPath, ItemNumber, ChangeKind)>> {
+    targeted_hints_for_path(None, hints).and_then(|targets| {
+        if targets.iter().all(|(path, _, _)| {
+            !repositories
+                .matching_hints(&[ChangeHint::repo(path.clone(), ChangeKind::Issue)])
+                .is_empty()
+        }) {
+            Some(targets)
+        } else {
+            None
+        }
+    })
+}
+
+fn targeted_hints_for_path(
+    single_repo: Option<&RepositoryPath>,
+    hints: &[ChangeHint],
+) -> Option<Vec<(RepositoryPath, ItemNumber, ChangeKind)>> {
+    let mut targets = Vec::new();
+    for hint in hints {
+        if !matches!(
+            hint.kind,
+            ChangeKind::Ci
+                | ChangeKind::PullRequest
+                | ChangeKind::Issue
+                | ChangeKind::Label
+                | ChangeKind::Review
+                | ChangeKind::Comment
+        ) {
+            return None;
+        }
+        if single_repo
+            .is_some_and(|path| path.owner != hint.repo.owner || path.name != hint.repo.name)
+        {
+            return None;
+        }
+        let item = hint.item?;
+        targets.push((hint.repo.clone(), item, hint.kind));
+    }
+    targets.sort_by(|left, right| {
+        (&left.0.owner, &left.0.name, left.1, left.2).cmp(&(
+            &right.0.owner,
+            &right.0.name,
+            right.1,
+            right.2,
+        ))
+    });
+    targets.dedup();
+    if targets.len() > MECHANICAL_TARGETED_WAKE_CAP {
+        None
+    } else {
+        Some(targets)
     }
 }
 
