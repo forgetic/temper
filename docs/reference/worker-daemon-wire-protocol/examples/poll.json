@@ -1,0 +1,6 @@
+{
+  "protocol_version": 1,
+  "type": "poll",
+  "worker_id": "worker-1",
+  "free_capacity": 1
+}

@@ -1,0 +1,6 @@
+{
+  "protocol_version": 1,
+  "type": "error",
+  "code": "poll_timeout",
+  "message": "no assignment available before the long-poll deadline"
+}

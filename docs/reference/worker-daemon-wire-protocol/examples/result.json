@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "type": "result",
+  "worker_id": "worker-1",
+  "job_id": "job-123",
+  "status": "success",
+  "branch": {
+    "name": "agent/pr-for-code-89",
+    "head_sha": "0123456789abcdef0123456789abcdef01234567"
+  }
+}

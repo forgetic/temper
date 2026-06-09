@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temper.local/reference/worker-daemon-wire-protocol/schema.json",
+  "title": "Worker/Daemon Wire Protocol v1",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/register" },
+    { "$ref": "#/$defs/poll" },
+    { "$ref": "#/$defs/assign" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/result" },
+    { "$ref": "#/$defs/release" },
+    { "$ref": "#/$defs/leaseAck" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "required": ["role", "repo"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 }
+      }
+    },
+    "register": {
+      "type": "object",
+      "required": ["protocol_version", "type", "worker_id", "capabilities", "capacity"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "register" },
+        "worker_id": { "type": "string", "minLength": 1 },
+        "capabilities": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/capability" } },
+        "capacity": {
+          "type": "object",
+          "required": ["max_concurrent_jobs"],
+          "properties": { "max_concurrent_jobs": { "type": "integer", "minimum": 1 } }
+        },
+        "labels": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "poll": {
+      "type": "object",
+      "required": ["protocol_version", "type", "worker_id", "free_capacity"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "poll" },
+        "worker_id": { "type": "string", "minLength": 1 },
+        "free_capacity": { "type": "integer", "minimum": 0 },
+        "max_wait_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "assign": {
+      "type": "object",
+      "required": ["protocol_version", "type", "job_id", "role", "repo", "artifact", "job_payload"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "assign" },
+        "job_id": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 },
+        "artifact": {
+          "type": "object",
+          "required": ["item", "kind"],
+          "properties": {
+            "item": { "type": ["string", "number"] },
+            "kind": { "type": "string", "minLength": 1 }
+          }
+        },
+        "job_payload": { "type": "object" }
+      }
+    },
+    "heartbeatJob": {
+      "type": "object",
+      "required": ["job_id", "state", "message"],
+      "properties": {
+        "job_id": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["running", "waiting", "finishing"] },
+        "message": { "type": "string" }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["protocol_version", "type", "worker_id", "jobs"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "heartbeat" },
+        "worker_id": { "type": "string", "minLength": 1 },
+        "jobs": { "type": "array", "items": { "$ref": "#/$defs/heartbeatJob" } },
+        "free_capacity": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["protocol_version", "type", "worker_id", "job_id", "status"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "result" },
+        "worker_id": { "type": "string", "minLength": 1 },
+        "job_id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["success", "failure"] },
+        "branch": {
+          "type": "object",
+          "required": ["name", "head_sha"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "head_sha": { "type": "string", "minLength": 1 }
+          }
+        },
+        "failure": {
+          "type": "object",
+          "required": ["class", "message"],
+          "properties": {
+            "class": { "enum": ["transient", "permanent", "canceled", "protocol"] },
+            "message": { "type": "string" }
+          }
+        },
+        "summary": { "type": "string" },
+        "details": { "type": "object" }
+      },
+      "allOf": [
+        { "if": { "properties": { "status": { "const": "failure" } }, "required": ["status"] }, "then": { "required": ["failure"] } }
+      ]
+    },
+    "release": {
+      "type": "object",
+      "required": ["protocol_version", "type", "worker_id", "job_id", "disposition"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "release" },
+        "worker_id": { "type": "string", "minLength": 1 },
+        "job_id": { "type": "string", "minLength": 1 },
+        "disposition": { "enum": ["accepted", "superseded", "reclaimed"] },
+        "message": { "type": "string" }
+      }
+    },
+    "leaseAck": {
+      "type": "object",
+      "required": ["protocol_version", "type", "worker_id", "job_id", "disposition"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "lease-ack" },
+        "worker_id": { "type": "string", "minLength": 1 },
+        "job_id": { "type": "string", "minLength": 1 },
+        "disposition": { "enum": ["released", "unknown_job"] },
+        "message": { "type": "string" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["protocol_version", "type", "code", "message"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "type": { "const": "error" },
+        "code": { "enum": ["poll_timeout", "protocol_version_mismatch", "malformed_message", "unknown_worker", "capacity_exceeded", "heartbeat_missed", "job_timeout"] },
+        "message": { "type": "string" },
+        "retry_after_ms": { "type": "integer", "minimum": 0 },
+        "job_id": { "type": "string" }
+      }
+    }
+  }
+}
