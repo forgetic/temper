@@ -19,7 +19,8 @@ use temper_forge::{
     RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_runner::{
-    pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake, ScanError, WorkItem,
+    pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake, workspace_content_key,
+    ScanError, WorkItem,
 };
 use temper_worker_protocol::{
     Artifact, ErrorCode, FailureClass, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
@@ -31,8 +32,9 @@ use temper_worker_registry::DaemonCore;
 // the trait passes them.
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, CompiledWorkflow, Effect, Executor, LeaseError, LeaseManager,
-    LeasePolicy, RoleId, ToolManifest, ValidatedWorkflow,
+    ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow, Effect, ExecutionContext,
+    ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy, RoleId, ToolManifest,
+    ValidatedWorkflow, VerdictId,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -143,14 +145,17 @@ impl ResultApplier for RoleRoutingApplier {
 pub struct ForgeApplier<F: Forge> {
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
+    compiled: CompiledWorkflow,
     attention_labels: Vec<String>,
 }
 
 impl<F: Forge> ForgeApplier<F> {
     pub fn new(forge: Arc<F>, workflow: Arc<ValidatedWorkflow>) -> Self {
+        let compiled = workflow.compile();
         Self {
             forge,
             workflow,
+            compiled,
             attention_labels: vec!["needs-human".to_string()],
         }
     }
@@ -170,6 +175,11 @@ impl<F: Forge> ForgeApplier<F> {
     }
 
     async fn apply_success(&self, job: InFlightJob, result: JobResult) {
+        if result.verdict.is_some() {
+            self.apply_verdict(job, result).await;
+            return;
+        }
+
         let Some(branch) = result.branch else {
             eprintln!(
                 "temper-daemon: forge applier ignored success result without branch for job_id={} repo={} artifact.kind={} artifact.item={}",
@@ -238,6 +248,100 @@ impl<F: Forge> ForgeApplier<F> {
                 "temper-daemon: forge applier ensure_pull_request failed for job_id={} repo={} issue={} correlation_key={}: {error}",
                 job.job_id, job.repo, number, correlation_key
             );
+        }
+    }
+
+    async fn apply_verdict(&self, job: InFlightJob, result: JobResult) {
+        let Some(verdict) = result.verdict.clone() else {
+            return;
+        };
+        let Some((repository, issue)) = self.resolve_issue(&job).await else {
+            return;
+        };
+        let number = issue.number;
+
+        let job_context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier could not parse JobContext for job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+        };
+        let Some(action) = job_context.action.as_deref() else {
+            eprintln!(
+                "temper-daemon: forge applier could not route verdict for job_id={} repo={} issue={} role={} verdict={}: missing action in JobContext",
+                job.job_id, job.repo, number, job.role, verdict
+            );
+            return;
+        };
+
+        let role_id = RoleId::new(job.role.as_str());
+        let verdict_id = VerdictId::new(verdict.as_str());
+        let Some(role) = self.compiled.role(&role_id) else {
+            eprintln!(
+                "temper-daemon: forge applier could not route verdict for job_id={} repo={} issue={} role={} action={} verdict={}: role not found in compiled workflow",
+                job.job_id, job.repo, number, job.role, action, verdict
+            );
+            return;
+        };
+        let Some(tool) = role.tools.iter().find(|tool| tool.name == action) else {
+            eprintln!(
+                "temper-daemon: forge applier could not route verdict for job_id={} repo={} issue={} role={} action={} verdict={}: action not found in compiled workflow",
+                job.job_id, job.repo, number, job.role, action, verdict
+            );
+            return;
+        };
+        let Some(routed) = tool.outcomes.get(&verdict_id).cloned() else {
+            eprintln!(
+                "temper-daemon: forge applier could not route verdict for job_id={} repo={} issue={} role={} action={} verdict={}: verdict is not declared for action",
+                job.job_id, job.repo, number, job.role, action, verdict
+            );
+            return;
+        };
+
+        let source_kind = ArtifactKindId::new(job_context.artifact_kind.as_str());
+        // A routed outcome such as intake -> code changes identifying labels. On
+        // replay the current kind no longer matches the queued source kind, so
+        // treat it as stale before the executor would classify the request as a
+        // validation error.
+        if matches!(
+            Classifier::new(self.workflow.as_ref()).classify_issue(&issue),
+            Ok(classified) if classified.kind != source_kind
+        ) {
+            return;
+        }
+
+        let mut context = ExecutionContext::new();
+        if let Some(body) = result.body.clone() {
+            let content_key = workspace_content_key(
+                &ArtifactKindId::new(job_context.artifact_kind.as_str()),
+                &routed,
+                number,
+            );
+            context.set_set_body_at(routed.clone(), 0, body);
+            context.set_set_body_correlation_key_at(routed.clone(), 0, content_key);
+        }
+
+        match Executor::with_context(self.workflow.as_ref(), self.forge.as_ref(), context)
+            .execute(
+                &repository.id,
+                ArtifactSource::Issue { number },
+                &routed,
+                &role_id,
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(error) if is_stale(&error) => {}
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier could not apply routed verdict transition for job_id={} repo={} issue={} role={} action={} verdict={} routed={}: {error}",
+                    job.job_id, job.repo, number, job.role, action, verdict, routed
+                );
+            }
         }
     }
 
@@ -425,6 +529,16 @@ fn failure_audit_body(class: &str, result: &JobResult) -> String {
         Some(message) if !message.is_empty() => format!("{header}\n\n{message}"),
         _ => header,
     }
+}
+
+fn is_stale(error: &ExecutionError) -> bool {
+    matches!(
+        error,
+        ExecutionError::Precondition { .. }
+            | ExecutionError::TargetMissing { .. }
+            | ExecutionError::TargetStale { .. }
+            | ExecutionError::Classification(_)
+    )
 }
 
 /// Lease-gated [`ResultApplier`] decorator for daemon-owned result application.
