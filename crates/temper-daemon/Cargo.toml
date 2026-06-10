@@ -10,8 +10,10 @@ description = "Standalone async daemon serving the Worker/Daemon wire protocol o
 async-trait = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
+hmac = "0.12"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 temper-forge = { path = "../temper-forge" }
 temper-runner = { path = "../temper-runner" }
 temper-worker-protocol = { path = "../temper-worker-protocol" }
