@@ -39,6 +39,10 @@ use tokio::{
     time::{sleep_until, Instant as TokioInstant},
 };
 
+mod webhook;
+
+pub use webhook::*;
+
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
 
 /// Which read-only scan the daemon feed runs for a role.
@@ -51,14 +55,11 @@ pub enum RoleFeedMode {
     Wake,
 }
 
-/// One repository/role pair scanned by the generic poll backstop.
-#[derive(Clone, Debug)]
+/// A configured repository/role feed target.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleFeedTarget {
-    /// Repository to scan.
     pub repo: RepositoryId,
-    /// Role whose subscribed queues are scanned.
     pub role: RoleId,
-    /// Scan mode to use for this target.
     pub mode: RoleFeedMode,
 }
 
