@@ -948,17 +948,21 @@ async fn handle_message(State(state): State<DaemonState>, body: Bytes) -> Respon
     }
 }
 
-pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
+pub async fn serve_router(router: Router, bind: SocketAddr) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
     eprintln!("temper-daemon: serving on {}", listener.local_addr()?);
 
-    axum::serve(listener, daemon.router())
+    axum::serve(listener, router)
         .with_graceful_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
             }
         })
         .await
+}
+
+pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
+    serve_router(daemon.router(), bind).await
 }
 
 #[cfg(test)]
