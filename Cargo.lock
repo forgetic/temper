@@ -1075,13 +1075,16 @@ name = "temper"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde_json",
  "temper-daemon",
  "temper-forge",
  "temper-forge-forgejo",
+ "temper-forgejo-ops",
  "temper-forgejo-provision",
  "temper-interaction-service",
  "temper-reference-delivery",
  "temper-reference-delivery-validator",
+ "temper-testing",
  "temper-trigger-forgejo",
  "temper-worker",
  "temper-workflow",
@@ -1293,6 +1296,7 @@ name = "temper-testing"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64",
  "bench-forgejo",
  "chrono",
@@ -1301,6 +1305,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "temper-coding-workspace",
+ "temper-daemon",
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-forgejo",
@@ -1310,6 +1315,7 @@ dependencies = [
  "temper-runner",
  "temper-trigger-forgejo",
  "temper-wake",
+ "temper-worker-protocol",
  "temper-workflow",
  "tokio",
 ]

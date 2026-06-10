@@ -26,7 +26,10 @@ use temper_worker_protocol::{
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
-use temper_worker_registry::{DaemonCore, InFlightJob};
+use temper_worker_registry::DaemonCore;
+// Public so out-of-crate `ResultApplier` implementations can name the job type
+// the trait passes them.
+pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, CompiledWorkflow, Executor, LeaseError, LeaseManager,
     LeasePolicy, RoleId, ValidatedWorkflow,

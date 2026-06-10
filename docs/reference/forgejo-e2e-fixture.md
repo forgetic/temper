@@ -2,7 +2,7 @@
 
 This page records the implementation contracts for the ignored Forgejo e2e
 fixtures. For commands, read
-[run-forgejo-multiprocess-e2e.md](../how-to/run-forgejo-multiprocess-e2e.md).
+[run-daemon-e2e.md](../how-to/run-daemon-e2e.md).
 For design rationale, read
 [forgejo-e2e-topology.md](../explanation/forgejo-e2e-topology.md).
 

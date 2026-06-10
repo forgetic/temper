@@ -50,6 +50,13 @@ temper-worker = { path = "crates/temper-worker" }
 temper-workflow = { path = "crates/temper-workflow" }
 tokio = { version = "1", features = ["rt", "net", "time", "signal", "macros"] }
 
+[dev-dependencies]
+# Daemon-topology e2e (`tests/daemon_forgejo_e2e.rs`): real Forgejo fixture,
+# webhook registration, and PR/CI assertions against the spawned daemon binary.
+serde_json = { workspace = true }
+temper-forgejo-ops = { path = "crates/temper-forgejo-ops" }
+temper-testing = { path = "crates/temper-testing" }
+
 [[bin]]
 name = "temper-daemon"
 path = "src/bin/temper-daemon.rs"

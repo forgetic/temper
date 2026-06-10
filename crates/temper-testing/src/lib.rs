@@ -16,6 +16,7 @@
 
 pub mod agents;
 pub mod ci;
+pub mod daemon_worker;
 pub mod forgejo_runtime;
 pub mod forgejo_server;
 pub mod provision_bin;

@@ -54,28 +54,8 @@ scenarios from runner test support on:
 - CI production is test-only. The workflow still reads native CI through the
   Forge API; the fake CI policy only decides which test verdicts to seed.
 
-## Multi-repo smoke
-
-To prove one fixed worker set scans multiple repositories, run the default
-process-level smoke:
-
-```sh
-cargo test -p temper-testing --test multi_repo_multiprocess
-```
-
-For the live Forgejo + webhook variant, use:
-
-```sh
-cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored
-```
-
-These include the cross-repo fan-out scenario on the same fixed worker fleet;
-all repos still use the same compiled reference workflow. Add
-`--test-threads=1` only when the host needs resource throttling.
-
 ## Related
 
-For the **true one-process-per-part** rehearsal — the same four scenarios run
-across real OS processes that coordinate only through a shared `FilesystemForge`
-store, plus the explicit "swap fakes for real" list — see
-[run-multiprocess-e2e.md](run-multiprocess-e2e.md).
+For the real-backend, real-process proof of the production daemon topology —
+the real `temper-daemon` binary plus a wire-protocol worker against a
+throwaway Forgejo with real CI — see [run-daemon-e2e.md](run-daemon-e2e.md).
