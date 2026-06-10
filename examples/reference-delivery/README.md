@@ -154,24 +154,16 @@ rm -rf examples/reference-delivery/run
 
 ## Related checks
 
-Hermetic/default-process coverage:
+Live Forgejo + runner daemon-topology e2e (see
+[run-daemon-e2e.md](../../docs/how-to/run-daemon-e2e.md)):
 
 ```sh
-cargo test -p temper-testing --test multi_repo_multiprocess
-```
+# both daemon scenarios
+cargo test --test daemon_forgejo_e2e -- --ignored
 
-Live Forgejo + runner fake-agent fixtures:
-
-```sh
-# all split Forgejo multiprocess scenarios
-cargo test -p temper-testing --test forgejo_multiprocess -- --ignored
-
-# retry one split scenario
-cargo test -p temper-testing --test forgejo_multiprocess \
-  forgejo_multiprocess_ci_fails_then_passes_converges -- --ignored
-
-cargo test -p temper-testing --test forgejo_multi_repo_webhook -- --ignored
-cargo test -p temper-testing --test forgejo_webhook_wakeup -- --ignored
+# retry one scenario
+cargo test --test daemon_forgejo_e2e \
+  daemon_forgejo_ci_fails_then_passes_converges -- --ignored
 ```
 
 Add `--test-threads=1` only as an optional host resource throttle; Forgejo

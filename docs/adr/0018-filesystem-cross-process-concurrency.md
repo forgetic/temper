@@ -26,8 +26,9 @@ This also undermines ADR 0013. Its compare-and-swap (`expected_version`) is
 checked against the version read from disk; without serialization two writers can
 both read version *v*, both pass their `expected_version == v` check, and one
 clobber the other. The CAS guarantee therefore only held *within* a single
-process. The true multi-process end-to-end rehearsal
-(`docs/how-to/run-multiprocess-e2e.md`) needs it to hold across OS processes that
+process. The true multi-process end-to-end rehearsal (historical; that
+worker-fleet rehearsal was superseded by the daemon-topology e2e,
+`docs/how-to/run-daemon-e2e.md`) needed it to hold across OS processes that
 coordinate solely through a shared store.
 
 ## Decision

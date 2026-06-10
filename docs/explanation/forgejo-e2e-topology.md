@@ -1,184 +1,157 @@
-# Forgejo multi-process e2e: topology and real CI
+# Daemon e2e: topology and real CI
 
-This explains the durable design of the Forgejo multi-process end-to-end
-rehearsal — the **real-backend twin** of the filesystem
-[multi-process rehearsal](../how-to/run-multiprocess-e2e.md). It is the design
-record that outlives `plans/` (which is gitignored). The how-to to run it is
-[run-forgejo-multiprocess-e2e.md](../how-to/run-forgejo-multiprocess-e2e.md);
-the CI-read decision is [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
+This explains the durable design of the daemon-topology end-to-end suite
+(`tests/daemon_forgejo_e2e.rs`) — the real-backend proof of the consolidated
+daemon/worker split. The how-to to run it is
+[run-daemon-e2e.md](../how-to/run-daemon-e2e.md); the CI-read decision is
+[ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md); the worker/daemon
+boundary is [worker-daemon-wire-protocol.md](../reference/worker-daemon-wire-protocol.md).
 
-## What changed from the filesystem rehearsal
+## What the suite proves (and what it does not)
 
-The filesystem rehearsal proves the *topology* — workers coordinate solely
-through the Forge and survive real process boundaries — on fakes. The Forgejo
-twin keeps the **exact** scenario seed/assert closures and worker set, but makes
-the **backend**, **CI**, and **webhook wake path** real. Agents stay the
-deterministic fakes in the main suite; separate gated regressions cover focused
-single- and multi-repo wake narrowing.
+The hermetic `crates/temper-daemon/tests/` suite already covers the daemon
+*logic* — scheduling, lease CAS, failure-class policy, idempotent applies,
+webhook verify/parse, backpressure, role routing — over a memory forge and
+in-process HTTP. The e2e suite exists for exactly the residual real-wiring
+value the hermetic suite cannot give:
+
+1. **Real-wiring proof**: real Forgejo API behavior, real webhook delivery,
+   real git push auth, and the real `temper-daemon` binary's
+   env→config→composition (`FORGEJO_*`, `TEMPER_FORGEJO_TOKEN_<ROLE>`,
+   CLI flags).
+2. **Real CI red→green**: mechanical merge-on-green against real Actions
+   verdicts — including *not* merging while CI is red.
+
+It deliberately does **not** re-prove workflow logic; scenarios are minimal.
 
 ## Process topology
 
-The split multi-process suite is five ignored tests. Each test owns the live
-world for one scenario:
+Two ignored tests; each owns the live world for one scenario:
 
 ```text
-  ┌──────────────────────────────────────────────────────────┐
+  ┌────────────────────────────────────────────────────────────┐
   │ Forgejo server (SQLite, ephemeral port, kill-on-drop)      │
-  │   REST /api/v1  ·  web UI /user/login + /{o}/{r}/actions   │
-  └──────────────────────────────────────────────────────────┘
-        ▲ REST (per-role token)        ▲ web-UI (password)   ▲ runs CI
-        │                              │                     │
-  ┌─────┴─────┐  ┌──────────┐  ┌───────┴──────┐      ┌───────┴────────┐
-  │ role      │  │ role     │  │ mechanical   │      │ forgejo-runner │
-  │ worker ×N │  │ worker   │  │ worker       │      │ (host mode)    │
-  └───────────┘  └──────────┘  └──────────────┘      └────────────────┘
+  │   REST /api/v1 · web UI (CI reads) · Actions               │
+  └────────────────────────────────────────────────────────────┘
+     ▲ API (daemon only)   │ webhooks        ▲ git push       ▲ runs CI
+     │                     ▼                 │ (role token)   │
+  ┌──┴──────────────────────────┐   ┌────────┴───────────┐ ┌──┴─────────────┐
+  │ temper-daemon binary        │   │ temper-testing-    │ │ forgejo-runner │
+  │ (webhook route, poll +      │◄──┤ daemon-worker      │ │ (host mode)    │
+  │  mechanical backstops,      │   │ (wire-protocol     │ └────────────────┘
+  │  lease-gated role-routed    │   │  client + real git │
+  │  appliers)                  │   │  push)             │
+  └─────────────────────────────┘   └────────────────────┘
 ```
 
-- **Server**: one throwaway Forgejo per scenario
-  (`temper_testing::forgejo_server`), Actions enabled, fresh SQLite, ephemeral
-  port, killed and removed on drop.
-- **Runner**: one real host-mode `forgejo-runner` per scenario (`--labels
-  host:host`, **no containers**) registered to that server. It is the genuine CI
-  producer — there is no fake `--kind ci` worker on Forgejo.
-- **Repositories**: the scenario-specific cached state contains only the needed
-  repo names. Cross-repo fan-out gets `service-cross-repo-source` and
-  `service-cross-repo-target`.
-- **Trigger**: one host-local `/forgejo/webhook` receiver per scenario
-  (`crates/temper-trigger-forgejo`) is registered against that scenario's
-  repositories and sends authenticated Unix-datagram wakes to its workers.
-- **Role + mechanical workers**: per scenario, the `temper-testing-worker`
-  binary, one OS process per role-with-an-agent plus one mechanical reconciler,
-  launched `--backend forgejo --clock wall` with a unique stop file, wake socket,
-  and log dir. They coordinate **only** through their scenario server.
+- **Server and runner** come from the shared `bench-forgejo` fixture
+  (re-exported as `temper_testing::forgejo_server`): one throwaway Forgejo per
+  scenario with Actions enabled, plus one real host-mode `forgejo-runner`
+  (`--labels host:host`, no containers) — the genuine CI producer.
+- **Daemon**: the real root-package `temper-daemon` binary on an ephemeral
+  port. It is the only component holding Forge API credentials: admin/bot
+  token via `FORGEJO_URL`/`FORGEJO_ACCESS_TOKEN`, web-UI credentials for the
+  ADR 0019 CI reads, and the provisioned engineer token via
+  `TEMPER_FORGEJO_TOKEN_ENGINEER` for role-attributed applies.
+- **Worker**: `temper-testing-daemon-worker`, a deterministic Worker/Daemon
+  Wire Protocol v1 client that stands in for `smith-worker`. It long-polls the
+  daemon, and on assignment clones/fetches the repo over the real git remote,
+  commits one deterministic change file as the engineer git identity, pushes
+  the hinted branch, and reports `result(success, branch+head_sha)`. It never
+  touches the Forge API. The worker lives in `temper-testing` so temper's CI
+  stays self-contained; the smith pairing is covered by `smith-worker`'s
+  hermetic fake-daemon contract tests.
+- **Webhook**: the repo webhook posts directly to the daemon's
+  `/forgejo/webhook` route (HMAC-verified); every verified delivery triggers a
+  wake scan of the configured repo/role feeds.
+
+## Scenario workflow
+
+The daemon runs the engineer-only **daemon-delivery** workflow
+(`tests/support/daemon-delivery.json`, the dogfood deployment shape):
+
+- the mechanical `raw_intake` automation stamps a seeded unlabeled intake
+  issue `code` + `ready` (there is no architect triage tier in the daemon
+  topology — production work is filed engineer-ready),
+- the engineer's `open_pr` produces the implementation PR (the daemon's
+  `ForgeApplier` opens it from the worker's pushed branch, as the engineer
+  identity, with the deterministic `pr-for-code-<N>` correlation key),
+- the mechanical `land_pr` automation merges once the `ci_gate` passes.
+
+The source issue closes on merge through the provider's native
+close-on-merge keyword: the worker's commit message carries `Closes #<N>`, so
+landing the merge commit on the default branch closes the issue. The daemon
+topology has no role that closes issues via the API, and the e2e asserts this
+real provider wiring.
 
 ## Identity is per-token
 
-Filesystem identity is a free `as_user(handle)` relabel. Forgejo identity **is
-the access token**: each role needs one user + token, and `current_user` is
-whatever the token resolves to. In multi-repo deployments that same role token
-must have Forge access to every repo in the worker's scan set. Provisioning
-therefore creates a real user (with a known password), adds it to the owner org,
-and mints a token per role. So one provisioned login can serve all three needs —
-REST token, PR assignee `UserId`, and web-UI CI login — the role users are given
-`id == handle`.
+Forgejo identity **is the access token**: the e2e asserts the implementation
+PR is *authored by the engineer role identity*, which proves the daemon's
+per-role token routing (`RoleRoutingApplier` + per-role
+`LeaseApplier→ForgeApplier` chains) through a real API, while the merge is
+performed by the daemon's default (admin/bot) identity through the mechanical
+backstop. Git pushes authenticate separately with the engineer token over
+`http.extraheader`, mirroring the production worker tier's credential split:
+the daemon holds Forge API credentials, the worker holds git credentials.
 
 ## Provisioning boundary
 
-Provisioning is split at the same boundary production operators need. The
-reference-delivery binary delegates to `crates/temper-forgejo-provision`, while
-fixture support keeps reusable server setup local to `temper-testing`:
-`provision_role_identities` creates org + per-role users/tokens once, and
-`provision_repository` creates the `auto_init` repo, labels, and CI workflow per
-repository. `provision_world(...)` keeps the single-repo convenience path;
-`provision(&server)` is the throwaway test wrapper that bootstraps an admin first.
-
-Role logins come from `runner_config().role_bindings`, never a hardcoded list.
-`seed_intake_issue(...)` creates the realistic entry issue idempotently, deriving
-its queue labels from the compiled workflow. The production
-`temper-provision-forgejo` binary reads the admin token from
-`TEMPER_FORGEJO_ADMIN_TOKEN` and writes per-role user/token/password secrets to a
-`0600` POSIX-sourceable file without printing secrets.
-
-### Provisioning onto an existing, content-bearing repo
-
-The defaults above are built for **throwaway** repos on a dedicated org: they
-create the repo, commit a marker CI workflow (`.forgejo/workflows/ci.yml`) plus a
-sentinel onto `main`, and add every identity to the org **Owners** team. Two
-flags relax that for a **real, pre-existing** target — e.g. running basic-delivery
-against `ai/smith` on the shared `ai` org (which also hosts `temper`). Both
-default to today's behavior, so throwaway flows are unchanged.
-
-- `--existing-repo` provisions onto a repo that **must already exist**. It checks
-  the repo up front (`GET /repos/{owner}/{name}`) and errors clearly if absent
-  instead of silently creating a bare repo. It **skips** the marker CI commit and
-  the sentinel commit, so the repo's own `.forgejo/workflows/ci.yml` and history
-  are never touched; labels, the webhook, and `enable_actions` (all idempotent)
-  still apply.
-- `--access org-owners|repo-collaborator` selects how identities are granted
-  access (default `org-owners`, today's behavior). `repo-collaborator` never
-  touches the Owners team; instead it grants each role user **and** the `bot` a
-  repo-scoped `write` collaborator permission on the target repo. `write` is
-  enough for the bot to merge approved, green PRs and read Actions status over the
-  web UI ([ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md)); `admin` is
-  intentionally avoided until a concrete need appears.
-
-The intended Smith caller pairs both with `--seed-intake no` (intake issues are
-filed separately by the `agent` user):
-
-```sh
-TEMPER_FORGEJO_ADMIN_TOKEN=<agent admin token> temper-provision-forgejo \
-  --base-url http://127.0.0.1:3000 --owner ai --name smith \
-  --existing-repo --access repo-collaborator \
-  --workflow ~/.config/smith/workflow.json \
-  --webhook-url http://127.0.0.1:<trigger-port>/forgejo/webhook \
-  --webhook-secret-file ~/.config/smith/secrets/webhook-secret \
-  --seed-intake no \
-  --out ~/.config/smith/secrets/roles.env
-```
+Provisioning is unchanged from the fixture: `provision_role_identities`
+creates org + per-role users/tokens once, `provision_repository` creates the
+`auto_init` repo, labels, and the marker-gated CI workflow per repository, and
+`seed_intake_issue` files the realistic entry issue idempotently. The
+production `temper-provision-forgejo` binary shares this code path; see
+[forgejo-e2e-fixture.md](../reference/forgejo-e2e-fixture.md).
 
 ## Real CI: producing and reading
 
 **Producing.** The provisioned repo commits `.forgejo/workflows/ci.yml`
-(`runs-on: host`). Because the host runner has no offline `actions/checkout`, the
-CI-pass gate keys on a **commit-message marker** (`[ci-pass]`) rather than a
-checked-out file. A failing head SHA and later passing fix SHA give the
-`ci_fails_then_passes` scenario two real verdicts.
+(`runs-on: host`). Because the host runner has no offline `actions/checkout`,
+the CI-pass gate keys on a **commit-message marker** (`[ci-pass]`) rather than
+a checked-out file. The worker's `--ci-sentinel` knob controls whether its
+commit carries the marker: `present` gives the happy path an immediately green
+head; `deferred` gives the red→green scenario a failing first head SHA and a
+later passing fix SHA — two real verdicts.
 
 **Reading.** Forgejo 7.0.12 lacks Actions run/task REST endpoints, so
-`list_ci_jobs` is REST-first with a **password/web-UI fallback** (ADR 0019): CSRF
-login, cookie jar, run discovery from `/{owner}/{repo}/actions`, and per-job
-status from live-view JSON. Reads match by head **branch**, drop superseded
-cancelled runs, and order jobs by run id.
-
-## Backend hardening this forced
-
-Driving real concurrent workers through a real server surfaced gaps that landed
-in `temper-forge-forgejo` behind unchanged `Forge` signatures:
-
-- **Bounded `5xx` write retry** for SQLite contention.
-- **No-auto-redirect client** so web-UI `303` login redirects are observable.
-- **Dependency add/remove payload carries `owner`/`repo`** because Gitea resolves
-  dependency targets by `(owner, repo, index)`.
-- **`list_pull_request_reviews` keeps dismissed/stale verdicts**; history is
-  preserved and the aggregate still takes the latest per reviewer.
-
-## Scaling shape
-
-The production scan fixes are part of the e2e topology, not test-only shortcuts.
-Role workers derive candidate queries from subscribed queues, request summary
-issue/PR rows, prune unlabelled closed history, and read CI/review/dependency
-signals only after a cheap queue match needs them. Webhook wakeups narrow
-immediate role ticks to hinted configured repositories; poll and audit remain
-broad backstops.
-
-Forgejo 7.0.x does not surface Actions completion as a repo webhook, so
-CI-reading roles use a short 1s status-poll fallback only for CI verdict
-transitions: the owner in every scenario, and the engineer in the CI fail→pass
-scenario. Scenario-specific cached state removes repeated provisioning. Libtest
-default parallelism is correctness-safe; throttle test threads only for host
-CPU/I/O capacity.
-
-## Why it stays `#[ignore]`d
-
-It boots real OS processes, executes CI **on the host**, and detects convergence
-by wall-clock polling. Like the `temper-forge-forgejo` live test it is
-`#[ignore]`d, so default `cargo test` stays hermetic and deterministic.
-
-Ignored startup may download pinned binaries into `.cache/forgejo/` when explicit
-overrides and cached files are absent. Binary and state caches are process-safe,
-and each test gets unique runtime paths. The in-process scenarios remain the
-first-line workflow coverage; this suite covers the real-backend topology.
+`list_ci_jobs` is REST-first with a **password/web-UI fallback** (ADR 0019).
+The daemon's mechanical backstop performs these reads with the web-UI
+credentials passed through its environment, exactly as the production
+launcher wires them.
 
 ## Triggering status
 
-Each split scenario is webhook-driven: real Forgejo posts to the production
-trigger, the trigger sends authenticated wake datagrams, and fake-agent Forgejo
-workers consume them while their normal poll backstop is `120000` ms. The focused
-ignored regressions still cover wake acceleration in isolation:
-`forgejo_webhook_wakeup` for one repo and `forgejo_multi_repo_webhook` for one
-fixed worker set scanning two repos.
+Each scenario is webhook-driven: real Forgejo posts to the daemon's webhook
+route and every verified delivery wake-scans the configured feeds. The
+daemon's normal poll backstop is deliberately long (600 s) and the tests
+assert convergence before it, so webhook wakes must carry all Forge-event
+progress. Forgejo 7.0.x does not surface Actions completion as a repo
+webhook, so the daemon's short mechanical cadence is the CI-verdict backstop
+(the successor of the legacy fleet's narrow CI status poll). Polling remains
+the correctness backstop; webhook payloads are hints only and every wake runs
+a fresh Forge scan.
 
-Polling remains the correctness backstop; webhook payloads are hints only and
-every wake runs a fresh Forge scan. On Forgejo 7.0.x, the suite keeps the short
-status-poll fallback limited to CI-reading role workers because CI-completion
-repo hooks are not observable.
+## What replaced the legacy fleet e2e
+
+This suite replaced the per-role `temper-testing-worker` fleet topology
+(webhook trigger process + Unix wake sockets + one OS process per role) and
+its e2e targets (`forgejo_multiprocess`, `forgejo_webhook_wakeup`,
+`forgejo_multi_repo_webhook`, `forgejo_worker`, `multiprocess`,
+`multi_repo_multiprocess`). The workflow logic those scenarios exercised is
+covered hermetically (`crates/temper-daemon/tests/`, the launcher-static
+tests, and `basic_delivery_fakes`); the topology they exercised is obsolete
+after the daemon/worker consolidation. The topology-agnostic fixture proofs
+(`forgejo_server`, `forgejo_runner`, `forgejo_provision`, `forgejo_pr_prep`,
+`forgejo_ci_web_ui`, `forgejo_workspace_pr`, `forgejo_parallel`) remain.
+
+## Why it stays `#[ignore]`d
+
+It boots real OS processes, executes CI **on the host**, and detects
+convergence by wall-clock polling. Like the `temper-forge-forgejo` live test
+it is `#[ignore]`d, so default `cargo test` stays hermetic and deterministic
+(the repo's `cargo dev-test-full` alias includes it).
+
+Ignored startup may download pinned binaries into `.cache/forgejo/` when
+explicit overrides and cached files are absent. Binary and state caches are
+process-safe, and each test gets unique runtime paths.

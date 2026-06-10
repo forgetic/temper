@@ -10,6 +10,10 @@ description = "Reusable non-production testing machinery shared across Temper cr
 name = "temper-testing-worker"
 path = "src/bin/temper-testing-worker.rs"
 
+[[bin]]
+name = "temper-testing-daemon-worker"
+path = "src/bin/temper-testing-daemon-worker.rs"
+
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
@@ -29,6 +33,9 @@ temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-runner = { path = "../temper-runner" }
 temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
 temper-wake = { path = "../temper-wake" }
+# Wire-protocol DTOs for the deterministic daemon test worker
+# (`daemon_worker` module + the `temper-testing-daemon-worker` bin).
+temper-worker-protocol = { path = "../temper-worker-protocol" }
 temper-workflow = { path = "../temper-workflow" }
 # Forgejo provisioning uses async REST under a Tokio reactor; a shared fixture
 # crate owns the blocking server/runner lifecycle and cache management.
@@ -44,7 +51,13 @@ base64 = "0.22"
 # runtime instead. The filesystem path keeps using `block_on`. This is a normal
 # dependency (not dev-only) because the production binary needs the reactor; the
 # `#[tokio::test]` provisioning tests reuse it via the `macros` feature.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "time"] }
+
+[dev-dependencies]
+# The hermetic daemon-worker contract test boots an in-process daemon transport
+# and serves its router on an ephemeral local port.
+axum = { workspace = true }
+temper-daemon = { path = "../temper-daemon" }
 
 [lints]
 workspace = true

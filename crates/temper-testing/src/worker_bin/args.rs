@@ -111,7 +111,7 @@ pub enum CiSentinelKind {
 /// Only the architect and reviewer have behavior variants; every other role
 /// uses its single fake. These map one-to-one onto the in-process scenario
 /// wiring in `temper-runner/tests/end_to_end.rs` so the same scenarios converge
-/// across both topologies (see `docs/how-to/run-multiprocess-e2e.md`).
+/// across both topologies.
 ///
 /// `ci_sentinel` is Forgejo-only and only the engineer reads it; it does not
 /// affect the filesystem topology.

@@ -9,8 +9,7 @@ Current guides:
 - [Manage local Temper dogfood services](manage-local-temper-dogfood-services.md)
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
-- [Run the multi-process end-to-end rehearsal](run-multiprocess-e2e.md)
-- [Run the Forgejo multi-process end-to-end fixture](run-forgejo-multiprocess-e2e.md)
+- [Run the daemon end-to-end fixture](run-daemon-e2e.md)
 - [Configure Smith LLM responders from Temper](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) — fake

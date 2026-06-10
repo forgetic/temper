@@ -32,12 +32,10 @@ cargo test --workspace --all-targets
 
 `cargo dev-test-quick` runs non-ignored tests.
 
-It includes the fast filesystem multi-process rehearsals (`temper-testing`'s
-`multiprocess` and `multi_repo_multiprocess` tests). Cargo builds the
-`temper-testing` package's `temper-testing-worker` test-support binary for those
-integration tests and exposes its path through
-`CARGO_BIN_EXE_temper-testing-worker`. Set `TEMPER_TESTING_WORKER_BIN` only when
-you intentionally want to spawn a prebuilt worker binary.
+It includes the hermetic daemon test-worker contract test (`temper-testing`'s
+`daemon_worker` test). Cargo builds the `temper-testing` package's
+`temper-testing-daemon-worker` test-support binary for that integration test
+and exposes its path through `CARGO_BIN_EXE_temper-testing-daemon-worker`.
 
 To prebuild every workspace test harness and integration-test binary without
 running tests:
@@ -69,4 +67,5 @@ cargo test --workspace --all-targets -- --include-ignored
 
 `cargo dev-test-full` runs the quick suite plus the ignored Forgejo-based
 integration tests. It may boot throwaway Forgejo servers, host-mode
-`forgejo-runner` processes, local webhook triggers, and worker processes.
+`forgejo-runner` processes, daemon processes, and worker processes (see
+[run-daemon-e2e.md](run-daemon-e2e.md)).

@@ -2,8 +2,9 @@
 //!
 //! The binary is a thin entry point; the parsing, worker construction, and run
 //! loop live here so the default test suite can exercise the wiring without
-//! spawning a process. See `docs/how-to/run-multiprocess-e2e.md` for the role of
-//! this fake worker in the multi-process rehearsal.
+//! spawning a process. This fake worker backs the legacy fleet runtime that
+//! stays deployed until the daemon-topology cutover (the multi-process e2e
+//! rehearsals that drove it were replaced by `tests/daemon_forgejo_e2e.rs`).
 
 pub mod args;
 mod args_parse;
