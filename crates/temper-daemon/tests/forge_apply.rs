@@ -174,6 +174,11 @@ fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             repo: repo_path.to_string(),
             queue: "code_ready".to_string(),
             artifact_kind: "code".to_string(),
+            repository: None,
+            base_branch: None,
+            branch_hint: None,
+            correlation_key: None,
+            artifact: None,
         })
         .expect("JobContext serializes"),
     }

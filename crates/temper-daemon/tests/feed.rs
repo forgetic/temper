@@ -4,9 +4,9 @@ use std::{future::IntoFuture, sync::Arc};
 
 use axum::http::StatusCode;
 use serde_json::json;
-use temper_daemon::{Daemon, RoleFeedMode};
+use temper_daemon::{Daemon, JobRepository, RoleFeedMode};
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
-use temper_forge_memory::MemoryForge;
+use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_worker_protocol::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
     ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
@@ -71,7 +71,7 @@ async fn create_issue(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str])
             repo,
             CreateIssue {
                 title: "ready code issue".to_string(),
-                body: String::new(),
+                body: "Implement the queued daemon work item.".to_string(),
                 labels: labels.iter().map(|label| (*label).to_string()).collect(),
                 assignees: Vec::new(),
             },
@@ -156,6 +156,47 @@ fn assert_poll_timeout(msg: WorkerProtocolMessage) {
 }
 
 #[tokio::test]
+async fn scanned_role_work_skips_item_when_enrichment_fails() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let _issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-skip", "engineer", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    forge.fail_next(FaultOp::GetIssueByNumber, "issue snapshot lookup failed");
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("scan succeeds and enrichment failure is skipped"),
+        0
+    );
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-skip", 100)).await);
+}
+
+#[tokio::test]
 async fn scanned_role_work_dispatches_to_worker_and_applies_once() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge).await;
@@ -221,6 +262,40 @@ async fn scanned_role_work_dispatches_to_worker_and_applies_once() {
         }
         other => panic!("expected assign, got {other:?}"),
     };
+    let context: temper_daemon::JobContext = serde_json::from_value(assignment.job_payload.clone())
+        .expect("assign job payload parses as daemon-reexported JobContext");
+    assert_eq!(context.role, "engineer");
+    assert_eq!(context.repo, "acme/service");
+    assert_eq!(context.queue, "code_ready");
+    assert_eq!(context.artifact_kind, "code");
+    assert_eq!(
+        context.repository,
+        Some(JobRepository {
+            owner: "acme".to_string(),
+            name: "service".to_string(),
+            default_branch: "main".to_string(),
+        })
+    );
+    assert_eq!(context.base_branch.as_deref(), Some("main"));
+    let expected_branch_hint = format!("agent/pr-for-code-{}", issue.get());
+    let expected_correlation_key = format!("pr-for-code-{}", issue.get());
+    assert_eq!(
+        context.branch_hint.as_deref(),
+        Some(expected_branch_hint.as_str())
+    );
+    assert_eq!(
+        context.correlation_key.as_deref(),
+        Some(expected_correlation_key.as_str())
+    );
+    let artifact = context.artifact.expect("issue snapshot is present");
+    assert_eq!(artifact.number, issue.get());
+    assert_eq!(artifact.title, "ready code issue");
+    assert_eq!(artifact.body, "Implement the queued daemon work item.");
+    assert_eq!(
+        artifact.labels,
+        vec!["code".to_string(), "ready".to_string()]
+    );
+    assert_eq!(artifact.state, "Open");
 
     let posted_result = job_result("worker-a", &assignment.job_id);
     match post_json(

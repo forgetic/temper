@@ -80,7 +80,7 @@ pub mod stage;
 pub mod trigger;
 pub mod worker;
 mod workspace_automation;
-pub mod workspace_request;
+mod workspace_request;
 
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use cadence::IdlePollBackoff;
@@ -133,3 +133,4 @@ pub use stage::{
 };
 pub use trigger::{broad_targets, ChangeHint, ChangeKind, TriggerScheduler, WakeTarget};
 pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
+pub use workspace_request::{pr_branch_hint, pr_correlation_key};

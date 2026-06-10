@@ -101,6 +101,38 @@ following ADR 0013. If duplicate dispatch occurs, the lease/CAS remains the
 arbiter. A losing completion or stale mutation harmlessly no-ops rather than
 corrupting state. Workers must not call the Forge API to mutate artifacts or PRs.
 
+### Standard job payload
+
+`Assign.job_payload` remains opaque at the envelope and schema layer: the daemon
+routes it as arbitrary JSON and workers must not depend on the envelope enforcing
+a particular object shape. Temper daemons use a standard v1 object for scanned
+workflow jobs so Smith-style workers can run without Forge API access:
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `role` | string | yes | Workflow role id. |
+| `repo` | string | yes | `owner/name` repository slug used for worker routing. |
+| `queue` | string | yes | Workflow queue id. |
+| `artifact_kind` | string | yes | Workflow artifact kind id. |
+| `repository` | object | no | Repository coordinates for the job assignment. |
+| `repository.owner` | string | yes when `repository` is present | Repository owner. |
+| `repository.name` | string | yes when `repository` is present | Repository name. |
+| `repository.default_branch` | string | yes when `repository` is present | Forge repository default branch as reported by the backend. |
+| `base_branch` | string | no | Normalized base branch for workspace output, falling back to `main` when the Forge repository default branch is blank. |
+| `branch_hint` | string | no | Deterministic worker branch suggestion, for example `agent/pr-for-code-42`. |
+| `correlation_key` | string | no | Deterministic PR correlation key, for example `pr-for-code-42`. |
+| `artifact` | object | no | Enqueue-time issue snapshot. Omitted for older minimal payloads and for PR-targeted jobs in v1. |
+| `artifact.number` | integer | yes when `artifact` is present | Repository-scoped issue number. |
+| `artifact.title` | string | yes when `artifact` is present | Issue title at enqueue time. |
+| `artifact.body` | string | yes when `artifact` is present | Issue body at enqueue time. |
+| `artifact.labels` | array of strings | yes when `artifact` is present | Issue labels at enqueue time. |
+| `artifact.state` | string | yes when `artifact` is present | Debug-formatted issue state, for example `Open`. |
+
+For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,
+and `artifact_kind` remain valid; the enrichment fields are optional. Readers
+must ignore unknown fields in the standard payload just as they do for protocol
+messages.
+
 ### `heartbeat` — worker → daemon
 
 Worker reports liveness and progress for in-flight jobs so the daemon can detect
