@@ -34,11 +34,11 @@ use temper_forge::{
     PullRequestQuery, PullRequestState, UserId,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{
     commit_ci_sentinel, seed_intake_issue, start_cached_provisioned_repositories, ForgejoRunner,
     ForgejoServer, Provisioned, RoleIdentity,
 };
-use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_workflow::{parse_metadata_block, CiStatus, RoleId};
 
 /// The engineer-only daemon-delivery workflow served to the daemon binary via
@@ -128,7 +128,9 @@ pub fn run_daemon_variant(variant: Variant) {
     let secret_file = workspace
         .0
         .write_file("daemon/webhook-secret", format!("{WEBHOOK_SECRET}\n"));
-    let workflow_file = workspace.0.write_file("daemon/workflow.json", DAEMON_WORKFLOW);
+    let workflow_file = workspace
+        .0
+        .write_file("daemon/workflow.json", DAEMON_WORKFLOW);
 
     // Real temper-daemon binary on a free local port.
     let port = free_port();
@@ -179,7 +181,15 @@ pub fn run_daemon_variant(variant: Variant) {
     let convergence_start = Instant::now();
     let forge = admin_forge(&server, &provisioned, &engineer);
 
-    let converged = drive_variant(&variant, &server, &provisioned, &engineer, &forge, issue, timeout);
+    let converged = drive_variant(
+        &variant,
+        &server,
+        &provisioned,
+        &engineer,
+        &forge,
+        issue,
+        timeout,
+    );
     let convergence = convergence_start.elapsed();
 
     if let Err(error) = converged {
@@ -241,7 +251,12 @@ fn drive_variant(
             // Phase A: the worker's marker-less head fails real CI and the PR
             // must stay unmerged while red.
             let head_branch = poll_until(deadline, || {
-                block_on(assert_ci_red_and_unmerged(forge, provisioned, engineer, issue))
+                block_on(assert_ci_red_and_unmerged(
+                    forge,
+                    provisioned,
+                    engineer,
+                    issue,
+                ))
             })?;
 
             // Phase B: push the CI sentinel fix to the PR head as the engineer;
@@ -386,7 +401,12 @@ async fn implementation_pr(
         .await
         .map_err(|error| format!("list_pull_requests failed: {error}"))?
         .into_iter()
-        .filter(|pull_request| pull_request.labels.iter().any(|label| label == "implementation"))
+        .filter(|pull_request| {
+            pull_request
+                .labels
+                .iter()
+                .any(|label| label == "implementation")
+        })
         .collect();
     if pull_requests.len() != 1 {
         return Err(format!(
@@ -493,7 +513,9 @@ fn spawn_daemon(
         // Per-role Forge API token routing (consolidation phase 4d).
         .env("TEMPER_FORGEJO_TOKEN_ENGINEER", &engineer.token)
         .env_remove("FORGEJO_DEFAULT_REPO")
-        .stdout(Stdio::from(log_file.try_clone().expect("daemon log clones")))
+        .stdout(Stdio::from(
+            log_file.try_clone().expect("daemon log clones"),
+        ))
         .stderr(Stdio::from(log_file))
         .spawn()
         .expect("temper-daemon binary spawns");
@@ -560,7 +582,9 @@ fn spawn_worker(
         .arg(ci_sentinel)
         .env("TEMPER_E2E_GIT_USER", &engineer.user)
         .env("TEMPER_E2E_GIT_TOKEN", &engineer.token)
-        .stdout(Stdio::from(log_file.try_clone().expect("worker log clones")))
+        .stdout(Stdio::from(
+            log_file.try_clone().expect("worker log clones"),
+        ))
         .stderr(Stdio::from(log_file))
         .spawn()
         .expect("temper-testing-daemon-worker binary spawns");
@@ -596,7 +620,10 @@ fn daemon_worker_binary() -> PathBuf {
             ])
             .status()
             .expect("cargo build for the daemon test worker runs");
-        assert!(status.success(), "building temper-testing-daemon-worker failed");
+        assert!(
+            status.success(),
+            "building temper-testing-daemon-worker failed"
+        );
         assert!(
             candidate.exists(),
             "temper-testing-daemon-worker missing at {} after build; set TEMPER_TESTING_DAEMON_WORKER_BIN",

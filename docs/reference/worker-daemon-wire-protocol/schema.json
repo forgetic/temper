@@ -66,7 +66,41 @@
             "kind": { "type": "string", "minLength": 1 }
           }
         },
-        "job_payload": { "type": "object" }
+        "job_payload": {
+          "type": "object",
+          "properties": {
+            "role": { "type": "string", "minLength": 1 },
+            "repo": { "type": "string", "minLength": 1 },
+            "queue": { "type": "string", "minLength": 1 },
+            "artifact_kind": { "type": "string", "minLength": 1 },
+            "repository": {
+              "type": "object",
+              "required": ["owner", "name", "default_branch"],
+              "properties": {
+                "owner": { "type": "string" },
+                "name": { "type": "string" },
+                "default_branch": { "type": "string" }
+              }
+            },
+            "base_branch": { "type": "string" },
+            "branch_hint": { "type": "string" },
+            "correlation_key": { "type": "string" },
+            "artifact": {
+              "type": "object",
+              "required": ["number", "title", "body", "labels", "state"],
+              "properties": {
+                "number": { "type": "integer", "minimum": 1 },
+                "title": { "type": "string" },
+                "body": { "type": "string" },
+                "labels": { "type": "array", "items": { "type": "string" } },
+                "state": { "type": "string" }
+              }
+            },
+            "action": { "type": "string" },
+            "checkout_capability": { "enum": ["writable", "read_only", "pull_request_read_only"] },
+            "allowed_verdicts": { "type": "array", "items": { "type": "string" } }
+          }
+        }
       }
     },
     "heartbeatJob": {
@@ -106,6 +140,8 @@
             "head_sha": { "type": "string", "minLength": 1 }
           }
         },
+        "verdict": { "type": "string" },
+        "body": { "type": "string" },
         "failure": {
           "type": "object",
           "required": ["class", "message"],

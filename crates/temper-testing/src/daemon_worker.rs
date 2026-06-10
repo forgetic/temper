@@ -155,9 +155,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome
             "--help" | "-h" => return Ok(ParseOutcome::Help),
             "--daemon-url" => daemon_url = Some(value_for(&flag, &mut iter)?),
             "--worker-id" => worker_id = Some(value_for(&flag, &mut iter)?),
-            "--capability" => {
-                capabilities.push(parse_capability(&value_for(&flag, &mut iter)?)?)
-            }
+            "--capability" => capabilities.push(parse_capability(&value_for(&flag, &mut iter)?)?),
             "--git-base-url" => git_base_url = Some(value_for(&flag, &mut iter)?),
             "--workspace-root" => {
                 workspace_root = Some(PathBuf::from(value_for(&flag, &mut iter)?))
@@ -203,7 +201,8 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome
 }
 
 fn value_for(flag: &str, iter: &mut impl Iterator<Item = String>) -> Result<String, String> {
-    iter.next().ok_or_else(|| format!("missing value for {flag}"))
+    iter.next()
+        .ok_or_else(|| format!("missing value for {flag}"))
 }
 
 fn parse_capability(raw: &str) -> Result<Capability, String> {
@@ -229,10 +228,7 @@ fn parse_capability(raw: &str) -> Result<Capability, String> {
 /// run with the stop-file and its own convergence timeout).
 pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<(), String> {
     let client = reqwest::Client::new();
-    let endpoint = format!(
-        "{}/v1/message",
-        config.daemon_url.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/v1/message", config.daemon_url.trim_end_matches('/'));
 
     let register = WorkerProtocolMessage::Register(Register {
         protocol_version: WORKER_PROTOCOL_VERSION,
@@ -299,9 +295,9 @@ pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<
                 }
             }
             Some(WorkerProtocolMessage::Error(error)) if error.code == ErrorCode::PollTimeout => {}
-            Some(other) => eprintln!(
-                "temper-testing-daemon-worker: unexpected poll response: {other:?}"
-            ),
+            Some(other) => {
+                eprintln!("temper-testing-daemon-worker: unexpected poll response: {other:?}")
+            }
             None => {}
         }
     }
@@ -376,6 +372,8 @@ async fn execute_job(
             job_id: assign.job_id.clone(),
             status: ResultStatus::Success,
             branch: Some(branch),
+            verdict: None,
+            body: None,
             failure: None,
             summary: Some(summary),
             details: None,
@@ -386,6 +384,8 @@ async fn execute_job(
             job_id: assign.job_id.clone(),
             status: ResultStatus::Failure,
             branch: None,
+            verdict: None,
+            body: None,
             failure: Some(Failure {
                 class: error.class,
                 message: error.message,

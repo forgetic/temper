@@ -29,7 +29,10 @@ workers initiate all worker/daemon exchanges, and the daemon never opens
 connections to workers or pushes unsolicited jobs to them.
 
 JSON keeps v1 easy to inspect and fixture-test while preserving message
-semantics for a future protobuf/gRPC transport.
+semantics for a future protobuf/gRPC transport. The additive verdict-job fields
+`JobContext.action`, `JobContext.checkout_capability`,
+`JobContext.allowed_verdicts`, `JobResult.verdict`, and `JobResult.body` are all
+optional, and the protocol version remains `1`.
 
 ## Envelope
 
@@ -127,11 +130,16 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `artifact.body` | string | yes when `artifact` is present | Issue body at enqueue time. |
 | `artifact.labels` | array of strings | yes when `artifact` is present | Issue labels at enqueue time. |
 | `artifact.state` | string | yes when `artifact` is present | Debug-formatted issue state, for example `Open`. |
+| `action` | string | no | Workflow action (intent-level tool / transition id) this job services, for example `open_pr` or `triage_intake`. |
+| `checkout_capability` | string | no | Checkout capability the worker should prepare: `writable`, `read_only`, or `pull_request_read_only`. Absent means writable, preserving v1's original behavior. |
+| `allowed_verdicts` | array of strings | no | Verdict vocabulary declared by `action`'s `outcomes` keys, in deterministic order. Empty or absent for a plain coding job. |
 
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,
-and `artifact_kind` remain valid; the enrichment fields are optional. Readers
-must ignore unknown fields in the standard payload just as they do for protocol
-messages.
+and `artifact_kind` remain valid; the enrichment fields are optional. The
+`action`, `checkout_capability`, and `allowed_verdicts` additions are also
+optional, and adding them does not change the protocol version: it remains `1`.
+Readers must ignore unknown fields in the standard payload just as they do for
+protocol messages.
 
 ### `heartbeat` — worker → daemon
 
@@ -167,6 +175,8 @@ Worker returns the structured result for one assigned job.
 | `branch` | object | required for successful code-producing jobs | Pushed branch data. |
 | `branch.name` | string | yes when `branch` is present | Pushed branch name. |
 | `branch.head_sha` | string | yes when `branch` is present | Git commit SHA at the branch head. |
+| `verdict` | string | no | Verdict chosen by a verdict job. Must be one of the assignment payload's `allowed_verdicts` when present. |
+| `body` | string | no | Authored body accompanying a verdict, such as a rewritten issue spec or PR review body. |
 | `failure` | object | required for failures | Failure details. |
 | `failure.class` | string | yes when `failure` is present | `transient`, `permanent`, `canceled`, or `protocol`. |
 | `failure.message` | string | yes when `failure` is present | Human-readable failure summary. |
@@ -176,6 +186,11 @@ Worker returns the structured result for one assigned job.
 The daemon performs any idempotent PR create/update through the Forge API as the
 role identity. The worker never calls the Forge API for PR create/update or
 artifact mutation.
+
+Verdict jobs are successful jobs whose result may carry `verdict` plus `body`
+and no `branch`; the allowed vocabulary comes from the assignment payload's
+`allowed_verdicts`. Both result fields are optional for backward compatibility,
+and their addition does not change the protocol version: it remains `1`.
 
 ### `release` — daemon → worker
 

@@ -75,7 +75,9 @@ async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("ephemeral daemon listener binds");
-    let addr = listener.local_addr().expect("daemon listener has an address");
+    let addr = listener
+        .local_addr()
+        .expect("daemon listener has an address");
     let router = daemon.router();
     tokio::spawn(async move {
         axum::serve(listener, router)
@@ -104,6 +106,9 @@ async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
             labels: vec!["code".to_string(), "ready".to_string()],
             state: "Open".to_string(),
         }),
+        action: Some("open_pr".to_string()),
+        checkout_capability: Some("writable".to_string()),
+        allowed_verdicts: Vec::new(),
     };
     daemon
         .enqueue_job(
@@ -134,8 +139,15 @@ async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
 
     assert_eq!(job.job_id, "acme/service/issue-7/engineer/code_ready");
     assert_eq!(job.role, "engineer");
-    assert_eq!(result.status, ResultStatus::Success, "worker log:\n{}", worker.logs());
-    let branch = result.branch.expect("success result carries the pushed branch");
+    assert_eq!(
+        result.status,
+        ResultStatus::Success,
+        "worker log:\n{}",
+        worker.logs()
+    );
+    let branch = result
+        .branch
+        .expect("success result carries the pushed branch");
     assert_eq!(branch.name, "agent/pr-for-code-7");
 
     // The branch really exists in the origin at the reported head.
@@ -211,7 +223,9 @@ fn spawn_worker(
         .arg("500")
         .env(GIT_USER_ENV, "engineer")
         .env_remove(GIT_TOKEN_ENV)
-        .stdout(Stdio::from(log_file.try_clone().expect("worker log clones")))
+        .stdout(Stdio::from(
+            log_file.try_clone().expect("worker log clones"),
+        ))
         .stderr(Stdio::from(log_file))
         .spawn()
         .expect("daemon test worker spawns");

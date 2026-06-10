@@ -116,6 +116,24 @@ pub struct JobContext {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<JobArtifactSnapshot>,
+
+    /// Workflow action (intent-level tool / transition id) this job services,
+    /// e.g. `open_pr` or `triage_intake`. Populated by daemon enrichment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+
+    /// Checkout capability the worker should prepare for the job:
+    /// `"writable"` (commit + push the head branch), `"read_only"` (analyse
+    /// only; verdict result), or `"pull_request_read_only"` (read-only with
+    /// the PR head fetched for diffing). Absent means writable (today's
+    /// behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_capability: Option<String>,
+
+    /// Verdict vocabulary the job's action declares (the action's `outcomes`
+    /// keys). Empty for a plain coding job.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_verdicts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +196,15 @@ pub struct JobResult {
     pub status: ResultStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<Branch>,
+    /// Verdict chosen by a verdict job (must be one of the assignment's
+    /// `allowed_verdicts`). A success result may carry a verdict and no
+    /// branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// Authored body accompanying a verdict (e.g. the rewritten issue spec or
+    /// the review body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<Failure>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,6 +285,9 @@ mod tests {
         include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/heartbeat.json");
     const RESULT: &str =
         include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/result.json");
+    const RESULT_VERDICT: &str = include_str!(
+        "../../../docs/reference/worker-daemon-wire-protocol/examples/result-verdict.json"
+    );
     const RELEASE: &str =
         include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/release.json");
     const LEASE_ACK: &str =
@@ -294,6 +324,7 @@ mod tests {
             (ASSIGN, "assign"),
             (HEARTBEAT, "heartbeat"),
             (RESULT, "result"),
+            (RESULT_VERDICT, "result"),
             (RELEASE, "release"),
             (LEASE_ACK, "lease-ack"),
             (ERROR, "error"),
@@ -346,6 +377,121 @@ mod tests {
         assert_eq!(context.branch_hint, None);
         assert_eq!(context.correlation_key, None);
         assert_eq!(context.artifact, None);
+        assert_eq!(context.action, None);
+        assert_eq!(context.checkout_capability, None);
+        assert!(context.allowed_verdicts.is_empty());
+    }
+
+    #[test]
+    fn old_shape_job_result_defaults_verdict_fields_to_none() {
+        let result: JobResult = serde_json::from_value(serde_json::json!({
+            "protocol_version": 1,
+            "worker_id": "worker-1",
+            "job_id": "job-123",
+            "status": "success",
+            "branch": {
+                "name": "agent/pr-for-code-42",
+                "head_sha": "0123456789abcdef0123456789abcdef01234567"
+            }
+        }))
+        .expect("old-shape job result parses");
+
+        assert_eq!(result.protocol_version, WORKER_PROTOCOL_VERSION);
+        assert_eq!(result.worker_id, "worker-1");
+        assert_eq!(result.job_id, "job-123");
+        assert_eq!(result.status, ResultStatus::Success);
+        assert!(result.branch.is_some());
+        assert_eq!(result.verdict, None);
+        assert_eq!(result.body, None);
+        assert_eq!(result.failure, None);
+    }
+
+    #[test]
+    fn old_equivalent_job_context_omits_new_enrichment_keys() {
+        let context = JobContext {
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            repository: None,
+            base_branch: None,
+            branch_hint: None,
+            correlation_key: None,
+            artifact: None,
+            action: None,
+            checkout_capability: None,
+            allowed_verdicts: Vec::new(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&context).expect("job context serializes"),
+            serde_json::json!({
+                "role": "engineer",
+                "repo": "ai/temper",
+                "queue": "code_ready",
+                "artifact_kind": "code"
+            })
+        );
+    }
+
+    #[test]
+    fn old_equivalent_job_result_omits_verdict_keys() {
+        let result = JobResult {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker-1".to_string(),
+            job_id: "job-123".to_string(),
+            status: ResultStatus::Success,
+            branch: Some(Branch {
+                name: "agent/pr-for-code-42".to_string(),
+                head_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            }),
+            verdict: None,
+            body: None,
+            failure: None,
+            summary: None,
+            details: None,
+        };
+
+        let value = serde_json::to_value(&result).expect("job result serializes");
+        assert_eq!(value.get("verdict"), None);
+        assert_eq!(value.get("body"), None);
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "protocol_version": 1,
+                "worker_id": "worker-1",
+                "job_id": "job-123",
+                "status": "success",
+                "branch": {
+                    "name": "agent/pr-for-code-42",
+                    "head_sha": "0123456789abcdef0123456789abcdef01234567"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn verdict_job_result_round_trips_without_branch() {
+        let result = JobResult {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker-1".to_string(),
+            job_id: "job-123".to_string(),
+            status: ResultStatus::Success,
+            branch: None,
+            verdict: Some("ready_code".to_string()),
+            body: Some("Rewritten implementation-ready issue body.".to_string()),
+            failure: None,
+            summary: Some("triaged intake".to_string()),
+            details: None,
+        };
+
+        let value = serde_json::to_value(&result).expect("job result serializes");
+        assert_eq!(value.get("branch"), None);
+        assert_eq!(value["verdict"], "ready_code");
+        assert_eq!(value["body"], "Rewritten implementation-ready issue body.");
+        let decoded: JobResult = serde_json::from_value(value).expect("serialized result parses");
+
+        assert_eq!(decoded, result);
     }
 
     #[test]
@@ -370,6 +516,9 @@ mod tests {
                 labels: vec!["code".to_string(), "ready".to_string()],
                 state: "Open".to_string(),
             }),
+            action: Some("open_pr".to_string()),
+            checkout_capability: Some("writable".to_string()),
+            allowed_verdicts: vec!["needs_architect".to_string()],
         };
 
         let value = serde_json::to_value(&context).expect("job context serializes");

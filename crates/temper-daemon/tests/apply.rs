@@ -75,6 +75,8 @@ fn job_result(worker_id: &str, job_id: &str, branch: Option<Branch>) -> JobResul
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
         branch,
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some("done".to_string()),
         details: None,
@@ -88,6 +90,8 @@ fn transient_failure_result(worker_id: &str, job_id: &str) -> JobResult {
         job_id: job_id.to_string(),
         status: ResultStatus::Failure,
         branch: None,
+        verdict: None,
+        body: None,
         failure: Some(Failure {
             class: FailureClass::Transient,
             message: "temporary worker failure".to_string(),
