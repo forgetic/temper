@@ -39,8 +39,10 @@ use tokio::{
     time::{sleep_until, Instant as TokioInstant},
 };
 
+pub mod config;
 mod webhook;
 
+pub use config::{parse, DaemonRunConfig, ParseOutcome, USAGE};
 pub use webhook::*;
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
