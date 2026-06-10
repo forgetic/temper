@@ -23,7 +23,7 @@ use temper_runner::{
     ScanError, WorkItem,
 };
 use temper_worker_protocol::{
-    Artifact, ErrorCode, FailureClass, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, FailureClass, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -882,7 +882,14 @@ async fn run_core(
                 if let (Some(job), Some(WorkerProtocolMessage::Release(_))) =
                     (in_flight, response.as_ref())
                 {
-                    match result_disposition(&result) {
+                    let disposition = result_disposition(&result);
+                    let line = result_received_log_line(
+                        &result,
+                        result_disposition_log_value(disposition),
+                    );
+                    eprintln!("{line}");
+
+                    match disposition {
                         ResultDisposition::Apply => {
                             let applier = applier.clone();
                             tokio::spawn(async move {
@@ -929,6 +936,10 @@ async fn run_core(
                         let _ = timer_tx.send(DaemonCommand::ExpirePoll { id });
                     });
                 } else {
+                    if let WorkerProtocolMessage::Assign(assign) = &response {
+                        let line = assignment_log_line(assign, &poll.worker_id);
+                        eprintln!("{line}");
+                    }
                     let _ = reply.send(response);
                 }
             }
@@ -982,6 +993,10 @@ fn fulfil_waiters(core: &mut DaemonCore, waiters: &mut BTreeMap<u64, PollWaiter>
         let waiter = waiters
             .remove(&id)
             .expect("waiter exists after successful poll response");
+        if let WorkerProtocolMessage::Assign(assign) = &response {
+            let line = assignment_log_line(assign, &waiter.poll.worker_id);
+            eprintln!("{line}");
+        }
         let _ = waiter.reply.send(response);
     }
 }
@@ -991,6 +1006,58 @@ fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
         message,
         WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout
     )
+}
+
+fn assignment_log_line(assign: &Assign, worker_id: &str) -> String {
+    format!(
+        "temper-daemon: assigned job_id={} role={} repo={} worker={}",
+        assign.job_id, assign.role, assign.repo, worker_id
+    )
+}
+
+fn result_received_log_line(result: &JobResult, disposition: &str) -> String {
+    format!(
+        "temper-daemon: result received job_id={} worker={} status={} disposition={}",
+        result.job_id,
+        result.worker_id,
+        result_status_log_value(result),
+        disposition
+    )
+}
+
+fn result_status_log_value(result: &JobResult) -> String {
+    match result.status {
+        ResultStatus::Success => "success".to_string(),
+        ResultStatus::Failure => {
+            let class = result
+                .failure
+                .as_ref()
+                .map(|failure| failure_class_log_value(failure.class))
+                .unwrap_or("unknown");
+            format!("failure({class})")
+        }
+    }
+}
+
+fn failure_class_log_value(class: FailureClass) -> &'static str {
+    match class {
+        FailureClass::Transient => "transient",
+        FailureClass::Permanent => "permanent",
+        FailureClass::Canceled => "canceled",
+        FailureClass::Protocol => "protocol",
+    }
+}
+
+fn result_disposition_log_value(disposition: ResultDisposition) -> &'static str {
+    match disposition {
+        ResultDisposition::Apply => "apply",
+        ResultDisposition::Reenqueue => "reenqueue",
+        ResultDisposition::Drop => "drop",
+    }
+}
+
+fn poll_backstop_log_line(enqueued: usize) -> String {
+    format!("temper-daemon: poll backstop enqueued={enqueued}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1175,6 +1242,10 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
             ),
         }
     }
+    if total > 0 {
+        let line = poll_backstop_log_line(total);
+        eprintln!("{line}");
+    }
     total
 }
 
@@ -1333,6 +1404,67 @@ mod tests {
             summary: None,
             details: None,
         }
+    }
+
+    fn assign_for_log_line() -> Assign {
+        Assign {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            job_id: "ai/temper/issue-147/engineer/code_ready".to_string(),
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+            artifact: Artifact {
+                item: json!(147),
+                kind: "issue".to_string(),
+            },
+            job_payload: json!({"safe": "context"}),
+        }
+    }
+
+    #[test]
+    fn assignment_log_line_includes_worker_from_poll() {
+        assert_eq!(
+            assignment_log_line(&assign_for_log_line(), "worker-a"),
+            "temper-daemon: assigned job_id=ai/temper/issue-147/engineer/code_ready role=engineer repo=ai/temper worker=worker-a"
+        );
+    }
+
+    #[test]
+    fn result_received_log_line_formats_success_status() {
+        let result = result_for_disposition(ResultStatus::Success, None);
+
+        assert_eq!(
+            result_received_log_line(&result, "apply"),
+            "temper-daemon: result received job_id=job-1 worker=worker-a status=success disposition=apply"
+        );
+    }
+
+    #[test]
+    fn result_received_log_line_formats_each_failure_class() {
+        let cases = [
+            (FailureClass::Transient, "transient", "reenqueue"),
+            (FailureClass::Permanent, "permanent", "apply"),
+            (FailureClass::Canceled, "canceled", "drop"),
+            (FailureClass::Protocol, "protocol", "apply"),
+        ];
+
+        for (class, expected_class, disposition) in cases {
+            let result = result_for_disposition(ResultStatus::Failure, Some(class));
+
+            assert_eq!(
+                result_received_log_line(&result, disposition),
+                format!(
+                    "temper-daemon: result received job_id=job-1 worker=worker-a status=failure({expected_class}) disposition={disposition}"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn poll_backstop_log_line_includes_enqueued_count() {
+        assert_eq!(
+            poll_backstop_log_line(5),
+            "temper-daemon: poll backstop enqueued=5"
+        );
     }
 
     #[test]
