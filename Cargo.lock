@@ -1074,11 +1074,13 @@ dependencies = [
 name = "temper"
 version = "0.1.0"
 dependencies = [
+ "temper-daemon",
  "temper-forgejo-provision",
  "temper-interaction-service",
  "temper-reference-delivery-validator",
  "temper-trigger-forgejo",
  "temper-worker",
+ "tokio",
 ]
 
 [[package]]
