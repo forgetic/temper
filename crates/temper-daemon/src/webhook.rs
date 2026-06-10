@@ -167,6 +167,25 @@ pub fn parse_verified_webhook(
     parse_change_hint(body, webhook_event(headers))
 }
 
+fn webhook_accepted_log_line(hint: &ChangeHint) -> String {
+    let item = hint
+        .item
+        .map(|item| item.to_string())
+        .unwrap_or_else(|| "-".to_string());
+
+    format!(
+        "temper-daemon: webhook accepted repo={}/{} kind={:?} item={}",
+        hint.repo.owner, hint.repo.name, hint.kind, item
+    )
+}
+
+fn webhook_wake_scan_log_line(repo: &RepositoryPath, enqueued: usize) -> String {
+    format!(
+        "temper-daemon: webhook wake scan repo={}/{} enqueued={enqueued}",
+        repo.owner, repo.name
+    )
+}
+
 /// Computes the lowercase hex HMAC-SHA256 signature for a webhook body.
 pub fn webhook_signature(secret: &str, body: &[u8]) -> String {
     encode_hex(&hmac_sha256(secret.as_bytes(), body))
@@ -185,6 +204,9 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
     body: &[u8],
 ) -> Result<usize, WebhookError> {
     let hint = parse_verified_webhook(headers, body, &config.secret)?;
+    let line = webhook_accepted_log_line(&hint);
+    eprintln!("{line}");
+
     let repository = match forge.get_repository_by_path(&hint.repo).await {
         Ok(Some(repository)) => repository,
         Ok(None) => return Ok(0),
@@ -198,10 +220,12 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
     };
 
     let mut total = 0;
+    let mut matched_target = false;
     for target in &config.targets {
         if target.repo != repository.id {
             continue;
         }
+        matched_target = true;
 
         match daemon
             .enqueue_scanned_role_work(
@@ -222,6 +246,11 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
                 target.role.as_str()
             ),
         }
+    }
+
+    if matched_target {
+        let line = webhook_wake_scan_log_line(&hint.repo, total);
+        eprintln!("{line}");
     }
 
     Ok(total)
@@ -327,4 +356,43 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .zip(right.iter())
         .fold(0_u8, |acc, (left, right)| acc | (left ^ right));
     diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn webhook_accepted_log_line_includes_item_number() {
+        let hint = ChangeHint::item(
+            RepositoryPath::new("ai", "temper"),
+            ItemNumber::new(147),
+            ChangeKind::PullRequest,
+        );
+
+        assert_eq!(
+            webhook_accepted_log_line(&hint),
+            "temper-daemon: webhook accepted repo=ai/temper kind=PullRequest item=147"
+        );
+    }
+
+    #[test]
+    fn webhook_accepted_log_line_renders_missing_item_as_dash() {
+        let hint = ChangeHint::repo(RepositoryPath::new("ai", "temper"), ChangeKind::Push);
+
+        assert_eq!(
+            webhook_accepted_log_line(&hint),
+            "temper-daemon: webhook accepted repo=ai/temper kind=Push item=-"
+        );
+    }
+
+    #[test]
+    fn webhook_wake_scan_log_line_includes_enqueued_count() {
+        let repo = RepositoryPath::new("ai", "temper");
+
+        assert_eq!(
+            webhook_wake_scan_log_line(&repo, 3),
+            "temper-daemon: webhook wake scan repo=ai/temper enqueued=3"
+        );
+    }
 }
