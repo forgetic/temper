@@ -230,6 +230,25 @@ fn manager_heartbeat_then_release_round_trips() {
 }
 
 #[test]
+fn manager_release_without_lease_does_not_append_empty_metadata() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let repo = new_repo(&forge);
+    let number = create_issue(&forge, &repo, &["code", "ready"], "Authored body");
+    let target = ArtifactSource::Issue { number };
+    let manager = LeaseManager::new(&forge, policy());
+
+    block_on(manager.release(&repo, target, "run-1")).expect("empty release is a no-op");
+
+    let body = issue_body(&forge, &repo, number);
+    assert_eq!(body, "Authored body");
+    assert_eq!(
+        parse_metadata_block(&body).expect("body metadata parses"),
+        None
+    );
+}
+
+#[test]
 fn manager_rejects_a_conflicting_acquire() {
     let root = TestRoot::new();
     let forge = root.forge();

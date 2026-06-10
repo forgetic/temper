@@ -29,7 +29,10 @@ pub fn pr_branch_hint(kind: &ArtifactKindId, number: ItemNumber) -> String {
 
 /// Deterministic correlation key for content-bearing effects on a routed
 /// transition, scoped to the work item and routed transition so retries dedupe.
-pub(crate) fn workspace_content_key(
+///
+/// This is the shared content-effect correlation key projection used by
+/// workspace-backed runner paths and daemon verdict application.
+pub fn workspace_content_key(
     kind: &ArtifactKindId,
     routed: &TransitionId,
     number: ItemNumber,

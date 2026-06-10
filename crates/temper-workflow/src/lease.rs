@@ -459,6 +459,9 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         worker: &str,
     ) -> Result<(), LeaseError> {
         let loaded = self.load(repo_id, target).await?;
+        if loaded.metadata().lease.is_none() {
+            return Ok(());
+        }
         let lease = self
             .planner
             .release(loaded.metadata().lease.as_ref(), worker)?;

@@ -21,10 +21,17 @@ use temper_workflow::{
 };
 use tokio::time::{sleep, Instant};
 
-const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
+const REFERENCE_FIXTURE: &str =
+    include_str!("../../temper-workflow/fixtures/reference-delivery.json");
+const BASIC_FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
 
 fn workflow() -> ValidatedWorkflow {
-    let spec: RawWorkflowSpec = serde_json::from_str(FIXTURE).expect("workflow parses");
+    let spec: RawWorkflowSpec = serde_json::from_str(REFERENCE_FIXTURE).expect("workflow parses");
+    spec.validate().expect("workflow validates")
+}
+
+fn basic_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec = serde_json::from_str(BASIC_FIXTURE).expect("workflow parses");
     spec.validate().expect("workflow validates")
 }
 
@@ -63,6 +70,35 @@ async fn create_ready_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNum
         .await
         .expect("issue is created")
         .number
+}
+
+async fn create_untriaged_intake_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNumber {
+    forge
+        .create_issue(
+            repo,
+            CreateIssue {
+                title: "raw intake".to_string(),
+                body: "rough user request".to_string(),
+                labels: vec!["untriaged".to_string()],
+                assignees: Vec::<UserId>::new(),
+            },
+        )
+        .await
+        .expect("intake issue is created")
+        .number
+}
+
+async fn issue_body_and_labels(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) -> (String, Vec<String>) {
+    let issue = forge
+        .get_issue_by_number(repo, number)
+        .await
+        .expect("issue reload succeeds")
+        .expect("issue exists");
+    (issue.body, issue.labels)
 }
 
 async fn spawn(daemon: &Daemon) -> String {
@@ -166,16 +202,26 @@ fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult {
     }
 }
 
+fn verdict_result(worker_id: &str, job_id: &str, verdict: &str, body: Option<&str>) -> JobResult {
+    JobResult {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: worker_id.to_string(),
+        job_id: job_id.to_string(),
+        status: ResultStatus::Success,
+        branch: None,
+        verdict: Some(verdict.to_string()),
+        body: body.map(str::to_string),
+        failure: None,
+        summary: Some("triaged".to_string()),
+        details: None,
+    }
+}
+
 fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
-    InFlightJob {
-        job_id: format!("{repo_path}/issue-{}/engineer/code_ready", number.get()),
-        role: "engineer".to_string(),
-        repo: repo_path.to_string(),
-        artifact: Artifact {
-            item: json!(number.get()),
-            kind: "issue".to_string(),
-        },
-        job_payload: serde_json::to_value(JobContext {
+    job_for_context(
+        repo_path,
+        number,
+        JobContext {
             role: "engineer".to_string(),
             repo: repo_path.to_string(),
             queue: "code_ready".to_string(),
@@ -188,8 +234,46 @@ fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             action: None,
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
-        })
-        .expect("JobContext serializes"),
+        },
+    )
+}
+
+fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
+    job_for_context(
+        repo_path,
+        number,
+        JobContext {
+            role: "architect".to_string(),
+            repo: repo_path.to_string(),
+            queue: "triage".to_string(),
+            artifact_kind: "intake".to_string(),
+            repository: None,
+            base_branch: None,
+            branch_hint: None,
+            correlation_key: None,
+            artifact: None,
+            action: Some("triage_intake".to_string()),
+            checkout_capability: Some("read_only".to_string()),
+            allowed_verdicts: vec!["ready_code".to_string()],
+        },
+    )
+}
+
+fn job_for_context(repo_path: &str, number: ItemNumber, context: JobContext) -> InFlightJob {
+    InFlightJob {
+        job_id: format!(
+            "{repo_path}/issue-{}/{}/{}",
+            number.get(),
+            context.role,
+            context.queue
+        ),
+        role: context.role.clone(),
+        repo: repo_path.to_string(),
+        artifact: Artifact {
+            item: json!(number.get()),
+            kind: "issue".to_string(),
+        },
+        job_payload: serde_json::to_value(context).expect("JobContext serializes"),
     }
 }
 
@@ -227,22 +311,32 @@ fn assert_release(msg: WorkerProtocolMessage, worker_id: &str, job_id: &str) {
     }
 }
 
-async fn poll_assignment(
+async fn poll_assignment_for_role(
     client: &reqwest::Client,
     url: &str,
     worker_id: &str,
+    expected_role: &str,
     issue: ItemNumber,
 ) -> temper_worker_protocol::Assign {
     match post_json(client, url, &poll(worker_id)).await {
         WorkerProtocolMessage::Assign(assign) => {
             assert_eq!(assign.repo, "acme/service");
-            assert_eq!(assign.role, "engineer");
+            assert_eq!(assign.role, expected_role);
             assert_eq!(assign.artifact.kind, "issue");
             assert_eq!(assign.artifact.item, json!(issue.get()));
             assign
         }
         other => panic!("expected assign, got {other:?}"),
     }
+}
+
+async fn poll_assignment(
+    client: &reqwest::Client,
+    url: &str,
+    worker_id: &str,
+    issue: ItemNumber,
+) -> temper_worker_protocol::Assign {
+    poll_assignment_for_role(client, url, worker_id, "engineer", issue).await
 }
 
 async fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
@@ -326,6 +420,141 @@ async fn assert_pull_request_count_stays(
         assert_eq!(pulls.len(), expected);
         sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[tokio::test]
+async fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_untriaged_intake_issue(&forge, &repo).await;
+    let workflow = Arc::new(basic_workflow());
+    let compiled = workflow.compile();
+    let applier = Arc::new(LeaseApplier::new(
+        forge.clone(),
+        policy(),
+        "daemon-1",
+        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+    ));
+    let daemon = Daemon::with_applier(applier);
+    let url = spawn(&daemon).await;
+    let client = reqwest::Client::new();
+    let role = RoleId::new("architect");
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-a", "architect", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                forge.as_ref(),
+                &repo,
+                workflow.as_ref(),
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds"),
+        1
+    );
+    let assignment = poll_assignment_for_role(&client, &url, "worker-a", "architect", issue).await;
+    let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
+        .expect("assignment payload is a JobContext");
+    assert_eq!(context.action.as_deref(), Some("triage_intake"));
+    assert_eq!(context.allowed_verdicts, vec!["ready_code"]);
+    assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
+
+    let result = verdict_result(
+        "worker-a",
+        &assignment.job_id,
+        "ready_code",
+        Some("rewritten spec"),
+    );
+    assert_release(
+        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+        "worker-a",
+        &assignment.job_id,
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let (body, labels) = loop {
+        let state = issue_body_and_labels(&forge, &repo, issue).await;
+        if state.0 == "rewritten spec" {
+            break state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for verdict apply, saw body {:?} labels {:?}",
+            state.0,
+            state.1
+        );
+        sleep(Duration::from_millis(10)).await;
+    };
+
+    assert_eq!(body, "rewritten spec");
+    assert!(!labels.iter().any(|label| label == "untriaged"));
+    assert!(labels.iter().any(|label| label == "code"));
+    assert!(labels.iter().any(|label| label == "ready"));
+    assert_no_pull_requests(&forge, &repo).await;
+}
+
+#[tokio::test]
+async fn triage_verdict_replay_is_quiet_no_op() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_untriaged_intake_issue(&forge, &repo).await;
+    let workflow = Arc::new(basic_workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = triage_in_flight_job("acme/service", issue);
+    let result = verdict_result(
+        "worker-a",
+        &job.job_id,
+        "ready_code",
+        Some("rewritten spec"),
+    );
+
+    applier.apply(job.clone(), result.clone()).await;
+    let after_first = issue_body_and_labels(&forge, &repo, issue).await;
+    applier.apply(job, result).await;
+    let after_second = issue_body_and_labels(&forge, &repo, issue).await;
+
+    assert_eq!(after_first, after_second);
+    assert_eq!(after_second.0, "rewritten spec");
+    assert!(!after_second.1.iter().any(|label| label == "untriaged"));
+    assert!(after_second.1.iter().any(|label| label == "code"));
+    assert!(after_second.1.iter().any(|label| label == "ready"));
+    assert_no_pull_requests(&forge, &repo).await;
+}
+
+#[tokio::test]
+async fn undeclared_verdict_does_not_mutate_issue() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_untriaged_intake_issue(&forge, &repo).await;
+    let workflow = Arc::new(basic_workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = triage_in_flight_job("acme/service", issue);
+    let before = issue_body_and_labels(&forge, &repo, issue).await;
+
+    applier
+        .apply(
+            job.clone(),
+            verdict_result("worker-a", &job.job_id, "nonsense", Some("rewritten spec")),
+        )
+        .await;
+
+    let after = issue_body_and_labels(&forge, &repo, issue).await;
+    assert_eq!(after, before);
+    assert_no_pull_requests(&forge, &repo).await;
 }
 
 #[tokio::test]
