@@ -1,0 +1,40 @@
+#!/bin/sh
+# temper-daemon-launcher — systemd ExecStart shim for the consolidated
+# temper-daemon. Maps the provisioned roles.env bot identity onto the generic
+# FORGEJO_* names ForgejoConfig::from_env reads; the per-role
+# TEMPER_FORGEJO_TOKEN_<ROLE> vars pass through untouched (the daemon's
+# role_tokens_from_env reads them directly for role-attributed applies).
+set -eu
+
+[ -n "${TEMPER_FORGEJO_BOT_TOKEN:-}" ] || {
+    echo 'temper-daemon-launcher: no TEMPER_FORGEJO_BOT_TOKEN in the environment; is ~/.config/temper/secrets/roles.env provisioned?' >&2
+    exit 1
+}
+export FORGEJO_URL="${BASE_URL:?BASE_URL not set (daemon.env)}"
+export FORGEJO_ACCESS_TOKEN="$TEMPER_FORGEJO_BOT_TOKEN"
+# Optional web-UI credentials for the ADR 0019 CI-read fallback used by the
+# mechanical backstop; both must be present to take effect.
+if [ -n "${TEMPER_FORGEJO_BOT_USER:-}" ] && [ -n "${TEMPER_FORGEJO_BOT_PASSWORD:-}" ]; then
+    export FORGEJO_USERNAME="$TEMPER_FORGEJO_BOT_USER"
+    export FORGEJO_PASSWORD="$TEMPER_FORGEJO_BOT_PASSWORD"
+fi
+
+set -- --bind "${DAEMON_BIND:-127.0.0.1:8080}" \
+       --daemon-id "${DAEMON_ID:-temper-daemon-1}" \
+       --workflow "${TEMPER_WORKFLOW_FILE:-$HOME/.config/temper/workflow.json}" \
+       --poll-cadence-secs "${DAEMON_POLL_CADENCE_SECS:-30}" \
+       --lease-ttl-secs "${DAEMON_LEASE_TTL_SECS:-300}"
+for _repo in ${DAEMON_REPOS:?DAEMON_REPOS not set (daemon.env)}; do
+    set -- "$@" --repo "$_repo"
+done
+for _role in ${DAEMON_ROLES:?DAEMON_ROLES not set (daemon.env)}; do
+    set -- "$@" --role "$_role"
+done
+if [ -n "${DAEMON_MECHANICAL_CADENCE_SECS:-}" ]; then
+    set -- "$@" --mechanical-cadence-secs "$DAEMON_MECHANICAL_CADENCE_SECS"
+fi
+if [ -n "${DAEMON_WEBHOOK_SECRET_FILE:-}" ]; then
+    set -- "$@" --webhook-secret-file "$DAEMON_WEBHOOK_SECRET_FILE"
+fi
+
+exec "$HOME/.local/bin/temper-daemon" "$@"
