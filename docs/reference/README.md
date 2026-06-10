@@ -13,6 +13,7 @@ Current reference pages:
 - [Filesystem backend](filesystem-backend.md)
 - [In-memory backend](in-memory-backend.md)
 - [Forgejo backend](forgejo-backend.md)
+- [GitHub backend](github-backend.md)
 - [Forgejo e2e fixture](forgejo-e2e-fixture.md)
 - [Workflow layer](workflow-layer.md)
   - [Workflow specification and compilation](workflow-specification.md)

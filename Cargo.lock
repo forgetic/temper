@@ -1164,6 +1164,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-forge-github"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "temper-forge",
+ "thiserror",
+]
+
+[[package]]
 name = "temper-forge-memory"
 version = "0.1.0"
 dependencies = [

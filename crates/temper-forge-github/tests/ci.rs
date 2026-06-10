@@ -1,0 +1,257 @@
+//! Offline contract tests for GitHub Actions CI reads.
+
+mod support;
+
+use support::{block_on, forge, pull_id, repo_id, MockHttpClient};
+use temper_forge::{CiJobId, CiJobQuery, CiJobStatus, ItemNumber};
+
+fn runs_envelope(run_id: u64, head_sha: &str) -> String {
+    format!(
+        r#"{{
+            "total_count": 1,
+            "workflow_runs": [{{"id": {run_id}, "head_sha": "{head_sha}", "status": "completed"}}]
+        }}"#
+    )
+}
+
+fn jobs_envelope() -> String {
+    r#"{
+        "total_count": 2,
+        "jobs": [
+            {
+                "id": 200,
+                "run_id": 12,
+                "head_sha": "abc123",
+                "name": "test",
+                "status": "in_progress",
+                "conclusion": null,
+                "html_url": "https://github.com/acme/widgets/runs/200",
+                "created_at": "2024-01-02T03:00:00Z",
+                "started_at": "2024-01-02T03:01:00Z",
+                "completed_at": null
+            },
+            {
+                "id": 100,
+                "run_id": 12,
+                "head_sha": "abc123",
+                "name": "build",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/acme/widgets/runs/100",
+                "created_at": "2024-01-02T03:00:00Z",
+                "started_at": "2024-01-02T03:01:00Z",
+                "completed_at": "2024-01-02T03:05:00Z"
+            }
+        ]
+    }"#
+    .to_string()
+}
+
+fn pull_json(number: u64, head_sha: &str) -> String {
+    format!(
+        r#"{{
+            "number": {number},
+            "title": "a pull",
+            "state": "open",
+            "user": {{"login": "author"}},
+            "head": {{"ref": "feature", "sha": "{head_sha}"}},
+            "base": {{"ref": "main", "sha": "basesha"}},
+            "created_at": "2024-03-01T00:00:00Z",
+            "updated_at": "2024-03-02T00:00:00Z"
+        }}"#
+    )
+}
+
+#[test]
+fn list_ci_jobs_by_commit_narrows_runs_with_head_sha() {
+    let client = MockHttpClient::new();
+    client.push_response(200, runs_envelope(12, "abc123"));
+    client.push_response(200, jobs_envelope());
+    let forge = forge(client.clone());
+
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some("abc123".to_string()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(jobs.len(), 2);
+    // Sorted by name: build before test.
+    assert_eq!(jobs[0].name, "build");
+    assert_eq!(jobs[0].id.as_str(), "github:acme/widgets:job:100");
+    assert_eq!(jobs[0].status, CiJobStatus::Completed);
+    assert_eq!(
+        jobs[0].conclusion,
+        Some(temper_forge::CiJobConclusion::Success)
+    );
+    assert_eq!(jobs[0].commit_sha, "abc123");
+    assert_eq!(
+        jobs[0].url.as_deref(),
+        Some("https://github.com/acme/widgets/runs/100")
+    );
+    assert_eq!(jobs[1].name, "test");
+    assert_eq!(jobs[1].status, CiJobStatus::Running);
+    assert_eq!(jobs[1].conclusion, None);
+
+    let recorded = client.recorded();
+    assert_eq!(recorded[0].path, "/repos/acme/widgets/actions/runs");
+    assert!(recorded[0]
+        .query
+        .iter()
+        .any(|(key, value)| key == "head_sha" && value == "abc123"));
+    assert_eq!(recorded[1].path, "/repos/acme/widgets/actions/runs/12/jobs");
+}
+
+#[test]
+fn list_ci_jobs_by_pull_request_resolves_head_sha_first() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pull_json(5, "abc123"));
+    client.push_response(200, runs_envelope(12, "abc123"));
+    client.push_response(200, jobs_envelope());
+    let forge = forge(client.clone());
+
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(5)),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(jobs.len(), 2);
+    assert_eq!(jobs[0].pull_request_id, Some(pull_id(5)));
+
+    let recorded = client.recorded();
+    assert_eq!(recorded[0].path, "/repos/acme/widgets/pulls/5");
+    assert!(recorded[1]
+        .query
+        .iter()
+        .any(|(key, value)| key == "head_sha" && value == "abc123"));
+}
+
+#[test]
+fn list_ci_jobs_for_missing_pull_request_is_empty() {
+    let client = MockHttpClient::new();
+    client.push_response(404, r#"{"message": "Not Found"}"#);
+    let forge = forge(client.clone());
+
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(99)),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+    assert!(jobs.is_empty());
+    // Only the pull-request lookup happened; no run scans.
+    assert_eq!(client.call_count(), 1);
+}
+
+#[test]
+fn list_ci_jobs_filters_by_status() {
+    let client = MockHttpClient::new();
+    client.push_response(200, runs_envelope(12, "abc123"));
+    client.push_response(200, jobs_envelope());
+    let forge = forge(client);
+
+    let jobs = block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some("abc123".to_string()),
+            status: Some(CiJobStatus::Completed),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].name, "build");
+}
+
+#[test]
+fn get_ci_job_reads_the_job_endpoint() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        r#"{
+            "id": 100,
+            "run_id": 12,
+            "head_sha": "abc123",
+            "name": "build",
+            "status": "completed",
+            "conclusion": "failure",
+            "html_url": "https://github.com/acme/widgets/runs/100",
+            "created_at": "2024-01-02T03:00:00Z",
+            "started_at": "2024-01-02T03:01:00Z",
+            "completed_at": "2024-01-02T03:05:00Z"
+        }"#,
+    );
+    let forge = forge(client.clone());
+
+    let id = CiJobId::new("github:acme/widgets:job:100");
+    let job = block_on(forge.get_ci_job(&id)).unwrap().unwrap();
+    assert_eq!(job.id, id);
+    assert_eq!(job.repo_id, repo_id());
+    assert_eq!(job.name, "build");
+    assert_eq!(job.status, CiJobStatus::Completed);
+    assert_eq!(job.conclusion, Some(temper_forge::CiJobConclusion::Failure));
+    assert!(job.pull_request_id.is_none());
+
+    assert_eq!(
+        client.recorded()[0].path,
+        "/repos/acme/widgets/actions/jobs/100"
+    );
+}
+
+#[test]
+fn get_ci_job_maps_404_to_none() {
+    let client = MockHttpClient::new();
+    client.push_response(404, r#"{"message": "Not Found"}"#);
+    let forge = forge(client);
+
+    let job = block_on(forge.get_ci_job(&CiJobId::new("github:acme/widgets:job:999"))).unwrap();
+    assert!(job.is_none());
+}
+
+#[test]
+fn get_ci_job_rejects_foreign_id_shapes() {
+    let client = MockHttpClient::new();
+    let forge = forge(client.clone());
+
+    let error = block_on(forge.get_ci_job(&CiJobId::new("forgejo:acme/widgets:actions:1:2:3")))
+        .unwrap_err();
+    assert!(matches!(error, temper_forge::ForgeError::InvalidRequest(_)));
+    assert_eq!(client.call_count(), 0);
+}
+
+#[test]
+fn list_ci_jobs_uses_explicit_commit_over_pull_head() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pull_json(5, "headsha"));
+    client.push_response(200, runs_envelope(12, "explicit"));
+    client.push_response(200, jobs_envelope());
+    let forge = forge(client.clone());
+
+    block_on(forge.list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(5)),
+            commit_sha: Some("explicit".to_string()),
+            ..CiJobQuery::default()
+        },
+    ))
+    .unwrap();
+
+    let recorded = client.recorded();
+    assert!(recorded[1]
+        .query
+        .iter()
+        .any(|(key, value)| key == "head_sha" && value == "explicit"));
+    // The pull request is still resolved (number check) but its head SHA does
+    // not override the explicit commit.
+    let _ = ItemNumber::new(5);
+}

@@ -1,0 +1,615 @@
+//! Pure conversions from GitHub DTOs into portable `temper_forge` models.
+//!
+//! These functions contain no HTTP or state; they translate the lenient DTOs in
+//! [`crate::types`] into the domain types in [`temper_forge`]. Keeping mapping
+//! pure makes the request/response plumbing in [`crate::pulls`] and
+//! [`crate::items`] thin and lets the conversions be unit-tested directly.
+//!
+//! Determinism: labels, assignees, and requested reviewers are sorted and
+//! deduplicated so two reads of the same artifact produce identical vectors,
+//! matching the reference backends' contract.
+
+use crate::ids::{
+    format_comment_id, format_issue_id, format_label_id, format_pull_request_id,
+    format_repository_id, format_review_id, format_user_id, RepoCoord,
+};
+use crate::types::{
+    CommentDto, IssueDto, LabelDto, PrBranchDto, PrRepoDto, PullRequestDto, RepositoryDto,
+    ReviewDto, UserDto,
+};
+use temper_forge::{
+    BranchRef, Comment, ForgeError, ForgeResult, Issue, IssueState, ItemNumber, Label, MergeMethod,
+    MergeRecord, PullRequest, PullRequestId, PullRequestReview, PullRequestState, Repository,
+    ReviewDecision, User, UserId, Version,
+};
+
+/// Maps a GitHub user DTO into a portable [`User`].
+///
+/// The GitHub login is both the portable [`UserId`] and the human-facing
+/// handle. `name`/`email` are `null` when unset and map to `None`.
+pub(crate) fn map_user(dto: UserDto) -> User {
+    User {
+        id: format_user_id(&dto.login),
+        handle: dto.login,
+        display_name: non_empty(dto.name),
+        email: non_empty(dto.email),
+    }
+}
+
+/// Maps a GitHub repository DTO into a portable [`Repository`].
+pub(crate) fn map_repository(dto: RepositoryDto) -> Repository {
+    let repo = RepoCoord::new(dto.owner.login, dto.name);
+    Repository {
+        id: format_repository_id(&repo),
+        owner: repo.owner,
+        name: repo.name,
+        default_branch: dto.default_branch,
+        description: non_empty(dto.description),
+        created_at: dto.created_at,
+        updated_at: dto.updated_at,
+    }
+}
+
+/// Maps a GitHub label DTO into a portable [`Label`] scoped to `repo`.
+///
+/// The numeric provider id becomes the prefixed opaque [`LabelId`]; empty
+/// color/description strings map to `None`. GitHub colors carry no `#` prefix
+/// and are passed through unchanged.
+pub(crate) fn map_label(repo: &RepoCoord, dto: LabelDto) -> Label {
+    Label {
+        id: format_label_id(repo, dto.id),
+        repo_id: format_repository_id(repo),
+        name: dto.name,
+        color: non_empty(dto.color),
+        description: non_empty(dto.description),
+    }
+}
+
+/// Returns `None` for a missing or empty string, else the value unchanged.
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.is_empty())
+}
+
+/// Maps a GitHub comment DTO into a portable [`Comment`].
+pub(crate) fn map_comment(repo: &RepoCoord, dto: CommentDto) -> Comment {
+    Comment {
+        id: format_comment_id(repo, dto.id),
+        author_id: format_user_id(&dto.user.login),
+        body: dto.body.unwrap_or_default(),
+        created_at: dto.created_at,
+        updated_at: dto.updated_at,
+    }
+}
+
+/// Maps a GitHub issue DTO into a portable [`Issue`].
+///
+/// `version` is set to [`Version::INITIAL`]; callers that have the response
+/// validator overwrite it through the backend's version cache.
+/// `dependencies` stays empty: GitHub exposes no native dependency links over
+/// its stable REST surface (see [`crate::dependencies`]).
+pub(crate) fn map_issue(repo: &RepoCoord, dto: IssueDto) -> Issue {
+    let number = ItemNumber::new(dto.number);
+    let state = if normalize(&dto.state) == "closed" {
+        IssueState::Closed
+    } else {
+        IssueState::Open
+    };
+    let labels = sorted_dedup(
+        dto.labels
+            .unwrap_or_default()
+            .into_iter()
+            .map(|label| label.name)
+            .collect(),
+    );
+    let assignees = sorted_dedup_users(map_logins(dto.assignees));
+
+    Issue {
+        id: format_issue_id(repo, number),
+        repo_id: format_repository_id(repo),
+        number,
+        title: dto.title,
+        body: dto.body.unwrap_or_default(),
+        state,
+        author_id: format_user_id(&dto.user.login),
+        labels,
+        assignees,
+        dependencies: Vec::new(),
+        version: Version::INITIAL,
+        created_at: dto.created_at,
+        updated_at: dto.updated_at,
+        closed_at: dto.closed_at,
+    }
+}
+
+/// Maps a GitHub pull-request DTO into a portable [`PullRequest`].
+///
+/// `version` is set to [`Version::INITIAL`] here; callers that have the
+/// response validator overwrite it through the backend's version cache.
+/// `dependencies` stays empty (GitHub has no native links). Merged state comes
+/// from the detail endpoint's `merged` boolean when present, falling back to
+/// `merged_at` for list rows that omit it. GitHub's JSON does not expose the
+/// merge method, so a merged pull request maps `MergeRecord::method` to
+/// [`MergeMethod::MergeCommit`] as a documented default; `merge_pull_request`
+/// reports the method actually requested.
+pub(crate) fn map_pull_request(repo: &RepoCoord, dto: PullRequestDto) -> PullRequest {
+    let number = ItemNumber::new(dto.number);
+    let id = format_pull_request_id(repo, number);
+    let merged = dto.merged.unwrap_or(dto.merged_at.is_some());
+    let state = if merged {
+        PullRequestState::Merged
+    } else if normalize(&dto.state) == "closed" {
+        PullRequestState::Closed
+    } else {
+        PullRequestState::Open
+    };
+
+    let (source, head_sha) = branch_side(repo, dto.head);
+    let (target, base_sha) = branch_side(repo, dto.base);
+
+    let labels = sorted_dedup(
+        dto.labels
+            .unwrap_or_default()
+            .into_iter()
+            .map(|label| label.name)
+            .collect(),
+    );
+    let assignees = sorted_dedup_users(map_logins(dto.assignees));
+    let requested_reviewers = sorted_dedup_users(map_logins(dto.requested_reviewers));
+
+    let merge = if merged {
+        dto.merge_commit_sha.clone().map(|sha| MergeRecord {
+            method: MergeMethod::MergeCommit,
+            commit_sha: sha,
+            merged_by: dto
+                .merged_by
+                .as_ref()
+                .map(|user| format_user_id(&user.login))
+                .unwrap_or_else(|| format_user_id(&dto.user.login)),
+            merged_at: dto.merged_at.unwrap_or(dto.updated_at),
+        })
+    } else {
+        None
+    };
+
+    PullRequest {
+        id,
+        repo_id: format_repository_id(repo),
+        number,
+        title: dto.title,
+        body: dto.body.unwrap_or_default(),
+        state,
+        author_id: format_user_id(&dto.user.login),
+        source,
+        target,
+        head_sha,
+        base_sha,
+        labels,
+        assignees,
+        requested_reviewers,
+        dependencies: Vec::new(),
+        merge,
+        version: Version::INITIAL,
+        created_at: dto.created_at,
+        updated_at: dto.updated_at,
+        closed_at: dto.closed_at,
+    }
+}
+
+/// Maps a GitHub review DTO into a portable [`PullRequestReview`].
+///
+/// Returns `None` for states without a portable decision: GitHub's `DISMISSED`
+/// state replaces the original verdict (unlike Forgejo, which keeps the verdict
+/// and flags it), so a dismissed review carries no decision to report and is
+/// dropped. `PENDING` (an unsubmitted draft visible only to its author) maps to
+/// the portable `Pending` decision when it carries a timestamp.
+pub(crate) fn map_review(
+    repo: &RepoCoord,
+    pull_request_id: &PullRequestId,
+    dto: ReviewDto,
+) -> Option<PullRequestReview> {
+    let decision = map_review_decision(&dto.state)?;
+    let submitted_at = dto.submitted_at?;
+    Some(PullRequestReview {
+        id: format_review_id(repo, dto.id),
+        pull_request_id: pull_request_id.clone(),
+        reviewer_id: format_user_id(&dto.user.login),
+        decision,
+        body: dto.body,
+        submitted_at,
+    })
+}
+
+/// Maps a GitHub review state string to a portable [`ReviewDecision`].
+///
+/// Accepts both GitHub's stored state names and its submit event names.
+/// Returns `None` for dismissed and unknown states.
+pub(crate) fn map_review_decision(state: &str) -> Option<ReviewDecision> {
+    match normalize(state).as_str() {
+        "approved" | "approve" => Some(ReviewDecision::Approved),
+        "changes_requested" | "request_changes" => Some(ReviewDecision::ChangesRequested),
+        "commented" | "comment" => Some(ReviewDecision::Commented),
+        "pending" => Some(ReviewDecision::Pending),
+        _ => None,
+    }
+}
+
+/// Returns the GitHub submit event token for a portable review decision.
+///
+/// GitHub's one-call review submit uses `APPROVE`, `REQUEST_CHANGES`, and
+/// `COMMENT`. [`ReviewDecision::Pending`] has no one-call submit (omitting the
+/// event leaves a draft the gate cannot observe), so it is rejected.
+pub(crate) fn review_event_token(decision: ReviewDecision) -> ForgeResult<&'static str> {
+    match decision {
+        ReviewDecision::Approved => Ok("APPROVE"),
+        ReviewDecision::ChangesRequested => Ok("REQUEST_CHANGES"),
+        ReviewDecision::Commented => Ok("COMMENT"),
+        ReviewDecision::Pending => Err(ForgeError::InvalidRequest(
+            "github backend cannot submit a pending review in one call; submit \
+             approved, changes_requested, or commented instead"
+                .to_string(),
+        )),
+    }
+}
+
+/// Returns the GitHub `merge_method` token for a portable merge method.
+pub(crate) fn merge_method_token(method: MergeMethod) -> &'static str {
+    match method {
+        MergeMethod::MergeCommit => "merge",
+        MergeMethod::Squash => "squash",
+        MergeMethod::Rebase => "rebase",
+    }
+}
+
+/// Builds a branch reference plus its commit SHA from a head/base DTO side.
+fn branch_side(pr_repo: &RepoCoord, branch: Option<PrBranchDto>) -> (BranchRef, Option<String>) {
+    let dto = branch.unwrap_or_default();
+    let sha = dto.sha.filter(|sha| !sha.is_empty());
+    let repo_coord = dto
+        .repo
+        .and_then(repo_coord_from_dto)
+        .unwrap_or_else(|| pr_repo.clone());
+    let branch_name = dto
+        .branch
+        .filter(|branch| !branch.is_empty())
+        .or_else(|| dto.label.map(|label| strip_owner_prefix(&label)))
+        .unwrap_or_default();
+    (
+        BranchRef {
+            repository_id: format_repository_id(&repo_coord),
+            branch: branch_name,
+        },
+        sha,
+    )
+}
+
+/// Resolves a repository coordinate from an embedded branch repo DTO.
+fn repo_coord_from_dto(dto: PrRepoDto) -> Option<RepoCoord> {
+    if let Some(full_name) = dto.full_name.filter(|name| !name.is_empty()) {
+        if let Some((owner, name)) = full_name.split_once('/') {
+            if !owner.is_empty() && !name.is_empty() && !name.contains('/') {
+                return Some(RepoCoord::new(owner, name));
+            }
+        }
+    }
+    let owner = dto.owner.map(|user| user.login).filter(|o| !o.is_empty())?;
+    let name = dto.name.filter(|name| !name.is_empty())?;
+    Some(RepoCoord::new(owner, name))
+}
+
+/// Strips a `owner:` prefix from a branch label, leaving the branch name.
+fn strip_owner_prefix(label: &str) -> String {
+    label
+        .split_once(':')
+        .map(|(_, branch)| branch.to_string())
+        .unwrap_or_else(|| label.to_string())
+}
+
+/// Normalizes a provider state string: lowercase, spaces/dashes to underscores.
+fn normalize(value: &str) -> String {
+    value.trim().to_lowercase().replace([' ', '-'], "_")
+}
+
+fn map_logins(users: Option<Vec<crate::types::UserDto>>) -> Vec<UserId> {
+    users
+        .unwrap_or_default()
+        .into_iter()
+        .map(|user| format_user_id(&user.login))
+        .collect()
+}
+
+fn sorted_dedup(mut values: Vec<String>) -> Vec<String> {
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn sorted_dedup_users(mut values: Vec<UserId>) -> Vec<UserId> {
+    values.sort();
+    values.dedup();
+    values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::parse_pull_request_id;
+
+    fn repo() -> RepoCoord {
+        RepoCoord::new("acme", "widgets")
+    }
+
+    fn pull_request_dto(json: &str) -> PullRequestDto {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn maps_open_pull_request_with_branches_and_sorts_collections() {
+        let pr = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 42,
+                    "title": "Add widget",
+                    "body": "details",
+                    "state": "open",
+                    "user": {"login": "author"},
+                    "head": {"label": "author:feature", "ref": "feature", "sha": "headsha"},
+                    "base": {"ref": "main", "sha": "basesha"},
+                    "labels": [{"id": 2, "name": "ready"}, {"id": 1, "name": "needs-ci"}],
+                    "assignees": [{"login": "carol"}, {"login": "bob"}],
+                    "requested_reviewers": [{"login": "dave"}],
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-03-02T00:00:00Z"
+                }"#,
+            ),
+        );
+
+        assert_eq!(pr.id, format_pull_request_id(&repo(), ItemNumber::new(42)));
+        assert_eq!(
+            parse_pull_request_id(&pr.id).unwrap().1,
+            ItemNumber::new(42)
+        );
+        assert_eq!(pr.state, PullRequestState::Open);
+        assert_eq!(pr.author_id, UserId::new("author"));
+        assert_eq!(pr.source.branch, "feature");
+        assert_eq!(pr.target.branch, "main");
+        assert_eq!(pr.head_sha.as_deref(), Some("headsha"));
+        assert_eq!(pr.base_sha.as_deref(), Some("basesha"));
+        assert_eq!(pr.labels, vec!["needs-ci".to_string(), "ready".to_string()]);
+        assert_eq!(pr.assignees, vec![UserId::new("bob"), UserId::new("carol")]);
+        assert_eq!(pr.requested_reviewers, vec![UserId::new("dave")]);
+        assert!(pr.merge.is_none());
+        assert_eq!(pr.version, Version::INITIAL);
+    }
+
+    #[test]
+    fn maps_issue_with_null_body_and_sorts_collections() {
+        let issue: IssueDto = serde_json::from_str(
+            r#"{
+                "number": 7,
+                "title": "Fix bug",
+                "body": null,
+                "state": "open",
+                "user": {"login": "author"},
+                "labels": [{"id": 2, "name": "ready"}, {"id": 1, "name": "bug"}],
+                "assignees": [{"login": "carol"}, {"login": "bob"}],
+                "created_at": "2024-03-01T00:00:00Z",
+                "updated_at": "2024-03-02T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+        let mapped = map_issue(&repo(), issue);
+        assert_eq!(mapped.id, format_issue_id(&repo(), ItemNumber::new(7)));
+        assert_eq!(mapped.state, IssueState::Open);
+        assert_eq!(mapped.body, "");
+        assert_eq!(mapped.author_id, UserId::new("author"));
+        assert_eq!(mapped.labels, vec!["bug".to_string(), "ready".to_string()]);
+        assert_eq!(
+            mapped.assignees,
+            vec![UserId::new("bob"), UserId::new("carol")]
+        );
+        assert!(mapped.dependencies.is_empty());
+        assert_eq!(mapped.version, Version::INITIAL);
+
+        let closed: IssueDto = serde_json::from_str(
+            r#"{
+                "number": 8,
+                "state": "closed",
+                "user": {"login": "author"},
+                "labels": null,
+                "assignees": null,
+                "created_at": "2024-03-01T00:00:00Z",
+                "updated_at": "2024-03-02T00:00:00Z",
+                "closed_at": "2024-03-03T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+        let mapped = map_issue(&repo(), closed);
+        assert_eq!(mapped.state, IssueState::Closed);
+        assert!(mapped.labels.is_empty());
+        assert!(mapped.closed_at.is_some());
+    }
+
+    #[test]
+    fn maps_merged_pull_request_to_merge_record() {
+        let pr = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 7,
+                    "title": "merged",
+                    "state": "closed",
+                    "merged": true,
+                    "merged_at": "2024-04-01T00:00:00Z",
+                    "merge_commit_sha": "mergesha",
+                    "merged_by": {"login": "maintainer"},
+                    "user": {"login": "author"},
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-04-01T00:00:00Z",
+                    "closed_at": "2024-04-01T00:00:00Z"
+                }"#,
+            ),
+        );
+
+        assert_eq!(pr.state, PullRequestState::Merged);
+        let merge = pr.merge.expect("merged pull request has a merge record");
+        assert_eq!(merge.commit_sha, "mergesha");
+        assert_eq!(merge.merged_by, UserId::new("maintainer"));
+        assert_eq!(merge.method, MergeMethod::MergeCommit);
+    }
+
+    #[test]
+    fn list_row_infers_merged_state_from_merged_at() {
+        // The `/pulls` list endpoint omits the `merged` boolean entirely.
+        let pr = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 9,
+                    "state": "closed",
+                    "merged_at": "2024-04-01T00:00:00Z",
+                    "merge_commit_sha": "mergesha",
+                    "user": {"login": "author"},
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-04-01T00:00:00Z",
+                    "closed_at": "2024-04-01T00:00:00Z"
+                }"#,
+            ),
+        );
+        assert_eq!(pr.state, PullRequestState::Merged);
+
+        let closed = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 10,
+                    "state": "closed",
+                    "merged_at": null,
+                    "user": {"login": "author"},
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-04-01T00:00:00Z",
+                    "closed_at": "2024-04-01T00:00:00Z"
+                }"#,
+            ),
+        );
+        assert_eq!(closed.state, PullRequestState::Closed);
+    }
+
+    #[test]
+    fn maps_review_decisions_and_drops_dismissed() {
+        let pr_id = format_pull_request_id(&repo(), ItemNumber::new(7));
+        let approved: ReviewDto = serde_json::from_str(
+            r#"{"id": 1, "user": {"login": "carol"}, "state": "APPROVED", "submitted_at": "2024-03-03T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let review = map_review(&repo(), &pr_id, approved).unwrap();
+        assert_eq!(review.decision, ReviewDecision::Approved);
+        assert_eq!(review.reviewer_id, UserId::new("carol"));
+
+        // GitHub's DISMISSED state replaces the original verdict, so there is no
+        // decision left to report and the event is dropped.
+        let dismissed: ReviewDto = serde_json::from_str(
+            r#"{"id": 2, "user": {"login": "carol"}, "state": "DISMISSED", "submitted_at": "2024-03-03T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(map_review(&repo(), &pr_id, dismissed).is_none());
+
+        // A pending draft without a timestamp cannot be ordered and is dropped.
+        let pending: ReviewDto = serde_json::from_str(
+            r#"{"id": 3, "user": {"login": "carol"}, "state": "PENDING", "submitted_at": null}"#,
+        )
+        .unwrap();
+        assert!(map_review(&repo(), &pr_id, pending).is_none());
+    }
+
+    #[test]
+    fn review_decision_accepts_event_and_state_names() {
+        assert_eq!(
+            map_review_decision("CHANGES_REQUESTED"),
+            Some(ReviewDecision::ChangesRequested)
+        );
+        assert_eq!(
+            map_review_decision("request_changes"),
+            Some(ReviewDecision::ChangesRequested)
+        );
+        assert_eq!(
+            map_review_decision("Commented"),
+            Some(ReviewDecision::Commented)
+        );
+        assert_eq!(
+            map_review_decision("pending"),
+            Some(ReviewDecision::Pending)
+        );
+        assert_eq!(map_review_decision("DISMISSED"), None);
+    }
+
+    #[test]
+    fn review_event_token_maps_and_rejects_pending() {
+        assert_eq!(
+            review_event_token(ReviewDecision::Approved).unwrap(),
+            "APPROVE"
+        );
+        assert_eq!(
+            review_event_token(ReviewDecision::ChangesRequested).unwrap(),
+            "REQUEST_CHANGES"
+        );
+        assert_eq!(
+            review_event_token(ReviewDecision::Commented).unwrap(),
+            "COMMENT"
+        );
+        assert!(matches!(
+            review_event_token(ReviewDecision::Pending),
+            Err(ForgeError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn merge_method_tokens() {
+        assert_eq!(merge_method_token(MergeMethod::MergeCommit), "merge");
+        assert_eq!(merge_method_token(MergeMethod::Squash), "squash");
+        assert_eq!(merge_method_token(MergeMethod::Rebase), "rebase");
+    }
+
+    #[test]
+    fn branch_uses_head_repo_when_present() {
+        let pr = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 9,
+                    "state": "open",
+                    "user": {"login": "author"},
+                    "head": {"ref": "fork-branch", "repo": {"full_name": "forker/widgets"}},
+                    "base": {"ref": "main"},
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-03-02T00:00:00Z"
+                }"#,
+            ),
+        );
+        assert_eq!(
+            pr.source.repository_id,
+            format_repository_id(&RepoCoord::new("forker", "widgets"))
+        );
+        assert_eq!(pr.target.repository_id, format_repository_id(&repo()));
+    }
+
+    #[test]
+    fn deleted_fork_branch_falls_back_to_pr_repo() {
+        let pr = map_pull_request(
+            &repo(),
+            pull_request_dto(
+                r#"{
+                    "number": 11,
+                    "state": "open",
+                    "user": {"login": "author"},
+                    "head": {"label": "ghost:feature", "ref": "feature", "repo": null},
+                    "base": {"ref": "main"},
+                    "created_at": "2024-03-01T00:00:00Z",
+                    "updated_at": "2024-03-02T00:00:00Z"
+                }"#,
+            ),
+        );
+        assert_eq!(pr.source.repository_id, format_repository_id(&repo()));
+        assert_eq!(pr.source.branch, "feature");
+    }
+}

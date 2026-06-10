@@ -10,6 +10,7 @@ members = [
     "crates/temper-forge-filesystem",
     "crates/temper-forge-memory",
     "crates/temper-forge-forgejo",
+    "crates/temper-forge-github",
     "crates/temper-runner",
     "crates/temper-testing",
     "crates/temper-reference-delivery",

@@ -1,0 +1,23 @@
+[package]
+name = "temper-forge-github"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "GitHub-backed Forge implementation (best-effort, offline-tested)."
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+temper-forge = { path = "../temper-forge" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Offline tests use a hand-rolled poller plus a recording mock HTTP client; no
+# async runtime or network is needed.
+
+[lints]
+workspace = true

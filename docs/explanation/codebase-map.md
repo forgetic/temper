@@ -10,6 +10,7 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | `crates/temper-forge-memory/` | Fast in-memory reference backend for deterministic workflow tests and local scenarios. |
 | `crates/temper-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, and multi-process/process-split tests. |
 | `crates/temper-forge-forgejo/` | Forgejo HTTP backend, provider-specific mapping, optional live smoke tests, and offline mock-contract tests. |
+| `crates/temper-forge-github/` | GitHub HTTP backend, provider-specific mapping, and offline mock-contract tests (first pass: hermetic tests only, no native dependency links). |
 | `crates/temper-workflow/` | Workflow definitions and runtime logic: validation, classification, compilation, planning/execution, leases, reconciliation, and recovery. |
 | `crates/temper-runner/` | Backend-agnostic worker runtime: queue scans, `RoleTools`, role/mechanical workers, polling/wake hints, multi-repo scans, runner config, and external-tool seams such as `coding_workspace`. |
 | `crates/temper-testing/` | Non-production fakes, fixtures, scenario drivers, CI sinks, worker logic, and gated e2e rehearsals. |
