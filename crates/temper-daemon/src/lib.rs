@@ -97,6 +97,37 @@ impl ResultApplier for NoopApplier {
     async fn apply(&self, _job: InFlightJob, _result: JobResult) {}
 }
 
+/// Routes each applied result to the applier registered for the job's role,
+/// falling back to the default applier for unknown roles.
+pub struct RoleRoutingApplier {
+    routes: BTreeMap<String, Arc<dyn ResultApplier>>,
+    default: Arc<dyn ResultApplier>,
+}
+
+impl RoleRoutingApplier {
+    pub fn new(default: Arc<dyn ResultApplier>) -> Self {
+        Self {
+            routes: BTreeMap::new(),
+            default,
+        }
+    }
+
+    pub fn with_route(mut self, role: impl Into<String>, applier: Arc<dyn ResultApplier>) -> Self {
+        self.routes.insert(role.into(), applier);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl ResultApplier for RoleRoutingApplier {
+    async fn apply(&self, job: InFlightJob, result: JobResult) {
+        match self.routes.get(&job.role) {
+            Some(applier) => applier.apply(job, result).await,
+            None => self.default.apply(job, result).await,
+        }
+    }
+}
+
 /// Forge-backed applier for daemon-accepted worker results.
 ///
 /// Successful issue-targeted worker results carrying a branch are turned into the

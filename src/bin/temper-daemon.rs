@@ -3,10 +3,11 @@
 use std::{process::ExitCode, sync::Arc};
 
 use temper_daemon::{
-    config::{ParseOutcome, USAGE},
+    config::{role_tokens_from_env, ParseOutcome, USAGE},
     router_with_webhook, run_mechanical_backstop, run_poll_backstop, serve_router, Daemon,
     DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig, PollBackstopConfig,
-    RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget, RoleRoutingApplier,
+    WebhookConfig,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -44,9 +45,10 @@ fn run(config: DaemonRunConfig) -> Result<(), String> {
 }
 
 async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
-    let forge = Arc::new(ForgejoForge::new(
-        ForgejoConfig::from_env().map_err(|error| format!("Forgejo config: {error}"))?,
-    ));
+    let forge_config =
+        ForgejoConfig::from_env().map_err(|error| format!("Forgejo config: {error}"))?;
+    let forge_base_url = forge_config.base_url.clone();
+    let forge = Arc::new(ForgejoForge::new(forge_config));
     let workflow = Arc::new(
         temper_reference_delivery::resolve_workflow(config.workflow_file.as_ref())
             .map_err(|error| format!("failed to resolve workflow: {error}"))?,
@@ -63,12 +65,13 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
     let lease_ttl = chrono::Duration::from_std(config.lease_ttl)
         .map_err(|error| format!("invalid --lease-ttl-secs: {error}"))?;
 
-    let daemon = Daemon::with_applier(Arc::new(LeaseApplier::new(
+    let daemon = Daemon::with_applier(result_applier(
         forge.clone(),
-        LeasePolicy::new(lease_ttl),
-        config.daemon_id.clone(),
-        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-    )));
+        forge_base_url,
+        workflow.clone(),
+        &config,
+        lease_ttl,
+    ));
 
     let poll_config = PollBackstopConfig {
         targets: normal_targets,
@@ -127,6 +130,86 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
     serve_router(router, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))
+}
+
+fn result_applier(
+    default_forge: Arc<ForgejoForge>,
+    forge_base_url: String,
+    workflow: Arc<temper_workflow::ValidatedWorkflow>,
+    config: &DaemonRunConfig,
+    lease_ttl: chrono::Duration,
+) -> Arc<dyn temper_daemon::ResultApplier> {
+    let default_chain = applier_chain(
+        default_forge,
+        workflow.clone(),
+        config.daemon_id.clone(),
+        lease_ttl,
+    );
+    let role_tokens = role_tokens_from_env(
+        config.roles.iter().map(|role| role.as_str().to_string()),
+        std::env::vars(),
+    );
+    if role_tokens.is_empty() {
+        return default_chain;
+    }
+
+    let mut routing = RoleRoutingApplier::new(default_chain);
+    let mut routed = Vec::new();
+    let mut fallback = Vec::new();
+
+    for role in &config.roles {
+        let role = role.as_str().to_string();
+        if let Some(token) = role_tokens.get(&role) {
+            let role_forge = Arc::new(ForgejoForge::new(ForgejoConfig::new(
+                forge_base_url.clone(),
+                token.clone(),
+            )));
+            let role_chain = applier_chain(
+                role_forge,
+                workflow.clone(),
+                config.daemon_id.clone(),
+                lease_ttl,
+            );
+            routing = routing.with_route(role.clone(), role_chain);
+            routed.push(role);
+        } else {
+            fallback.push(role);
+        }
+    }
+
+    eprintln!(
+        "temper-daemon: role identities routed={} fallback={}",
+        role_list(&routed),
+        role_list(&fallback)
+    );
+
+    Arc::new(routing)
+}
+
+fn applier_chain(
+    forge: Arc<ForgejoForge>,
+    workflow: Arc<temper_workflow::ValidatedWorkflow>,
+    daemon_id: String,
+    lease_ttl: chrono::Duration,
+) -> Arc<dyn temper_daemon::ResultApplier> {
+    Arc::new(LeaseApplier::new(
+        forge.clone(),
+        LeasePolicy::new(lease_ttl),
+        daemon_id,
+        Arc::new(ForgeApplier::new(forge, workflow)),
+    ))
+}
+
+fn role_list(roles: impl IntoIterator<Item = impl AsRef<str>>) -> String {
+    let roles = roles
+        .into_iter()
+        .map(|role| role.as_ref().to_string())
+        .collect::<Vec<_>>();
+    if roles.is_empty() {
+        "(none)".to_string()
+    } else {
+        roles.join(",")
+    }
 }
 
 async fn resolve_repositories<F: Forge + ?Sized>(

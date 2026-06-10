@@ -2,7 +2,12 @@
 
 //! Pure deployment configuration parser for the root `temper-daemon` binary.
 
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    path::PathBuf,
+    time::Duration,
+};
 
 use temper_forge::RepositoryPath;
 use temper_workflow::RoleId;
@@ -53,6 +58,50 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, Str
         return Ok(ParseOutcome::Help);
     }
     raw.into_config().map(ParseOutcome::Run)
+}
+
+/// Resolves per-role Forge API tokens from `TEMPER_FORGEJO_TOKEN_<ROLEKEY>`
+/// environment variables.
+///
+/// Roles without a provisioned token are absent from the returned map so callers
+/// can fall back to the default identity for them. `ROLEKEY` is the role id
+/// uppercased with every non-`[A-Z0-9]` character replaced by `_`.
+pub fn role_tokens_from_env(
+    roles: impl IntoIterator<Item = String>,
+    vars: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    let wanted_roles = roles.into_iter().collect::<BTreeSet<_>>();
+    let mut tokens = BTreeMap::new();
+
+    for (key, token) in vars {
+        let Some(role_key) = key.strip_prefix("TEMPER_FORGEJO_TOKEN_") else {
+            continue;
+        };
+        if token.trim().is_empty() {
+            continue;
+        }
+
+        for role in &wanted_roles {
+            if role_key == env_role_key(role) {
+                tokens.entry(role.clone()).or_insert_with(|| token.clone());
+            }
+        }
+    }
+
+    tokens
+}
+
+fn env_role_key(role: &str) -> String {
+    role.chars()
+        .map(|ch| {
+            let ch = ch.to_ascii_uppercase();
+            if ch.is_ascii_uppercase() || ch.is_ascii_digit() {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -248,8 +297,98 @@ mod tests {
         RepositoryPath::new(owner, name)
     }
 
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
     fn role(id: &str) -> RoleId {
         RoleId::new(id)
+    }
+
+    #[test]
+    fn role_tokens_resolve_configured_roles_only() {
+        let tokens = role_tokens_from_env(
+            vec!["engineer".to_string(), "reviewer".to_string()],
+            env(&[
+                ("TEMPER_FORGEJO_TOKEN_ENGINEER", "engineer-token"),
+                ("TEMPER_FORGEJO_TOKEN_ARCHITECT", "architect-token"),
+                ("UNRELATED", "ignored"),
+            ]),
+        );
+
+        assert_eq!(
+            tokens,
+            BTreeMap::from([("engineer".to_string(), "engineer-token".to_string())])
+        );
+    }
+
+    #[test]
+    fn role_tokens_map_hyphenated_and_non_alphanumeric_roles_to_env_keys() {
+        let tokens = role_tokens_from_env(
+            vec![
+                "ci-reviewer".to_string(),
+                "qa.bot/2".to_string(),
+                "agent_007".to_string(),
+            ],
+            env(&[
+                ("TEMPER_FORGEJO_TOKEN_CI_REVIEWER", "ci-token"),
+                ("TEMPER_FORGEJO_TOKEN_QA_BOT_2", "qa-token"),
+                ("TEMPER_FORGEJO_TOKEN_AGENT_007", "agent-token"),
+            ]),
+        );
+
+        assert_eq!(
+            tokens,
+            BTreeMap::from([
+                ("agent_007".to_string(), "agent-token".to_string()),
+                ("ci-reviewer".to_string(), "ci-token".to_string()),
+                ("qa.bot/2".to_string(), "qa-token".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn role_tokens_treat_trimmed_empty_values_as_absent() {
+        let tokens = role_tokens_from_env(
+            vec!["engineer".to_string(), "reviewer".to_string()],
+            env(&[
+                ("TEMPER_FORGEJO_TOKEN_ENGINEER", "  "),
+                ("TEMPER_FORGEJO_TOKEN_REVIEWER", "reviewer-token"),
+            ]),
+        );
+
+        assert_eq!(
+            tokens,
+            BTreeMap::from([("reviewer".to_string(), "reviewer-token".to_string())])
+        );
+    }
+
+    #[test]
+    fn role_tokens_deduplicate_duplicate_roles() {
+        let tokens = role_tokens_from_env(
+            vec![
+                "engineer".to_string(),
+                "engineer".to_string(),
+                "reviewer".to_string(),
+            ],
+            env(&[
+                ("TEMPER_FORGEJO_TOKEN_ENGINEER", "engineer-token"),
+                ("TEMPER_FORGEJO_TOKEN_REVIEWER", "reviewer-token"),
+            ]),
+        );
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(
+            tokens.get("engineer").map(String::as_str),
+            Some("engineer-token")
+        );
+        assert_eq!(
+            tokens.get("reviewer").map(String::as_str),
+            Some("reviewer-token")
+        );
     }
 
     #[test]
