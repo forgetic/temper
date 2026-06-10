@@ -51,6 +51,26 @@ pub enum RoleFeedMode {
     Wake,
 }
 
+/// One repository/role pair scanned by the generic poll backstop.
+#[derive(Clone, Debug)]
+pub struct RoleFeedTarget {
+    /// Repository to scan.
+    pub repo: RepositoryId,
+    /// Role whose subscribed queues are scanned.
+    pub role: RoleId,
+    /// Scan mode to use for this target.
+    pub mode: RoleFeedMode,
+}
+
+/// Configured target set and fixed delay between poll-backstop passes.
+#[derive(Clone, Debug)]
+pub struct PollBackstopConfig {
+    /// Targets scanned in order on each cadence tick.
+    pub targets: Vec<RoleFeedTarget>,
+    /// Delay after one complete pass before the next pass starts.
+    pub cadence: Duration,
+}
+
 /// Pluggable seam invoked when the daemon accepts a worker `result`.
 ///
 /// The default implementation is a no-op. Use [`LeaseApplier`] to compose a
@@ -792,6 +812,54 @@ impl Daemon {
         Router::new()
             .route("/v1/message", post(handle_message))
             .with_state(state)
+    }
+}
+
+/// Runs one poll-backstop pass over the configured targets.
+pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
+    daemon: &Daemon,
+    forge: &F,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    config: &PollBackstopConfig,
+) -> usize {
+    let mut total = 0;
+    for target in &config.targets {
+        match daemon
+            .enqueue_scanned_role_work(
+                forge,
+                &target.repo,
+                workflow,
+                compiled,
+                now,
+                &target.role,
+                target.mode,
+            )
+            .await
+        {
+            Ok(count) => total += count,
+            Err(error) => eprintln!(
+                "temper-daemon: poll backstop scan failed for repo={} role={}: {error}",
+                target.repo,
+                target.role.as_str()
+            ),
+        }
+    }
+    total
+}
+
+/// Runs a fixed-delay poll backstop forever.
+pub async fn run_poll_backstop<F: Forge + ?Sized>(
+    daemon: &Daemon,
+    forge: &F,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    config: &PollBackstopConfig,
+) {
+    loop {
+        run_poll_backstop_tick(daemon, forge, workflow, compiled, Utc::now(), config).await;
+        tokio::time::sleep(config.cadence).await;
     }
 }
 
