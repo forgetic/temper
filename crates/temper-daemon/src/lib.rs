@@ -13,16 +13,13 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use temper_forge::{
-    CreateComment, Forge, ForgeError, Issue, ItemNumber, Repository, RepositoryId, RepositoryPath,
-    UpdateIssue,
+    BranchRef, CreateComment, CreatePullRequest, Forge, ForgeError, Issue, ItemNumber, Repository,
+    RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_runner::{
-    scan_role, scan_role_wake,
-    workspace_request::{implementation_pr_pull_request_input, pr_correlation_key},
-    ScanError, WorkItem,
+    pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake, ScanError, WorkItem,
 };
 use temper_worker_protocol::{
     Artifact, ErrorCode, FailureClass, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
@@ -43,6 +40,7 @@ pub mod config;
 mod webhook;
 
 pub use config::{parse, DaemonRunConfig, ParseOutcome, USAGE};
+pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, JobRepository};
 pub use webhook::*;
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
@@ -324,6 +322,46 @@ impl<F: Forge> ForgeApplier<F> {
     }
 }
 
+fn implementation_pr_pull_request_input(
+    repo: RepositoryId,
+    code_number: ItemNumber,
+    issue_title: &str,
+    head_branch: String,
+    base_branch: String,
+    summary: &str,
+    labels: Vec<String>,
+) -> CreatePullRequest {
+    let metadata = temper_workflow::WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        parents: vec![temper_workflow::ArtifactRef::same_repo(code_number)],
+        ..temper_workflow::WorkflowMetadata::default()
+    };
+    let summary = summary.trim();
+    let body = format!(
+        "Workspace-produced implementation for issue #{code_number}.\n\nSummary: {}\n\n{}",
+        if summary.is_empty() {
+            "(none)"
+        } else {
+            summary
+        },
+        temper_workflow::render_metadata_block(&metadata)
+    );
+    CreatePullRequest {
+        title: format!("Implement #{code_number}: {issue_title}"),
+        body,
+        source: BranchRef {
+            repository_id: repo.clone(),
+            branch: head_branch,
+        },
+        target: BranchRef {
+            repository_id: repo,
+            branch: base_branch,
+        },
+        labels,
+        assignees: Vec::new(),
+    }
+}
+
 #[async_trait::async_trait]
 impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
     async fn apply(&self, job: InFlightJob, result: JobResult) {
@@ -455,17 +493,6 @@ async fn resolve_target<F: Forge + ?Sized>(
     Some((repository.id, target))
 }
 
-/// Daemon-owned role-decision context serialized into a worker assignment.
-/// This starts minimal for Phase 2f-i and can be extended later when the real
-/// worker executor consumes richer role-decision inputs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobContext {
-    pub role: String,
-    pub repo: String,
-    pub queue: String,
-    pub artifact_kind: String,
-}
-
 /// A daemon job derived from a scanned `WorkItem`: exactly the arguments
 /// `Daemon::enqueue_job` consumes.
 #[derive(Debug, Clone, PartialEq)]
@@ -492,6 +519,11 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         repo: repo.to_string(),
         queue: queue.clone(),
         artifact_kind: item.kind.as_str().to_string(),
+        repository: None,
+        base_branch: None,
+        branch_hint: None,
+        correlation_key: None,
+        artifact: None,
     };
 
     WorkItemJob {
@@ -504,6 +536,67 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         },
         job_payload: serde_json::to_value(&context).expect("JobContext serializes"),
     }
+}
+
+/// Enrich a mapped job's payload with the workspace context the worker-side
+/// coding agent needs: repository coordinates, base branch, branch hint,
+/// correlation key, and (for issue targets) an artifact snapshot. Forge reads
+/// happen here so `job_from_work_item` stays pure.
+async fn enrich_work_item_job<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    item: &WorkItem,
+    job: &mut WorkItemJob,
+) -> Result<(), ScanError> {
+    let repository = forge
+        .get_repository(repo)
+        .await?
+        .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
+
+    let base_branch = if repository.default_branch.trim().is_empty() {
+        "main".to_string()
+    } else {
+        repository.default_branch.clone()
+    };
+    let number = match item.target {
+        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number,
+    };
+
+    let artifact = match item.target {
+        ArtifactSource::Issue { number } => {
+            let issue = forge
+                .get_issue_by_number(repo, number)
+                .await?
+                .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("issue {number}"))))?;
+            Some(JobArtifactSnapshot {
+                number: number.get(),
+                title: issue.title,
+                body: issue.body,
+                labels: issue.labels,
+                state: format!("{:?}", issue.state),
+            })
+        }
+        ArtifactSource::PullRequest { .. } => None,
+    };
+
+    let context = JobContext {
+        role: job.role.clone(),
+        repo: job.repo.clone(),
+        queue: item.queue.as_str().to_string(),
+        artifact_kind: item.kind.as_str().to_string(),
+        repository: Some(JobRepository {
+            owner: repository.owner,
+            name: repository.name,
+            default_branch: repository.default_branch,
+        }),
+        base_branch: Some(base_branch),
+        branch_hint: Some(pr_branch_hint(&item.kind, number)),
+        correlation_key: Some(pr_correlation_key(&item.kind, number)),
+        artifact,
+    };
+    job.job_payload = serde_json::to_value(&context).expect("JobContext serializes");
+
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -755,10 +848,10 @@ impl Daemon {
     }
 
     /// Scans `repo` for `role`'s active queue work and enqueues each resulting
-    /// `WorkItem` into the daemon for dispatch. Returns the number of scanned
-    /// items; the daemon/registry dedupes already-pending or in-flight jobs by
-    /// `job_id`, so repeated feeds for an unchanged ready artifact do not
-    /// double-dispatch.
+    /// `WorkItem` into the daemon for dispatch. Returns the number of
+    /// successfully enriched and enqueued jobs; the daemon/registry dedupes
+    /// already-pending or in-flight jobs by `job_id`, so repeated feeds for an
+    /// unchanged ready artifact do not double-dispatch.
     ///
     /// The protocol `repo` label is the artifact repository's `owner/name` path,
     /// matching worker registered capability `repo` values.
@@ -780,10 +873,32 @@ impl Daemon {
                 scan_role_wake(forge, repo, workflow, compiled, now, role).await?
             }
         };
+        let mut enqueued = 0;
         for item in &items {
-            self.enqueue_work_item(&repo_label, item).await;
+            let mut job = job_from_work_item(&repo_label, item);
+            match enrich_work_item_job(forge, repo, item, &mut job).await {
+                Ok(()) => {
+                    self.enqueue_job(
+                        job.job_id,
+                        job.role,
+                        job.repo,
+                        job.artifact,
+                        job.job_payload,
+                    )
+                    .await;
+                    enqueued += 1;
+                }
+                Err(error) => eprintln!(
+                    "temper-daemon: skipped scanned work item after enrichment failed for repo={} role={} queue={} artifact_kind={} target={:?}: {error}",
+                    repo_label,
+                    role.as_str(),
+                    item.queue.as_str(),
+                    item.kind.as_str(),
+                    item.target
+                ),
+            }
         }
-        Ok(items.len())
+        Ok(enqueued)
     }
 
     #[cfg(test)]
@@ -971,7 +1086,8 @@ pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use temper_forge::ItemNumber;
+    use temper_forge::{CreateRepository, Forge, ItemNumber};
+    use temper_forge_memory::MemoryForge;
     use temper_worker_protocol::{Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
     use temper_workflow::{ArtifactKindId, QueueId, RoleId};
 
@@ -1082,12 +1198,26 @@ mod tests {
             }
         );
         assert_eq!(
+            job.job_payload,
+            json!({
+                "role": "engineer",
+                "repo": "ai/temper",
+                "queue": "code_ready",
+                "artifact_kind": "code"
+            })
+        );
+        assert_eq!(
             serde_json::from_value::<JobContext>(job.job_payload).expect("valid JobContext"),
             JobContext {
                 role: "engineer".to_string(),
                 repo: "ai/temper".to_string(),
                 queue: "code_ready".to_string(),
                 artifact_kind: "code".to_string(),
+                repository: None,
+                base_branch: None,
+                branch_hint: None,
+                correlation_key: None,
+                artifact: None,
             }
         );
     }
@@ -1128,5 +1258,43 @@ mod tests {
         daemon.enqueue_work_item("ai/temper", &item).await;
 
         assert_eq!(daemon.queued_jobs().await, vec![expected]);
+    }
+
+    #[tokio::test]
+    async fn enrich_work_item_job_leaves_pull_request_artifact_snapshot_empty() {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(CreateRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
+            .await
+            .expect("repository is created")
+            .id;
+        let item = work_item(ArtifactSource::PullRequest {
+            number: ItemNumber::new(42),
+        });
+        let mut job = job_from_work_item("ai/temper", &item);
+
+        enrich_work_item_job(&forge, &repo, &item, &mut job)
+            .await
+            .expect("enrichment succeeds for pull request targets");
+
+        let context: JobContext =
+            serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
+        assert_eq!(context.base_branch.as_deref(), Some("main"));
+        assert_eq!(
+            context.repository,
+            Some(JobRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+            })
+        );
+        assert_eq!(context.branch_hint.as_deref(), Some("agent/pr-for-code-42"));
+        assert_eq!(context.correlation_key.as_deref(), Some("pr-for-code-42"));
+        assert_eq!(context.artifact, None);
     }
 }

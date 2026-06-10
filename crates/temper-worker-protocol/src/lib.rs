@@ -72,6 +72,52 @@ pub struct Assign {
     pub job_payload: Value,
 }
 
+/// Repository coordinates for a job assignment (standard job payload v1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobRepository {
+    pub owner: String,
+    pub name: String,
+    pub default_branch: String,
+}
+
+/// Snapshot of the Forge artifact a job acts on, taken at enqueue time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobArtifactSnapshot {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub labels: Vec<String>,
+    /// Debug-formatted artifact state, e.g. `Open`.
+    pub state: String,
+}
+
+/// Standard daemon-owned job payload serialized into `Assign.job_payload`.
+/// Enrichment fields are optional so older minimal payloads still parse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobContext {
+    pub role: String,
+    pub repo: String,
+    pub queue: String,
+    pub artifact_kind: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<JobRepository>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+
+    /// Branch the worker should push, e.g. `agent/pr-for-code-42`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_hint: Option<String>,
+
+    /// Idempotent PR correlation key, e.g. `pr-for-code-42`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_key: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<JobArtifactSnapshot>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeartbeatState {
@@ -279,5 +325,72 @@ mod tests {
         .expect("unknown fields must be accepted");
 
         assert!(matches!(msg, WorkerProtocolMessage::Poll(_)));
+    }
+
+    #[test]
+    fn minimal_job_context_defaults_enrichment_fields_to_none() {
+        let context: JobContext = serde_json::from_value(serde_json::json!({
+            "role": "engineer",
+            "repo": "ai/temper",
+            "queue": "code_ready",
+            "artifact_kind": "code"
+        }))
+        .expect("minimal job context parses");
+
+        assert_eq!(context.role, "engineer");
+        assert_eq!(context.repo, "ai/temper");
+        assert_eq!(context.queue, "code_ready");
+        assert_eq!(context.artifact_kind, "code");
+        assert_eq!(context.repository, None);
+        assert_eq!(context.base_branch, None);
+        assert_eq!(context.branch_hint, None);
+        assert_eq!(context.correlation_key, None);
+        assert_eq!(context.artifact, None);
+    }
+
+    #[test]
+    fn full_job_context_round_trips_without_loss() {
+        let context = JobContext {
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            repository: Some(JobRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+            }),
+            base_branch: Some("main".to_string()),
+            branch_hint: Some("agent/pr-for-code-42".to_string()),
+            correlation_key: Some("pr-for-code-42".to_string()),
+            artifact: Some(JobArtifactSnapshot {
+                number: 42,
+                title: "Implement daemon payload".to_string(),
+                body: "Add the standard job context.".to_string(),
+                labels: vec!["code".to_string(), "ready".to_string()],
+                state: "Open".to_string(),
+            }),
+        };
+
+        let value = serde_json::to_value(&context).expect("job context serializes");
+        let decoded: JobContext =
+            serde_json::from_value(value).expect("serialized job context parses");
+
+        assert_eq!(decoded, context);
+    }
+
+    #[test]
+    fn job_context_unknown_fields_are_ignored() {
+        let context: JobContext = serde_json::from_value(serde_json::json!({
+            "role": "engineer",
+            "repo": "ai/temper",
+            "queue": "code_ready",
+            "artifact_kind": "code",
+            "future_field": "ignored"
+        }))
+        .expect("unknown job context fields must be accepted");
+
+        assert_eq!(context.role, "engineer");
+        assert_eq!(context.repository, None);
     }
 }

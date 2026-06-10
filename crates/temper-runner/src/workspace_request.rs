@@ -23,7 +23,7 @@ pub fn pr_correlation_key(kind: &ArtifactKindId, number: ItemNumber) -> String {
 }
 
 /// Deterministic branch suggestion for a workspace head.
-pub(crate) fn pr_branch_hint(kind: &ArtifactKindId, number: ItemNumber) -> String {
+pub fn pr_branch_hint(kind: &ArtifactKindId, number: ItemNumber) -> String {
     format!("agent/{}", pr_correlation_key(kind, number))
 }
 
