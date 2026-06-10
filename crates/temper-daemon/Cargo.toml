@@ -23,9 +23,5 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time", "net", "sig
 reqwest = { workspace = true }
 temper-forge-memory = { path = "../temper-forge-memory" }
 
-[[bin]]
-name = "temper-daemon"
-path = "src/bin/temper-daemon.rs"
-
 [lints]
 workspace = true

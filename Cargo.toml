@@ -36,11 +36,17 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
+temper-daemon = { path = "crates/temper-daemon" }
 temper-forgejo-provision = { path = "crates/temper-forgejo-provision" }
 temper-interaction-service = { path = "crates/temper-interaction-service" }
 temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator" }
 temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo" }
 temper-worker = { path = "crates/temper-worker" }
+tokio = { version = "1", features = ["rt", "net", "time", "signal", "macros"] }
+
+[[bin]]
+name = "temper-daemon"
+path = "src/bin/temper-daemon.rs"
 
 [[bin]]
 name = "temper-worker"
