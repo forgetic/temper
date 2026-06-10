@@ -114,7 +114,12 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
     }
 }
 
-fn failure_result(worker_id: &str, job_id: &str) -> JobResult {
+fn failure_result(
+    worker_id: &str,
+    job_id: &str,
+    failure_class: Option<FailureClass>,
+    message: &str,
+) -> JobResult {
     JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
@@ -124,13 +129,22 @@ fn failure_result(worker_id: &str, job_id: &str) -> JobResult {
             name: "agent/pr-for-code-1".to_string(),
             head_sha: "def456".to_string(),
         }),
-        failure: Some(Failure {
-            class: FailureClass::Permanent,
-            message: "not implemented".to_string(),
+        failure: failure_class.map(|class| Failure {
+            class,
+            message: message.to_string(),
         }),
         summary: Some("failed".to_string()),
         details: None,
     }
+}
+
+fn permanent_failure_result(worker_id: &str, job_id: &str) -> JobResult {
+    failure_result(
+        worker_id,
+        job_id,
+        Some(FailureClass::Permanent),
+        "not implemented",
+    )
 }
 
 fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult {
@@ -215,6 +229,50 @@ async fn poll_assignment(
         }
         other => panic!("expected assign, got {other:?}"),
     }
+}
+
+async fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
+    forge
+        .get_issue_by_number(repo, number)
+        .await
+        .expect("issue reload succeeds")
+        .expect("issue exists")
+        .labels
+}
+
+async fn issue_comment_bodies(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) -> Vec<String> {
+    let issue = forge
+        .get_issue_by_number(repo, number)
+        .await
+        .expect("issue reload succeeds")
+        .expect("issue exists");
+    forge
+        .list_issue_comments(&issue.id)
+        .await
+        .expect("list issue comments succeeds")
+        .into_iter()
+        .map(|comment| comment.body)
+        .collect()
+}
+
+async fn assert_no_attention_mark(forge: &MemoryForge, repo: &RepositoryId, issue: ItemNumber) {
+    assert!(!issue_labels(forge, repo, issue)
+        .await
+        .iter()
+        .any(|label| label == "needs-human"));
+    assert!(issue_comment_bodies(forge, repo, issue).await.is_empty());
+}
+
+async fn assert_no_pull_requests(forge: &MemoryForge, repo: &RepositoryId) {
+    let pulls = forge
+        .list_pull_requests(repo, PullRequestQuery::default())
+        .await
+        .expect("list pull requests succeeds");
+    assert!(pulls.is_empty());
 }
 
 async fn wait_for_pull_request_count(
@@ -418,7 +476,7 @@ async fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
 }
 
 #[tokio::test]
-async fn non_success_and_success_without_branch_create_no_pull_request() {
+async fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
     let forge = Arc::new(MemoryForge::new());
     let repo = new_repo(&forge, "stable").await;
     let issue = create_ready_issue(&forge, &repo).await;
@@ -427,15 +485,160 @@ async fn non_success_and_success_without_branch_create_no_pull_request() {
     let job = in_flight_job("acme/service", issue);
 
     applier
-        .apply(job.clone(), failure_result("worker-a", &job.job_id))
-        .await;
-    applier
         .apply(job.clone(), success_without_branch("worker-a", &job.job_id))
         .await;
 
-    let pulls = forge
-        .list_pull_requests(&repo, PullRequestQuery::default())
-        .await
-        .expect("list pull requests succeeds");
-    assert!(pulls.is_empty());
+    assert_no_pull_requests(&forge, &repo).await;
+    assert_no_attention_mark(&forge, &repo, issue).await;
+}
+
+#[tokio::test]
+async fn permanent_failure_marks_issue_for_human_attention_and_audit() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_ready_issue(&forge, &repo).await;
+    let workflow = Arc::new(workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = in_flight_job("acme/service", issue);
+
+    applier
+        .apply(
+            job.clone(),
+            permanent_failure_result("worker-a", &job.job_id),
+        )
+        .await;
+
+    assert_no_pull_requests(&forge, &repo).await;
+    let labels = issue_labels(&forge, &repo, issue).await;
+    assert!(labels.iter().any(|label| label == "needs-human"));
+    let comments = issue_comment_bodies(&forge, &repo, issue).await;
+    assert_eq!(comments.len(), 1);
+    let comment = &comments[0];
+    assert!(comment.contains("not implemented"));
+    assert!(comment.contains("failure class: permanent"));
+    assert!(comment.contains(&format!("job_id: `{}`", job.job_id)));
+    assert!(comment.contains("worker: `worker-a`"));
+}
+
+#[tokio::test]
+async fn failure_marking_applies_for_human_audit_classes() {
+    for (failure_class, expected_class, message) in [
+        (
+            Some(FailureClass::Permanent),
+            "permanent",
+            "permanent worker failure",
+        ),
+        (
+            Some(FailureClass::Protocol),
+            "protocol",
+            "protocol worker failure",
+        ),
+        (None, "unknown", "missing failure details"),
+    ] {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = in_flight_job("acme/service", issue);
+
+        applier
+            .apply(
+                job.clone(),
+                failure_result("worker-a", &job.job_id, failure_class, message),
+            )
+            .await;
+
+        assert_no_pull_requests(&forge, &repo).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert!(labels.iter().any(|label| label == "needs-human"));
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        let comment = &comments[0];
+        assert!(comment.contains(&format!("failure class: {expected_class}")));
+        assert!(comment.contains(&format!("job_id: `{}`", job.job_id)));
+        assert!(comment.contains("worker: `worker-a`"));
+        if failure_class.is_some() {
+            assert!(comment.contains(message));
+        } else {
+            assert!(!comment.contains(message));
+        }
+    }
+}
+
+#[tokio::test]
+async fn transient_failure_does_not_create_pull_request_or_mark_issue() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_ready_issue(&forge, &repo).await;
+    let workflow = Arc::new(workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = in_flight_job("acme/service", issue);
+
+    applier
+        .apply(
+            job.clone(),
+            failure_result(
+                "worker-a",
+                &job.job_id,
+                Some(FailureClass::Transient),
+                "try again later",
+            ),
+        )
+        .await;
+
+    assert_no_pull_requests(&forge, &repo).await;
+    assert_no_attention_mark(&forge, &repo, issue).await;
+}
+
+#[tokio::test]
+async fn canceled_failure_does_not_create_pull_request_or_mark_issue() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_ready_issue(&forge, &repo).await;
+    let workflow = Arc::new(workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = in_flight_job("acme/service", issue);
+
+    applier
+        .apply(
+            job.clone(),
+            failure_result(
+                "worker-a",
+                &job.job_id,
+                Some(FailureClass::Canceled),
+                "worker stopped",
+            ),
+        )
+        .await;
+
+    assert_no_pull_requests(&forge, &repo).await;
+    assert_no_attention_mark(&forge, &repo, issue).await;
+}
+
+#[tokio::test]
+async fn permanent_failure_replay_is_idempotent() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_ready_issue(&forge, &repo).await;
+    let workflow = Arc::new(workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = in_flight_job("acme/service", issue);
+    let result = permanent_failure_result("worker-a", &job.job_id);
+
+    applier.apply(job.clone(), result.clone()).await;
+    applier.apply(job.clone(), result).await;
+
+    assert_no_pull_requests(&forge, &repo).await;
+    let labels = issue_labels(&forge, &repo, issue).await;
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label.as_str() == "needs-human")
+            .count(),
+        1
+    );
+    let comments = issue_comment_bodies(&forge, &repo, issue).await;
+    assert_eq!(comments.len(), 1);
+    assert!(comments[0].contains("not implemented"));
 }

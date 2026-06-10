@@ -15,14 +15,17 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temper_forge::{Forge, ForgeError, ItemNumber, RepositoryId, RepositoryPath};
+use temper_forge::{
+    CreateComment, Forge, ForgeError, Issue, ItemNumber, Repository, RepositoryId, RepositoryPath,
+    UpdateIssue,
+};
 use temper_runner::{
     scan_role, scan_role_wake,
     workspace_request::{implementation_pr_pull_request_input, pr_correlation_key},
     ScanError, WorkItem,
 };
 use temper_worker_protocol::{
-    Artifact, ErrorCode, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
+    Artifact, ErrorCode, FailureClass, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -68,31 +71,45 @@ impl ResultApplier for NoopApplier {
     async fn apply(&self, _job: InFlightJob, _result: JobResult) {}
 }
 
-/// Forge-backed success applier for daemon-accepted worker results.
+/// Forge-backed applier for daemon-accepted worker results.
 ///
-/// This inner applier turns a successful issue-targeted worker result carrying a
-/// branch into the same implementation-PR creation input the runner workspace
-/// paths use, then calls [`Executor::ensure_pull_request`] with the deterministic
-/// workspace correlation key. It deliberately does not acquire or release leases;
-/// compose it under [`LeaseApplier`] when real daemon application is enabled.
+/// Successful issue-targeted worker results carrying a branch are turned into the
+/// same implementation-PR creation input the runner workspace paths use, then
+/// passed to [`Executor::ensure_pull_request`] with the deterministic workspace
+/// correlation key. Permanent/protocol worker failures mark the source issue for
+/// human attention and add an audit comment. It deliberately does not acquire or
+/// release leases; compose it under [`LeaseApplier`] when real daemon
+/// application is enabled.
 pub struct ForgeApplier<F: Forge> {
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
+    attention_labels: Vec<String>,
 }
 
 impl<F: Forge> ForgeApplier<F> {
     pub fn new(forge: Arc<F>, workflow: Arc<ValidatedWorkflow>) -> Self {
-        Self { forge, workflow }
-    }
-}
-
-#[async_trait::async_trait]
-impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
-    async fn apply(&self, job: InFlightJob, result: JobResult) {
-        if result.status != ResultStatus::Success {
-            return;
+        Self {
+            forge,
+            workflow,
+            attention_labels: vec!["needs-human".to_string()],
         }
+    }
 
+    pub fn with_attention_labels(mut self, labels: Vec<String>) -> Self {
+        let labels = labels
+            .into_iter()
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty())
+            .collect::<Vec<_>>();
+        self.attention_labels = if labels.is_empty() {
+            vec!["needs-human".to_string()]
+        } else {
+            labels
+        };
+        self
+    }
+
+    async fn apply_success(&self, job: InFlightJob, result: JobResult) {
         let Some(branch) = result.branch else {
             eprintln!(
                 "temper-daemon: forge applier ignored success result without branch for job_id={} repo={} artifact.kind={} artifact.item={}",
@@ -109,50 +126,10 @@ impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
         }
         let branch_name = branch.name;
 
-        if job.artifact.kind != "issue" {
-            eprintln!(
-                "temper-daemon: forge applier ignored non-issue job for job_id={} repo={} artifact.kind={} artifact.item={}",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item
-            );
-            return;
-        }
-
-        let Some(number) = job.artifact.item.as_u64().map(ItemNumber::new) else {
-            eprintln!(
-                "temper-daemon: forge applier ignored job with non-numeric issue item for job_id={} repo={} artifact.item={}",
-                job.job_id, job.repo, job.artifact.item
-            );
+        let Some((repository, issue)) = self.resolve_issue(&job).await else {
             return;
         };
-
-        let Some((owner, name)) = job.repo.split_once('/') else {
-            eprintln!(
-                "temper-daemon: forge applier ignored job with malformed repo path for job_id={} repo={}",
-                job.job_id, job.repo
-            );
-            return;
-        };
-        let repository = match self
-            .forge
-            .get_repository_by_path(&RepositoryPath::new(owner, name))
-            .await
-        {
-            Ok(Some(repository)) => repository,
-            Ok(None) => {
-                eprintln!(
-                    "temper-daemon: forge applier repository not found for job_id={} repo={} issue={}",
-                    job.job_id, job.repo, number
-                );
-                return;
-            }
-            Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier repository lookup failed for job_id={} repo={} issue={}: {error}",
-                    job.job_id, job.repo, number
-                );
-                return;
-            }
-        };
+        let number = issue.number;
 
         let context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
             Ok(context) => context,
@@ -165,24 +142,6 @@ impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
             }
         };
         let source_kind = ArtifactKindId::new(context.artifact_kind);
-
-        let issue = match self.forge.get_issue_by_number(&repository.id, number).await {
-            Ok(Some(issue)) => issue,
-            Ok(None) => {
-                eprintln!(
-                    "temper-daemon: forge applier source issue not found for job_id={} repo={} issue={}",
-                    job.job_id, job.repo, number
-                );
-                return;
-            }
-            Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier issue lookup failed for job_id={} repo={} issue={}: {error}",
-                    job.job_id, job.repo, number
-                );
-                return;
-            }
-        };
 
         let base_branch = if repository.default_branch.trim().is_empty() {
             "main".to_string()
@@ -220,6 +179,151 @@ impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
                 job.job_id, job.repo, number, correlation_key
             );
         }
+    }
+
+    async fn apply_failure(&self, job: InFlightJob, result: JobResult) {
+        let failure = result.failure.as_ref();
+        let class = match failure.map(|failure| failure.class) {
+            Some(FailureClass::Permanent) => "permanent",
+            Some(FailureClass::Protocol) => "protocol",
+            None => "unknown",
+            Some(FailureClass::Transient | FailureClass::Canceled) => return,
+        };
+
+        let Some((_repository, issue)) = self.resolve_issue(&job).await else {
+            return;
+        };
+
+        if self
+            .attention_labels
+            .iter()
+            .all(|label| issue.labels.iter().any(|existing| existing == label))
+        {
+            return;
+        }
+
+        if let Err(error) = self
+            .forge
+            .update_issue(
+                &issue.id,
+                UpdateIssue {
+                    add_labels: self.attention_labels.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            eprintln!(
+                "temper-daemon: forge applier could not label failed job source issue for job_id={} repo={} issue={} failure_class={}: {error}",
+                job.job_id, job.repo, issue.number, class
+            );
+            return;
+        }
+
+        let body = failure_audit_body(class, &result);
+        if let Err(error) = self
+            .forge
+            .add_issue_comment(&issue.id, CreateComment { body })
+            .await
+        {
+            eprintln!(
+                "temper-daemon: forge applier could not add failed job audit comment for job_id={} repo={} issue={} failure_class={}: {error}",
+                job.job_id, job.repo, issue.number, class
+            );
+        }
+    }
+
+    async fn resolve_issue(&self, job: &InFlightJob) -> Option<(Repository, Issue)> {
+        if job.artifact.kind != "issue" {
+            eprintln!(
+                "temper-daemon: forge applier ignored non-issue job for job_id={} repo={} artifact.kind={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            );
+            return None;
+        }
+
+        let Some(number) = job.artifact.item.as_u64().map(ItemNumber::new) else {
+            eprintln!(
+                "temper-daemon: forge applier ignored job with non-numeric issue item for job_id={} repo={} artifact.item={}",
+                job.job_id, job.repo, job.artifact.item
+            );
+            return None;
+        };
+
+        let Some((owner, name)) = job.repo.split_once('/') else {
+            eprintln!(
+                "temper-daemon: forge applier ignored job with malformed repo path for job_id={} repo={}",
+                job.job_id, job.repo
+            );
+            return None;
+        };
+        let repository = match self
+            .forge
+            .get_repository_by_path(&RepositoryPath::new(owner, name))
+            .await
+        {
+            Ok(Some(repository)) => repository,
+            Ok(None) => {
+                eprintln!(
+                    "temper-daemon: forge applier repository not found for job_id={} repo={} issue={}",
+                    job.job_id, job.repo, number
+                );
+                return None;
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier repository lookup failed for job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return None;
+            }
+        };
+
+        let issue = match self.forge.get_issue_by_number(&repository.id, number).await {
+            Ok(Some(issue)) => issue,
+            Ok(None) => {
+                eprintln!(
+                    "temper-daemon: forge applier source issue not found for job_id={} repo={} issue={}",
+                    job.job_id, job.repo, number
+                );
+                return None;
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier issue lookup failed for job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return None;
+            }
+        };
+
+        Some((repository, issue))
+    }
+}
+
+#[async_trait::async_trait]
+impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
+    async fn apply(&self, job: InFlightJob, result: JobResult) {
+        match result.status {
+            ResultStatus::Success => self.apply_success(job, result).await,
+            ResultStatus::Failure => self.apply_failure(job, result).await,
+        }
+    }
+}
+
+fn failure_audit_body(class: &str, result: &JobResult) -> String {
+    let header = format!(
+        "Daemon could not complete this work (failure class: {class}).\n\njob_id: `{}`\nworker: `{}`",
+        result.job_id, result.worker_id
+    );
+
+    match result
+        .failure
+        .as_ref()
+        .map(|failure| failure.message.trim())
+    {
+        Some(message) if !message.is_empty() => format!("{header}\n\n{message}"),
+        _ => header,
     }
 }
 
@@ -445,16 +549,35 @@ async fn run_core(
                 let in_flight = core.in_flight_job(&result.job_id);
                 let response = core.handle(WorkerProtocolMessage::Result(result.clone()));
 
-                // Apply only when the core accepted/completed the in-flight job. Unknown,
-                // never-assigned, version-mismatched, and double-sent results must not run
-                // the applier.
+                // Route only when the core accepted/completed the in-flight job.
+                // Unknown, never-assigned, version-mismatched, and double-sent
+                // results must not apply, retry, or drop beyond the core response.
                 if let (Some(job), Some(WorkerProtocolMessage::Release(_))) =
                     (in_flight, response.as_ref())
                 {
-                    let applier = applier.clone();
-                    tokio::spawn(async move {
-                        applier.apply(job, result).await;
-                    });
+                    match result_disposition(&result) {
+                        ResultDisposition::Apply => {
+                            let applier = applier.clone();
+                            tokio::spawn(async move {
+                                applier.apply(job, result).await;
+                            });
+                        }
+                        ResultDisposition::Reenqueue => {
+                            // The daemon only holds a durable Forge lease during apply.
+                            // Transient failures do not enter apply, so there is no Forge
+                            // lease to release here; `DaemonCore` has already completed the
+                            // registry assignment above and the remaining work is to retry.
+                            core.enqueue_job(
+                                job.job_id,
+                                job.role,
+                                job.repo,
+                                job.artifact,
+                                job.job_payload,
+                            );
+                            fulfil_waiters(&mut core, &mut waiters);
+                        }
+                        ResultDisposition::Drop => {}
+                    }
                 }
 
                 let _ = reply.send(response);
@@ -541,6 +664,26 @@ fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
         message,
         WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultDisposition {
+    Apply,
+    Reenqueue,
+    Drop,
+}
+
+fn result_disposition(result: &JobResult) -> ResultDisposition {
+    match result.status {
+        ResultStatus::Success => ResultDisposition::Apply,
+        ResultStatus::Failure => match result.failure.as_ref().map(|failure| failure.class) {
+            Some(FailureClass::Transient) => ResultDisposition::Reenqueue,
+            Some(FailureClass::Canceled) => ResultDisposition::Drop,
+            Some(FailureClass::Permanent | FailureClass::Protocol) | None => {
+                ResultDisposition::Apply
+            }
+        },
+    }
 }
 
 impl Daemon {
@@ -754,6 +897,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use temper_forge::ItemNumber;
+    use temper_worker_protocol::{Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
     use temper_workflow::{ArtifactKindId, QueueId, RoleId};
 
     fn work_item(target: ArtifactSource) -> WorkItem {
@@ -763,6 +907,85 @@ mod tests {
             target,
             kind: ArtifactKindId::new("code"),
         }
+    }
+
+    fn result_for_disposition(
+        status: ResultStatus,
+        failure_class: Option<FailureClass>,
+    ) -> JobResult {
+        JobResult {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker-a".to_string(),
+            job_id: "job-1".to_string(),
+            status,
+            branch: None,
+            failure: failure_class.map(|class| Failure {
+                class,
+                message: "worker failed".to_string(),
+            }),
+            summary: None,
+            details: None,
+        }
+    }
+
+    #[test]
+    fn result_disposition_routes_success_to_apply() {
+        assert_eq!(
+            result_disposition(&result_for_disposition(ResultStatus::Success, None)),
+            ResultDisposition::Apply
+        );
+    }
+
+    #[test]
+    fn result_disposition_routes_transient_failure_to_reenqueue() {
+        assert_eq!(
+            result_disposition(&result_for_disposition(
+                ResultStatus::Failure,
+                Some(FailureClass::Transient),
+            )),
+            ResultDisposition::Reenqueue
+        );
+    }
+
+    #[test]
+    fn result_disposition_routes_permanent_failure_to_apply() {
+        assert_eq!(
+            result_disposition(&result_for_disposition(
+                ResultStatus::Failure,
+                Some(FailureClass::Permanent),
+            )),
+            ResultDisposition::Apply
+        );
+    }
+
+    #[test]
+    fn result_disposition_routes_protocol_failure_to_apply() {
+        assert_eq!(
+            result_disposition(&result_for_disposition(
+                ResultStatus::Failure,
+                Some(FailureClass::Protocol),
+            )),
+            ResultDisposition::Apply
+        );
+    }
+
+    #[test]
+    fn result_disposition_routes_canceled_failure_to_drop() {
+        assert_eq!(
+            result_disposition(&result_for_disposition(
+                ResultStatus::Failure,
+                Some(FailureClass::Canceled),
+            )),
+            ResultDisposition::Drop
+        );
+    }
+
+    #[test]
+    fn result_disposition_routes_failure_without_details_to_apply() {
+        assert_eq!(
+            result_disposition(&result_for_disposition(ResultStatus::Failure, None)),
+            ResultDisposition::Apply
+        );
     }
 
     #[test]

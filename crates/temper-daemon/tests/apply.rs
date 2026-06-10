@@ -5,8 +5,8 @@ use std::{future::IntoFuture, sync::Arc};
 use axum::http::StatusCode;
 use serde_json::json;
 use temper_worker_protocol::{
-    Artifact, Branch, Capability, Capacity, JobResult, Poll, Register, ReleaseDisposition,
-    ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobResult, Poll, Register,
+    ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
 use tokio::sync::mpsc;
@@ -81,6 +81,33 @@ fn job_result(worker_id: &str, job_id: &str, branch: Option<Branch>) -> JobResul
     }
 }
 
+fn transient_failure_result(worker_id: &str, job_id: &str) -> JobResult {
+    JobResult {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: worker_id.to_string(),
+        job_id: job_id.to_string(),
+        status: ResultStatus::Failure,
+        branch: None,
+        failure: Some(Failure {
+            class: FailureClass::Transient,
+            message: "temporary worker failure".to_string(),
+        }),
+        summary: Some("transient failure".to_string()),
+        details: None,
+    }
+}
+
+fn success_result(worker_id: &str, job_id: &str) -> JobResult {
+    job_result(
+        worker_id,
+        job_id,
+        Some(Branch {
+            name: "agent/pr-for-code-114".to_string(),
+            head_sha: "abc123".to_string(),
+        }),
+    )
+}
+
 fn artifact() -> Artifact {
     Artifact {
         item: json!(114),
@@ -125,6 +152,13 @@ fn assert_release(msg: WorkerProtocolMessage, worker_id: &str, job_id: &str) {
 fn assert_assigned(msg: WorkerProtocolMessage, job_id: &str) {
     match msg {
         WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, job_id),
+        other => panic!("expected assign, got {other:?}"),
+    }
+}
+
+fn assignment_job_id(msg: WorkerProtocolMessage) -> String {
+    match msg {
+        WorkerProtocolMessage::Assign(assign) => assign.job_id,
         other => panic!("expected assign, got {other:?}"),
     }
 }
@@ -255,6 +289,69 @@ async fn result_without_in_flight_job_does_not_invoke_applier() {
     let (job, recorded_result) = rx.recv().await.expect("applier records real result");
     assert_eq!(job.job_id, "real-job");
     assert_eq!(recorded_result.job_id, real_result.job_id);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn transient_failure_reenqueues_job() {
+    let (daemon, url, mut rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(&client, &url, &register("worker-a")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    daemon
+        .enqueue_job(
+            "job-retry-1",
+            "engineer",
+            "ai/temper",
+            artifact(),
+            json!({"prompt":"implement", "issue":114}),
+        )
+        .await;
+
+    let first_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
+    assert_eq!(first_job_id, "job-retry-1");
+
+    let transient = transient_failure_result("worker-a", &first_job_id);
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(transient.clone()),
+        )
+        .await,
+        "worker-a",
+        &first_job_id,
+    );
+
+    let retry_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
+    assert_eq!(retry_job_id, first_job_id);
+
+    let final_result = success_result("worker-a", &retry_job_id);
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(final_result.clone()),
+        )
+        .await,
+        "worker-a",
+        &retry_job_id,
+    );
+
+    let (job, recorded_result) = rx
+        .recv()
+        .await
+        .expect("applier records final success result");
+    assert_eq!(job.job_id, retry_job_id);
+    assert_eq!(recorded_result.job_id, final_result.job_id);
+    assert_eq!(recorded_result.status, ResultStatus::Success);
+    assert_eq!(recorded_result.branch, final_result.branch);
     assert!(matches!(
         rx.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
