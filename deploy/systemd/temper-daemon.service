@@ -1,0 +1,26 @@
+# Repo-tracked template for the consolidated temper-daemon systemd user unit.
+#
+# The daemon is the sole Forgejo API writer in the two-tier topology: webhook
+# intake, poll backstop, scan-to-enqueue dispatch to long-polling workers,
+# lease-gated role-attributed applies, and optional mechanical backstop all run
+# here. Workers connect to DAEMON_BIND and never touch the Forge API.
+#
+# Install with deploy/install.sh, then adjust %h/.config/temper/daemon.env as
+# needed. Forgejo API tokens are loaded from the provisioned roles.env file;
+# this template does not contain secrets.
+
+[Unit]
+Description=Temper consolidated daemon
+After=forgejo.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/temper/daemon.env
+EnvironmentFile=%h/.config/temper/secrets/roles.env
+ExecStart=%h/.local/bin/temper-daemon-launcher
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
