@@ -48,6 +48,8 @@ fn success_result(job_id: &str) -> JobResult {
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
         branch: None,
+        verdict: None,
+        body: None,
         failure: None,
         summary: None,
         details: None,

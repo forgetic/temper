@@ -2,11 +2,34 @@
   "protocol_version": 1,
   "type": "assign",
   "job_id": "job-123",
-  "role": "coder",
+  "role": "architect",
   "repo": "ai/temper",
   "artifact": {
     "item": 89,
     "kind": "issue"
   },
-  "job_payload": {}
+  "job_payload": {
+    "role": "architect",
+    "repo": "ai/temper",
+    "queue": "triage",
+    "artifact_kind": "intake",
+    "repository": {
+      "owner": "ai",
+      "name": "temper",
+      "default_branch": "main"
+    },
+    "base_branch": "main",
+    "branch_hint": "agent/pr-for-intake-89",
+    "correlation_key": "pr-for-intake-89",
+    "artifact": {
+      "number": 89,
+      "title": "Clarify daemon worker protocol",
+      "body": "Please make the examples worker-compatible.",
+      "labels": ["untriaged"],
+      "state": "Open"
+    },
+    "action": "triage_intake",
+    "checkout_capability": "read_only",
+    "allowed_verdicts": ["ready_code"]
+  }
 }

@@ -31,8 +31,8 @@ use temper_worker_registry::DaemonCore;
 // the trait passes them.
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, CompiledWorkflow, Executor, LeaseError, LeaseManager,
-    LeasePolicy, RoleId, ValidatedWorkflow,
+    ArtifactKindId, ArtifactSource, CompiledWorkflow, Effect, Executor, LeaseError, LeaseManager,
+    LeasePolicy, RoleId, ToolManifest, ValidatedWorkflow,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -563,6 +563,9 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         branch_hint: None,
         correlation_key: None,
         artifact: None,
+        action: None,
+        checkout_capability: None,
+        allowed_verdicts: Vec::new(),
     };
 
     WorkItemJob {
@@ -586,6 +589,7 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
     repo: &RepositoryId,
     item: &WorkItem,
     job: &mut WorkItemJob,
+    compiled: &CompiledWorkflow,
 ) -> Result<(), ScanError> {
     let repository = forge
         .get_repository(repo)
@@ -618,7 +622,7 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
         ArtifactSource::PullRequest { .. } => None,
     };
 
-    let context = JobContext {
+    let mut context = JobContext {
         role: job.role.clone(),
         repo: job.repo.clone(),
         queue: item.queue.as_str().to_string(),
@@ -632,10 +636,64 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
         branch_hint: Some(pr_branch_hint(&item.kind, number)),
         correlation_key: Some(pr_correlation_key(&item.kind, number)),
         artifact,
+        action: None,
+        checkout_capability: None,
+        allowed_verdicts: Vec::new(),
     };
+    enrich_job_context_from_workflow(item, compiled, &mut context);
     job.job_payload = serde_json::to_value(&context).expect("JobContext serializes");
 
     Ok(())
+}
+
+fn enrich_job_context_from_workflow(
+    item: &WorkItem,
+    compiled: &CompiledWorkflow,
+    context: &mut JobContext,
+) {
+    let Some(role) = compiled.role(&item.role) else {
+        return;
+    };
+
+    let mut matches = role
+        .tools
+        .iter()
+        .filter(|tool| action_is_workspace_backed(tool) && tool.artifact == item.kind);
+    let Some(tool) = matches.next() else {
+        return;
+    };
+    if matches.next().is_some() {
+        return;
+    }
+
+    context.action = Some(tool.name.clone());
+    context.allowed_verdicts = allowed_verdicts(tool);
+    context.checkout_capability = Some(if create_pull_request_count(tool) > 0 {
+        "writable".to_string()
+    } else {
+        match item.target {
+            ArtifactSource::Issue { .. } => "read_only".to_string(),
+            ArtifactSource::PullRequest { .. } => "pull_request_read_only".to_string(),
+        }
+    });
+}
+
+fn action_is_workspace_backed(tool: &ToolManifest) -> bool {
+    !tool.outcomes.is_empty() || create_pull_request_count(tool) > 0
+}
+
+fn create_pull_request_count(tool: &ToolManifest) -> usize {
+    tool.effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
+        .count()
+}
+
+fn allowed_verdicts(tool: &ToolManifest) -> Vec<String> {
+    tool.outcomes
+        .keys()
+        .map(|verdict| verdict.as_str().to_string())
+        .collect()
 }
 
 #[derive(Clone)]
@@ -915,7 +973,7 @@ impl Daemon {
         let mut enqueued = 0;
         for item in &items {
             let mut job = job_from_work_item(&repo_label, item);
-            match enrich_work_item_job(forge, repo, item, &mut job).await {
+            match enrich_work_item_job(forge, repo, item, &mut job, compiled).await {
                 Ok(()) => {
                     self.enqueue_job(
                         job.job_id,
@@ -1128,7 +1186,10 @@ mod tests {
     use temper_forge::{CreateRepository, Forge, ItemNumber};
     use temper_forge_memory::MemoryForge;
     use temper_worker_protocol::{Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
-    use temper_workflow::{ArtifactKindId, QueueId, RoleId};
+    use temper_workflow::{ArtifactKindId, QueueId, RawWorkflowSpec, RoleId};
+
+    const BASIC_DELIVERY_FIXTURE: &str =
+        include_str!("../../temper-workflow/fixtures/basic-delivery.json");
 
     fn work_item(target: ArtifactSource) -> WorkItem {
         WorkItem {
@@ -1149,6 +1210,8 @@ mod tests {
             job_id: "job-1".to_string(),
             status,
             branch: None,
+            verdict: None,
+            body: None,
             failure: failure_class.map(|class| Failure {
                 class,
                 message: "worker failed".to_string(),
@@ -1257,6 +1320,9 @@ mod tests {
                 branch_hint: None,
                 correlation_key: None,
                 artifact: None,
+                action: None,
+                checkout_capability: None,
+                allowed_verdicts: Vec::new(),
             }
         );
     }
@@ -1316,8 +1382,14 @@ mod tests {
             number: ItemNumber::new(42),
         });
         let mut job = job_from_work_item("ai/temper", &item);
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
+        let compiled = workflow
+            .validate()
+            .expect("basic-delivery workflow validates")
+            .compile();
 
-        enrich_work_item_job(&forge, &repo, &item, &mut job)
+        enrich_work_item_job(&forge, &repo, &item, &mut job, &compiled)
             .await
             .expect("enrichment succeeds for pull request targets");
 
@@ -1335,5 +1407,8 @@ mod tests {
         assert_eq!(context.branch_hint.as_deref(), Some("agent/pr-for-code-42"));
         assert_eq!(context.correlation_key.as_deref(), Some("pr-for-code-42"));
         assert_eq!(context.artifact, None);
+        assert_eq!(context.action.as_deref(), Some("open_pr"));
+        assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
+        assert!(context.allowed_verdicts.is_empty());
     }
 }

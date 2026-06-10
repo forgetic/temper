@@ -108,6 +108,8 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
             name: branch_name.to_string(),
             head_sha: "abc123".to_string(),
         }),
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some(summary.to_string()),
         details: Some(json!({"note":"fake worker result"})),
@@ -129,6 +131,8 @@ fn failure_result(
             name: "agent/pr-for-code-1".to_string(),
             head_sha: "def456".to_string(),
         }),
+        verdict: None,
+        body: None,
         failure: failure_class.map(|class| Failure {
             class,
             message: message.to_string(),
@@ -154,6 +158,8 @@ fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult {
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
         branch: None,
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some("done".to_string()),
         details: None,
@@ -179,6 +185,9 @@ fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             branch_hint: None,
             correlation_key: None,
             artifact: None,
+            action: None,
+            checkout_capability: None,
+            allowed_verdicts: Vec::new(),
         })
         .expect("JobContext serializes"),
     }

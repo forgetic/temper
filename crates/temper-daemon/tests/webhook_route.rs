@@ -173,6 +173,8 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
             name: branch_name.to_string(),
             head_sha: "abc123".to_string(),
         }),
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some(summary.to_string()),
         details: Some(json!({"note":"fake worker result"})),

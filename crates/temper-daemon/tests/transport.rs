@@ -69,6 +69,8 @@ fn result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
         branch: None,
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some("done".to_string()),
         details: None,

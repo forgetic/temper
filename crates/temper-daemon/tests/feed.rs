@@ -15,7 +15,7 @@ use temper_worker_registry::InFlightJob;
 use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};
 use tokio::sync::mpsc;
 
-const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
+const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
 
 struct RecordingApplier {
     tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
@@ -119,6 +119,8 @@ fn job_result(worker_id: &str, job_id: &str) -> JobResult {
             name: "agent/pr-for-code-feed".to_string(),
             head_sha: "feed123".to_string(),
         }),
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some("done".to_string()),
         details: Some(json!({"note":"fake worker result"})),
@@ -194,6 +196,73 @@ async fn scanned_role_work_skips_item_when_enrichment_fails() {
         0
     );
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-skip", 100)).await);
+}
+
+#[tokio::test]
+async fn scanned_architect_triage_item_carries_verdict_job_enrichment() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let issue = create_issue(&forge, &repo, &["untriaged"]).await;
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("architect");
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds"),
+        1
+    );
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-architect", "architect", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let assignment = match post_json(&client, &url, &poll("worker-architect")).await {
+        WorkerProtocolMessage::Assign(assign) => {
+            assert_eq!(assign.repo, "acme/service");
+            assert_eq!(assign.role, "architect");
+            assert_eq!(assign.artifact.kind, "issue");
+            assert_eq!(assign.artifact.item, json!(issue.get()));
+            assert!(assign
+                .job_id
+                .contains(&format!("/issue-{}/architect/triage", issue.get())));
+            assign
+        }
+        other => panic!("expected assign, got {other:?}"),
+    };
+
+    let context: temper_daemon::JobContext = serde_json::from_value(assignment.job_payload)
+        .expect("assign job payload parses as daemon-reexported JobContext");
+    assert_eq!(context.role, "architect");
+    assert_eq!(context.repo, "acme/service");
+    assert_eq!(context.queue, "triage");
+    assert_eq!(context.artifact_kind, "intake");
+    assert_eq!(context.action.as_deref(), Some("triage_intake"));
+    assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
+    assert_eq!(context.allowed_verdicts, vec!["ready_code".to_string()]);
+    assert_eq!(context.base_branch.as_deref(), Some("main"));
+    let artifact = context.artifact.expect("issue snapshot is present");
+    assert_eq!(artifact.number, issue.get());
+    assert_eq!(artifact.labels, vec!["untriaged".to_string()]);
 }
 
 #[tokio::test]
@@ -277,6 +346,9 @@ async fn scanned_role_work_dispatches_to_worker_and_applies_once() {
         })
     );
     assert_eq!(context.base_branch.as_deref(), Some("main"));
+    assert_eq!(context.action.as_deref(), Some("open_pr"));
+    assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
+    assert!(context.allowed_verdicts.is_empty());
     let expected_branch_hint = format!("agent/pr-for-code-{}", issue.get());
     let expected_correlation_key = format!("pr-for-code-{}", issue.get());
     assert_eq!(

@@ -97,6 +97,8 @@ fn job_result(job_id: &str) -> JobResult {
             name: "agent/pr-for-code-118".to_string(),
             head_sha: "abc123".to_string(),
         }),
+        verdict: None,
+        body: None,
         failure: None,
         summary: Some("done".to_string()),
         details: Some(json!({"note":"fake worker result"})),
