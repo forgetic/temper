@@ -37,9 +37,14 @@ use tokio::{
 };
 
 pub mod config;
+pub mod mechanical;
 mod webhook;
 
 pub use config::{parse, DaemonRunConfig, ParseOutcome, USAGE};
+pub use mechanical::{
+    run_mechanical_backstop, run_mechanical_backstop_tick, MechanicalBackstopConfig,
+};
+pub use temper_runner::{RepositorySet, RepositoryTarget};
 pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, JobRepository};
 pub use webhook::*;
 

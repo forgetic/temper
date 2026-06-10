@@ -4,12 +4,13 @@ use std::{process::ExitCode, sync::Arc};
 
 use temper_daemon::{
     config::{ParseOutcome, USAGE},
-    router_with_webhook, run_poll_backstop, serve_router, Daemon, DaemonRunConfig, ForgeApplier,
-    LeaseApplier, PollBackstopConfig, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    router_with_webhook, run_mechanical_backstop, run_poll_backstop, serve_router, Daemon,
+    DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig, PollBackstopConfig,
+    RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget, WebhookConfig,
 };
-use temper_forge::{Forge, RepositoryId, RepositoryPath};
+use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_workflow::{LeasePolicy, RoleId};
+use temper_workflow::{CompiledWorkflow, LeasePolicy, RoleId};
 
 fn main() -> ExitCode {
     let config = match temper_daemon::config::parse(std::env::args().skip(1)) {
@@ -51,7 +52,12 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
             .map_err(|error| format!("failed to resolve workflow: {error}"))?,
     );
     let compiled = Arc::new(workflow.compile());
-    let repo_ids = resolve_repositories(forge.as_ref(), &config.repos).await?;
+    let repositories = resolve_repositories(forge.as_ref(), &config.repos).await?;
+    let repo_ids: Vec<RepositoryId> = repositories
+        .repositories()
+        .iter()
+        .map(|repository| repository.id.clone())
+        .collect();
     let normal_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Normal);
     let wake_targets = role_feed_targets(&repo_ids, &config.roles, RoleFeedMode::Wake);
     let lease_ttl = chrono::Duration::from_std(config.lease_ttl)
@@ -83,6 +89,25 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
         .await;
     });
 
+    if let Some(cadence) = config.mechanical_cadence {
+        ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
+        let mechanical_config = MechanicalBackstopConfig {
+            repositories,
+            cadence,
+            lease_policy: LeasePolicy::new(lease_ttl),
+        };
+        let mechanical_forge = forge.clone();
+        let mechanical_workflow = workflow.clone();
+        tokio::spawn(async move {
+            run_mechanical_backstop(
+                mechanical_forge.as_ref(),
+                mechanical_workflow.as_ref(),
+                &mechanical_config,
+            )
+            .await;
+        });
+    }
+
     let router = if let Some(path) = config.webhook_secret_file.as_ref() {
         let secret = std::fs::read_to_string(path).map_err(|error| {
             format!(
@@ -107,7 +132,7 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
 async fn resolve_repositories<F: Forge + ?Sized>(
     forge: &F,
     repos: &[RepositoryPath],
-) -> Result<Vec<RepositoryId>, String> {
+) -> Result<RepositorySet, String> {
     let mut resolved = Vec::with_capacity(repos.len());
     for path in repos {
         let repository = forge
@@ -115,9 +140,41 @@ async fn resolve_repositories<F: Forge + ?Sized>(
             .await
             .map_err(|error| format!("repository {} lookup failed: {error}", repo_label(path)))?
             .ok_or_else(|| format!("repository {} not found", repo_label(path)))?;
-        resolved.push(repository.id);
+        resolved.push(RepositoryTarget::new(
+            repository.id,
+            RepositoryPath::new(repository.owner, repository.name),
+        ));
     }
-    Ok(resolved)
+    Ok(RepositorySet::new(resolved))
+}
+
+async fn ensure_workflow_labels<F: Forge + ?Sized>(
+    forge: &F,
+    repositories: &RepositorySet,
+    compiled: &CompiledWorkflow,
+) -> Result<(), String> {
+    for repository in repositories.repositories() {
+        for label in compiled.labels().labels() {
+            forge
+                .upsert_label(
+                    &repository.id,
+                    UpsertLabel {
+                        name: label.id.to_string(),
+                        color: Some("#ededed".to_string()),
+                        description: None,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "repository {} label {} upsert failed: {error}",
+                        repository.display_path(),
+                        label.id
+                    )
+                })?;
+        }
+    }
+    Ok(())
 }
 
 fn role_feed_targets(

@@ -18,8 +18,8 @@ pub const USAGE: &str = concat!(
     "--repo <owner/name> [--repo <owner/name> ...] ",
     "--role <role> [--role <role> ...] ",
     "[--workflow <path>] [--poll-cadence-secs <n>] ",
-    "[--lease-ttl-secs <n>] [--webhook-secret-file <path>] ",
-    "[--daemon-id <id>]\n",
+    "[--mechanical-cadence-secs <n>] [--lease-ttl-secs <n>] ",
+    "[--webhook-secret-file <path>] [--daemon-id <id>]\n",
     "  Forgejo connection settings come from FORGEJO_URL + ",
     "FORGEJO_ACCESS_TOKEN; optional Forgejo environment variables are read by ",
     "ForgejoConfig::from_env"
@@ -33,6 +33,7 @@ pub struct DaemonRunConfig {
     pub roles: Vec<RoleId>,
     pub workflow_file: Option<PathBuf>,
     pub poll_cadence: Duration,
+    pub mechanical_cadence: Option<Duration>,
     pub lease_ttl: Duration,
     pub webhook_secret_file: Option<PathBuf>,
     pub daemon_id: String,
@@ -62,6 +63,7 @@ struct RawArgs {
     roles: Vec<String>,
     workflow_file: Option<String>,
     poll_cadence_secs: Option<String>,
+    mechanical_cadence_secs: Option<String>,
     lease_ttl_secs: Option<String>,
     webhook_secret_file: Option<String>,
     daemon_id: Option<String>,
@@ -79,6 +81,9 @@ impl RawArgs {
                 "--role" => raw.roles.push(value_for(&flag, &mut iter)?),
                 "--workflow" => raw.workflow_file = Some(value_for(&flag, &mut iter)?),
                 "--poll-cadence-secs" => raw.poll_cadence_secs = Some(value_for(&flag, &mut iter)?),
+                "--mechanical-cadence-secs" => {
+                    raw.mechanical_cadence_secs = Some(value_for(&flag, &mut iter)?)
+                }
                 "--lease-ttl-secs" => raw.lease_ttl_secs = Some(value_for(&flag, &mut iter)?),
                 "--webhook-secret-file" => {
                     raw.webhook_secret_file = Some(value_for(&flag, &mut iter)?)
@@ -99,6 +104,10 @@ impl RawArgs {
             "--poll-cadence-secs",
             DEFAULT_POLL_CADENCE_SECS,
         )?;
+        let mechanical_cadence = parse_optional_positive_secs(
+            self.mechanical_cadence_secs.as_deref(),
+            "--mechanical-cadence-secs",
+        )?;
         let lease_ttl = parse_positive_secs(
             self.lease_ttl_secs.as_deref(),
             "--lease-ttl-secs",
@@ -112,6 +121,7 @@ impl RawArgs {
             roles,
             workflow_file: self.workflow_file.map(PathBuf::from),
             poll_cadence,
+            mechanical_cadence,
             lease_ttl,
             webhook_secret_file: self.webhook_secret_file.map(PathBuf::from),
             daemon_id,
@@ -187,11 +197,23 @@ fn parse_positive_secs(
     default_secs: u64,
 ) -> Result<Duration, String> {
     let secs = match raw {
-        Some(raw) => raw
-            .parse::<u64>()
-            .map_err(|error| format!("{flag} must be a positive integer: {error}"))?,
+        Some(raw) => parse_secs(raw, flag)?,
         None => default_secs,
     };
+    positive_duration(secs, flag)
+}
+
+fn parse_optional_positive_secs(raw: Option<&str>, flag: &str) -> Result<Option<Duration>, String> {
+    raw.map(|raw| parse_secs(raw, flag).and_then(|secs| positive_duration(secs, flag)))
+        .transpose()
+}
+
+fn parse_secs(raw: &str, flag: &str) -> Result<u64, String> {
+    raw.parse::<u64>()
+        .map_err(|error| format!("{flag} must be a positive integer: {error}"))
+}
+
+fn positive_duration(secs: u64, flag: &str) -> Result<Duration, String> {
     if secs == 0 {
         return Err(format!("{flag} must be positive"));
     }
@@ -238,6 +260,7 @@ mod tests {
         assert_eq!(config.repos, vec![repo("acme", "service")]);
         assert_eq!(config.roles, vec![role("engineer")]);
         assert_eq!(config.poll_cadence, Duration::from_secs(30));
+        assert_eq!(config.mechanical_cadence, None);
         assert_eq!(config.lease_ttl, Duration::from_secs(300));
         assert_eq!(config.daemon_id, "temper-daemon-1");
         assert_eq!(config.workflow_file, None);
@@ -302,6 +325,10 @@ mod tests {
             "1",
             "--poll-cadence-secs",
             "60",
+            "--mechanical-cadence-secs",
+            "7",
+            "--mechanical-cadence-secs",
+            "120",
             "--lease-ttl-secs",
             "2",
             "--lease-ttl-secs",
@@ -322,6 +349,7 @@ mod tests {
 
         assert_eq!(config.bind, "0.0.0.0:9000".parse().unwrap());
         assert_eq!(config.poll_cadence, Duration::from_secs(60));
+        assert_eq!(config.mechanical_cadence, Some(Duration::from_secs(120)));
         assert_eq!(config.lease_ttl, Duration::from_secs(900));
         assert_eq!(
             config.webhook_secret_file,
@@ -360,6 +388,25 @@ mod tests {
             .unwrap_err();
             assert!(
                 error.contains("--poll-cadence-secs"),
+                "error for {raw:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_mechanical_cadence_is_rejected() {
+        for raw in ["nope", "0"] {
+            let error = parse(strings(&[
+                "--repo",
+                "a/b",
+                "--role",
+                "engineer",
+                "--mechanical-cadence-secs",
+                raw,
+            ]))
+            .unwrap_err();
+            assert!(
+                error.contains("--mechanical-cadence-secs"),
                 "error for {raw:?}: {error}"
             );
         }
