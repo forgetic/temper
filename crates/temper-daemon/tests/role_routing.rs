@@ -50,6 +50,7 @@ fn success_result(job_id: &str) -> JobResult {
         branch: None,
         verdict: None,
         body: None,
+        children: Vec::new(),
         failure: None,
         summary: None,
         details: None,

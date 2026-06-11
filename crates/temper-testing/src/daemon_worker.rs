@@ -374,6 +374,7 @@ async fn execute_job(
             branch: Some(branch),
             verdict: None,
             body: None,
+            children: Vec::new(),
             failure: None,
             summary: Some(summary),
             details: None,
@@ -386,6 +387,7 @@ async fn execute_job(
             branch: None,
             verdict: None,
             body: None,
+            children: Vec::new(),
             failure: Some(Failure {
                 class: error.class,
                 message: error.message,

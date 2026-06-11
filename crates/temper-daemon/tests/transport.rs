@@ -71,6 +71,7 @@ fn result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
         branch: None,
         verdict: None,
         body: None,
+        children: Vec::new(),
         failure: None,
         summary: Some("done".to_string()),
         details: None,

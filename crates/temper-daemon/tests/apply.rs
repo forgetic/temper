@@ -134,6 +134,7 @@ fn job_result(worker_id: &str, job_id: &str, branch: Option<Branch>) -> JobResul
         branch,
         verdict: None,
         body: None,
+        children: Vec::new(),
         failure: None,
         summary: Some("done".to_string()),
         details: None,
@@ -175,6 +176,7 @@ fn failure_result(
         branch: None,
         verdict: None,
         body: None,
+        children: Vec::new(),
         failure: Some(Failure {
             class,
             message: message.to_string(),
