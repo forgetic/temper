@@ -17,8 +17,9 @@ use crate::artifact::ArtifactRef;
 use crate::classify::ArtifactSource;
 use crate::context::CreateIssuesChild;
 use crate::ids::{RoleId, TransitionId};
+use crate::metadata::global_child_correlation_key;
 use crate::plan::{Postcondition, TransitionPlan, WorkflowEffect};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use temper_forge::{
     CreateComment, CreateIssue, CreatePullRequest, CreatePullRequestReview, Forge, ItemNumber,
     RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
@@ -360,49 +361,80 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     /// Each child lands independently through
     /// [`ensure_issue_with_parent`](Self::ensure_issue_with_parent), carrying a
     /// parent back-reference to the artifact the transition acts on and a stable
-    /// per-child correlation key derived from the effect's base key. The fan-out
-    /// is non-atomic on real forges (the cross-repo aggregation stance): if a
-    /// create lands but a later child or the source label flip crashes, retrying
-    /// reuses the same keys and resolves the existing children instead of
-    /// duplicating them. Sibling dependency relations are recorded only after
-    /// every child exists, so a dependency target's number is always known.
+    /// per-child correlation key. Same-repository children keep the legacy
+    /// base-key/slug correlation-key composition and same-repository parent
+    /// shorthand for replay compatibility. A child with
+    /// [`CreateIssuesChild::target_repo`] set uses the documented global child
+    /// correlation key, a repo-qualified parent back-reference, and is created in
+    /// that target repository. The fan-out is non-atomic on real forges (the
+    /// cross-repo aggregation stance): if a create lands but a later child or the
+    /// source label flip crashes, retrying reuses the same keys and resolves the
+    /// existing children instead of duplicating them. Sibling dependency
+    /// relations are recorded only after every child exists, so a dependency
+    /// target's repository and number are always known. When an issue transition
+    /// fans out to at least one cross-repository child, the parent issue also
+    /// records repo-qualified fallback dependency refs for every child in
+    /// declaration order; all-same-repository fan-outs leave the parent metadata
+    /// untouched for byte-for-byte compatibility with existing artifacts.
     async fn apply_issue_creates(
         &self,
         repo_id: &RepositoryId,
         target: ArtifactSource,
         creates: &[PreparedCreateIssues],
     ) -> Result<(), ExecutionError> {
+        let parent_number = target_number(target);
         for create in creates {
-            let parent = ArtifactRef::same_repo(target_number(target));
-            let mut numbers_by_slug = std::collections::BTreeMap::<String, ItemNumber>::new();
+            let mut child_numbers_by_slug = BTreeMap::<String, (RepositoryId, ItemNumber)>::new();
+            let mut any_cross_repo = false;
             // First pass: every child exists and carries its parent back-reference.
             for child in &create.children {
-                let correlation_key =
-                    child_correlation_key(&create.base_correlation_key, &child.slug);
-                let outcome = self
-                    .ensure_issue_with_parent(
-                        repo_id,
-                        &correlation_key,
-                        Some(parent.clone()),
-                        CreateIssue {
-                            title: child.title.clone(),
-                            body: child.body.clone(),
-                            labels: child.labels.clone(),
-                            assignees: Vec::new(),
-                        },
-                    )
-                    .await?;
-                numbers_by_slug.insert(child.slug.clone(), outcome.into_artifact().number);
+                let child_repo = child.target_repo.as_ref().unwrap_or(repo_id);
+                let same_repo = child_repo == repo_id;
+                any_cross_repo |= !same_repo;
+                let correlation_key = if same_repo {
+                    child_correlation_key(&create.base_correlation_key, &child.slug)
+                } else {
+                    global_child_correlation_key(repo_id, parent_number, &child.slug)
+                };
+                let parent = if same_repo {
+                    ArtifactRef::same_repo(parent_number)
+                } else {
+                    ArtifactRef::in_repo(repo_id.clone(), parent_number)
+                };
+                let outcome = {
+                    let result = self
+                        .ensure_issue_with_parent(
+                            child_repo,
+                            &correlation_key,
+                            Some(parent),
+                            CreateIssue {
+                                title: child.title.clone(),
+                                body: child.body.clone(),
+                                labels: child.labels.clone(),
+                                assignees: Vec::new(),
+                            },
+                        )
+                        .await;
+                    if same_repo {
+                        result?
+                    } else {
+                        result.map_err(|error| annotate_target_repo_error(child_repo, error))?
+                    }
+                };
+                child_numbers_by_slug.insert(
+                    child.slug.clone(),
+                    (child_repo.clone(), outcome.into_artifact().number),
+                );
             }
             // Second pass: link sibling dependencies now that all numbers resolve.
             for child in &create.children {
                 if child.dependencies.is_empty() {
                     continue;
                 }
-                let child_number = numbers_by_slug[&child.slug];
+                let (child_repo, child_number) = child_numbers_by_slug[&child.slug].clone();
                 let child_issue = self
                     .forge
-                    .get_issue_by_number(repo_id, child_number)
+                    .get_issue_by_number(&child_repo, child_number)
                     .await?
                     .ok_or(ExecutionError::TargetMissing {
                         target: ArtifactSource::Issue {
@@ -410,12 +442,33 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                         },
                     })?;
                 for dependency_slug in &child.dependencies {
-                    let dependency_number = numbers_by_slug[dependency_slug];
-                    self.ensure_issue_dependency_metadata(
-                        &child_issue.id,
-                        &ArtifactRef::same_repo(dependency_number),
-                    )
-                    .await?;
+                    let (dependency_repo, dependency_number) =
+                        child_numbers_by_slug[dependency_slug].clone();
+                    let dependency = if dependency_repo == child_repo {
+                        ArtifactRef::same_repo(dependency_number)
+                    } else {
+                        ArtifactRef::in_repo(dependency_repo, dependency_number)
+                    };
+                    self.ensure_issue_dependency_metadata(&child_issue.id, &dependency)
+                        .await?;
+                }
+            }
+            // Third pass: cross-repo issue fan-out records parent dependency refs.
+            if any_cross_repo {
+                if let ArtifactSource::Issue { number } = target {
+                    let parent_issue = self
+                        .forge
+                        .get_issue_by_number(repo_id, number)
+                        .await?
+                        .ok_or(ExecutionError::TargetMissing { target })?;
+                    for child in &create.children {
+                        let (child_repo, child_number) = child_numbers_by_slug[&child.slug].clone();
+                        self.ensure_issue_dependency_metadata(
+                            &parent_issue.id,
+                            &ArtifactRef::in_repo(child_repo, child_number),
+                        )
+                        .await?;
+                    }
                 }
             }
         }
@@ -773,6 +826,15 @@ fn child_correlation_key(base_correlation_key: &str, slug: &str) -> String {
         slug.len(),
         slug
     )
+}
+
+fn annotate_target_repo_error(target_repo: &RepositoryId, error: ExecutionError) -> ExecutionError {
+    match error {
+        ExecutionError::Backend { message } => ExecutionError::Backend {
+            message: format!("cannot ensure issue in target repository `{target_repo}`: {message}"),
+        },
+        other => other,
+    }
 }
 
 /// Validates that every child's declared sibling dependency names another child
