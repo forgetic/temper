@@ -63,11 +63,13 @@ fn valid_spec() -> RawWorkflowSpec {
                 id: "epic".to_string(),
                 target: ArtifactTarget::Issue,
                 identifying_labels: vec!["epic".to_string()],
+                initial_labels: Vec::new(),
             },
             RawArtifactKind {
                 id: "code".to_string(),
                 target: ArtifactTarget::Issue,
                 identifying_labels: vec!["code".to_string()],
+                initial_labels: Vec::new(),
             },
         ],
         relations: vec![RawRelation {
@@ -552,8 +554,13 @@ fn empty_queue_artifacts_are_diagnosed() {
 fn raw_spec_loads_from_json() {
     let json = r#"{
         "name": "from-json",
-        "labels": [{"id": "ready"}],
-        "artifact_kinds": [{"id": "code", "target": "issue", "identifying_labels": ["ready"]}],
+        "labels": [{"id": "ready"}, {"id": "needs-review"}],
+        "artifact_kinds": [{
+            "id": "code",
+            "target": "issue",
+            "identifying_labels": ["ready"],
+            "initial_labels": ["needs-review"]
+        }],
         "queues": [{"id": "code_ready", "artifact": "code", "labels": ["ready"]}],
         "roles": [{"id": "engineer", "queues": ["code_ready"]}],
         "transitions": [{
@@ -565,9 +572,48 @@ fn raw_spec_loads_from_json() {
     }"#;
 
     let spec: RawWorkflowSpec = serde_json::from_str(json).expect("json should parse");
+    assert_eq!(spec.artifact_kinds[0].initial_labels, vec!["needs-review"]);
+
     let workflow = spec.validate().expect("loaded spec should validate");
     assert_eq!(workflow.name(), "from-json");
     assert_eq!(workflow.transitions().len(), 1);
+    assert_eq!(
+        workflow.artifact_kinds()[0].initial_labels,
+        vec!["needs-review".into()]
+    );
+}
+
+#[test]
+fn raw_artifact_kind_initial_labels_default_to_empty() {
+    let json = r#"{
+        "id": "code",
+        "target": "issue",
+        "identifying_labels": ["code"]
+    }"#;
+
+    let artifact: RawArtifactKind = serde_json::from_str(json).expect("artifact parses");
+    assert!(artifact.initial_labels.is_empty());
+}
+
+#[test]
+fn undeclared_initial_label_is_diagnosed_like_an_artifact_label() {
+    let mut spec = valid_spec();
+    spec.artifact_kinds[1]
+        .initial_labels
+        .push("missing-initial".to_string());
+
+    let errors = spec
+        .validate()
+        .expect_err("missing initial label must fail");
+    assert!(errors
+        .diagnostics()
+        .contains(&Diagnostic::UndeclaredReference {
+            expected: SymbolKind::Label,
+            id: "missing-initial".to_string(),
+            site: ReferenceSite::ArtifactLabel {
+                artifact: "code".to_string(),
+            },
+        }));
 }
 
 #[test]
@@ -594,6 +640,7 @@ fn single_default_artifact_kind_validates() {
         id: "intake".to_string(),
         target: ArtifactTarget::Issue,
         identifying_labels: Vec::new(),
+        initial_labels: Vec::new(),
     });
 
     spec.validate()
@@ -609,11 +656,13 @@ fn multiple_default_artifact_kinds_for_one_target_is_diagnosed() {
         id: "intake".to_string(),
         target: ArtifactTarget::Issue,
         identifying_labels: Vec::new(),
+        initial_labels: Vec::new(),
     });
     spec.artifact_kinds.push(RawArtifactKind {
         id: "inbox".to_string(),
         target: ArtifactTarget::Issue,
         identifying_labels: Vec::new(),
+        initial_labels: Vec::new(),
     });
 
     let errors = spec
@@ -641,11 +690,13 @@ fn one_default_per_distinct_target_validates() {
         id: "intake".to_string(),
         target: ArtifactTarget::Issue,
         identifying_labels: Vec::new(),
+        initial_labels: Vec::new(),
     });
     spec.artifact_kinds.push(RawArtifactKind {
         id: "pr_intake".to_string(),
         target: ArtifactTarget::PullRequest,
         identifying_labels: Vec::new(),
+        initial_labels: Vec::new(),
     });
 
     spec.validate()

@@ -163,6 +163,17 @@ fn check_references(
                 diagnostics,
             );
         }
+        for label in &artifact.initial_labels {
+            check_reference(
+                declared.labels,
+                label,
+                SymbolKind::Label,
+                ReferenceSite::ArtifactLabel {
+                    artifact: artifact.id.clone(),
+                },
+                diagnostics,
+            );
+        }
     }
 
     for relation in &spec.relations {

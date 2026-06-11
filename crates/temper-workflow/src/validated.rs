@@ -187,6 +187,10 @@ pub struct ValidatedArtifactKind {
     /// Labels that must all be present for a Forge artifact to be classified as
     /// this kind.
     pub identifying_labels: Vec<LabelId>,
+    /// Labels attached when the engine creates an artifact of this kind, in
+    /// addition to the identifying labels. They are not part of the kind's
+    /// identity and later transitions may freely remove them.
+    pub initial_labels: Vec<LabelId>,
 }
 
 /// A validated state within a dimension.

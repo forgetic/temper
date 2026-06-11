@@ -152,6 +152,13 @@ pub struct RawArtifactKind {
     /// references a label id.
     #[serde(default)]
     pub identifying_labels: Vec<String>,
+    /// Labels attached when the engine creates an artifact of this kind, in
+    /// addition to the identifying labels. Unlike identifying labels they are
+    /// not part of the kind's identity: later transitions may freely remove
+    /// them (e.g. an initial `needs-reviewer` routing label cleared by the
+    /// review). Each entry references a label id.
+    #[serde(default)]
+    pub initial_labels: Vec<String>,
 }
 
 /// State dimension declaration: a named, usually mutually exclusive, state group.

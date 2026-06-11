@@ -211,6 +211,9 @@
       "target": "pull_request",
       "identifying_labels": [
         "implementation"
+      ],
+      "initial_labels": [
+        "needs-reviewer"
       ]
     }
   ],

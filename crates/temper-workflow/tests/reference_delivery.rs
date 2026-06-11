@@ -151,6 +151,20 @@ fn reference_fixture_validates_with_expected_shape() {
         .expect("mechanical automation authority is declared");
     assert!(mechanical.queues.is_empty());
 
+    let implementation_pr = workflow
+        .artifact_kinds()
+        .iter()
+        .find(|kind| kind.id.as_str() == "implementation_pr")
+        .expect("implementation PR kind is declared");
+    assert_eq!(
+        implementation_pr.identifying_labels,
+        vec![LabelId::new("implementation")]
+    );
+    assert_eq!(
+        implementation_pr.initial_labels,
+        vec![LabelId::new("needs-reviewer")]
+    );
+
     let ci_gate = workflow
         .gates()
         .iter()
@@ -645,6 +659,17 @@ fn mechanical_landing_requires_review_and_native_ci() {
             WorkflowEffect::AddLabel(LabelId::new("alignment")),
         ]
     );
+}
+
+#[test]
+fn fresh_implementation_pr_matches_reviewer_queue() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let fresh_pr = classify_pr(&workflow, 19, &["implementation", "needs-reviewer"]);
+
+    assert!(planner
+        .matching_queues(&fresh_pr)
+        .contains(&QueueId::new("pr_needs_review")));
 }
 
 #[test]

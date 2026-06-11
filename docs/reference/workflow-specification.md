@@ -23,7 +23,7 @@ issues in one pass. Ids are typed (`RoleId`, `QueueId`, `TransitionId`,
 | Primitive | Meaning |
 | --- | --- |
 | `role` | Actor authority, subscribed queues, concurrency hint, prompt guidance, and declared non-workflow external tools. |
-| `artifact_kind` | Logical item mapped to a Forge target (`issue` or `pull_request`) plus identifying labels. |
+| `artifact_kind` | Logical item mapped to a Forge target (`issue` or `pull_request`) plus identifying labels and optional initial creation labels. |
 | `state_dimension` | Named state group projected as labels. Dimensions are exclusive by default; states may restrict legal artifact kinds. |
 | `queue` | Query over artifact kind(s), labels, optional disjunctive label branches, optional runtime/projected condition, activation policy, and optional automation metadata. |
 | `transition` | Guarded action authorized for roles. Effects may update labels/assignees, create comments, create PRs, request reviewers, submit reviews, or merge PRs. |
@@ -36,6 +36,26 @@ links, CI jobs, review decisions, and merge state are observed from the Forge
 rather than mirrored as labels. Metadata blocks carry information with no
 portable Forge field: kind overrides, parent links, fallback/cross-repo
 dependencies, correlation keys, and leases.
+
+## Artifact kinds
+
+An `artifact_kind` maps a logical workflow item to one Forge target (`issue` or
+`pull_request`) and declares the labels that classify existing Forge artifacts:
+
+- `identifying_labels` are part of the artifact kind's identity. A Forge artifact
+  is classified as the kind only when every identifying label is present, and
+  daemon correlation lookups use these stable labels to find already-created
+  artifacts.
+- `initial_labels` are creation-time labels the engine adds in addition to the
+  identifying labels when it creates an artifact of this kind. They are useful
+  for initial routing, such as putting a newly opened implementation PR into a
+  reviewer queue. They are not kind identity, so later transitions may freely
+  remove them (for example after review starts or completes) without breaking
+  idempotent correlation lookup.
+
+Do not use another artifact kind's identifying label as an `initial_labels` entry:
+that can make a newly created artifact classify as the wrong kind or as multiple
+kinds until the routing label is removed.
 
 ## Roles, prompts, and external tools
 
