@@ -53,7 +53,7 @@ pub fn build_runtime() -> Result<EngineRuntime, String> {
 /// need one). This is the standard `main()` entry for temper binaries and the
 /// test-harness replacement for `#[tokio::test]` bodies:
 ///
-/// ```ignore
+/// ```text
 /// #[test]
 /// fn my_async_test() {
 ///     temper_io_engine::block_on(async { ... });
