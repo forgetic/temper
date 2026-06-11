@@ -26,16 +26,16 @@ use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_testing::{runner_config, workflow};
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
-async fn provisions_identity_repo_labels_and_workflow() {
+fn provisions_identity_repo_labels_and_workflow() {
+    temper_io_engine::block_on(async move {
     // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
     // polling; building/dropping that client inside the async test context trips
     // Tokio's "cannot drop a runtime in an async context" guard. Boot it on a
     // blocking thread so the nested blocking runtime lives and dies off-reactor.
-    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
+    let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
         .await
-        .expect("server boot task joins")
         .expect("forgejo cached provisioned state starts");
     let server = cached.server;
     let provisioned = cached.provisioned;
@@ -110,43 +110,36 @@ async fn provisions_identity_repo_labels_and_workflow() {
     );
 
     // 5. The CI workflow file is committed and Actions are enabled.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .expect("client builds");
-    let contents = client
-        .get(format!(
-            "{base}/api/v1/repos/{}/{}/contents/.forgejo/workflows/ci.yml",
-            provisioned.owner, provisioned.name
-        ))
-        .header(
-            "Authorization",
-            format!("token {}", provisioned.admin_token),
+    let client = temper_io_engine::http::JsonClient::new();
+    let (contents_status, _) = client
+        .send_expect_json(
+            "GET",
+            format!(
+                "{base}/api/v1/repos/{}/{}/contents/.forgejo/workflows/ci.yml",
+                provisioned.owner, provisioned.name
+            ),
+            Some(&provisioned.admin_token),
+            None,
+            "contents request",
         )
-        .send()
-        .await
-        .expect("contents request sends");
+        .await;
     assert!(
-        contents.status().is_success(),
-        "workflow file should be committed, got {}",
-        contents.status()
+        (200..300).contains(&contents_status),
+        "workflow file should be committed, got {contents_status}"
     );
 
-    let repo_json: serde_json::Value = client
-        .get(format!(
-            "{base}/api/v1/repos/{}/{}",
-            provisioned.owner, provisioned.name
-        ))
-        .header(
-            "Authorization",
-            format!("token {}", provisioned.admin_token),
+    let (_, repo_json) = client
+        .send_expect_json(
+            "GET",
+            format!(
+                "{base}/api/v1/repos/{}/{}",
+                provisioned.owner, provisioned.name
+            ),
+            Some(&provisioned.admin_token),
+            None,
+            "repo request",
         )
-        .send()
-        .await
-        .expect("repo request sends")
-        .json()
-        .await
-        .expect("repo json parses");
+        .await;
     assert_eq!(
         repo_json["has_actions"].as_bool(),
         Some(true),
@@ -155,4 +148,5 @@ async fn provisions_identity_repo_labels_and_workflow() {
 
     // Tear down explicitly so any panic in drop surfaces here.
     drop(server);
+    })
 }

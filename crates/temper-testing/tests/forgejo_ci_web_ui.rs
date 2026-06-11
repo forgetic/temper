@@ -24,15 +24,15 @@ use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_server::{start_cached_provisioned_server, ForgejoRunner};
 use temper_testing::runner_config;
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
-async fn list_ci_jobs_reads_failure_through_web_ui() {
+fn list_ci_jobs_reads_failure_through_web_ui() {
+    temper_io_engine::block_on(async move {
     // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
     // polling; boot it on a blocking thread so that nested runtime lives and dies
     // off-reactor (matching the Phase 2 provisioning test).
-    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
+    let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
         .await
-        .expect("server boot task joins")
         .expect("forgejo cached provisioned state starts");
     let server = cached.server;
     let provisioned = cached.provisioned;
@@ -89,7 +89,7 @@ async fn list_ci_jobs_reads_failure_through_web_ui() {
         if Instant::now() >= deadline {
             break None;
         }
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        temper_io_engine::runtime::sleep_for(Duration::from_secs(3)).await;
     };
 
     let job = failing.unwrap_or_else(|| {
@@ -106,4 +106,5 @@ async fn list_ci_jobs_reads_failure_through_web_ui() {
     // Tear down explicitly so any panic in drop surfaces here, not at unwind.
     drop(runner);
     drop(server);
+    })
 }

@@ -55,12 +55,13 @@ impl From<ForgeError> for RunError {
 }
 
 /// Runs the production worker to completion.
+///
+/// The worker loop runs as an engine task so it holds a capability context:
+/// the wake-socket waits and poll-deadline timers are completion-driven I/O
+/// requests against the engine runtime.
 pub fn run(args: &WorkerArgs) -> Result<RunReport, RunError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| RunError::Backend(format!("failed to start Tokio runtime: {error}")))?;
-    runtime.block_on(run_async(args))
+    let args = args.clone();
+    temper_io_engine::block_on(async move { run_async(&args).await })
 }
 
 async fn run_async(args: &WorkerArgs) -> Result<RunReport, RunError> {
@@ -405,7 +406,7 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
         .poll_interval
         .to_std()
         .unwrap_or_else(|_| StdDuration::from_millis(1_000));
-    let wake = build_wake_listener(args)?;
+    let mut wake = build_wake_listener(args)?;
     let mut consecutive_failures = 0u32;
     let audit_interval = args
         .audit_interval
@@ -502,7 +503,7 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
             }
         }
         let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
-        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_ref())
+        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_mut())
             .await
             .map_err(|error| RunError::Backend(error.to_string()))?
         {

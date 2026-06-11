@@ -55,10 +55,7 @@ fn runner_runs_failing_job_and_reports_failure() {
     let cached = ForgejoServer::start_with_state(&state, |server| {
         let base = server.base_url().to_string();
         let token = create_admin_token(server);
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let client = temper_io_engine::http::BlockingJsonClient::new();
         create_repo(&client, &base, &token);
         Ok::<RunnerSmokeMetadata, String>(RunnerSmokeMetadata { admin_token: token })
     })
@@ -66,10 +63,7 @@ fn runner_runs_failing_job_and_reports_failure() {
     let server = cached.server;
     let token = cached.metadata.admin_token;
     let base = server.base_url().to_string();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("blocking client builds");
+    let client = temper_io_engine::http::BlockingJsonClient::new();
 
     // Register the host-mode runner *before* pushing the workflow so it is ready
     // to claim the job the moment Actions sees it.
@@ -137,75 +131,69 @@ fn create_admin_token(server: &ForgejoServer) -> String {
     token
 }
 
-fn create_repo(client: &reqwest::blocking::Client, base: &str, token: &str) {
-    let resp = client
-        .post(format!("{base}/api/v1/user/repos"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
+fn create_repo(client: &temper_io_engine::http::BlockingJsonClient, base: &str, token: &str) {
+    let (status, body) = client.send_expect_json(
+        "POST",
+        format!("{base}/api/v1/user/repos"),
+        Some(token),
+        Some(&json!({
             "name": REPO,
             "auto_init": true,
             "default_branch": "main",
             "private": false,
-        }))
-        .send()
-        .expect("create repo request sends");
+        })),
+        "create repo",
+    );
     assert!(
-        resp.status().is_success(),
-        "create repo failed: {} {}",
-        resp.status(),
-        resp.text().unwrap_or_default()
+        (200..300).contains(&status),
+        "create repo failed: {status} {body}"
     );
 }
 
 /// Commits the failing workflow file and returns the resulting commit SHA (the
 /// head the runner will report a status against).
-fn put_workflow_file(client: &reqwest::blocking::Client, base: &str, token: &str) -> String {
+fn put_workflow_file(client: &temper_io_engine::http::BlockingJsonClient, base: &str, token: &str) -> String {
     use base64::Engine;
     let content = base64::engine::general_purpose::STANDARD.encode(FAILING_WORKFLOW);
-    let resp = client
-        .post(format!(
-            "{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"
-        ))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
+    let (status, body) = client.send_expect_json(
+        "POST",
+        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"),
+        Some(token),
+        Some(&json!({
             "content": content,
             "message": "add failing CI workflow",
             "branch": "main",
-        }))
-        .send()
-        .expect("put contents request sends");
-    assert!(
-        resp.status().is_success(),
-        "put workflow failed: {} {}",
-        resp.status(),
-        resp.text().unwrap_or_default()
+        })),
+        "put workflow",
     );
-    let body: Value = resp.json().expect("contents response is json");
+    assert!(
+        (200..300).contains(&status),
+        "put workflow failed: {status} {body}"
+    );
     body["commit"]["sha"]
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| panic!("no commit sha in contents response: {body}"))
 }
 
-fn enable_repo_actions(client: &reqwest::blocking::Client, base: &str, token: &str) {
-    let resp = client
-        .patch(format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({ "has_actions": true }))
-        .send()
-        .expect("patch repo request sends");
+fn enable_repo_actions(client: &temper_io_engine::http::BlockingJsonClient, base: &str, token: &str) {
+    let (status, body) = client.send_expect_json(
+        "PATCH",
+        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"),
+        Some(token),
+        Some(&json!({ "has_actions": true })),
+        "enable actions",
+    );
     assert!(
-        resp.status().is_success(),
-        "enable actions failed: {} {}",
-        resp.status(),
-        resp.text().unwrap_or_default()
+        (200..300).contains(&status),
+        "enable actions failed: {status} {body}"
     );
 }
 
 /// Polls the commit-status API until a terminal state appears or a generous
 /// deadline passes. Returns the observed `state` (e.g. `failure`, `success`).
 fn wait_for_commit_state(
-    client: &reqwest::blocking::Client,
+    client: &temper_io_engine::http::BlockingJsonClient,
     base: &str,
     token: &str,
     sha: &str,
@@ -215,12 +203,8 @@ fn wait_for_commit_state(
     let url = format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/commits/{sha}/status");
     let mut last = String::from("(none)");
     loop {
-        if let Ok(resp) = client
-            .get(&url)
-            .header("Authorization", format!("token {token}"))
-            .send()
-        {
-            if let Ok(body) = resp.json::<Value>() {
+        if let Ok(resp) = client.send("GET", url.as_str(), Some(token), None) {
+            if let Ok(body) = serde_json::from_slice::<Value>(&resp.body) {
                 let state = body["state"].as_str().unwrap_or("").to_string();
                 last = state.clone();
                 // `pending`/`running`/empty mean "not done yet"; keep polling.

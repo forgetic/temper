@@ -102,8 +102,9 @@ async fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumb
     labels
 }
 
-#[tokio::test]
-async fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
+#[test]
+ fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge).await;
     let dependency = create_issue(&forge, &repo.id, &["code", "ready"]).await;
@@ -154,10 +155,12 @@ async fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
         issue_labels(&forge, &repo.id, blocked).await,
         vec!["code".to_string(), "ready".to_string()]
     );
+    })
 }
 
-#[tokio::test]
-async fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
+#[test]
+ fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let workflow = workflow();
     let config = MechanicalBackstopConfig {
@@ -179,4 +182,5 @@ async fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
         .expect("tick succeeds"),
         Progress::unchanged()
     );
+    })
 }

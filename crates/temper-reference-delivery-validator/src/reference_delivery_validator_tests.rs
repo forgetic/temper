@@ -29,8 +29,9 @@ fn parse_requires_token_from_env_and_redacts_debug() {
     assert!(!format!("{args:?}").contains("secret-token"));
 }
 
-#[tokio::test]
-async fn zero_dependency_blocked_parent_reports_original_incident_shape() {
+#[test]
+ fn zero_dependency_blocked_parent_reports_original_incident_shape() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let source = create_repo(&forge, "acme", "service").await;
     let parent = create_issue(
@@ -66,10 +67,12 @@ async fn zero_dependency_blocked_parent_reports_original_incident_shape() {
     assert!(
         rendered.contains("architect blocked the parent but no fan-out side effects were recorded")
     );
+    })
 }
 
-#[tokio::test]
-async fn parent_with_child_backrefs_and_correlation_passes() {
+#[test]
+ fn parent_with_child_backrefs_and_correlation_passes() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let source = create_repo(&forge, "acme", "service").await;
     let target = create_repo(&forge, "acme", "service-canary").await;
@@ -142,6 +145,7 @@ async fn parent_with_child_backrefs_and_correlation_passes() {
         .lines()
         .iter()
         .any(|line| line.contains("expected 2 child dependencies, found 2")));
+    })
 }
 
 async fn create_repo(forge: &MemoryForge, owner: &str, name: &str) -> RepositoryId {

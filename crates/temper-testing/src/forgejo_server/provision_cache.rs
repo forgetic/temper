@@ -182,12 +182,14 @@ fn reference_delivery_state_description(repo_names: &[String]) -> serde_json::Va
     })
 }
 
+/// Drives a borrowing fixture future on a throwaway engine runtime.
+///
+/// The future is polled on this thread (no ambient task context); the REST
+/// helpers it uses fall back to a detached capability context, which is fine
+/// for fixture provisioning (no deadlines or timers inside).
 fn block_on_fixture<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds")
-        .block_on(future)
+    let runtime = temper_io_engine::build_runtime().expect("engine runtime builds");
+    runtime.block_on(future)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

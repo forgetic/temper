@@ -1,7 +1,7 @@
 //! Mockable HTTP seam for the GitHub backend.
 //!
 //! The [`HttpClient`] trait isolates the backend from a concrete HTTP library.
-//! The real adapter ([`ReqwestHttpClient`]) talks to the live GitHub API; tests
+//! The real adapter ([`EngineHttpClient`]) talks to the live GitHub API; tests
 //! drive a mock client that records requests and replays canned responses
 //! without touching the network.
 
@@ -134,89 +134,64 @@ pub(crate) fn build_request(
     }
 }
 
-/// Real [`HttpClient`] backed by `reqwest`.
+/// Real [`HttpClient`] backed by the engine's pooled asupersync HTTP client.
 ///
-/// Sending a request requires an async runtime (for example Tokio) to be
-/// driving the future. Offline tests use the mock client instead.
-#[derive(Clone, Debug)]
-pub struct ReqwestHttpClient {
+/// From the logic layer's point of view one `execute` call is a single
+/// `<io-event-request>`; this adapter is the imperative-shell executor that
+/// performs it. Note: `https` API roots additionally require asupersync's
+/// `tls` feature; the offline tests use the mock client instead.
+#[derive(Clone)]
+pub struct EngineHttpClient {
     base_url: String,
-    client: reqwest::Client,
+    client: std::sync::Arc<asupersync::http::h1::http_client::HttpClient>,
 }
 
-impl ReqwestHttpClient {
+impl std::fmt::Debug for EngineHttpClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EngineHttpClient")
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EngineHttpClient {
     /// Builds a client targeting `base_url`, stripping any trailing slashes.
     ///
     /// Redirects are **not** auto-followed: the REST API returns terminal
     /// `2xx`/`4xx` directly, and a `301` (e.g. a renamed repository) should be
     /// surfaced to the caller rather than silently chased.
     pub fn new(base_url: impl Into<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_default();
-        Self::with_client(base_url, client)
-    }
-
-    /// Builds a client from an existing `reqwest::Client`.
-    pub fn with_client(base_url: impl Into<String>, client: reqwest::Client) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
-            client,
-        }
-    }
-}
-
-impl HttpMethod {
-    fn to_reqwest(self) -> reqwest::Method {
-        match self {
-            HttpMethod::Get => reqwest::Method::GET,
-            HttpMethod::Post => reqwest::Method::POST,
-            HttpMethod::Put => reqwest::Method::PUT,
-            HttpMethod::Patch => reqwest::Method::PATCH,
-            HttpMethod::Delete => reqwest::Method::DELETE,
+            client: temper_io_engine::http::build_http_client(),
         }
     }
 }
 
 #[async_trait]
-impl HttpClient for ReqwestHttpClient {
+impl HttpClient for EngineHttpClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        let url = format!("{}{}", self.base_url, request.path);
-        let mut builder = self.client.request(request.method.to_reqwest(), url);
+        let mut url = format!("{}{}", self.base_url, request.path);
         if !request.query.is_empty() {
-            builder = builder.query(&request.query);
-        }
-        for (name, value) in &request.headers {
-            builder = builder.header(name, value);
-        }
-        if let Some(body) = request.body {
-            builder = builder.body(body);
+            url.push('?');
+            url.push_str(&temper_io_engine::http::encode_query(&request.query));
         }
 
-        let response = builder
-            .send()
+        let call = temper_io_engine::http::HttpCall {
+            method: request.method.as_str().to_string(),
+            url,
+            headers: request.headers,
+            body: request.body.map(String::into_bytes).unwrap_or_default(),
+        };
+        let cx = temper_io_engine::runtime::ambient_cx();
+        let response = temper_io_engine::http::http_call(&cx, &self.client, call)
             .await
-            .map_err(|error| HttpError::Transport(error.to_string()))?;
-        let status = response.status().as_u16();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(name, value)| {
-                (
-                    name.to_string(),
-                    value.to_str().unwrap_or_default().to_string(),
-                )
-            })
-            .collect();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| HttpError::Transport(error.to_string()))?;
+            .map_err(HttpError::Transport)?;
         Ok(HttpResponse {
-            status,
-            headers,
-            body,
+            status: response.status,
+            headers: response.headers,
+            body: String::from_utf8_lossy(&response.body).into_owned(),
         })
     }
 }

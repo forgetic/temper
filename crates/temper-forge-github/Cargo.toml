@@ -10,7 +10,8 @@ description = "GitHub-backed Forge implementation (best-effort, offline-tested).
 async-trait.workspace = true
 chrono.workspace = true
 temper-forge = { path = "../temper-forge" }
-reqwest.workspace = true
+asupersync.workspace = true
+temper-io-engine = { path = "../temper-io-engine" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

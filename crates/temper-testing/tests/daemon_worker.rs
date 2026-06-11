@@ -23,13 +23,12 @@ use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_worker_protocol::{
     Artifact, JobArtifactSnapshot, JobContext, JobRepository, JobResult, ResultStatus,
 };
-use tokio::sync::mpsc;
 
 const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Applier seam that records every applied (job, result) pair for the test.
 struct RecordingApplier {
-    tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
+    tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
 }
 
 #[async_trait::async_trait]
@@ -59,8 +58,9 @@ impl Drop for WorkerGuard {
     }
 }
 
-#[tokio::test]
-async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
+#[test]
+ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
+    temper_io_engine::block_on(async move {
     let workspace = RunWorkspace::new("temper-daemon-worker-hermetic");
 
     // A seeded bare origin reachable over file:// (no credentials needed).
@@ -70,20 +70,12 @@ async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
     seed_origin(&origin, workspace.path());
 
     // In-process daemon transport with a recording applier seam.
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = temper_io_engine::channel();
     let daemon = Daemon::with_applier(Arc::new(RecordingApplier { tx }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
         .await
-        .expect("ephemeral daemon listener binds");
-    let addr = listener
-        .local_addr()
-        .expect("daemon listener has an address");
-    let router = daemon.router();
-    tokio::spawn(async move {
-        axum::serve(listener, router)
-            .await
-            .expect("in-process daemon serves");
-    });
+        .expect("ephemeral daemon server binds");
+    let addr = server.local_addr();
 
     // One enriched issue job, exactly what the daemon's scan feed enqueues.
     let context = JobContext {
@@ -127,15 +119,20 @@ async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
     let log = workspace.join("worker.log");
     let mut worker = spawn_worker(workspace.path(), addr, &stop_file, &log);
 
-    let (job, result) = tokio::time::timeout(RESULT_TIMEOUT, rx.recv())
-        .await
-        .unwrap_or_else(|_| {
-            panic!(
-                "daemon did not observe a worker result within {RESULT_TIMEOUT:?}\n--- worker log ---\n{}",
-                worker.logs()
-            )
-        })
-        .expect("applier channel stays open");
+    let cx = temper_io_engine::runtime::current_cx();
+    let (job, result) = asupersync::time::timeout(
+        temper_io_engine::runtime::timer_now(&cx),
+        RESULT_TIMEOUT,
+        Box::pin(rx.recv()),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "daemon did not observe a worker result within {RESULT_TIMEOUT:?}\n--- worker log ---\n{}",
+            worker.logs()
+        )
+    })
+    .expect("applier channel stays open");
 
     assert_eq!(job.job_id, "acme/service/issue-7/engineer/code_ready");
     assert_eq!(job.role, "engineer");
@@ -192,11 +189,11 @@ async fn daemon_worker_pushes_branch_and_daemon_sees_success() {
 
     // The stop-file ends the loop and the worker exits cleanly.
     std::fs::write(&stop_file, b"stop").expect("stop file writes");
-    let status = tokio::task::spawn_blocking(move || worker.child.wait())
+    let status = asupersync::runtime::spawn_blocking(move || worker.child.wait())
         .await
-        .expect("wait task joins")
         .expect("worker child waits");
     assert!(status.success(), "worker exited with {status:?}");
+    })
 }
 
 fn spawn_worker(

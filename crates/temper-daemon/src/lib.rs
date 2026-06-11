@@ -6,17 +6,9 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::post,
-    Json, Router,
-};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use temper_forge::{
@@ -41,9 +33,9 @@ use temper_workflow::{
     Effect, ExecutionContext, ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy,
     RoleId, ToolManifest, TransitionId, ValidatedWorkflow, VerdictId,
 };
-use tokio::{
-    sync::{mpsc, oneshot},
-    time::{sleep_until, Instant as TokioInstant},
+use temper_io_engine::http::{HttpRequestData, HttpResponder, HttpResponseData};
+use temper_io_engine::{
+    arm_timer, channel, drive, CqSender, EngineTime, Executor as EngineExecutor, Machine,
 };
 
 pub mod config;
@@ -52,7 +44,7 @@ mod webhook;
 
 pub use config::{parse, DaemonRunConfig, ParseOutcome, USAGE};
 pub use mechanical::{
-    run_mechanical_backstop, run_mechanical_backstop_tick, MechanicalBackstopConfig,
+    run_mechanical_backstop_tick, spawn_mechanical_backstop, MechanicalBackstopConfig,
 };
 pub use temper_runner::{RepositorySet, RepositoryTarget};
 pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, JobRepository};
@@ -1156,225 +1148,407 @@ fn allowed_verdicts(tool: &ToolManifest) -> Vec<String> {
         .collect()
 }
 
-#[derive(Clone)]
-struct DaemonState {
-    cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
-    max_poll_wait_ms: u64,
-}
-
+/// Worker-protocol + webhook transport handle for one daemon process.
+///
+/// `Daemon` is a cloneable handle that submits `<io-event-completion>`s to the
+/// daemon's engine loop. The logic — protocol handling, long-poll waiters,
+/// apply-window bookkeeping, webhook verification — lives in `DaemonMachine`,
+/// a pure state machine; all I/O (HTTP responses, timers, result application,
+/// wake scans) is performed by `DaemonExecutor` on the engine runtime.
 #[derive(Clone)]
 pub struct Daemon {
-    cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
-    max_poll_wait_ms: u64,
+    cq: CqSender<DaemonCompletion>,
+    scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
 }
 
-enum DaemonCommand {
-    Message {
-        msg: WorkerProtocolMessage,
-        reply: oneshot::Sender<Option<WorkerProtocolMessage>>,
+/// Type-erased webhook wake scanner installed by [`Daemon::with_webhook`].
+trait WakeScanner: Send + Sync {
+    fn scan(
+        &self,
+        hint: temper_runner::ChangeHint,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+}
+
+/// `<io-event-completion>`s observed by the daemon machine.
+enum DaemonCompletion {
+    /// One inbound HTTP request (worker protocol or webhook).
+    Http {
+        request: HttpRequestData,
+        responder: HttpResponder,
     },
-    Result {
-        result: JobResult,
-        reply: oneshot::Sender<Option<WorkerProtocolMessage>>,
-    },
-    Poll {
-        poll: Poll,
-        deadline: TokioInstant,
-        reply: oneshot::Sender<WorkerProtocolMessage>,
-    },
-    ExpirePoll {
-        id: u64,
-    },
-    EnqueueJob {
+    /// A long-poll waiter's max-wait deadline elapsed.
+    PollDeadline { id: u64 },
+    /// A result applier finished off-loop.
+    ApplyFinished { job_id: String },
+    /// Daemon API: enqueue one job (scans, backstops, tests).
+    Enqueue {
         job_id: String,
         role: String,
         repo: String,
         artifact: Artifact,
         job_payload: serde_json::Value,
     },
-    ApplyFinished {
-        job_id: String,
-    },
-    SetApplyGrace {
-        apply_grace: Duration,
-    },
+    /// A webhook wake scan completed; release the held `202` response.
+    WakeScanFinished { token: u64 },
+    /// Adjust the post-apply re-enqueue grace window.
+    SetApplyGrace { apply_grace: Duration },
+    /// Enable webhook intake with the given verification config.
+    ConfigureWebhook { config: WebhookConfig },
     #[cfg(test)]
     QueuedJobs {
-        reply: oneshot::Sender<Vec<QueuedJob>>,
+        reply: temper_io_engine::OneshotSender<Vec<QueuedJob>>,
     },
+}
+
+/// `<io-event-request>`s the daemon machine may issue.
+enum DaemonRequest {
+    Respond {
+        responder: HttpResponder,
+        response: HttpResponseData,
+    },
+    StartPollTimer {
+        id: u64,
+        delay: Duration,
+    },
+    RunApply {
+        job: InFlightJob,
+        result: JobResult,
+    },
+    RunWakeScan {
+        token: u64,
+        hint: temper_runner::ChangeHint,
+    },
+    Log(String),
+    #[cfg(test)]
+    QueuedJobsReply(
+        temper_io_engine::OneshotSender<Vec<QueuedJob>>,
+        Vec<QueuedJob>,
+    ),
 }
 
 struct PollWaiter {
     poll: Poll,
-    reply: oneshot::Sender<WorkerProtocolMessage>,
+    responder: HttpResponder,
 }
 
-async fn run_core(
-    mut rx: mpsc::UnboundedReceiver<DaemonCommand>,
-    cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
-    applier: Arc<dyn ResultApplier>,
+/// The daemon's functional core: deterministic worker-protocol, long-poll,
+/// apply-window, and webhook-verification logic. No I/O, no clocks — time
+/// arrives as data on completions; everything it wants done leaves as
+/// [`DaemonRequest`] values.
+struct DaemonMachine {
+    core: DaemonCore,
+    max_poll_wait_ms: u64,
+    webhook: Option<WebhookConfig>,
+    waiters: BTreeMap<u64, PollWaiter>,
+    webhook_waiters: BTreeMap<u64, HttpResponder>,
+    applying: BTreeSet<String>,
+    recently_applied: BTreeMap<String, EngineTime>,
     apply_grace: Duration,
-) {
-    let mut core = DaemonCore::new();
-    let mut waiters = BTreeMap::new();
-    let mut applying = BTreeSet::new();
-    let mut recently_applied = BTreeMap::new();
-    let mut apply_grace = apply_grace;
-    let mut next_id = 0_u64;
+    /// The engine's once-per-delivery clock snapshot; updated as the first
+    /// act of every transition, before any handler logic runs.
+    now: EngineTime,
+    next_id: u64,
+}
 
-    while let Some(command) = rx.recv().await {
-        match command {
-            DaemonCommand::Message { msg, reply } => {
-                let _ = reply.send(core.handle(msg));
+impl DaemonMachine {
+    fn new(apply_grace: Duration, max_poll_wait_ms: u64) -> Self {
+        Self {
+            core: DaemonCore::new(),
+            max_poll_wait_ms,
+            webhook: None,
+            waiters: BTreeMap::new(),
+            webhook_waiters: BTreeMap::new(),
+            applying: BTreeSet::new(),
+            recently_applied: BTreeMap::new(),
+            apply_grace,
+            now: EngineTime::ZERO,
+            next_id: 0,
+        }
+    }
+
+    fn next_token(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        id
+    }
+
+    fn handle_http(
+        &mut self,
+        request: HttpRequestData,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        match (request.method.as_str(), request.uri.as_str()) {
+            ("POST", "/v1/message") => self.handle_protocol_message(&request.body, responder),
+            ("POST", "/forgejo/webhook") if self.webhook.is_some() => {
+                self.handle_webhook_delivery(&request, responder)
             }
-            DaemonCommand::Result { result, reply } => {
-                // Capture full job context before the core completes and forgets the job.
-                let in_flight = core.in_flight_job(&result.job_id);
-                let response = core.handle(WorkerProtocolMessage::Result(result.clone()));
+            _ => vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(404),
+            }],
+        }
+    }
 
-                // Route only when the core accepted/completed the in-flight job.
-                // Unknown, never-assigned, version-mismatched, and double-sent
-                // results must not apply, retry, or drop beyond the core response.
+    fn handle_protocol_message(
+        &mut self,
+        body: &[u8],
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        let Ok(msg) = serde_json::from_slice::<WorkerProtocolMessage>(body) else {
+            return vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(400),
+            }];
+        };
+
+        match msg {
+            WorkerProtocolMessage::Poll(poll) => {
+                let response = self
+                    .core
+                    .handle(WorkerProtocolMessage::Poll(poll.clone()))
+                    .expect("poll messages produce a response");
+
+                if is_poll_timeout(&response) {
+                    let requested = poll.max_wait_ms.unwrap_or(self.max_poll_wait_ms);
+                    let wait_ms = requested.min(self.max_poll_wait_ms);
+                    let id = self.next_token();
+                    self.waiters.insert(id, PollWaiter { poll, responder });
+                    vec![DaemonRequest::StartPollTimer {
+                        id,
+                        delay: Duration::from_millis(wait_ms),
+                    }]
+                } else {
+                    let mut requests = Vec::new();
+                    if let WorkerProtocolMessage::Assign(assign) = &response {
+                        requests.push(DaemonRequest::Log(assignment_log_line(
+                            assign,
+                            &poll.worker_id,
+                        )));
+                    }
+                    requests.push(DaemonRequest::Respond {
+                        responder,
+                        response: protocol_response(Some(response)),
+                    });
+                    requests
+                }
+            }
+            WorkerProtocolMessage::Result(result) => {
+                let mut requests = Vec::new();
+                // Capture full job context before the core completes and
+                // forgets the job.
+                let in_flight = self.core.in_flight_job(&result.job_id);
+                let response = self
+                    .core
+                    .handle(WorkerProtocolMessage::Result(result.clone()));
+
+                // Route only when the core accepted/completed the in-flight
+                // job. Unknown, never-assigned, version-mismatched, and
+                // double-sent results must not apply, retry, or drop beyond
+                // the core response.
                 if let (Some(job), Some(WorkerProtocolMessage::Release(_))) =
                     (in_flight, response.as_ref())
                 {
                     let disposition = result_disposition(&result);
-                    let line = result_received_log_line(
+                    requests.push(DaemonRequest::Log(result_received_log_line(
                         &result,
                         result_disposition_log_value(disposition),
-                    );
-                    eprintln!("{line}");
+                    )));
 
                     match disposition {
                         ResultDisposition::Apply => {
-                            let job_id = job.job_id.clone();
-                            applying.insert(job_id.clone());
-                            let applier = applier.clone();
-                            let apply_finished_tx = cmd_tx.clone();
-                            tokio::spawn(async move {
-                                applier.apply(job, result).await;
-                                let _ =
-                                    apply_finished_tx.send(DaemonCommand::ApplyFinished { job_id });
-                            });
+                            self.applying.insert(job.job_id.clone());
+                            requests.push(DaemonRequest::RunApply { job, result });
                         }
                         ResultDisposition::DropForRescan => {
-                            // Let the next webhook wake or poll-backstop tick re-feed this
-                            // through the guarded scan path instead of hot re-enqueuing.
+                            // Let the next webhook wake or poll-backstop tick
+                            // re-feed this through the guarded scan path
+                            // instead of hot re-enqueuing.
                         }
                         ResultDisposition::Drop => {}
                     }
                 }
 
-                let _ = reply.send(response);
+                requests.push(DaemonRequest::Respond {
+                    responder,
+                    response: protocol_response(response),
+                });
+                requests
             }
-            DaemonCommand::Poll {
-                poll,
-                deadline,
-                reply,
-            } => {
-                let response = core
-                    .handle(WorkerProtocolMessage::Poll(poll.clone()))
+            other => {
+                let response = self.core.handle(other);
+                vec![DaemonRequest::Respond {
+                    responder,
+                    response: protocol_response(response),
+                }]
+            }
+        }
+    }
+
+    fn handle_webhook_delivery(
+        &mut self,
+        request: &HttpRequestData,
+        responder: HttpResponder,
+    ) -> Vec<DaemonRequest> {
+        let config = self.webhook.as_ref().expect("webhook config checked");
+        let headers: BTreeMap<String, String> = request
+            .headers
+            .iter()
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+            .collect();
+
+        match parse_verified_webhook(&headers, &request.body, &config.secret) {
+            Ok(hint) => {
+                let token = self.next_token();
+                self.webhook_waiters.insert(token, responder);
+                vec![
+                    DaemonRequest::Log(webhook_accepted_log_line(&hint)),
+                    DaemonRequest::RunWakeScan { token, hint },
+                ]
+            }
+            Err(WebhookError::InvalidSignature) => vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(401),
+            }],
+            Err(WebhookError::BadPayload(_)) => vec![DaemonRequest::Respond {
+                responder,
+                response: HttpResponseData::status_only(400),
+            }],
+        }
+    }
+
+    fn handle_enqueue(
+        &mut self,
+        job_id: String,
+        role: String,
+        repo: String,
+        artifact: Artifact,
+        job_payload: serde_json::Value,
+    ) -> Vec<DaemonRequest> {
+        let mut requests = Vec::new();
+        let now = self.now;
+        self.recently_applied.retain(|_, deadline| *deadline > now);
+        if self.applying.contains(&job_id) {
+            requests.push(DaemonRequest::Log(format!(
+                "temper-daemon: skipped enqueue for job in apply window job_id={job_id}"
+            )));
+            return requests;
+        }
+        if self
+            .recently_applied
+            .get(&job_id)
+            .is_some_and(|deadline| *deadline > now)
+        {
+            requests.push(DaemonRequest::Log(format!(
+                "temper-daemon: skipped enqueue for recently applied job job_id={job_id}"
+            )));
+            return requests;
+        }
+        self.core
+            .enqueue_job(job_id, role, repo, artifact, job_payload);
+        requests.extend(self.fulfil_waiters());
+        requests
+    }
+
+    fn fulfil_waiters(&mut self) -> Vec<DaemonRequest> {
+        let mut requests = Vec::new();
+        let ids = self.waiters.keys().copied().collect::<Vec<_>>();
+
+        for id in ids {
+            let Some(waiter) = self.waiters.get(&id) else {
+                continue;
+            };
+
+            let response = self
+                .core
+                .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
+                .expect("poll messages produce a response");
+
+            if is_poll_timeout(&response) {
+                continue;
+            }
+
+            let waiter = self
+                .waiters
+                .remove(&id)
+                .expect("waiter exists after successful poll response");
+            if let WorkerProtocolMessage::Assign(assign) = &response {
+                requests.push(DaemonRequest::Log(assignment_log_line(
+                    assign,
+                    &waiter.poll.worker_id,
+                )));
+            }
+            requests.push(DaemonRequest::Respond {
+                responder: waiter.responder,
+                response: protocol_response(Some(response)),
+            });
+        }
+        requests
+    }
+}
+
+impl Machine for DaemonMachine {
+    type Completion = DaemonCompletion;
+    type Request = DaemonRequest;
+
+    fn on_completion(
+        &mut self,
+        now: EngineTime,
+        completion: DaemonCompletion,
+    ) -> Vec<DaemonRequest> {
+        self.now = now;
+        match completion {
+            DaemonCompletion::Http { request, responder } => self.handle_http(request, responder),
+            DaemonCompletion::PollDeadline { id } => {
+                let Some(waiter) = self.waiters.remove(&id) else {
+                    return Vec::new();
+                };
+                let response = self
+                    .core
+                    .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
                     .expect("poll messages produce a response");
-
-                if is_poll_timeout(&response) {
-                    let id = next_id;
-                    next_id = next_id.wrapping_add(1);
-                    waiters.insert(id, PollWaiter { poll, reply });
-
-                    let timer_tx = cmd_tx.clone();
-                    tokio::spawn(async move {
-                        sleep_until(deadline).await;
-                        let _ = timer_tx.send(DaemonCommand::ExpirePoll { id });
-                    });
-                } else {
-                    if let WorkerProtocolMessage::Assign(assign) = &response {
-                        let line = assignment_log_line(assign, &poll.worker_id);
-                        eprintln!("{line}");
-                    }
-                    let _ = reply.send(response);
-                }
+                vec![DaemonRequest::Respond {
+                    responder: waiter.responder,
+                    response: protocol_response(Some(response)),
+                }]
             }
-            DaemonCommand::ExpirePoll { id } => {
-                if let Some(waiter) = waiters.remove(&id) {
-                    let response = core
-                        .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
-                        .expect("poll messages produce a response");
-                    let _ = waiter.reply.send(response);
-                }
+            DaemonCompletion::ApplyFinished { job_id } => {
+                self.applying.remove(&job_id);
+                self.recently_applied
+                    .insert(job_id, self.now + self.apply_grace);
+                Vec::new()
             }
-            DaemonCommand::EnqueueJob {
+            DaemonCompletion::Enqueue {
                 job_id,
                 role,
                 repo,
                 artifact,
                 job_payload,
-            } => {
-                let now = Instant::now();
-                recently_applied.retain(|_, deadline| *deadline > now);
-                if applying.contains(&job_id) {
-                    eprintln!(
-                        "temper-daemon: skipped enqueue for job in apply window job_id={job_id}"
-                    );
-                    continue;
+            } => self.handle_enqueue(job_id, role, repo, artifact, job_payload),
+            DaemonCompletion::WakeScanFinished { token } => {
+                match self.webhook_waiters.remove(&token) {
+                    Some(responder) => vec![DaemonRequest::Respond {
+                        responder,
+                        response: HttpResponseData::status_only(202),
+                    }],
+                    None => Vec::new(),
                 }
-                if recently_applied
-                    .get(&job_id)
-                    .is_some_and(|deadline| *deadline > now)
-                {
-                    eprintln!(
-                        "temper-daemon: skipped enqueue for recently applied job job_id={job_id}"
-                    );
-                    continue;
-                }
-                core.enqueue_job(job_id, role, repo, artifact, job_payload);
-                fulfil_waiters(&mut core, &mut waiters);
             }
-            DaemonCommand::ApplyFinished { job_id } => {
-                applying.remove(&job_id);
-                recently_applied.insert(job_id, Instant::now() + apply_grace);
+            DaemonCompletion::SetApplyGrace { apply_grace } => {
+                self.apply_grace = apply_grace;
+                Vec::new()
             }
-            DaemonCommand::SetApplyGrace {
-                apply_grace: new_apply_grace,
-            } => {
-                apply_grace = new_apply_grace;
+            DaemonCompletion::ConfigureWebhook { config } => {
+                self.webhook = Some(config);
+                Vec::new()
             }
             #[cfg(test)]
-            DaemonCommand::QueuedJobs { reply } => {
-                let _ = reply.send(core.queued_jobs());
+            DaemonCompletion::QueuedJobs { reply } => {
+                vec![DaemonRequest::QueuedJobsReply(
+                    reply,
+                    self.core.queued_jobs(),
+                )]
             }
         }
-    }
-}
-
-fn fulfil_waiters(core: &mut DaemonCore, waiters: &mut BTreeMap<u64, PollWaiter>) {
-    let ids = waiters.keys().copied().collect::<Vec<_>>();
-
-    for id in ids {
-        let Some(waiter) = waiters.get(&id) else {
-            continue;
-        };
-
-        if waiter.reply.is_closed() {
-            waiters.remove(&id);
-            continue;
-        }
-
-        let response = core
-            .handle(WorkerProtocolMessage::Poll(waiter.poll.clone()))
-            .expect("poll messages produce a response");
-
-        if is_poll_timeout(&response) {
-            continue;
-        }
-
-        let waiter = waiters
-            .remove(&id)
-            .expect("waiter exists after successful poll response");
-        if let WorkerProtocolMessage::Assign(assign) = &response {
-            let line = assignment_log_line(assign, &waiter.poll.worker_id);
-            eprintln!("{line}");
-        }
-        let _ = waiter.reply.send(response);
     }
 }
 
@@ -1457,6 +1631,70 @@ fn result_disposition(result: &JobResult) -> ResultDisposition {
     }
 }
 
+/// Renders a worker-protocol core response as an HTTP response: `200` with a
+/// JSON body, or `204` when the core had nothing to say.
+fn protocol_response(message: Option<WorkerProtocolMessage>) -> HttpResponseData {
+    match message {
+        Some(message) => HttpResponseData::json(
+            200,
+            &serde_json::to_value(&message).expect("protocol messages serialize"),
+        ),
+        None => HttpResponseData::status_only(204),
+    }
+}
+
+/// The daemon's imperative shell: performs each machine request on the engine
+/// runtime and feeds the resulting completions back into the queue.
+struct DaemonExecutor {
+    handle: asupersync::runtime::RuntimeHandle,
+    cq: CqSender<DaemonCompletion>,
+    applier: Arc<dyn ResultApplier>,
+    scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
+}
+
+impl EngineExecutor<DaemonMachine> for DaemonExecutor {
+    fn execute(&self, request: DaemonRequest) {
+        match request {
+            DaemonRequest::Respond {
+                responder,
+                response,
+            } => responder.respond(response),
+            DaemonRequest::StartPollTimer { id, delay } => {
+                arm_timer(&self.handle, &self.cq, delay, move || {
+                    DaemonCompletion::PollDeadline { id }
+                });
+            }
+            DaemonRequest::RunApply { job, result } => {
+                let applier = Arc::clone(&self.applier);
+                let cq = self.cq.clone();
+                let job_id = job.job_id.clone();
+                self.handle.spawn(async move {
+                    applier.apply(job, result).await;
+                    let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
+                });
+            }
+            DaemonRequest::RunWakeScan { token, hint } => {
+                let scanner = self.scanner_slot.lock().expect("scanner slot").clone();
+                let cq = self.cq.clone();
+                match scanner {
+                    Some(scanner) => {
+                        self.handle.spawn(async move {
+                            scanner.scan(hint).await;
+                            let _ = cq.send(DaemonCompletion::WakeScanFinished { token });
+                        });
+                    }
+                    None => {
+                        let _ = cq.send(DaemonCompletion::WakeScanFinished { token });
+                    }
+                }
+            }
+            DaemonRequest::Log(line) => eprintln!("{line}"),
+            #[cfg(test)]
+            DaemonRequest::QueuedJobsReply(reply, jobs) => reply.send(jobs),
+        }
+    }
+}
+
 impl Daemon {
     pub fn new() -> Self {
         Self::with_applier(Arc::new(NoopApplier))
@@ -1468,8 +1706,8 @@ impl Daemon {
 
     pub fn with_apply_grace(self, apply_grace: Duration) -> Self {
         let _ = self
-            .cmd_tx
-            .send(DaemonCommand::SetApplyGrace { apply_grace });
+            .cq
+            .send(DaemonCompletion::SetApplyGrace { apply_grace });
         self
     }
 
@@ -1477,13 +1715,84 @@ impl Daemon {
         applier: Arc<dyn ResultApplier>,
         apply_grace: Duration,
     ) -> Self {
-        let (cmd_tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_core(rx, cmd_tx.clone(), applier, apply_grace));
+        let handle = asupersync::runtime::Runtime::current_handle()
+            .expect("Daemon requires a running engine runtime");
+        let (cq_tx, cq_rx) = channel();
+        let scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let executor = DaemonExecutor {
+            handle: handle.clone(),
+            cq: cq_tx.clone(),
+            applier,
+            scanner_slot: Arc::clone(&scanner_slot),
+        };
+        let machine = DaemonMachine::new(apply_grace, DEFAULT_MAX_POLL_WAIT_MS);
+        handle.spawn(async move {
+            let _ = drive(machine, &executor, cq_rx).await;
+        });
 
         Self {
-            cmd_tx,
-            max_poll_wait_ms: DEFAULT_MAX_POLL_WAIT_MS,
+            cq: cq_tx,
+            scanner_slot,
         }
+    }
+
+    /// Enables `POST /forgejo/webhook` intake on this daemon's HTTP surface:
+    /// deliveries are verified and parsed by the daemon machine, then executed
+    /// as wake scans against the given forge/workflow before the held `202`
+    /// response is released.
+    pub fn with_webhook<F: Forge + Send + Sync + 'static>(
+        self,
+        forge: Arc<F>,
+        workflow: Arc<ValidatedWorkflow>,
+        compiled: Arc<CompiledWorkflow>,
+        config: Arc<WebhookConfig>,
+    ) -> Self {
+        struct ForgeWakeScanner<F: Forge + Send + Sync + 'static> {
+            daemon: Daemon,
+            forge: Arc<F>,
+            workflow: Arc<ValidatedWorkflow>,
+            compiled: Arc<CompiledWorkflow>,
+            config: Arc<WebhookConfig>,
+        }
+
+        impl<F: Forge + Send + Sync + 'static> WakeScanner for ForgeWakeScanner<F> {
+            fn scan(
+                &self,
+                hint: temper_runner::ChangeHint,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+                let daemon = self.daemon.clone();
+                let forge = Arc::clone(&self.forge);
+                let workflow = Arc::clone(&self.workflow);
+                let compiled = Arc::clone(&self.compiled);
+                let config = Arc::clone(&self.config);
+                Box::pin(async move {
+                    run_wake_scan(
+                        &daemon,
+                        forge.as_ref(),
+                        workflow.as_ref(),
+                        compiled.as_ref(),
+                        Utc::now(),
+                        config.as_ref(),
+                        &hint,
+                    )
+                    .await;
+                })
+            }
+        }
+
+        let scanner = Arc::new(ForgeWakeScanner {
+            daemon: self.clone(),
+            forge,
+            workflow,
+            compiled,
+            config: Arc::clone(&config),
+        });
+        *self.scanner_slot.lock().expect("scanner slot") = Some(scanner);
+        let _ = self.cq.send(DaemonCompletion::ConfigureWebhook {
+            config: (*config).clone(),
+        });
+        self
     }
 
     pub async fn enqueue_job(
@@ -1494,7 +1803,7 @@ impl Daemon {
         artifact: Artifact,
         job_payload: serde_json::Value,
     ) {
-        let _ = self.cmd_tx.send(DaemonCommand::EnqueueJob {
+        let _ = self.cq.send(DaemonCompletion::Enqueue {
             job_id: job_id.into(),
             role: role.into(),
             repo: repo.into(),
@@ -1574,13 +1883,13 @@ impl Daemon {
 
     #[cfg(test)]
     async fn queued_jobs(&self) -> Vec<WorkItemJob> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(DaemonCommand::QueuedJobs { reply })
-            .expect("daemon core task is running");
-
-        rx.await
-            .expect("daemon core task replies with queued jobs")
+        let (reply, rx) = temper_io_engine::oneshot();
+        if self.cq.send(DaemonCompletion::QueuedJobs { reply }).is_err() {
+            return Vec::new();
+        }
+        rx.recv()
+            .await
+            .unwrap_or_default()
             .into_iter()
             .map(|job| WorkItemJob {
                 job_id: job.job_id,
@@ -1590,17 +1899,6 @@ impl Daemon {
                 job_payload: job.job_payload,
             })
             .collect()
-    }
-
-    pub fn router(&self) -> Router {
-        let state = DaemonState {
-            cmd_tx: self.cmd_tx.clone(),
-            max_poll_wait_ms: self.max_poll_wait_ms,
-        };
-
-        Router::new()
-            .route("/v1/message", post(handle_message))
-            .with_state(state)
     }
 }
 
@@ -1642,18 +1940,39 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
     total
 }
 
-/// Runs a fixed-delay poll backstop forever.
-pub async fn run_poll_backstop<F: Forge + ?Sized>(
-    daemon: &Daemon,
-    forge: &F,
-    workflow: &ValidatedWorkflow,
-    compiled: &CompiledWorkflow,
-    config: &PollBackstopConfig,
+/// Spawns a machine-driven fixed-delay poll backstop onto the engine runtime.
+///
+/// Replaces the previous `run_poll_backstop` sleep loop: a cadence machine
+/// requests one tick, the shell executes the scan, and the next tick is
+/// scheduled one cadence after the previous tick completed.
+pub fn spawn_poll_backstop<F: Forge + Send + Sync + 'static>(
+    daemon: Daemon,
+    forge: Arc<F>,
+    workflow: Arc<ValidatedWorkflow>,
+    compiled: Arc<CompiledWorkflow>,
+    config: PollBackstopConfig,
 ) {
-    loop {
-        run_poll_backstop_tick(daemon, forge, workflow, compiled, Utc::now(), config).await;
-        tokio::time::sleep(config.cadence).await;
-    }
+    let handle = asupersync::runtime::Runtime::current_handle()
+        .expect("poll backstop requires a running engine runtime");
+    let cadence = config.cadence;
+    temper_io_engine::spawn_cadence_loop(&handle, cadence, move || {
+        let daemon = daemon.clone();
+        let forge = Arc::clone(&forge);
+        let workflow = Arc::clone(&workflow);
+        let compiled = Arc::clone(&compiled);
+        let config = config.clone();
+        async move {
+            run_poll_backstop_tick(
+                &daemon,
+                forge.as_ref(),
+                workflow.as_ref(),
+                compiled.as_ref(),
+                Utc::now(),
+                &config,
+            )
+            .await;
+        }
+    });
 }
 
 impl Default for Daemon {
@@ -1674,87 +1993,26 @@ async fn repo_label<F: Forge + ?Sized>(
     Ok(format!("{}/{}", repository.owner, repository.name))
 }
 
-async fn handle_message(State(state): State<DaemonState>, body: Bytes) -> Response {
-    let Ok(msg) = serde_json::from_slice::<WorkerProtocolMessage>(&body) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-
-    match msg {
-        WorkerProtocolMessage::Poll(poll) => {
-            let requested = poll.max_wait_ms.unwrap_or(state.max_poll_wait_ms);
-            let wait_ms = requested.min(state.max_poll_wait_ms);
-            let deadline = TokioInstant::now() + Duration::from_millis(wait_ms);
-            let (reply, rx) = oneshot::channel();
-
-            if state
-                .cmd_tx
-                .send(DaemonCommand::Poll {
-                    poll,
-                    deadline,
-                    reply,
-                })
-                .is_err()
-            {
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-
-            match rx.await {
-                Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        WorkerProtocolMessage::Result(result) => {
-            let (reply, rx) = oneshot::channel();
-
-            if state
-                .cmd_tx
-                .send(DaemonCommand::Result { result, reply })
-                .is_err()
-            {
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-
-            match rx.await {
-                Ok(Some(reply)) => (StatusCode::OK, Json(reply)).into_response(),
-                Ok(None) => StatusCode::NO_CONTENT.into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        other => {
-            let (reply, rx) = oneshot::channel();
-
-            if state
-                .cmd_tx
-                .send(DaemonCommand::Message { msg: other, reply })
-                .is_err()
-            {
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-
-            match rx.await {
-                Ok(Some(reply)) => (StatusCode::OK, Json(reply)).into_response(),
-                Ok(None) => StatusCode::NO_CONTENT.into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-    }
-}
-
-pub async fn serve_router(router: Router, bind: SocketAddr) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    eprintln!("temper-daemon: serving on {}", listener.local_addr()?);
-
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
-            }
-        })
-        .await
-}
-
-pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
-    serve_router(daemon.router(), bind).await
+/// Binds and serves the daemon's HTTP surface (`POST /v1/message`, plus
+/// `POST /forgejo/webhook` when [`Daemon::with_webhook`] was used) on the
+/// engine runtime. Returns once bound; the connections are served by engine
+/// tasks. Use the returned server handle for the bound address and graceful
+/// drain.
+pub async fn serve(
+    daemon: &Daemon,
+    bind: SocketAddr,
+) -> std::io::Result<temper_io_engine::http::EngineHttpServer> {
+    let handle = asupersync::runtime::Runtime::current_handle()
+        .expect("serve requires a running engine runtime");
+    let server = temper_io_engine::http::serve_http(
+        &handle,
+        bind,
+        daemon.cq.clone(),
+        |request, responder| DaemonCompletion::Http { request, responder },
+    )
+    .await?;
+    eprintln!("temper-daemon: serving on {}", server.local_addr());
+    Ok(server)
 }
 
 #[cfg(test)]
@@ -1882,8 +2140,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
+    #[test]
+     fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
+        temper_io_engine::block_on(async move {
         let forge = MemoryForge::new();
         let repo = forge
             .create_repository(CreateRepository {
@@ -1962,6 +2221,7 @@ mod tests {
                 .expect("enrichment skip succeeds"),
             EnrichOutcome::SkipExistingPullRequest
         );
+        })
     }
 
     #[test]
@@ -2103,8 +2363,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn enqueue_work_item_stores_mapped_job() {
+    #[test]
+     fn enqueue_work_item_stores_mapped_job() {
+        temper_io_engine::block_on(async move {
         let daemon = Daemon::new();
         let item = work_item(ArtifactSource::Issue {
             number: ItemNumber::new(103),
@@ -2114,10 +2375,12 @@ mod tests {
         daemon.enqueue_work_item("ai/temper", &item).await;
 
         assert_eq!(daemon.queued_jobs().await, vec![expected]);
+        })
     }
 
-    #[tokio::test]
-    async fn enrich_work_item_job_skips_closed_issue() {
+    #[test]
+     fn enrich_work_item_job_skips_closed_issue() {
+        temper_io_engine::block_on(async move {
         let forge = MemoryForge::new();
         let repo = forge
             .create_repository(CreateRepository {
@@ -2168,10 +2431,12 @@ mod tests {
                 .expect("enrichment skip succeeds"),
             EnrichOutcome::SkipTerminalArtifact
         );
+        })
     }
 
-    #[tokio::test]
-    async fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
+    #[test]
+     fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
+        temper_io_engine::block_on(async move {
         let forge = MemoryForge::new();
         let repo = forge
             .create_repository(CreateRepository {
@@ -2249,10 +2514,12 @@ mod tests {
         assert_eq!(context.action.as_deref(), Some("open_pr"));
         assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
         assert!(context.allowed_verdicts.is_empty());
+        })
     }
 
-    #[tokio::test]
-    async fn enrich_work_item_job_skips_closed_pull_request() {
+    #[test]
+     fn enrich_work_item_job_skips_closed_pull_request() {
+        temper_io_engine::block_on(async move {
         let forge = MemoryForge::new();
         let repo = forge
             .create_repository(CreateRepository {
@@ -2311,5 +2578,6 @@ mod tests {
                 .expect("enrichment skip succeeds"),
             EnrichOutcome::SkipTerminalArtifact
         );
+        })
     }
 }

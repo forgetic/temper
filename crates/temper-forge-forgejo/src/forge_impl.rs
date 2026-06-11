@@ -214,7 +214,7 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
 
 /// Compile-time proof that the production backend satisfies the `Forge` trait.
 ///
-/// `ForgejoForge<ReqwestHttpClient>` is the type the runner constructs; this
+/// `ForgejoForge<EngineHttpClient>` is the type the runner constructs; this
 /// never-called function fails to type-check if the trait impl or its bounds
 /// regress.
 const _: fn() = || {

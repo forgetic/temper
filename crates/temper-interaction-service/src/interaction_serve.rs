@@ -16,10 +16,7 @@ pub fn run_serve(args: &InteractionServeArgs) -> Result<(), InteractionDeploymen
         |key| std::env::var(key).ok(),
     )?;
     let service = build_service(&spec, &bindings, |key| std::env::var(key).ok())?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| InteractionDeploymentError::Config(error.to_string()))?;
+    let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
     let app = InteractionHttpApp::new(service, options.service_token);
     run_http(options.bind, app, &runtime)?;
     Ok(())

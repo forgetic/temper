@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{collections::BTreeMap, future::IntoFuture};
+use std::collections::BTreeMap;
 
-use axum::http::StatusCode;
 use serde_json::json;
 use temper_daemon::{
     handle_webhook, webhook_signature, Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig,
@@ -28,11 +27,10 @@ fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
 
 async fn spawn() -> (Daemon, String) {
     let daemon = Daemon::new();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
         .await
-        .expect("bind test listener");
-    let addr = listener.local_addr().expect("read local addr");
-    tokio::spawn(axum::serve(listener, daemon.router()).into_future());
+        .expect("bind test server");
+    let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"))
 }
 
@@ -94,26 +92,29 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
 }
 
 async fn post(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
-) -> reqwest::Response {
+) -> temper_io_engine::http::HttpResponseData {
     client
-        .post(url)
-        .json(msg)
-        .send()
+        .send(
+            "POST",
+            url,
+            None,
+            Some(&serde_json::to_value(msg).expect("message serializes")),
+        )
         .await
         .expect("post message")
 }
 
 async fn post_json(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
 ) -> WorkerProtocolMessage {
     let response = post(client, url, msg).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    response.json().await.expect("protocol response json")
+    assert_eq!(response.status, 200);
+    serde_json::from_slice(&response.body).expect("protocol response json")
 }
 
 fn assert_poll_timeout(msg: WorkerProtocolMessage) {
@@ -159,15 +160,16 @@ fn webhook_config(repo: RepositoryId) -> WebhookConfig {
     }
 }
 
-#[tokio::test]
-async fn verified_webhook_wakes_matching_target_then_dispatches() {
+#[test]
+ fn verified_webhook_wakes_matching_target_then_dispatches() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let repo = create_repo(&forge, "acme", "service").await;
     let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
     let workflow = workflow();
     let compiled = workflow.compile();
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let config = webhook_config(repo.clone());
     let body = serde_json::to_vec(&json!({
         "repository": { "full_name": "acme/service" },
@@ -198,21 +200,23 @@ async fn verified_webhook_wakes_matching_target_then_dispatches() {
             &register("worker-a", "engineer", "acme/service")
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
     assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
+    })
 }
 
-#[tokio::test]
-async fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
+#[test]
+ fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let repo = create_repo(&forge, "acme", "service").await;
     let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
     let workflow = workflow();
     let compiled = workflow.compile();
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let config = webhook_config(repo);
     let body = serde_json::to_vec(&json!({
         "repository": { "full_name": "acme/service" },
@@ -245,14 +249,16 @@ async fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
             &register("worker-a", "engineer", "acme/service")
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
+    })
 }
 
-#[tokio::test]
-async fn webhook_for_unconfigured_repo_enqueues_nothing() {
+#[test]
+ fn webhook_for_unconfigured_repo_enqueues_nothing() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let configured_repo = create_repo(&forge, "acme", "service").await;
     let other_repo = create_repo(&forge, "acme", "other").await;
@@ -261,7 +267,7 @@ async fn webhook_for_unconfigured_repo_enqueues_nothing() {
     let workflow = workflow();
     let compiled = workflow.compile();
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let config = webhook_config(configured_repo);
     let body = serde_json::to_vec(&json!({
         "repository": { "full_name": "acme/other" },
@@ -292,8 +298,9 @@ async fn webhook_for_unconfigured_repo_enqueues_nothing() {
             &register("worker-a", "engineer", "acme/service")
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
+    })
 }

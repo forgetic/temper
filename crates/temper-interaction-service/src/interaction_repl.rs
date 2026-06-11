@@ -16,11 +16,9 @@ use crate::interaction_commands::{
 use crate::interaction_service::InteractionService;
 
 pub fn run_repl(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| InteractionDeploymentError::Config(error.to_string()))?;
-    runtime.block_on(run_repl_async(args))
+    let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
+    let args = args.clone();
+    temper_io_engine::runtime::block_on_runtime(&runtime, async move { run_repl_async(&args).await })
 }
 
 async fn run_repl_async(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {

@@ -393,8 +393,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn automation_verdict_routes_to_create_issues_and_fans_out_children() {
+    #[test]
+     fn automation_verdict_routes_to_create_issues_and_fans_out_children() {
+        temper_io_engine::block_on(async move {
         let forge = MemoryForge::new();
         let repo = forge
             .create_repository(CreateRepository {
@@ -496,5 +497,6 @@ mod tests {
             .expect("lookup")
             .expect("epic exists");
         assert!(parent.labels.iter().any(|label| label == "planned"));
+        })
     }
 }

@@ -304,7 +304,7 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
         .poll_interval
         .to_std()
         .unwrap_or_else(|_| StdDuration::from_millis(50));
-    let wake = match args.wake_socket.clone() {
+    let mut wake = match args.wake_socket.clone() {
         Some(socket) => Some(
             WakeListener::bind(
                 WakeConfig::from_files(socket, args.wake_secret_file.clone())
@@ -404,7 +404,7 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
             break;
         }
         let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
-        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_ref())
+        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_mut())
             .await
             .map_err(|error| RunError::Backend(error.to_string()))?
         {
@@ -630,24 +630,21 @@ mod tests {
             wake_secret_file: Some(secret_file),
             workflow_file: None,
         };
-        let worker = BurstWorker {
+        let worker = std::sync::Arc::new(BurstWorker {
             ticks: AtomicU64::new(0),
             reasons: Mutex::new(Vec::new()),
             socket,
-        };
+        });
         let stop_file_for_thread = stop_file.clone();
         let stopper = thread::spawn(move || {
             thread::sleep(StdDuration::from_millis(800));
             std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
         });
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime builds");
-
-        let report = runtime
-            .block_on(drive_async(&args, &worker))
-            .expect("drive succeeds");
+        let worker_for_drive = std::sync::Arc::clone(&worker);
+        let report = temper_io_engine::block_on(async move {
+            drive_async(&args, &*worker_for_drive).await
+        })
+        .expect("drive succeeds");
         stopper.join().expect("stopper joins");
 
         assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);

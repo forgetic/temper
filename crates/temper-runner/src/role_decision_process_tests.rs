@@ -304,8 +304,9 @@ fn process_error_classification_distinguishes_failure_branches() {
     );
 }
 
-#[tokio::test]
-async fn process_agent_sends_request_filters_environment_and_executes_action() {
+#[test]
+ fn process_agent_sends_request_filters_environment_and_executes_action() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
     let request_path = temp_path("request.json");
     let config = script_config(
@@ -374,10 +375,12 @@ fi
     );
     std::env::remove_var("TEMPER_RUNNER_ROLE_DECISION_ALLOWED");
     std::env::remove_var("TEMPER_RUNNER_ROLE_DECISION_BLOCKED");
+    })
 }
 
-#[tokio::test]
-async fn process_agent_treats_unauthorized_action_as_no_action() {
+#[test]
+ fn process_agent_treats_unauthorized_action_as_no_action() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
     let agent = agent(
         fixture.manifest.clone(),
@@ -393,10 +396,12 @@ async fn process_agent_treats_unauthorized_action_as_no_action() {
 
     assert!(!changed);
     assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
+    })
 }
 
-#[tokio::test]
-async fn process_agent_reports_timeout_exit_and_malformed_replies() {
+#[test]
+ fn process_agent_reports_timeout_exit_and_malformed_replies() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
     let cases = [
         (
@@ -442,10 +447,12 @@ async fn process_agent_reports_timeout_exit_and_malformed_replies() {
         );
     }
     assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
+    })
 }
 
-#[tokio::test]
-async fn process_agent_redacts_secret_like_stderr() {
+#[test]
+ fn process_agent_redacts_secret_like_stderr() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
     let error = agent(
         fixture.manifest.clone(),
@@ -459,6 +466,7 @@ async fn process_agent_redacts_secret_like_stderr() {
     assert!(rendered.contains(REDACTED));
     assert!(!rendered.contains("super-secret"));
     assert!(!rendered.contains("token=super-secret"));
+    })
 }
 
 #[derive(Default)]
@@ -499,8 +507,9 @@ impl CodingWorkspace for FixtureWorkspace {
     }
 }
 
-#[tokio::test]
-async fn process_agent_uses_coding_workspace_for_pr_actions() {
+#[test]
+ fn process_agent_uses_coding_workspace_for_pr_actions() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow()).await;
     let workspace = Arc::new(FixtureWorkspace::default());
     let workspace_provider: Arc<dyn CodingWorkspace> = workspace.clone();
@@ -541,6 +550,7 @@ async fn process_agent_uses_coding_workspace_for_pr_actions() {
     assert!(pull_requests[0]
         .body
         .contains("updated docs/product-change.md"));
+    })
 }
 
 /// An `open_pr` action that declares a `needs_architect` verdict routing to an
@@ -617,8 +627,9 @@ impl CodingWorkspace for VerdictWorkspace {
     }
 }
 
-#[tokio::test]
-async fn workspace_verdict_routes_open_pr_to_escalation_without_pr_create() {
+#[test]
+ fn workspace_verdict_routes_open_pr_to_escalation_without_pr_create() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow_with_outcomes()).await;
     let workspace: Arc<dyn CodingWorkspace> = Arc::new(VerdictWorkspace {
         verdict: temper_workflow::VerdictId::new("needs_architect"),
@@ -659,6 +670,7 @@ async fn workspace_verdict_routes_open_pr_to_escalation_without_pr_create() {
         pull_requests.is_empty(),
         "escalation must not open a pull request"
     );
+    })
 }
 
 /// An `open_pr`-style action whose `ready_code` verdict routes to a content
@@ -746,8 +758,9 @@ async fn issue_body(fixture: &Fixture) -> String {
         .body
 }
 
-#[tokio::test]
-async fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
+#[test]
+ fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], set_body_workflow_with_outcomes()).await;
     let authored = "# Crisp spec\n\nImplementable, authored by the architect workspace.";
     let workspace: Arc<dyn CodingWorkspace> = Arc::new(BodyWorkspace {
@@ -791,6 +804,7 @@ async fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
         pull_requests.is_empty(),
         "a content rewrite must not open a pull request"
     );
+    })
 }
 
 /// A triage action whose `needs_breakdown` verdict routes to a transition that
@@ -868,8 +882,9 @@ impl CodingWorkspace for ChildrenWorkspace {
     }
 }
 
-#[tokio::test]
-async fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
+#[test]
+ fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
+    temper_io_engine::block_on(async move {
     let fixture =
         fixture_from_workflow(&["task", "todo"], create_issues_workflow_with_outcomes()).await;
     let children = vec![
@@ -947,10 +962,12 @@ async fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
         pull_requests.is_empty(),
         "a breakdown must not open a pull request"
     );
+    })
 }
 
-#[tokio::test]
-async fn workspace_undeclared_verdict_is_an_error() {
+#[test]
+ fn workspace_undeclared_verdict_is_an_error() {
+    temper_io_engine::block_on(async move {
     let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow_with_outcomes()).await;
     let workspace: Arc<dyn CodingWorkspace> = Arc::new(VerdictWorkspace {
         verdict: temper_workflow::VerdictId::new("unknown_verdict"),
@@ -982,6 +999,7 @@ async fn workspace_undeclared_verdict_is_an_error() {
     );
     // No transition applied.
     assert_eq!(labels(&fixture).await, vec!["task", "todo"]);
+    })
 }
 
 /// A `review_pr`-style action: it targets a **pull request**, declares no
@@ -1083,8 +1101,9 @@ impl CodingWorkspace for ReviewWorkspace {
     }
 }
 
-#[tokio::test]
-async fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create() {
+#[test]
+ fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create() {
+    temper_io_engine::block_on(async move {
     use temper_forge::{BranchRef, CreatePullRequest, PullRequestQuery};
 
     let forge = MemoryForge::new();
@@ -1218,4 +1237,5 @@ async fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create()
         1,
         "review must not open a new pull request"
     );
+    })
 }

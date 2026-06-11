@@ -30,15 +30,15 @@ use temper_testing::forgejo_server::{prepare_pull_request_head, start_cached_pro
 use temper_testing::pull_request_input;
 use temper_workflow::RoleId;
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
-async fn prep_makes_head_real_and_pr_is_mergeable() {
+fn prep_makes_head_real_and_pr_is_mergeable() {
+    temper_io_engine::block_on(async move {
     // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
     // boot it off-reactor so its nested blocking runtime lives and dies off the async
     // test thread (same pattern as the Phase 2 provisioning test).
-    let cached = tokio::task::spawn_blocking(start_cached_provisioned_server)
+    let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
         .await
-        .expect("server boot task joins")
         .expect("forgejo cached provisioned state starts");
     let server = cached.server;
     let provisioned = cached.provisioned;
@@ -87,23 +87,22 @@ async fn prep_makes_head_real_and_pr_is_mergeable() {
     .expect("pr-prep creates head branch + commit");
 
     // The head branch now exists as a real ref.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .expect("client builds");
-    let branch_resp = client
-        .get(format!(
-            "{base}/api/v1/repos/{}/{}/branches/{head}",
-            provisioned.owner, provisioned.name
-        ))
-        .header("Authorization", format!("token {}", engineer.token))
-        .send()
-        .await
-        .expect("branch lookup sends");
+    let client = temper_io_engine::http::JsonClient::new();
+    let (branch_status, _) = client
+        .send_expect_json(
+            "GET",
+            format!(
+                "{base}/api/v1/repos/{}/{}/branches/{head}",
+                provisioned.owner, provisioned.name
+            ),
+            Some(&engineer.token),
+            None,
+            "branch lookup",
+        )
+        .await;
     assert!(
-        branch_resp.status().is_success(),
-        "head branch should exist after prep, got {}",
-        branch_resp.status()
+        (200..300).contains(&branch_status),
+        "head branch should exist after prep, got {branch_status}"
     );
 
     // 3. create_pull_request now succeeds against the real server.
@@ -142,21 +141,21 @@ async fn prep_makes_head_real_and_pr_is_mergeable() {
 
     // Tear down explicitly so any panic in drop surfaces here.
     drop(server);
+    })
 }
 
 /// Polls a PR's raw REST view until `mergeable` is `true` or a short deadline
 /// passes. Forgejo runs the merge-conflict check in the background after the PR
 /// is created, so the field is briefly `false`/null before settling.
-async fn poll_mergeable(client: &reqwest::Client, pr_url: &str, token: &str) -> bool {
+async fn poll_mergeable(
+    client: &temper_io_engine::http::JsonClient,
+    pr_url: &str,
+    token: &str,
+) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if let Ok(resp) = client
-            .get(pr_url)
-            .header("Authorization", format!("token {token}"))
-            .send()
-            .await
-        {
-            if let Ok(body) = resp.json::<Value>().await {
+        if let Ok(resp) = client.send("GET", pr_url, Some(token), None).await {
+            if let Ok(body) = serde_json::from_slice::<Value>(&resp.body) {
                 if body["mergeable"].as_bool() == Some(true) {
                     return true;
                 }
@@ -165,6 +164,6 @@ async fn poll_mergeable(client: &reqwest::Client, pr_url: &str, token: &str) -> 
         if std::time::Instant::now() >= deadline {
             return false;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        temper_io_engine::runtime::sleep_for(std::time::Duration::from_millis(500)).await;
     }
 }

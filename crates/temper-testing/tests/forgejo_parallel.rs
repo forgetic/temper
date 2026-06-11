@@ -130,24 +130,17 @@ fn cached_reference_delivery_state_is_safe_for_parallel_callers() {
 }
 
 fn read_exact_repo(info: &ProvisionedInfo, token: &str) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = temper_io_engine::http::BlockingJsonClient::new();
     let url = format!(
         "{}/api/v1/repos/{}/{}",
         info.base_url, info.owner, info.name
     );
     let response = client
-        .get(&url)
-        .header("Authorization", format!("token {token}"))
-        .send()
+        .send("GET", url.as_str(), Some(token), None)
         .map_err(|error| format!("repo read {url} failed to send: {error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .map_err(|error| format!("repo read {url} body failed: {error}"))?;
-    if !status.is_success() {
+    let status = response.status;
+    let body = String::from_utf8_lossy(&response.body).into_owned();
+    if !(200..300).contains(&status) {
         return Err(format!("repo read {url} failed: {status} {body}"));
     }
     let json: Value =
@@ -244,12 +237,9 @@ where
 
 fn assert_server_teardown(base_url: &str, data_dir: &Path) -> Result<(), String> {
     let version_url = format!("{base_url}/api/v1/version");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = temper_io_engine::http::BlockingJsonClient::new();
     for _ in 0..25 {
-        let port_is_down = client.get(&version_url).send().is_err();
+        let port_is_down = client.send("GET", version_url.as_str(), None, None).is_err();
         let data_dir_is_gone = !data_dir.exists();
         if port_is_down && data_dir_is_gone {
             return Ok(());
@@ -258,7 +248,7 @@ fn assert_server_teardown(base_url: &str, data_dir: &Path) -> Result<(), String>
     }
     Err(format!(
         "server did not tear down cleanly: url_down={} data_dir_exists={} ({})",
-        client.get(&version_url).send().is_err(),
+        client.send("GET", version_url.as_str(), None, None).is_err(),
         data_dir.exists(),
         data_dir.display()
     ))

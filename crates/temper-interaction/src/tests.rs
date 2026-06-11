@@ -313,8 +313,9 @@ fn forge_marker_render_and_parse() {
     );
 }
 
-#[tokio::test]
-async fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
+#[test]
+ fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
+    temper_io_engine::block_on(async move {
     let (human, agent, _repo) = seeded().await;
     let mut session = ForgeInteractionSession::open(
         Arc::new(human.clone()),
@@ -357,10 +358,12 @@ async fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
         .unwrap();
     assert!(!retry.created);
     assert_eq!(retry.issue.number, filed.issue.number);
+    })
 }
 
-#[tokio::test]
-async fn transcript_resume_refuses_non_transcript_label_policy() {
+#[test]
+ fn transcript_resume_refuses_non_transcript_label_policy() {
+    temper_io_engine::block_on(async move {
     let (human, agent, repo) = seeded().await;
     let issue = human
         .create_issue(
@@ -397,10 +400,12 @@ async fn transcript_resume_refuses_non_transcript_label_policy() {
         error,
         InteractionError::TranscriptLabelMismatch { .. }
     ));
+    })
 }
 
-#[tokio::test]
-async fn transcript_resume_reconstructs_recent_turns_by_author_identity() {
+#[test]
+ fn transcript_resume_reconstructs_recent_turns_by_author_identity() {
+    temper_io_engine::block_on(async move {
     let (human, agent, repo) = seeded().await;
     let marker = render_transcript_marker(MARKER_NAMESPACE, "pc-existing");
     let issue = human
@@ -478,4 +483,5 @@ async fn transcript_resume_reconstructs_recent_turns_by_author_identity() {
             .collect::<Vec<_>>(),
         vec!["second", "third"]
     );
+    })
 }

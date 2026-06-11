@@ -124,8 +124,9 @@ async fn create_conversation(app: &InteractionHttpApp, profile_id: &str) -> Stri
     body["id"].as_str().unwrap().to_string()
 }
 
-#[tokio::test]
-async fn generic_http_routes_work_for_two_profiles() {
+#[test]
+ fn generic_http_routes_work_for_two_profiles() {
+    temper_io_engine::block_on(async move {
     let app = fake_app(None).await;
     let intake = create_conversation(&app, "intake-agent").await;
     let support = create_conversation(&app, "support-agent").await;
@@ -197,10 +198,12 @@ async fn generic_http_routes_work_for_two_profiles() {
     let events_body = response_json(&events);
     assert_eq!(events_body["streaming"], false);
     assert!(events_body["events"].as_array().unwrap().len() >= 5);
+    })
 }
 
-#[tokio::test]
-async fn generic_http_auth_protects_routes_when_configured() {
+#[test]
+ fn generic_http_auth_protects_routes_when_configured() {
+    temper_io_engine::block_on(async move {
     let app = fake_app(Some("service-secret")).await;
     let unauthenticated = app
         .handle_http_request(HttpRequest::new("GET", "/health", Vec::new()))
@@ -214,6 +217,7 @@ async fn generic_http_auth_protects_routes_when_configured() {
         )
         .await;
     assert_eq!(authenticated.status(), 200);
+    })
 }
 
 fn compiled_two_profile_spec() -> CompiledInteractionSpec {

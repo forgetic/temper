@@ -1,0 +1,1623 @@
+//! Lazy initialization cell with async support.
+//!
+//! [`OnceCell`] provides a cell that can be initialized exactly once,
+//! with support for async initialization functions.
+//!
+//! # Cancel Safety
+//!
+//! - `get_or_init`: If cancelled during initialization, the cell remains
+//!   uninitialized and a future caller can try again.
+//! - `get_or_try_init`: Same as above, with error handling.
+//! - Racing initializers: Only one will succeed; others will wait or
+//!   get the initialized value.
+
+use smallvec::SmallVec;
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Condvar, Mutex as StdMutex, OnceLock};
+use std::task::{Context, Poll, Waker};
+
+/// State values for OnceCell.
+const UNINIT: u8 = 0;
+const INITIALIZING: u8 = 1;
+const INITIALIZED: u8 = 2;
+
+/// Error returned when a OnceCell operation fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnceCellError {
+    /// The cell is already initialized.
+    AlreadyInitialized,
+    /// Initialization was cancelled.
+    Cancelled,
+}
+
+impl fmt::Display for OnceCellError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyInitialized => write!(f, "once cell already initialized"),
+            Self::Cancelled => write!(f, "once cell initialization cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for OnceCellError {}
+
+/// A queued waiter for cell initialization.
+#[derive(Debug)]
+struct InitWaiter {
+    waker: Waker,
+    /// Stable waiter identity for refresh/removal without per-waiter allocation.
+    id: u64,
+}
+
+/// Internal state holding waiters.
+struct WaiterState {
+    waiters: SmallVec<[InitWaiter; 4]>,
+    next_waiter_id: u64,
+}
+
+#[cfg(test)]
+struct BlockingWaitHook {
+    entered_tx: std::sync::mpsc::Sender<()>,
+    release_rx: StdMutex<std::sync::mpsc::Receiver<()>>,
+}
+
+#[cfg(test)]
+impl BlockingWaitHook {
+    fn run(&self) {
+        self.entered_tx
+            .send(())
+            .expect("blocking wait hook should report entry");
+        self.release_rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recv()
+            .expect("blocking wait hook should be released");
+    }
+}
+
+#[cfg(test)]
+static BLOCKING_WAIT_HOOK: OnceLock<StdMutex<Option<std::sync::Arc<BlockingWaitHook>>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+fn run_blocking_wait_hook() {
+    let hook = BLOCKING_WAIT_HOOK
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(hook) = hook {
+        hook.run();
+    }
+}
+
+/// A cell that can be initialized exactly once.
+///
+/// `OnceCell` provides a way to lazily initialize a value, potentially
+/// using an async initialization function. Once initialized, the value
+/// can be accessed immutably.
+///
+/// # Example
+///
+/// ```ignore
+/// static CONFIG: OnceCell<Config> = OnceCell::new();
+///
+/// async fn get_config() -> &'static Config {
+///     CONFIG.get_or_init(|| async {
+///         load_config().await
+///     }).await
+/// }
+/// ```
+pub struct OnceCell<T> {
+    /// Current state (UNINIT, INITIALIZING, or INITIALIZED).
+    state: AtomicU8,
+    /// The value (using OnceLock for safe &T access).
+    value: OnceLock<T>,
+    /// Waiters for async notification.
+    waiters: StdMutex<WaiterState>,
+    /// Condition variable for blocking waiters.
+    cvar: Condvar,
+}
+
+impl<T> OnceCell<T> {
+    /// Creates a new uninitialized `OnceCell`.
+    #[inline]
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: AtomicU8::new(UNINIT),
+            value: OnceLock::new(),
+            waiters: StdMutex::new(WaiterState {
+                waiters: SmallVec::new(),
+                next_waiter_id: 0,
+            }),
+            cvar: Condvar::new(),
+        }
+    }
+
+    /// Creates a new `OnceCell` with the given value.
+    #[inline]
+    #[must_use]
+    pub fn with_value(value: T) -> Self {
+        let cell = Self::new();
+        let _ = cell.value.set(value);
+        cell.state.store(INITIALIZED, Ordering::Release);
+        cell
+    }
+
+    /// Returns `true` if the cell has been initialized.
+    #[inline]
+    #[must_use]
+    pub fn is_initialized(&self) -> bool {
+        self.state.load(Ordering::Acquire) == INITIALIZED
+    }
+
+    /// Gets the value if initialized.
+    ///
+    /// Returns `None` if the cell is not yet initialized.
+    #[inline]
+    #[must_use]
+    pub fn get(&self) -> Option<&T> {
+        if self.is_initialized() {
+            self.value.get()
+        } else {
+            None
+        }
+    }
+
+    /// Sets the value if not already initialized.
+    ///
+    /// Returns `Err(value)` if the cell is already initialized or if another
+    /// thread/task is currently initializing the cell. This ensures the method
+    /// never blocks the OS thread, avoiding deadlocks in async contexts.
+    #[inline]
+    pub fn set(&self, value: T) -> Result<(), T> {
+        loop {
+            match self.state.compare_exchange_weak(
+                UNINIT,
+                INITIALIZING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // We are the initializer. Store the value.
+                    let _ = self.value.set(value);
+                    self.transition_out_of_initializing(INITIALIZED);
+                    return Ok(());
+                }
+                Err(INITIALIZED | INITIALIZING) => return Err(value),
+                Err(UNINIT) => {} // Spurious failure, try again
+                Err(_) => unreachable!("invalid state"),
+            }
+        }
+    }
+
+    /// Gets the value, initializing it synchronously if necessary.
+    ///
+    /// If the cell is uninitialized, `f` is called to create the value.
+    /// If multiple threads call this concurrently, only one will run the
+    /// initialization function; others will block waiting for the result.
+    #[inline]
+    pub fn get_or_init_blocking<F>(&self, f: F) -> &T
+    where
+        F: FnOnce() -> T,
+    {
+        // Fast path: already initialized.
+        if self.is_initialized() {
+            return self.value.get().expect("value should be set");
+        }
+
+        // Wrap in Option so we can consume the FnOnce at most once inside a
+        // retry loop (needed when a prior initializer is cancelled).
+        let mut init_fn = Some(f);
+
+        loop {
+            match self.state.compare_exchange_weak(
+                UNINIT,
+                INITIALIZING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // We are the initializer.
+                    let f = init_fn.take().expect("init closure available");
+                    let mut guard = InitGuard {
+                        cell: self,
+                        completed: false,
+                    };
+                    let value = f();
+                    let _ = self.value.set(value);
+                    guard.completed = true;
+                    drop(guard);
+                    self.transition_out_of_initializing(INITIALIZED);
+                    return self.value.get().expect("just initialized");
+                }
+                Err(INITIALIZED) => {
+                    return self.value.get().expect("already initialized");
+                }
+                Err(UNINIT) => {} // Spurious failure, try again
+                Err(_) => {
+                    // Another thread is initializing. Wait for it.
+                    self.wait_for_init_blocking();
+                    if self.is_initialized() {
+                        return self.value.get().expect("should be initialized after wait");
+                    }
+                    // The initializer was cancelled — state is back to UNINIT.
+                    // Loop to retry the CAS and potentially become the initializer.
+                }
+            }
+        }
+    }
+
+    /// Gets the value, initializing it if necessary (async version).
+    ///
+    /// If the cell is uninitialized, `f` is called to create the value.
+    /// If multiple tasks call this concurrently, only one will run the
+    /// initialization function; others will wait for the result.
+    ///
+    /// # Cancel Safety
+    ///
+    /// If the initialization future is cancelled, the cell remains
+    /// uninitialized and a future caller can try again.
+    #[inline]
+    #[allow(clippy::future_not_send)]
+    pub async fn get_or_init<F, Fut>(&self, f: F) -> &T
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        // Fast path: already initialized.
+        if self.is_initialized() {
+            return self.value.get().expect("value should be set");
+        }
+
+        // Wrap in Option so we can consume the FnOnce at most once inside a
+        // retry loop (needed when a prior initializer is cancelled).
+        let mut init_fn = Some(f);
+
+        loop {
+            match self.state.compare_exchange_weak(
+                UNINIT,
+                INITIALIZING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // We are the initializer.
+                    let f = init_fn.take().expect("init closure available");
+                    let mut guard = InitGuard {
+                        cell: self,
+                        completed: false,
+                    };
+
+                    let value = f().await;
+
+                    // Store value and mark complete.
+                    let _ = self.value.set(value);
+                    guard.completed = true;
+                    drop(guard); // Guard checks `completed` — won't reset state.
+                    self.transition_out_of_initializing(INITIALIZED);
+                    return self.value.get().expect("just initialized");
+                }
+                Err(INITIALIZED) => {
+                    return self.value.get().expect("already initialized");
+                }
+                Err(UNINIT) => {} // Spurious failure, try again
+                Err(_) => {
+                    // Another task is initializing. Wait for it.
+                    WaitInit {
+                        cell: self,
+                        waiter_id: None,
+                    }
+                    .await;
+
+                    // Check whether initialization actually succeeded.
+                    if self.is_initialized() {
+                        return self.value.get().expect("should be initialized after wait");
+                    }
+                    // The initializer was cancelled — state is back to UNINIT.
+                    // Loop to retry the CAS and potentially become the initializer.
+                }
+            }
+        }
+    }
+
+    /// Gets the value, initializing it with a fallible function if necessary.
+    ///
+    /// If the cell is uninitialized, `f` is called to create the value.
+    /// If `f` returns an error, the cell remains uninitialized.
+    ///
+    /// # Cancel Safety
+    ///
+    /// If the initialization future is cancelled or returns an error,
+    /// the cell remains uninitialized and a future caller can try again.
+    #[inline]
+    #[allow(clippy::future_not_send)]
+    pub async fn get_or_try_init<F, Fut, E>(&self, f: F) -> Result<&T, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        // Fast path: already initialized.
+        if self.is_initialized() {
+            return Ok(self.value.get().expect("value should be set"));
+        }
+
+        // Wrap in Option so we can consume the FnOnce at most once inside a
+        // retry loop (needed when a prior initializer is cancelled).
+        let mut init_fn = Some(f);
+
+        loop {
+            // Try to become the initializer.
+            match self.state.compare_exchange_weak(
+                UNINIT,
+                INITIALIZING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // We are the initializer.
+                    // Create a guard to reset state if we're cancelled or fail.
+                    let mut guard = InitGuard {
+                        cell: self,
+                        completed: false,
+                    };
+
+                    let f = init_fn.take().expect("init closure available");
+                    match f().await {
+                        Ok(value) => {
+                            // Store value and mark complete.
+                            let _ = self.value.set(value);
+                            guard.completed = true;
+                            drop(guard); // Guard checks `completed` — won't reset state.
+                            self.transition_out_of_initializing(INITIALIZED);
+                            return Ok(self.value.get().expect("just initialized"));
+                        }
+                        Err(e) => {
+                            // Guard resets state to UNINIT and wakes waiters on drop.
+                            drop(guard);
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(INITIALIZED) => {
+                    // Already initialized (race).
+                    return Ok(self.value.get().expect("already initialized"));
+                }
+                Err(INITIALIZING) => {
+                    // Another task is initializing. Wait for it.
+                    WaitInit {
+                        cell: self,
+                        waiter_id: None,
+                    }
+                    .await;
+                    // The other task might have failed, check state.
+                    if self.is_initialized() {
+                        return Ok(self.value.get().expect("should be initialized"));
+                    }
+                    // The other task failed. Loop and retry the CAS.
+                }
+                Err(UNINIT) => {} // Spurious failure, try again
+                Err(_) => unreachable!("invalid state"),
+            }
+        }
+    }
+
+    /// Takes the value out of the cell, leaving it uninitialized.
+    ///
+    /// Returns `None` if the cell is not initialized.
+    #[inline]
+    pub fn take(&mut self) -> Option<T> {
+        if self.is_initialized() {
+            self.state.store(UNINIT, Ordering::Release);
+            self.value.take()
+        } else {
+            None
+        }
+    }
+
+    /// Consumes the cell, returning the contained value.
+    ///
+    /// Returns `None` if the cell is not initialized.
+    #[inline]
+    pub fn into_inner(self) -> Option<T> {
+        self.value.into_inner()
+    }
+
+    /// Block until initialized.
+    fn wait_for_init_blocking(&self) {
+        let mut guard = match self.waiters.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        while self.state.load(Ordering::Acquire) == INITIALIZING {
+            #[cfg(test)]
+            run_blocking_wait_hook();
+            guard = match self.cvar.wait(guard) {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+        drop(guard);
+    }
+
+    fn transition_out_of_initializing(&self, new_state: u8) {
+        let wakers: SmallVec<[Waker; 4]> = {
+            let mut guard = match self.waiters.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            self.state.store(new_state, Ordering::Release);
+            guard.waiters.drain(..).map(|waiter| waiter.waker).collect()
+        };
+        self.cvar.notify_all();
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+
+    /// Registers a waker for async waiting with waiter-id tracking to prevent
+    /// unbounded queue growth.
+    fn register_waker(&self, waker: &Waker, waiter_id: &mut Option<u64>) {
+        let mut guard = match self.waiters.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if let Some(id) = *waiter_id {
+            // Still queued: refresh to the latest task waker.
+            if let Some(existing) = guard.waiters.iter_mut().find(|entry| entry.id == id) {
+                if !existing.waker.will_wake(waker) {
+                    existing.waker.clone_from(waker);
+                }
+            } else {
+                // Dequeued while still waiting; re-register.
+                let new_id = guard.next_waiter_id;
+                guard.next_waiter_id = guard.next_waiter_id.wrapping_add(1);
+                guard.waiters.push(InitWaiter {
+                    waker: waker.clone(),
+                    id: new_id,
+                });
+                *waiter_id = Some(new_id);
+            }
+        } else {
+            // First time: create new waiter id.
+            let id = guard.next_waiter_id;
+            guard.next_waiter_id = guard.next_waiter_id.wrapping_add(1);
+            guard.waiters.push(InitWaiter {
+                waker: waker.clone(),
+                id,
+            });
+            *waiter_id = Some(id);
+        }
+        drop(guard);
+    }
+}
+
+impl<T> Default for OnceCell<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for OnceCell<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("OnceCell");
+        match self.get() {
+            Some(v) => d.field("value", v),
+            None => d.field("value", &format_args!("<uninitialized>")),
+        };
+        d.finish()
+    }
+}
+
+impl<T: Clone> Clone for OnceCell<T> {
+    fn clone(&self) -> Self {
+        self.get()
+            .map_or_else(Self::new, |value| Self::with_value(value.clone()))
+    }
+}
+
+impl<T: PartialEq> PartialEq for OnceCell<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.get() == other.get()
+    }
+}
+
+impl<T: Eq> Eq for OnceCell<T> {}
+
+impl<T> From<T> for OnceCell<T> {
+    #[inline]
+    fn from(value: T) -> Self {
+        Self::with_value(value)
+    }
+}
+
+/// Guard that resets state to UNINIT and wakes waiters if initialization is
+/// cancelled (i.e. the initializing future is dropped before completion).
+struct InitGuard<'a, T> {
+    cell: &'a OnceCell<T>,
+    completed: bool,
+}
+
+impl<T> Drop for InitGuard<'_, T> {
+    fn drop(&mut self) {
+        if !self.completed {
+            // Reset state to allow another attempt.
+            self.cell.transition_out_of_initializing(UNINIT);
+        }
+    }
+}
+
+/// Future that waits for initialization to complete.
+struct WaitInit<'a, T> {
+    cell: &'a OnceCell<T>,
+    /// Tracks registered waiter identity to prevent unbounded queue growth.
+    waiter_id: Option<u64>,
+}
+
+impl<T> Future for WaitInit<'_, T> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        let state = this.cell.state.load(Ordering::Acquire);
+        if state == INITIALIZING {
+            this.cell.register_waker(cx.waker(), &mut this.waiter_id);
+            // Double-check after registering.
+            if this.cell.state.load(Ordering::Acquire) == INITIALIZING {
+                Poll::Pending
+            } else {
+                // Do not clear waiter_id here. If state changed after register_waker
+                // but before transition_out_of_initializing drained the queue, Drop must remove it to
+                // prevent memory leaks.
+                Poll::Ready(())
+            }
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
+impl<T> Drop for WaitInit<'_, T> {
+    fn drop(&mut self) {
+        if let Some(waiter_id) = self.waiter_id {
+            // Remove canceled waiter registrations immediately so repeated
+            // cancel/drop cycles don't accumulate until transition_out_of_initializing() drains.
+            let mut guard = match self.cell.waiters.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(pos) = guard.waiters.iter().position(|entry| entry.id == waiter_id) {
+                guard.waiters.swap_remove(pos);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::init_test_logging;
+    use futures_lite::future::{block_on, pending};
+    use proptest::prelude::*;
+    use std::future::{Future, poll_fn};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::task::{Context, Poll, Waker};
+    use std::thread;
+
+    struct BlockingWaitHookGuard;
+
+    impl Drop for BlockingWaitHookGuard {
+        fn drop(&mut self) {
+            let mut guard = BLOCKING_WAIT_HOOK
+                .get_or_init(|| StdMutex::new(None))
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = None;
+        }
+    }
+
+    /// Serializes tests that spawn threads which may call `wait_for_init_blocking`
+    /// (and thus `run_blocking_wait_hook`), preventing cross-test interference
+    /// through the global `BLOCKING_WAIT_HOOK` static.
+    static BLOCKING_TEST_SERIALIZER: StdMutex<()> = StdMutex::new(());
+
+    fn acquire_blocking_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        BLOCKING_TEST_SERIALIZER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn init_test(name: &str) {
+        init_test_logging();
+        crate::test_phase!(name);
+    }
+
+    fn install_blocking_wait_hook(hook: std::sync::Arc<BlockingWaitHook>) -> BlockingWaitHookGuard {
+        let mut guard = BLOCKING_WAIT_HOOK
+            .get_or_init(|| StdMutex::new(None))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(hook);
+        BlockingWaitHookGuard
+    }
+
+    fn noop_waker() -> Waker {
+        std::task::Waker::noop().clone()
+    }
+
+    #[derive(Default)]
+    struct CountWaker {
+        wakes: AtomicUsize,
+    }
+
+    impl CountWaker {
+        fn count(&self) -> usize {
+            self.wakes.load(Ordering::SeqCst)
+        }
+    }
+
+    use std::task::Wake;
+    impl Wake for CountWaker {
+        fn wake(self: Arc<Self>) {
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn new_cell_is_uninitialized() {
+        init_test("new_cell_is_uninitialized");
+        let cell: OnceCell<i32> = OnceCell::new();
+        crate::assert_with_log!(
+            !cell.is_initialized(),
+            "not initialized",
+            false,
+            cell.is_initialized()
+        );
+        crate::assert_with_log!(cell.get().is_none(), "get none", true, cell.get().is_none());
+        crate::test_complete!("new_cell_is_uninitialized");
+    }
+
+    #[test]
+    fn with_value_is_initialized() {
+        init_test("with_value_is_initialized");
+        let cell = OnceCell::with_value(42);
+        crate::assert_with_log!(
+            cell.is_initialized(),
+            "initialized",
+            true,
+            cell.is_initialized()
+        );
+        crate::assert_with_log!(cell.get() == Some(&42), "get value", Some(&42), cell.get());
+        crate::test_complete!("with_value_is_initialized");
+    }
+
+    #[test]
+    fn set_initializes_cell() {
+        init_test("set_initializes_cell");
+        let cell: OnceCell<i32> = OnceCell::new();
+        let set_ok = cell.set(42).is_ok();
+        crate::assert_with_log!(set_ok, "set ok", true, set_ok);
+        crate::assert_with_log!(
+            cell.is_initialized(),
+            "initialized",
+            true,
+            cell.is_initialized()
+        );
+        crate::assert_with_log!(cell.get() == Some(&42), "get value", Some(&42), cell.get());
+        crate::test_complete!("set_initializes_cell");
+    }
+
+    #[test]
+    fn set_twice_fails() {
+        init_test("set_twice_fails");
+        let cell = OnceCell::new();
+        let first_ok = cell.set(1).is_ok();
+        let second_err = cell.set(2).is_err();
+        crate::assert_with_log!(first_ok, "first set ok", true, first_ok);
+        crate::assert_with_log!(second_err, "second set err", true, second_err);
+        crate::assert_with_log!(
+            cell.get() == Some(&1),
+            "value unchanged",
+            Some(&1),
+            cell.get()
+        );
+        crate::test_complete!("set_twice_fails");
+    }
+
+    #[test]
+    fn set_returns_err_immediately_when_inflight_initializer_running() {
+        init_test("set_returns_err_immediately_when_inflight_initializer_running");
+        let _lock = acquire_blocking_test_lock();
+        let cell = Arc::new(OnceCell::<u32>::new());
+        let gate = Arc::new(std::sync::Barrier::new(2));
+
+        let cell_for_init = Arc::clone(&cell);
+        let gate_for_init = Arc::clone(&gate);
+        let init_handle = thread::spawn(move || {
+            *cell_for_init.get_or_init_blocking(|| {
+                gate_for_init.wait();
+                thread::sleep(std::time::Duration::from_millis(25));
+                7
+            })
+        });
+
+        // Ensure initializer has entered and is in-flight before calling set.
+        gate.wait();
+
+        let set_result = cell.set(9);
+        crate::assert_with_log!(
+            set_result == Err(9),
+            "set should return Err immediately when inflight init is running",
+            Err::<(), u32>(9),
+            set_result
+        );
+
+        let init_value = init_handle.join().expect("initializer panicked");
+        crate::assert_with_log!(init_value == 7, "initializer value", 7u32, init_value);
+        crate::assert_with_log!(
+            cell.get() == Some(&7),
+            "cell keeps inflight initializer result",
+            Some(&7),
+            cell.get()
+        );
+        crate::test_complete!("set_returns_err_immediately_when_inflight_initializer_running");
+    }
+
+    #[test]
+    fn get_or_init_blocking_initializes_once() {
+        init_test("get_or_init_blocking_initializes_once");
+        let cell: OnceCell<i32> = OnceCell::new();
+        let counter = AtomicUsize::new(0);
+
+        let result = cell.get_or_init_blocking(|| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            42
+        });
+        crate::assert_with_log!(*result == 42, "first result", 42, *result);
+        crate::assert_with_log!(
+            counter.load(Ordering::SeqCst) == 1,
+            "counter",
+            1usize,
+            counter.load(Ordering::SeqCst)
+        );
+
+        // Second call should return cached value.
+        let result = cell.get_or_init_blocking(|| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            100
+        });
+        crate::assert_with_log!(*result == 42, "cached result", 42, *result);
+        crate::assert_with_log!(
+            counter.load(Ordering::SeqCst) == 1,
+            "counter",
+            1usize,
+            counter.load(Ordering::SeqCst)
+        );
+        crate::test_complete!("get_or_init_blocking_initializes_once");
+    }
+
+    proptest! {
+        #[test]
+        fn metamorphic_initialization_path_preserves_visibility_surface(
+            value in any::<u32>(),
+            fallback in any::<u32>(),
+        ) {
+            let eager_cell = OnceCell::with_value(value);
+
+            let set_cell = OnceCell::new();
+            prop_assert_eq!(set_cell.set(value), Ok(()));
+
+            let async_cell = OnceCell::new();
+            let async_value = block_on(async_cell.get_or_init(|| async move { value }));
+            prop_assert_eq!(*async_value, value);
+
+            let blocking_cell = OnceCell::new();
+            let blocking_value = blocking_cell.get_or_init_blocking(|| value);
+            prop_assert_eq!(*blocking_value, value);
+
+            for cell in [&eager_cell, &set_cell, &async_cell, &blocking_cell] {
+                prop_assert!(cell.is_initialized());
+                prop_assert_eq!(cell.get(), Some(&value));
+
+                let async_probe_runs = Arc::new(AtomicUsize::new(0));
+                let async_probe_counter = Arc::clone(&async_probe_runs);
+                let observed_async = block_on(cell.get_or_init(|| async move {
+                    async_probe_counter.fetch_add(1, Ordering::SeqCst);
+                    fallback
+                }));
+                prop_assert_eq!(*observed_async, value);
+                prop_assert_eq!(async_probe_runs.load(Ordering::SeqCst), 0);
+
+                let blocking_probe_runs = Arc::new(AtomicUsize::new(0));
+                let blocking_probe_counter = Arc::clone(&blocking_probe_runs);
+                let observed_blocking = cell.get_or_init_blocking(|| {
+                    blocking_probe_counter.fetch_add(1, Ordering::SeqCst);
+                    fallback
+                });
+                prop_assert_eq!(*observed_blocking, value);
+                prop_assert_eq!(blocking_probe_runs.load(Ordering::SeqCst), 0);
+
+                let cloned = cell.clone();
+                prop_assert!(cloned.is_initialized());
+                prop_assert_eq!(cloned.get(), Some(&value));
+            }
+        }
+
+        #[test]
+        fn metamorphic_async_cancellation_recovery_matches_fresh_success_surface(
+            value in any::<u32>(),
+            fallback in any::<u32>(),
+        ) {
+            let recovered = OnceCell::new();
+            let fresh = OnceCell::new();
+
+            let mut cancelled_init = Box::pin(recovered.get_or_init(|| async { pending::<u32>().await }));
+            let noop = noop_waker();
+            let mut cx = Context::from_waker(&noop);
+            prop_assert!(Future::poll(cancelled_init.as_mut(), &mut cx).is_pending());
+            drop(cancelled_init);
+
+            prop_assert!(!recovered.is_initialized());
+
+            let recovered_value = block_on(recovered.get_or_init(|| async move { value }));
+            let fresh_value = block_on(fresh.get_or_init(|| async move { value }));
+
+            let ignored_probe_runs = Arc::new(AtomicUsize::new(0));
+            let ignored_probe_counter = Arc::clone(&ignored_probe_runs);
+            let recovered_again = block_on(recovered.get_or_init(|| async move {
+                ignored_probe_counter.fetch_add(1, Ordering::SeqCst);
+                fallback
+            }));
+
+            prop_assert_eq!(*recovered_value, *fresh_value);
+            prop_assert_eq!(*recovered_again, value);
+            prop_assert_eq!(ignored_probe_runs.load(Ordering::SeqCst), 0);
+            prop_assert_eq!(recovered.get(), fresh.get());
+            prop_assert!(recovered.is_initialized());
+        }
+    }
+
+    #[test]
+    fn metamorphic_async_waiters_converge_on_winner_without_running_fallbacks() {
+        init_test("metamorphic_async_waiters_converge_on_winner_without_running_fallbacks");
+        let cell: OnceCell<u32> = OnceCell::new();
+        let release_winner = Arc::new(AtomicBool::new(false));
+        let fallback_runs = Arc::new(AtomicUsize::new(0));
+        let winner_value = 41u32;
+
+        let release_for_init = Arc::clone(&release_winner);
+        let mut init_fut = Box::pin(cell.get_or_init(move || {
+            let release_for_init = Arc::clone(&release_for_init);
+            async move {
+                poll_fn(move |_| {
+                    if release_for_init.load(Ordering::SeqCst) {
+                        Poll::Ready(winner_value)
+                    } else {
+                        Poll::Pending
+                    }
+                })
+                .await
+            }
+        }));
+
+        let noop = noop_waker();
+        let mut cx = Context::from_waker(&noop);
+        assert!(Future::poll(init_fut.as_mut(), &mut cx).is_pending());
+
+        let mut waiters = Vec::new();
+        for fallback in [7u32, 13, 21, 34] {
+            let fallback_runs = Arc::clone(&fallback_runs);
+            waiters.push(Box::pin(cell.get_or_init(move || {
+                let fallback_runs = Arc::clone(&fallback_runs);
+                async move {
+                    fallback_runs.fetch_add(1, Ordering::SeqCst);
+                    fallback
+                }
+            })));
+        }
+
+        for waiter in &mut waiters {
+            assert!(Future::poll(waiter.as_mut(), &mut cx).is_pending());
+        }
+
+        release_winner.store(true, Ordering::SeqCst);
+
+        match Future::poll(init_fut.as_mut(), &mut cx) {
+            Poll::Ready(value) => assert_eq!(*value, winner_value),
+            Poll::Pending => panic!("winner should complete after release"),
+        }
+
+        for waiter in &mut waiters {
+            match Future::poll(waiter.as_mut(), &mut cx) {
+                Poll::Ready(value) => assert_eq!(*value, winner_value),
+                Poll::Pending => panic!("waiter should observe the winner once initialized"),
+            }
+        }
+
+        assert_eq!(fallback_runs.load(Ordering::SeqCst), 0);
+        assert_eq!(cell.get(), Some(&winner_value));
+        crate::test_complete!(
+            "metamorphic_async_waiters_converge_on_winner_without_running_fallbacks"
+        );
+    }
+
+    #[test]
+    fn metamorphic_blocking_contenders_converge_on_single_observable_winner() {
+        init_test("metamorphic_blocking_contenders_converge_on_single_observable_winner");
+        let _lock = acquire_blocking_test_lock();
+
+        for candidates in [
+            &[11u32, 17][..],
+            &[5u32, 8, 13][..],
+            &[2u32, 3, 5, 8, 13][..],
+        ] {
+            let cell = Arc::new(OnceCell::<u32>::new());
+            let start_gate = Arc::new(std::sync::Barrier::new(candidates.len()));
+            let init_runs = Arc::new(AtomicUsize::new(0));
+            let mut handles = Vec::with_capacity(candidates.len());
+
+            for &candidate in candidates {
+                let cell = Arc::clone(&cell);
+                let start_gate = Arc::clone(&start_gate);
+                let init_runs = Arc::clone(&init_runs);
+                handles.push(thread::spawn(move || {
+                    start_gate.wait();
+                    *cell.get_or_init_blocking(|| {
+                        init_runs.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(std::time::Duration::from_millis(5));
+                        candidate
+                    })
+                }));
+            }
+
+            let observed: Vec<u32> = handles
+                .into_iter()
+                .map(|handle| handle.join().expect("thread panicked"))
+                .collect();
+            let winner = observed[0];
+
+            assert!(
+                observed.iter().all(|&value| value == winner),
+                "all contenders should observe the same winner: {observed:?}"
+            );
+            assert_eq!(
+                init_runs.load(Ordering::SeqCst),
+                1,
+                "exactly one initializer should run"
+            );
+            assert_eq!(cell.get(), Some(&winner));
+
+            let probe_runs = Arc::new(AtomicUsize::new(0));
+            let probe_counter = Arc::clone(&probe_runs);
+            let cached = cell.get_or_init_blocking(|| {
+                probe_counter.fetch_add(1, Ordering::SeqCst);
+                999
+            });
+            assert_eq!(*cached, winner);
+            assert_eq!(probe_runs.load(Ordering::SeqCst), 0);
+        }
+
+        crate::test_complete!(
+            "metamorphic_blocking_contenders_converge_on_single_observable_winner"
+        );
+    }
+
+    #[test]
+    fn metamorphic_blocking_panic_recovery_matches_fresh_success_surface() {
+        init_test("metamorphic_blocking_panic_recovery_matches_fresh_success_surface");
+        let _lock = acquire_blocking_test_lock();
+        let recovered = Arc::new(OnceCell::<u32>::new());
+        let fresh = OnceCell::<u32>::new();
+        let expected = 55u32;
+
+        let recovered_for_panic = Arc::clone(&recovered);
+        let panic_handle = thread::spawn(move || {
+            let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = recovered_for_panic.get_or_init_blocking(|| -> u32 { panic!("boom") });
+            }));
+            assert!(
+                panic_result.is_err(),
+                "initializer panic should be captured"
+            );
+        });
+        panic_handle.join().expect("panic thread panicked");
+
+        let recovered_value = *recovered.get_or_init_blocking(|| expected);
+        let fresh_value = *fresh.get_or_init_blocking(|| expected);
+
+        assert_eq!(recovered_value, fresh_value);
+        assert_eq!(recovered.get(), fresh.get());
+        assert_eq!(recovered.is_initialized(), fresh.is_initialized());
+        crate::test_complete!("metamorphic_blocking_panic_recovery_matches_fresh_success_surface");
+    }
+
+    proptest! {
+        #[test]
+        fn metamorphic_try_init_error_recovery_matches_direct_success(
+            value in any::<u32>(),
+            fallback in any::<u32>(),
+        ) {
+            let recovered = OnceCell::new();
+            let fresh = OnceCell::new();
+
+            prop_assert_eq!(
+                block_on(recovered.get_or_try_init(|| async { Err::<u32, &'static str>("boom") })),
+                Err("boom")
+            );
+            prop_assert!(!recovered.is_initialized());
+
+            let recovered_value = block_on(recovered.get_or_try_init(|| async move {
+                Ok::<u32, &'static str>(value)
+            }))
+            .expect("recovery init should succeed");
+            let fresh_value = block_on(fresh.get_or_try_init(|| async move {
+                Ok::<u32, &'static str>(value)
+            }))
+            .expect("fresh init should succeed");
+
+            let ignored_probe_runs = Arc::new(AtomicUsize::new(0));
+            let ignored_probe_counter = Arc::clone(&ignored_probe_runs);
+            let recovered_again = block_on(recovered.get_or_try_init(|| async move {
+                ignored_probe_counter.fetch_add(1, Ordering::SeqCst);
+                Ok::<u32, &'static str>(fallback)
+            }))
+            .expect("subsequent reads should observe the recovered value");
+
+            prop_assert_eq!(*recovered_value, *fresh_value);
+            prop_assert_eq!(*recovered_again, value);
+            prop_assert_eq!(ignored_probe_runs.load(Ordering::SeqCst), 0);
+            prop_assert_eq!(recovered.get(), fresh.get());
+            prop_assert!(recovered.is_initialized());
+        }
+    }
+
+    #[test]
+    fn get_or_init_cancelled_leaves_uninitialized() {
+        init_test("get_or_init_cancelled_leaves_uninitialized");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        let mut fut = Box::pin(cell.get_or_init(|| async { pending::<u32>().await }));
+
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let poll = Future::poll(fut.as_mut(), &mut cx);
+        crate::assert_with_log!(poll.is_pending(), "init pending", true, poll.is_pending());
+
+        drop(fut);
+
+        let still_uninit = !cell.is_initialized();
+        crate::assert_with_log!(
+            still_uninit,
+            "cell uninitialized after cancel",
+            true,
+            still_uninit
+        );
+
+        let value = block_on(cell.get_or_init(|| async { 7 }));
+        crate::assert_with_log!(*value == 7, "init after cancel", 7u32, *value);
+        crate::test_complete!("get_or_init_cancelled_leaves_uninitialized");
+    }
+
+    /// Regression test for bd-ar5hz: waiter must not panic when the initializer
+    /// is cancelled. Instead, the waiter should retry and eventually succeed.
+    #[test]
+    fn get_or_init_waiter_retries_after_cancelled_init() {
+        init_test("get_or_init_waiter_retries_after_cancelled_init");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        // Task A: start init with a future that will never complete.
+        let mut init_fut = Box::pin(cell.get_or_init(|| async { pending::<u32>().await }));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let poll = Future::poll(init_fut.as_mut(), &mut cx);
+        assert!(poll.is_pending(), "init should be pending");
+
+        // Task B: a waiter that will be parked because A is INITIALIZING.
+        let mut waiter_fut = Box::pin(cell.get_or_init(|| async { 99u32 }));
+        let poll_b = Future::poll(waiter_fut.as_mut(), &mut cx);
+        assert!(
+            poll_b.is_pending(),
+            "waiter should be pending while init in progress"
+        );
+
+        // Cancel task A — InitGuard should reset to UNINIT and wake B.
+        drop(init_fut);
+
+        // Task B should now retry (not panic) and initialize the cell.
+        let poll_b2 = Future::poll(waiter_fut.as_mut(), &mut cx);
+        assert!(
+            poll_b2.is_ready(),
+            "waiter should complete after cancelled init"
+        );
+        assert_eq!(
+            cell.get(),
+            Some(&99),
+            "cell should be initialized by waiter"
+        );
+        crate::test_complete!("get_or_init_waiter_retries_after_cancelled_init");
+    }
+
+    #[test]
+    fn get_or_init_waiter_refreshes_queued_waker() {
+        init_test("get_or_init_waiter_refreshes_queued_waker");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        // Task A starts initialization and stays pending.
+        let mut init_fut = Box::pin(cell.get_or_init(|| async { pending::<u32>().await }));
+        let noop = noop_waker();
+        let mut noop_cx = Context::from_waker(&noop);
+        assert!(Future::poll(init_fut.as_mut(), &mut noop_cx).is_pending());
+
+        // Task B waits on initialization and is first polled with waker A.
+        let mut waiter_fut = Box::pin(cell.get_or_init(|| async { 7u32 }));
+        let wake_counter_first = Arc::new(CountWaker::default());
+        let wake_counter_second = Arc::new(CountWaker::default());
+        let task_waker_first = Waker::from(Arc::clone(&wake_counter_first));
+        let task_waker_second = Waker::from(Arc::clone(&wake_counter_second));
+
+        let mut cx_a = Context::from_waker(&task_waker_first);
+        assert!(Future::poll(waiter_fut.as_mut(), &mut cx_a).is_pending());
+
+        // Poll again with a different waker while still queued; this should refresh.
+        let mut cx_b = Context::from_waker(&task_waker_second);
+        assert!(Future::poll(waiter_fut.as_mut(), &mut cx_b).is_pending());
+
+        // Cancel Task A: waiters are woken. The queued waiter should wake waker B, not stale A.
+        drop(init_fut);
+
+        crate::assert_with_log!(
+            wake_counter_second.count() > 0,
+            "latest waker was notified",
+            true,
+            wake_counter_second.count() > 0
+        );
+        crate::assert_with_log!(
+            wake_counter_first.count() == 0,
+            "stale waker not notified",
+            0usize,
+            wake_counter_first.count()
+        );
+        crate::test_complete!("get_or_init_waiter_refreshes_queued_waker");
+    }
+
+    #[test]
+    fn get_or_init_cancelled_waiters_do_not_accumulate() {
+        init_test("get_or_init_cancelled_waiters_do_not_accumulate");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        // Hold cell in INITIALIZING so waiters will queue.
+        let mut init_fut = Box::pin(cell.get_or_init(|| async { pending::<u32>().await }));
+        let noop = noop_waker();
+        let mut noop_cx = Context::from_waker(&noop);
+        assert!(Future::poll(init_fut.as_mut(), &mut noop_cx).is_pending());
+
+        // Repeatedly create + cancel waiters while initialization is pending.
+        for _ in 0..128 {
+            let mut waiter_fut = Box::pin(cell.get_or_init(|| async { 11u32 }));
+            assert!(Future::poll(waiter_fut.as_mut(), &mut noop_cx).is_pending());
+            drop(waiter_fut);
+        }
+
+        let queued_waiters = cell
+            .waiters
+            .lock()
+            .expect("waiters lock poisoned")
+            .waiters
+            .len();
+        crate::assert_with_log!(
+            queued_waiters == 0,
+            "canceled waiters are removed immediately",
+            0usize,
+            queued_waiters
+        );
+
+        drop(init_fut);
+        crate::test_complete!("get_or_init_cancelled_waiters_do_not_accumulate");
+    }
+
+    #[test]
+    fn get_or_try_init_cancelled_leaves_uninitialized() {
+        init_test("get_or_try_init_cancelled_leaves_uninitialized");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        let mut fut = Box::pin(
+            cell.get_or_try_init(|| async { pending::<Result<u32, &'static str>>().await }),
+        );
+
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let poll = Future::poll(fut.as_mut(), &mut cx);
+        assert!(poll.is_pending(), "init should be pending");
+
+        drop(fut);
+
+        assert!(
+            !cell.is_initialized(),
+            "cell should remain uninitialized after cancellation"
+        );
+
+        let value = block_on(cell.get_or_try_init(|| async { Ok::<_, ()>(7) })).expect("init ok");
+        assert_eq!(*value, 7);
+        crate::test_complete!("get_or_try_init_cancelled_leaves_uninitialized");
+    }
+
+    /// Regression: waiter must retry after a cancelled fallible initializer.
+    #[test]
+    fn get_or_try_init_waiter_retries_after_cancelled_init() {
+        init_test("get_or_try_init_waiter_retries_after_cancelled_init");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        // Task A: start init with a future that will never complete.
+        let mut init_fut = Box::pin(
+            cell.get_or_try_init(|| async { pending::<Result<u32, &'static str>>().await }),
+        );
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let poll = Future::poll(init_fut.as_mut(), &mut cx);
+        assert!(poll.is_pending(), "init should be pending");
+
+        // Task B: a waiter that will be parked because A is INITIALIZING.
+        let mut waiter_fut = Box::pin(cell.get_or_try_init(|| async { Ok::<_, ()>(99u32) }));
+        let poll_b = Future::poll(waiter_fut.as_mut(), &mut cx);
+        assert!(
+            poll_b.is_pending(),
+            "waiter should be pending while init in progress"
+        );
+
+        // Cancel task A — InitGuard should reset to UNINIT and wake B.
+        drop(init_fut);
+
+        // Task B should now retry and initialize the cell.
+        let poll_b2 = Future::poll(waiter_fut.as_mut(), &mut cx);
+        match poll_b2 {
+            Poll::Ready(Ok(value)) => assert_eq!(*value, 99),
+            Poll::Ready(Err(err)) => panic!("unexpected error: {err:?}"),
+            Poll::Pending => panic!("waiter should have completed after cancel"),
+        }
+
+        crate::test_complete!("get_or_try_init_waiter_retries_after_cancelled_init");
+    }
+
+    #[test]
+    fn get_or_try_init_error_leaves_uninitialized() {
+        init_test("get_or_try_init_error_leaves_uninitialized");
+        let cell: OnceCell<u32> = OnceCell::new();
+
+        let err = block_on(cell.get_or_try_init(|| async { Err::<u32, &str>("boom") }));
+        assert_eq!(err, Err("boom"));
+        assert!(
+            !cell.is_initialized(),
+            "cell should remain uninitialized after error"
+        );
+
+        let value = block_on(cell.get_or_try_init(|| async { Ok::<_, ()>(42) })).expect("init ok");
+        assert_eq!(*value, 42);
+        crate::test_complete!("get_or_try_init_error_leaves_uninitialized");
+    }
+
+    /// Regression test for bd-ar5hz (blocking variant): blocking waiter must
+    /// not panic when an async initializer is cancelled.
+    #[test]
+    fn get_or_init_blocking_retries_after_cancelled_async_init() {
+        init_test("get_or_init_blocking_retries_after_cancelled_async_init");
+        let _lock = acquire_blocking_test_lock();
+        let cell = Arc::new(OnceCell::<u32>::new());
+
+        // Start an async init that will be cancelled.
+        let mut init_fut = Box::pin(cell.get_or_init(|| async { pending::<u32>().await }));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let poll = Future::poll(init_fut.as_mut(), &mut cx);
+        assert!(poll.is_pending());
+
+        // Spawn a blocking waiter that should not panic.
+        let cell2 = Arc::clone(&cell);
+        let handle = thread::spawn(move || {
+            // This will block until state leaves INITIALIZING, then retry.
+            *cell2.get_or_init_blocking(|| 42)
+        });
+
+        // Give the thread time to enter wait_for_init_blocking.
+        thread::sleep(std::time::Duration::from_millis(20));
+
+        // Cancel the async init — state resets to UNINIT, cvar notified.
+        drop(init_fut);
+
+        let value = handle.join().expect("blocking waiter panicked");
+        assert_eq!(
+            value, 42,
+            "blocking waiter should have initialized the cell"
+        );
+        assert!(cell.is_initialized());
+        crate::test_complete!("get_or_init_blocking_retries_after_cancelled_async_init");
+    }
+
+    #[test]
+    fn get_or_init_blocking_does_not_miss_cancel_notify_between_check_and_wait() {
+        init_test("get_or_init_blocking_does_not_miss_cancel_notify_between_check_and_wait");
+        let _lock = acquire_blocking_test_lock();
+        let cell = Arc::new(OnceCell::<u32>::new());
+
+        let (init_started_tx, init_started_rx) = std::sync::mpsc::channel();
+        let (cancel_tx, cancel_rx) = std::sync::mpsc::channel();
+        let (cancel_started_tx, cancel_started_rx) = std::sync::mpsc::channel();
+
+        let cell_for_init = Arc::clone(&cell);
+        let init_handle = thread::spawn(move || {
+            let mut init_fut =
+                Box::pin(cell_for_init.get_or_init(|| async { pending::<u32>().await }));
+            let waker = noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            assert!(Future::poll(init_fut.as_mut(), &mut cx).is_pending());
+            init_started_tx
+                .send(())
+                .expect("init thread should report startup");
+            cancel_rx
+                .recv()
+                .expect("main thread should request cancellation");
+            cancel_started_tx
+                .send(())
+                .expect("init thread should report imminent cancellation");
+            drop(init_fut);
+        });
+
+        init_started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("async initializer should enter INITIALIZING");
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let _hook_guard = install_blocking_wait_hook(std::sync::Arc::new(BlockingWaitHook {
+            entered_tx,
+            release_rx: StdMutex::new(release_rx),
+        }));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let cell_for_waiter = Arc::clone(&cell);
+        let waiter_handle = thread::spawn(move || {
+            let value = *cell_for_waiter.get_or_init_blocking(|| 42);
+            done_tx
+                .send(value)
+                .expect("waiter thread should report initialization result");
+        });
+
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("blocking waiter should reach the pre-wait hook");
+        cancel_tx
+            .send(())
+            .expect("main thread should be able to request cancellation");
+        cancel_started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("init thread should start cancellation while waiter is paused");
+        release_tx
+            .send(())
+            .expect("main thread should release the waiter into condvar wait");
+
+        let value = done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("blocking waiter should not miss the cancellation wakeup");
+        assert_eq!(value, 42);
+        assert!(cell.is_initialized());
+
+        waiter_handle.join().expect("waiter thread panicked");
+        init_handle.join().expect("init thread panicked");
+        crate::test_complete!(
+            "get_or_init_blocking_does_not_miss_cancel_notify_between_check_and_wait"
+        );
+    }
+
+    #[test]
+    fn get_or_init_blocking_panic_resets_state() {
+        init_test("get_or_init_blocking_panic_resets_state");
+        let _lock = acquire_blocking_test_lock();
+        let cell = Arc::new(OnceCell::<u32>::new());
+
+        let cell_for_panic = Arc::clone(&cell);
+        let handle = thread::spawn(move || {
+            let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = cell_for_panic.get_or_init_blocking(|| -> u32 { panic!("boom") });
+            }));
+            crate::assert_with_log!(
+                panic_result.is_err(),
+                "initializer panic captured",
+                true,
+                panic_result.is_err()
+            );
+        });
+
+        handle.join().expect("panic thread panicked");
+
+        crate::assert_with_log!(
+            !cell.is_initialized(),
+            "cell remains uninitialized after panic",
+            false,
+            cell.is_initialized()
+        );
+
+        let value = cell.get_or_init_blocking(|| 55);
+        crate::assert_with_log!(*value == 55, "recovery init", 55u32, *value);
+        crate::test_complete!("get_or_init_blocking_panic_resets_state");
+    }
+
+    #[test]
+    fn wait_for_init_blocking_recovers_from_poisoned_condvar_wait() {
+        init_test("wait_for_init_blocking_recovers_from_poisoned_condvar_wait");
+        let _lock = acquire_blocking_test_lock();
+        let cell = Arc::new(OnceCell::<u32>::new());
+        cell.state.store(INITIALIZING, Ordering::Release);
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cell
+                .waiters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("intentional poison");
+        }));
+
+        let waiter = {
+            let cell = Arc::clone(&cell);
+            thread::spawn(move || {
+                cell.wait_for_init_blocking();
+            })
+        };
+
+        thread::sleep(std::time::Duration::from_millis(20));
+        cell.state.store(UNINIT, Ordering::Release);
+        cell.cvar.notify_all();
+
+        let waiter_joined = waiter.join();
+        crate::assert_with_log!(
+            waiter_joined.is_ok(),
+            "poisoned condvar wait should recover without panic",
+            true,
+            waiter_joined.is_ok()
+        );
+        crate::test_complete!("wait_for_init_blocking_recovers_from_poisoned_condvar_wait");
+    }
+
+    #[test]
+    fn concurrent_init_only_runs_once() {
+        init_test("concurrent_init_only_runs_once");
+        let _lock = acquire_blocking_test_lock();
+        let cell = Arc::new(OnceCell::<i32>::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+
+        for _ in 0..10 {
+            let cell = Arc::clone(&cell);
+            let counter = Arc::clone(&counter);
+            handles.push(thread::spawn(move || {
+                let result = cell.get_or_init_blocking(|| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    thread::sleep(std::time::Duration::from_millis(10));
+                    42
+                });
+                crate::assert_with_log!(*result == 42, "result", 42, *result);
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("thread panicked");
+        }
+
+        crate::assert_with_log!(
+            counter.load(Ordering::SeqCst) == 1,
+            "counter",
+            1usize,
+            counter.load(Ordering::SeqCst)
+        );
+        crate::test_complete!("concurrent_init_only_runs_once");
+    }
+
+    #[test]
+    fn take_resets_cell() {
+        init_test("take_resets_cell");
+        let mut cell = OnceCell::with_value(42);
+        let taken = cell.take();
+        crate::assert_with_log!(taken == Some(42), "take value", Some(42), taken);
+        crate::assert_with_log!(
+            !cell.is_initialized(),
+            "not initialized",
+            false,
+            cell.is_initialized()
+        );
+        crate::assert_with_log!(cell.get().is_none(), "get none", true, cell.get().is_none());
+        crate::test_complete!("take_resets_cell");
+    }
+
+    #[test]
+    fn into_inner_extracts_value() {
+        init_test("into_inner_extracts_value");
+        let cell = OnceCell::with_value(42);
+        let inner = cell.into_inner();
+        crate::assert_with_log!(inner == Some(42), "into_inner", Some(42), inner);
+        crate::test_complete!("into_inner_extracts_value");
+    }
+
+    #[test]
+    fn clone_copies_value() {
+        init_test("clone_copies_value");
+        let cell = OnceCell::with_value(42);
+        let cloned = cell.clone();
+        crate::assert_with_log!(
+            cell.get() == Some(&42),
+            "original value retained after clone",
+            Some(&42),
+            cell.get()
+        );
+        crate::assert_with_log!(
+            cloned.get() == Some(&42),
+            "cloned value",
+            Some(&42),
+            cloned.get()
+        );
+        crate::test_complete!("clone_copies_value");
+    }
+
+    #[test]
+    fn debug_shows_value() {
+        init_test("debug_shows_value");
+        let cell = OnceCell::with_value(42);
+        let debug_text = format!("{cell:?}");
+        crate::assert_with_log!(
+            debug_text.contains("42"),
+            "debug shows value",
+            true,
+            debug_text.contains("42")
+        );
+        crate::test_complete!("debug_shows_value");
+    }
+
+    /// Invariant: if `get_or_try_init` returns an error, the cell remains
+    /// UNINIT and a subsequent caller can succeed.
+    #[test]
+    fn get_or_try_init_error_resets_state() {
+        init_test("get_or_try_init_error_resets_state");
+        let cell = OnceCell::<u32>::new();
+
+        let result: Result<&u32, &str> = block_on(cell.get_or_try_init(|| async { Err("fail") }));
+        let is_err = result.is_err();
+        crate::assert_with_log!(is_err, "first init fails", true, is_err);
+
+        let still_uninit = !cell.is_initialized();
+        crate::assert_with_log!(still_uninit, "cell UNINIT after error", true, still_uninit);
+
+        // A second caller with a successful init should work.
+        let val = block_on(cell.get_or_try_init(|| async { Ok::<u32, &str>(42) }));
+        crate::assert_with_log!(val == Ok(&42), "second init ok", true, val == Ok(&42));
+
+        crate::test_complete!("get_or_try_init_error_resets_state");
+    }
+
+    // =========================================================================
+    // Pure data-type tests (wave 42 – CyanBarn)
+    // =========================================================================
+
+    #[test]
+    #[allow(clippy::clone_on_copy)]
+    fn once_cell_error_debug_clone_copy_eq_display() {
+        let already = OnceCellError::AlreadyInitialized;
+        let cancelled = OnceCellError::Cancelled;
+        let copied = already;
+        let cloned = already.clone(); // intentional: exercises Clone on Copy type
+        assert_eq!(copied, cloned);
+        assert_eq!(copied, OnceCellError::AlreadyInitialized);
+        assert_ne!(already, cancelled);
+        assert!(format!("{already:?}").contains("AlreadyInitialized"));
+        assert!(already.to_string().contains("already initialized"));
+        assert!(cancelled.to_string().contains("cancelled"));
+    }
+}

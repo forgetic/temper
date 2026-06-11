@@ -8,8 +8,9 @@ description = "Low-level Forgejo REST helpers outside the portable Forge trait."
 
 [dependencies]
 base64 = "0.22"
-reqwest = { workspace = true, features = ["json"] }
+asupersync.workspace = true
 serde_json.workspace = true
+temper-io-engine = { path = "../temper-io-engine" }
 
 [lints]
 workspace = true

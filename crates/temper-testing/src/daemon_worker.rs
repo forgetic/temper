@@ -227,7 +227,7 @@ fn parse_capability(raw: &str) -> Result<Capability, String> {
 /// re-poll. Transport errors are logged and retried (the e2e driver bounds the
 /// run with the stop-file and its own convergence timeout).
 pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let endpoint = format!("{}/v1/message", config.daemon_url.trim_end_matches('/'));
 
     let register = WorkerProtocolMessage::Register(Register {
@@ -263,7 +263,7 @@ pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<
             Ok(response) => response,
             Err(error) => {
                 eprintln!("temper-testing-daemon-worker: poll failed: {error}");
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                temper_io_engine::runtime::sleep_for(Duration::from_millis(200)).await;
                 continue;
             }
         };
@@ -310,31 +310,27 @@ pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<
 }
 
 async fn send(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     endpoint: &str,
     message: &WorkerProtocolMessage,
 ) -> Result<Option<WorkerProtocolMessage>, String> {
+    let payload = serde_json::to_value(message)
+        .map_err(|error| format!("serializing protocol message failed: {error}"))?;
     let response = client
-        .post(endpoint)
-        .json(message)
-        .send()
+        .send("POST", endpoint, None, Some(&payload))
         .await
         .map_err(|error| format!("request to {endpoint} failed: {error}"))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| format!("reading response from {endpoint} failed: {error}"))?;
-    if status == reqwest::StatusCode::NO_CONTENT || bytes.is_empty() {
+    if response.status == 204 || response.body.is_empty() {
         return Ok(None);
     }
-    if status != reqwest::StatusCode::OK {
+    if response.status != 200 {
         return Err(format!(
-            "daemon returned HTTP {status} from {endpoint}: {}",
-            String::from_utf8_lossy(&bytes)
+            "daemon returned HTTP {} from {endpoint}: {}",
+            response.status,
+            String::from_utf8_lossy(&response.body)
         ));
     }
-    serde_json::from_slice(&bytes)
+    serde_json::from_slice(&response.body)
         .map(Some)
         .map_err(|error| format!("daemon response was not valid protocol JSON: {error}"))
 }
@@ -564,8 +560,8 @@ impl Workspace<'_> {
         current_dir: Option<&Path>,
         include_remote_auth: bool,
         args: &[&str],
-    ) -> Result<std::process::Output, JobError> {
-        let mut git = tokio::process::Command::new("git");
+    ) -> Result<asupersync::process::Output, JobError> {
+        let mut git = asupersync::process::Command::new("git");
         git.env("GIT_TERMINAL_PROMPT", "0")
             .arg("-c")
             .arg(format!("user.name={}", self.identity.user))
@@ -580,9 +576,9 @@ impl Workspace<'_> {
         if let Some(current_dir) = current_dir {
             git.arg("-C").arg(current_dir);
         }
+        git.args(args);
         let output = git
-            .args(args)
-            .output()
+            .output_async()
             .await
             .map_err(|error| JobError::transient(format!("spawning git failed: {error}")))?;
         if output.status.success() {
