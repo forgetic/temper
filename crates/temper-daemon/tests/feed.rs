@@ -7,7 +7,8 @@ use serde_json::json;
 use temper_daemon::{Daemon, JobRepository, RoleFeedMode};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber,
-    PullRequest, PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest,
+    MergeMethod, MergePullRequest, PullRequest, PullRequestUpdateState, RepositoryId, UpdateIssue,
+    UpdatePullRequest,
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_worker_protocol::{
@@ -314,7 +315,7 @@ async fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
     let compiled = workflow.compile();
     let role = RoleId::new("engineer");
     let correlation_key = format!("pr-for-code-{}", issue.get());
-    let pull_request = create_implementation_pull_request(&forge, &repo, &correlation_key).await;
+    let _pull_request = create_implementation_pull_request(&forge, &repo, &correlation_key).await;
     let (daemon, url, _rx) = spawn_recording().await;
     let client = reqwest::Client::new();
 
@@ -345,17 +346,42 @@ async fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
         0
     );
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-existing-pr", 100)).await);
+}
 
+#[tokio::test]
+async fn scanned_writable_issue_skips_while_merged_pr_has_correlation_key() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+    let correlation_key = format!("pr-for-code-{}", issue.get());
+    let pull_request = create_implementation_pull_request(&forge, &repo, &correlation_key).await;
     forge
-        .update_pull_request(
+        .merge_pull_request(
             &pull_request.id,
-            UpdatePullRequest {
-                state: Some(PullRequestUpdateState::Closed),
-                ..UpdatePullRequest::default()
+            MergePullRequest {
+                method: MergeMethod::Squash,
+                commit_title: None,
+                commit_body: None,
             },
         )
         .await
-        .expect("pull request is closed unmerged");
+        .expect("pull request is merged");
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-merged-pr", "engineer", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
 
     assert_eq!(
         daemon
@@ -369,17 +395,69 @@ async fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
                 RoleFeedMode::Normal,
             )
             .await
-            .expect("feed succeeds after correlated PR closes"),
+            .expect("feed succeeds and merged correlated PR is skipped"),
+        0
+    );
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-merged-pr", 100)).await);
+}
+
+#[tokio::test]
+async fn scanned_writable_issue_enqueues_after_correlated_pr_closes_unmerged() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+    let correlation_key = format!("pr-for-code-{}", issue.get());
+    let pull_request = create_implementation_pull_request(&forge, &repo, &correlation_key).await;
+    forge
+        .update_pull_request(
+            &pull_request.id,
+            UpdatePullRequest {
+                state: Some(PullRequestUpdateState::Closed),
+                ..UpdatePullRequest::default()
+            },
+        )
+        .await
+        .expect("pull request is closed unmerged");
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-closed-unmerged-pr", "engineer", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds after correlated PR closes unmerged"),
         1
     );
 
-    match post_json(&client, &url, &poll("worker-existing-pr")).await {
+    match post_json(&client, &url, &poll("worker-closed-unmerged-pr")).await {
         WorkerProtocolMessage::Assign(assign) => {
             assert_eq!(assign.role, "engineer");
             assert_eq!(assign.artifact.kind, "issue");
             assert_eq!(assign.artifact.item, json!(issue.get()));
         }
-        other => panic!("expected assign after closing correlated PR, got {other:?}"),
+        other => panic!("expected assign after closing correlated PR unmerged, got {other:?}"),
     }
 }
 
