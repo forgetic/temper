@@ -139,141 +139,141 @@ fn assert_scanned_issue_assignment(msg: WorkerProtocolMessage, issue: ItemNumber
 }
 
 #[test]
- fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
+fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let repo = new_repo(&forge).await;
-    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let (daemon, url) = spawn().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let config = PollBackstopConfig {
-        targets: vec![RoleFeedTarget {
-            repo: repo.clone(),
-            role: RoleId::new("engineer"),
-            mode: RoleFeedMode::Normal,
-        }],
-        cadence: Duration::from_millis(10),
-    };
-
-    assert_eq!(
-        run_poll_backstop_tick(
-            &daemon,
-            &forge,
-            &workflow,
-            &compiled,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-        )
-        .await,
-        1
-    );
-
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-
-    assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
-    })
-}
-
-#[test]
- fn run_poll_backstop_tick_with_no_targets_is_zero() {
-    temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let (daemon, url) = spawn().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let config = PollBackstopConfig {
-        targets: vec![],
-        cadence: Duration::from_millis(10),
-    };
-
-    assert_eq!(
-        run_poll_backstop_tick(
-            &daemon,
-            &forge,
-            &workflow,
-            &compiled,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-        )
-        .await,
-        0
-    );
-
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
-    })
-}
-
-#[test]
- fn run_poll_backstop_tick_skips_failing_target_and_continues() {
-    temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let repo = new_repo(&forge).await;
-    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let (daemon, url) = spawn().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let config = PollBackstopConfig {
-        targets: vec![
-            RoleFeedTarget {
-                repo: RepositoryId::new("missing-repo"),
-                role: RoleId::new("engineer"),
-                mode: RoleFeedMode::Normal,
-            },
-            RoleFeedTarget {
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge).await;
+        let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let (daemon, url) = spawn().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let config = PollBackstopConfig {
+            targets: vec![RoleFeedTarget {
                 repo: repo.clone(),
                 role: RoleId::new("engineer"),
                 mode: RoleFeedMode::Normal,
-            },
-        ],
-        cadence: Duration::from_millis(10),
-    };
+            }],
+            cadence: Duration::from_millis(10),
+        };
 
-    assert_eq!(
-        run_poll_backstop_tick(
-            &daemon,
-            &forge,
-            &workflow,
-            &compiled,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-        )
-        .await,
-        1
-    );
+        assert_eq!(
+            run_poll_backstop_tick(
+                &daemon,
+                &forge,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+            )
+            .await,
+            1
+        );
 
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-    assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+
+        assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
+    })
+}
+
+#[test]
+fn run_poll_backstop_tick_with_no_targets_is_zero() {
+    temper_io_engine::block_on(async move {
+        let forge = MemoryForge::new();
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let (daemon, url) = spawn().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let config = PollBackstopConfig {
+            targets: vec![],
+            cadence: Duration::from_millis(10),
+        };
+
+        assert_eq!(
+            run_poll_backstop_tick(
+                &daemon,
+                &forge,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+            )
+            .await,
+            0
+        );
+
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
+    })
+}
+
+#[test]
+fn run_poll_backstop_tick_skips_failing_target_and_continues() {
+    temper_io_engine::block_on(async move {
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge).await;
+        let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let (daemon, url) = spawn().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let config = PollBackstopConfig {
+            targets: vec![
+                RoleFeedTarget {
+                    repo: RepositoryId::new("missing-repo"),
+                    role: RoleId::new("engineer"),
+                    mode: RoleFeedMode::Normal,
+                },
+                RoleFeedTarget {
+                    repo: repo.clone(),
+                    role: RoleId::new("engineer"),
+                    mode: RoleFeedMode::Normal,
+                },
+            ],
+            cadence: Duration::from_millis(10),
+        };
+
+        assert_eq!(
+            run_poll_backstop_tick(
+                &daemon,
+                &forge,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+            )
+            .await,
+            1
+        );
+
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+        assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
     })
 }

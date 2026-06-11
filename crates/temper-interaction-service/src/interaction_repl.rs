@@ -18,7 +18,10 @@ use crate::interaction_service::InteractionService;
 pub fn run_repl(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {
     let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
     let args = args.clone();
-    temper_io_engine::runtime::block_on_runtime(&runtime, async move { run_repl_async(&args).await })
+    temper_io_engine::runtime::block_on_runtime(
+        &runtime,
+        async move { run_repl_async(&args).await },
+    )
 }
 
 async fn run_repl_async(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {

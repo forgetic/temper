@@ -641,10 +641,9 @@ mod tests {
             std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
         });
         let worker_for_drive = std::sync::Arc::clone(&worker);
-        let report = temper_io_engine::block_on(async move {
-            drive_async(&args, &*worker_for_drive).await
-        })
-        .expect("drive succeeds");
+        let report =
+            temper_io_engine::block_on(async move { drive_async(&args, &*worker_for_drive).await })
+                .expect("drive succeeds");
         stopper.join().expect("stopper joins");
 
         assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);

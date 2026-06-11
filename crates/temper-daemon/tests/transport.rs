@@ -3,8 +3,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use temper_io_engine::http::{HttpResponseData, JsonClient};
 use serde_json::json;
+use temper_io_engine::http::{HttpResponseData, JsonClient};
 use temper_worker_protocol::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register,
     ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
@@ -113,271 +113,272 @@ fn assert_error(msg: WorkerProtocolMessage, code: ErrorCode) {
 }
 
 #[test]
- fn register_then_poll_returns_assignment_when_matching_work_exists() {
+fn register_then_poll_returns_assignment_when_matching_work_exists() {
     temper_io_engine::block_on(async move {
-    let (daemon, url) = spawn().await;
-    let client = JsonClient::new();
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "ai/temper", 1)
-        )
-        .await
-        .status,
-        204
-    );
-    let artifact = artifact();
-    let payload = json!({"prompt":"implement"});
-    daemon
-        .enqueue_job(
-            "job-1",
-            "engineer",
-            "ai/temper",
-            artifact.clone(),
-            payload.clone(),
-        )
-        .await;
+        let (daemon, url) = spawn().await;
+        let client = JsonClient::new();
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "ai/temper", 1)
+            )
+            .await
+            .status,
+            204
+        );
+        let artifact = artifact();
+        let payload = json!({"prompt":"implement"});
+        daemon
+            .enqueue_job(
+                "job-1",
+                "engineer",
+                "ai/temper",
+                artifact.clone(),
+                payload.clone(),
+            )
+            .await;
 
-    match post_json(&client, &url, &poll("worker-a")).await {
-        WorkerProtocolMessage::Assign(assign) => {
-            assert_eq!(assign.job_id, "job-1");
-            assert_eq!(assign.role, "engineer");
-            assert_eq!(assign.repo, "ai/temper");
-            assert_eq!(assign.artifact, artifact);
-            assert_eq!(assign.job_payload, payload);
+        match post_json(&client, &url, &poll("worker-a")).await {
+            WorkerProtocolMessage::Assign(assign) => {
+                assert_eq!(assign.job_id, "job-1");
+                assert_eq!(assign.role, "engineer");
+                assert_eq!(assign.repo, "ai/temper");
+                assert_eq!(assign.artifact, artifact);
+                assert_eq!(assign.job_payload, payload);
+            }
+            other => panic!("expected assign, got {other:?}"),
         }
-        other => panic!("expected assign, got {other:?}"),
-    }
     })
 }
 
 #[test]
- fn poll_with_no_work_blocks_then_returns_poll_timeout() {
+fn poll_with_no_work_blocks_then_returns_poll_timeout() {
     temper_io_engine::block_on(async move {
-    let (_, url) = spawn().await;
-    let client = JsonClient::new();
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "ai/temper", 1)
-        )
-        .await
-        .status,
-        204
-    );
+        let (_, url) = spawn().await;
+        let client = JsonClient::new();
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "ai/temper", 1)
+            )
+            .await
+            .status,
+            204
+        );
 
-    let started = Instant::now();
-    assert_error(
-        post_json(&client, &url, &poll_with_wait("worker-a", 300)).await,
-        ErrorCode::PollTimeout,
-    );
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(250),
-        "elapsed: {elapsed:?}"
-    );
-    assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
-    })
-}
-
-#[test]
- fn poll_matches_worker_capability_only() {
-    temper_io_engine::block_on(async move {
-    let (daemon, url) = spawn().await;
-    let client = JsonClient::new();
-    daemon
-        .enqueue_job("job-1", "architect", "ai/temper", artifact(), json!({}))
-        .await;
-    let _ = post(
-        &client,
-        &url,
-        &register("engineer-a", "engineer", "ai/temper", 1),
-    )
-    .await;
-    assert_error(
-        post_json(&client, &url, &poll_with_wait("engineer-a", 300)).await,
-        ErrorCode::PollTimeout,
-    );
-    let _ = post(
-        &client,
-        &url,
-        &register("architect-a", "architect", "ai/temper", 1),
-    )
-    .await;
-    match post_json(&client, &url, &poll("architect-a")).await {
-        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
-        other => panic!("expected assign, got {other:?}"),
-    }
-    })
-}
-
-#[test]
- fn enqueue_mid_poll_wakes_and_assigns_promptly() {
-    temper_io_engine::block_on(async move {
-    let (daemon, url) = spawn().await;
-    let client = JsonClient::new();
-    let _ = post(
-        &client,
-        &url,
-        &register("worker-a", "engineer", "ai/temper", 1),
-    )
-    .await;
-
-    let poll_client = client.clone();
-    let poll_url = url.clone();
-    let poll_task = asupersync::runtime::Runtime::current_handle()
-        .expect("engine runtime")
-        .spawn(async move {
         let started = Instant::now();
-        let reply = post_json(&poll_client, &poll_url, &poll_with_wait("worker-a", 5_000)).await;
-        (reply, started.elapsed())
-    });
+        assert_error(
+            post_json(&client, &url, &poll_with_wait("worker-a", 300)).await,
+            ErrorCode::PollTimeout,
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(250),
+            "elapsed: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
+    })
+}
 
-    temper_io_engine::runtime::sleep_for(Duration::from_millis(200)).await;
-    daemon
-        .enqueue_job(
-            "job-1",
-            "engineer",
-            "ai/temper",
-            artifact(),
-            json!({"prompt":"implement"}),
+#[test]
+fn poll_matches_worker_capability_only() {
+    temper_io_engine::block_on(async move {
+        let (daemon, url) = spawn().await;
+        let client = JsonClient::new();
+        daemon
+            .enqueue_job("job-1", "architect", "ai/temper", artifact(), json!({}))
+            .await;
+        let _ = post(
+            &client,
+            &url,
+            &register("engineer-a", "engineer", "ai/temper", 1),
+        )
+        .await;
+        assert_error(
+            post_json(&client, &url, &poll_with_wait("engineer-a", 300)).await,
+            ErrorCode::PollTimeout,
+        );
+        let _ = post(
+            &client,
+            &url,
+            &register("architect-a", "architect", "ai/temper", 1),
+        )
+        .await;
+        match post_json(&client, &url, &poll("architect-a")).await {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
+        }
+    })
+}
+
+#[test]
+fn enqueue_mid_poll_wakes_and_assigns_promptly() {
+    temper_io_engine::block_on(async move {
+        let (daemon, url) = spawn().await;
+        let client = JsonClient::new();
+        let _ = post(
+            &client,
+            &url,
+            &register("worker-a", "engineer", "ai/temper", 1),
         )
         .await;
 
-    let (reply, elapsed) = poll_task.await;
-    match reply {
-        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
-        other => panic!("expected assign, got {other:?}"),
-    }
-    assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
-    })
-}
+        let poll_client = client.clone();
+        let poll_url = url.clone();
+        let poll_task = asupersync::runtime::Runtime::current_handle()
+            .expect("engine runtime")
+            .spawn(async move {
+                let started = Instant::now();
+                let reply =
+                    post_json(&poll_client, &poll_url, &poll_with_wait("worker-a", 5_000)).await;
+                (reply, started.elapsed())
+            });
 
-#[test]
- fn saturated_worker_blocks_then_returns_poll_timeout() {
-    temper_io_engine::block_on(async move {
-    let (daemon, url) = spawn().await;
-    let client = JsonClient::new();
-    let _ = post(
-        &client,
-        &url,
-        &register("worker-a", "engineer", "ai/temper", 1),
-    )
-    .await;
-    daemon
-        .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({}))
-        .await;
+        temper_io_engine::runtime::sleep_for(Duration::from_millis(200)).await;
+        daemon
+            .enqueue_job(
+                "job-1",
+                "engineer",
+                "ai/temper",
+                artifact(),
+                json!({"prompt":"implement"}),
+            )
+            .await;
 
-    match post_json(&client, &url, &poll("worker-a")).await {
-        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
-        other => panic!("expected assign, got {other:?}"),
-    }
-
-    let started = Instant::now();
-    assert_error(
-        post_json(&client, &url, &poll_with_wait("worker-a", 300)).await,
-        ErrorCode::PollTimeout,
-    );
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(250),
-        "elapsed: {elapsed:?}"
-    );
-    assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
-    })
-}
-#[test]
- fn result_release_frees_capacity() {
-    temper_io_engine::block_on(async move {
-    let (daemon, url) = spawn().await;
-    let client = JsonClient::new();
-    let _ = post(
-        &client,
-        &url,
-        &register("worker-a", "engineer", "ai/temper", 1),
-    )
-    .await;
-    daemon
-        .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"n":1}))
-        .await;
-    daemon
-        .enqueue_job("job-2", "engineer", "ai/temper", artifact(), json!({"n":2}))
-        .await;
-    match post_json(&client, &url, &poll("worker-a")).await {
-        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
-        other => panic!("expected assign, got {other:?}"),
-    }
-    match post_json(&client, &url, &result("worker-a", "job-1")).await {
-        WorkerProtocolMessage::Release(release) => {
-            assert_eq!(release.disposition, ReleaseDisposition::Accepted)
+        let (reply, elapsed) = poll_task.await;
+        match reply {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
         }
-        other => panic!("expected release, got {other:?}"),
-    }
-    match post_json(&client, &url, &poll("worker-a")).await {
-        WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-2"),
-        other => panic!("expected assign, got {other:?}"),
-    }
+        assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
     })
 }
 
 #[test]
- fn heartbeat_semantics() {
+fn saturated_worker_blocks_then_returns_poll_timeout() {
     temper_io_engine::block_on(async move {
-    let (_, url) = spawn().await;
-    let client = JsonClient::new();
-    let _ = post(
-        &client,
-        &url,
-        &register("worker-a", "engineer", "ai/temper", 1),
-    )
-    .await;
-    assert_eq!(
-        post(&client, &url, &heartbeat("worker-a")).await.status,
-        204
-    );
-    assert_error(
-        post_json(&client, &url, &heartbeat("missing")).await,
-        ErrorCode::UnknownWorker,
-    );
+        let (daemon, url) = spawn().await;
+        let client = JsonClient::new();
+        let _ = post(
+            &client,
+            &url,
+            &register("worker-a", "engineer", "ai/temper", 1),
+        )
+        .await;
+        daemon
+            .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({}))
+            .await;
+
+        match post_json(&client, &url, &poll("worker-a")).await {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
+        }
+
+        let started = Instant::now();
+        assert_error(
+            post_json(&client, &url, &poll_with_wait("worker-a", 300)).await,
+            ErrorCode::PollTimeout,
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(250),
+            "elapsed: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
+    })
+}
+#[test]
+fn result_release_frees_capacity() {
+    temper_io_engine::block_on(async move {
+        let (daemon, url) = spawn().await;
+        let client = JsonClient::new();
+        let _ = post(
+            &client,
+            &url,
+            &register("worker-a", "engineer", "ai/temper", 1),
+        )
+        .await;
+        daemon
+            .enqueue_job("job-1", "engineer", "ai/temper", artifact(), json!({"n":1}))
+            .await;
+        daemon
+            .enqueue_job("job-2", "engineer", "ai/temper", artifact(), json!({"n":2}))
+            .await;
+        match post_json(&client, &url, &poll("worker-a")).await {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
+        }
+        match post_json(&client, &url, &result("worker-a", "job-1")).await {
+            WorkerProtocolMessage::Release(release) => {
+                assert_eq!(release.disposition, ReleaseDisposition::Accepted)
+            }
+            other => panic!("expected release, got {other:?}"),
+        }
+        match post_json(&client, &url, &poll("worker-a")).await {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-2"),
+            other => panic!("expected assign, got {other:?}"),
+        }
     })
 }
 
 #[test]
- fn protocol_version_mismatch() {
+fn heartbeat_semantics() {
     temper_io_engine::block_on(async move {
-    let (_, url) = spawn().await;
-    let client = JsonClient::new();
-    let mut msg = register("worker-a", "engineer", "ai/temper", 1);
-    if let WorkerProtocolMessage::Register(register) = &mut msg {
-        register.protocol_version = WORKER_PROTOCOL_VERSION + 1;
-    }
-    assert_error(
-        post_json(&client, &url, &msg).await,
-        ErrorCode::ProtocolVersionMismatch,
-    );
+        let (_, url) = spawn().await;
+        let client = JsonClient::new();
+        let _ = post(
+            &client,
+            &url,
+            &register("worker-a", "engineer", "ai/temper", 1),
+        )
+        .await;
+        assert_eq!(
+            post(&client, &url, &heartbeat("worker-a")).await.status,
+            204
+        );
+        assert_error(
+            post_json(&client, &url, &heartbeat("missing")).await,
+            ErrorCode::UnknownWorker,
+        );
     })
 }
 
 #[test]
- fn malformed_request_body() {
+fn protocol_version_mismatch() {
     temper_io_engine::block_on(async move {
-    let (_, url) = spawn().await;
-    let client = temper_io_engine::http::build_http_client();
-    let cx = temper_io_engine::runtime::current_cx();
-    let response = temper_io_engine::http::http_call(
-        &cx,
-        &client,
-        temper_io_engine::http::HttpCall {
-            method: "POST".into(),
-            url,
-            headers: Vec::new(),
-            body: b"{ not valid }".to_vec(),
-        },
-    )
-    .await
-    .expect("post malformed request");
-    assert_eq!(response.status, 400);
+        let (_, url) = spawn().await;
+        let client = JsonClient::new();
+        let mut msg = register("worker-a", "engineer", "ai/temper", 1);
+        if let WorkerProtocolMessage::Register(register) = &mut msg {
+            register.protocol_version = WORKER_PROTOCOL_VERSION + 1;
+        }
+        assert_error(
+            post_json(&client, &url, &msg).await,
+            ErrorCode::ProtocolVersionMismatch,
+        );
+    })
+}
+
+#[test]
+fn malformed_request_body() {
+    temper_io_engine::block_on(async move {
+        let (_, url) = spawn().await;
+        let client = temper_io_engine::http::build_http_client();
+        let cx = temper_io_engine::runtime::current_cx();
+        let response = temper_io_engine::http::http_call(
+            &cx,
+            &client,
+            temper_io_engine::http::HttpCall {
+                method: "POST".into(),
+                url,
+                headers: Vec::new(),
+                body: b"{ not valid }".to_vec(),
+            },
+        )
+        .await
+        .expect("post malformed request");
+        assert_eq!(response.status, 400);
     })
 }

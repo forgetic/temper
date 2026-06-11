@@ -12,8 +12,12 @@ use crate::queue::CqSender;
 /// Arm a one-shot timer. After `delay`, `make_completion` is invoked (this is
 /// where the shell may stamp "now") and the result is submitted to the
 /// completion queue. The machine sees time purely as data.
-pub fn arm_timer<C, F>(handle: &RuntimeHandle, cq: &CqSender<C>, delay: Duration, make_completion: F)
-where
+pub fn arm_timer<C, F>(
+    handle: &RuntimeHandle,
+    cq: &CqSender<C>,
+    delay: Duration,
+    make_completion: F,
+) where
     C: Send + 'static,
     F: FnOnce() -> C + Send + 'static,
 {

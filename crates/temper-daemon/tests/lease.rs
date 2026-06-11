@@ -106,100 +106,97 @@ fn job_result(job_id: &str) -> JobResult {
 }
 
 #[test]
- fn lease_won_inner_applied_then_lease_released() {
+fn lease_won_inner_applied_then_lease_released() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge).await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let (tx, mut rx) = temper_io_engine::channel();
-    let (lease_tx, mut lease_rx) = temper_io_engine::channel();
-    let inner = Arc::new(RecordingApplier {
-        tx,
-        forge: Some(forge.clone()),
-        repo: Some(repo.clone()),
-        issue: Some(issue),
-        lease_tx: Some(lease_tx),
-    });
-    let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner);
-    let job = in_flight_job(issue);
-    let result = job_result(&job.job_id);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge).await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let (tx, mut rx) = temper_io_engine::channel();
+        let (lease_tx, mut lease_rx) = temper_io_engine::channel();
+        let inner = Arc::new(RecordingApplier {
+            tx,
+            forge: Some(forge.clone()),
+            repo: Some(repo.clone()),
+            issue: Some(issue),
+            lease_tx: Some(lease_tx),
+        });
+        let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner);
+        let job = in_flight_job(issue);
+        let result = job_result(&job.job_id);
 
-    applier.apply(job.clone(), result.clone()).await;
+        applier.apply(job.clone(), result.clone()).await;
 
-    let (recorded_job, recorded_result) = rx.recv().await.expect("inner records one apply");
-    assert_eq!(recorded_job, job);
-    assert_eq!(recorded_result, result);
-    assert!(rx.try_recv().is_none());
+        let (recorded_job, recorded_result) = rx.recv().await.expect("inner records one apply");
+        assert_eq!(recorded_job, job);
+        assert_eq!(recorded_result, result);
+        assert!(rx.try_recv().is_none());
 
-    let observed_lease = lease_rx
-        .recv()
-        .await
-        .expect("inner records lease state")
-        .expect("lease is present while inner apply runs");
-    assert_eq!(observed_lease.worker, "daemon-1");
-    assert_eq!(observed_lease.role, RoleId::new("engineer"));
-    assert!(matches!(
-        lease_rx.try_recv(),
-        None
-    ));
+        let observed_lease = lease_rx
+            .recv()
+            .await
+            .expect("inner records lease state")
+            .expect("lease is present while inner apply runs");
+        assert_eq!(observed_lease.worker, "daemon-1");
+        assert_eq!(observed_lease.role, RoleId::new("engineer"));
+        assert!(matches!(lease_rx.try_recv(), None));
 
-    let issue = forge
-        .get_issue_by_number(&repo, issue)
-        .await
-        .expect("issue reload succeeds")
-        .expect("issue exists after apply");
-    assert!(parse_metadata_block(&issue.body)
-        .expect("issue metadata parses")
-        .unwrap_or_default()
-        .lease
-        .is_none());
+        let issue = forge
+            .get_issue_by_number(&repo, issue)
+            .await
+            .expect("issue reload succeeds")
+            .expect("issue exists after apply");
+        assert!(parse_metadata_block(&issue.body)
+            .expect("issue metadata parses")
+            .unwrap_or_default()
+            .lease
+            .is_none());
     })
 }
 
 #[test]
- fn peer_owned_lease_noops_and_preserves_peer_lease() {
+fn peer_owned_lease_noops_and_preserves_peer_lease() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge).await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let target = ArtifactSource::Issue { number: issue };
-    let manager = LeaseManager::new(forge.as_ref(), policy());
-    let peer_lease = manager
-        .acquire(
-            &repo,
-            target,
-            RoleId::new("engineer"),
-            "daemon-2",
-            chrono::Utc::now(),
-        )
-        .await
-        .expect("peer lease is acquired");
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge).await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let target = ArtifactSource::Issue { number: issue };
+        let manager = LeaseManager::new(forge.as_ref(), policy());
+        let peer_lease = manager
+            .acquire(
+                &repo,
+                target,
+                RoleId::new("engineer"),
+                "daemon-2",
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("peer lease is acquired");
 
-    let (tx, mut rx) = temper_io_engine::channel();
-    let inner = Arc::new(RecordingApplier {
-        tx,
-        forge: None,
-        repo: None,
-        issue: None,
-        lease_tx: None,
-    });
-    let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner);
-    let job = in_flight_job(issue);
-    let result = job_result(&job.job_id);
+        let (tx, mut rx) = temper_io_engine::channel();
+        let inner = Arc::new(RecordingApplier {
+            tx,
+            forge: None,
+            repo: None,
+            issue: None,
+            lease_tx: None,
+        });
+        let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner);
+        let job = in_flight_job(issue);
+        let result = job_result(&job.job_id);
 
-    applier.apply(job, result).await;
+        applier.apply(job, result).await;
 
-    assert!(rx.try_recv().is_none());
-    let issue = forge
-        .get_issue_by_number(&repo, issue)
-        .await
-        .expect("issue reload succeeds")
-        .expect("issue exists after duplicate apply");
-    let lease = parse_metadata_block(&issue.body)
-        .expect("issue metadata parses")
-        .expect("issue has metadata")
-        .lease
-        .expect("peer lease is still present");
-    assert_eq!(lease, peer_lease);
+        assert!(rx.try_recv().is_none());
+        let issue = forge
+            .get_issue_by_number(&repo, issue)
+            .await
+            .expect("issue reload succeeds")
+            .expect("issue exists after duplicate apply");
+        let lease = parse_metadata_block(&issue.body)
+            .expect("issue metadata parses")
+            .expect("issue has metadata")
+            .lease
+            .expect("peer lease is still present");
+        assert_eq!(lease, peer_lease);
     })
 }

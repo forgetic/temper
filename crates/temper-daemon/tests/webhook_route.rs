@@ -3,9 +3,10 @@
 use std::{sync::Arc, time::Duration};
 
 use serde_json::json;
+use std::time::Instant;
 use temper_daemon::{
-    webhook_signature, Daemon, ForgeApplier, LeaseApplier, RoleFeedMode,
-    RoleFeedTarget, WebhookConfig,
+    webhook_signature, Daemon, ForgeApplier, LeaseApplier, RoleFeedMode, RoleFeedTarget,
+    WebhookConfig,
 };
 use temper_forge::{
     CreateIssue, CreateRepository, Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
@@ -20,7 +21,6 @@ use temper_workflow::{
     parse_metadata_block, ArtifactKindId, ArtifactRef, CompiledWorkflow, LeasePolicy,
     RawWorkflowSpec, RoleId, ValidatedWorkflow,
 };
-use std::time::Instant;
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
@@ -70,7 +70,9 @@ async fn spawn_with_webhook(
     compiled: Arc<CompiledWorkflow>,
     config: Arc<WebhookConfig>,
 ) -> (String, String) {
-    let daemon = daemon.clone().with_webhook(forge, workflow, compiled, config);
+    let daemon = daemon
+        .clone()
+        .with_webhook(forge, workflow, compiled, config);
     let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
         .await
         .expect("bind test server");
@@ -279,184 +281,188 @@ async fn wait_for_pull_request_count(
 }
 
 #[test]
- fn posted_webhook_wakes_target_then_worker_is_assigned() {
+fn posted_webhook_wakes_target_then_worker_is_assigned() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = create_repo(&forge, "acme", "service", "main").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let compiled = Arc::new(workflow.compile());
-    let daemon = Daemon::new();
-    let config = Arc::new(webhook_config(repo));
-    let (message_url, webhook_url) = spawn_with_webhook(
-        &daemon,
-        forge.clone(),
-        workflow,
-        compiled,
-        Arc::clone(&config),
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let body = webhook_body(issue);
-
-    assert_eq!(
-        post_webhook(&client, &webhook_url, &config.secret, body)
-            .await
-            .status,
-        202
-    );
-
-    register_engineer(&client, &message_url).await;
-    assert_scanned_issue_assignment(
-        post_json(&client, &message_url, &poll("worker-a")).await,
-        issue,
-    );
-    })
-}
-
-#[test]
- fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = create_repo(&forge, "acme", "service", "main").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let compiled = Arc::new(workflow.compile());
-    let daemon = Daemon::new();
-    let config = Arc::new(webhook_config(repo));
-    let (message_url, webhook_url) = spawn_with_webhook(
-        &daemon,
-        forge.clone(),
-        workflow,
-        compiled,
-        Arc::clone(&config),
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let body = webhook_body(issue);
-
-    assert_eq!(
-        post_webhook_with_signature(&client, &webhook_url, "sha256=00", body)
-            .await
-            .status,
-        401
-    );
-
-    register_engineer(&client, &message_url).await;
-    assert_poll_timeout(post_json(&client, &message_url, &poll_with_wait("worker-a", 100)).await);
-    })
-}
-
-#[test]
- fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = create_repo(&forge, "acme", "service", "main").await;
-    create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let compiled = Arc::new(workflow.compile());
-    let daemon = Daemon::new();
-    let config = Arc::new(webhook_config(repo));
-    let (message_url, webhook_url) = spawn_with_webhook(
-        &daemon,
-        forge.clone(),
-        workflow,
-        compiled,
-        Arc::clone(&config),
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let body = b"{not valid JSON".to_vec();
-
-    assert_eq!(
-        post_webhook(&client, &webhook_url, &config.secret, body)
-            .await
-            .status,
-        400
-    );
-
-    register_engineer(&client, &message_url).await;
-    assert_poll_timeout(post_json(&client, &message_url, &poll_with_wait("worker-a", 100)).await);
-    })
-}
-
-#[test]
- fn posted_webhook_drives_success_apply_to_pull_request() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = create_repo(&forge, "acme", "service", "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let compiled = Arc::new(workflow.compile());
-    let daemon = Daemon::with_applier(Arc::new(LeaseApplier::new(
-        forge.clone(),
-        LeasePolicy::new(chrono::Duration::seconds(300)),
-        "daemon-1",
-        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-    )));
-    let config = Arc::new(webhook_config(repo.clone()));
-    let (message_url, webhook_url) = spawn_with_webhook(
-        &daemon,
-        forge.clone(),
-        workflow,
-        compiled,
-        Arc::clone(&config),
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let body = webhook_body(issue);
-
-    assert_eq!(
-        post_webhook(&client, &webhook_url, &config.secret, body)
-            .await
-            .status,
-        202
-    );
-    register_engineer(&client, &message_url).await;
-    let assignment = assert_scanned_issue_assignment(
-        post_json(&client, &message_url, &poll("worker-a")).await,
-        issue,
-    );
-
-    let summary = "implemented daemon webhook route";
-    let branch_name = format!("agent/pr-for-code-{}", issue.get());
-    let posted_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
-    assert_release(
-        post_json(
-            &client,
-            &message_url,
-            &WorkerProtocolMessage::Result(posted_result),
+        let forge = Arc::new(MemoryForge::new());
+        let repo = create_repo(&forge, "acme", "service", "main").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let compiled = Arc::new(workflow.compile());
+        let daemon = Daemon::new();
+        let config = Arc::new(webhook_config(repo));
+        let (message_url, webhook_url) = spawn_with_webhook(
+            &daemon,
+            forge.clone(),
+            workflow,
+            compiled,
+            Arc::clone(&config),
         )
-        .await,
-        "worker-a",
-        &assignment.job_id,
-    );
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let body = webhook_body(issue);
 
-    let pulls = wait_for_pull_request_count(&forge, &repo, 1).await;
-    let pull = &pulls[0];
-    assert_eq!(
-        pull.title,
-        format!("Implement #{}: ready code issue", issue.get())
-    );
-    assert_eq!(pull.source.repository_id, repo);
-    assert_eq!(pull.source.branch, branch_name);
-    assert_eq!(pull.target.repository_id, repo);
-    assert_eq!(pull.target.branch, "stable");
-    assert!(pull.labels.iter().any(|label| label == "implementation"));
-    assert!(pull.body.contains(summary));
+        assert_eq!(
+            post_webhook(&client, &webhook_url, &config.secret, body)
+                .await
+                .status,
+            202
+        );
 
-    let metadata = parse_metadata_block(&pull.body)
-        .expect("PR metadata parses")
-        .expect("PR metadata exists");
-    assert_eq!(
-        metadata.kind,
-        Some(ArtifactKindId::new("implementation_pr"))
-    );
-    assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
-    let expected_correlation_key = format!("pr-for-code-{}", issue.get());
-    assert_eq!(
-        metadata.correlation_key.as_deref(),
-        Some(expected_correlation_key.as_str())
-    );
+        register_engineer(&client, &message_url).await;
+        assert_scanned_issue_assignment(
+            post_json(&client, &message_url, &poll("worker-a")).await,
+            issue,
+        );
+    })
+}
+
+#[test]
+fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = create_repo(&forge, "acme", "service", "main").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let compiled = Arc::new(workflow.compile());
+        let daemon = Daemon::new();
+        let config = Arc::new(webhook_config(repo));
+        let (message_url, webhook_url) = spawn_with_webhook(
+            &daemon,
+            forge.clone(),
+            workflow,
+            compiled,
+            Arc::clone(&config),
+        )
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let body = webhook_body(issue);
+
+        assert_eq!(
+            post_webhook_with_signature(&client, &webhook_url, "sha256=00", body)
+                .await
+                .status,
+            401
+        );
+
+        register_engineer(&client, &message_url).await;
+        assert_poll_timeout(
+            post_json(&client, &message_url, &poll_with_wait("worker-a", 100)).await,
+        );
+    })
+}
+
+#[test]
+fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = create_repo(&forge, "acme", "service", "main").await;
+        create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let compiled = Arc::new(workflow.compile());
+        let daemon = Daemon::new();
+        let config = Arc::new(webhook_config(repo));
+        let (message_url, webhook_url) = spawn_with_webhook(
+            &daemon,
+            forge.clone(),
+            workflow,
+            compiled,
+            Arc::clone(&config),
+        )
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let body = b"{not valid JSON".to_vec();
+
+        assert_eq!(
+            post_webhook(&client, &webhook_url, &config.secret, body)
+                .await
+                .status,
+            400
+        );
+
+        register_engineer(&client, &message_url).await;
+        assert_poll_timeout(
+            post_json(&client, &message_url, &poll_with_wait("worker-a", 100)).await,
+        );
+    })
+}
+
+#[test]
+fn posted_webhook_drives_success_apply_to_pull_request() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = create_repo(&forge, "acme", "service", "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let compiled = Arc::new(workflow.compile());
+        let daemon = Daemon::with_applier(Arc::new(LeaseApplier::new(
+            forge.clone(),
+            LeasePolicy::new(chrono::Duration::seconds(300)),
+            "daemon-1",
+            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+        )));
+        let config = Arc::new(webhook_config(repo.clone()));
+        let (message_url, webhook_url) = spawn_with_webhook(
+            &daemon,
+            forge.clone(),
+            workflow,
+            compiled,
+            Arc::clone(&config),
+        )
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let body = webhook_body(issue);
+
+        assert_eq!(
+            post_webhook(&client, &webhook_url, &config.secret, body)
+                .await
+                .status,
+            202
+        );
+        register_engineer(&client, &message_url).await;
+        let assignment = assert_scanned_issue_assignment(
+            post_json(&client, &message_url, &poll("worker-a")).await,
+            issue,
+        );
+
+        let summary = "implemented daemon webhook route";
+        let branch_name = format!("agent/pr-for-code-{}", issue.get());
+        let posted_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        assert_release(
+            post_json(
+                &client,
+                &message_url,
+                &WorkerProtocolMessage::Result(posted_result),
+            )
+            .await,
+            "worker-a",
+            &assignment.job_id,
+        );
+
+        let pulls = wait_for_pull_request_count(&forge, &repo, 1).await;
+        let pull = &pulls[0];
+        assert_eq!(
+            pull.title,
+            format!("Implement #{}: ready code issue", issue.get())
+        );
+        assert_eq!(pull.source.repository_id, repo);
+        assert_eq!(pull.source.branch, branch_name);
+        assert_eq!(pull.target.repository_id, repo);
+        assert_eq!(pull.target.branch, "stable");
+        assert!(pull.labels.iter().any(|label| label == "implementation"));
+        assert!(pull.body.contains(summary));
+
+        let metadata = parse_metadata_block(&pull.body)
+            .expect("PR metadata parses")
+            .expect("PR metadata exists");
+        assert_eq!(
+            metadata.kind,
+            Some(ArtifactKindId::new("implementation_pr"))
+        );
+        assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+        let expected_correlation_key = format!("pr-for-code-{}", issue.get());
+        assert_eq!(
+            metadata.correlation_key.as_deref(),
+            Some(expected_correlation_key.as_str())
+        );
     })
 }

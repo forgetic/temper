@@ -69,8 +69,9 @@ the reference pattern).
 
 ## The runtime underneath
 
-The shell runs on asupersync 0.3.1 (vendored; see `vendor/README.md` for the
-rustc-1.85 compatibility patches and a timer lost-wakeup fix), configured
+The shell runs on stock asupersync 0.3.2 (the newest release that builds on
+stable rustc, and the first with the upstream fix for the timer lost-wakeup
+hang that 0.3.1 needed a local patch for; 0.3.3+ require nightly), configured
 **single-threaded** (libuv-shaped): one loop thread runs every task, so while
 a machine transition executes nothing else in the engine progresses —
 concurrency without parallelism. Blocking work goes through `spawn_blocking`'s

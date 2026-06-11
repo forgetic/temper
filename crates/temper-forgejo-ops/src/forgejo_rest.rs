@@ -113,7 +113,9 @@ impl Client {
             method: method.to_string(),
             url,
             headers,
-            body: body.map(|value| value.to_string().into_bytes()).unwrap_or_default(),
+            body: body
+                .map(|value| value.to_string().into_bytes())
+                .unwrap_or_default(),
         };
 
         // Apply the request deadline only with a real task context: a detached

@@ -129,14 +129,16 @@ pub async fn run_process(cx: &Cx, call: ProcessCall) -> Result<ProcessOutput, Pr
         drop(stdin);
     }
 
-    let wait = child.wait_with_output_async();
+    let wait = child.wait_with_output_async(cx);
     let output = match call.timeout {
-        Some(window) => match timeout(crate::runtime::timer_now(cx), window, Box::pin(wait)).await {
-            Ok(result) => result,
-            Err(_elapsed) => {
-                return Err(ProcessCallError::TimedOut);
+        Some(window) => {
+            match timeout(crate::runtime::timer_now(cx), window, Box::pin(wait)).await {
+                Ok(result) => result,
+                Err(_elapsed) => {
+                    return Err(ProcessCallError::TimedOut);
+                }
             }
-        },
+        }
         None => wait.await,
     }
     .map_err(|error| ProcessCallError::Io {

@@ -3,6 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use serde_json::json;
+use std::time::Instant;
 use temper_daemon::{Daemon, ForgeApplier, JobContext, LeaseApplier, ResultApplier, RoleFeedMode};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, Issue, IssueQuery,
@@ -19,7 +20,6 @@ use temper_workflow::{
     global_child_correlation_key, parse_metadata_block, ArtifactKindId, ArtifactRef,
     ArtifactSource, LeaseManager, LeasePolicy, RawWorkflowSpec, RoleId, ValidatedWorkflow,
 };
-use std::time::Instant;
 
 const REFERENCE_FIXTURE: &str =
     include_str!("../../temper-workflow/fixtures/reference-delivery.json");
@@ -784,821 +784,777 @@ async fn assign_review_job(
 }
 
 #[test]
- fn review_verdict_approve_submits_native_review_and_routes_landing_label() {
+fn review_verdict_approve_submits_native_review_and_routes_landing_label() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
 
-    let result = verdict_result("worker-a", &assignment.job_id, "approve", None);
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    let (labels, reviews) =
-        wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
-            !has_label(labels, "needs-reviewer")
-                && has_label(labels, "landing")
-                && reviews.len() == 1
-        })
-        .await;
-
-    assert!(has_label(&labels, "implementation"));
-    assert!(!has_label(&labels, "needs-reviewer"));
-    assert!(has_label(&labels, "landing"));
-    assert_eq!(reviews.len(), 1);
-    assert_eq!(reviews[0].decision, ReviewDecision::Approved);
-    })
-}
-
-#[test]
- fn review_verdict_changes_attaches_changes_requested_review_with_body() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
-    let authored = "please add error handling";
-
-    let result = verdict_result("worker-a", &assignment.job_id, "changes", Some(authored));
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(result.clone()),
-        )
-        .await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    let (labels, reviews) =
-        wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
-            !has_label(labels, "needs-reviewer") && reviews.len() == 1
-        })
-        .await;
-
-    assert!(has_label(&labels, "implementation"));
-    assert!(!has_label(&labels, "needs-reviewer"));
-    assert_eq!(reviews.len(), 1);
-    assert_eq!(reviews[0].decision, ReviewDecision::ChangesRequested);
-    let body = reviews[0].body.as_deref().expect("review carries a body");
-    assert!(
-        body.contains(authored),
-        "review body should carry authored text, got `{body}`"
-    );
-
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    let replay_job = review_in_flight_job("acme/service", pull_request);
-    let replay_result = verdict_result("worker-a", &replay_job.job_id, "changes", Some(authored));
-    ForgeApplier::new(forge.clone(), Arc::new(workflow()))
-        .apply(replay_job, replay_result)
-        .await;
-
-    assert_pull_request_state_stays(&forge, &repo, pull_request, labels, 1).await;
-    })
-}
-
-#[test]
- fn review_verdict_escalate_adds_needs_architect_label() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
-
-    let result = verdict_result("worker-a", &assignment.job_id, "escalate", None);
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    let (labels, reviews) =
-        wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
-            has_label(labels, "needs-architect") && reviews.is_empty()
-        })
-        .await;
-
-    assert!(has_label(&labels, "implementation"));
-    assert!(has_label(&labels, "needs-architect"));
-    assert!(reviews.is_empty());
-    })
-}
-
-#[test]
- fn undeclared_review_verdict_does_not_mutate_pull_request() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-    let before = pull_request_labels_and_reviews(&forge, &repo, pull_request).await;
-    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
-
-    let result = verdict_result("worker-a", &assignment.job_id, "merge_now", None);
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    assert_pull_request_state_stays(&forge, &repo, pull_request, before.0, before.1.len()).await;
-    })
-}
-
-#[test]
- fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let compiled = workflow.compile();
-    let applier = Arc::new(LeaseApplier::new(
-        forge.clone(),
-        policy(),
-        "daemon-1",
-        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-    ));
-    let daemon = Daemon::with_applier(applier);
-    let url = spawn(&daemon).await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let role = RoleId::new("architect");
-
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "architect", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-
-    assert_eq!(
-        daemon
-            .enqueue_scanned_role_work(
-                forge.as_ref(),
-                &repo,
-                workflow.as_ref(),
-                &compiled,
-                ts("2026-05-29T00:00:00Z"),
-                &role,
-                RoleFeedMode::Normal,
-            )
-            .await
-            .expect("feed succeeds"),
-        1
-    );
-    let assignment =
-        poll_assignment_for_role(&client, &url, "worker-a", "architect", "issue", issue).await;
-    let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
-        .expect("assignment payload is a JobContext");
-    assert_eq!(context.action.as_deref(), Some("triage_intake"));
-    assert_eq!(
-        context.allowed_verdicts,
-        vec!["needs_breakdown", "needs_design", "ready_code"]
-    );
-    assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
-
-    let result = verdict_result(
-        "worker-a",
-        &assignment.job_id,
-        "ready_code",
-        Some("rewritten spec"),
-    );
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let (body, labels) = loop {
-        let state = issue_body_and_labels(&forge, &repo, issue).await;
-        if state.0 == "rewritten spec" {
-            break state;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for verdict apply, saw body {:?} labels {:?}",
-            state.0,
-            state.1
+        let result = verdict_result("worker-a", &assignment.job_id, "approve", None);
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
         );
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
-    };
 
-    assert_eq!(body, "rewritten spec");
-    assert!(!labels.iter().any(|label| label == "untriaged"));
-    assert!(labels.iter().any(|label| label == "code"));
-    assert!(labels.iter().any(|label| label == "ready"));
-    assert_no_pull_requests(&forge, &repo).await;
+        let (labels, reviews) =
+            wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+                !has_label(labels, "needs-reviewer")
+                    && has_label(labels, "landing")
+                    && reviews.len() == 1
+            })
+            .await;
+
+        assert!(has_label(&labels, "implementation"));
+        assert!(!has_label(&labels, "needs-reviewer"));
+        assert!(has_label(&labels, "landing"));
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].decision, ReviewDecision::Approved);
     })
 }
 
 #[test]
- fn triage_verdict_replay_is_quiet_no_op() {
+fn review_verdict_changes_attaches_changes_requested_review_with_body() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = triage_in_flight_job("acme/service", issue);
-    let result = verdict_result(
-        "worker-a",
-        &job.job_id,
-        "ready_code",
-        Some("rewritten spec"),
-    );
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+        let authored = "please add error handling";
 
-    applier.apply(job.clone(), result.clone()).await;
-    let after_first = issue_body_and_labels(&forge, &repo, issue).await;
-    applier.apply(job, result).await;
-    let after_second = issue_body_and_labels(&forge, &repo, issue).await;
-
-    assert_eq!(after_first, after_second);
-    assert_eq!(after_second.0, "rewritten spec");
-    assert!(!after_second.1.iter().any(|label| label == "untriaged"));
-    assert!(after_second.1.iter().any(|label| label == "code"));
-    assert!(after_second.1.iter().any(|label| label == "ready"));
-    assert_no_pull_requests(&forge, &repo).await;
-    })
-}
-
-#[test]
- fn breakdown_verdict_creates_children_across_repos() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo_a = new_repo(&forge, "stable").await;
-    let repo_b = create_repo(&forge, "acme", "web", "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
-    let workflow = Arc::new(workflow());
-    let compiled = workflow.compile();
-    let applier = Arc::new(LeaseApplier::new(
-        forge.clone(),
-        policy(),
-        "daemon-1",
-        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-    ));
-    let daemon = Daemon::with_applier(applier);
-    let url = spawn(&daemon).await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let role = RoleId::new("architect");
-
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "architect", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-
-    assert_eq!(
-        daemon
-            .enqueue_scanned_role_work(
-                forge.as_ref(),
-                &repo_a,
-                workflow.as_ref(),
-                &compiled,
-                ts("2026-05-29T00:00:00Z"),
-                &role,
-                RoleFeedMode::Normal,
+        let result = verdict_result("worker-a", &assignment.job_id, "changes", Some(authored));
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(result.clone()),
             )
-            .await
-            .expect("feed succeeds"),
-        1
-    );
-    let assignment =
-        poll_assignment_for_role(&client, &url, "worker-a", "architect", "issue", issue).await;
-    let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
-        .expect("assignment payload is a JobContext");
-    assert_eq!(context.action.as_deref(), Some("triage_intake"));
-    assert_eq!(
-        context.allowed_verdicts,
-        vec!["needs_breakdown", "needs_design", "ready_code"]
-    );
-    assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
-
-    let mut web = job_child(
-        "web-client",
-        "Implement the web client",
-        "Build the web client against the API schema.",
-        &["code", "ready"],
-    );
-    web.depends_on = vec!["api-schema".to_string()];
-    web.target_repo = Some("acme/web".to_string());
-    let result = verdict_result_with_children(
-        "worker-a",
-        &assignment.job_id,
-        "needs_breakdown",
-        vec![
-            job_child(
-                "api-schema",
-                "Define the API schema",
-                "Write the shared API schema.",
-                &["code", "ready"],
-            ),
-            web,
-        ],
-    );
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let labels = issue_labels(&forge, &repo_a, issue).await;
-        if !has_label(&labels, "untriaged") && has_label(&labels, "epic") {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for breakdown verdict apply, saw labels {:?}",
-            labels
+            .await,
+            "worker-a",
+            &assignment.job_id,
         );
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
-    }
 
-    let repo_a_issues = wait_for_issue_count(&forge, &repo_a, 2).await;
-    let repo_b_issues = wait_for_issue_count(&forge, &repo_b, 1).await;
-    let api_child = issue_by_slug(&repo_a_issues, "api-schema");
-    let web_child = issue_by_slug(&repo_b_issues, "web-client");
+        let (labels, reviews) =
+            wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+                !has_label(labels, "needs-reviewer") && reviews.len() == 1
+            })
+            .await;
 
-    assert_eq!(
-        api_child.labels,
-        vec!["code".to_string(), "ready".to_string()]
-    );
-    let api_metadata = parse_metadata_block(&api_child.body)
-        .expect("api child metadata parses")
-        .expect("api child metadata exists");
-    assert_eq!(api_metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+        assert!(has_label(&labels, "implementation"));
+        assert!(!has_label(&labels, "needs-reviewer"));
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].decision, ReviewDecision::ChangesRequested);
+        let body = reviews[0].body.as_deref().expect("review carries a body");
+        assert!(
+            body.contains(authored),
+            "review body should carry authored text, got `{body}`"
+        );
 
-    assert_eq!(
-        web_child.labels,
-        vec!["code".to_string(), "ready".to_string()]
-    );
-    let web_metadata = parse_metadata_block(&web_child.body)
-        .expect("web child metadata parses")
-        .expect("web child metadata exists");
-    assert_eq!(
-        web_metadata.parents,
-        vec![ArtifactRef::in_repo(repo_a.clone(), issue)]
-    );
-    let expected_web_correlation_key = global_child_correlation_key(&repo_a, issue, "web-client");
-    assert_eq!(
-        web_metadata.correlation_key.as_deref(),
-        Some(expected_web_correlation_key.as_str())
-    );
-    assert_eq!(
-        web_metadata.dependencies,
-        vec![ArtifactRef::in_repo(repo_a.clone(), api_child.number)]
-    );
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
 
-    let parent = forge
-        .get_issue_by_number(&repo_a, issue)
-        .await
-        .expect("parent reload succeeds")
-        .expect("parent exists");
-    let parent_metadata = parse_metadata_block(&parent.body)
-        .expect("parent metadata parses")
-        .expect("parent metadata exists");
-    assert_eq!(
-        parent_metadata.dependencies,
-        vec![
-            ArtifactRef::in_repo(repo_a.clone(), api_child.number),
-            ArtifactRef::in_repo(repo_b.clone(), web_child.number),
-        ]
-    );
+        let replay_job = review_in_flight_job("acme/service", pull_request);
+        let replay_result =
+            verdict_result("worker-a", &replay_job.job_id, "changes", Some(authored));
+        ForgeApplier::new(forge.clone(), Arc::new(workflow()))
+            .apply(replay_job, replay_result)
+            .await;
+
+        assert_pull_request_state_stays(&forge, &repo, pull_request, labels, 1).await;
     })
 }
 
 #[test]
- fn breakdown_verdict_replay_is_idempotent() {
+fn review_verdict_escalate_adds_needs_architect_label() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo_a = new_repo(&forge, "stable").await;
-    let repo_b = create_repo(&forge, "acme", "web", "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
-    let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
-    let job = triage_in_flight_job("acme/service", issue);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
 
-    let mut web = job_child(
-        "web-client",
-        "Implement the web client",
-        "Build the web client against the API schema.",
-        &["code", "ready"],
-    );
-    web.depends_on = vec!["api-schema".to_string()];
-    web.target_repo = Some("acme/web".to_string());
-    let result = verdict_result_with_children(
-        "worker-a",
-        &job.job_id,
-        "needs_breakdown",
-        vec![
-            job_child(
-                "api-schema",
-                "Define the API schema",
-                "Write the shared API schema.",
-                &["code", "ready"],
-            ),
-            web,
-        ],
-    );
+        let result = verdict_result("worker-a", &assignment.job_id, "escalate", None);
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
 
-    applier.apply(job.clone(), result.clone()).await;
-    let repo_a_issues = list_issues(&forge, &repo_a).await;
-    let repo_b_issues = list_issues(&forge, &repo_b).await;
-    assert_eq!(repo_a_issues.len(), 2);
-    assert_eq!(repo_b_issues.len(), 1);
-    let api_child = issue_by_slug(&repo_a_issues, "api-schema");
-    let web_child = issue_by_slug(&repo_b_issues, "web-client");
-    let parent = forge
-        .get_issue_by_number(&repo_a, issue)
-        .await
-        .expect("parent reload succeeds")
-        .expect("parent exists");
-    let parent_dependencies = parse_metadata_block(&parent.body)
-        .expect("parent metadata parses")
-        .expect("parent metadata exists")
-        .dependencies;
-    assert_eq!(
-        parent_dependencies,
-        vec![
-            ArtifactRef::in_repo(repo_a.clone(), api_child.number),
-            ArtifactRef::in_repo(repo_b.clone(), web_child.number),
-        ]
-    );
+        let (labels, reviews) =
+            wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+                has_label(labels, "needs-architect") && reviews.is_empty()
+            })
+            .await;
 
-    applier.apply(job, result).await;
-
-    assert_issue_count_stays(&forge, &repo_a, 2).await;
-    assert_issue_count_stays(&forge, &repo_b, 1).await;
-    let parent = forge
-        .get_issue_by_number(&repo_a, issue)
-        .await
-        .expect("parent reload succeeds")
-        .expect("parent exists");
-    let after_replay_dependencies = parse_metadata_block(&parent.body)
-        .expect("parent metadata parses")
-        .expect("parent metadata exists")
-        .dependencies;
-    assert_eq!(after_replay_dependencies, parent_dependencies);
+        assert!(has_label(&labels, "implementation"));
+        assert!(has_label(&labels, "needs-architect"));
+        assert!(reviews.is_empty());
     })
 }
 
 #[test]
- fn children_without_create_issues_effect_are_ignored() {
+fn undeclared_review_verdict_does_not_mutate_pull_request() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo).await;
-    let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
-    let job = triage_in_flight_job("acme/service", issue);
-    let mut result = verdict_result(
-        "worker-a",
-        &job.job_id,
-        "ready_code",
-        Some("rewritten spec"),
-    );
-    result.children = vec![job_child(
-        "stray-child",
-        "Do not create me",
-        "This child is not bound by the ready_code route.",
-        &["code", "ready"],
-    )];
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+        let before = pull_request_labels_and_reviews(&forge, &repo, pull_request).await;
+        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
 
-    applier.apply(job, result).await;
+        let result = verdict_result("worker-a", &assignment.job_id, "merge_now", None);
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
 
-    let (body, labels) = issue_body_and_labels(&forge, &repo, issue).await;
-    assert_eq!(body, "rewritten spec");
-    assert!(!has_label(&labels, "untriaged"));
-    assert!(has_label(&labels, "code"));
-    assert!(has_label(&labels, "ready"));
-    assert_eq!(list_issues(&forge, &repo).await.len(), 1);
+        assert_pull_request_state_stays(&forge, &repo, pull_request, before.0, before.1.len())
+            .await;
     })
 }
 
 #[test]
- fn unresolvable_child_target_repo_drops_apply() {
+fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo_a = new_repo(&forge, "stable").await;
-    let repo_b = create_repo(&forge, "acme", "web", "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
-    let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
-    let job = triage_in_flight_job("acme/service", issue);
-    let mut child = job_child(
-        "api-schema",
-        "Define the API schema",
-        "Write the shared API schema.",
-        &["code", "ready"],
-    );
-    child.target_repo = Some("nobody/nowhere".to_string());
-    let result =
-        verdict_result_with_children("worker-a", &job.job_id, "needs_breakdown", vec![child]);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let compiled = workflow.compile();
+        let applier = Arc::new(LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+        ));
+        let daemon = Daemon::with_applier(applier);
+        let url = spawn(&daemon).await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let role = RoleId::new("architect");
 
-    applier.apply(job, result).await;
-
-    let (body, labels) = issue_body_and_labels(&forge, &repo_a, issue).await;
-    assert_eq!(body, "rough user request");
-    assert_eq!(labels, vec!["untriaged".to_string()]);
-    assert_eq!(list_issues(&forge, &repo_a).await.len(), 1);
-    assert!(list_issues(&forge, &repo_b).await.is_empty());
-    })
-}
-
-#[test]
- fn undeclared_verdict_does_not_mutate_issue() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_untriaged_intake_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = triage_in_flight_job("acme/service", issue);
-    let before = issue_body_and_labels(&forge, &repo, issue).await;
-
-    applier
-        .apply(
-            job.clone(),
-            verdict_result("worker-a", &job.job_id, "nonsense", Some("rewritten spec")),
-        )
-        .await;
-
-    let after = issue_body_and_labels(&forge, &repo, issue).await;
-    assert_eq!(after, before);
-    assert_no_pull_requests(&forge, &repo).await;
-    })
-}
-
-#[test]
- fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let compiled = workflow.compile();
-    let applier = Arc::new(LeaseApplier::new(
-        forge.clone(),
-        policy(),
-        "daemon-1",
-        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-    ));
-    let daemon = Daemon::with_applier(applier);
-    let url = spawn(&daemon).await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let role = RoleId::new("engineer");
-
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-
-    assert_eq!(
-        daemon
-            .enqueue_scanned_role_work(
-                forge.as_ref(),
-                &repo,
-                workflow.as_ref(),
-                &compiled,
-                ts("2026-05-29T00:00:00Z"),
-                &role,
-                RoleFeedMode::Normal,
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "architect", "acme/service")
             )
             .await
-            .expect("feed succeeds"),
-        1
-    );
-    let assignment = poll_assignment(&client, &url, "worker-a", issue).await;
-    let summary = "implemented daemon worker success apply";
-    let branch_name = format!("agent/pr-for-code-{}", issue.get());
-    let posted_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(posted_result)).await,
-        "worker-a",
-        &assignment.job_id,
-    );
+            .status,
+            204
+        );
 
-    let pulls = wait_for_pull_request_count(&forge, &repo, 1).await;
-    let pull = &pulls[0];
-    assert_eq!(
-        pull.title,
-        format!("Implement #{}: ready code issue", issue.get())
-    );
-    assert_eq!(pull.source.repository_id, repo);
-    assert_eq!(pull.source.branch, branch_name);
-    assert_eq!(pull.target.repository_id, repo);
-    assert_eq!(pull.target.branch, "stable");
-    assert!(pull.assignees.is_empty());
-    assert_eq!(
-        pull.labels,
-        vec!["implementation".to_string(), "needs-reviewer".to_string()]
-    );
-    assert!(pull.body.contains(summary));
+        assert_eq!(
+            daemon
+                .enqueue_scanned_role_work(
+                    forge.as_ref(),
+                    &repo,
+                    workflow.as_ref(),
+                    &compiled,
+                    ts("2026-05-29T00:00:00Z"),
+                    &role,
+                    RoleFeedMode::Normal,
+                )
+                .await
+                .expect("feed succeeds"),
+            1
+        );
+        let assignment =
+            poll_assignment_for_role(&client, &url, "worker-a", "architect", "issue", issue).await;
+        let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
+            .expect("assignment payload is a JobContext");
+        assert_eq!(context.action.as_deref(), Some("triage_intake"));
+        assert_eq!(
+            context.allowed_verdicts,
+            vec!["needs_breakdown", "needs_design", "ready_code"]
+        );
+        assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
 
-    let pull_number = pull.number;
-    let metadata = parse_metadata_block(&pull.body)
-        .expect("PR metadata parses")
-        .expect("PR metadata exists");
-    assert_eq!(
-        metadata.kind,
-        Some(ArtifactKindId::new("implementation_pr"))
-    );
-    assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
-    let expected_correlation_key = format!("pr-for-code-{}", issue.get());
-    assert_eq!(
-        metadata.correlation_key.as_deref(),
-        Some(expected_correlation_key.as_str())
-    );
+        let result = verdict_result(
+            "worker-a",
+            &assignment.job_id,
+            "ready_code",
+            Some("rewritten spec"),
+        );
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
 
-    drop_pull_request_label(&forge, &repo, pull_number, "needs-reviewer").await;
-    assert_eq!(
-        pull_request_labels(&forge, &repo, pull_number).await,
-        vec!["implementation".to_string()]
-    );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (body, labels) = loop {
+            let state = issue_body_and_labels(&forge, &repo, issue).await;
+            if state.0 == "rewritten spec" {
+                break state;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for verdict apply, saw body {:?} labels {:?}",
+                state.0,
+                state.1
+            );
+            temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        };
 
-    let replay_job = InFlightJob {
-        job_id: assignment.job_id.clone(),
-        role: assignment.role.clone(),
-        repo: assignment.repo.clone(),
-        artifact: assignment.artifact.clone(),
-        job_payload: assignment.job_payload.clone(),
-    };
-    let replay_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
-    ForgeApplier::new(forge.clone(), workflow.clone())
-        .apply(replay_job, replay_result)
-        .await;
-    assert_pull_request_count_stays(&forge, &repo, 1).await;
-    assert_eq!(
-        pull_request_labels(&forge, &repo, pull_number).await,
-        vec!["implementation".to_string()]
-    );
+        assert_eq!(body, "rewritten spec");
+        assert!(!labels.iter().any(|label| label == "untriaged"));
+        assert!(labels.iter().any(|label| label == "code"));
+        assert!(labels.iter().any(|label| label == "ready"));
+        assert_no_pull_requests(&forge, &repo).await;
+    })
+}
 
-    assert_eq!(
-        daemon
-            .enqueue_scanned_role_work(
-                forge.as_ref(),
-                &repo,
-                workflow.as_ref(),
-                &compiled,
-                ts("2026-05-29T00:00:00Z"),
-                &role,
-                RoleFeedMode::Normal,
+#[test]
+fn triage_verdict_replay_is_quiet_no_op() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = triage_in_flight_job("acme/service", issue);
+        let result = verdict_result(
+            "worker-a",
+            &job.job_id,
+            "ready_code",
+            Some("rewritten spec"),
+        );
+
+        applier.apply(job.clone(), result.clone()).await;
+        let after_first = issue_body_and_labels(&forge, &repo, issue).await;
+        applier.apply(job, result).await;
+        let after_second = issue_body_and_labels(&forge, &repo, issue).await;
+
+        assert_eq!(after_first, after_second);
+        assert_eq!(after_second.0, "rewritten spec");
+        assert!(!after_second.1.iter().any(|label| label == "untriaged"));
+        assert!(after_second.1.iter().any(|label| label == "code"));
+        assert!(after_second.1.iter().any(|label| label == "ready"));
+        assert_no_pull_requests(&forge, &repo).await;
+    })
+}
+
+#[test]
+fn breakdown_verdict_creates_children_across_repos() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo_a = new_repo(&forge, "stable").await;
+        let repo_b = create_repo(&forge, "acme", "web", "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
+        let workflow = Arc::new(workflow());
+        let compiled = workflow.compile();
+        let applier = Arc::new(LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+        ));
+        let daemon = Daemon::with_applier(applier);
+        let url = spawn(&daemon).await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let role = RoleId::new("architect");
+
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "architect", "acme/service")
             )
             .await
-            .expect("repeat feed succeeds and skips issue with an open implementation PR"),
-        0
-    );
+            .status,
+            204
+        );
 
-    assert_pull_request_count_stays(&forge, &repo, 1).await;
+        assert_eq!(
+            daemon
+                .enqueue_scanned_role_work(
+                    forge.as_ref(),
+                    &repo_a,
+                    workflow.as_ref(),
+                    &compiled,
+                    ts("2026-05-29T00:00:00Z"),
+                    &role,
+                    RoleFeedMode::Normal,
+                )
+                .await
+                .expect("feed succeeds"),
+            1
+        );
+        let assignment =
+            poll_assignment_for_role(&client, &url, "worker-a", "architect", "issue", issue).await;
+        let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
+            .expect("assignment payload is a JobContext");
+        assert_eq!(context.action.as_deref(), Some("triage_intake"));
+        assert_eq!(
+            context.allowed_verdicts,
+            vec!["needs_breakdown", "needs_design", "ready_code"]
+        );
+        assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
+
+        let mut web = job_child(
+            "web-client",
+            "Implement the web client",
+            "Build the web client against the API schema.",
+            &["code", "ready"],
+        );
+        web.depends_on = vec!["api-schema".to_string()];
+        web.target_repo = Some("acme/web".to_string());
+        let result = verdict_result_with_children(
+            "worker-a",
+            &assignment.job_id,
+            "needs_breakdown",
+            vec![
+                job_child(
+                    "api-schema",
+                    "Define the API schema",
+                    "Write the shared API schema.",
+                    &["code", "ready"],
+                ),
+                web,
+            ],
+        );
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let labels = issue_labels(&forge, &repo_a, issue).await;
+            if !has_label(&labels, "untriaged") && has_label(&labels, "epic") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for breakdown verdict apply, saw labels {:?}",
+                labels
+            );
+            temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        }
+
+        let repo_a_issues = wait_for_issue_count(&forge, &repo_a, 2).await;
+        let repo_b_issues = wait_for_issue_count(&forge, &repo_b, 1).await;
+        let api_child = issue_by_slug(&repo_a_issues, "api-schema");
+        let web_child = issue_by_slug(&repo_b_issues, "web-client");
+
+        assert_eq!(
+            api_child.labels,
+            vec!["code".to_string(), "ready".to_string()]
+        );
+        let api_metadata = parse_metadata_block(&api_child.body)
+            .expect("api child metadata parses")
+            .expect("api child metadata exists");
+        assert_eq!(api_metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+
+        assert_eq!(
+            web_child.labels,
+            vec!["code".to_string(), "ready".to_string()]
+        );
+        let web_metadata = parse_metadata_block(&web_child.body)
+            .expect("web child metadata parses")
+            .expect("web child metadata exists");
+        assert_eq!(
+            web_metadata.parents,
+            vec![ArtifactRef::in_repo(repo_a.clone(), issue)]
+        );
+        let expected_web_correlation_key =
+            global_child_correlation_key(&repo_a, issue, "web-client");
+        assert_eq!(
+            web_metadata.correlation_key.as_deref(),
+            Some(expected_web_correlation_key.as_str())
+        );
+        assert_eq!(
+            web_metadata.dependencies,
+            vec![ArtifactRef::in_repo(repo_a.clone(), api_child.number)]
+        );
+
+        let parent = forge
+            .get_issue_by_number(&repo_a, issue)
+            .await
+            .expect("parent reload succeeds")
+            .expect("parent exists");
+        let parent_metadata = parse_metadata_block(&parent.body)
+            .expect("parent metadata parses")
+            .expect("parent metadata exists");
+        assert_eq!(
+            parent_metadata.dependencies,
+            vec![
+                ArtifactRef::in_repo(repo_a.clone(), api_child.number),
+                ArtifactRef::in_repo(repo_b.clone(), web_child.number),
+            ]
+        );
     })
 }
 
 #[test]
- fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
+fn breakdown_verdict_replay_is_idempotent() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let target = ArtifactSource::Issue { number: issue };
-    let manager = LeaseManager::new(forge.as_ref(), policy());
-    let peer_lease = manager
-        .acquire(
-            &repo,
-            target,
-            RoleId::new("engineer"),
-            "peer-daemon",
-            chrono::Utc::now(),
-        )
-        .await
-        .expect("peer lease is acquired");
-    let applier = LeaseApplier::new(
-        forge.clone(),
-        policy(),
-        "daemon-1",
-        Arc::new(ForgeApplier::new(forge.clone(), workflow)),
-    );
-    let job = in_flight_job("acme/service", issue);
-    let result = success_result(
-        "worker-a",
-        &job.job_id,
-        &format!("agent/pr-for-code-{}", issue.get()),
-        "done",
-    );
+        let forge = Arc::new(MemoryForge::new());
+        let repo_a = new_repo(&forge, "stable").await;
+        let repo_b = create_repo(&forge, "acme", "web", "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = triage_in_flight_job("acme/service", issue);
 
-    applier.apply(job, result).await;
+        let mut web = job_child(
+            "web-client",
+            "Implement the web client",
+            "Build the web client against the API schema.",
+            &["code", "ready"],
+        );
+        web.depends_on = vec!["api-schema".to_string()];
+        web.target_repo = Some("acme/web".to_string());
+        let result = verdict_result_with_children(
+            "worker-a",
+            &job.job_id,
+            "needs_breakdown",
+            vec![
+                job_child(
+                    "api-schema",
+                    "Define the API schema",
+                    "Write the shared API schema.",
+                    &["code", "ready"],
+                ),
+                web,
+            ],
+        );
 
-    let pulls = forge
-        .list_pull_requests(&repo, PullRequestQuery::default())
-        .await
-        .expect("list pull requests succeeds");
-    assert!(pulls.is_empty());
-    let issue = forge
-        .get_issue_by_number(&repo, issue)
-        .await
-        .expect("issue reload succeeds")
-        .expect("issue exists after apply");
-    let lease = parse_metadata_block(&issue.body)
-        .expect("issue metadata parses")
-        .expect("issue has metadata")
-        .lease
-        .expect("peer lease is still present");
-    assert_eq!(lease, peer_lease);
+        applier.apply(job.clone(), result.clone()).await;
+        let repo_a_issues = list_issues(&forge, &repo_a).await;
+        let repo_b_issues = list_issues(&forge, &repo_b).await;
+        assert_eq!(repo_a_issues.len(), 2);
+        assert_eq!(repo_b_issues.len(), 1);
+        let api_child = issue_by_slug(&repo_a_issues, "api-schema");
+        let web_child = issue_by_slug(&repo_b_issues, "web-client");
+        let parent = forge
+            .get_issue_by_number(&repo_a, issue)
+            .await
+            .expect("parent reload succeeds")
+            .expect("parent exists");
+        let parent_dependencies = parse_metadata_block(&parent.body)
+            .expect("parent metadata parses")
+            .expect("parent metadata exists")
+            .dependencies;
+        assert_eq!(
+            parent_dependencies,
+            vec![
+                ArtifactRef::in_repo(repo_a.clone(), api_child.number),
+                ArtifactRef::in_repo(repo_b.clone(), web_child.number),
+            ]
+        );
+
+        applier.apply(job, result).await;
+
+        assert_issue_count_stays(&forge, &repo_a, 2).await;
+        assert_issue_count_stays(&forge, &repo_b, 1).await;
+        let parent = forge
+            .get_issue_by_number(&repo_a, issue)
+            .await
+            .expect("parent reload succeeds")
+            .expect("parent exists");
+        let after_replay_dependencies = parse_metadata_block(&parent.body)
+            .expect("parent metadata parses")
+            .expect("parent metadata exists")
+            .dependencies;
+        assert_eq!(after_replay_dependencies, parent_dependencies);
     })
 }
 
 #[test]
- fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
+fn children_without_create_issues_effect_are_ignored() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = in_flight_job("acme/service", issue);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = triage_in_flight_job("acme/service", issue);
+        let mut result = verdict_result(
+            "worker-a",
+            &job.job_id,
+            "ready_code",
+            Some("rewritten spec"),
+        );
+        result.children = vec![job_child(
+            "stray-child",
+            "Do not create me",
+            "This child is not bound by the ready_code route.",
+            &["code", "ready"],
+        )];
 
-    applier
-        .apply(job.clone(), success_without_branch("worker-a", &job.job_id))
-        .await;
+        applier.apply(job, result).await;
 
-    assert_no_pull_requests(&forge, &repo).await;
-    assert_no_attention_mark(&forge, &repo, issue).await;
+        let (body, labels) = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(body, "rewritten spec");
+        assert!(!has_label(&labels, "untriaged"));
+        assert!(has_label(&labels, "code"));
+        assert!(has_label(&labels, "ready"));
+        assert_eq!(list_issues(&forge, &repo).await.len(), 1);
     })
 }
 
 #[test]
- fn permanent_failure_marks_issue_for_human_attention_and_audit() {
+fn unresolvable_child_target_repo_drops_apply() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = in_flight_job("acme/service", issue);
+        let forge = Arc::new(MemoryForge::new());
+        let repo_a = new_repo(&forge, "stable").await;
+        let repo_b = create_repo(&forge, "acme", "web", "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo_a).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = triage_in_flight_job("acme/service", issue);
+        let mut child = job_child(
+            "api-schema",
+            "Define the API schema",
+            "Write the shared API schema.",
+            &["code", "ready"],
+        );
+        child.target_repo = Some("nobody/nowhere".to_string());
+        let result =
+            verdict_result_with_children("worker-a", &job.job_id, "needs_breakdown", vec![child]);
 
-    applier
-        .apply(
-            job.clone(),
-            permanent_failure_result("worker-a", &job.job_id),
-        )
-        .await;
+        applier.apply(job, result).await;
 
-    assert_no_pull_requests(&forge, &repo).await;
-    let labels = issue_labels(&forge, &repo, issue).await;
-    assert!(labels.iter().any(|label| label == "needs-human"));
-    let comments = issue_comment_bodies(&forge, &repo, issue).await;
-    assert_eq!(comments.len(), 1);
-    let comment = &comments[0];
-    assert!(comment.contains("not implemented"));
-    assert!(comment.contains("failure class: permanent"));
-    assert!(comment.contains(&format!("job_id: `{}`", job.job_id)));
-    assert!(comment.contains("worker: `worker-a`"));
-    assert!(comment.contains(&format!(
-        "<!-- temper:comment-key=daemon_failure_audit:{} -->",
-        job.job_id
-    )));
+        let (body, labels) = issue_body_and_labels(&forge, &repo_a, issue).await;
+        assert_eq!(body, "rough user request");
+        assert_eq!(labels, vec!["untriaged".to_string()]);
+        assert_eq!(list_issues(&forge, &repo_a).await.len(), 1);
+        assert!(list_issues(&forge, &repo_b).await.is_empty());
     })
 }
 
 #[test]
- fn failure_marking_applies_for_human_audit_classes() {
+fn undeclared_verdict_does_not_mutate_issue() {
     temper_io_engine::block_on(async move {
-    for (failure_class, expected_class, message) in [
-        (
-            Some(FailureClass::Permanent),
-            "permanent",
-            "permanent worker failure",
-        ),
-        (
-            Some(FailureClass::Protocol),
-            "protocol",
-            "protocol worker failure",
-        ),
-        (None, "unknown", "missing failure details"),
-    ] {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_untriaged_intake_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = triage_in_flight_job("acme/service", issue);
+        let before = issue_body_and_labels(&forge, &repo, issue).await;
+
+        applier
+            .apply(
+                job.clone(),
+                verdict_result("worker-a", &job.job_id, "nonsense", Some("rewritten spec")),
+            )
+            .await;
+
+        let after = issue_body_and_labels(&forge, &repo, issue).await;
+        assert_eq!(after, before);
+        assert_no_pull_requests(&forge, &repo).await;
+    })
+}
+
+#[test]
+fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let compiled = workflow.compile();
+        let applier = Arc::new(LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+        ));
+        let daemon = Daemon::with_applier(applier);
+        let url = spawn(&daemon).await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let role = RoleId::new("engineer");
+
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+
+        assert_eq!(
+            daemon
+                .enqueue_scanned_role_work(
+                    forge.as_ref(),
+                    &repo,
+                    workflow.as_ref(),
+                    &compiled,
+                    ts("2026-05-29T00:00:00Z"),
+                    &role,
+                    RoleFeedMode::Normal,
+                )
+                .await
+                .expect("feed succeeds"),
+            1
+        );
+        let assignment = poll_assignment(&client, &url, "worker-a", issue).await;
+        let summary = "implemented daemon worker success apply";
+        let branch_name = format!("agent/pr-for-code-{}", issue.get());
+        let posted_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        assert_release(
+            post_json(&client, &url, &WorkerProtocolMessage::Result(posted_result)).await,
+            "worker-a",
+            &assignment.job_id,
+        );
+
+        let pulls = wait_for_pull_request_count(&forge, &repo, 1).await;
+        let pull = &pulls[0];
+        assert_eq!(
+            pull.title,
+            format!("Implement #{}: ready code issue", issue.get())
+        );
+        assert_eq!(pull.source.repository_id, repo);
+        assert_eq!(pull.source.branch, branch_name);
+        assert_eq!(pull.target.repository_id, repo);
+        assert_eq!(pull.target.branch, "stable");
+        assert!(pull.assignees.is_empty());
+        assert_eq!(
+            pull.labels,
+            vec!["implementation".to_string(), "needs-reviewer".to_string()]
+        );
+        assert!(pull.body.contains(summary));
+
+        let pull_number = pull.number;
+        let metadata = parse_metadata_block(&pull.body)
+            .expect("PR metadata parses")
+            .expect("PR metadata exists");
+        assert_eq!(
+            metadata.kind,
+            Some(ArtifactKindId::new("implementation_pr"))
+        );
+        assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+        let expected_correlation_key = format!("pr-for-code-{}", issue.get());
+        assert_eq!(
+            metadata.correlation_key.as_deref(),
+            Some(expected_correlation_key.as_str())
+        );
+
+        drop_pull_request_label(&forge, &repo, pull_number, "needs-reviewer").await;
+        assert_eq!(
+            pull_request_labels(&forge, &repo, pull_number).await,
+            vec!["implementation".to_string()]
+        );
+
+        let replay_job = InFlightJob {
+            job_id: assignment.job_id.clone(),
+            role: assignment.role.clone(),
+            repo: assignment.repo.clone(),
+            artifact: assignment.artifact.clone(),
+            job_payload: assignment.job_payload.clone(),
+        };
+        let replay_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        ForgeApplier::new(forge.clone(), workflow.clone())
+            .apply(replay_job, replay_result)
+            .await;
+        assert_pull_request_count_stays(&forge, &repo, 1).await;
+        assert_eq!(
+            pull_request_labels(&forge, &repo, pull_number).await,
+            vec!["implementation".to_string()]
+        );
+
+        assert_eq!(
+            daemon
+                .enqueue_scanned_role_work(
+                    forge.as_ref(),
+                    &repo,
+                    workflow.as_ref(),
+                    &compiled,
+                    ts("2026-05-29T00:00:00Z"),
+                    &role,
+                    RoleFeedMode::Normal,
+                )
+                .await
+                .expect("repeat feed succeeds and skips issue with an open implementation PR"),
+            0
+        );
+
+        assert_pull_request_count_stays(&forge, &repo, 1).await;
+    })
+}
+
+#[test]
+fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let target = ArtifactSource::Issue { number: issue };
+        let manager = LeaseManager::new(forge.as_ref(), policy());
+        let peer_lease = manager
+            .acquire(
+                &repo,
+                target,
+                RoleId::new("engineer"),
+                "peer-daemon",
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("peer lease is acquired");
+        let applier = LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            Arc::new(ForgeApplier::new(forge.clone(), workflow)),
+        );
+        let job = in_flight_job("acme/service", issue);
+        let result = success_result(
+            "worker-a",
+            &job.job_id,
+            &format!("agent/pr-for-code-{}", issue.get()),
+            "done",
+        );
+
+        applier.apply(job, result).await;
+
+        let pulls = forge
+            .list_pull_requests(&repo, PullRequestQuery::default())
+            .await
+            .expect("list pull requests succeeds");
+        assert!(pulls.is_empty());
+        let issue = forge
+            .get_issue_by_number(&repo, issue)
+            .await
+            .expect("issue reload succeeds")
+            .expect("issue exists after apply");
+        let lease = parse_metadata_block(&issue.body)
+            .expect("issue metadata parses")
+            .expect("issue has metadata")
+            .lease
+            .expect("peer lease is still present");
+        assert_eq!(lease, peer_lease);
+    })
+}
+
+#[test]
+fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = in_flight_job("acme/service", issue);
+
+        applier
+            .apply(job.clone(), success_without_branch("worker-a", &job.job_id))
+            .await;
+
+        assert_no_pull_requests(&forge, &repo).await;
+        assert_no_attention_mark(&forge, &repo, issue).await;
+    })
+}
+
+#[test]
+fn permanent_failure_marks_issue_for_human_attention_and_audit() {
+    temper_io_engine::block_on(async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1609,7 +1565,7 @@ async fn assign_review_job(
         applier
             .apply(
                 job.clone(),
-                failure_result("worker-a", &job.job_id, failure_class, message),
+                permanent_failure_result("worker-a", &job.job_id),
             )
             .await;
 
@@ -1619,131 +1575,178 @@ async fn assign_review_job(
         let comments = issue_comment_bodies(&forge, &repo, issue).await;
         assert_eq!(comments.len(), 1);
         let comment = &comments[0];
-        assert!(comment.contains(&format!("failure class: {expected_class}")));
+        assert!(comment.contains("not implemented"));
+        assert!(comment.contains("failure class: permanent"));
         assert!(comment.contains(&format!("job_id: `{}`", job.job_id)));
         assert!(comment.contains("worker: `worker-a`"));
-        if failure_class.is_some() {
-            assert!(comment.contains(message));
-        } else {
-            assert!(!comment.contains(message));
+        assert!(comment.contains(&format!(
+            "<!-- temper:comment-key=daemon_failure_audit:{} -->",
+            job.job_id
+        )));
+    })
+}
+
+#[test]
+fn failure_marking_applies_for_human_audit_classes() {
+    temper_io_engine::block_on(async move {
+        for (failure_class, expected_class, message) in [
+            (
+                Some(FailureClass::Permanent),
+                "permanent",
+                "permanent worker failure",
+            ),
+            (
+                Some(FailureClass::Protocol),
+                "protocol",
+                "protocol worker failure",
+            ),
+            (None, "unknown", "missing failure details"),
+        ] {
+            let forge = Arc::new(MemoryForge::new());
+            let repo = new_repo(&forge, "stable").await;
+            let issue = create_ready_issue(&forge, &repo).await;
+            let workflow = Arc::new(workflow());
+            let applier = ForgeApplier::new(forge.clone(), workflow);
+            let job = in_flight_job("acme/service", issue);
+
+            applier
+                .apply(
+                    job.clone(),
+                    failure_result("worker-a", &job.job_id, failure_class, message),
+                )
+                .await;
+
+            assert_no_pull_requests(&forge, &repo).await;
+            let labels = issue_labels(&forge, &repo, issue).await;
+            assert!(labels.iter().any(|label| label == "needs-human"));
+            let comments = issue_comment_bodies(&forge, &repo, issue).await;
+            assert_eq!(comments.len(), 1);
+            let comment = &comments[0];
+            assert!(comment.contains(&format!("failure class: {expected_class}")));
+            assert!(comment.contains(&format!("job_id: `{}`", job.job_id)));
+            assert!(comment.contains("worker: `worker-a`"));
+            if failure_class.is_some() {
+                assert!(comment.contains(message));
+            } else {
+                assert!(!comment.contains(message));
+            }
         }
-    }
     })
 }
 
 #[test]
- fn transient_failure_does_not_create_pull_request_or_mark_issue() {
+fn transient_failure_does_not_create_pull_request_or_mark_issue() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = in_flight_job("acme/service", issue);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = in_flight_job("acme/service", issue);
 
-    applier
-        .apply(
-            job.clone(),
-            failure_result(
-                "worker-a",
-                &job.job_id,
-                Some(FailureClass::Transient),
-                "try again later",
-            ),
-        )
-        .await;
+        applier
+            .apply(
+                job.clone(),
+                failure_result(
+                    "worker-a",
+                    &job.job_id,
+                    Some(FailureClass::Transient),
+                    "try again later",
+                ),
+            )
+            .await;
 
-    assert_no_pull_requests(&forge, &repo).await;
-    assert_no_attention_mark(&forge, &repo, issue).await;
+        assert_no_pull_requests(&forge, &repo).await;
+        assert_no_attention_mark(&forge, &repo, issue).await;
     })
 }
 
 #[test]
- fn canceled_failure_does_not_create_pull_request_or_mark_issue() {
+fn canceled_failure_does_not_create_pull_request_or_mark_issue() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = in_flight_job("acme/service", issue);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = in_flight_job("acme/service", issue);
 
-    applier
-        .apply(
-            job.clone(),
-            failure_result(
-                "worker-a",
-                &job.job_id,
-                Some(FailureClass::Canceled),
-                "worker stopped",
-            ),
-        )
-        .await;
+        applier
+            .apply(
+                job.clone(),
+                failure_result(
+                    "worker-a",
+                    &job.job_id,
+                    Some(FailureClass::Canceled),
+                    "worker stopped",
+                ),
+            )
+            .await;
 
-    assert_no_pull_requests(&forge, &repo).await;
-    assert_no_attention_mark(&forge, &repo, issue).await;
+        assert_no_pull_requests(&forge, &repo).await;
+        assert_no_attention_mark(&forge, &repo, issue).await;
     })
 }
 
 #[test]
- fn permanent_failure_replay_is_idempotent() {
+fn permanent_failure_replay_is_idempotent() {
     temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = in_flight_job("acme/service", issue);
-    let result = permanent_failure_result("worker-a", &job.job_id);
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = in_flight_job("acme/service", issue);
+        let result = permanent_failure_result("worker-a", &job.job_id);
 
-    applier.apply(job.clone(), result.clone()).await;
-    applier.apply(job.clone(), result).await;
+        applier.apply(job.clone(), result.clone()).await;
+        applier.apply(job.clone(), result).await;
 
-    assert_no_pull_requests(&forge, &repo).await;
-    let labels = issue_labels(&forge, &repo, issue).await;
-    assert_eq!(
-        labels
+        assert_no_pull_requests(&forge, &repo).await;
+        let labels = issue_labels(&forge, &repo, issue).await;
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label.as_str() == "needs-human")
+                .count(),
+            1
+        );
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("not implemented"));
+        assert!(comments[0].contains(&format!(
+            "<!-- temper:comment-key=daemon_failure_audit:{} -->",
+            job.job_id
+        )));
+    })
+}
+
+#[test]
+fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
+    temper_io_engine::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow);
+        let job = in_flight_job("acme/service", issue);
+        let result = permanent_failure_result("worker-a", &job.job_id);
+
+        applier.apply(job.clone(), result.clone()).await;
+        drop_issue_label(&forge, &repo, issue, "needs-human").await;
+        applier.apply(job.clone(), result).await;
+
+        assert_no_pull_requests(&forge, &repo).await;
+        assert!(!issue_labels(&forge, &repo, issue)
+            .await
             .iter()
-            .filter(|label| label.as_str() == "needs-human")
-            .count(),
-        1
-    );
-    let comments = issue_comment_bodies(&forge, &repo, issue).await;
-    assert_eq!(comments.len(), 1);
-    assert!(comments[0].contains("not implemented"));
-    assert!(comments[0].contains(&format!(
-        "<!-- temper:comment-key=daemon_failure_audit:{} -->",
-        job.job_id
-    )));
-    })
-}
-
-#[test]
- fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
-    temper_io_engine::block_on(async move {
-    let forge = Arc::new(MemoryForge::new());
-    let repo = new_repo(&forge, "stable").await;
-    let issue = create_ready_issue(&forge, &repo).await;
-    let workflow = Arc::new(workflow());
-    let applier = ForgeApplier::new(forge.clone(), workflow);
-    let job = in_flight_job("acme/service", issue);
-    let result = permanent_failure_result("worker-a", &job.job_id);
-
-    applier.apply(job.clone(), result.clone()).await;
-    drop_issue_label(&forge, &repo, issue, "needs-human").await;
-    applier.apply(job.clone(), result).await;
-
-    assert_no_pull_requests(&forge, &repo).await;
-    assert!(!issue_labels(&forge, &repo, issue)
-        .await
-        .iter()
-        .any(|label| label == "needs-human"));
-    let comments = issue_comment_bodies(&forge, &repo, issue).await;
-    assert_eq!(comments.len(), 1);
-    assert!(comments[0].contains("not implemented"));
-    assert!(comments[0].contains(&format!(
-        "<!-- temper:comment-key=daemon_failure_audit:{} -->",
-        job.job_id
-    )));
+            .any(|label| label == "needs-human"));
+        let comments = issue_comment_bodies(&forge, &repo, issue).await;
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("not implemented"));
+        assert!(comments[0].contains(&format!(
+            "<!-- temper:comment-key=daemon_failure_audit:{} -->",
+            job.job_id
+        )));
     })
 }

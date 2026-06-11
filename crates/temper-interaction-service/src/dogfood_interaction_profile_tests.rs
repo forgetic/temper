@@ -68,60 +68,60 @@ fn dogfood_fixture_product_manager_profile_validates_and_compiles() {
 }
 
 #[test]
- fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
+fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
     temper_io_engine::block_on(async move {
-    let profile = compiled_profile();
-    let (human, agent) = seeded(&profile).await;
-    let human_reader = human.clone();
-    let mut session = ForgeInteractionSession::open(
-        Arc::new(human) as Arc<dyn Forge>,
-        Arc::new(agent) as Arc<dyn Forge>,
-        Arc::new(FixtureResponder) as Arc<dyn InteractiveResponder>,
-        ForgeSessionConfig::from_profile_manifest(&profile).unwrap(),
-        ForgeSessionOpenOptions {
-            base_url: "https://git.example.test".into(),
-            repo_path: RepositoryPath::new("ai", "temper"),
-            transcript_issue: None,
-            context: json!({}),
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(session.transcript_issue().labels, profile.transcript.labels);
-
-    let reply = session.send_human_turn("I want a chat MVP.").await.unwrap();
-    assert_eq!(reply.message, "Let's file a small MVP.");
-    assert_eq!(reply.proposals[0].id.as_str(), "terminal-chat-mvp");
-
-    let comments = human_reader
-        .list_issue_comments(&session.transcript_issue().id)
+        let profile = compiled_profile();
+        let (human, agent) = seeded(&profile).await;
+        let human_reader = human.clone();
+        let mut session = ForgeInteractionSession::open(
+            Arc::new(human) as Arc<dyn Forge>,
+            Arc::new(agent) as Arc<dyn Forge>,
+            Arc::new(FixtureResponder) as Arc<dyn InteractiveResponder>,
+            ForgeSessionConfig::from_profile_manifest(&profile).unwrap(),
+            ForgeSessionOpenOptions {
+                base_url: "https://git.example.test".into(),
+                repo_path: RepositoryPath::new("ai", "temper"),
+                transcript_issue: None,
+                context: json!({}),
+            },
+        )
         .await
         .unwrap();
-    assert_eq!(comments.len(), 2);
-    assert_eq!(comments[0].author_id, UserId::new(human_handle(&profile)));
-    assert_eq!(comments[1].author_id, UserId::new(agent_handle(&profile)));
 
-    let proposal_id = ProposalId::new("terminal-chat-mvp").unwrap();
-    let action_id = &profile.acceptance_actions[0].id;
-    let filed = session
-        .accept_issue_proposal_with_action(&proposal_id, Some(action_id))
-        .await
-        .unwrap();
-    assert!(filed.created);
-    assert_eq!(filed.issue.labels, accepted_issue_labels(&profile));
-    assert!(filed.issue.body.contains("requested-by: human"));
-    assert!(filed
-        .issue
-        .body
-        .contains(&format!("Transcript: {}", session.transcript_url())));
+        assert_eq!(session.transcript_issue().labels, profile.transcript.labels);
 
-    let retry = session
-        .accept_issue_proposal_with_action(&proposal_id, Some(action_id))
-        .await
-        .unwrap();
-    assert!(!retry.created);
-    assert_eq!(retry.issue.number, filed.issue.number);
+        let reply = session.send_human_turn("I want a chat MVP.").await.unwrap();
+        assert_eq!(reply.message, "Let's file a small MVP.");
+        assert_eq!(reply.proposals[0].id.as_str(), "terminal-chat-mvp");
+
+        let comments = human_reader
+            .list_issue_comments(&session.transcript_issue().id)
+            .await
+            .unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].author_id, UserId::new(human_handle(&profile)));
+        assert_eq!(comments[1].author_id, UserId::new(agent_handle(&profile)));
+
+        let proposal_id = ProposalId::new("terminal-chat-mvp").unwrap();
+        let action_id = &profile.acceptance_actions[0].id;
+        let filed = session
+            .accept_issue_proposal_with_action(&proposal_id, Some(action_id))
+            .await
+            .unwrap();
+        assert!(filed.created);
+        assert_eq!(filed.issue.labels, accepted_issue_labels(&profile));
+        assert!(filed.issue.body.contains("requested-by: human"));
+        assert!(filed
+            .issue
+            .body
+            .contains(&format!("Transcript: {}", session.transcript_url())));
+
+        let retry = session
+            .accept_issue_proposal_with_action(&proposal_id, Some(action_id))
+            .await
+            .unwrap();
+        assert!(!retry.created);
+        assert_eq!(retry.issue.number, filed.issue.number);
     })
 }
 

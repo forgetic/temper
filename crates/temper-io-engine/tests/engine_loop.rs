@@ -82,23 +82,29 @@ fn machine_is_pure_and_deterministic() {
     let mut machine = PingMachine::default();
     let t = EngineTime::from_nanos(7);
     let started = machine.on_start(t);
-    assert!(matches!(started[..], [Request::StartTimer { token: 0, .. }]));
+    assert!(matches!(
+        started[..],
+        [Request::StartTimer { token: 0, .. }]
+    ));
 
     let requests = machine.on_completion(t, Completion::TimerFired { token: 0 });
-    assert!(matches!(requests[..], [Request::StartTimer { token: 1, .. }]));
+    assert!(matches!(
+        requests[..],
+        [Request::StartTimer { token: 1, .. }]
+    ));
 
     let (probe_tx, _probe_rx) = temper_io_engine::oneshot();
     let requests = machine.on_completion(
         t,
         Completion::HttpInbound(
-        HttpRequestData {
-            method: "POST".into(),
-            uri: "/ping".into(),
-            headers: Vec::new(),
-            body: Vec::new(),
-        },
-        // A responder is just a capability token to the machine; it never
-        // looks inside.
+            HttpRequestData {
+                method: "POST".into(),
+                uri: "/ping".into(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+            // A responder is just a capability token to the machine; it never
+            // looks inside.
             HttpResponder::from_oneshot(probe_tx),
         ),
     );

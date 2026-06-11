@@ -34,113 +34,113 @@ use temper_workflow::RoleId;
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn prep_makes_head_real_and_pr_is_mergeable() {
     temper_io_engine::block_on(async move {
-    // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
-    // boot it off-reactor so its nested blocking runtime lives and dies off the async
-    // test thread (same pattern as the Phase 2 provisioning test).
-    let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
-        .await
-        .expect("forgejo cached provisioned state starts");
-    let server = cached.server;
-    let provisioned = cached.provisioned;
-    let base = server.base_url().to_string();
-    let engineer = provisioned
-        .role(&RoleId::new("engineer"))
-        .expect("engineer role is provisioned");
+        // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
+        // boot it off-reactor so its nested blocking runtime lives and dies off the async
+        // test thread (same pattern as the Phase 2 provisioning test).
+        let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
+            .await
+            .expect("forgejo cached provisioned state starts");
+        let server = cached.server;
+        let provisioned = cached.provisioned;
+        let base = server.base_url().to_string();
+        let engineer = provisioned
+            .role(&RoleId::new("engineer"))
+            .expect("engineer role is provisioned");
 
-    // The engineer acts with its own token (Forgejo identity is the token). This
-    // is the exact handle a `--backend forgejo` engineer worker would build.
-    let forge = ForgejoForge::new(
-        ForgejoConfig::new(&base, &engineer.token)
-            .with_default_repo(&provisioned.owner, &provisioned.name),
-    );
+        // The engineer acts with its own token (Forgejo identity is the token). This
+        // is the exact handle a `--backend forgejo` engineer worker would build.
+        let forge = ForgejoForge::new(
+            ForgejoConfig::new(&base, &engineer.token)
+                .with_default_repo(&provisioned.owner, &provisioned.name),
+        );
 
-    // Build the same CreatePullRequest the fake engineer builds: head
-    // `fake/pr-for-code-{N}`, base `main`, the `implementation` label.
-    let code_number = 1u64;
-    let head = format!("fake/pr-for-code-{code_number}");
-    let input = pull_request_input(
-        &provisioned.repository,
-        format!("Implement #{code_number}: prep smoke"),
-        format!("Fake implementation for code issue #{code_number}."),
-        head.clone(),
-        vec!["implementation".to_string()],
-    );
+        // Build the same CreatePullRequest the fake engineer builds: head
+        // `fake/pr-for-code-{N}`, base `main`, the `implementation` label.
+        let code_number = 1u64;
+        let head = format!("fake/pr-for-code-{code_number}");
+        let input = pull_request_input(
+            &provisioned.repository,
+            format!("Implement #{code_number}: prep smoke"),
+            format!("Fake implementation for code issue #{code_number}."),
+            head.clone(),
+            vec!["implementation".to_string()],
+        );
 
-    // 1. Without prep, the head is not a real ref → create_pull_request 404s.
-    let unprepared = forge
-        .create_pull_request(&provisioned.repository, input.clone())
-        .await;
-    assert!(
-        matches!(unprepared, Err(temper_forge::ForgeError::NotFound(_))),
-        "expected NotFound for a non-existent head branch, got {unprepared:?}"
-    );
+        // 1. Without prep, the head is not a real ref → create_pull_request 404s.
+        let unprepared = forge
+            .create_pull_request(&provisioned.repository, input.clone())
+            .await;
+        assert!(
+            matches!(unprepared, Err(temper_forge::ForgeError::NotFound(_))),
+            "expected NotFound for a non-existent head branch, got {unprepared:?}"
+        );
 
-    // 2. Prep creates the head branch + a trivial differing commit.
-    prepare_pull_request_head(
-        &base,
-        &engineer.token,
-        &provisioned.owner,
-        &provisioned.name,
-        &input,
-    )
-    .await
-    .expect("pr-prep creates head branch + commit");
-
-    // The head branch now exists as a real ref.
-    let client = temper_io_engine::http::JsonClient::new();
-    let (branch_status, _) = client
-        .send_expect_json(
-            "GET",
-            format!(
-                "{base}/api/v1/repos/{}/{}/branches/{head}",
-                provisioned.owner, provisioned.name
-            ),
-            Some(&engineer.token),
-            None,
-            "branch lookup",
+        // 2. Prep creates the head branch + a trivial differing commit.
+        prepare_pull_request_head(
+            &base,
+            &engineer.token,
+            &provisioned.owner,
+            &provisioned.name,
+            &input,
         )
-        .await;
-    assert!(
-        (200..300).contains(&branch_status),
-        "head branch should exist after prep, got {branch_status}"
-    );
-
-    // 3. create_pull_request now succeeds against the real server.
-    let pull = forge
-        .create_pull_request(&provisioned.repository, input.clone())
         .await
-        .expect("create_pull_request succeeds once the head is real");
+        .expect("pr-prep creates head branch + commit");
 
-    // …and becomes mergeable (a non-empty diff against base, no conflicts). The
-    // portable model does not surface mergeability, so confirm via raw REST.
-    // Forgejo computes `mergeable` asynchronously after creation, so it is often
-    // `false` for the first moment; poll until the background merge-check settles.
-    let pr_url = format!(
-        "{base}/api/v1/repos/{}/{}/pulls/{}",
-        provisioned.owner,
-        provisioned.name,
-        pull.number.get()
-    );
-    let mergeable = poll_mergeable(&client, &pr_url, &engineer.token).await;
-    assert!(
-        mergeable,
-        "PR should become mergeable after prep (head diverges from base)"
-    );
+        // The head branch now exists as a real ref.
+        let client = temper_io_engine::http::JsonClient::new();
+        let (branch_status, _) = client
+            .send_expect_json(
+                "GET",
+                format!(
+                    "{base}/api/v1/repos/{}/{}/branches/{head}",
+                    provisioned.owner, provisioned.name
+                ),
+                Some(&engineer.token),
+                None,
+                "branch lookup",
+            )
+            .await;
+        assert!(
+            (200..300).contains(&branch_status),
+            "head branch should exist after prep, got {branch_status}"
+        );
 
-    // 4. Re-running prep is a no-op: the branch and file already exist, and the
-    //    idempotent conflict handling must not error.
-    prepare_pull_request_head(
-        &base,
-        &engineer.token,
-        &provisioned.owner,
-        &provisioned.name,
-        &input,
-    )
-    .await
-    .expect("re-running pr-prep is a no-op");
+        // 3. create_pull_request now succeeds against the real server.
+        let pull = forge
+            .create_pull_request(&provisioned.repository, input.clone())
+            .await
+            .expect("create_pull_request succeeds once the head is real");
 
-    // Tear down explicitly so any panic in drop surfaces here.
-    drop(server);
+        // …and becomes mergeable (a non-empty diff against base, no conflicts). The
+        // portable model does not surface mergeability, so confirm via raw REST.
+        // Forgejo computes `mergeable` asynchronously after creation, so it is often
+        // `false` for the first moment; poll until the background merge-check settles.
+        let pr_url = format!(
+            "{base}/api/v1/repos/{}/{}/pulls/{}",
+            provisioned.owner,
+            provisioned.name,
+            pull.number.get()
+        );
+        let mergeable = poll_mergeable(&client, &pr_url, &engineer.token).await;
+        assert!(
+            mergeable,
+            "PR should become mergeable after prep (head diverges from base)"
+        );
+
+        // 4. Re-running prep is a no-op: the branch and file already exist, and the
+        //    idempotent conflict handling must not error.
+        prepare_pull_request_head(
+            &base,
+            &engineer.token,
+            &provisioned.owner,
+            &provisioned.name,
+            &input,
+        )
+        .await
+        .expect("re-running pr-prep is a no-op");
+
+        // Tear down explicitly so any panic in drop surfaces here.
+        drop(server);
     })
 }
 

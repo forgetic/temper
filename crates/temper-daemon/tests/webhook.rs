@@ -161,146 +161,146 @@ fn webhook_config(repo: RepositoryId) -> WebhookConfig {
 }
 
 #[test]
- fn verified_webhook_wakes_matching_target_then_dispatches() {
+fn verified_webhook_wakes_matching_target_then_dispatches() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let repo = create_repo(&forge, "acme", "service").await;
-    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let (daemon, url) = spawn().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let config = webhook_config(repo.clone());
-    let body = serde_json::to_vec(&json!({
-        "repository": { "full_name": "acme/service" },
-        "issue": { "number": issue.get() }
-    }))
-    .expect("webhook body serializes");
-    let headers = signed_headers(&config.secret, &body, "issues");
+        let forge = MemoryForge::new();
+        let repo = create_repo(&forge, "acme", "service").await;
+        let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let (daemon, url) = spawn().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let config = webhook_config(repo.clone());
+        let body = serde_json::to_vec(&json!({
+            "repository": { "full_name": "acme/service" },
+            "issue": { "number": issue.get() }
+        }))
+        .expect("webhook body serializes");
+        let headers = signed_headers(&config.secret, &body, "issues");
 
-    assert_eq!(
-        handle_webhook(
-            &daemon,
-            &forge,
-            &workflow,
-            &compiled,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-            &headers,
-            &body,
-        )
-        .await,
-        Ok(1)
-    );
+        assert_eq!(
+            handle_webhook(
+                &daemon,
+                &forge,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+                &headers,
+                &body,
+            )
+            .await,
+            Ok(1)
+        );
 
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-    assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+        assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
     })
 }
 
 #[test]
- fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
+fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let repo = create_repo(&forge, "acme", "service").await;
-    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let (daemon, url) = spawn().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let config = webhook_config(repo);
-    let body = serde_json::to_vec(&json!({
-        "repository": { "full_name": "acme/service" },
-        "issue": { "number": issue.get() }
-    }))
-    .expect("webhook body serializes");
-    let mut headers = BTreeMap::new();
-    headers.insert("x-forgejo-event".to_string(), "issues".to_string());
-    headers.insert("x-forgejo-signature".to_string(), "sha256=00".to_string());
+        let forge = MemoryForge::new();
+        let repo = create_repo(&forge, "acme", "service").await;
+        let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let (daemon, url) = spawn().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let config = webhook_config(repo);
+        let body = serde_json::to_vec(&json!({
+            "repository": { "full_name": "acme/service" },
+            "issue": { "number": issue.get() }
+        }))
+        .expect("webhook body serializes");
+        let mut headers = BTreeMap::new();
+        headers.insert("x-forgejo-event".to_string(), "issues".to_string());
+        headers.insert("x-forgejo-signature".to_string(), "sha256=00".to_string());
 
-    assert_eq!(
-        handle_webhook(
-            &daemon,
-            &forge,
-            &workflow,
-            &compiled,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-            &headers,
-            &body,
-        )
-        .await,
-        Err(WebhookError::InvalidSignature)
-    );
+        assert_eq!(
+            handle_webhook(
+                &daemon,
+                &forge,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+                &headers,
+                &body,
+            )
+            .await,
+            Err(WebhookError::InvalidSignature)
+        );
 
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
     })
 }
 
 #[test]
- fn webhook_for_unconfigured_repo_enqueues_nothing() {
+fn webhook_for_unconfigured_repo_enqueues_nothing() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let configured_repo = create_repo(&forge, "acme", "service").await;
-    let other_repo = create_repo(&forge, "acme", "other").await;
-    create_issue(&forge, &configured_repo, &["code", "ready"]).await;
-    let issue = create_issue(&forge, &other_repo, &["code", "ready"]).await;
-    let workflow = workflow();
-    let compiled = workflow.compile();
-    let (daemon, url) = spawn().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    let config = webhook_config(configured_repo);
-    let body = serde_json::to_vec(&json!({
-        "repository": { "full_name": "acme/other" },
-        "issue": { "number": issue.get() }
-    }))
-    .expect("webhook body serializes");
-    let headers = signed_headers(&config.secret, &body, "issues");
+        let forge = MemoryForge::new();
+        let configured_repo = create_repo(&forge, "acme", "service").await;
+        let other_repo = create_repo(&forge, "acme", "other").await;
+        create_issue(&forge, &configured_repo, &["code", "ready"]).await;
+        let issue = create_issue(&forge, &other_repo, &["code", "ready"]).await;
+        let workflow = workflow();
+        let compiled = workflow.compile();
+        let (daemon, url) = spawn().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        let config = webhook_config(configured_repo);
+        let body = serde_json::to_vec(&json!({
+            "repository": { "full_name": "acme/other" },
+            "issue": { "number": issue.get() }
+        }))
+        .expect("webhook body serializes");
+        let headers = signed_headers(&config.secret, &body, "issues");
 
-    assert_eq!(
-        handle_webhook(
-            &daemon,
-            &forge,
-            &workflow,
-            &compiled,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-            &headers,
-            &body,
-        )
-        .await,
-        Ok(0)
-    );
+        assert_eq!(
+            handle_webhook(
+                &daemon,
+                &forge,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+                &headers,
+                &body,
+            )
+            .await,
+            Ok(0)
+        );
 
-    assert_eq!(
-        post(
-            &client,
-            &url,
-            &register("worker-a", "engineer", "acme/service")
-        )
-        .await
-        .status,
-        204
-    );
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
+        assert_eq!(
+            post(
+                &client,
+                &url,
+                &register("worker-a", "engineer", "acme/service")
+            )
+            .await
+            .status,
+            204
+        );
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
     })
 }

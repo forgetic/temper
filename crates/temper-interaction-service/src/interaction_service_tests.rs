@@ -125,98 +125,98 @@ async fn create_conversation(app: &InteractionHttpApp, profile_id: &str) -> Stri
 }
 
 #[test]
- fn generic_http_routes_work_for_two_profiles() {
+fn generic_http_routes_work_for_two_profiles() {
     temper_io_engine::block_on(async move {
-    let app = fake_app(None).await;
-    let intake = create_conversation(&app, "intake-agent").await;
-    let support = create_conversation(&app, "support-agent").await;
+        let app = fake_app(None).await;
+        let intake = create_conversation(&app, "intake-agent").await;
+        let support = create_conversation(&app, "support-agent").await;
 
-    let intake_turn = app
-        .handle_http_request(json_request(
-            "POST",
-            &format!("/conversations/{intake}/turns"),
-            json!({ "body": "please file intake work" }),
-        ))
-        .await;
-    assert_eq!(intake_turn.status(), 200);
-    let intake_body = response_json(&intake_turn);
-    assert_eq!(intake_body["reply"]["message"], "intake-agent reply");
-    assert_eq!(
-        intake_body["latest_proposals"][0]["id"],
-        "intake-agent-proposal"
-    );
+        let intake_turn = app
+            .handle_http_request(json_request(
+                "POST",
+                &format!("/conversations/{intake}/turns"),
+                json!({ "body": "please file intake work" }),
+            ))
+            .await;
+        assert_eq!(intake_turn.status(), 200);
+        let intake_body = response_json(&intake_turn);
+        assert_eq!(intake_body["reply"]["message"], "intake-agent reply");
+        assert_eq!(
+            intake_body["latest_proposals"][0]["id"],
+            "intake-agent-proposal"
+        );
 
-    let support_turn = app
-        .handle_http_request(json_request(
-            "POST",
-            &format!("/conversations/{support}/turns"),
-            json!({ "body": "please file support work" }),
-        ))
-        .await;
-    assert_eq!(support_turn.status(), 200);
-    assert_eq!(
-        response_json(&support_turn)["reply"]["message"],
-        "support-agent reply"
-    );
+        let support_turn = app
+            .handle_http_request(json_request(
+                "POST",
+                &format!("/conversations/{support}/turns"),
+                json!({ "body": "please file support work" }),
+            ))
+            .await;
+        assert_eq!(support_turn.status(), 200);
+        assert_eq!(
+            response_json(&support_turn)["reply"]["message"],
+            "support-agent reply"
+        );
 
-    let proposals = app
-        .handle_http_request(HttpRequest::new(
-            "GET",
-            &format!("/conversations/{intake}/proposals"),
-            Vec::new(),
-        ))
-        .await;
-    assert_eq!(proposals.status(), 200);
-    assert_eq!(
-        response_json(&proposals)["proposals"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+        let proposals = app
+            .handle_http_request(HttpRequest::new(
+                "GET",
+                &format!("/conversations/{intake}/proposals"),
+                Vec::new(),
+            ))
+            .await;
+        assert_eq!(proposals.status(), 200);
+        assert_eq!(
+            response_json(&proposals)["proposals"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
 
-    let accepted = app
-        .handle_http_request(json_request(
-            "POST",
-            &format!("/conversations/{intake}/proposals/intake-agent-proposal/accept"),
-            json!({}),
-        ))
-        .await;
-    assert_eq!(accepted.status(), 200);
-    let accepted_body = response_json(&accepted);
-    assert_eq!(accepted_body["created"], true);
-    assert_eq!(accepted_body["target"]["kind"], "issue");
+        let accepted = app
+            .handle_http_request(json_request(
+                "POST",
+                &format!("/conversations/{intake}/proposals/intake-agent-proposal/accept"),
+                json!({}),
+            ))
+            .await;
+        assert_eq!(accepted.status(), 200);
+        let accepted_body = response_json(&accepted);
+        assert_eq!(accepted_body["created"], true);
+        assert_eq!(accepted_body["target"]["kind"], "issue");
 
-    let events = app
-        .handle_http_request(HttpRequest::new(
-            "GET",
-            &format!("/conversations/{intake}/events"),
-            Vec::new(),
-        ))
-        .await;
-    assert_eq!(events.status(), 200);
-    let events_body = response_json(&events);
-    assert_eq!(events_body["streaming"], false);
-    assert!(events_body["events"].as_array().unwrap().len() >= 5);
+        let events = app
+            .handle_http_request(HttpRequest::new(
+                "GET",
+                &format!("/conversations/{intake}/events"),
+                Vec::new(),
+            ))
+            .await;
+        assert_eq!(events.status(), 200);
+        let events_body = response_json(&events);
+        assert_eq!(events_body["streaming"], false);
+        assert!(events_body["events"].as_array().unwrap().len() >= 5);
     })
 }
 
 #[test]
- fn generic_http_auth_protects_routes_when_configured() {
+fn generic_http_auth_protects_routes_when_configured() {
     temper_io_engine::block_on(async move {
-    let app = fake_app(Some("service-secret")).await;
-    let unauthenticated = app
-        .handle_http_request(HttpRequest::new("GET", "/health", Vec::new()))
-        .await;
-    assert_eq!(unauthenticated.status(), 401);
+        let app = fake_app(Some("service-secret")).await;
+        let unauthenticated = app
+            .handle_http_request(HttpRequest::new("GET", "/health", Vec::new()))
+            .await;
+        assert_eq!(unauthenticated.status(), 401);
 
-    let authenticated = app
-        .handle_http_request(
-            HttpRequest::new("GET", "/health", Vec::new())
-                .with_header("authorization", "Bearer service-secret"),
-        )
-        .await;
-    assert_eq!(authenticated.status(), 200);
+        let authenticated = app
+            .handle_http_request(
+                HttpRequest::new("GET", "/health", Vec::new())
+                    .with_header("authorization", "Bearer service-secret"),
+            )
+            .await;
+        assert_eq!(authenticated.status(), 200);
     })
 }
 

@@ -59,68 +59,68 @@ impl Drop for WorkerGuard {
 }
 
 #[test]
- fn daemon_worker_pushes_branch_and_daemon_sees_success() {
+fn daemon_worker_pushes_branch_and_daemon_sees_success() {
     temper_io_engine::block_on(async move {
-    let workspace = RunWorkspace::new("temper-daemon-worker-hermetic");
+        let workspace = RunWorkspace::new("temper-daemon-worker-hermetic");
 
-    // A seeded bare origin reachable over file:// (no credentials needed).
-    let git_root = workspace.dir("git/acme");
-    let origin = git_root.join("service.git");
-    git(&["init", "--bare", path_str(&origin)]);
-    seed_origin(&origin, workspace.path());
+        // A seeded bare origin reachable over file:// (no credentials needed).
+        let git_root = workspace.dir("git/acme");
+        let origin = git_root.join("service.git");
+        git(&["init", "--bare", path_str(&origin)]);
+        seed_origin(&origin, workspace.path());
 
-    // In-process daemon transport with a recording applier seam.
-    let (tx, mut rx) = temper_io_engine::channel();
-    let daemon = Daemon::with_applier(Arc::new(RecordingApplier { tx }));
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("ephemeral daemon server binds");
-    let addr = server.local_addr();
+        // In-process daemon transport with a recording applier seam.
+        let (tx, mut rx) = temper_io_engine::channel();
+        let daemon = Daemon::with_applier(Arc::new(RecordingApplier { tx }));
+        let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
+            .await
+            .expect("ephemeral daemon server binds");
+        let addr = server.local_addr();
 
-    // One enriched issue job, exactly what the daemon's scan feed enqueues.
-    let context = JobContext {
-        role: "engineer".to_string(),
-        repo: "acme/service".to_string(),
-        queue: "code_ready".to_string(),
-        artifact_kind: "code".to_string(),
-        repository: Some(JobRepository {
-            owner: "acme".to_string(),
-            name: "service".to_string(),
-            default_branch: "main".to_string(),
-        }),
-        base_branch: Some("main".to_string()),
-        branch_hint: Some("agent/pr-for-code-7".to_string()),
-        correlation_key: Some("pr-for-code-7".to_string()),
-        artifact: Some(JobArtifactSnapshot {
-            number: 7,
-            title: "Implement the thing".to_string(),
-            body: "Detailed issue body".to_string(),
-            labels: vec!["code".to_string(), "ready".to_string()],
-            state: "Open".to_string(),
-        }),
-        action: Some("open_pr".to_string()),
-        checkout_capability: Some("writable".to_string()),
-        allowed_verdicts: Vec::new(),
-    };
-    daemon
-        .enqueue_job(
-            "acme/service/issue-7/engineer/code_ready",
-            "engineer",
-            "acme/service",
-            Artifact {
-                item: json!(7),
-                kind: "issue".to_string(),
-            },
-            serde_json::to_value(&context).expect("JobContext serializes"),
-        )
-        .await;
+        // One enriched issue job, exactly what the daemon's scan feed enqueues.
+        let context = JobContext {
+            role: "engineer".to_string(),
+            repo: "acme/service".to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            repository: Some(JobRepository {
+                owner: "acme".to_string(),
+                name: "service".to_string(),
+                default_branch: "main".to_string(),
+            }),
+            base_branch: Some("main".to_string()),
+            branch_hint: Some("agent/pr-for-code-7".to_string()),
+            correlation_key: Some("pr-for-code-7".to_string()),
+            artifact: Some(JobArtifactSnapshot {
+                number: 7,
+                title: "Implement the thing".to_string(),
+                body: "Detailed issue body".to_string(),
+                labels: vec!["code".to_string(), "ready".to_string()],
+                state: "Open".to_string(),
+            }),
+            action: Some("open_pr".to_string()),
+            checkout_capability: Some("writable".to_string()),
+            allowed_verdicts: Vec::new(),
+        };
+        daemon
+            .enqueue_job(
+                "acme/service/issue-7/engineer/code_ready",
+                "engineer",
+                "acme/service",
+                Artifact {
+                    item: json!(7),
+                    kind: "issue".to_string(),
+                },
+                serde_json::to_value(&context).expect("JobContext serializes"),
+            )
+            .await;
 
-    let stop_file = workspace.join("stop");
-    let log = workspace.join("worker.log");
-    let mut worker = spawn_worker(workspace.path(), addr, &stop_file, &log);
+        let stop_file = workspace.join("stop");
+        let log = workspace.join("worker.log");
+        let mut worker = spawn_worker(workspace.path(), addr, &stop_file, &log);
 
-    let cx = temper_io_engine::runtime::current_cx();
-    let (job, result) = asupersync::time::timeout(
+        let cx = temper_io_engine::runtime::current_cx();
+        let (job, result) = asupersync::time::timeout(
         temper_io_engine::runtime::timer_now(&cx),
         RESULT_TIMEOUT,
         Box::pin(rx.recv()),
@@ -134,65 +134,65 @@ impl Drop for WorkerGuard {
     })
     .expect("applier channel stays open");
 
-    assert_eq!(job.job_id, "acme/service/issue-7/engineer/code_ready");
-    assert_eq!(job.role, "engineer");
-    assert_eq!(
-        result.status,
-        ResultStatus::Success,
-        "worker log:\n{}",
-        worker.logs()
-    );
-    let branch = result
-        .branch
-        .expect("success result carries the pushed branch");
-    assert_eq!(branch.name, "agent/pr-for-code-7");
+        assert_eq!(job.job_id, "acme/service/issue-7/engineer/code_ready");
+        assert_eq!(job.role, "engineer");
+        assert_eq!(
+            result.status,
+            ResultStatus::Success,
+            "worker log:\n{}",
+            worker.logs()
+        );
+        let branch = result
+            .branch
+            .expect("success result carries the pushed branch");
+        assert_eq!(branch.name, "agent/pr-for-code-7");
 
-    // The branch really exists in the origin at the reported head.
-    let pushed_sha = git_output(&[
-        "-C",
-        path_str(&origin),
-        "rev-parse",
-        "refs/heads/agent/pr-for-code-7",
-    ]);
-    assert_eq!(pushed_sha, branch.head_sha);
+        // The branch really exists in the origin at the reported head.
+        let pushed_sha = git_output(&[
+            "-C",
+            path_str(&origin),
+            "rev-parse",
+            "refs/heads/agent/pr-for-code-7",
+        ]);
+        assert_eq!(pushed_sha, branch.head_sha);
 
-    // Deterministic commit: role identity, CI sentinel, and the native
-    // close-on-merge keyword for the source issue.
-    let message = git_output(&[
-        "-C",
-        path_str(&origin),
-        "log",
-        "-1",
-        "--format=%B",
-        "refs/heads/agent/pr-for-code-7",
-    ]);
-    assert!(
-        message.starts_with(&format!("Implement pr-for-code-7 {CI_PASS_MARKER}")),
-        "unexpected commit subject: {message}"
-    );
-    assert!(
-        message.contains("Closes #7"),
-        "commit message is missing the issue close keyword: {message}"
-    );
-    let author = git_output(&[
-        "-C",
-        path_str(&origin),
-        "log",
-        "-1",
-        "--format=%an <%ae>|%cn <%ce>",
-        "refs/heads/agent/pr-for-code-7",
-    ]);
-    assert_eq!(
-        author,
-        "engineer <engineer@example.invalid>|engineer <engineer@example.invalid>"
-    );
+        // Deterministic commit: role identity, CI sentinel, and the native
+        // close-on-merge keyword for the source issue.
+        let message = git_output(&[
+            "-C",
+            path_str(&origin),
+            "log",
+            "-1",
+            "--format=%B",
+            "refs/heads/agent/pr-for-code-7",
+        ]);
+        assert!(
+            message.starts_with(&format!("Implement pr-for-code-7 {CI_PASS_MARKER}")),
+            "unexpected commit subject: {message}"
+        );
+        assert!(
+            message.contains("Closes #7"),
+            "commit message is missing the issue close keyword: {message}"
+        );
+        let author = git_output(&[
+            "-C",
+            path_str(&origin),
+            "log",
+            "-1",
+            "--format=%an <%ae>|%cn <%ce>",
+            "refs/heads/agent/pr-for-code-7",
+        ]);
+        assert_eq!(
+            author,
+            "engineer <engineer@example.invalid>|engineer <engineer@example.invalid>"
+        );
 
-    // The stop-file ends the loop and the worker exits cleanly.
-    std::fs::write(&stop_file, b"stop").expect("stop file writes");
-    let status = asupersync::runtime::spawn_blocking(move || worker.child.wait())
-        .await
-        .expect("worker child waits");
-    assert!(status.success(), "worker exited with {status:?}");
+        // The stop-file ends the loop and the worker exits cleanly.
+        std::fs::write(&stop_file, b"stop").expect("stop file writes");
+        let status = asupersync::runtime::spawn_blocking(move || worker.child.wait())
+            .await
+            .expect("worker child waits");
+        assert!(status.success(), "worker exited with {status:?}");
     })
 }
 

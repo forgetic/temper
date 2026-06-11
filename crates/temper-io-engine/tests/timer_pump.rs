@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Guard for the vendored timer-pump patch: a bare sleep on an otherwise idle
-//! production runtime must fire (upstream asupersync 0.3.1 never pumped the
-//! timer wheel outside the lab runtime).
+//! Guard for the timer lost-wakeup bug: a bare sleep on an otherwise idle
+//! production runtime must fire. asupersync 0.3.1 hung here (the I/O leader
+//! blocked the reactor with no timeout; we carried a vendored patch), fixed
+//! upstream in 0.3.2 by folding the timer deadline into the leader's poll
+//! timeout and capping the idle poll at 250ms. Keep this test when bumping
+//! asupersync — it is the cheapest canary for scheduler regressions.
 
 use std::time::{Duration, Instant};
 
