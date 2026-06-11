@@ -52,6 +52,15 @@ Requirements:
 The child issue body carries both this correlation key and a repo-qualified
 `parents` reference back to the source parent.
 
+The `create_issues` effect path uses the same contract when a
+`CreateIssuesChild` names `target_repo`: the child is ensured in that repository
+with a global child key and repo-qualified parent backref. A fan-out containing
+any cross-repository child also records repo-qualified dependency refs for every
+child on the parent issue so dependency aggregation observes the same graph as
+scripted architect fan-out. Children without `target_repo` keep the legacy
+same-repository key/backref shape unless the parent dependency list must qualify
+them because a sibling crossed repositories.
+
 ## Relation and dependency semantics
 
 `parent` and `produced_pr` relations are metadata-projected. `dependency`

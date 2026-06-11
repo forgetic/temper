@@ -27,7 +27,7 @@
 
 use crate::ids::{RoleId, TransitionId};
 use std::collections::BTreeMap;
-use temper_forge::{CreatePullRequest, UserId};
+use temper_forge::{CreatePullRequest, RepositoryId, UserId};
 
 /// One workspace-authored child artifact bound for a `CreateIssues` effect.
 ///
@@ -55,6 +55,9 @@ pub struct CreateIssuesChild {
     /// one. Recorded as fallback dependency relations once both children exist,
     /// reusing the cross-repo aggregation stance (non-atomic on real forges).
     pub dependencies: Vec<String>,
+    /// Repository the child is created in. `None` (the default) keeps today's
+    /// behavior: the child lands in the parent artifact's repository.
+    pub target_repo: Option<RepositoryId>,
 }
 
 impl CreateIssuesChild {
@@ -66,6 +69,7 @@ impl CreateIssuesChild {
             body: body.into(),
             labels: Vec::new(),
             dependencies: Vec::new(),
+            target_repo: None,
         }
     }
 
@@ -82,6 +86,12 @@ impl CreateIssuesChild {
         dependencies: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.dependencies = dependencies.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the target repository for this child, returning `self` for chaining.
+    pub fn with_target_repo(mut self, repo: impl Into<RepositoryId>) -> Self {
+        self.target_repo = Some(repo.into());
         self
     }
 }
