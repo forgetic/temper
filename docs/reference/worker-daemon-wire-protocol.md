@@ -31,8 +31,8 @@ connections to workers or pushes unsolicited jobs to them.
 JSON keeps v1 easy to inspect and fixture-test while preserving message
 semantics for a future protobuf/gRPC transport. The additive verdict-job fields
 `JobContext.action`, `JobContext.checkout_capability`,
-`JobContext.allowed_verdicts`, `JobResult.verdict`, and `JobResult.body` are all
-optional, and the protocol version remains `1`.
+`JobContext.allowed_verdicts`, `JobResult.verdict`, `JobResult.body`, and
+`JobResult.children` are all optional, and the protocol version remains `1`.
 
 ## Envelope
 
@@ -177,6 +177,13 @@ Worker returns the structured result for one assigned job.
 | `branch.head_sha` | string | yes when `branch` is present | Git commit SHA at the branch head. |
 | `verdict` | string | no | Verdict chosen by a verdict job. Must be one of the assignment payload's `allowed_verdicts` when present. |
 | `body` | string | no | Authored body accompanying a verdict, such as a rewritten issue spec or PR review body. |
+| `children` | array of objects | no | Workspace-authored child issues for breakdown verdicts such as `needs_breakdown`. Empty or absent means no children. |
+| `children[].slug` | string | yes | Stable per-child identifier within the result; seeds the child's correlation key and is referenced by sibling `depends_on` entries. |
+| `children[].title` | string | yes | Child issue title. |
+| `children[].body` | string | yes | Child issue body. |
+| `children[].labels` | array of strings | no | Labels to apply when creating the child issue. |
+| `children[].depends_on` | array of strings | no | Slugs of sibling children in the same result that must land before this one. |
+| `children[].target_repo` | string | no | Target repository as an `owner/name` path. Omitted means the assignment's own repository. |
 | `failure` | object | required for failures | Failure details. |
 | `failure.class` | string | yes when `failure` is present | `transient`, `permanent`, `canceled`, or `protocol`. |
 | `failure.message` | string | yes when `failure` is present | Human-readable failure summary. |
@@ -188,9 +195,13 @@ role identity. The worker never calls the Forge API for PR create/update or
 artifact mutation.
 
 Verdict jobs are successful jobs whose result may carry `verdict` plus `body`
-and no `branch`; the allowed vocabulary comes from the assignment payload's
-`allowed_verdicts`. Both result fields are optional for backward compatibility,
-and their addition does not change the protocol version: it remains `1`.
+or breakdown `children` and no `branch`; the allowed vocabulary comes from the
+assignment payload's `allowed_verdicts`. The daemon binds `children` only when
+the routed verdict transition declares a `create_issues` effect; a child's
+optional `target_repo` uses the same `owner/name` shape as daemon `--repo` and
+omits to the assignment's repository. These result fields are optional for
+backward compatibility, and their addition does not change the protocol version:
+it remains `1`.
 
 ### `release` — daemon → worker
 

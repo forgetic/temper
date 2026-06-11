@@ -175,6 +175,7 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
         }),
         verdict: None,
         body: None,
+        children: Vec::new(),
         failure: None,
         summary: Some(summary.to_string()),
         details: Some(json!({"note":"fake worker result"})),

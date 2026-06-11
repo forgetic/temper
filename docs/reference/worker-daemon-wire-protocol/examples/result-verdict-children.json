@@ -1,0 +1,25 @@
+{
+  "protocol_version": 1,
+  "type": "result",
+  "worker_id": "worker-1",
+  "job_id": "job-123",
+  "status": "success",
+  "verdict": "needs_breakdown",
+  "children": [
+    {
+      "slug": "api-schema",
+      "title": "Define the API schema",
+      "body": "Write the shared API schema.",
+      "labels": ["code", "ready"]
+    },
+    {
+      "slug": "web-client",
+      "title": "Implement the web client",
+      "body": "Build the web client against the API schema.",
+      "labels": ["code", "ready"],
+      "depends_on": ["api-schema"],
+      "target_repo": "acme/web"
+    }
+  ],
+  "summary": "planned breakdown"
+}

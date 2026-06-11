@@ -99,6 +99,7 @@ fn job_result(job_id: &str) -> JobResult {
         }),
         verdict: None,
         body: None,
+        children: Vec::new(),
         failure: None,
         summary: Some("done".to_string()),
         details: Some(json!({"note":"fake worker result"})),

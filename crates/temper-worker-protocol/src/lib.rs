@@ -188,6 +188,26 @@ pub struct Failure {
     pub message: String,
 }
 
+/// One workspace-authored child issue carried by a breakdown verdict result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobChild {
+    /// Stable per-child identifier within the result (seeds the child's
+    /// correlation key; referenced by sibling `depends_on`).
+    pub slug: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Slugs of sibling children in the same result that must land before
+    /// this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// Target repository as an `owner/name` path (the same shape the daemon's
+    /// `--repo` flag parses). `None` = the job's own repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_repo: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobResult {
     pub protocol_version: u32,
@@ -205,6 +225,9 @@ pub struct JobResult {
     /// the review body).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Child issues authored by a breakdown verdict (e.g. `needs_breakdown`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<JobChild>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<Failure>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,26 +298,6 @@ pub struct ProtocolError {
 mod tests {
     use super::*;
 
-    const REGISTER: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/register.json");
-    const POLL: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/poll.json");
-    const ASSIGN: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/assign.json");
-    const HEARTBEAT: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/heartbeat.json");
-    const RESULT: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/result.json");
-    const RESULT_VERDICT: &str = include_str!(
-        "../../../docs/reference/worker-daemon-wire-protocol/examples/result-verdict.json"
-    );
-    const RELEASE: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/release.json");
-    const LEASE_ACK: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/lease-ack.json");
-    const ERROR: &str =
-        include_str!("../../../docs/reference/worker-daemon-wire-protocol/examples/error.json");
-
     fn assert_round_trips(json: &str) -> WorkerProtocolMessage {
         let msg: WorkerProtocolMessage = serde_json::from_str(json).expect("fixture parses");
         let encoded = serde_json::to_string(&msg).expect("serializes");
@@ -316,30 +319,50 @@ mod tests {
         }
     }
 
+    fn fixture_jsons() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/reference/worker-daemon-wire-protocol/examples");
+        let mut fixtures = std::fs::read_dir(dir)
+            .expect("read protocol fixture directory")
+            .map(|entry| entry.expect("fixture entry"))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("json")
+            })
+            .map(|entry| {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .expect("fixture has a filename")
+                    .to_str()
+                    .expect("fixture filename is UTF-8")
+                    .to_string();
+                let json = std::fs::read_to_string(path).expect("fixture is readable");
+                (name, json)
+            })
+            .collect::<Vec<_>>();
+        fixtures.sort_by(|left, right| left.0.cmp(&right.0));
+        fixtures
+    }
+
     #[test]
     fn fixtures_round_trip_and_match_variants() {
-        let fixtures = [
-            (REGISTER, "register"),
-            (POLL, "poll"),
-            (ASSIGN, "assign"),
-            (HEARTBEAT, "heartbeat"),
-            (RESULT, "result"),
-            (RESULT_VERDICT, "result"),
-            (RELEASE, "release"),
-            (LEASE_ACK, "lease-ack"),
-            (ERROR, "error"),
-        ];
-
-        for (json, name) in fixtures {
-            let msg = assert_round_trips(json);
+        for (filename, json) in fixture_jsons() {
+            let msg = assert_round_trips(&json);
             assert_eq!(protocol_version(&msg), WORKER_PROTOCOL_VERSION);
 
-            match (name, msg) {
+            let expected = filename.trim_end_matches(".json");
+            match (expected, msg) {
                 ("register", WorkerProtocolMessage::Register(_))
                 | ("poll", WorkerProtocolMessage::Poll(_))
                 | ("assign", WorkerProtocolMessage::Assign(_))
                 | ("heartbeat", WorkerProtocolMessage::Heartbeat(_))
                 | ("result", WorkerProtocolMessage::Result(_))
+                | ("result-verdict", WorkerProtocolMessage::Result(_))
+                | ("result-verdict-children", WorkerProtocolMessage::Result(_))
                 | ("release", WorkerProtocolMessage::Release(_))
                 | ("lease-ack", WorkerProtocolMessage::LeaseAck(_))
                 | ("error", WorkerProtocolMessage::Error(_)) => {}
@@ -403,6 +426,7 @@ mod tests {
         assert!(result.branch.is_some());
         assert_eq!(result.verdict, None);
         assert_eq!(result.body, None);
+        assert!(result.children.is_empty());
         assert_eq!(result.failure, None);
     }
 
@@ -447,6 +471,7 @@ mod tests {
             }),
             verdict: None,
             body: None,
+            children: Vec::new(),
             failure: None,
             summary: None,
             details: None,
@@ -455,6 +480,7 @@ mod tests {
         let value = serde_json::to_value(&result).expect("job result serializes");
         assert_eq!(value.get("verdict"), None);
         assert_eq!(value.get("body"), None);
+        assert_eq!(value.get("children"), None);
         assert_eq!(
             value,
             serde_json::json!({
@@ -480,6 +506,7 @@ mod tests {
             branch: None,
             verdict: Some("ready_code".to_string()),
             body: Some("Rewritten implementation-ready issue body.".to_string()),
+            children: Vec::new(),
             failure: None,
             summary: Some("triaged intake".to_string()),
             details: None,
@@ -487,11 +514,89 @@ mod tests {
 
         let value = serde_json::to_value(&result).expect("job result serializes");
         assert_eq!(value.get("branch"), None);
+        assert_eq!(value.get("children"), None);
         assert_eq!(value["verdict"], "ready_code");
         assert_eq!(value["body"], "Rewritten implementation-ready issue body.");
         let decoded: JobResult = serde_json::from_value(value).expect("serialized result parses");
 
         assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn verdict_job_result_round_trips_with_children() {
+        let result = JobResult {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker-1".to_string(),
+            job_id: "job-123".to_string(),
+            status: ResultStatus::Success,
+            branch: None,
+            verdict: Some("needs_breakdown".to_string()),
+            body: None,
+            children: vec![
+                JobChild {
+                    slug: "api-schema".to_string(),
+                    title: "Define the API schema".to_string(),
+                    body: "Write the shared API schema.".to_string(),
+                    labels: vec!["code".to_string(), "ready".to_string()],
+                    depends_on: Vec::new(),
+                    target_repo: None,
+                },
+                JobChild {
+                    slug: "web-client".to_string(),
+                    title: "Implement the web client".to_string(),
+                    body: "Build the web client against the API schema.".to_string(),
+                    labels: vec!["code".to_string(), "ready".to_string()],
+                    depends_on: vec!["api-schema".to_string()],
+                    target_repo: Some("acme/web".to_string()),
+                },
+            ],
+            failure: None,
+            summary: Some("planned breakdown".to_string()),
+            details: None,
+        };
+
+        let value = serde_json::to_value(&result).expect("job result serializes");
+        assert_eq!(value.get("branch"), None);
+        assert_eq!(value["verdict"], "needs_breakdown");
+        assert_eq!(value["children"][0]["slug"], "api-schema");
+        assert_eq!(
+            value["children"][1]["depends_on"],
+            serde_json::json!(["api-schema"])
+        );
+        assert_eq!(value["children"][1]["target_repo"], "acme/web");
+        let decoded: JobResult = serde_json::from_value(value).expect("serialized result parses");
+
+        assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn child_defaults_omit_empty_optional_fields() {
+        let child = JobChild {
+            slug: "api-schema".to_string(),
+            title: "Define the API schema".to_string(),
+            body: "Write the shared API schema.".to_string(),
+            labels: Vec::new(),
+            depends_on: Vec::new(),
+            target_repo: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&child).expect("child serializes"),
+            serde_json::json!({
+                "slug": "api-schema",
+                "title": "Define the API schema",
+                "body": "Write the shared API schema."
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<JobChild>(serde_json::json!({
+                "slug": "api-schema",
+                "title": "Define the API schema",
+                "body": "Write the shared API schema."
+            }))
+            .expect("minimal child parses"),
+            child
+        );
     }
 
     #[test]

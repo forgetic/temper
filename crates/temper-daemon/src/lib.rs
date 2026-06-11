@@ -28,7 +28,8 @@ use temper_runner::{
     ScanError, WorkItem,
 };
 use temper_worker_protocol::{
-    Artifact, Assign, ErrorCode, FailureClass, JobResult, Poll, ResultStatus, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, FailureClass, JobChild, JobResult, Poll, ResultStatus,
+    WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -38,8 +39,8 @@ use temper_worker_registry::DaemonCore;
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
     find_pull_request_by_correlation, ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow,
-    Effect, ExecutionContext, ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy,
-    RoleId, ToolManifest, TransitionId, ValidatedWorkflow, VerdictId,
+    CreateIssuesChild, Effect, ExecutionContext, ExecutionError, Executor, LeaseError,
+    LeaseManager, LeasePolicy, RoleId, ToolManifest, TransitionId, ValidatedWorkflow, VerdictId,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -319,12 +320,27 @@ impl<F: Forge> ForgeApplier<F> {
                     return;
                 }
 
-                let context = verdict_execution_context(
+                let mut context = verdict_execution_context(
                     &job_context.artifact_kind,
                     &routed,
                     number,
                     result.body,
                 );
+                if !result.children.is_empty()
+                    && !self
+                        .bind_create_issues_children(VerdictChildrenBinding {
+                            job: &job,
+                            repository_id: &repository.id,
+                            artifact_kind: &job_context.artifact_kind,
+                            routed: &routed,
+                            number,
+                            children: result.children,
+                            context: &mut context,
+                        })
+                        .await
+                {
+                    return;
+                }
 
                 self.execute_routed_verdict(RoutedVerdictApply {
                     job: &job,
@@ -383,6 +399,107 @@ impl<F: Forge> ForgeApplier<F> {
                     "temper-daemon: forge applier ignored unsupported verdict job for job_id={} repo={} artifact.kind={} artifact.item={}",
                     job.job_id, job.repo, job.artifact.kind, job.artifact.item
                 );
+            }
+        }
+    }
+
+    async fn bind_create_issues_children(&self, binding: VerdictChildrenBinding<'_>) -> bool {
+        let Some(effect_index) = create_issues_effect_index(self.workflow.as_ref(), binding.routed)
+        else {
+            eprintln!(
+                "temper-daemon: forge applier ignored verdict children without create_issues effect for job_id={} repo={} issue={} routed={} children={}",
+                binding.job.job_id,
+                binding.job.repo,
+                binding.number,
+                binding.routed,
+                binding.children.len()
+            );
+            return true;
+        };
+
+        let mut mapped = Vec::with_capacity(binding.children.len());
+        for child in binding.children {
+            let Some(mapped_child) = self
+                .map_job_child(binding.job, binding.repository_id, binding.number, child)
+                .await
+            else {
+                return false;
+            };
+            mapped.push(mapped_child);
+        }
+
+        let content_key = workspace_content_key(
+            &ArtifactKindId::new(binding.artifact_kind),
+            binding.routed,
+            binding.number,
+        );
+        binding
+            .context
+            .set_create_issues_at(binding.routed.clone(), effect_index, mapped);
+        binding.context.set_create_issues_correlation_key_at(
+            binding.routed.clone(),
+            effect_index,
+            content_key,
+        );
+        true
+    }
+
+    async fn map_job_child(
+        &self,
+        job: &InFlightJob,
+        source_repo: &RepositoryId,
+        number: ItemNumber,
+        child: JobChild,
+    ) -> Option<CreateIssuesChild> {
+        let mut mapped = CreateIssuesChild {
+            slug: child.slug,
+            title: child.title,
+            body: child.body,
+            labels: child.labels,
+            dependencies: child.depends_on,
+            target_repo: None,
+        };
+
+        if let Some(target_repo) = child.target_repo {
+            let repository = self
+                .resolve_child_target_repository(job, source_repo, number, &target_repo)
+                .await?;
+            mapped = mapped.with_target_repo(repository.id);
+        }
+
+        Some(mapped)
+    }
+
+    async fn resolve_child_target_repository(
+        &self,
+        job: &InFlightJob,
+        source_repo: &RepositoryId,
+        number: ItemNumber,
+        target_repo: &str,
+    ) -> Option<Repository> {
+        let Some(path) = parse_child_target_repo(target_repo) else {
+            eprintln!(
+                "temper-daemon: forge applier dropped verdict apply with malformed child target_repo for job_id={} repo={} issue={} target_repo={}",
+                job.job_id, job.repo, number, target_repo
+            );
+            return None;
+        };
+
+        match self.forge.get_repository_by_path(&path).await {
+            Ok(Some(repository)) => Some(repository),
+            Ok(None) => {
+                eprintln!(
+                    "temper-daemon: forge applier dropped verdict apply with unknown child target_repo for job_id={} repo={} issue={} source_repo={} target_repo={}",
+                    job.job_id, job.repo, number, source_repo, target_repo
+                );
+                None
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier dropped verdict apply after child target_repo lookup failed for job_id={} repo={} issue={} source_repo={} target_repo={}: {error}",
+                    job.job_id, job.repo, number, source_repo, target_repo
+                );
+                None
             }
         }
     }
@@ -618,6 +735,38 @@ struct RoutedVerdictApply<'a> {
     artifact_label: &'static str,
     number: ItemNumber,
     context: ExecutionContext,
+}
+
+struct VerdictChildrenBinding<'a> {
+    job: &'a InFlightJob,
+    repository_id: &'a RepositoryId,
+    artifact_kind: &'a str,
+    routed: &'a TransitionId,
+    number: ItemNumber,
+    children: Vec<JobChild>,
+    context: &'a mut ExecutionContext,
+}
+
+fn create_issues_effect_index(
+    workflow: &ValidatedWorkflow,
+    transition: &TransitionId,
+) -> Option<usize> {
+    let declares_create_issues = workflow
+        .transitions()
+        .iter()
+        .find(|candidate| &candidate.id == transition)?
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::CreateIssues { .. }));
+    declares_create_issues.then_some(0)
+}
+
+fn parse_child_target_repo(target_repo: &str) -> Option<RepositoryPath> {
+    let (owner, name) = target_repo.split_once('/')?;
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return None;
+    }
+    Some(RepositoryPath::new(owner, name))
 }
 
 fn verdict_execution_context(
@@ -1139,7 +1288,11 @@ fn enrich_job_context_from_workflow(
 }
 
 fn action_is_workspace_backed(tool: &ToolManifest) -> bool {
-    !tool.outcomes.is_empty() || create_pull_request_count(tool) > 0
+    !tool.outcomes.is_empty()
+        || tool
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
 }
 
 fn create_pull_request_count(tool: &ToolManifest) -> usize {
@@ -1795,6 +1948,7 @@ mod tests {
             branch: None,
             verdict: None,
             body: None,
+            children: Vec::new(),
             failure: failure_class.map(|class| Failure {
                 class,
                 message: "worker failed".to_string(),
