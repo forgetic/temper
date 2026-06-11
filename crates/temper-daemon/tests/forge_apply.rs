@@ -7,7 +7,8 @@ use serde_json::json;
 use temper_daemon::{Daemon, ForgeApplier, JobContext, LeaseApplier, ResultApplier, RoleFeedMode};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, ItemNumber, PullRequest,
-    PullRequestQuery, PullRequestReview, RepositoryId, ReviewDecision, UpdateIssue, UserId,
+    PullRequestQuery, PullRequestReview, RepositoryId, ReviewDecision, UpdateIssue,
+    UpdatePullRequest, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
@@ -516,6 +517,29 @@ async fn drop_issue_label(
         .expect("label is dropped");
 }
 
+async fn drop_pull_request_label(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    label: &str,
+) {
+    let pull_request = forge
+        .get_pull_request_by_number(repo, number)
+        .await
+        .expect("pull request reload succeeds")
+        .expect("pull request exists");
+    forge
+        .update_pull_request(
+            &pull_request.id,
+            UpdatePullRequest {
+                remove_labels: vec![label.to_string()],
+                ..UpdatePullRequest::default()
+            },
+        )
+        .await
+        .expect("pull request label is dropped");
+}
+
 async fn assert_no_pull_requests(forge: &MemoryForge, repo: &RepositoryId) {
     let pulls = forge
         .list_pull_requests(repo, PullRequestQuery::default())
@@ -993,9 +1017,13 @@ async fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
     assert_eq!(pull.target.repository_id, repo);
     assert_eq!(pull.target.branch, "stable");
     assert!(pull.assignees.is_empty());
-    assert!(pull.labels.iter().any(|label| label == "implementation"));
+    assert_eq!(
+        pull.labels,
+        vec!["implementation".to_string(), "needs-reviewer".to_string()]
+    );
     assert!(pull.body.contains(summary));
 
+    let pull_number = pull.number;
     let metadata = parse_metadata_block(&pull.body)
         .expect("PR metadata parses")
         .expect("PR metadata exists");
@@ -1008,6 +1036,29 @@ async fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
     assert_eq!(
         metadata.correlation_key.as_deref(),
         Some(expected_correlation_key.as_str())
+    );
+
+    drop_pull_request_label(&forge, &repo, pull_number, "needs-reviewer").await;
+    assert_eq!(
+        pull_request_labels(&forge, &repo, pull_number).await,
+        vec!["implementation".to_string()]
+    );
+
+    let replay_job = InFlightJob {
+        job_id: assignment.job_id.clone(),
+        role: assignment.role.clone(),
+        repo: assignment.repo.clone(),
+        artifact: assignment.artifact.clone(),
+        job_payload: assignment.job_payload.clone(),
+    };
+    let replay_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+    ForgeApplier::new(forge.clone(), workflow.clone())
+        .apply(replay_job, replay_result)
+        .await;
+    assert_pull_request_count_stays(&forge, &repo, 1).await;
+    assert_eq!(
+        pull_request_labels(&forge, &repo, pull_number).await,
+        vec!["implementation".to_string()]
     );
 
     assert_eq!(

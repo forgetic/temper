@@ -224,7 +224,8 @@ impl<F: Forge> ForgeApplier<F> {
         } else {
             repository.default_branch.clone()
         };
-        let labels = implementation_pr_labels(self.workflow.as_ref());
+        let lookup_labels = implementation_pr_labels(self.workflow.as_ref());
+        let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
         let summary = result.summary.unwrap_or_default();
         let input = implementation_pr_pull_request_input(
             repository.id.clone(),
@@ -233,12 +234,17 @@ impl<F: Forge> ForgeApplier<F> {
             branch_name,
             base_branch,
             &summary,
-            labels,
+            create_labels,
         );
         let correlation_key = pr_correlation_key(&source_kind, number);
 
         if let Err(error) = Executor::new(self.workflow.as_ref(), self.forge.as_ref())
-            .ensure_pull_request(&repository.id, &correlation_key, input)
+            .ensure_pull_request_with_lookup(
+                &repository.id,
+                &correlation_key,
+                &lookup_labels,
+                input,
+            )
             .await
         {
             eprintln!(
@@ -1038,6 +1044,25 @@ fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn implementation_pr_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
+    let Some(kind) = workflow.artifact_kind(&ArtifactKindId::new("implementation_pr")) else {
+        return Vec::new();
+    };
+
+    let mut labels = Vec::new();
+    for label in kind
+        .identifying_labels
+        .iter()
+        .chain(kind.initial_labels.iter())
+    {
+        let label = label.as_str().to_string();
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    labels
 }
 
 fn skip_log_reason(outcome: EnrichOutcome) -> &'static str {

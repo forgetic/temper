@@ -32,6 +32,7 @@ fn automated_spec() -> RawWorkflowSpec {
             id: "implementation_pr".to_string(),
             target: ArtifactTarget::PullRequest,
             identifying_labels: vec!["implementation-pr".to_string()],
+            initial_labels: Vec::new(),
         }],
         queues: vec![RawQueue {
             id: "landing".to_string(),
@@ -80,6 +81,7 @@ fn add_issue_artifact_kind(spec: &mut RawWorkflowSpec) {
         id: "work_item".to_string(),
         target: ArtifactTarget::Issue,
         identifying_labels: vec!["issue".to_string()],
+        initial_labels: Vec::new(),
     });
 }
 

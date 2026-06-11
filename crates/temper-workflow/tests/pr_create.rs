@@ -89,6 +89,55 @@ fn ensure_pull_request_is_idempotent_across_retries() {
 }
 
 #[test]
+fn ensure_pull_request_with_lookup_ignores_removed_create_only_labels() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = workflow();
+    let repo = new_repo(&forge);
+    let executor = Executor::new(&workflow, &forge);
+
+    let create_labels = vec!["implementation".to_string(), "needs-reviewer".to_string()];
+    let lookup_labels = vec!["implementation".to_string()];
+    let mut input = pr_input(&repo);
+    input.labels = create_labels.clone();
+
+    let first = block_on(executor.ensure_pull_request_with_lookup(
+        &repo,
+        "pr-code-42",
+        &lookup_labels,
+        input.clone(),
+    ))
+    .expect("first ensure creates the pull request");
+    assert!(first.was_created());
+
+    let created = first.artifact().clone();
+    block_on(forge.update_pull_request(
+        &created.id,
+        temper_forge::UpdatePullRequest {
+            remove_labels: vec!["needs-reviewer".to_string()],
+            ..temper_forge::UpdatePullRequest::default()
+        },
+    ))
+    .expect("review routing label is removed");
+
+    let second = block_on(executor.ensure_pull_request_with_lookup(
+        &repo,
+        "pr-code-42",
+        &lookup_labels,
+        input,
+    ))
+    .expect("second ensure finds the reviewed pull request by identifying label");
+    assert!(!second.was_created());
+    assert_eq!(second.artifact().number, created.number);
+    assert_eq!(second.artifact().id, created.id);
+    assert_eq!(second.artifact().labels, vec!["implementation".to_string()]);
+
+    let pull_requests = block_on(forge.list_pull_requests(&repo, PullRequestQuery::default()))
+        .expect("pull requests list");
+    assert_eq!(pull_requests.len(), 1);
+}
+
+#[test]
 fn create_pull_request_effect_uses_idempotent_ensure_path() {
     let root = TestRoot::new();
     let forge = root.forge();

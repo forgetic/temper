@@ -134,9 +134,25 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         correlation_key: &str,
         input: CreatePullRequest,
     ) -> Result<EnsureOutcome<PullRequest>, ExecutionError> {
+        let lookup_labels = input.labels.clone();
+        self.ensure_pull_request_with_lookup(repo_id, correlation_key, &lookup_labels, input)
+            .await
+    }
+
+    /// Like [`Executor::ensure_pull_request`], but the correlation lookup filters
+    /// by `lookup_labels` instead of the create input's labels. Use when the
+    /// created artifact carries creation-time labels that later transitions may
+    /// remove (the lookup must key on the stable identifying labels).
+    pub async fn ensure_pull_request_with_lookup(
+        &self,
+        repo_id: &RepositoryId,
+        correlation_key: &str,
+        lookup_labels: &[String],
+        input: CreatePullRequest,
+    ) -> Result<EnsureOutcome<PullRequest>, ExecutionError> {
         let _guard = correlation_locks().acquire(lock_key("pull", repo_id, correlation_key));
         if let Some(existing) = self
-            .find_pull_request_by_correlation(repo_id, correlation_key, &input.labels)
+            .find_pull_request_by_correlation(repo_id, correlation_key, lookup_labels)
             .await?
         {
             return Ok(EnsureOutcome::Existing(existing));
@@ -252,7 +268,7 @@ impl CorrelationLookupPlan {
         }
     }
 
-    /// Issue queries for open and closed state, with create labels when known.
+    /// Issue queries for open and closed state, with configured labels when known.
     pub fn issue_queries(&self) -> Vec<IssueQuery> {
         [IssueState::Open, IssueState::Closed]
             .into_iter()
@@ -268,7 +284,7 @@ impl CorrelationLookupPlan {
             .collect()
     }
 
-    /// Pull-request queries for open, closed, and merged state, with create labels when known.
+    /// Pull-request queries for open, closed, and merged state, with configured labels when known.
     pub fn pull_request_queries(&self) -> Vec<PullRequestQuery> {
         [
             PullRequestState::Open,

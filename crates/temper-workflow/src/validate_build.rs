@@ -55,6 +55,7 @@ pub(crate) fn build_validated(spec: &RawWorkflowSpec) -> ValidatedWorkflow {
                 .iter()
                 .map(LabelId::new)
                 .collect(),
+            initial_labels: artifact.initial_labels.iter().map(LabelId::new).collect(),
         })
         .collect();
     let state_dimensions = spec
