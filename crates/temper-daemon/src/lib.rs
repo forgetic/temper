@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -59,6 +59,7 @@ pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, JobRepository}
 pub use webhook::*;
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
+const APPLY_GRACE: Duration = Duration::from_secs(10);
 
 /// Which read-only scan the daemon feed runs for a role.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -764,9 +765,10 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
     enrich_job_context_from_workflow(item, compiled, &mut context);
 
     if is_writable_issue_job(item, &context)
-        && open_pull_request_exists_for_correlation(forge, repo, workflow, &context).await?
+        && implementation_pull_request_exists_for_correlation(forge, repo, workflow, &context)
+            .await?
     {
-        return Ok(EnrichOutcome::SkipExistingOpenPullRequest);
+        return Ok(EnrichOutcome::SkipExistingPullRequest);
     }
 
     job.job_payload = serde_json::to_value(&context).expect("JobContext serializes");
@@ -778,7 +780,7 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
 enum EnrichOutcome {
     Enriched,
     SkipTerminalArtifact,
-    SkipExistingOpenPullRequest,
+    SkipExistingPullRequest,
 }
 
 fn default_base_branch(repository: &Repository) -> String {
@@ -851,7 +853,7 @@ fn is_writable_issue_job(item: &WorkItem, context: &JobContext) -> bool {
         && context.checkout_capability.as_deref() == Some("writable")
 }
 
-async fn open_pull_request_exists_for_correlation<F: Forge + ?Sized>(
+async fn implementation_pull_request_exists_for_correlation<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
@@ -864,7 +866,15 @@ async fn open_pull_request_exists_for_correlation<F: Forge + ?Sized>(
     let pull_request = find_pull_request_by_correlation(forge, repo, correlation_key, &labels)
         .await
         .map_err(ScanError::Execution)?;
-    Ok(pull_request.is_some_and(|pull_request| pull_request.state == PullRequestState::Open))
+    // A merged implementation PR permanently covers its correlation key. If the
+    // source issue is reopened after that merge, rework needs a fresh issue with
+    // a fresh correlation key rather than automatic re-feed of the old one.
+    Ok(pull_request.is_some_and(|pull_request| {
+        matches!(
+            pull_request.state,
+            PullRequestState::Open | PullRequestState::Merged
+        )
+    }))
 }
 
 fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
@@ -883,7 +893,7 @@ fn skip_log_reason(outcome: EnrichOutcome) -> &'static str {
     match outcome {
         EnrichOutcome::Enriched => "",
         EnrichOutcome::SkipTerminalArtifact => "terminal artifact",
-        EnrichOutcome::SkipExistingOpenPullRequest => "existing open implementation pull request",
+        EnrichOutcome::SkipExistingPullRequest => "existing implementation pull request",
     }
 }
 
@@ -1009,6 +1019,9 @@ enum DaemonCommand {
     ApplyFinished {
         job_id: String,
     },
+    SetApplyGrace {
+        apply_grace: Duration,
+    },
     #[cfg(test)]
     QueuedJobs {
         reply: oneshot::Sender<Vec<QueuedJob>>,
@@ -1024,10 +1037,13 @@ async fn run_core(
     mut rx: mpsc::UnboundedReceiver<DaemonCommand>,
     cmd_tx: mpsc::UnboundedSender<DaemonCommand>,
     applier: Arc<dyn ResultApplier>,
+    apply_grace: Duration,
 ) {
     let mut core = DaemonCore::new();
     let mut waiters = BTreeMap::new();
     let mut applying = BTreeSet::new();
+    let mut recently_applied = BTreeMap::new();
+    let mut apply_grace = apply_grace;
     let mut next_id = 0_u64;
 
     while let Some(command) = rx.recv().await {
@@ -1117,9 +1133,20 @@ async fn run_core(
                 artifact,
                 job_payload,
             } => {
+                let now = Instant::now();
+                recently_applied.retain(|_, deadline| *deadline > now);
                 if applying.contains(&job_id) {
                     eprintln!(
                         "temper-daemon: skipped enqueue for job in apply window job_id={job_id}"
+                    );
+                    continue;
+                }
+                if recently_applied
+                    .get(&job_id)
+                    .is_some_and(|deadline| *deadline > now)
+                {
+                    eprintln!(
+                        "temper-daemon: skipped enqueue for recently applied job job_id={job_id}"
                     );
                     continue;
                 }
@@ -1128,6 +1155,12 @@ async fn run_core(
             }
             DaemonCommand::ApplyFinished { job_id } => {
                 applying.remove(&job_id);
+                recently_applied.insert(job_id, Instant::now() + apply_grace);
+            }
+            DaemonCommand::SetApplyGrace {
+                apply_grace: new_apply_grace,
+            } => {
+                apply_grace = new_apply_grace;
             }
             #[cfg(test)]
             DaemonCommand::QueuedJobs { reply } => {
@@ -1254,8 +1287,22 @@ impl Daemon {
     }
 
     pub fn with_applier(applier: Arc<dyn ResultApplier>) -> Self {
+        Self::with_applier_and_apply_grace(applier, APPLY_GRACE)
+    }
+
+    pub fn with_apply_grace(self, apply_grace: Duration) -> Self {
+        let _ = self
+            .cmd_tx
+            .send(DaemonCommand::SetApplyGrace { apply_grace });
+        self
+    }
+
+    fn with_applier_and_apply_grace(
+        applier: Arc<dyn ResultApplier>,
+        apply_grace: Duration,
+    ) -> Self {
         let (cmd_tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_core(rx, cmd_tx.clone(), applier));
+        tokio::spawn(run_core(rx, cmd_tx.clone(), applier, apply_grace));
 
         Self {
             cmd_tx,
@@ -1336,7 +1383,7 @@ impl Daemon {
                 }
                 Ok(
                     skip @ (EnrichOutcome::SkipTerminalArtifact
-                    | EnrichOutcome::SkipExistingOpenPullRequest),
+                    | EnrichOutcome::SkipExistingPullRequest),
                 ) => {
                     eprintln!("{}", skip_log_line(&repo_label, role, item, skip));
                 }
@@ -1543,8 +1590,10 @@ mod tests {
         UpdatePullRequest,
     };
     use temper_forge_memory::MemoryForge;
-    use temper_worker_protocol::{Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
-    use temper_workflow::{ArtifactKindId, QueueId, RawWorkflowSpec, RoleId};
+    use temper_worker_protocol::{Artifact, Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
+    use temper_workflow::{
+        render_metadata_block, ArtifactKindId, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata,
+    };
 
     const BASIC_DELIVERY_FIXTURE: &str =
         include_str!("../../temper-workflow/fixtures/basic-delivery.json");
@@ -1630,6 +1679,113 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn skip_log_reason_names_existing_pull_request_without_state_qualifier() {
+        assert_eq!(
+            skip_log_reason(EnrichOutcome::SkipExistingPullRequest),
+            "existing implementation pull request"
+        );
+    }
+
+    #[test]
+    fn skip_log_line_includes_existing_pull_request_reason() {
+        let item = work_item(ArtifactSource::Issue {
+            number: ItemNumber::new(153),
+        });
+
+        assert_eq!(
+            skip_log_line(
+                "ai/temper",
+                &RoleId::new("engineer"),
+                &item,
+                EnrichOutcome::SkipExistingPullRequest
+            ),
+            "temper-daemon: skipped role work for existing implementation pull request repo=ai/temper role=engineer queue=code_ready artifact_kind=code target=Issue { number: ItemNumber(153) }"
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(CreateRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
+            .await
+            .expect("repository is created")
+            .id;
+        let issue = forge
+            .create_issue(
+                &repo,
+                temper_forge::CreateIssue {
+                    title: "ready".to_string(),
+                    body: "needs implementation".to_string(),
+                    labels: vec!["code".to_string(), "ready".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("issue is created");
+        let correlation_key = format!("pr-for-code-{}", issue.number.get());
+        let pull_request = forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: "Implement ready issue".to_string(),
+                    body: format!(
+                        "Implementation PR.\n\n{}",
+                        render_metadata_block(&WorkflowMetadata {
+                            correlation_key: Some(correlation_key.clone()),
+                            ..WorkflowMetadata::default()
+                        })
+                    ),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: format!("agent/{correlation_key}"),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("pull request is created");
+        forge
+            .merge_pull_request(
+                &pull_request.id,
+                temper_forge::MergePullRequest {
+                    method: temper_forge::MergeMethod::Squash,
+                    commit_title: None,
+                    commit_body: None,
+                },
+            )
+            .await
+            .expect("pull request is merged");
+        let item = work_item(ArtifactSource::Issue {
+            number: issue.number,
+        });
+        let mut job = job_from_work_item("ai/temper", &item);
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
+        let workflow = workflow
+            .validate()
+            .expect("basic-delivery workflow validates");
+        let compiled = workflow.compile();
+
+        assert_eq!(
+            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                .await
+                .expect("enrichment skip succeeds"),
+            EnrichOutcome::SkipExistingPullRequest
+        );
     }
 
     #[test]

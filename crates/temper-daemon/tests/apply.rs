@@ -3,6 +3,7 @@
 use std::{
     future::IntoFuture,
     sync::{Arc, Mutex as StdMutex},
+    time::Duration,
 };
 
 use axum::http::StatusCode;
@@ -14,7 +15,7 @@ use temper_worker_protocol::{
 use temper_worker_registry::InFlightJob;
 use tokio::{
     sync::{mpsc, oneshot},
-    time::{sleep, Duration},
+    time::sleep,
 };
 
 struct RecordingApplier {
@@ -67,7 +68,17 @@ impl temper_daemon::ResultApplier for RecordingApplier {
 async fn spawn_with_applier(
     applier: Arc<dyn temper_daemon::ResultApplier>,
 ) -> (temper_daemon::Daemon, String) {
-    let daemon = temper_daemon::Daemon::with_applier(applier);
+    spawn_daemon(temper_daemon::Daemon::with_applier(applier)).await
+}
+
+async fn spawn_with_applier_and_apply_grace(
+    applier: Arc<dyn temper_daemon::ResultApplier>,
+    apply_grace: Duration,
+) -> (temper_daemon::Daemon, String) {
+    spawn_daemon(temper_daemon::Daemon::with_applier(applier).with_apply_grace(apply_grace)).await
+}
+
+async fn spawn_daemon(daemon: temper_daemon::Daemon) -> (temper_daemon::Daemon, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");
@@ -415,8 +426,11 @@ async fn result_without_in_flight_job_does_not_invoke_applier() {
 async fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
     let (record_tx, mut rx) = mpsc::unbounded_channel();
     let (release_tx, release_rx) = oneshot::channel();
-    let (daemon, url) =
-        spawn_with_applier(Arc::new(GatedApplier::new(record_tx, vec![release_rx]))).await;
+    let (daemon, url) = spawn_with_applier_and_apply_grace(
+        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+        Duration::ZERO,
+    )
+    .await;
     let client = reqwest::Client::new();
     assert_eq!(
         post(&client, &url, &register("worker-a")).await.status(),
@@ -449,6 +463,121 @@ async fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
 
     release_tx.send(()).expect("release apply gate");
     eventually_enqueue_and_assign(&daemon, &client, &url, "worker-a", "job-apply-window-1").await;
+}
+
+#[tokio::test]
+async fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
+    let (record_tx, mut rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let (daemon, url) = spawn_with_applier_and_apply_grace(
+        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+        Duration::from_millis(200),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(&client, &url, &register("worker-a")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    enqueue_standard_job(&daemon, "job-apply-grace-1").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-a")).await,
+        "job-apply-grace-1",
+    );
+
+    let result = success_result("worker-a", "job-apply-grace-1");
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(result.clone()),
+        )
+        .await,
+        "worker-a",
+        "job-apply-grace-1",
+    );
+    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+    assert_eq!(job.job_id, "job-apply-grace-1");
+    assert_eq!(recorded_result.job_id, result.job_id);
+    release_tx.send(()).expect("release apply gate");
+    sleep(Duration::from_millis(25)).await;
+
+    enqueue_standard_job(&daemon, "job-apply-grace-1").await;
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+
+    sleep(Duration::from_millis(225)).await;
+    enqueue_standard_job(&daemon, "job-apply-grace-1").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-a")).await,
+        "job-apply-grace-1",
+    );
+}
+
+#[tokio::test]
+async fn apply_block_and_grace_are_per_job_id() {
+    let (record_tx, mut rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let (daemon, url) = spawn_with_applier_and_apply_grace(
+        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+        Duration::from_millis(200),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(&client, &url, &register("worker-a")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        post(&client, &url, &register("worker-b")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        post(&client, &url, &register("worker-c")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    enqueue_standard_job(&daemon, "job-blocked").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-a")).await,
+        "job-blocked",
+    );
+
+    let result = success_result("worker-a", "job-blocked");
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(result.clone()),
+        )
+        .await,
+        "worker-a",
+        "job-blocked",
+    );
+    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+    assert_eq!(job.job_id, "job-blocked");
+    assert_eq!(recorded_result.job_id, result.job_id);
+
+    enqueue_standard_job(&daemon, "job-blocked").await;
+    enqueue_standard_job(&daemon, "job-independent-apply").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-b")).await,
+        "job-independent-apply",
+    );
+
+    release_tx.send(()).expect("release apply gate");
+    sleep(Duration::from_millis(25)).await;
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    enqueue_standard_job(&daemon, "job-blocked").await;
+    enqueue_standard_job(&daemon, "job-independent-grace").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-c")).await,
+        "job-independent-grace",
+    );
 }
 
 #[tokio::test]
@@ -517,8 +646,11 @@ async fn transient_failure_drops_job_for_rescan() {
 async fn permanent_failure_apply_window_unblocks_after_apply_completes() {
     let (record_tx, mut rx) = mpsc::unbounded_channel();
     let (release_tx, release_rx) = oneshot::channel();
-    let (daemon, url) =
-        spawn_with_applier(Arc::new(GatedApplier::new(record_tx, vec![release_rx]))).await;
+    let (daemon, url) = spawn_with_applier_and_apply_grace(
+        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+        Duration::ZERO,
+    )
+    .await;
     let client = reqwest::Client::new();
     assert_eq!(
         post(&client, &url, &register("worker-a")).await.status(),
