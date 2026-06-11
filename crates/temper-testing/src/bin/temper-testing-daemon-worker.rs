@@ -28,18 +28,17 @@ fn main() -> ExitCode {
         }
     };
 
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match temper_io_engine::build_runtime() {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("temper-testing-daemon-worker: failed to build tokio runtime: {error}");
+            eprintln!("temper-testing-daemon-worker: failed to build engine runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
 
-    match runtime.block_on(run(&config, &identity)) {
+    match temper_io_engine::runtime::block_on_runtime(&runtime, async move {
+        run(&config, &identity).await
+    }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("temper-testing-daemon-worker: {error}");

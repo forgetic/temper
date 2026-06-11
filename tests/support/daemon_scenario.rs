@@ -735,13 +735,11 @@ fn log_file(path: &Path) -> std::fs::File {
     std::fs::File::create(path).expect("log file creates")
 }
 
-/// Drives a single boxed future to completion on a one-shot current-thread
-/// runtime; the real backend's futures park on network IO.
+/// Drives a single boxed future to completion on a one-shot engine runtime;
+/// the real backend's futures park on network IO.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds")
+    temper_io_engine::build_runtime()
+        .expect("engine runtime builds")
         .block_on(future)
 }
 

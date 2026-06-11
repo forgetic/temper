@@ -4,6 +4,13 @@
 # cores. Agents should not add a fixed job count unless a task explicitly needs
 # reproducible resource limits.
 
+# The vendored asupersync crate (vendor/asupersync) declares feature gates for
+# capabilities that only stabilized after rustc 1.85 (let-chains et al.).
+# RUSTC_BOOTSTRAP scoped to that single crate name lets the stable 1.85
+# compiler accept those gates; every other crate still builds as plain stable.
+[env]
+RUSTC_BOOTSTRAP = "asupersync"
+
 [alias]
 dev-check = "check --workspace --all-targets -j2"
 dev-clippy = "clippy --workspace --all-targets -j2"

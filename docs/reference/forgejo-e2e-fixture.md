@@ -113,5 +113,6 @@ The server config must allow loopback webhook targets:
 `[webhook] ALLOWED_HOST_LIST = 127.0.0.1,localhost`. If hooks register but no
 trigger request arrives, check that before debugging signatures or wake sockets.
 
-Binary resolution and readiness polling use blocking `reqwest`; backend exercise
-happens in async tests after the server is live.
+Binary resolution and readiness polling use the fixture crate's blocking HTTP
+client; backend exercise happens in async tests (on the asupersync engine
+runtime) after the server is live.

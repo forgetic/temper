@@ -226,11 +226,8 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| (!value.trim().is_empty()).then_some(value))
 }
 
-fn build_runtime() -> Result<tokio::runtime::Runtime, RunError> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| RunError::Runtime(err.to_string()))
+fn build_runtime() -> Result<temper_io_engine::EngineRuntime, RunError> {
+    temper_io_engine::build_runtime().map_err(RunError::Runtime)
 }
 
 fn intake_seed_from_args(args: &ProvisionArgs) -> Result<provision::IntakeIssueSeed, RunError> {

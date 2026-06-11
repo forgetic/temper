@@ -8,9 +8,10 @@ description = "Forgejo-backed Forge implementation (best-effort, offline-tested)
 
 [dependencies]
 async-trait.workspace = true
+asupersync.workspace = true
 chrono.workspace = true
 temper-forge = { path = "../temper-forge" }
-reqwest.workspace = true
+temper-io-engine = { path = "../temper-io-engine" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -19,9 +20,6 @@ thiserror.workspace = true
 base64 = "0.22"
 bench-forgejo = { path = "../../../bench/crates/bench-forgejo" }
 temper-workflow = { path = "../temper-workflow" }
-# Only the optional ignored live smoke tests (`tests/live.rs`) need a real async
-# runtime to drive `reqwest`; the offline tests use a hand-rolled poller.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true

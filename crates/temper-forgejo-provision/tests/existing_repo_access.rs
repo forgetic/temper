@@ -20,7 +20,6 @@
 //!   `write` and never adds them to the org Owners team;
 //! - `--existing-repo` against a missing repo errors clearly.
 
-use std::time::Duration;
 
 use serde_json::Value;
 use temper_forgejo_provision::provision::{
@@ -38,107 +37,95 @@ const SENTINEL_BODY: &str = "name: project-owned-ci\non: [push]\njobs:\n  noop:\
 /// blocking client that must not be dropped on the reactor) and returns it with
 /// a freshly bootstrapped admin token.
 async fn start_server_with_admin() -> (ForgejoServer, String) {
-    tokio::task::spawn_blocking(|| {
+    asupersync::runtime::spawn_blocking(|| {
         let server = ForgejoServer::start().expect("forgejo server boots");
         let admin_token = bootstrap_admin(&server).expect("admin bootstrap mints a token");
         (server, admin_token)
     })
     .await
-    .expect("server boot task joins")
 }
 
-fn http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .expect("client builds")
+fn http() -> temper_io_engine::http::JsonClient {
+    temper_io_engine::http::JsonClient::new()
 }
 
-async fn create_org(client: &reqwest::Client, base: &str, admin: &str, owner: &str) {
-    let resp = client
-        .post(format!("{base}/api/v1/orgs"))
-        .header("Authorization", format!("token {admin}"))
-        .json(&serde_json::json!({ "username": owner }))
-        .send()
-        .await
-        .expect("create org sends");
-    assert!(
-        resp.status().is_success(),
-        "create org failed: {}",
-        resp.status()
-    );
+async fn create_org(client: &temper_io_engine::http::JsonClient, base: &str, admin: &str, owner: &str) {
+    let (status, _) = client
+        .send_expect_json(
+            "POST",
+            format!("{base}/api/v1/orgs"),
+            Some(admin),
+            Some(&serde_json::json!({ "username": owner })),
+            "create org",
+        )
+        .await;
+    assert!((200..300).contains(&status), "create org failed: {status}");
 }
 
 async fn create_repo_with_sentinel(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
     name: &str,
 ) {
-    let resp = client
-        .post(format!("{base}/api/v1/orgs/{owner}/repos"))
-        .header("Authorization", format!("token {admin}"))
-        .json(&serde_json::json!({
-            "name": name,
-            "default_branch": "main",
-            "auto_init": true,
-            "private": false,
-        }))
-        .send()
-        .await
-        .expect("create repo sends");
-    assert!(
-        resp.status().is_success(),
-        "create repo failed: {}",
-        resp.status()
-    );
+    let (status, _) = client
+        .send_expect_json(
+            "POST",
+            format!("{base}/api/v1/orgs/{owner}/repos"),
+            Some(admin),
+            Some(&serde_json::json!({
+                "name": name,
+                "default_branch": "main",
+                "auto_init": true,
+                "private": false,
+            })),
+            "create repo",
+        )
+        .await;
+    assert!((200..300).contains(&status), "create repo failed: {status}");
 
     // Commit the project's own CI file so we can prove `--existing-repo` leaves
     // it byte-for-byte untouched.
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(SENTINEL_BODY);
-    let resp = client
-        .post(format!(
-            "{base}/api/v1/repos/{owner}/{name}/contents/{SENTINEL_PATH}"
-        ))
-        .header("Authorization", format!("token {admin}"))
-        .json(&serde_json::json!({
-            "content": encoded,
-            "message": "project: add own CI",
-            "branch": "main",
-        }))
-        .send()
-        .await
-        .expect("commit sentinel sends");
-    assert!(
-        resp.status().is_success(),
-        "commit sentinel failed: {}",
-        resp.status()
-    );
+    let (status, _) = client
+        .send_expect_json(
+            "POST",
+            format!("{base}/api/v1/repos/{owner}/{name}/contents/{SENTINEL_PATH}"),
+            Some(admin),
+            Some(&serde_json::json!({
+                "content": encoded,
+                "message": "project: add own CI",
+                "branch": "main",
+            })),
+            "commit sentinel",
+        )
+        .await;
+    assert!((200..300).contains(&status), "commit sentinel failed: {status}");
 }
 
 /// Reads a file's decoded contents from the repo, or `None` if absent.
 async fn file_contents(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
     name: &str,
     path: &str,
 ) -> Option<String> {
-    let resp = client
-        .get(format!(
-            "{base}/api/v1/repos/{owner}/{name}/contents/{path}"
-        ))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("contents request sends");
-    if !resp.status().is_success() {
+    let (status, body) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}/contents/{path}"),
+            Some(admin),
+            None,
+            "contents request",
+        )
+        .await;
+    if !(200..300).contains(&status) {
         return None;
     }
-    let body: Value = resp.json().await.expect("contents json parses");
     let encoded = body["content"].as_str().expect("content field is a string");
     // Forgejo returns base64 with embedded newlines.
     use base64::Engine;
@@ -151,33 +138,29 @@ async fn file_contents(
 
 /// The number of commits on `main`. Used to prove `--existing-repo` adds none.
 async fn commit_count(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
     name: &str,
 ) -> usize {
-    let resp = client
-        .get(format!(
-            "{base}/api/v1/repos/{owner}/{name}/commits?sha=main&limit=50"
-        ))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("commits request sends");
-    assert!(
-        resp.status().is_success(),
-        "list commits failed: {}",
-        resp.status()
-    );
-    let body: Value = resp.json().await.expect("commits json parses");
+    let (status, body) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}/commits?sha=main&limit=50"),
+            Some(admin),
+            None,
+            "list commits",
+        )
+        .await;
+    assert!((200..300).contains(&status), "list commits failed: {status}");
     body.as_array().expect("commits is an array").len()
 }
 
 /// The collaborator permission Forgejo reports for `login` on the repo, or
 /// `None` if `login` is not a collaborator.
 async fn collaborator_permission(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -185,43 +168,42 @@ async fn collaborator_permission(
     login: &str,
 ) -> Option<String> {
     // 404 when not a collaborator; otherwise `{ "permission": "...", ... }`.
-    let resp = client
-        .get(format!(
-            "{base}/api/v1/repos/{owner}/{name}/collaborators/{login}/permission"
-        ))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("collaborator permission request sends");
-    if resp.status().as_u16() == 404 {
+    let (status, body) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}/collaborators/{login}/permission"),
+            Some(admin),
+            None,
+            "collaborator permission",
+        )
+        .await;
+    if status == 404 {
         return None;
     }
     assert!(
-        resp.status().is_success(),
-        "collaborator permission failed for {login}: {}",
-        resp.status()
+        (200..300).contains(&status),
+        "collaborator permission failed for {login}: {status}"
     );
-    let body: Value = resp.json().await.expect("permission json parses");
     body["permission"].as_str().map(str::to_string)
 }
 
 /// Whether `login` is a member of the org Owners team.
 async fn is_owners_member(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
     login: &str,
 ) -> bool {
-    let teams: Value = client
-        .get(format!("{base}/api/v1/orgs/{owner}/teams"))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("list teams sends")
-        .json()
-        .await
-        .expect("teams json parses");
+    let (_, teams) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/orgs/{owner}/teams"),
+            Some(admin),
+            None,
+            "list teams",
+        )
+        .await;
     let owners_id = teams
         .as_array()
         .and_then(|teams| {
@@ -231,33 +213,34 @@ async fn is_owners_member(
         })
         .and_then(|team| team["id"].as_i64())
         .expect("org has an Owners team");
-    let resp = client
-        .get(format!("{base}/api/v1/teams/{owners_id}/members/{login}"))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("team membership request sends");
-    resp.status().is_success()
+    let (status, _) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/teams/{owners_id}/members/{login}"),
+            Some(admin),
+            None,
+            "team membership",
+        )
+        .await;
+    (200..300).contains(&status)
 }
 
 async fn label_names(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
     name: &str,
 ) -> Vec<String> {
-    let body: Value = client
-        .get(format!(
-            "{base}/api/v1/repos/{owner}/{name}/labels?limit=100"
-        ))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("list labels sends")
-        .json()
-        .await
-        .expect("labels json parses");
+    let (_, body) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}/labels?limit=100"),
+            Some(admin),
+            None,
+            "list labels",
+        )
+        .await;
     body.as_array()
         .expect("labels is an array")
         .iter()
@@ -266,27 +249,28 @@ async fn label_names(
 }
 
 async fn has_actions(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
     name: &str,
 ) -> bool {
-    let body: Value = client
-        .get(format!("{base}/api/v1/repos/{owner}/{name}"))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("repo request sends")
-        .json()
-        .await
-        .expect("repo json parses");
+    let (_, body) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}"),
+            Some(admin),
+            None,
+            "repo request",
+        )
+        .await;
     body["has_actions"].as_bool().unwrap_or(false)
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
-async fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
+ fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
+    temper_io_engine::block_on(async move {
     let (server, admin) = start_server_with_admin().await;
     let base = server.base_url().to_string();
     let name = "smith";
@@ -379,11 +363,13 @@ async fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() 
     );
 
     drop(server);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
-async fn existing_repo_errors_when_repo_absent() {
+ fn existing_repo_errors_when_repo_absent() {
+    temper_io_engine::block_on(async move {
     let (server, admin) = start_server_with_admin().await;
     let base = server.base_url().to_string();
     let client = http();
@@ -415,11 +401,13 @@ async fn existing_repo_errors_when_repo_absent() {
     );
 
     drop(server);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
-async fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
+ fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
+    temper_io_engine::block_on(async move {
     // Exercises the full `provision_and_seed` path with `--existing-repo` and a
     // webhook, mirroring the intended Smith caller (`--seed-intake no`).
     let (server, admin) = start_server_with_admin().await;
@@ -456,15 +444,15 @@ async fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
     assert!(issue.is_none(), "no intake issue seeded with seed=None");
 
     // The webhook is registered.
-    let hooks: Value = client
-        .get(format!("{base}/api/v1/repos/{OWNER}/{name}/hooks"))
-        .header("Authorization", format!("token {admin}"))
-        .send()
-        .await
-        .expect("list hooks sends")
-        .json()
-        .await
-        .expect("hooks json parses");
+    let (_, hooks) = client
+        .send_expect_json(
+            "GET",
+            format!("{base}/api/v1/repos/{OWNER}/{name}/hooks"),
+            Some(&admin),
+            None,
+            "list hooks",
+        )
+        .await;
     let registered = hooks
         .as_array()
         .expect("hooks is an array")
@@ -483,4 +471,5 @@ async fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
 
     std::fs::remove_dir_all(&dir).ok();
     drop(server);
+    })
 }

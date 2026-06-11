@@ -14,7 +14,6 @@ use temper_interaction::{
     ConversationTranscriptRef, ConversationTurn, ForgeInteractionSession, ForgeSessionConfig,
     ForgeSessionOpenOptions, InteractionError, InteractiveResponder, ProposalId,
 };
-use tokio::sync::Mutex;
 
 use crate::interaction_api::{parse_json, ApiError, CreateConversationRequest, SendTurnRequest};
 pub use crate::interaction_api::{
@@ -92,7 +91,7 @@ pub struct InteractionService {
     repo_path: RepositoryPath,
     default_profile: Option<ConversationProfileId>,
     profiles: BTreeMap<ConversationProfileId, InteractionProfileRuntime>,
-    sessions: Mutex<BTreeMap<String, ActiveSession>>,
+    sessions: std::sync::Mutex<BTreeMap<String, ActiveSession>>,
     events: ConversationEventLog,
 }
 
@@ -129,7 +128,7 @@ impl InteractionService {
             repo_path,
             default_profile,
             profiles,
-            sessions: Mutex::new(BTreeMap::new()),
+            sessions: std::sync::Mutex::new(BTreeMap::new()),
             events: ConversationEventLog::new(),
         })
     }
@@ -175,7 +174,7 @@ impl InteractionService {
                 transcript: Some(transcript_ref(&response.transcript)),
             },
         );
-        self.sessions.lock().await.insert(
+        self.sessions.lock().expect("sessions lock").insert(
             response.id.clone(),
             ActiveSession {
                 profile: runtime.manifest.clone(),
@@ -189,7 +188,7 @@ impl InteractionService {
         &self,
         id: &str,
     ) -> Result<ConversationResponse, InteractionServiceError> {
-        let sessions = self.sessions.lock().await;
+        let sessions = self.sessions.lock().expect("sessions lock");
         let active = sessions
             .get(id)
             .ok_or_else(|| InteractionServiceError::not_found("conversation not found"))?;
@@ -200,7 +199,7 @@ impl InteractionService {
         &self,
         id: &str,
     ) -> Result<ProposalsResponse, InteractionServiceError> {
-        let sessions = self.sessions.lock().await;
+        let sessions = self.sessions.lock().expect("sessions lock");
         let active = sessions
             .get(id)
             .ok_or_else(|| InteractionServiceError::not_found("conversation not found"))?;
@@ -219,19 +218,32 @@ impl InteractionService {
                 "body must not be empty",
             ));
         }
-        let mut sessions = self.sessions.lock().await;
-        let active = sessions
-            .get_mut(id)
+        // Take the session out of the map for the awaited turn so no lock is
+        // held across the responder I/O, then put it back regardless of the
+        // outcome. Requests for one conversation are serialized by taking
+        // ownership here.
+        let mut active = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .remove(id)
             .ok_or_else(|| InteractionServiceError::not_found("conversation not found"))?;
         let conversation_id = active.session.conversation_id().clone();
-        let reply = active.session.send_human_turn(&body).await?;
-        let response = TurnResponse {
-            reply: reply.clone(),
-            transcript: transcript_response(&active.session),
-            latest_proposals: active.session.latest_proposals().to_vec(),
-        };
-        self.record_turn_events(conversation_id, &active.profile, body, &reply, &response);
-        Ok(response)
+        let reply = active.session.send_human_turn(&body).await;
+        let outcome = reply.map(|reply| {
+            let response = TurnResponse {
+                reply: reply.clone(),
+                transcript: transcript_response(&active.session),
+                latest_proposals: active.session.latest_proposals().to_vec(),
+            };
+            self.record_turn_events(conversation_id, &active.profile, body, &reply, &response);
+            response
+        });
+        self.sessions
+            .lock()
+            .expect("sessions lock")
+            .insert(id.to_string(), active);
+        Ok(outcome?)
     }
 
     pub async fn accept_proposal(
@@ -249,23 +261,34 @@ impl InteractionService {
         proposal_id: ProposalId,
         acceptance_action: Option<&AcceptanceActionId>,
     ) -> Result<AcceptProposalResponse, InteractionServiceError> {
-        let sessions = self.sessions.lock().await;
-        let active = sessions
-            .get(id)
+        // Same take/reinsert discipline as `send_turn`: never hold the
+        // sessions lock across responder I/O.
+        let active = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .remove(id)
             .ok_or_else(|| InteractionServiceError::not_found("conversation not found"))?;
         let conversation_id = active.session.conversation_id().clone();
         let outcome = active
             .session
             .accept_issue_proposal_with_action(&proposal_id, acceptance_action)
-            .await?;
-        let response = accept_response(
-            &active.session,
-            proposal_id,
-            outcome.created,
-            &outcome.issue,
-        );
-        self.record_accept_event(conversation_id, &response);
-        Ok(response)
+            .await;
+        let response = outcome.map(|outcome| {
+            let response = accept_response(
+                &active.session,
+                proposal_id,
+                outcome.created,
+                &outcome.issue,
+            );
+            self.record_accept_event(conversation_id, &response);
+            response
+        });
+        self.sessions
+            .lock()
+            .expect("sessions lock")
+            .insert(id.to_string(), active);
+        Ok(response?)
     }
 
     pub async fn conversation_events(
@@ -273,7 +296,7 @@ impl InteractionService {
         id: &str,
     ) -> Result<ConversationEventsResponse, InteractionServiceError> {
         let conversation_id = {
-            let sessions = self.sessions.lock().await;
+            let sessions = self.sessions.lock().expect("sessions lock");
             sessions
                 .get(id)
                 .ok_or_else(|| InteractionServiceError::not_found("conversation not found"))?
@@ -449,10 +472,11 @@ impl InteractionHttpApp {
 pub fn run_http(
     bind: SocketAddr,
     app: InteractionHttpApp,
-    runtime: &tokio::runtime::Runtime,
+    runtime: &temper_io_engine::EngineRuntime,
 ) -> Result<(), InteractionServiceError> {
     let listener = TcpListener::bind(bind)?;
     eprintln!("temper-interaction: serving on {bind}");
+    let app = std::sync::Arc::new(app);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -468,11 +492,16 @@ pub fn run_http(
 
 fn handle_connection(
     mut stream: TcpStream,
-    app: &InteractionHttpApp,
-    runtime: &tokio::runtime::Runtime,
+    app: &std::sync::Arc<InteractionHttpApp>,
+    runtime: &temper_io_engine::EngineRuntime,
 ) -> Result<(), InteractionServiceError> {
     let request = HttpRequest::read_from(&mut stream)?;
-    let response = runtime.block_on(app.handle_http_request(request));
+    // Each request runs as one engine task: responder subprocess calls and
+    // their deadlines are engine I/O requests needing a task context.
+    let app = std::sync::Arc::clone(app);
+    let response = temper_io_engine::runtime::block_on_runtime(runtime, async move {
+        app.handle_http_request(request).await
+    });
     stream.write_all(response.to_http().as_bytes())?;
     Ok(())
 }

@@ -2,10 +2,15 @@
 //!
 //! Secrets are only sent in headers/basic auth. Errors include a status and a
 //! short response-body snippet, never the authorization value.
+//!
+//! Each helper is a single `<io-event-request>` from the caller's point of
+//! view: it performs one HTTP exchange on the engine's pooled client and
+//! returns the parsed outcome. All protocol interpretation (status mapping,
+//! conflict tolerance, response shapes) is pure code over the returned data.
 
 use base64::Engine;
-use reqwest::Client;
 use serde_json::{json, Value};
+use temper_io_engine::http::{http_call, HttpCall};
 
 /// The shared password assigned to demo role users.
 pub const ROLE_PASSWORD: &str = "R0le-Phase2-e2e!";
@@ -17,6 +22,9 @@ const TOKEN_SCOPES: &[&str] = &[
     "write:user",
     "read:organization",
 ];
+
+/// Per-request deadline, matching the previous client-wide configuration.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug)]
 pub enum RestError {
@@ -50,32 +58,124 @@ impl std::error::Error for RestError {}
 
 pub type Result<T> = std::result::Result<T, RestError>;
 
+/// Engine-backed HTTP client for the low-level Forgejo helpers.
+///
+/// Keeps the name (and the `&Client` parameter convention) of the previous
+/// reqwest-based client so call sites stay unchanged.
+#[derive(Clone)]
+pub struct Client {
+    inner: std::sync::Arc<asupersync::http::h1::http_client::HttpClient>,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Client").finish_non_exhaustive()
+    }
+}
+
+enum Auth<'a> {
+    Token(&'a str),
+    Basic(&'a str, &'a str),
+}
+
+/// A fully-buffered response: status plus body text.
+struct RestResponse {
+    status: u16,
+    body: String,
+}
+
+impl RestResponse {
+    fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+}
+
+impl Client {
+    async fn send(
+        &self,
+        method: &str,
+        url: String,
+        auth: Auth<'_>,
+        body: Option<&Value>,
+    ) -> Result<RestResponse> {
+        let mut headers = vec![match auth {
+            Auth::Token(token) => ("Authorization".to_string(), format!("token {token}")),
+            Auth::Basic(user, password) => {
+                let credentials =
+                    base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
+                ("Authorization".to_string(), format!("Basic {credentials}"))
+            }
+        }];
+        if body.is_some() {
+            headers.push(("Content-Type".to_string(), "application/json".to_string()));
+        }
+        let call = HttpCall {
+            method: method.to_string(),
+            url,
+            headers,
+            body: body.map(|value| value.to_string().into_bytes()).unwrap_or_default(),
+        };
+
+        // Apply the request deadline only with a real task context: a detached
+        // context has no clock, which would make the deadline meaningless.
+        let result = match asupersync::cx::Cx::current() {
+            Some(cx) => {
+                match asupersync::time::timeout(
+                    temper_io_engine::runtime::timer_now(&cx),
+                    REQUEST_TIMEOUT,
+                    Box::pin(http_call(&cx, &self.inner, call)),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_elapsed) => Err(format!(
+                        "request timed out after {}s",
+                        REQUEST_TIMEOUT.as_secs()
+                    )),
+                }
+            }
+            None => {
+                let cx = temper_io_engine::runtime::ambient_cx();
+                http_call(&cx, &self.inner, call).await
+            }
+        };
+
+        let response = result.map_err(RestError::Http)?;
+        Ok(RestResponse {
+            status: response.status,
+            body: String::from_utf8_lossy(&response.body).into_owned(),
+        })
+    }
+}
+
 pub fn http_client() -> Result<Client> {
-    Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|err| RestError::Http(err.to_string()))
+    Ok(Client {
+        inner: temper_io_engine::http::build_http_client(),
+    })
 }
 
 pub async fn ensure_org(client: &Client, base: &str, token: &str, owner: &str) -> Result<()> {
     let resp = client
-        .post(format!("{base}/api/v1/orgs"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({ "username": owner }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "create org").await
+        .send(
+            "POST",
+            format!("{base}/api/v1/orgs"),
+            Auth::Token(token),
+            Some(&json!({ "username": owner })),
+        )
+        .await?;
+    accept_or_conflict(resp, "create org")
 }
 
 pub async fn owners_team_id(client: &Client, base: &str, token: &str, owner: &str) -> Result<i64> {
     let resp = client
-        .get(format!("{base}/api/v1/orgs/{owner}/teams"))
-        .header("Authorization", format!("token {token}"))
-        .send()
-        .await
-        .map_err(http_err)?;
-    let teams: Value = json_ok(resp, "list org teams").await?;
+        .send(
+            "GET",
+            format!("{base}/api/v1/orgs/{owner}/teams"),
+            Auth::Token(token),
+            None,
+        )
+        .await?;
+    let teams: Value = json_ok(resp, "list org teams")?;
     teams
         .as_array()
         .and_then(|teams| {
@@ -98,18 +198,19 @@ pub async fn create_user(
     email: &str,
 ) -> Result<()> {
     let resp = client
-        .post(format!("{base}/api/v1/admin/users"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
-            "username": login,
-            "email": email,
-            "password": ROLE_PASSWORD,
-            "must_change_password": false,
-        }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "create user").await
+        .send(
+            "POST",
+            format!("{base}/api/v1/admin/users"),
+            Auth::Token(token),
+            Some(&json!({
+                "username": login,
+                "email": email,
+                "password": ROLE_PASSWORD,
+                "must_change_password": false,
+            })),
+        )
+        .await?;
+    accept_or_conflict(resp, "create user")
 }
 
 pub async fn add_team_member(
@@ -120,12 +221,14 @@ pub async fn add_team_member(
     login: &str,
 ) -> Result<()> {
     let resp = client
-        .put(format!("{base}/api/v1/teams/{team_id}/members/{login}"))
-        .header("Authorization", format!("token {token}"))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "add team member").await
+        .send(
+            "PUT",
+            format!("{base}/api/v1/teams/{team_id}/members/{login}"),
+            Auth::Token(token),
+            None,
+        )
+        .await?;
+    accept_or_conflict(resp, "add team member")
 }
 
 pub async fn mint_user_token(client: &Client, base: &str, login: &str) -> Result<String> {
@@ -142,16 +245,17 @@ pub async fn mint_user_token(client: &Client, base: &str, login: &str) -> Result
             .unwrap_or_default()
     );
     let resp = client
-        .post(format!("{base}/api/v1/users/{login}/tokens"))
-        .basic_auth(login, Some(ROLE_PASSWORD))
-        .json(&json!({
-            "name": token_name,
-            "scopes": TOKEN_SCOPES,
-        }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    let body: Value = json_ok(resp, "mint user token").await?;
+        .send(
+            "POST",
+            format!("{base}/api/v1/users/{login}/tokens"),
+            Auth::Basic(login, ROLE_PASSWORD),
+            Some(&json!({
+                "name": token_name,
+                "scopes": TOKEN_SCOPES,
+            })),
+        )
+        .await?;
+    let body: Value = json_ok(resp, "mint user token")?;
     body["sha1"]
         .as_str()
         .map(str::to_string)
@@ -171,18 +275,19 @@ pub async fn ensure_repo(
     default_branch: &str,
 ) -> Result<()> {
     let resp = client
-        .post(format!("{base}/api/v1/orgs/{owner}/repos"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
-            "name": name,
-            "default_branch": default_branch,
-            "auto_init": true,
-            "private": false,
-        }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "create repo").await
+        .send(
+            "POST",
+            format!("{base}/api/v1/orgs/{owner}/repos"),
+            Auth::Token(token),
+            Some(&json!({
+                "name": name,
+                "default_branch": default_branch,
+                "auto_init": true,
+                "private": false,
+            })),
+        )
+        .await?;
+    accept_or_conflict(resp, "create repo")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -199,19 +304,18 @@ pub async fn commit_file(
 ) -> Result<()> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(contents);
     let resp = client
-        .post(format!(
-            "{base}/api/v1/repos/{owner}/{name}/contents/{path}"
-        ))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
-            "content": encoded,
-            "message": message,
-            "branch": branch,
-        }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "commit file").await
+        .send(
+            "POST",
+            format!("{base}/api/v1/repos/{owner}/{name}/contents/{path}"),
+            Auth::Token(token),
+            Some(&json!({
+                "content": encoded,
+                "message": message,
+                "branch": branch,
+            })),
+        )
+        .await?;
+    accept_or_conflict(resp, "commit file")
 }
 
 pub async fn create_branch(
@@ -224,16 +328,17 @@ pub async fn create_branch(
     old_branch: &str,
 ) -> Result<()> {
     let resp = client
-        .post(format!("{base}/api/v1/repos/{owner}/{name}/branches"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
-            "new_branch_name": new_branch,
-            "old_branch_name": old_branch,
-        }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "create branch").await
+        .send(
+            "POST",
+            format!("{base}/api/v1/repos/{owner}/{name}/branches"),
+            Auth::Token(token),
+            Some(&json!({
+                "new_branch_name": new_branch,
+                "old_branch_name": old_branch,
+            })),
+        )
+        .await?;
+    accept_or_conflict(resp, "create branch")
 }
 
 pub async fn ensure_repo_webhook(
@@ -246,12 +351,14 @@ pub async fn ensure_repo_webhook(
     secret: &str,
 ) -> Result<()> {
     let existing = client
-        .get(format!("{base}/api/v1/repos/{owner}/{name}/hooks"))
-        .header("Authorization", format!("token {token}"))
-        .send()
-        .await
-        .map_err(http_err)?;
-    let hooks: Value = json_ok(existing, "list repo hooks").await?;
+        .send(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}/hooks"),
+            Auth::Token(token),
+            None,
+        )
+        .await?;
+    let hooks: Value = json_ok(existing, "list repo hooks")?;
     let already_registered = hooks
         .as_array()
         .is_some_and(|hooks| hooks.iter().any(|hook| hook_config_url(hook) == Some(url)));
@@ -260,37 +367,38 @@ pub async fn ensure_repo_webhook(
     }
 
     let resp = client
-        .post(format!("{base}/api/v1/repos/{owner}/{name}/hooks"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
-            "type": "gitea",
-            "active": true,
-            "events": [
-                "push",
-                "status",
-                "issues",
-                "issue_comment",
-                "pull_request",
-                "pull_request_sync",
-                "pull_request_review_approved",
-                "pull_request_review_rejected",
-                "pull_request_review_comment",
-                "workflow_job",
-                "workflow_run",
-                "action_run_failure",
-                "action_run_recover",
-                "action_run_success",
-            ],
-            "config": {
-                "url": url,
-                "content_type": "json",
-                "secret": secret,
-            },
-        }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    json_ok(resp, "create repo webhook").await.map(|_| ())
+        .send(
+            "POST",
+            format!("{base}/api/v1/repos/{owner}/{name}/hooks"),
+            Auth::Token(token),
+            Some(&json!({
+                "type": "gitea",
+                "active": true,
+                "events": [
+                    "push",
+                    "status",
+                    "issues",
+                    "issue_comment",
+                    "pull_request",
+                    "pull_request_sync",
+                    "pull_request_review_approved",
+                    "pull_request_review_rejected",
+                    "pull_request_review_comment",
+                    "workflow_job",
+                    "workflow_run",
+                    "action_run_failure",
+                    "action_run_recover",
+                    "action_run_success",
+                ],
+                "config": {
+                    "url": url,
+                    "content_type": "json",
+                    "secret": secret,
+                },
+            })),
+        )
+        .await?;
+    json_ok(resp, "create repo webhook").map(|_| ())
 }
 
 fn hook_config_url(hook: &Value) -> Option<&str> {
@@ -311,14 +419,16 @@ pub async fn list_pull_request_files(
     let mut page = 1;
     loop {
         let resp = client
-            .get(format!(
-                "{base}/api/v1/repos/{owner}/{name}/pulls/{number}/files?page={page}&limit=50"
-            ))
-            .header("Authorization", format!("token {token}"))
-            .send()
-            .await
-            .map_err(http_err)?;
-        let payload: Value = json_ok(resp, "list pull request files").await?;
+            .send(
+                "GET",
+                format!(
+                    "{base}/api/v1/repos/{owner}/{name}/pulls/{number}/files?page={page}&limit=50"
+                ),
+                Auth::Token(token),
+                None,
+            )
+            .await?;
+        let payload: Value = json_ok(resp, "list pull request files")?;
         let page_files = payload.as_array().ok_or_else(|| RestError::Shape {
             what: "pull request files".into(),
             detail: "response was not an array".into(),
@@ -352,14 +462,16 @@ pub async fn list_issue_comment_bodies(
     let mut page = 1;
     loop {
         let resp = client
-            .get(format!(
-                "{base}/api/v1/repos/{owner}/{name}/issues/{number}/comments?page={page}&limit=50"
-            ))
-            .header("Authorization", format!("token {token}"))
-            .send()
-            .await
-            .map_err(http_err)?;
-        let payload: Value = json_ok(resp, "list issue comments").await?;
+            .send(
+                "GET",
+                format!(
+                    "{base}/api/v1/repos/{owner}/{name}/issues/{number}/comments?page={page}&limit=50"
+                ),
+                Auth::Token(token),
+                None,
+            )
+            .await?;
+        let payload: Value = json_ok(resp, "list issue comments")?;
         let page_comments = payload.as_array().ok_or_else(|| RestError::Shape {
             what: "issue comments".into(),
             detail: "response was not an array".into(),
@@ -388,15 +500,14 @@ pub async fn create_issue_comment(
     body: &str,
 ) -> Result<()> {
     let resp = client
-        .post(format!(
-            "{base}/api/v1/repos/{owner}/{name}/issues/{number}/comments"
-        ))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({ "body": body }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    json_ok(resp, "create issue comment").await.map(|_| ())
+        .send(
+            "POST",
+            format!("{base}/api/v1/repos/{owner}/{name}/issues/{number}/comments"),
+            Auth::Token(token),
+            Some(&json!({ "body": body })),
+        )
+        .await?;
+    json_ok(resp, "create issue comment").map(|_| ())
 }
 
 pub async fn enable_actions(
@@ -407,13 +518,14 @@ pub async fn enable_actions(
     name: &str,
 ) -> Result<()> {
     let resp = client
-        .patch(format!("{base}/api/v1/repos/{owner}/{name}"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({ "has_actions": true }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    json_ok(resp, "enable actions").await.map(|_| ())
+        .send(
+            "PATCH",
+            format!("{base}/api/v1/repos/{owner}/{name}"),
+            Auth::Token(token),
+            Some(&json!({ "has_actions": true })),
+        )
+        .await?;
+    json_ok(resp, "enable actions").map(|_| ())
 }
 
 /// Confirms an org repository already exists, erroring clearly if it is absent.
@@ -430,16 +542,17 @@ pub async fn require_repo(
     name: &str,
 ) -> Result<()> {
     let resp = client
-        .get(format!("{base}/api/v1/repos/{owner}/{name}"))
-        .header("Authorization", format!("token {token}"))
-        .send()
-        .await
-        .map_err(http_err)?;
-    let status = resp.status();
-    if status.is_success() {
+        .send(
+            "GET",
+            format!("{base}/api/v1/repos/{owner}/{name}"),
+            Auth::Token(token),
+            None,
+        )
+        .await?;
+    if resp.is_success() {
         return Ok(());
     }
-    if status.as_u16() == 404 {
+    if resp.status == 404 {
         return Err(RestError::Api {
             what: "require existing repo".into(),
             status: 404,
@@ -449,7 +562,7 @@ pub async fn require_repo(
             ),
         });
     }
-    Err(api_error(resp, "require existing repo", status).await)
+    Err(api_error(resp, "require existing repo"))
 }
 
 /// Grants a repo-scoped collaborator permission on `owner/name` to `login`.
@@ -469,41 +582,33 @@ pub async fn add_repo_collaborator(
     permission: &str,
 ) -> Result<()> {
     let resp = client
-        .put(format!(
-            "{base}/api/v1/repos/{owner}/{name}/collaborators/{login}"
-        ))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({ "permission": permission }))
-        .send()
-        .await
-        .map_err(http_err)?;
-    accept_or_conflict(resp, "add repo collaborator").await
+        .send(
+            "PUT",
+            format!("{base}/api/v1/repos/{owner}/{name}/collaborators/{login}"),
+            Auth::Token(token),
+            Some(&json!({ "permission": permission })),
+        )
+        .await?;
+    accept_or_conflict(resp, "add repo collaborator")
 }
 
-fn http_err(err: reqwest::Error) -> RestError {
-    RestError::Http(err.to_string())
-}
-
-async fn json_ok(resp: reqwest::Response, what: &str) -> Result<Value> {
-    let status = resp.status();
-    if status.is_success() {
-        resp.json::<Value>().await.map_err(|err| RestError::Shape {
+fn json_ok(resp: RestResponse, what: &str) -> Result<Value> {
+    if resp.is_success() {
+        serde_json::from_str::<Value>(&resp.body).map_err(|err| RestError::Shape {
             what: what.into(),
             detail: err.to_string(),
         })
     } else {
-        Err(api_error(resp, what, status).await)
+        Err(api_error(resp, what))
     }
 }
 
-async fn accept_or_conflict(resp: reqwest::Response, what: &str) -> Result<()> {
-    let status = resp.status();
-    if status.is_success() {
+fn accept_or_conflict(resp: RestResponse, what: &str) -> Result<()> {
+    if resp.is_success() {
         return Ok(());
     }
-    let code = status.as_u16();
-    let body = resp.text().await.unwrap_or_default();
-    let lower = body.to_lowercase();
+    let code = resp.status;
+    let lower = resp.body.to_lowercase();
     let benign = (code == 409 || code == 422)
         && (lower.contains("exist") || lower.contains("already") || lower.contains("member"));
     if benign {
@@ -512,17 +617,16 @@ async fn accept_or_conflict(resp: reqwest::Response, what: &str) -> Result<()> {
         Err(RestError::Api {
             what: what.into(),
             status: code,
-            body: snippet(&body),
+            body: snippet(&resp.body),
         })
     }
 }
 
-async fn api_error(resp: reqwest::Response, what: &str, status: reqwest::StatusCode) -> RestError {
-    let body = resp.text().await.unwrap_or_default();
+fn api_error(resp: RestResponse, what: &str) -> RestError {
     RestError::Api {
         what: what.into(),
-        status: status.as_u16(),
-        body: snippet(&body),
+        status: resp.status,
+        body: snippet(&resp.body),
     }
 }
 
@@ -551,5 +655,20 @@ mod tests {
             error.to_string(),
             "forgejo call 'create repo' failed (422): already exists"
         );
+    }
+
+    #[test]
+    fn accept_or_conflict_tolerates_benign_conflicts() {
+        let benign = RestResponse {
+            status: 409,
+            body: "user already exists".into(),
+        };
+        assert!(accept_or_conflict(benign, "create user").is_ok());
+
+        let hostile = RestResponse {
+            status: 500,
+            body: "boom".into(),
+        };
+        assert!(accept_or_conflict(hostile, "create user").is_err());
     }
 }

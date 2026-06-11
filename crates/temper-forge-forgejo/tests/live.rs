@@ -19,7 +19,8 @@ use temper_forge::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, IssueQuery, IssueState,
     PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ReqwestHttpClient};
+use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
+use temper_io_engine::http::{http_call, HttpCall, HttpResponseData};
 
 const ADMIN_USER: &str = "liveadmin";
 const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";
@@ -43,64 +44,66 @@ struct LiveMetadata {
 struct LiveWorld {
     _server: ForgejoServer,
     _runner: ForgejoRunner,
-    forge: ForgejoForge<ReqwestHttpClient>,
+    forge: ForgejoForge<EngineHttpClient>,
     repo_id: RepositoryId,
     repo_path: RepositoryPath,
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "boots local Forgejo + host-mode forgejo-runner; run with --ignored"]
-async fn live_smoke_suite_against_throwaway_forgejo() {
-    let world = boot_world().await;
+fn live_smoke_suite_against_throwaway_forgejo() {
+    temper_io_engine::block_on(async {
+        let world = boot_world().await;
 
-    let user = world
-        .forge
-        .current_user()
-        .await
-        .expect("current_user should succeed");
-    assert_eq!(user.handle, ADMIN_USER);
+        let user = world
+            .forge
+            .current_user()
+            .await
+            .expect("current_user should succeed");
+        assert_eq!(user.handle, ADMIN_USER);
 
-    let repo = world
-        .forge
-        .get_repository_by_path(&world.repo_path)
-        .await
-        .expect("get_repository_by_path should succeed")
-        .expect("provisioned repository should exist");
-    assert_eq!(repo.id, world.repo_id);
-    assert_eq!(repo.owner, world.repo_path.owner);
-    assert_eq!(repo.name, world.repo_path.name);
-    assert_eq!(repo.default_branch, "main");
+        let repo = world
+            .forge
+            .get_repository_by_path(&world.repo_path)
+            .await
+            .expect("get_repository_by_path should succeed")
+            .expect("provisioned repository should exist");
+        assert_eq!(repo.id, world.repo_id);
+        assert_eq!(repo.owner, world.repo_path.owner);
+        assert_eq!(repo.name, world.repo_path.name);
+        assert_eq!(repo.default_branch, "main");
 
-    let labels = world
-        .forge
-        .list_labels(&world.repo_id)
-        .await
-        .expect("list_labels should succeed");
-    let mut names: Vec<&str> = labels.iter().map(|label| label.name.as_str()).collect();
-    let sorted = {
-        let mut copy = names.clone();
-        copy.sort_unstable();
-        copy
-    };
-    names.sort_unstable();
-    assert_eq!(names, sorted, "labels should come back name-sorted");
+        let labels = world
+            .forge
+            .list_labels(&world.repo_id)
+            .await
+            .expect("list_labels should succeed");
+        let mut names: Vec<&str> = labels.iter().map(|label| label.name.as_str()).collect();
+        let sorted = {
+            let mut copy = names.clone();
+            copy.sort_unstable();
+            copy
+        };
+        names.sort_unstable();
+        assert_eq!(names, sorted, "labels should come back name-sorted");
 
-    let issues = world
-        .forge
-        .list_issues(&world.repo_id, IssueQuery::default())
-        .await
-        .expect("list_issues should succeed");
-    assert!(issues.iter().all(|issue| issue.repo_id == world.repo_id));
+        let issues = world
+            .forge
+            .list_issues(&world.repo_id, IssueQuery::default())
+            .await
+            .expect("list_issues should succeed");
+        assert!(issues.iter().all(|issue| issue.repo_id == world.repo_id));
 
-    let pulls = world
-        .forge
-        .list_pull_requests(&world.repo_id, PullRequestQuery::default())
-        .await
-        .expect("list_pull_requests should succeed");
-    assert!(pulls.iter().all(|pull| pull.repo_id == world.repo_id));
+        let pulls = world
+            .forge
+            .list_pull_requests(&world.repo_id, PullRequestQuery::default())
+            .await
+            .expect("list_pull_requests should succeed");
+        assert!(pulls.iter().all(|pull| pull.repo_id == world.repo_id));
 
-    create_and_close_issue(&world).await;
-    wait_for_ci_success(&world).await;
+        create_and_close_issue(&world).await;
+        wait_for_ci_success(&world).await;
+    });
 }
 
 async fn boot_world() -> LiveWorld {
@@ -111,26 +114,19 @@ async fn boot_world() -> LiveWorld {
         "repo": REPO,
     }))
     .expect("live smoke state serializes");
-    let cached = tokio::task::spawn_blocking(move || {
+    let cached = asupersync::runtime::spawn_blocking(move || {
         ForgejoServer::start_with_state(&state, |server| {
             let base = server.base_url().to_string();
             let admin_token = bootstrap_admin(server).expect("admin token bootstraps");
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime builds")
-                .block_on(async {
-                    let client = reqwest::Client::builder()
-                        .timeout(Duration::from_secs(15))
-                        .build()
-                        .map_err(|err| err.to_string())?;
-                    create_initialized_repo(&client, &base, &admin_token).await;
-                    Ok::<LiveMetadata, String>(LiveMetadata { admin_token })
-                })
+            // One-shot bootstrap on this blocking thread: build a fresh engine
+            // runtime, perform the provisioning calls, tear it down.
+            temper_io_engine::block_on(async move {
+                create_initialized_repo(&base, &admin_token).await;
+                Ok::<LiveMetadata, String>(LiveMetadata { admin_token })
+            })
         })
     })
     .await
-    .expect("server boot task joins")
     .expect("cached Forgejo state starts");
     let server = cached.server;
     let base = server.base_url().to_string();
@@ -139,12 +135,8 @@ async fn boot_world() -> LiveWorld {
     let mut runner = ForgejoRunner::register(&server).expect("forgejo-runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("reqwest client builds");
-    enable_repo_actions(&client, &base, &admin_token).await;
-    put_workflow_file(&client, &base, &admin_token).await;
+    enable_repo_actions(&base, &admin_token).await;
+    put_workflow_file(&base, &admin_token).await;
 
     let repo_path = RepositoryPath::new(ADMIN_USER, REPO);
     let forge = ForgejoForge::new(
@@ -195,72 +187,85 @@ fn bootstrap_admin(server: &ForgejoServer) -> Result<String, ServerError> {
     Ok(token.trim().to_string())
 }
 
-async fn create_initialized_repo(client: &reqwest::Client, base: &str, token: &str) {
-    let response = client
-        .post(format!("{base}/api/v1/user/repos"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
+/// Send one authorized JSON request through the engine HTTP client.
+async fn api_json(method: &str, url: String, token: &str, body: &Value) -> HttpResponseData {
+    let client = temper_io_engine::http::build_http_client();
+    let cx = temper_io_engine::runtime::ambient_cx();
+    http_call(
+        &cx,
+        &client,
+        HttpCall {
+            method: method.to_string(),
+            url,
+            headers: vec![
+                ("Authorization".to_string(), format!("token {token}")),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: body.to_string().into_bytes(),
+        },
+    )
+    .await
+    .expect("api request sends")
+}
+
+async fn create_initialized_repo(base: &str, token: &str) {
+    let response = api_json(
+        "POST",
+        format!("{base}/api/v1/user/repos"),
+        token,
+        &json!({
             "name": REPO,
             "auto_init": true,
             "default_branch": "main",
             "private": false,
-        }))
-        .send()
-        .await
-        .expect("create repo request sends");
-    assert_success(response, "create repo").await;
+        }),
+    )
+    .await;
+    assert_success(&response, "create repo");
 }
 
-async fn enable_repo_actions(client: &reqwest::Client, base: &str, token: &str) {
-    let response = client
-        .patch(format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({ "has_actions": true }))
-        .send()
-        .await
-        .expect("enable actions request sends");
-    assert_success(response, "enable actions").await;
+async fn enable_repo_actions(base: &str, token: &str) {
+    let response = api_json(
+        "PATCH",
+        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"),
+        token,
+        &json!({ "has_actions": true }),
+    )
+    .await;
+    assert_success(&response, "enable actions");
 }
 
-async fn put_workflow_file(client: &reqwest::Client, base: &str, token: &str) -> String {
+async fn put_workflow_file(base: &str, token: &str) -> String {
     let content = base64::engine::general_purpose::STANDARD.encode(CI_WORKFLOW);
-    let response = client
-        .post(format!(
-            "{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"
-        ))
-        .header("Authorization", format!("token {token}"))
-        .json(&json!({
+    let response = api_json(
+        "POST",
+        format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/.forgejo/workflows/ci.yml"),
+        token,
+        &json!({
             "content": content,
             "message": "add CI workflow",
             "branch": "main",
-        }))
-        .send()
-        .await
-        .expect("put workflow request sends");
-    let body = assert_success_json(response, "put workflow").await;
+        }),
+    )
+    .await;
+    let body = assert_success_json(&response, "put workflow");
     body["commit"]["sha"]
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| panic!("no commit sha in contents response: {body}"))
 }
 
-async fn assert_success(response: reqwest::Response, what: &str) {
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+fn assert_success(response: &HttpResponseData, what: &str) {
+    if !(200..300).contains(&response.status) {
+        let status = response.status;
+        let body = String::from_utf8_lossy(&response.body);
         panic!("{what} failed: {status} {body}");
     }
 }
 
-async fn assert_success_json(response: reqwest::Response, what: &str) -> Value {
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        panic!("{what} failed: {status} {body}");
-    }
-    response
-        .json()
-        .await
+fn assert_success_json(response: &HttpResponseData, what: &str) -> Value {
+    assert_success(response, what);
+    serde_json::from_slice(&response.body)
         .unwrap_or_else(|error| panic!("{what} response should be json: {error}"))
 }
 
@@ -317,6 +322,6 @@ async fn wait_for_ci_success(world: &LiveWorld) {
         if Instant::now() >= deadline {
             panic!("CI success was not observed within 180s; last observation: {observation}");
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        temper_io_engine::runtime::sleep_for(Duration::from_secs(2)).await;
     }
 }

@@ -42,16 +42,14 @@ use crate::worker_bin::run::{
 /// from its filesystem fake (it must prep PR heads and push CI fix commits).
 const ENGINEER_ROLE: &str = "engineer";
 
-/// Runs a `--backend forgejo` worker to completion on a Tokio runtime.
+/// Runs a `--backend forgejo` worker to completion on the engine runtime.
 ///
 /// Note `--kind ci` never reaches here: it is rejected for the Forgejo backend
 /// during argument parsing (the real `forgejo-runner` is the CI producer).
 pub(super) fn run(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport, RunError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| RunError::Backend(format!("failed to start Tokio runtime: {error}")))?;
-    runtime.block_on(run_async(args, forgejo))
+    let args = args.clone();
+    let forgejo = forgejo.clone();
+    temper_io_engine::block_on(async move { run_async(&args, &forgejo).await })
 }
 
 async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport, RunError> {

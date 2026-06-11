@@ -17,7 +17,7 @@ temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-runner = { path = "../temper-runner" }
 temper-wake = { path = "../temper-wake" }
 temper-workflow = { path = "../temper-workflow" }
-tokio = { version = "1", features = ["macros", "rt", "time"] }
+temper-io-engine = { path = "../temper-io-engine" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }

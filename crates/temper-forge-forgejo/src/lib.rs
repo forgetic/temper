@@ -28,7 +28,7 @@ mod pulls;
 mod repos;
 mod types;
 
-pub use client::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse, ReqwestHttpClient};
+pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
 pub use config::{CasMode, ConfigError, ForgejoConfig, WebUiCredentials, DEFAULT_PAGE_LIMIT};
 
 use serde::de::DeserializeOwned;
@@ -57,20 +57,20 @@ fn is_transient(status: u16) -> bool {
 
 /// Forgejo Forge backend.
 ///
-/// `C` is the HTTP client; production uses [`ReqwestHttpClient`] and tests use a
+/// `C` is the HTTP client; production uses [`EngineHttpClient`] and tests use a
 /// recording mock. Construct with [`ForgejoForge::new`] for the real client or
 /// [`ForgejoForge::with_client`] to inject a custom one.
 #[derive(Clone, Debug)]
-pub struct ForgejoForge<C = ReqwestHttpClient> {
+pub struct ForgejoForge<C = EngineHttpClient> {
     config: ForgejoConfig,
     client: C,
     versions: Arc<VersionCache>,
 }
 
-impl ForgejoForge<ReqwestHttpClient> {
+impl ForgejoForge<EngineHttpClient> {
     /// Builds a backend that talks to the configured base URL over `reqwest`.
     pub fn new(config: ForgejoConfig) -> Self {
-        let client = ReqwestHttpClient::new(config.base_url.clone());
+        let client = EngineHttpClient::new(config.base_url.clone());
         Self::with_client(config, client)
     }
 }

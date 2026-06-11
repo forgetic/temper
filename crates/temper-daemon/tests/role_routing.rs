@@ -6,15 +6,14 @@ use serde_json::json;
 use temper_daemon::{ResultApplier, RoleRoutingApplier};
 use temper_worker_protocol::{Artifact, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION};
 use temper_worker_registry::InFlightJob;
-use tokio::sync::mpsc;
 
 struct RecordingApplier {
     name: &'static str,
-    tx: mpsc::UnboundedSender<(&'static str, String, String)>,
+    tx: temper_io_engine::CqSender<(&'static str, String, String)>,
 }
 
 impl RecordingApplier {
-    fn new(name: &'static str, tx: mpsc::UnboundedSender<(&'static str, String, String)>) -> Self {
+    fn new(name: &'static str, tx: temper_io_engine::CqSender<(&'static str, String, String)>) -> Self {
         Self { name, tx }
     }
 }
@@ -57,9 +56,10 @@ fn success_result(job_id: &str) -> JobResult {
     }
 }
 
-#[tokio::test]
-async fn role_routing_applier_dispatches_known_role_to_registered_applier() {
-    let (tx, mut rx) = mpsc::unbounded_channel();
+#[test]
+ fn role_routing_applier_dispatches_known_role_to_registered_applier() {
+    temper_io_engine::block_on(async move {
+    let (tx, mut rx) = temper_io_engine::channel();
     let routing = RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
         .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
     let job = in_flight_job("engineer");
@@ -76,12 +76,14 @@ async fn role_routing_applier_dispatches_known_role_to_registered_applier() {
             "job-engineer".to_string()
         ))
     );
-    assert!(rx.try_recv().is_err());
+    assert!(rx.try_recv().is_none());
+    })
 }
 
-#[tokio::test]
-async fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
-    let (tx, mut rx) = mpsc::unbounded_channel();
+#[test]
+ fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
+    temper_io_engine::block_on(async move {
+    let (tx, mut rx) = temper_io_engine::channel();
     let routing = RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
         .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
     let job = in_flight_job("reviewer");
@@ -98,5 +100,6 @@ async fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
             "job-reviewer".to_string()
         ))
     );
-    assert!(rx.try_recv().is_err());
+    assert!(rx.try_recv().is_none());
+    })
 }

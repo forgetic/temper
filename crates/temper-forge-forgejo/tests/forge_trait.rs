@@ -13,7 +13,7 @@ mod support;
 
 use support::{block_on, forge, repo_id, MockHttpClient, OWNER, REPO};
 use temper_forge::{Forge, IssueState, ItemNumber, UserId};
-use temper_forge_forgejo::{ForgejoForge, ReqwestHttpClient};
+use temper_forge_forgejo::{ForgejoForge, EngineHttpClient};
 use temper_workflow::{Executor, ValidatedWorkflow};
 
 #[test]
@@ -69,7 +69,7 @@ fn used_through_dyn_forge_for_a_read_end_to_end() {
 /// Never called; it fails to type-check if the impl or its `Send + Sync` bounds
 /// regress.
 #[allow(dead_code)]
-fn _assert_reqwest_backend_is_forge(forge: &ForgejoForge<ReqwestHttpClient>) {
+fn _assert_engine_backend_is_forge(forge: &ForgejoForge<EngineHttpClient>) {
     fn is_forge<T: Forge + ?Sized>(_: &T) {}
     is_forge(forge);
 }

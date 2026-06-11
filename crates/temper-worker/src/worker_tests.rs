@@ -21,11 +21,8 @@ fn temp_path(name: &str) -> PathBuf {
     path
 }
 
-fn runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds")
+fn runtime() -> temper_io_engine::EngineRuntime {
+    temper_io_engine::build_runtime().expect("engine runtime builds")
 }
 
 #[test]
@@ -119,7 +116,6 @@ fn pr_diff_guard_targets_are_derived_from_role_manifests() {
 fn resolves_multiple_repositories_and_reports_missing_without_secret() {
     let forge = MemoryForge::new();
     let runtime = runtime();
-    let _guard = runtime.enter();
     runtime
         .block_on(forge.create_repository(CreateRepository {
             owner: "acme".into(),
@@ -184,7 +180,6 @@ impl Agent<MemoryForge> for RecordingAgent {
 fn production_role_wake_with_known_hint_scans_only_that_repo() {
     let forge = MemoryForge::new();
     let runtime = runtime();
-    let _guard = runtime.enter();
     let repo_a = runtime
         .block_on(forge.create_repository(CreateRepository {
             owner: "acme".into(),
@@ -288,8 +283,7 @@ fn production_tick_id_is_stable_for_log_correlation() {
 fn authenticated_wake_interrupts_long_wait() {
     let socket = temp_path("authenticated");
     let runtime = runtime();
-    let _guard = runtime.enter();
-    let listener = WakeListener::bind(WakeConfig {
+    let mut listener = WakeListener::bind(WakeConfig {
         socket: socket.clone(),
         secret: Some("wake-secret".into()),
     })
@@ -305,7 +299,7 @@ fn authenticated_wake_interrupts_long_wait() {
         .block_on(wait_for_wake_or_poll(
             || stop.should_stop(),
             StdDuration::from_secs(60),
-            Some(&listener),
+            Some(&mut listener),
         ))
         .expect("wait succeeds");
     sender.join().expect("sender joins");
@@ -321,8 +315,7 @@ fn authenticated_wake_interrupts_long_wait() {
 fn wake_payload_carries_repository_hint_to_waiter() {
     let socket = temp_path("hinted");
     let runtime = runtime();
-    let _guard = runtime.enter();
-    let listener = WakeListener::bind(WakeConfig {
+    let mut listener = WakeListener::bind(WakeConfig {
         socket: socket.clone(),
         secret: Some("wake-secret".into()),
     })
@@ -339,7 +332,7 @@ fn wake_payload_carries_repository_hint_to_waiter() {
         .block_on(wait_for_wake_or_poll(
             || stop.should_stop(),
             StdDuration::from_secs(60),
-            Some(&listener),
+            Some(&mut listener),
         ))
         .expect("wait succeeds");
     sender.join().expect("sender joins");
@@ -351,8 +344,7 @@ fn wake_payload_carries_repository_hint_to_waiter() {
 fn broad_wake_in_coalesced_batch_forces_broad_wait_outcome() {
     let socket = temp_path("burst");
     let runtime = runtime();
-    let _guard = runtime.enter();
-    let listener = WakeListener::bind(WakeConfig {
+    let mut listener = WakeListener::bind(WakeConfig {
         socket: socket.clone(),
         secret: Some("wake-secret".into()),
     })
@@ -371,7 +363,7 @@ fn broad_wake_in_coalesced_batch_forces_broad_wait_outcome() {
         .block_on(wait_for_wake_or_poll(
             || stop.should_stop(),
             StdDuration::from_secs(60),
-            Some(&listener),
+            Some(&mut listener),
         ))
         .expect("wait succeeds");
 
@@ -383,8 +375,7 @@ fn unauthorized_wake_is_ignored_until_stop_or_poll() {
     let socket = temp_path("unauthorized");
     let stop_file = temp_path("stop").with_extension("stop");
     let runtime = runtime();
-    let _guard = runtime.enter();
-    let listener = WakeListener::bind(WakeConfig {
+    let mut listener = WakeListener::bind(WakeConfig {
         socket: socket.clone(),
         secret: Some("wake-secret".into()),
     })
@@ -403,7 +394,7 @@ fn unauthorized_wake_is_ignored_until_stop_or_poll() {
         .block_on(wait_for_wake_or_poll(
             || stop.should_stop(),
             StdDuration::from_secs(60),
-            Some(&listener),
+            Some(&mut listener),
         ))
         .expect("wait succeeds");
     sender.join().expect("sender joins");

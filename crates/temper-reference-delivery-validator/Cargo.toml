@@ -10,7 +10,7 @@ description = "Operator-facing reference-delivery Forge-state validator."
 temper-forge = { path = "../temper-forge" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-workflow = { path = "../temper-workflow" }
-tokio = { version = "1", features = ["rt", "time"] }
+temper-io-engine = { path = "../temper-io-engine" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }

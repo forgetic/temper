@@ -36,16 +36,11 @@ fn server_boots_serves_version_and_tears_down() {
     // Independently confirm the API answers, and capture the port so we can
     // assert the process is gone after drop.
     let version_url = format!("{base}/api/v1/version");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("blocking client builds");
+    let client = temper_io_engine::http::BlockingJsonClient::new();
     let body = client
-        .get(&version_url)
-        .send()
-        .expect("version endpoint responds")
-        .text()
-        .expect("version body reads");
+        .send("GET", version_url.as_str(), None, None)
+        .map(|response| String::from_utf8_lossy(&response.body).into_owned())
+        .expect("version endpoint responds");
     assert!(body.contains("version"), "unexpected /version body: {body}");
 
     // Dropping the server kills the process and removes the data dir; the port
@@ -53,7 +48,7 @@ fn server_boots_serves_version_and_tears_down() {
     drop(server);
     let mut still_up = true;
     for _ in 0..25 {
-        if client.get(&version_url).send().is_err() {
+        if client.send("GET", version_url.as_str(), None, None).is_err() {
             still_up = false;
             break;
         }

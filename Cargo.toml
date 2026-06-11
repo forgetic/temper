@@ -7,6 +7,7 @@ members = [
     "crates/temper-worker-protocol",
     "crates/temper-worker-registry",
     "crates/temper-interaction",
+    "crates/temper-io-engine",
     "crates/temper-forge-filesystem",
     "crates/temper-forge-memory",
     "crates/temper-forge-forgejo",
@@ -37,6 +38,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
+asupersync = { workspace = true }
 chrono = { workspace = true }
 temper-daemon = { path = "crates/temper-daemon" }
 temper-forge = { path = "crates/temper-forge" }
@@ -47,8 +49,8 @@ temper-reference-delivery = { path = "crates/temper-reference-delivery" }
 temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator" }
 temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo" }
 temper-worker = { path = "crates/temper-worker" }
+temper-io-engine = { path = "crates/temper-io-engine" }
 temper-workflow = { path = "crates/temper-workflow" }
-tokio = { version = "1", features = ["rt", "net", "time", "signal", "macros"] }
 
 [dev-dependencies]
 # Daemon-topology e2e (`tests/daemon_forgejo_e2e.rs`): real Forgejo fixture,
@@ -87,17 +89,33 @@ workspace = true
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.76"
+rust-version = "1.85"
 
 [workspace.dependencies]
-axum = "0.7"
+# Pinned to 0.3.1, the same version the pi-sdk coding agent stack uses. The
+# crate is vendored (see [patch.crates-io] below) so it builds on rustc 1.85:
+# the vendored copy enables the post-1.85 feature gates it relies on, compiled
+# with a crate-scoped RUSTC_BOOTSTRAP set in .cargo/config.toml. Keep the
+# transitive pins in Cargo.lock with:
+#
+#   cargo update -p virtue-next --precise 0.1.2
+#   cargo update -p franken-decision --precise 0.3.1
+#   cargo update -p franken-kernel --precise 0.3.1
+#
+# (franken-* 0.3.4 and virtue-next 0.1.3 need rustc >= 1.86.)
+asupersync = "=0.3.1"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+
+# rustc 1.85 compatibility patches; see vendor/README.md.
+[patch.crates-io]
+asupersync = { path = "vendor/asupersync" }
+asupersync-macros = { path = "vendor/asupersync-macros" }
+franken-evidence = { path = "vendor/franken-evidence" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

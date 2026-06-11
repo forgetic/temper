@@ -66,7 +66,7 @@ fn read_secret(path: &Path) -> Result<String, WakeError> {
 
 #[cfg(unix)]
 pub struct WakeListener {
-    socket: tokio::net::UnixDatagram,
+    socket: asupersync::net::unix::UnixDatagram,
     path: PathBuf,
     secret: Option<String>,
 }
@@ -80,7 +80,7 @@ impl WakeListener {
             }
         }
         let _ = std::fs::remove_file(&config.socket);
-        let socket = tokio::net::UnixDatagram::bind(&config.socket)?;
+        let socket = asupersync::net::unix::UnixDatagram::bind(&config.socket)?;
         Ok(Self {
             socket,
             path: config.socket,
@@ -88,7 +88,7 @@ impl WakeListener {
         })
     }
 
-    pub async fn recv(&self) -> Result<Option<ChangeHint>, WakeError> {
+    pub async fn recv(&mut self) -> Result<Option<ChangeHint>, WakeError> {
         let mut buf = [0_u8; 2048];
         let size = self.socket.recv(&mut buf).await?;
         decode_payload(&buf[..size], self.secret.as_deref())
@@ -96,7 +96,9 @@ impl WakeListener {
 
     pub fn try_recv(&self) -> Result<Option<Option<ChangeHint>>, WakeError> {
         let mut buf = [0_u8; 2048];
-        match self.socket.try_recv(&mut buf) {
+        // The engine's datagram socket is non-blocking; a raw std recv gives
+        // the same try semantics the previous runtime offered.
+        match self.socket.as_std().recv(&mut buf) {
             Ok(size) => decode_payload(&buf[..size], self.secret.as_deref()).map(Some),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(WakeError::Io(error)),
@@ -120,7 +122,7 @@ impl WakeListener {
         Err(WakeError::Unsupported)
     }
 
-    pub async fn recv(&self) -> Result<Option<ChangeHint>, WakeError> {
+    pub async fn recv(&mut self) -> Result<Option<ChangeHint>, WakeError> {
         Err(WakeError::Unsupported)
     }
 
@@ -197,38 +199,48 @@ fn drain_wake_batch(
 pub async fn wait_for_wake_or_poll(
     mut should_stop: impl FnMut() -> bool,
     interval: StdDuration,
-    wake: Option<&WakeListener>,
+    mut wake: Option<&mut WakeListener>,
 ) -> Result<WakeWaitOutcome, WakeError> {
-    let deadline = tokio::time::sleep(interval);
-    tokio::pin!(deadline);
+    // Imperative-shell wait: slice the poll interval into bounded waits so the
+    // stop flag is observed at least every STOP_CHECK_INTERVAL, racing the
+    // datagram recv against each slice's deadline. The decisions (payload
+    // auth/decode, debounce policy, batch draining) stay pure functions.
+    let deadline = std::time::Instant::now() + interval;
     loop {
         if should_stop() {
             return Ok(WakeWaitOutcome::Stop);
         }
-        let stop_check = tokio::time::sleep(STOP_CHECK_INTERVAL);
-        tokio::pin!(stop_check);
-        match wake {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(WakeWaitOutcome::PollDeadline);
+        }
+        let window = remaining.min(STOP_CHECK_INTERVAL);
+        match wake.as_deref_mut() {
             Some(listener) => {
-                tokio::select! {
-                    _ = &mut deadline => return Ok(WakeWaitOutcome::PollDeadline),
-                    _ = &mut stop_check => {},
-                    received = listener.recv() => match received {
-                        Ok(hint) => {
-                            tokio::time::sleep(wake_debounce()).await;
-                            return drain_wake_batch(listener, hint).map(WakeWaitOutcome::Wake);
-                        }
-                        Err(WakeError::Unauthorized) => {
-                            eprintln!("temper-wake: ignored unauthorized wake message");
-                        }
-                        Err(error) => return Err(error),
-                    },
+                let received = asupersync::time::timeout(
+                    temper_io_engine::runtime::engine_now(),
+                    window,
+                    Box::pin(listener.recv()),
+                )
+                .await;
+                match received {
+                    Err(_elapsed) => {}
+                    Ok(Ok(hint)) => {
+                        asupersync::time::sleep(
+                            temper_io_engine::runtime::engine_now(),
+                            wake_debounce(),
+                        )
+                        .await;
+                        return drain_wake_batch(listener, hint).map(WakeWaitOutcome::Wake);
+                    }
+                    Ok(Err(WakeError::Unauthorized)) => {
+                        eprintln!("temper-wake: ignored unauthorized wake message");
+                    }
+                    Ok(Err(error)) => return Err(error),
                 }
             }
             None => {
-                tokio::select! {
-                    _ = &mut deadline => return Ok(WakeWaitOutcome::PollDeadline),
-                    _ = &mut stop_check => {},
-                }
+                asupersync::time::sleep(temper_io_engine::runtime::engine_now(), window).await;
             }
         }
     }

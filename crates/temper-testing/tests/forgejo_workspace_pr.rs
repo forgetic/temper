@@ -227,9 +227,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime builds")
+    temper_io_engine::build_runtime()
+        .expect("engine runtime builds")
         .block_on(future)
 }

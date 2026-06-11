@@ -1,36 +1,30 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    future::IntoFuture,
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
-use axum::http::StatusCode;
 use serde_json::json;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobResult, Poll,
     Register, ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
-use tokio::{
-    sync::{mpsc, oneshot},
-    time::sleep,
-};
 
 struct RecordingApplier {
-    tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
+    tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
 }
 
 struct GatedApplier {
-    tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
-    releases: StdMutex<Vec<oneshot::Receiver<()>>>,
+    tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
+    releases: StdMutex<Vec<temper_io_engine::OneshotReceiver<()>>>,
 }
 
 impl GatedApplier {
     fn new(
-        tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
-        releases: Vec<oneshot::Receiver<()>>,
+        tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
+        releases: Vec<temper_io_engine::OneshotReceiver<()>>,
     ) -> Self {
         Self {
             tx,
@@ -54,7 +48,7 @@ impl temper_daemon::ResultApplier for GatedApplier {
             releases.remove(0)
         };
         let _ = self.tx.send((job, result));
-        let _ = release.await;
+        let _ = release.recv().await;
     }
 }
 
@@ -79,20 +73,19 @@ async fn spawn_with_applier_and_apply_grace(
 }
 
 async fn spawn_daemon(daemon: temper_daemon::Daemon) -> (temper_daemon::Daemon, String) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
         .await
-        .expect("bind test listener");
-    let addr = listener.local_addr().expect("read local addr");
-    tokio::spawn(axum::serve(listener, daemon.router()).into_future());
+        .expect("bind test server");
+    let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"))
 }
 
 async fn spawn_recording() -> (
     temper_daemon::Daemon,
     String,
-    mpsc::UnboundedReceiver<(InFlightJob, JobResult)>,
+    temper_io_engine::CqReceiver<(InFlightJob, JobResult)>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = temper_io_engine::channel();
     let (daemon, url) = spawn_with_applier(Arc::new(RecordingApplier { tx })).await;
     (daemon, url, rx)
 }
@@ -205,26 +198,29 @@ fn artifact() -> Artifact {
 }
 
 async fn post(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
-) -> reqwest::Response {
+) -> temper_io_engine::http::HttpResponseData {
     client
-        .post(url)
-        .json(msg)
-        .send()
+        .send(
+            "POST",
+            url,
+            None,
+            Some(&serde_json::to_value(msg).expect("message serializes")),
+        )
         .await
         .expect("post message")
 }
 
 async fn post_json(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
 ) -> WorkerProtocolMessage {
     let response = post(client, url, msg).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    response.json().await.expect("protocol response json")
+    assert_eq!(response.status, 200);
+    serde_json::from_slice(&response.body).expect("protocol response json")
 }
 
 fn assert_release(msg: WorkerProtocolMessage, worker_id: &str, job_id: &str) {
@@ -273,7 +269,7 @@ async fn enqueue_standard_job(daemon: &temper_daemon::Daemon, job_id: &str) {
 
 async fn eventually_enqueue_and_assign(
     daemon: &temper_daemon::Daemon,
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     worker_id: &str,
     job_id: &str,
@@ -283,7 +279,7 @@ async fn eventually_enqueue_and_assign(
         match post_json(client, url, &poll_with_wait(worker_id, 25)).await {
             WorkerProtocolMessage::Assign(assign) if assign.job_id == job_id => return,
             WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout => {
-                sleep(Duration::from_millis(10)).await;
+                temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
             }
             other => panic!("expected assign for {job_id} or poll timeout, got {other:?}"),
         }
@@ -292,13 +288,14 @@ async fn eventually_enqueue_and_assign(
     panic!("job {job_id} did not become dispatchable after apply finished");
 }
 
-#[tokio::test]
-async fn accepted_result_invokes_applier_with_in_flight_context() {
+#[test]
+ fn accepted_result_invokes_applier_with_in_flight_context() {
+    temper_io_engine::block_on(async move {
     let (daemon, url, mut rx) = spawn_recording().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
 
     let artifact = artifact();
@@ -343,19 +340,18 @@ async fn accepted_result_invokes_applier_with_in_flight_context() {
     assert_eq!(recorded_result.job_id, posted_result.job_id);
     assert_eq!(recorded_result.status, posted_result.status);
     assert_eq!(recorded_result.branch, posted_result.branch);
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(rx.try_recv().is_none());
+    })
 }
 
-#[tokio::test]
-async fn result_without_in_flight_job_does_not_invoke_applier() {
+#[test]
+ fn result_without_in_flight_job_does_not_invoke_applier() {
+    temper_io_engine::block_on(async move {
     let (daemon, url, mut rx) = spawn_recording().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
 
     assert_release(
@@ -418,25 +414,24 @@ async fn result_without_in_flight_job_does_not_invoke_applier() {
     let (job, recorded_result) = rx.recv().await.expect("applier records real result");
     assert_eq!(job.job_id, "real-job");
     assert_eq!(recorded_result.job_id, real_result.job_id);
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(rx.try_recv().is_none());
+    })
 }
 
-#[tokio::test]
-async fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
-    let (record_tx, mut rx) = mpsc::unbounded_channel();
-    let (release_tx, release_rx) = oneshot::channel();
+#[test]
+ fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
+    temper_io_engine::block_on(async move {
+    let (record_tx, mut rx) = temper_io_engine::channel();
+    let (release_tx, release_rx) = temper_io_engine::oneshot();
     let (daemon, url) = spawn_with_applier_and_apply_grace(
         Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
         Duration::ZERO,
     )
     .await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
 
     enqueue_standard_job(&daemon, "job-apply-window-1").await;
@@ -463,23 +458,25 @@ async fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
     enqueue_standard_job(&daemon, "job-apply-window-1").await;
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
-    release_tx.send(()).expect("release apply gate");
+    release_tx.send(());
     eventually_enqueue_and_assign(&daemon, &client, &url, "worker-a", "job-apply-window-1").await;
+    })
 }
 
-#[tokio::test]
-async fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
-    let (record_tx, mut rx) = mpsc::unbounded_channel();
-    let (release_tx, release_rx) = oneshot::channel();
+#[test]
+ fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
+    temper_io_engine::block_on(async move {
+    let (record_tx, mut rx) = temper_io_engine::channel();
+    let (release_tx, release_rx) = temper_io_engine::oneshot();
     let (daemon, url) = spawn_with_applier_and_apply_grace(
         Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
         Duration::from_millis(200),
     )
     .await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
 
     enqueue_standard_job(&daemon, "job-apply-grace-1").await;
@@ -502,41 +499,43 @@ async fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
     let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
     assert_eq!(job.job_id, "job-apply-grace-1");
     assert_eq!(recorded_result.job_id, result.job_id);
-    release_tx.send(()).expect("release apply gate");
-    sleep(Duration::from_millis(25)).await;
+    release_tx.send(());
+    temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
 
     enqueue_standard_job(&daemon, "job-apply-grace-1").await;
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
-    sleep(Duration::from_millis(225)).await;
+    temper_io_engine::runtime::sleep_for(Duration::from_millis(225)).await;
     enqueue_standard_job(&daemon, "job-apply-grace-1").await;
     assert_assigned(
         post_json(&client, &url, &poll("worker-a")).await,
         "job-apply-grace-1",
     );
+    })
 }
 
-#[tokio::test]
-async fn apply_block_and_grace_are_per_job_id() {
-    let (record_tx, mut rx) = mpsc::unbounded_channel();
-    let (release_tx, release_rx) = oneshot::channel();
+#[test]
+ fn apply_block_and_grace_are_per_job_id() {
+    temper_io_engine::block_on(async move {
+    let (record_tx, mut rx) = temper_io_engine::channel();
+    let (release_tx, release_rx) = temper_io_engine::oneshot();
     let (daemon, url) = spawn_with_applier_and_apply_grace(
         Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
         Duration::from_millis(200),
     )
     .await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
     assert_eq!(
-        post(&client, &url, &register("worker-b")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-b")).await.status,
+        204
     );
     assert_eq!(
-        post(&client, &url, &register("worker-c")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-c")).await.status,
+        204
     );
 
     enqueue_standard_job(&daemon, "job-blocked").await;
@@ -567,12 +566,9 @@ async fn apply_block_and_grace_are_per_job_id() {
         "job-independent-apply",
     );
 
-    release_tx.send(()).expect("release apply gate");
-    sleep(Duration::from_millis(25)).await;
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    release_tx.send(());
+    temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
+    assert!(rx.try_recv().is_none());
 
     enqueue_standard_job(&daemon, "job-blocked").await;
     enqueue_standard_job(&daemon, "job-independent-grace").await;
@@ -580,15 +576,17 @@ async fn apply_block_and_grace_are_per_job_id() {
         post_json(&client, &url, &poll("worker-c")).await,
         "job-independent-grace",
     );
+    })
 }
 
-#[tokio::test]
-async fn transient_failure_drops_job_for_rescan() {
+#[test]
+ fn transient_failure_drops_job_for_rescan() {
+    temper_io_engine::block_on(async move {
     let (daemon, url, mut rx) = spawn_recording().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
 
     enqueue_standard_job(&daemon, "job-retry-1").await;
@@ -609,10 +607,7 @@ async fn transient_failure_drops_job_for_rescan() {
     );
 
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(rx.try_recv().is_none());
 
     enqueue_standard_job(&daemon, &first_job_id).await;
     let retry_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
@@ -638,25 +633,24 @@ async fn transient_failure_drops_job_for_rescan() {
     assert_eq!(recorded_result.job_id, final_result.job_id);
     assert_eq!(recorded_result.status, ResultStatus::Success);
     assert_eq!(recorded_result.branch, final_result.branch);
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(rx.try_recv().is_none());
+    })
 }
 
-#[tokio::test]
-async fn permanent_failure_apply_window_unblocks_after_apply_completes() {
-    let (record_tx, mut rx) = mpsc::unbounded_channel();
-    let (release_tx, release_rx) = oneshot::channel();
+#[test]
+ fn permanent_failure_apply_window_unblocks_after_apply_completes() {
+    temper_io_engine::block_on(async move {
+    let (record_tx, mut rx) = temper_io_engine::channel();
+    let (release_tx, release_rx) = temper_io_engine::oneshot();
     let (daemon, url) = spawn_with_applier_and_apply_grace(
         Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
         Duration::ZERO,
     )
     .await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &register("worker-a")).await.status,
+        204
     );
 
     enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
@@ -691,7 +685,7 @@ async fn permanent_failure_apply_window_unblocks_after_apply_completes() {
     enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
-    release_tx.send(()).expect("release apply gate");
+    release_tx.send(());
     eventually_enqueue_and_assign(
         &daemon,
         &client,
@@ -700,4 +694,5 @@ async fn permanent_failure_apply_window_unblocks_after_apply_completes() {
         "job-permanent-failure-1",
     )
     .await;
+    })
 }

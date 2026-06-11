@@ -198,27 +198,30 @@ impl From<std::io::Error> for RunError {
 /// bindings and the default branch come from [`runner_config`], so role logins
 /// stay derived from config and are never hardcoded.
 pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| RunError::Runtime(err.to_string()))?;
+    let runtime = temper_io_engine::build_runtime().map_err(RunError::Runtime)?;
 
     let config = runner_config();
-    let provisioned = runtime.block_on(provision_world(
-        &args.base_url,
-        &args.admin_token,
-        &args.owner,
-        &args.name,
-        &config.role_bindings,
-        &config.repository.default_branch,
-    ))?;
-
-    let issue = runtime.block_on(seed_intake_issue(
-        &args.base_url,
-        &args.admin_token,
-        &args.owner,
-        &args.name,
-    ))?;
+    let (provisioned, issue) = {
+        let base_url = args.base_url.clone();
+        let admin_token = args.admin_token.clone();
+        let owner = args.owner.clone();
+        let name = args.name.clone();
+        let role_bindings = config.role_bindings.clone();
+        let default_branch = config.repository.default_branch.clone();
+        temper_io_engine::runtime::block_on_runtime(&runtime, async move {
+            let provisioned = provision_world(
+                &base_url,
+                &admin_token,
+                &owner,
+                &name,
+                &role_bindings,
+                &default_branch,
+            )
+            .await?;
+            let issue = seed_intake_issue(&base_url, &admin_token, &owner, &name).await?;
+            Ok::<_, RunError>((provisioned, issue))
+        })?
+    };
 
     write_secrets_file(&args.out, &format_secrets_env(&provisioned))?;
 

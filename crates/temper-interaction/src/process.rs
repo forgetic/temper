@@ -1,11 +1,8 @@
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
-use tokio::time;
+use temper_io_engine::process::{run_process, ProcessCall, ProcessCallError};
 
 use crate::{ConversationReply, ConversationRequest, InteractionError, InteractiveResponder};
 
@@ -111,61 +108,42 @@ impl InteractiveResponder for ProcessResponder {
         &self,
         request: &ConversationRequest,
     ) -> Result<ConversationReply, InteractionError> {
-        let request_json = serde_json::to_vec(request)?;
-        let mut command = Command::new(&self.config.program);
-        command
-            .args(&self.config.args)
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        if let Some(working_dir) = &self.config.working_dir {
-            command.current_dir(working_dir);
-        }
+        let mut request_json = serde_json::to_vec(request)?;
+        request_json.push(b'\n');
+
+        // One responder turn is one `<io-event-request>`: the call below is
+        // data describing the spawn (program, args, allow-listed env, stdin
+        // payload, deadline); the engine performs it and hands back the
+        // buffered output for this pure code to interpret.
+        let mut call = ProcessCall::new(self.config.program.to_string_lossy().into_owned());
+        call.args = self.config.args.clone();
+        call.clear_env = true;
+        call.current_dir = self.config.working_dir.clone();
+        call.stdin = Some(request_json);
+        call.timeout = Some(self.config.timeout);
         for name in &self.config.env_allowlist {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
+            if let Ok(value) = std::env::var(name) {
+                call.env.insert(name.clone(), value);
             }
         }
 
-        let mut child = command
-            .spawn()
-            .map_err(|source| InteractionError::ProcessResponderIo {
+        let cx = temper_io_engine::runtime::current_cx();
+        let output = run_process(&cx, call).await.map_err(|error| match error {
+            ProcessCallError::Spawn(message) => InteractionError::ProcessResponderIo {
                 operation: "spawn",
-                source,
-            })?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| InteractionError::responder("process responder stdin unavailable"))?;
-        stdin.write_all(&request_json).await.map_err(|source| {
-            InteractionError::ProcessResponderIo {
-                operation: "write stdin",
-                source,
-            }
-        })?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|source| InteractionError::ProcessResponderIo {
-                operation: "write stdin",
-                source,
-            })?;
-        drop(stdin);
-
-        let output = time::timeout(self.config.timeout, child.wait_with_output())
-            .await
-            .map_err(|_| InteractionError::ProcessResponderTimeout {
+                source: std::io::Error::other(message),
+            },
+            ProcessCallError::Io { operation, message } => InteractionError::ProcessResponderIo {
+                operation,
+                source: std::io::Error::other(message),
+            },
+            ProcessCallError::TimedOut => InteractionError::ProcessResponderTimeout {
                 timeout: self.config.timeout,
-            })?
-            .map_err(|source| InteractionError::ProcessResponderIo {
-                operation: "wait",
-                source,
-            })?;
-        if !output.status.success() {
+            },
+        })?;
+        if !output.success {
             return Err(InteractionError::ProcessResponderExit {
-                status: output.status.to_string(),
+                status: output.status_display,
                 stderr: preview_lossy(&output.stderr),
             });
         }

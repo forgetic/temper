@@ -37,9 +37,8 @@ temper-wake = { path = "../temper-wake" }
 # (`daemon_worker` module + the `temper-testing-daemon-worker` bin).
 temper-worker-protocol = { path = "../temper-worker-protocol" }
 temper-workflow = { path = "../temper-workflow" }
-# Forgejo provisioning uses async REST under a Tokio reactor; a shared fixture
-# crate owns the blocking server/runner lifecycle and cache management.
-reqwest = { workspace = true, features = ["blocking", "json"] }
+# Forgejo provisioning drives async REST on the engine runtime; a shared
+# fixture crate owns the blocking server/runner lifecycle and cache management.
 sha2 = "0.10"
 # Phase 2 provisioning commits workflow file(s) via the Forgejo contents API,
 # which accepts base64-encoded bodies. Also used by ignored Forgejo smoke tests
@@ -47,16 +46,15 @@ sha2 = "0.10"
 base64 = "0.22"
 # The Forgejo backend (`ForgejoForge`) is async and its futures park on real
 # network IO, so the `--backend forgejo` worker path (Phase 3) cannot use the
-# crate's no-op `block_on`; it drives the poll loop on a current-thread Tokio
-# runtime instead. The filesystem path keeps using `block_on`. This is a normal
-# dependency (not dev-only) because the production binary needs the reactor; the
-# `#[tokio::test]` provisioning tests reuse it via the `macros` feature.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "time"] }
+# crate's no-op `block_on`; it drives the poll loop as an engine task instead.
+# The filesystem path keeps using `block_on`. This is a normal dependency (not
+# dev-only) because the production binaries need the engine runtime.
+asupersync.workspace = true
+temper-io-engine = { path = "../temper-io-engine" }
 
 [dev-dependencies]
 # The hermetic daemon-worker contract test boots an in-process daemon transport
-# and serves its router on an ephemeral local port.
-axum = { workspace = true }
+# and serves it on an ephemeral local port.
 temper-daemon = { path = "../temper-daemon" }
 
 [lints]

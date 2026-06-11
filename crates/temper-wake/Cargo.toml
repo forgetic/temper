@@ -8,8 +8,9 @@ description = "Host-local authenticated wake socket bus for Temper runtimes."
 
 [dependencies]
 serde_json.workspace = true
+asupersync.workspace = true
+temper-io-engine = { path = "../temper-io-engine" }
 temper-runner = { path = "../temper-runner" }
-tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
 
 [dev-dependencies]
 temper-forge = { path = "../temper-forge" }

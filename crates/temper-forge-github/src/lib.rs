@@ -28,7 +28,7 @@ mod pulls;
 mod repos;
 mod types;
 
-pub use client::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse, ReqwestHttpClient};
+pub use client::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse, EngineHttpClient};
 pub use config::{CasMode, ConfigError, GitHubConfig, DEFAULT_PAGE_LIMIT};
 
 use serde::de::DeserializeOwned;
@@ -57,20 +57,20 @@ fn is_transient(status: u16) -> bool {
 
 /// GitHub Forge backend.
 ///
-/// `C` is the HTTP client; production uses [`ReqwestHttpClient`] and tests use
+/// `C` is the HTTP client; production uses [`EngineHttpClient`] and tests use
 /// a recording mock. Construct with [`GitHubForge::new`] for the real client or
 /// [`GitHubForge::with_client`] to inject a custom one.
 #[derive(Clone, Debug)]
-pub struct GitHubForge<C = ReqwestHttpClient> {
+pub struct GitHubForge<C = EngineHttpClient> {
     config: GitHubConfig,
     client: C,
     versions: Arc<VersionCache>,
 }
 
-impl GitHubForge<ReqwestHttpClient> {
-    /// Builds a backend that talks to the configured API root over `reqwest`.
+impl GitHubForge<EngineHttpClient> {
+    /// Builds a backend that talks to the configured API root over the engine HTTP client.
     pub fn new(config: GitHubConfig) -> Self {
-        let client = ReqwestHttpClient::new(config.base_url.clone());
+        let client = EngineHttpClient::new(config.base_url.clone());
         Self::with_client(config, client)
     }
 }

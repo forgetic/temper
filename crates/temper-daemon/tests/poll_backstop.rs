@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{future::IntoFuture, time::Duration};
+use std::time::Duration;
 
-use axum::http::StatusCode;
 use serde_json::json;
 use temper_daemon::{
     run_poll_backstop_tick, Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget,
@@ -27,11 +26,10 @@ fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
 
 async fn spawn() -> (Daemon, String) {
     let daemon = Daemon::new();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
         .await
-        .expect("bind test listener");
-    let addr = listener.local_addr().expect("read local addr");
-    tokio::spawn(axum::serve(listener, daemon.router()).into_future());
+        .expect("bind test server");
+    let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"))
 }
 
@@ -93,26 +91,29 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
 }
 
 async fn post(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
-) -> reqwest::Response {
+) -> temper_io_engine::http::HttpResponseData {
     client
-        .post(url)
-        .json(msg)
-        .send()
+        .send(
+            "POST",
+            url,
+            None,
+            Some(&serde_json::to_value(msg).expect("message serializes")),
+        )
         .await
         .expect("post message")
 }
 
 async fn post_json(
-    client: &reqwest::Client,
+    client: &temper_io_engine::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
 ) -> WorkerProtocolMessage {
     let response = post(client, url, msg).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    response.json().await.expect("protocol response json")
+    assert_eq!(response.status, 200);
+    serde_json::from_slice(&response.body).expect("protocol response json")
 }
 
 fn assert_poll_timeout(msg: WorkerProtocolMessage) {
@@ -137,15 +138,16 @@ fn assert_scanned_issue_assignment(msg: WorkerProtocolMessage, issue: ItemNumber
     }
 }
 
-#[tokio::test]
-async fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
+#[test]
+ fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge).await;
     let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
     let workflow = workflow();
     let compiled = workflow.compile();
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let config = PollBackstopConfig {
         targets: vec![RoleFeedTarget {
             repo: repo.clone(),
@@ -175,20 +177,22 @@ async fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
             &register("worker-a", "engineer", "acme/service")
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
 
     assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
+    })
 }
 
-#[tokio::test]
-async fn run_poll_backstop_tick_with_no_targets_is_zero() {
+#[test]
+ fn run_poll_backstop_tick_with_no_targets_is_zero() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let workflow = workflow();
     let compiled = workflow.compile();
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let config = PollBackstopConfig {
         targets: vec![],
         cadence: Duration::from_millis(10),
@@ -214,21 +218,23 @@ async fn run_poll_backstop_tick_with_no_targets_is_zero() {
             &register("worker-a", "engineer", "acme/service")
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 100)).await);
+    })
 }
 
-#[tokio::test]
-async fn run_poll_backstop_tick_skips_failing_target_and_continues() {
+#[test]
+ fn run_poll_backstop_tick_skips_failing_target_and_continues() {
+    temper_io_engine::block_on(async move {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge).await;
     let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
     let workflow = workflow();
     let compiled = workflow.compile();
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = temper_io_engine::http::JsonClient::new();
     let config = PollBackstopConfig {
         targets: vec![
             RoleFeedTarget {
@@ -265,8 +271,9 @@ async fn run_poll_backstop_tick_skips_failing_target_and_continues() {
             &register("worker-a", "engineer", "acme/service")
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
     assert_scanned_issue_assignment(post_json(&client, &url, &poll("worker-a")).await, issue);
+    })
 }

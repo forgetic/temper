@@ -2,16 +2,8 @@
 
 //! Library-only Forgejo/Gitea webhook intake helpers for daemon wake scans.
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt};
 
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    routing::post,
-    Router,
-};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
@@ -20,52 +12,6 @@ use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
 
 use crate::{Daemon, RoleFeedMode, RoleFeedTarget};
-
-struct WebhookState<F: Forge + Send + Sync + 'static> {
-    daemon: Daemon,
-    forge: Arc<F>,
-    workflow: Arc<ValidatedWorkflow>,
-    compiled: Arc<CompiledWorkflow>,
-    config: Arc<WebhookConfig>,
-}
-
-impl<F: Forge + Send + Sync + 'static> Clone for WebhookState<F> {
-    fn clone(&self) -> Self {
-        Self {
-            daemon: self.daemon.clone(),
-            forge: Arc::clone(&self.forge),
-            workflow: Arc::clone(&self.workflow),
-            compiled: Arc::clone(&self.compiled),
-            config: Arc::clone(&self.config),
-        }
-    }
-}
-
-/// Builds a stateless daemon router that serves the worker protocol plus the
-/// Forgejo/Gitea webhook wake intake.
-///
-/// The daemon's default [`Daemon::router`] remains worker-protocol only. Callers
-/// opt into `POST /forgejo/webhook` by using this combined router builder.
-pub fn router_with_webhook<F: Forge + Send + Sync + 'static>(
-    daemon: &Daemon,
-    forge: Arc<F>,
-    workflow: Arc<ValidatedWorkflow>,
-    compiled: Arc<CompiledWorkflow>,
-    config: Arc<WebhookConfig>,
-) -> Router {
-    let state = WebhookState {
-        daemon: daemon.clone(),
-        forge,
-        workflow,
-        compiled,
-        config,
-    };
-    let webhooks = Router::new()
-        .route("/forgejo/webhook", post(handle_webhook_route::<F>))
-        .with_state(state);
-
-    daemon.router().merge(webhooks)
-}
 
 /// Errors returned while verifying or parsing a webhook delivery.
 #[derive(Debug, Eq, PartialEq)]
@@ -167,7 +113,7 @@ pub fn parse_verified_webhook(
     parse_change_hint(body, webhook_event(headers))
 }
 
-fn webhook_accepted_log_line(hint: &ChangeHint) -> String {
+pub(crate) fn webhook_accepted_log_line(hint: &ChangeHint) -> String {
     let item = hint
         .item
         .map(|item| item.to_string())
@@ -206,16 +152,32 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
     let hint = parse_verified_webhook(headers, body, &config.secret)?;
     let line = webhook_accepted_log_line(&hint);
     eprintln!("{line}");
+    Ok(run_wake_scan(daemon, forge, workflow, compiled, now, config, &hint).await)
+}
 
+/// Runs the wake scans one verified webhook delivery triggers.
+///
+/// This is the I/O half of webhook intake — the daemon machine verifies and
+/// parses the delivery purely, then issues this scan as a single engine
+/// request. Returns the number of enqueued jobs.
+pub async fn run_wake_scan<F: Forge + ?Sized>(
+    daemon: &Daemon,
+    forge: &F,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    config: &WebhookConfig,
+    hint: &ChangeHint,
+) -> usize {
     let repository = match forge.get_repository_by_path(&hint.repo).await {
         Ok(Some(repository)) => repository,
-        Ok(None) => return Ok(0),
+        Ok(None) => return 0,
         Err(error) => {
             eprintln!(
                 "temper-daemon: webhook repository lookup failed for repo={}/{}: {error}",
                 hint.repo.owner, hint.repo.name
             );
-            return Ok(0);
+            return 0;
         }
     };
 
@@ -253,40 +215,7 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
         eprintln!("{line}");
     }
 
-    Ok(total)
-}
-
-async fn handle_webhook_route<F: Forge + Send + Sync + 'static>(
-    State(state): State<WebhookState<F>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let lowercase_headers = headers
-        .iter()
-        .map(|(name, value)| {
-            (
-                name.as_str().to_ascii_lowercase(),
-                value.to_str().unwrap_or_default().to_string(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    match handle_webhook(
-        &state.daemon,
-        state.forge.as_ref(),
-        state.workflow.as_ref(),
-        state.compiled.as_ref(),
-        Utc::now(),
-        state.config.as_ref(),
-        &lowercase_headers,
-        &body,
-    )
-    .await
-    {
-        Ok(_) => StatusCode::ACCEPTED.into_response(),
-        Err(WebhookError::InvalidSignature) => StatusCode::UNAUTHORIZED.into_response(),
-        Err(WebhookError::BadPayload(_)) => StatusCode::BAD_REQUEST.into_response(),
-    }
+    total
 }
 
 fn parse_repo(value: &Value) -> Result<RepositoryPath, WebhookError> {

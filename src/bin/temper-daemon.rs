@@ -4,10 +4,9 @@ use std::{process::ExitCode, sync::Arc};
 
 use temper_daemon::{
     config::{role_tokens_from_env, ParseOutcome, USAGE},
-    router_with_webhook, run_mechanical_backstop, run_poll_backstop, serve_router, Daemon,
-    DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig, PollBackstopConfig,
-    RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget, RoleRoutingApplier,
-    WebhookConfig,
+    spawn_mechanical_backstop, spawn_poll_backstop, Daemon, DaemonRunConfig, ForgeApplier,
+    LeaseApplier, MechanicalBackstopConfig, PollBackstopConfig, RepositorySet, RepositoryTarget,
+    RoleFeedMode, RoleFeedTarget, RoleRoutingApplier, WebhookConfig,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -36,12 +35,10 @@ fn main() -> ExitCode {
 }
 
 fn run(config: DaemonRunConfig) -> Result<(), String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("failed to build tokio runtime: {error}"))?;
-
-    runtime.block_on(run_async(config))
+    // The daemon runs entirely as engine tasks: the HTTP listener, the pure
+    // daemon machine's engine loop, backstop cadence machines, appliers, and
+    // wake scans are all completion-driven I/O on the asupersync runtime.
+    temper_io_engine::block_on(async move { run_async(config).await })
 }
 
 async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
@@ -77,20 +74,13 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
         targets: normal_targets,
         cadence: config.poll_cadence,
     };
-    let poll_daemon = daemon.clone();
-    let poll_forge = forge.clone();
-    let poll_workflow = workflow.clone();
-    let poll_compiled = compiled.clone();
-    tokio::spawn(async move {
-        run_poll_backstop(
-            &poll_daemon,
-            poll_forge.as_ref(),
-            poll_workflow.as_ref(),
-            poll_compiled.as_ref(),
-            &poll_config,
-        )
-        .await;
-    });
+    spawn_poll_backstop(
+        daemon.clone(),
+        forge.clone(),
+        workflow.clone(),
+        compiled.clone(),
+        poll_config,
+    );
 
     if let Some(cadence) = config.mechanical_cadence {
         ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
@@ -99,19 +89,10 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
             cadence,
             lease_policy: LeasePolicy::new(lease_ttl),
         };
-        let mechanical_forge = forge.clone();
-        let mechanical_workflow = workflow.clone();
-        tokio::spawn(async move {
-            run_mechanical_backstop(
-                mechanical_forge.as_ref(),
-                mechanical_workflow.as_ref(),
-                &mechanical_config,
-            )
-            .await;
-        });
+        spawn_mechanical_backstop(forge.clone(), workflow.clone(), mechanical_config);
     }
 
-    let router = if let Some(path) = config.webhook_secret_file.as_ref() {
+    let daemon = if let Some(path) = config.webhook_secret_file.as_ref() {
         let secret = std::fs::read_to_string(path).map_err(|error| {
             format!(
                 "failed to read --webhook-secret-file {}: {error}",
@@ -122,14 +103,20 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
             secret: secret.trim().to_string(),
             targets: wake_targets,
         });
-        router_with_webhook(&daemon, forge, workflow, compiled, webhook_config)
+        daemon.with_webhook(forge, workflow, compiled, webhook_config)
     } else {
-        daemon.router()
+        daemon
     };
 
-    serve_router(router, config.bind)
+    let server = temper_daemon::serve(&daemon, config.bind)
         .await
-        .map_err(|error| format!("serve failed: {error}"))
+        .map_err(|error| format!("serve failed: {error}"))?;
+
+    if let Err(error) = asupersync::signal::ctrl_c().await {
+        eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
+    }
+    server.begin_drain(std::time::Duration::from_secs(5));
+    Ok(())
 }
 
 fn result_applier(

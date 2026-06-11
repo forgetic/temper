@@ -9,14 +9,13 @@ use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{Artifact, Branch, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION};
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{parse_metadata_block, ArtifactSource, LeaseManager, LeasePolicy, RoleId};
-use tokio::sync::mpsc;
 
 struct RecordingApplier {
-    tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
+    tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
     forge: Option<Arc<MemoryForge>>,
     repo: Option<RepositoryId>,
     issue: Option<ItemNumber>,
-    lease_tx: Option<mpsc::UnboundedSender<Option<temper_workflow::Lease>>>,
+    lease_tx: Option<temper_io_engine::CqSender<Option<temper_workflow::Lease>>>,
 }
 
 #[async_trait::async_trait]
@@ -106,13 +105,14 @@ fn job_result(job_id: &str) -> JobResult {
     }
 }
 
-#[tokio::test]
-async fn lease_won_inner_applied_then_lease_released() {
+#[test]
+ fn lease_won_inner_applied_then_lease_released() {
+    temper_io_engine::block_on(async move {
     let forge = Arc::new(MemoryForge::new());
     let repo = new_repo(&forge).await;
     let issue = create_ready_issue(&forge, &repo).await;
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (lease_tx, mut lease_rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = temper_io_engine::channel();
+    let (lease_tx, mut lease_rx) = temper_io_engine::channel();
     let inner = Arc::new(RecordingApplier {
         tx,
         forge: Some(forge.clone()),
@@ -129,10 +129,7 @@ async fn lease_won_inner_applied_then_lease_released() {
     let (recorded_job, recorded_result) = rx.recv().await.expect("inner records one apply");
     assert_eq!(recorded_job, job);
     assert_eq!(recorded_result, result);
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(rx.try_recv().is_none());
 
     let observed_lease = lease_rx
         .recv()
@@ -143,7 +140,7 @@ async fn lease_won_inner_applied_then_lease_released() {
     assert_eq!(observed_lease.role, RoleId::new("engineer"));
     assert!(matches!(
         lease_rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
+        None
     ));
 
     let issue = forge
@@ -156,10 +153,12 @@ async fn lease_won_inner_applied_then_lease_released() {
         .unwrap_or_default()
         .lease
         .is_none());
+    })
 }
 
-#[tokio::test]
-async fn peer_owned_lease_noops_and_preserves_peer_lease() {
+#[test]
+ fn peer_owned_lease_noops_and_preserves_peer_lease() {
+    temper_io_engine::block_on(async move {
     let forge = Arc::new(MemoryForge::new());
     let repo = new_repo(&forge).await;
     let issue = create_ready_issue(&forge, &repo).await;
@@ -176,7 +175,7 @@ async fn peer_owned_lease_noops_and_preserves_peer_lease() {
         .await
         .expect("peer lease is acquired");
 
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = temper_io_engine::channel();
     let inner = Arc::new(RecordingApplier {
         tx,
         forge: None,
@@ -190,10 +189,7 @@ async fn peer_owned_lease_noops_and_preserves_peer_lease() {
 
     applier.apply(job, result).await;
 
-    assert!(matches!(
-        rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(rx.try_recv().is_none());
     let issue = forge
         .get_issue_by_number(&repo, issue)
         .await
@@ -205,4 +201,5 @@ async fn peer_owned_lease_noops_and_preserves_peer_lease() {
         .lease
         .expect("peer lease is still present");
     assert_eq!(lease, peer_lease);
+    })
 }

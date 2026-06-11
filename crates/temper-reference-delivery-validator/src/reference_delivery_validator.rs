@@ -198,10 +198,7 @@ where
 }
 
 pub fn run(args: &ValidatorArgs) -> Result<String, RunError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| RunError::Runtime(error.to_string()))?;
+    let runtime = temper_io_engine::build_runtime().map_err(RunError::Runtime)?;
     let forge = ForgejoForge::new(ForgejoConfig::new(
         args.base_url.clone(),
         args.token.clone(),

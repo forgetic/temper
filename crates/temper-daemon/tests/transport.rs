@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::time::Duration;
 use std::time::Instant;
-use std::{future::IntoFuture, time::Duration};
 
-use axum::http::StatusCode;
+use temper_io_engine::http::{HttpResponseData, JsonClient};
 use serde_json::json;
 use temper_worker_protocol::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register,
@@ -12,12 +12,10 @@ use temper_worker_protocol::{
 
 async fn spawn() -> (temper_daemon::Daemon, String) {
     let daemon = temper_daemon::Daemon::new();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
         .await
-        .expect("bind test listener");
-    let addr = listener.local_addr().expect("read local addr");
-    tokio::spawn(axum::serve(listener, daemon.router()).into_future());
-    (daemon, format!("http://{addr}/v1/message"))
+        .expect("bind test server");
+    (daemon, format!("http://{}/v1/message", server.local_addr()))
 }
 
 fn register(
@@ -85,27 +83,26 @@ fn artifact() -> Artifact {
     }
 }
 
-async fn post(
-    client: &reqwest::Client,
-    url: &str,
-    msg: &WorkerProtocolMessage,
-) -> reqwest::Response {
+async fn post(client: &JsonClient, url: &str, msg: &WorkerProtocolMessage) -> HttpResponseData {
     client
-        .post(url)
-        .json(msg)
-        .send()
+        .send(
+            "POST",
+            url,
+            None,
+            Some(&serde_json::to_value(msg).expect("message serializes")),
+        )
         .await
         .expect("post message")
 }
 
 async fn post_json(
-    client: &reqwest::Client,
+    client: &JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
 ) -> WorkerProtocolMessage {
     let response = post(client, url, msg).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    response.json().await.expect("protocol response json")
+    assert_eq!(response.status, 200);
+    serde_json::from_slice(&response.body).expect("protocol response json")
 }
 
 fn assert_error(msg: WorkerProtocolMessage, code: ErrorCode) {
@@ -115,10 +112,11 @@ fn assert_error(msg: WorkerProtocolMessage, code: ErrorCode) {
     }
 }
 
-#[tokio::test]
-async fn register_then_poll_returns_assignment_when_matching_work_exists() {
+#[test]
+ fn register_then_poll_returns_assignment_when_matching_work_exists() {
+    temper_io_engine::block_on(async move {
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     assert_eq!(
         post(
             &client,
@@ -126,8 +124,8 @@ async fn register_then_poll_returns_assignment_when_matching_work_exists() {
             &register("worker-a", "engineer", "ai/temper", 1)
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
     let artifact = artifact();
     let payload = json!({"prompt":"implement"});
@@ -151,12 +149,14 @@ async fn register_then_poll_returns_assignment_when_matching_work_exists() {
         }
         other => panic!("expected assign, got {other:?}"),
     }
+    })
 }
 
-#[tokio::test]
-async fn poll_with_no_work_blocks_then_returns_poll_timeout() {
+#[test]
+ fn poll_with_no_work_blocks_then_returns_poll_timeout() {
+    temper_io_engine::block_on(async move {
     let (_, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     assert_eq!(
         post(
             &client,
@@ -164,8 +164,8 @@ async fn poll_with_no_work_blocks_then_returns_poll_timeout() {
             &register("worker-a", "engineer", "ai/temper", 1)
         )
         .await
-        .status(),
-        StatusCode::NO_CONTENT
+        .status,
+        204
     );
 
     let started = Instant::now();
@@ -179,12 +179,14 @@ async fn poll_with_no_work_blocks_then_returns_poll_timeout() {
         "elapsed: {elapsed:?}"
     );
     assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
+    })
 }
 
-#[tokio::test]
-async fn poll_matches_worker_capability_only() {
+#[test]
+ fn poll_matches_worker_capability_only() {
+    temper_io_engine::block_on(async move {
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     daemon
         .enqueue_job("job-1", "architect", "ai/temper", artifact(), json!({}))
         .await;
@@ -208,12 +210,14 @@ async fn poll_matches_worker_capability_only() {
         WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
         other => panic!("expected assign, got {other:?}"),
     }
+    })
 }
 
-#[tokio::test]
-async fn enqueue_mid_poll_wakes_and_assigns_promptly() {
+#[test]
+ fn enqueue_mid_poll_wakes_and_assigns_promptly() {
+    temper_io_engine::block_on(async move {
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     let _ = post(
         &client,
         &url,
@@ -223,13 +227,15 @@ async fn enqueue_mid_poll_wakes_and_assigns_promptly() {
 
     let poll_client = client.clone();
     let poll_url = url.clone();
-    let poll_task = tokio::spawn(async move {
+    let poll_task = asupersync::runtime::Runtime::current_handle()
+        .expect("engine runtime")
+        .spawn(async move {
         let started = Instant::now();
         let reply = post_json(&poll_client, &poll_url, &poll_with_wait("worker-a", 5_000)).await;
         (reply, started.elapsed())
     });
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    temper_io_engine::runtime::sleep_for(Duration::from_millis(200)).await;
     daemon
         .enqueue_job(
             "job-1",
@@ -240,18 +246,20 @@ async fn enqueue_mid_poll_wakes_and_assigns_promptly() {
         )
         .await;
 
-    let (reply, elapsed) = poll_task.await.expect("poll task completes");
+    let (reply, elapsed) = poll_task.await;
     match reply {
         WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
         other => panic!("expected assign, got {other:?}"),
     }
     assert!(elapsed < Duration::from_secs(3), "elapsed: {elapsed:?}");
+    })
 }
 
-#[tokio::test]
-async fn saturated_worker_blocks_then_returns_poll_timeout() {
+#[test]
+ fn saturated_worker_blocks_then_returns_poll_timeout() {
+    temper_io_engine::block_on(async move {
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     let _ = post(
         &client,
         &url,
@@ -278,11 +286,13 @@ async fn saturated_worker_blocks_then_returns_poll_timeout() {
         "elapsed: {elapsed:?}"
     );
     assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
+    })
 }
-#[tokio::test]
-async fn result_release_frees_capacity() {
+#[test]
+ fn result_release_frees_capacity() {
+    temper_io_engine::block_on(async move {
     let (daemon, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     let _ = post(
         &client,
         &url,
@@ -309,12 +319,14 @@ async fn result_release_frees_capacity() {
         WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-2"),
         other => panic!("expected assign, got {other:?}"),
     }
+    })
 }
 
-#[tokio::test]
-async fn heartbeat_semantics() {
+#[test]
+ fn heartbeat_semantics() {
+    temper_io_engine::block_on(async move {
     let (_, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     let _ = post(
         &client,
         &url,
@@ -322,19 +334,21 @@ async fn heartbeat_semantics() {
     )
     .await;
     assert_eq!(
-        post(&client, &url, &heartbeat("worker-a")).await.status(),
-        StatusCode::NO_CONTENT
+        post(&client, &url, &heartbeat("worker-a")).await.status,
+        204
     );
     assert_error(
         post_json(&client, &url, &heartbeat("missing")).await,
         ErrorCode::UnknownWorker,
     );
+    })
 }
 
-#[tokio::test]
-async fn protocol_version_mismatch() {
+#[test]
+ fn protocol_version_mismatch() {
+    temper_io_engine::block_on(async move {
     let (_, url) = spawn().await;
-    let client = reqwest::Client::new();
+    let client = JsonClient::new();
     let mut msg = register("worker-a", "engineer", "ai/temper", 1);
     if let WorkerProtocolMessage::Register(register) = &mut msg {
         register.protocol_version = WORKER_PROTOCOL_VERSION + 1;
@@ -343,16 +357,27 @@ async fn protocol_version_mismatch() {
         post_json(&client, &url, &msg).await,
         ErrorCode::ProtocolVersionMismatch,
     );
+    })
 }
 
-#[tokio::test]
-async fn malformed_request_body() {
+#[test]
+ fn malformed_request_body() {
+    temper_io_engine::block_on(async move {
     let (_, url) = spawn().await;
-    let response = reqwest::Client::new()
-        .post(url)
-        .body("{ not valid }")
-        .send()
-        .await
-        .expect("post malformed request");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let client = temper_io_engine::http::build_http_client();
+    let cx = temper_io_engine::runtime::current_cx();
+    let response = temper_io_engine::http::http_call(
+        &cx,
+        &client,
+        temper_io_engine::http::HttpCall {
+            method: "POST".into(),
+            url,
+            headers: Vec::new(),
+            body: b"{ not valid }".to_vec(),
+        },
+    )
+    .await
+    .expect("post malformed request");
+    assert_eq!(response.status, 400);
+    })
 }

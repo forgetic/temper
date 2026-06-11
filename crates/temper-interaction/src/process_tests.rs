@@ -26,8 +26,9 @@ fn basic_request() -> ConversationRequest {
     )
 }
 
-#[tokio::test]
-async fn process_responder_sends_request_reads_reply_and_filters_environment() {
+#[test]
+ fn process_responder_sends_request_reads_reply_and_filters_environment() {
+    temper_io_engine::block_on(async move {
     let request_path = temp_path("request.json");
     let script_path = temp_path("responder.sh");
     fs::write(
@@ -71,10 +72,12 @@ fi
     std::env::remove_var("TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_BLOCKED");
     let _ = fs::remove_file(request_path);
     let _ = fs::remove_file(script_path);
+    })
 }
 
-#[tokio::test]
-async fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
+#[test]
+ fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
+    temper_io_engine::block_on(async move {
     let timeout = ProcessResponder::new(
         ProcessResponderConfig::new("/bin/sh")
             .with_args(["-c".to_string(), "cat >/dev/null; sleep 1".to_string()])
@@ -132,4 +135,5 @@ async fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids
         duplicate,
         InteractionError::DuplicateProposalId { .. }
     ));
+    })
 }

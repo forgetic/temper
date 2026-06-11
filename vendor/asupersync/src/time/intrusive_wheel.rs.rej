@@ -1,0 +1,33 @@
+--- src/time/intrusive_wheel.rs
++++ src/time/intrusive_wheel.rs
+@@ -512,18 +512,23 @@
+ 
+     #[allow(clippy::only_used_in_recursion)]
+     fn cascade(&mut self, level_index: u8, now: Instant, wakers: &mut Vec<Waker>) {
+-        let (bucket, wrapped) = match level_index {
+-            1 => self.level1.advance_and_drain(),
+-            2 => self.level2.advance_and_drain(),
+-            3 => self.level3.advance_and_drain(),
++        let (mut current_node, wrapped) = match level_index {
++            1 => self.level1.advance_and_take(),
++            2 => self.level2.advance_and_take(),
++            3 => self.level3.advance_and_take(),
+             _ => return,
+         };
+ 
+-        for node in bucket {
+-            let node_ref = unsafe { node.as_ref() };
++        while let Some(node_ptr) = current_node {
++            let node_ref = unsafe { node_ptr.as_ref() };
++            let next = node_ref.next.get();
++
++            node_ref.linked.set(false);
++            node_ref.prev.set(None);
++            node_ref.next.set(None);
++
+             if node_ref.deadline() <= now {
+                 if let Some(waker) = node_ref.take_waker() {
+                     wakers.push(waker);
+                 }
+                 self.count = self.count.saturating_sub(1);
+-                continue;

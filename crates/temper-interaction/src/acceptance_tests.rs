@@ -216,8 +216,9 @@ async fn open_session<R: InteractiveResponder + ?Sized>(
     .unwrap()
 }
 
-#[tokio::test]
-async fn arbitrary_profile_issue_creation_acceptance_uses_manifest_effects() {
+#[test]
+ fn arbitrary_profile_issue_creation_acceptance_uses_manifest_effects() {
+    temper_io_engine::block_on(async move {
     let manifest = support_manifest();
     let (human, agent, _repo) = seeded(&manifest).await;
     let mut session = open_session(
@@ -264,10 +265,12 @@ async fn arbitrary_profile_issue_creation_acceptance_uses_manifest_effects() {
     assert!(comments
         .iter()
         .any(|comment| comment.body.contains("Accepted support-mvp")));
+    })
 }
 
-#[tokio::test]
-async fn product_manager_fixture_acceptance_preserves_filed_issue_shape() {
+#[test]
+ fn product_manager_fixture_acceptance_preserves_filed_issue_shape() {
+    temper_io_engine::block_on(async move {
     let manifest = product_manifest();
     let (human, agent, _repo) = seeded(&manifest).await;
     let mut session = open_session(
@@ -297,10 +300,12 @@ async fn product_manager_fixture_acceptance_preserves_filed_issue_shape() {
         .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
     assert!(outcome.issue.body.contains("requested-by: human"));
     assert!(outcome.issue.body.contains("temper:product-chat-file="));
+    })
 }
 
-#[tokio::test]
-async fn acceptance_retry_is_idempotent_for_issue_and_comment_effects() {
+#[test]
+ fn acceptance_retry_is_idempotent_for_issue_and_comment_effects() {
+    temper_io_engine::block_on(async move {
     let manifest = support_manifest();
     let (human, agent, _repo) = seeded(&manifest).await;
     let mut session = open_session(
@@ -339,10 +344,12 @@ async fn acceptance_retry_is_idempotent_for_issue_and_comment_effects() {
         .filter(|comment| comment.body.contains("Accepted support-mvp"))
         .count();
     assert_eq!(acceptance_comments, 1);
+    })
 }
 
-#[tokio::test]
-async fn restart_resume_reconstructs_latest_proposals_and_accepts() {
+#[test]
+ fn restart_resume_reconstructs_latest_proposals_and_accepts() {
+    temper_io_engine::block_on(async move {
     let manifest = support_manifest();
     let (human, agent, _repo) = seeded(&manifest).await;
     let mut first = open_session(
@@ -377,10 +384,12 @@ async fn restart_resume_reconstructs_latest_proposals_and_accepts() {
         .await
         .unwrap();
     assert!(outcome.created);
+    })
 }
 
-#[tokio::test]
-async fn unsupported_proposal_kind_is_rejected_before_persistence() {
+#[test]
+ fn unsupported_proposal_kind_is_rejected_before_persistence() {
+    temper_io_engine::block_on(async move {
     let manifest = support_manifest();
     let (human, agent, _repo) = seeded(&manifest).await;
     let reply = ConversationReply {
@@ -409,6 +418,7 @@ async fn unsupported_proposal_kind_is_rejected_before_persistence() {
         error,
         InteractionError::UnsupportedProposalKind { .. }
     ));
+    })
 }
 
 #[test]

@@ -14,11 +14,10 @@ serde_json.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-process-protocol = { path = "../temper-process-protocol" }
 thiserror.workspace = true
-tokio = { version = "1", features = ["io-util", "process", "time"] }
+temper-io-engine = { path = "../temper-io-engine" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }
-tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

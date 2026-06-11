@@ -67,8 +67,9 @@ fn dogfood_fixture_product_manager_profile_validates_and_compiles() {
     assert_eq!(effect.marker_key(), Some("file"));
 }
 
-#[tokio::test]
-async fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
+#[test]
+ fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
+    temper_io_engine::block_on(async move {
     let profile = compiled_profile();
     let (human, agent) = seeded(&profile).await;
     let human_reader = human.clone();
@@ -121,6 +122,7 @@ async fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
         .unwrap();
     assert!(!retry.created);
     assert_eq!(retry.issue.number, filed.issue.number);
+    })
 }
 
 fn compiled_profile() -> CompiledProfileManifest {
