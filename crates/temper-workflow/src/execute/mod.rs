@@ -90,7 +90,7 @@ mod ensure;
 mod merge;
 mod signals;
 
-pub use ensure::CorrelationLookupPlan;
+pub use ensure::{find_pull_request_by_correlation, CorrelationLookupPlan};
 
 use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, Classifier};
 use crate::context::ExecutionContext;
