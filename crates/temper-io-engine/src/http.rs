@@ -18,7 +18,11 @@ use std::time::Duration;
 
 use asupersync::cx::Cx;
 use asupersync::http::h1::http_client::{ClientError, HttpClient, HttpClientBuilder};
-use asupersync::http::h1::{Http1Listener, Method, Request as H1Request, Response as H1Response};
+use asupersync::http::h1::server::HostPolicy;
+use asupersync::http::h1::{
+    Http1Config, Http1Listener, Http1ListenerConfig, Method, Request as H1Request,
+    Response as H1Response,
+};
 use asupersync::runtime::RuntimeHandle;
 use asupersync::server::shutdown::ShutdownSignal;
 
@@ -118,33 +122,45 @@ where
     F: Fn(HttpRequestData, HttpResponder) -> C + Send + Sync + 'static,
 {
     let to_completion = Arc::new(to_completion);
-    let listener = Http1Listener::bind(bind, move |request: H1Request| {
-        let cq = cq.clone();
-        let to_completion = Arc::clone(&to_completion);
-        async move {
-            let data = HttpRequestData {
-                method: request.method.as_str().to_string(),
-                uri: request.uri,
-                headers: request.headers,
-                body: request.body,
-            };
-            let (reply_tx, reply_rx) = oneshot();
-            let completion = to_completion(data, HttpResponder(reply_tx));
-            if cq.send(completion).is_err() {
-                return H1Response::new(500, "Internal Server Error", Vec::new());
-            }
-            match reply_rx.recv().await {
-                Some(response) => {
-                    let mut h1 = H1Response::builder(response.status);
-                    for (name, value) in response.headers {
-                        h1 = h1.header(name, value);
-                    }
-                    h1.body(response.body).build()
+    // Accept any Host header. asupersync 0.3.2 rejects all requests by
+    // default (421) unless a host policy is set; engine services are reached
+    // by IP, localhost, or hostname interchangeably, authenticate at the
+    // application layer (webhook HMAC, job protocol), and never derive
+    // absolute URLs from Host — the injection surface the policy guards
+    // against does not exist here.
+    let config = Http1ListenerConfig::default()
+        .http_config(Http1Config::default().host_policy(HostPolicy::AllowAll));
+    let listener = Http1Listener::bind_with_config(
+        bind,
+        move |request: H1Request| {
+            let cq = cq.clone();
+            let to_completion = Arc::clone(&to_completion);
+            async move {
+                let data = HttpRequestData {
+                    method: request.method.as_str().to_string(),
+                    uri: request.uri,
+                    headers: request.headers,
+                    body: request.body,
+                };
+                let (reply_tx, reply_rx) = oneshot();
+                let completion = to_completion(data, HttpResponder(reply_tx));
+                if cq.send(completion).is_err() {
+                    return H1Response::new(500, "Internal Server Error", Vec::new());
                 }
-                None => H1Response::new(500, "Internal Server Error", Vec::new()),
+                match reply_rx.recv().await {
+                    Some(response) => {
+                        let mut h1 = H1Response::builder(response.status);
+                        for (name, value) in response.headers {
+                            h1 = h1.header(name, value);
+                        }
+                        h1.body(response.body).build()
+                    }
+                    None => H1Response::new(500, "Internal Server Error", Vec::new()),
+                }
             }
-        }
-    })
+        },
+        config,
+    )
     .await?;
 
     let local_addr = listener.local_addr()?;
