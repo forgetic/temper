@@ -7,7 +7,7 @@ use serde_json::json;
 use temper_daemon::{Daemon, ForgeApplier, JobContext, LeaseApplier, ResultApplier, RoleFeedMode};
 use temper_forge::{
     CreateIssue, CreateRepository, Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
-    UserId,
+    UpdateIssue, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
@@ -375,6 +375,29 @@ async fn assert_no_attention_mark(forge: &MemoryForge, repo: &RepositoryId, issu
     assert!(issue_comment_bodies(forge, repo, issue).await.is_empty());
 }
 
+async fn drop_issue_label(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    label: &str,
+) {
+    let issue = forge
+        .get_issue_by_number(repo, number)
+        .await
+        .expect("issue reload succeeds")
+        .expect("issue exists");
+    forge
+        .update_issue(
+            &issue.id,
+            UpdateIssue {
+                remove_labels: vec![label.to_string()],
+                ..UpdateIssue::default()
+            },
+        )
+        .await
+        .expect("label is dropped");
+}
+
 async fn assert_no_pull_requests(forge: &MemoryForge, repo: &RepositoryId) {
     let pulls = forge
         .list_pull_requests(repo, PullRequestQuery::default())
@@ -651,16 +674,8 @@ async fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
                 RoleFeedMode::Normal,
             )
             .await
-            .expect("repeat feed succeeds"),
-        1
-    );
-    let replay_assignment = poll_assignment(&client, &url, "worker-a", issue).await;
-    let replay_result =
-        success_result("worker-a", &replay_assignment.job_id, &branch_name, summary);
-    assert_release(
-        post_json(&client, &url, &WorkerProtocolMessage::Result(replay_result)).await,
-        "worker-a",
-        &replay_assignment.job_id,
+            .expect("repeat feed succeeds and skips issue with an open implementation PR"),
+        0
     );
 
     assert_pull_request_count_stays(&forge, &repo, 1).await;
@@ -761,6 +776,10 @@ async fn permanent_failure_marks_issue_for_human_attention_and_audit() {
     assert!(comment.contains("failure class: permanent"));
     assert!(comment.contains(&format!("job_id: `{}`", job.job_id)));
     assert!(comment.contains("worker: `worker-a`"));
+    assert!(comment.contains(&format!(
+        "<!-- temper:comment-key=daemon_failure_audit:{} -->",
+        job.job_id
+    )));
 }
 
 #[tokio::test]
@@ -884,4 +903,36 @@ async fn permanent_failure_replay_is_idempotent() {
     let comments = issue_comment_bodies(&forge, &repo, issue).await;
     assert_eq!(comments.len(), 1);
     assert!(comments[0].contains("not implemented"));
+    assert!(comments[0].contains(&format!(
+        "<!-- temper:comment-key=daemon_failure_audit:{} -->",
+        job.job_id
+    )));
+}
+
+#[tokio::test]
+async fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let issue = create_ready_issue(&forge, &repo).await;
+    let workflow = Arc::new(workflow());
+    let applier = ForgeApplier::new(forge.clone(), workflow);
+    let job = in_flight_job("acme/service", issue);
+    let result = permanent_failure_result("worker-a", &job.job_id);
+
+    applier.apply(job.clone(), result.clone()).await;
+    drop_issue_label(&forge, &repo, issue, "needs-human").await;
+    applier.apply(job.clone(), result).await;
+
+    assert_no_pull_requests(&forge, &repo).await;
+    assert!(!issue_labels(&forge, &repo, issue)
+        .await
+        .iter()
+        .any(|label| label == "needs-human"));
+    let comments = issue_comment_bodies(&forge, &repo, issue).await;
+    assert_eq!(comments.len(), 1);
+    assert!(comments[0].contains("not implemented"));
+    assert!(comments[0].contains(&format!(
+        "<!-- temper:comment-key=daemon_failure_audit:{} -->",
+        job.job_id
+    )));
 }

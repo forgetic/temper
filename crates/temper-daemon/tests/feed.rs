@@ -5,14 +5,19 @@ use std::{future::IntoFuture, sync::Arc};
 use axum::http::StatusCode;
 use serde_json::json;
 use temper_daemon::{Daemon, JobRepository, RoleFeedMode};
-use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
+use temper_forge::{
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber,
+    PullRequest, PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest,
+};
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_worker_protocol::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
     ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
-use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};
+use temper_workflow::{
+    render_metadata_block, RawWorkflowSpec, RoleId, ValidatedWorkflow, WorkflowMetadata,
+};
 use tokio::sync::mpsc;
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
@@ -66,6 +71,26 @@ async fn new_repo(forge: &MemoryForge) -> RepositoryId {
 }
 
 async fn create_issue(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str]) -> ItemNumber {
+    let issue = forge
+        .create_issue(
+            repo,
+            CreateIssue {
+                title: "ready code issue".to_string(),
+                body: "Implement the queued daemon work item.".to_string(),
+                labels: labels.iter().map(|label| (*label).to_string()).collect(),
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("issue is created");
+    issue.number
+}
+
+async fn create_issue_record(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    labels: &[&str],
+) -> temper_forge::Issue {
     forge
         .create_issue(
             repo,
@@ -78,7 +103,39 @@ async fn create_issue(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str])
         )
         .await
         .expect("issue is created")
-        .number
+}
+
+async fn create_implementation_pull_request(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    correlation_key: &str,
+) -> PullRequest {
+    forge
+        .create_pull_request(
+            repo,
+            CreatePullRequest {
+                title: "Implement queued work".to_string(),
+                body: format!(
+                    "Implementation PR.\n\n{}",
+                    render_metadata_block(&WorkflowMetadata {
+                        correlation_key: Some(correlation_key.to_string()),
+                        ..WorkflowMetadata::default()
+                    })
+                ),
+                source: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: format!("agent/{correlation_key}"),
+                },
+                target: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "main".to_string(),
+                },
+                labels: vec!["implementation".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("implementation pull request is created")
 }
 
 fn register(worker_id: &str, role: &str, repo: &str) -> WorkerProtocolMessage {
@@ -158,6 +215,56 @@ fn assert_poll_timeout(msg: WorkerProtocolMessage) {
 }
 
 #[tokio::test]
+async fn scanned_role_work_skips_terminal_labeled_closed_issue() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let issue = create_issue_record(&forge, &repo, &["code", "ready"]).await;
+    forge
+        .update_issue(
+            &issue.id,
+            UpdateIssue {
+                state: Some(IssueState::Closed),
+                ..UpdateIssue::default()
+            },
+        )
+        .await
+        .expect("issue is closed");
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-closed", "engineer", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds and closed issue is skipped"),
+        0
+    );
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-closed", 100)).await);
+}
+
+#[tokio::test]
 async fn scanned_role_work_skips_item_when_enrichment_fails() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge).await;
@@ -196,6 +303,136 @@ async fn scanned_role_work_skips_item_when_enrichment_fails() {
         0
     );
     assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-skip", 100)).await);
+}
+
+#[tokio::test]
+async fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("engineer");
+    let correlation_key = format!("pr-for-code-{}", issue.get());
+    let pull_request = create_implementation_pull_request(&forge, &repo, &correlation_key).await;
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-existing-pr", "engineer", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds and open correlated PR is skipped"),
+        0
+    );
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-existing-pr", 100)).await);
+
+    forge
+        .update_pull_request(
+            &pull_request.id,
+            UpdatePullRequest {
+                state: Some(PullRequestUpdateState::Closed),
+                ..UpdatePullRequest::default()
+            },
+        )
+        .await
+        .expect("pull request is closed unmerged");
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds after correlated PR closes"),
+        1
+    );
+
+    match post_json(&client, &url, &poll("worker-existing-pr")).await {
+        WorkerProtocolMessage::Assign(assign) => {
+            assert_eq!(assign.role, "engineer");
+            assert_eq!(assign.artifact.kind, "issue");
+            assert_eq!(assign.artifact.item, json!(issue.get()));
+        }
+        other => panic!("expected assign after closing correlated PR, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn scanned_read_only_triage_item_enqueues_even_when_open_pr_exists() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge).await;
+    let issue = create_issue(&forge, &repo, &["untriaged"]).await;
+    let _pull_request = create_implementation_pull_request(&forge, &repo, "pr-for-code-999").await;
+    let workflow = workflow();
+    let compiled = workflow.compile();
+    let role = RoleId::new("architect");
+    let (daemon, url, _rx) = spawn_recording().await;
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-triage-open-pr", "architect", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                &forge,
+                &repo,
+                &workflow,
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("feed succeeds"),
+        1
+    );
+
+    match post_json(&client, &url, &poll("worker-triage-open-pr")).await {
+        WorkerProtocolMessage::Assign(assign) => {
+            assert_eq!(assign.role, "architect");
+            assert_eq!(assign.artifact.kind, "issue");
+            assert_eq!(assign.artifact.item, json!(issue.get()));
+            let context: temper_daemon::JobContext =
+                serde_json::from_value(assign.job_payload).expect("triage payload parses");
+            assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
+        }
+        other => panic!("expected triage assign, got {other:?}"),
+    }
 }
 
 #[tokio::test]

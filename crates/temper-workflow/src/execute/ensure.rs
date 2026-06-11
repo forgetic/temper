@@ -200,26 +200,36 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
     }
 
     /// Finds a pull request whose metadata block carries the correlation key.
-    async fn find_pull_request_by_correlation(
+    pub async fn find_pull_request_by_correlation(
         &self,
         repo_id: &RepositoryId,
         correlation_key: &str,
         labels: &[String],
     ) -> Result<Option<PullRequest>, ExecutionError> {
-        let plan = CorrelationLookupPlan::new(correlation_key, labels);
-        let mut seen = BTreeSet::<PullRequestId>::new();
-        let mut candidates = Vec::new();
-        for query in plan.pull_request_queries() {
-            for pull_request in self.forge.list_pull_requests(repo_id, query).await? {
-                if seen.insert(pull_request.id.clone()) {
-                    candidates.push(pull_request);
-                }
+        find_pull_request_by_correlation(self.forge, repo_id, correlation_key, labels).await
+    }
+}
+
+/// Finds a pull request whose metadata block carries the correlation key.
+pub async fn find_pull_request_by_correlation<F: Forge + ?Sized>(
+    forge: &F,
+    repo_id: &RepositoryId,
+    correlation_key: &str,
+    labels: &[String],
+) -> Result<Option<PullRequest>, ExecutionError> {
+    let plan = CorrelationLookupPlan::new(correlation_key, labels);
+    let mut seen = BTreeSet::<PullRequestId>::new();
+    let mut candidates = Vec::new();
+    for query in plan.pull_request_queries() {
+        for pull_request in forge.list_pull_requests(repo_id, query).await? {
+            if seen.insert(pull_request.id.clone()) {
+                candidates.push(pull_request);
             }
         }
-        Ok(candidates
-            .into_iter()
-            .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
     }
+    Ok(candidates
+        .into_iter()
+        .find(|pull_request| metadata_has_correlation_key(&pull_request.body, correlation_key)))
 }
 
 /// Bounded list-query plan for correlation-key lookups.

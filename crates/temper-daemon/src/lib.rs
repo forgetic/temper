@@ -15,8 +15,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use temper_forge::{
-    BranchRef, CreateComment, CreatePullRequest, Forge, ForgeError, Issue, ItemNumber, Repository,
-    RepositoryId, RepositoryPath, UpdateIssue,
+    BranchRef, CreateComment, CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber,
+    PullRequest, PullRequestState, Repository, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_runner::{
     pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake, workspace_content_key,
@@ -32,9 +32,9 @@ use temper_worker_registry::DaemonCore;
 // the trait passes them.
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
-    ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow, Effect, ExecutionContext,
-    ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy, RoleId, ToolManifest,
-    ValidatedWorkflow, VerdictId,
+    find_pull_request_by_correlation, ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow,
+    Effect, ExecutionContext, ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy,
+    RoleId, ToolManifest, ValidatedWorkflow, VerdictId,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -218,16 +218,7 @@ impl<F: Forge> ForgeApplier<F> {
         } else {
             repository.default_branch.clone()
         };
-        let labels = self
-            .workflow
-            .artifact_kind(&ArtifactKindId::new("implementation_pr"))
-            .map(|kind| {
-                kind.identifying_labels
-                    .iter()
-                    .map(|label| label.as_str().to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let labels = implementation_pr_labels(self.workflow.as_ref());
         let summary = result.summary.unwrap_or_default();
         let input = implementation_pr_pull_request_input(
             repository.id.clone(),
@@ -364,6 +355,25 @@ impl<F: Forge> ForgeApplier<F> {
             .all(|label| issue.labels.iter().any(|existing| existing == label))
         {
             return;
+        }
+
+        let comment_marker = failure_audit_comment_marker(&result.job_id);
+        match self.forge.list_issue_comments(&issue.id).await {
+            Ok(comments) => {
+                if comments
+                    .iter()
+                    .any(|comment| comment.body.contains(&comment_marker))
+                {
+                    return;
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier could not list failed job audit comments for job_id={} repo={} issue={} failure_class={}: {error}",
+                    job.job_id, job.repo, issue.number, class
+                );
+                return;
+            }
         }
 
         if let Err(error) = self
@@ -515,20 +525,31 @@ impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
     }
 }
 
+const FAILURE_AUDIT_COMMENT_KEY_PREFIX: &str = "daemon_failure_audit:";
+
+fn failure_audit_comment_marker(job_id: &str) -> String {
+    format!("<!-- temper:comment-key={FAILURE_AUDIT_COMMENT_KEY_PREFIX}{job_id} -->")
+}
+
 fn failure_audit_body(class: &str, result: &JobResult) -> String {
     let header = format!(
         "Daemon could not complete this work (failure class: {class}).\n\njob_id: `{}`\nworker: `{}`",
         result.job_id, result.worker_id
     );
 
-    match result
+    let body = match result
         .failure
         .as_ref()
         .map(|failure| failure.message.trim())
     {
         Some(message) if !message.is_empty() => format!("{header}\n\n{message}"),
         _ => header,
-    }
+    };
+    format!(
+        "{}\n\n{}",
+        body,
+        failure_audit_comment_marker(&result.job_id)
+    )
 }
 
 fn is_stale(error: &ExecutionError) -> bool {
@@ -696,44 +717,25 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
 
 /// Enrich a mapped job's payload with the workspace context the worker-side
 /// coding agent needs: repository coordinates, base branch, branch hint,
-/// correlation key, and (for issue targets) an artifact snapshot. Forge reads
-/// happen here so `job_from_work_item` stays pure.
+/// correlation key, and an artifact snapshot. Forge reads happen here so
+/// `job_from_work_item` stays pure.
 async fn enrich_work_item_job<F: Forge + ?Sized>(
     forge: &F,
     repo: &RepositoryId,
     item: &WorkItem,
     job: &mut WorkItemJob,
+    workflow: &ValidatedWorkflow,
     compiled: &CompiledWorkflow,
-) -> Result<(), ScanError> {
+) -> Result<EnrichOutcome, ScanError> {
     let repository = forge
         .get_repository(repo)
         .await?
         .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
 
-    let base_branch = if repository.default_branch.trim().is_empty() {
-        "main".to_string()
-    } else {
-        repository.default_branch.clone()
-    };
-    let number = match item.target {
-        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number,
-    };
-
-    let artifact = match item.target {
-        ArtifactSource::Issue { number } => {
-            let issue = forge
-                .get_issue_by_number(repo, number)
-                .await?
-                .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("issue {number}"))))?;
-            Some(JobArtifactSnapshot {
-                number: number.get(),
-                title: issue.title,
-                body: issue.body,
-                labels: issue.labels,
-                state: format!("{:?}", issue.state),
-            })
-        }
-        ArtifactSource::PullRequest { .. } => None,
+    let base_branch = default_base_branch(&repository);
+    let number = target_number(item.target);
+    let Some(artifact) = terminal_checked_snapshot(forge, repo, item.target).await? else {
+        return Ok(EnrichOutcome::SkipTerminalArtifact);
     };
 
     let mut context = JobContext {
@@ -749,15 +751,168 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
         base_branch: Some(base_branch),
         branch_hint: Some(pr_branch_hint(&item.kind, number)),
         correlation_key: Some(pr_correlation_key(&item.kind, number)),
-        artifact,
+        artifact: Some(artifact),
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
     };
     enrich_job_context_from_workflow(item, compiled, &mut context);
+
+    if is_writable_issue_job(item, &context)
+        && open_pull_request_exists_for_correlation(forge, repo, workflow, &context).await?
+    {
+        return Ok(EnrichOutcome::SkipExistingOpenPullRequest);
+    }
+
     job.job_payload = serde_json::to_value(&context).expect("JobContext serializes");
 
-    Ok(())
+    Ok(EnrichOutcome::Enriched)
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum EnrichOutcome {
+    Enriched,
+    SkipTerminalArtifact,
+    SkipExistingOpenPullRequest,
+}
+
+fn default_base_branch(repository: &Repository) -> String {
+    if repository.default_branch.trim().is_empty() {
+        "main".to_string()
+    } else {
+        repository.default_branch.clone()
+    }
+}
+
+fn target_number(target: ArtifactSource) -> ItemNumber {
+    match target {
+        ArtifactSource::Issue { number } | ArtifactSource::PullRequest { number } => number,
+    }
+}
+
+async fn terminal_checked_snapshot<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    target: ArtifactSource,
+) -> Result<Option<JobArtifactSnapshot>, ScanError> {
+    match target {
+        ArtifactSource::Issue { number } => {
+            let issue = forge
+                .get_issue_by_number(repo, number)
+                .await?
+                .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("issue {number}"))))?;
+            if issue.state != IssueState::Open {
+                return Ok(None);
+            }
+            Ok(Some(snapshot_from_issue(issue)))
+        }
+        ArtifactSource::PullRequest { number } => {
+            let pull_request = forge
+                .get_pull_request_by_number(repo, number)
+                .await?
+                .ok_or_else(|| {
+                    ScanError::Forge(ForgeError::NotFound(format!("pull request {number}")))
+                })?;
+            if pull_request.state != PullRequestState::Open {
+                return Ok(None);
+            }
+            Ok(Some(snapshot_from_pull_request(pull_request)))
+        }
+    }
+}
+
+fn snapshot_from_issue(issue: Issue) -> JobArtifactSnapshot {
+    JobArtifactSnapshot {
+        number: issue.number.get(),
+        title: issue.title,
+        body: issue.body,
+        labels: issue.labels,
+        state: format!("{:?}", issue.state),
+    }
+}
+
+fn snapshot_from_pull_request(pull_request: PullRequest) -> JobArtifactSnapshot {
+    JobArtifactSnapshot {
+        number: pull_request.number.get(),
+        title: pull_request.title,
+        body: pull_request.body,
+        labels: pull_request.labels,
+        state: format!("{:?}", pull_request.state),
+    }
+}
+
+fn is_writable_issue_job(item: &WorkItem, context: &JobContext) -> bool {
+    matches!(item.target, ArtifactSource::Issue { .. })
+        && context.checkout_capability.as_deref() == Some("writable")
+}
+
+async fn open_pull_request_exists_for_correlation<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    context: &JobContext,
+) -> Result<bool, ScanError> {
+    let Some(correlation_key) = context.correlation_key.as_deref() else {
+        return Ok(false);
+    };
+    let labels = implementation_pr_labels(workflow);
+    let pull_request = find_pull_request_by_correlation(forge, repo, correlation_key, &labels)
+        .await
+        .map_err(ScanError::Execution)?;
+    Ok(pull_request.is_some_and(|pull_request| pull_request.state == PullRequestState::Open))
+}
+
+fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
+    workflow
+        .artifact_kind(&ArtifactKindId::new("implementation_pr"))
+        .map(|kind| {
+            kind.identifying_labels
+                .iter()
+                .map(|label| label.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn skip_log_reason(outcome: EnrichOutcome) -> &'static str {
+    match outcome {
+        EnrichOutcome::Enriched => "",
+        EnrichOutcome::SkipTerminalArtifact => "terminal artifact",
+        EnrichOutcome::SkipExistingOpenPullRequest => "existing open implementation pull request",
+    }
+}
+
+fn skip_log_line(
+    repo_label: &str,
+    role: &RoleId,
+    item: &WorkItem,
+    reason: EnrichOutcome,
+) -> String {
+    format!(
+        "temper-daemon: skipped role work for {} repo={} role={} queue={} artifact_kind={} target={:?}",
+        skip_log_reason(reason),
+        repo_label,
+        role.as_str(),
+        item.queue.as_str(),
+        item.kind.as_str(),
+        item.target
+    )
+}
+
+fn enrichment_failure_log_line(
+    repo_label: &str,
+    role: &RoleId,
+    item: &WorkItem,
+    error: &ScanError,
+) -> String {
+    format!(
+        "temper-daemon: skipped scanned work item after enrichment failed for repo={} role={} queue={} artifact_kind={} target={:?}: {error}",
+        repo_label,
+        role.as_str(),
+        item.queue.as_str(),
+        item.kind.as_str(),
+        item.target
+    )
 }
 
 fn enrich_job_context_from_workflow(
@@ -1154,8 +1309,8 @@ impl Daemon {
         let mut enqueued = 0;
         for item in &items {
             let mut job = job_from_work_item(&repo_label, item);
-            match enrich_work_item_job(forge, repo, item, &mut job, compiled).await {
-                Ok(()) => {
+            match enrich_work_item_job(forge, repo, item, &mut job, workflow, compiled).await {
+                Ok(EnrichOutcome::Enriched) => {
                     self.enqueue_job(
                         job.job_id,
                         job.role,
@@ -1166,13 +1321,15 @@ impl Daemon {
                     .await;
                     enqueued += 1;
                 }
+                Ok(
+                    skip @ (EnrichOutcome::SkipTerminalArtifact
+                    | EnrichOutcome::SkipExistingOpenPullRequest),
+                ) => {
+                    eprintln!("{}", skip_log_line(&repo_label, role, item, skip));
+                }
                 Err(error) => eprintln!(
-                    "temper-daemon: skipped scanned work item after enrichment failed for repo={} role={} queue={} artifact_kind={} target={:?}: {error}",
-                    repo_label,
-                    role.as_str(),
-                    item.queue.as_str(),
-                    item.kind.as_str(),
-                    item.target
+                    "{}",
+                    enrichment_failure_log_line(&repo_label, role, item, &error)
                 ),
             }
         }
@@ -1368,7 +1525,10 @@ pub async fn serve(daemon: &Daemon, bind: SocketAddr) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use temper_forge::{CreateRepository, Forge, ItemNumber};
+    use temper_forge::{
+        BranchRef, CreatePullRequest, CreateRepository, Forge, ItemNumber, UpdateIssue,
+        UpdatePullRequest,
+    };
     use temper_forge_memory::MemoryForge;
     use temper_worker_protocol::{Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
     use temper_workflow::{ArtifactKindId, QueueId, RawWorkflowSpec, RoleId};
@@ -1612,7 +1772,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrich_work_item_job_leaves_pull_request_artifact_snapshot_empty() {
+    async fn enrich_work_item_job_skips_closed_issue() {
         let forge = MemoryForge::new();
         let repo = forge
             .create_repository(CreateRepository {
@@ -1624,20 +1784,97 @@ mod tests {
             .await
             .expect("repository is created")
             .id;
-        let item = work_item(ArtifactSource::PullRequest {
-            number: ItemNumber::new(42),
+        let issue = forge
+            .create_issue(
+                &repo,
+                temper_forge::CreateIssue {
+                    title: "closed".to_string(),
+                    body: "done".to_string(),
+                    labels: vec!["code".to_string(), "ready".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("issue is created");
+        forge
+            .update_issue(
+                &issue.id,
+                UpdateIssue {
+                    state: Some(IssueState::Closed),
+                    ..UpdateIssue::default()
+                },
+            )
+            .await
+            .expect("issue is closed");
+        let item = work_item(ArtifactSource::Issue {
+            number: issue.number,
         });
         let mut job = job_from_work_item("ai/temper", &item);
         let workflow: RawWorkflowSpec =
             serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
-        let compiled = workflow
+        let workflow = workflow
             .validate()
-            .expect("basic-delivery workflow validates")
-            .compile();
+            .expect("basic-delivery workflow validates");
+        let compiled = workflow.compile();
 
-        enrich_work_item_job(&forge, &repo, &item, &mut job, &compiled)
+        assert_eq!(
+            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                .await
+                .expect("enrichment skip succeeds"),
+            EnrichOutcome::SkipTerminalArtifact
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(CreateRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
             .await
-            .expect("enrichment succeeds for pull request targets");
+            .expect("repository is created")
+            .id;
+        let pull_request = forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: "Fix failing CI".to_string(),
+                    body: "Address the failing PR.".to_string(),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "agent/pr-for-code-42".to_string(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("pull request is created");
+        let item = work_item(ArtifactSource::PullRequest {
+            number: pull_request.number,
+        });
+        let mut job = job_from_work_item("ai/temper", &item);
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
+        let workflow = workflow
+            .validate()
+            .expect("basic-delivery workflow validates");
+        let compiled = workflow.compile();
+
+        assert_eq!(
+            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                .await
+                .expect("enrichment succeeds for pull request targets"),
+            EnrichOutcome::Enriched
+        );
 
         let context: JobContext =
             serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
@@ -1650,11 +1887,84 @@ mod tests {
                 default_branch: "main".to_string(),
             })
         );
-        assert_eq!(context.branch_hint.as_deref(), Some("agent/pr-for-code-42"));
-        assert_eq!(context.correlation_key.as_deref(), Some("pr-for-code-42"));
-        assert_eq!(context.artifact, None);
+        assert_eq!(
+            context.branch_hint.as_deref(),
+            Some(format!("agent/pr-for-code-{}", pull_request.number.get()).as_str())
+        );
+        assert_eq!(
+            context.correlation_key.as_deref(),
+            Some(format!("pr-for-code-{}", pull_request.number.get()).as_str())
+        );
+        let artifact = context.artifact.expect("pull request snapshot is present");
+        assert_eq!(artifact.number, pull_request.number.get());
+        assert_eq!(artifact.title, "Fix failing CI");
+        assert_eq!(artifact.body, "Address the failing PR.");
+        assert_eq!(artifact.labels, vec!["implementation".to_string()]);
+        assert_eq!(artifact.state, "Open");
         assert_eq!(context.action.as_deref(), Some("open_pr"));
         assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
         assert!(context.allowed_verdicts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn enrich_work_item_job_skips_closed_pull_request() {
+        let forge = MemoryForge::new();
+        let repo = forge
+            .create_repository(CreateRepository {
+                owner: "ai".to_string(),
+                name: "temper".to_string(),
+                default_branch: "main".to_string(),
+                description: None,
+            })
+            .await
+            .expect("repository is created")
+            .id;
+        let pull_request = forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: "closed PR".to_string(),
+                    body: "closed".to_string(),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "agent/pr-for-code-7".to_string(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "main".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("pull request is created");
+        forge
+            .update_pull_request(
+                &pull_request.id,
+                UpdatePullRequest {
+                    state: Some(temper_forge::PullRequestUpdateState::Closed),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await
+            .expect("pull request is closed");
+        let item = work_item(ArtifactSource::PullRequest {
+            number: pull_request.number,
+        });
+        let mut job = job_from_work_item("ai/temper", &item);
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
+        let workflow = workflow
+            .validate()
+            .expect("basic-delivery workflow validates");
+        let compiled = workflow.compile();
+
+        assert_eq!(
+            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                .await
+                .expect("enrichment skip succeeds"),
+            EnrichOutcome::SkipTerminalArtifact
+        );
     }
 }
