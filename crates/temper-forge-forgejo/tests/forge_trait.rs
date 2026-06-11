@@ -13,7 +13,7 @@ mod support;
 
 use support::{block_on, forge, repo_id, MockHttpClient, OWNER, REPO};
 use temper_forge::{Forge, IssueState, ItemNumber, UserId};
-use temper_forge_forgejo::{ForgejoForge, EngineHttpClient};
+use temper_forge_forgejo::{EngineHttpClient, ForgejoForge};
 use temper_workflow::{Executor, ValidatedWorkflow};
 
 #[test]

@@ -239,7 +239,9 @@ fn assert_server_teardown(base_url: &str, data_dir: &Path) -> Result<(), String>
     let version_url = format!("{base_url}/api/v1/version");
     let client = temper_io_engine::http::BlockingJsonClient::new();
     for _ in 0..25 {
-        let port_is_down = client.send("GET", version_url.as_str(), None, None).is_err();
+        let port_is_down = client
+            .send("GET", version_url.as_str(), None, None)
+            .is_err();
         let data_dir_is_gone = !data_dir.exists();
         if port_is_down && data_dir_is_gone {
             return Ok(());
@@ -248,7 +250,9 @@ fn assert_server_teardown(base_url: &str, data_dir: &Path) -> Result<(), String>
     }
     Err(format!(
         "server did not tear down cleanly: url_down={} data_dir_exists={} ({})",
-        client.send("GET", version_url.as_str(), None, None).is_err(),
+        client
+            .send("GET", version_url.as_str(), None, None)
+            .is_err(),
         data_dir.exists(),
         data_dir.display()
     ))

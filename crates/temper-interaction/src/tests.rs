@@ -314,174 +314,174 @@ fn forge_marker_render_and_parse() {
 }
 
 #[test]
- fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
+fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
     temper_io_engine::block_on(async move {
-    let (human, agent, _repo) = seeded().await;
-    let mut session = ForgeInteractionSession::open(
-        Arc::new(human.clone()),
-        Arc::new(agent),
-        Arc::new(FakeResponder),
-        config(),
-        ForgeSessionOpenOptions::new(
-            "https://git.example.test",
-            RepositoryPath::new("ai", "temper"),
-        ),
-    )
-    .await
-    .unwrap();
-    assert_eq!(session.transcript_issue().labels, vec![TRANSCRIPT_LABEL]);
+        let (human, agent, _repo) = seeded().await;
+        let mut session = ForgeInteractionSession::open(
+            Arc::new(human.clone()),
+            Arc::new(agent),
+            Arc::new(FakeResponder),
+            config(),
+            ForgeSessionOpenOptions::new(
+                "https://git.example.test",
+                RepositoryPath::new("ai", "temper"),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(session.transcript_issue().labels, vec![TRANSCRIPT_LABEL]);
 
-    let reply = session.send_human_turn("I want a chat MVP.").await.unwrap();
-    assert_eq!(reply.proposals.len(), 1);
-    let comments = human
-        .list_issue_comments(&session.transcript_issue().id)
-        .await
-        .unwrap();
-    assert_eq!(comments.len(), 2);
-    assert_eq!(comments[0].author_id, UserId::new("human"));
-    assert_eq!(comments[1].author_id, UserId::new("product-manager"));
+        let reply = session.send_human_turn("I want a chat MVP.").await.unwrap();
+        assert_eq!(reply.proposals.len(), 1);
+        let comments = human
+            .list_issue_comments(&session.transcript_issue().id)
+            .await
+            .unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].author_id, UserId::new("human"));
+        assert_eq!(comments[1].author_id, UserId::new("product-manager"));
 
-    let filed = session
-        .accept_issue_proposal(&proposal_id("terminal-chat-mvp"))
-        .await
-        .unwrap();
-    assert!(filed.created);
-    assert_eq!(filed.issue.labels, vec![INTAKE_LABEL.to_string()]);
-    assert!(filed.issue.body.contains("requested-by: human"));
-    assert!(filed.issue.body.contains(&acceptance_marker(
-        session.conversation_id().as_str(),
-        "terminal-chat-mvp"
-    )));
-    let retry = session
-        .accept_issue_proposal(&proposal_id("terminal-chat-mvp"))
-        .await
-        .unwrap();
-    assert!(!retry.created);
-    assert_eq!(retry.issue.number, filed.issue.number);
+        let filed = session
+            .accept_issue_proposal(&proposal_id("terminal-chat-mvp"))
+            .await
+            .unwrap();
+        assert!(filed.created);
+        assert_eq!(filed.issue.labels, vec![INTAKE_LABEL.to_string()]);
+        assert!(filed.issue.body.contains("requested-by: human"));
+        assert!(filed.issue.body.contains(&acceptance_marker(
+            session.conversation_id().as_str(),
+            "terminal-chat-mvp"
+        )));
+        let retry = session
+            .accept_issue_proposal(&proposal_id("terminal-chat-mvp"))
+            .await
+            .unwrap();
+        assert!(!retry.created);
+        assert_eq!(retry.issue.number, filed.issue.number);
     })
 }
 
 #[test]
- fn transcript_resume_refuses_non_transcript_label_policy() {
+fn transcript_resume_refuses_non_transcript_label_policy() {
     temper_io_engine::block_on(async move {
-    let (human, agent, repo) = seeded().await;
-    let issue = human
-        .create_issue(
-            &repo.id,
-            CreateIssue {
-                title: "Workflow issue".into(),
-                body: "not a transcript".into(),
-                labels: vec![INTAKE_LABEL.into()],
-                assignees: Vec::new(),
+        let (human, agent, repo) = seeded().await;
+        let issue = human
+            .create_issue(
+                &repo.id,
+                CreateIssue {
+                    title: "Workflow issue".into(),
+                    body: "not a transcript".into(),
+                    labels: vec![INTAKE_LABEL.into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let error = match ForgeInteractionSession::open(
+            Arc::new(human),
+            Arc::new(agent),
+            Arc::new(NeverResponder),
+            config(),
+            ForgeSessionOpenOptions {
+                base_url: "https://git.example.test".into(),
+                repo_path: RepositoryPath::new("ai", "temper"),
+                transcript_issue: Some(issue.number),
+                context: json!({}),
             },
         )
         .await
-        .unwrap();
+        {
+            Ok(_) => panic!("resume should reject workflow issue"),
+            Err(error) => error,
+        };
 
-    let error = match ForgeInteractionSession::open(
-        Arc::new(human),
-        Arc::new(agent),
-        Arc::new(NeverResponder),
-        config(),
-        ForgeSessionOpenOptions {
-            base_url: "https://git.example.test".into(),
-            repo_path: RepositoryPath::new("ai", "temper"),
-            transcript_issue: Some(issue.number),
-            context: json!({}),
-        },
-    )
-    .await
-    {
-        Ok(_) => panic!("resume should reject workflow issue"),
-        Err(error) => error,
-    };
-
-    assert!(matches!(
-        error,
-        InteractionError::TranscriptLabelMismatch { .. }
-    ));
+        assert!(matches!(
+            error,
+            InteractionError::TranscriptLabelMismatch { .. }
+        ));
     })
 }
 
 #[test]
- fn transcript_resume_reconstructs_recent_turns_by_author_identity() {
+fn transcript_resume_reconstructs_recent_turns_by_author_identity() {
     temper_io_engine::block_on(async move {
-    let (human, agent, repo) = seeded().await;
-    let marker = render_transcript_marker(MARKER_NAMESPACE, "pc-existing");
-    let issue = human
-        .create_issue(
-            &repo.id,
-            CreateIssue {
-                title: "Product conversation".into(),
-                body: marker,
-                labels: vec![TRANSCRIPT_LABEL.into()],
-                assignees: Vec::new(),
-            },
-        )
-        .await
-        .unwrap();
-    let other = human.as_user(user("random-user"));
-    other
-        .add_issue_comment(
-            &issue.id,
-            CreateComment {
-                body: "ignored".into(),
-            },
-        )
-        .await
-        .unwrap();
-    human
-        .add_issue_comment(
-            &issue.id,
-            CreateComment {
-                body: "first".into(),
-            },
-        )
-        .await
-        .unwrap();
-    agent
-        .add_issue_comment(
-            &issue.id,
-            CreateComment {
-                body: "second".into(),
-            },
-        )
-        .await
-        .unwrap();
-    human
-        .add_issue_comment(
-            &issue.id,
-            CreateComment {
-                body: "third".into(),
+        let (human, agent, repo) = seeded().await;
+        let marker = render_transcript_marker(MARKER_NAMESPACE, "pc-existing");
+        let issue = human
+            .create_issue(
+                &repo.id,
+                CreateIssue {
+                    title: "Product conversation".into(),
+                    body: marker,
+                    labels: vec![TRANSCRIPT_LABEL.into()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let other = human.as_user(user("random-user"));
+        other
+            .add_issue_comment(
+                &issue.id,
+                CreateComment {
+                    body: "ignored".into(),
+                },
+            )
+            .await
+            .unwrap();
+        human
+            .add_issue_comment(
+                &issue.id,
+                CreateComment {
+                    body: "first".into(),
+                },
+            )
+            .await
+            .unwrap();
+        agent
+            .add_issue_comment(
+                &issue.id,
+                CreateComment {
+                    body: "second".into(),
+                },
+            )
+            .await
+            .unwrap();
+        human
+            .add_issue_comment(
+                &issue.id,
+                CreateComment {
+                    body: "third".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut cfg = config();
+        cfg.transcript = cfg.transcript.with_recent_turn_limit(2);
+        let session = ForgeInteractionSession::open(
+            Arc::new(human),
+            Arc::new(agent),
+            Arc::new(NeverResponder),
+            cfg,
+            ForgeSessionOpenOptions {
+                base_url: "https://git.example.test".into(),
+                repo_path: RepositoryPath::new("ai", "temper"),
+                transcript_issue: Some(issue.number),
+                context: json!({}),
             },
         )
         .await
         .unwrap();
 
-    let mut cfg = config();
-    cfg.transcript = cfg.transcript.with_recent_turn_limit(2);
-    let session = ForgeInteractionSession::open(
-        Arc::new(human),
-        Arc::new(agent),
-        Arc::new(NeverResponder),
-        cfg,
-        ForgeSessionOpenOptions {
-            base_url: "https://git.example.test".into(),
-            repo_path: RepositoryPath::new("ai", "temper"),
-            transcript_issue: Some(issue.number),
-            context: json!({}),
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        session
-            .turns()
-            .iter()
-            .map(|turn| turn.body.as_str())
-            .collect::<Vec<_>>(),
-        vec!["second", "third"]
-    );
+        assert_eq!(
+            session
+                .turns()
+                .iter()
+                .map(|turn| turn.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second", "third"]
+        );
     })
 }

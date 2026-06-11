@@ -18,9 +18,7 @@ use std::time::Duration;
 
 use asupersync::cx::Cx;
 use asupersync::http::h1::http_client::{ClientError, HttpClient, HttpClientBuilder};
-use asupersync::http::h1::{
-    Http1Listener, Method, Request as H1Request, Response as H1Response,
-};
+use asupersync::http::h1::{Http1Listener, Method, Request as H1Request, Response as H1Response};
 use asupersync::runtime::RuntimeHandle;
 use asupersync::server::shutdown::ShutdownSignal;
 
@@ -276,7 +274,9 @@ impl JsonClient {
             method: method.to_string(),
             url: url.into(),
             headers,
-            body: body.map(|value| value.to_string().into_bytes()).unwrap_or_default(),
+            body: body
+                .map(|value| value.to_string().into_bytes())
+                .unwrap_or_default(),
         };
         let cx = crate::runtime::ambient_cx();
         http_call(&cx, &self.client, call).await

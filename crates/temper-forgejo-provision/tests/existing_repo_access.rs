@@ -20,7 +20,6 @@
 //!   `write` and never adds them to the org Owners team;
 //! - `--existing-repo` against a missing repo errors clearly.
 
-
 use serde_json::Value;
 use temper_forgejo_provision::provision::{
     provision_and_seed, provision_world, AccessScope, ProvisionOptions, BOT_USER,
@@ -49,7 +48,12 @@ fn http() -> temper_io_engine::http::JsonClient {
     temper_io_engine::http::JsonClient::new()
 }
 
-async fn create_org(client: &temper_io_engine::http::JsonClient, base: &str, admin: &str, owner: &str) {
+async fn create_org(
+    client: &temper_io_engine::http::JsonClient,
+    base: &str,
+    admin: &str,
+    owner: &str,
+) {
     let (status, _) = client
         .send_expect_json(
             "POST",
@@ -102,7 +106,10 @@ async fn create_repo_with_sentinel(
             "commit sentinel",
         )
         .await;
-    assert!((200..300).contains(&status), "commit sentinel failed: {status}");
+    assert!(
+        (200..300).contains(&status),
+        "commit sentinel failed: {status}"
+    );
 }
 
 /// Reads a file's decoded contents from the repo, or `None` if absent.
@@ -153,7 +160,10 @@ async fn commit_count(
             "list commits",
         )
         .await;
-    assert!((200..300).contains(&status), "list commits failed: {status}");
+    assert!(
+        (200..300).contains(&status),
+        "list commits failed: {status}"
+    );
     body.as_array().expect("commits is an array").len()
 }
 
@@ -269,207 +279,207 @@ async fn has_actions(
 
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
- fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
+fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
     temper_io_engine::block_on(async move {
-    let (server, admin) = start_server_with_admin().await;
-    let base = server.base_url().to_string();
-    let name = "smith";
-    let client = http();
+        let (server, admin) = start_server_with_admin().await;
+        let base = server.base_url().to_string();
+        let name = "smith";
+        let client = http();
 
-    // A real, content-bearing repo on a shared org (the `ai` org also hosts
-    // `temper`), with the project's own CI already committed.
-    create_org(&client, &base, &admin, OWNER).await;
-    create_repo_with_sentinel(&client, &base, &admin, OWNER, name).await;
-    let commits_before = commit_count(&client, &base, &admin, OWNER, name).await;
+        // A real, content-bearing repo on a shared org (the `ai` org also hosts
+        // `temper`), with the project's own CI already committed.
+        create_org(&client, &base, &admin, OWNER).await;
+        create_repo_with_sentinel(&client, &base, &admin, OWNER, name).await;
+        let commits_before = commit_count(&client, &base, &admin, OWNER, name).await;
 
-    let config = runner_config();
-    let workflow = workflow();
-    let provisioned = provision_world(
-        &base,
-        &admin,
-        OWNER,
-        name,
-        &config.role_bindings,
-        "main",
-        &workflow,
-        ProvisionOptions {
-            existing_repo: true,
-            access: AccessScope::RepoCollaborator,
-        },
-    )
-    .await
-    .expect("provision against existing repo succeeds");
-
-    // The repo's own CI file is byte-for-byte untouched (no marker CI commit).
-    let after = file_contents(&client, &base, &admin, OWNER, name, SENTINEL_PATH)
+        let config = runner_config();
+        let workflow = workflow();
+        let provisioned = provision_world(
+            &base,
+            &admin,
+            OWNER,
+            name,
+            &config.role_bindings,
+            "main",
+            &workflow,
+            ProvisionOptions {
+                existing_repo: true,
+                access: AccessScope::RepoCollaborator,
+            },
+        )
         .await
-        .expect("project CI file still present");
-    assert_eq!(
-        after, SENTINEL_BODY,
-        "project-owned CI must not be overwritten"
-    );
-    assert!(
-        !after.contains("[ci-pass]"),
-        "marker CI workflow must not have been committed over the project's CI"
-    );
+        .expect("provision against existing repo succeeds");
 
-    // No provisioning commits were added to main (no marker CI, no sentinel).
-    let commits_after = commit_count(&client, &base, &admin, OWNER, name).await;
-    assert_eq!(
-        commits_after, commits_before,
-        "--existing-repo must add no commits to main"
-    );
-
-    // Labels were still upserted and Actions enabled.
-    let labels = label_names(&client, &base, &admin, OWNER, name).await;
-    let declared: Vec<String> = workflow
-        .compile()
-        .labels()
-        .labels()
-        .iter()
-        .map(|spec| spec.id.to_string())
-        .collect();
-    for label in &declared {
-        assert!(labels.contains(label), "label {label} should be upserted");
-    }
-    assert!(
-        has_actions(&client, &base, &admin, OWNER, name).await,
-        "Actions must be enabled"
-    );
-
-    // Every role user and the bot is a repo collaborator with `write`, and none
-    // were added to the Owners team.
-    for identity in provisioned.roles.values() {
+        // The repo's own CI file is byte-for-byte untouched (no marker CI commit).
+        let after = file_contents(&client, &base, &admin, OWNER, name, SENTINEL_PATH)
+            .await
+            .expect("project CI file still present");
         assert_eq!(
-            collaborator_permission(&client, &base, &admin, OWNER, name, &identity.user).await,
-            Some("write".to_string()),
-            "role {} should have repo-scoped write",
-            identity.user
+            after, SENTINEL_BODY,
+            "project-owned CI must not be overwritten"
         );
         assert!(
-            !is_owners_member(&client, &base, &admin, OWNER, &identity.user).await,
-            "role {} must not be an Owners-team member under repo-collaborator access",
-            identity.user
+            !after.contains("[ci-pass]"),
+            "marker CI workflow must not have been committed over the project's CI"
         );
-    }
-    assert_eq!(
-        collaborator_permission(&client, &base, &admin, OWNER, name, BOT_USER).await,
-        Some("write".to_string()),
-        "bot should have repo-scoped write so it can merge approved PRs"
-    );
-    assert!(
-        !is_owners_member(&client, &base, &admin, OWNER, BOT_USER).await,
-        "bot must not be an Owners-team member under repo-collaborator access"
-    );
 
-    drop(server);
+        // No provisioning commits were added to main (no marker CI, no sentinel).
+        let commits_after = commit_count(&client, &base, &admin, OWNER, name).await;
+        assert_eq!(
+            commits_after, commits_before,
+            "--existing-repo must add no commits to main"
+        );
+
+        // Labels were still upserted and Actions enabled.
+        let labels = label_names(&client, &base, &admin, OWNER, name).await;
+        let declared: Vec<String> = workflow
+            .compile()
+            .labels()
+            .labels()
+            .iter()
+            .map(|spec| spec.id.to_string())
+            .collect();
+        for label in &declared {
+            assert!(labels.contains(label), "label {label} should be upserted");
+        }
+        assert!(
+            has_actions(&client, &base, &admin, OWNER, name).await,
+            "Actions must be enabled"
+        );
+
+        // Every role user and the bot is a repo collaborator with `write`, and none
+        // were added to the Owners team.
+        for identity in provisioned.roles.values() {
+            assert_eq!(
+                collaborator_permission(&client, &base, &admin, OWNER, name, &identity.user).await,
+                Some("write".to_string()),
+                "role {} should have repo-scoped write",
+                identity.user
+            );
+            assert!(
+                !is_owners_member(&client, &base, &admin, OWNER, &identity.user).await,
+                "role {} must not be an Owners-team member under repo-collaborator access",
+                identity.user
+            );
+        }
+        assert_eq!(
+            collaborator_permission(&client, &base, &admin, OWNER, name, BOT_USER).await,
+            Some("write".to_string()),
+            "bot should have repo-scoped write so it can merge approved PRs"
+        );
+        assert!(
+            !is_owners_member(&client, &base, &admin, OWNER, BOT_USER).await,
+            "bot must not be an Owners-team member under repo-collaborator access"
+        );
+
+        drop(server);
     })
 }
 
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
- fn existing_repo_errors_when_repo_absent() {
+fn existing_repo_errors_when_repo_absent() {
     temper_io_engine::block_on(async move {
-    let (server, admin) = start_server_with_admin().await;
-    let base = server.base_url().to_string();
-    let client = http();
+        let (server, admin) = start_server_with_admin().await;
+        let base = server.base_url().to_string();
+        let client = http();
 
-    // The org exists, but the named repo does not.
-    create_org(&client, &base, &admin, OWNER).await;
+        // The org exists, but the named repo does not.
+        create_org(&client, &base, &admin, OWNER).await;
 
-    let config = runner_config();
-    let workflow = workflow();
-    let error = provision_world(
-        &base,
-        &admin,
-        OWNER,
-        "does-not-exist",
-        &config.role_bindings,
-        "main",
-        &workflow,
-        ProvisionOptions {
-            existing_repo: true,
-            access: AccessScope::RepoCollaborator,
-        },
-    )
-    .await
-    .expect_err("--existing-repo against an absent repo must error");
-    let message = error.to_string();
-    assert!(
-        message.contains("does-not-exist") && message.contains("does not exist"),
-        "error should name the missing repo: {message}"
-    );
-
-    drop(server);
-    })
-}
-
-#[test]
-#[ignore = "boots a real Forgejo server; run with --ignored"]
- fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
-    temper_io_engine::block_on(async move {
-    // Exercises the full `provision_and_seed` path with `--existing-repo` and a
-    // webhook, mirroring the intended Smith caller (`--seed-intake no`).
-    let (server, admin) = start_server_with_admin().await;
-    let base = server.base_url().to_string();
-    let name = "smith-webhook";
-    let client = http();
-
-    create_org(&client, &base, &admin, OWNER).await;
-    create_repo_with_sentinel(&client, &base, &admin, OWNER, name).await;
-
-    // A webhook secret file on disk.
-    let dir = std::env::temp_dir().join(format!("temper-issue70-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let secret_file = dir.join("webhook-secret");
-    std::fs::write(&secret_file, "s3cr3t").expect("write secret");
-
-    let workflow = workflow();
-    let (_provisioned, issue) = provision_and_seed(
-        &base,
-        &admin,
-        OWNER,
-        name,
-        Some("http://127.0.0.1:9999/forgejo/webhook"),
-        Some(secret_file.as_path()),
-        None, // --seed-intake no
-        &workflow,
-        ProvisionOptions {
-            existing_repo: true,
-            access: AccessScope::RepoCollaborator,
-        },
-    )
-    .await
-    .expect("provision_and_seed against existing repo succeeds");
-    assert!(issue.is_none(), "no intake issue seeded with seed=None");
-
-    // The webhook is registered.
-    let (_, hooks) = client
-        .send_expect_json(
-            "GET",
-            format!("{base}/api/v1/repos/{OWNER}/{name}/hooks"),
-            Some(&admin),
-            None,
-            "list hooks",
+        let config = runner_config();
+        let workflow = workflow();
+        let error = provision_world(
+            &base,
+            &admin,
+            OWNER,
+            "does-not-exist",
+            &config.role_bindings,
+            "main",
+            &workflow,
+            ProvisionOptions {
+                existing_repo: true,
+                access: AccessScope::RepoCollaborator,
+            },
         )
-        .await;
-    let registered = hooks
-        .as_array()
-        .expect("hooks is an array")
-        .iter()
-        .any(|hook| {
-            hook.pointer("/config/url").and_then(Value::as_str)
-                == Some("http://127.0.0.1:9999/forgejo/webhook")
-        });
-    assert!(registered, "webhook should be registered");
-
-    // The project's CI is still untouched.
-    let after = file_contents(&client, &base, &admin, OWNER, name, SENTINEL_PATH)
         .await
-        .expect("project CI file still present");
-    assert_eq!(after, SENTINEL_BODY, "project-owned CI must survive");
+        .expect_err("--existing-repo against an absent repo must error");
+        let message = error.to_string();
+        assert!(
+            message.contains("does-not-exist") && message.contains("does not exist"),
+            "error should name the missing repo: {message}"
+        );
 
-    std::fs::remove_dir_all(&dir).ok();
-    drop(server);
+        drop(server);
+    })
+}
+
+#[test]
+#[ignore = "boots a real Forgejo server; run with --ignored"]
+fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
+    temper_io_engine::block_on(async move {
+        // Exercises the full `provision_and_seed` path with `--existing-repo` and a
+        // webhook, mirroring the intended Smith caller (`--seed-intake no`).
+        let (server, admin) = start_server_with_admin().await;
+        let base = server.base_url().to_string();
+        let name = "smith-webhook";
+        let client = http();
+
+        create_org(&client, &base, &admin, OWNER).await;
+        create_repo_with_sentinel(&client, &base, &admin, OWNER, name).await;
+
+        // A webhook secret file on disk.
+        let dir = std::env::temp_dir().join(format!("temper-issue70-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let secret_file = dir.join("webhook-secret");
+        std::fs::write(&secret_file, "s3cr3t").expect("write secret");
+
+        let workflow = workflow();
+        let (_provisioned, issue) = provision_and_seed(
+            &base,
+            &admin,
+            OWNER,
+            name,
+            Some("http://127.0.0.1:9999/forgejo/webhook"),
+            Some(secret_file.as_path()),
+            None, // --seed-intake no
+            &workflow,
+            ProvisionOptions {
+                existing_repo: true,
+                access: AccessScope::RepoCollaborator,
+            },
+        )
+        .await
+        .expect("provision_and_seed against existing repo succeeds");
+        assert!(issue.is_none(), "no intake issue seeded with seed=None");
+
+        // The webhook is registered.
+        let (_, hooks) = client
+            .send_expect_json(
+                "GET",
+                format!("{base}/api/v1/repos/{OWNER}/{name}/hooks"),
+                Some(&admin),
+                None,
+                "list hooks",
+            )
+            .await;
+        let registered = hooks
+            .as_array()
+            .expect("hooks is an array")
+            .iter()
+            .any(|hook| {
+                hook.pointer("/config/url").and_then(Value::as_str)
+                    == Some("http://127.0.0.1:9999/forgejo/webhook")
+            });
+        assert!(registered, "webhook should be registered");
+
+        // The project's CI is still untouched.
+        let after = file_contents(&client, &base, &admin, OWNER, name, SENTINEL_PATH)
+            .await
+            .expect("project CI file still present");
+        assert_eq!(after, SENTINEL_BODY, "project-owned CI must survive");
+
+        std::fs::remove_dir_all(&dir).ok();
+        drop(server);
     })
 }

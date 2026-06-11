@@ -152,7 +152,11 @@ fn create_repo(client: &temper_io_engine::http::BlockingJsonClient, base: &str, 
 
 /// Commits the failing workflow file and returns the resulting commit SHA (the
 /// head the runner will report a status against).
-fn put_workflow_file(client: &temper_io_engine::http::BlockingJsonClient, base: &str, token: &str) -> String {
+fn put_workflow_file(
+    client: &temper_io_engine::http::BlockingJsonClient,
+    base: &str,
+    token: &str,
+) -> String {
     use base64::Engine;
     let content = base64::engine::general_purpose::STANDARD.encode(FAILING_WORKFLOW);
     let (status, body) = client.send_expect_json(
@@ -176,7 +180,11 @@ fn put_workflow_file(client: &temper_io_engine::http::BlockingJsonClient, base: 
         .unwrap_or_else(|| panic!("no commit sha in contents response: {body}"))
 }
 
-fn enable_repo_actions(client: &temper_io_engine::http::BlockingJsonClient, base: &str, token: &str) {
+fn enable_repo_actions(
+    client: &temper_io_engine::http::BlockingJsonClient,
+    base: &str,
+    token: &str,
+) {
     let (status, body) = client.send_expect_json(
         "PATCH",
         format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"),

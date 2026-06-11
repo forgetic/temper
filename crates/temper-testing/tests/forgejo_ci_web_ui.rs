@@ -28,83 +28,83 @@ use temper_testing::runner_config;
 #[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
 fn list_ci_jobs_reads_failure_through_web_ui() {
     temper_io_engine::block_on(async move {
-    // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
-    // polling; boot it on a blocking thread so that nested runtime lives and dies
-    // off-reactor (matching the Phase 2 provisioning test).
-    let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
-        .await
-        .expect("forgejo cached provisioned state starts");
-    let server = cached.server;
-    let provisioned = cached.provisioned;
-    let base = server.base_url().to_string();
-
-    // Register the host-mode runner after restoring the cached tree. The cached
-    // provisioning committed the workflow already; the runner claims the queued
-    // run from this per-test server copy.
-    let mut runner = ForgejoRunner::register(&server).expect("runner registers");
-    assert!(runner.is_running(), "runner daemon exited immediately");
-
-    // Build a backend as one workflow role: the role's token for REST plus that
-    // role's user/password for the web-UI CI read fallback (ADR 0019).
-    let binding = runner_config()
-        .role_bindings
-        .into_iter()
-        .next()
-        .expect("at least one role binding");
-    let identity = provisioned.role(&binding.role).expect("role provisioned");
-    let config = ForgejoConfig::new(&base, &identity.token)
-        .with_web_ui_credentials(&identity.user, &identity.password);
-    let forge = ForgejoForge::new(config);
-
-    // The workflow commit on `main` triggers a push run that fails (`test -f
-    // ci-ok` with no sentinel). Poll until the web-UI read path returns a failed
-    // job. A real host CI job takes seconds; allow generous slack for cold start.
-    let deadline = Instant::now() + Duration::from_secs(180);
-    // Most recent observation, surfaced in the timeout panic for diagnosis.
-    let mut last = String::from("(no jobs yet)");
-    let _ = &last;
-    let failing = loop {
-        match forge
-            .list_ci_jobs(&provisioned.repository, CiJobQuery::default())
+        // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
+        // polling; boot it on a blocking thread so that nested runtime lives and dies
+        // off-reactor (matching the Phase 2 provisioning test).
+        let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
             .await
-        {
-            Ok(jobs) => {
-                last = format!(
-                    "{:?}",
-                    jobs.iter()
-                        .map(|j| (j.name.clone(), j.status, j.conclusion))
-                        .collect::<Vec<_>>()
-                );
-                if let Some(job) = jobs.iter().find(|job| {
-                    job.status == CiJobStatus::Completed
-                        && job.conclusion == Some(CiJobConclusion::Failure)
-                }) {
-                    break Some(job.clone());
+            .expect("forgejo cached provisioned state starts");
+        let server = cached.server;
+        let provisioned = cached.provisioned;
+        let base = server.base_url().to_string();
+
+        // Register the host-mode runner after restoring the cached tree. The cached
+        // provisioning committed the workflow already; the runner claims the queued
+        // run from this per-test server copy.
+        let mut runner = ForgejoRunner::register(&server).expect("runner registers");
+        assert!(runner.is_running(), "runner daemon exited immediately");
+
+        // Build a backend as one workflow role: the role's token for REST plus that
+        // role's user/password for the web-UI CI read fallback (ADR 0019).
+        let binding = runner_config()
+            .role_bindings
+            .into_iter()
+            .next()
+            .expect("at least one role binding");
+        let identity = provisioned.role(&binding.role).expect("role provisioned");
+        let config = ForgejoConfig::new(&base, &identity.token)
+            .with_web_ui_credentials(&identity.user, &identity.password);
+        let forge = ForgejoForge::new(config);
+
+        // The workflow commit on `main` triggers a push run that fails (`test -f
+        // ci-ok` with no sentinel). Poll until the web-UI read path returns a failed
+        // job. A real host CI job takes seconds; allow generous slack for cold start.
+        let deadline = Instant::now() + Duration::from_secs(180);
+        // Most recent observation, surfaced in the timeout panic for diagnosis.
+        let mut last = String::from("(no jobs yet)");
+        let _ = &last;
+        let failing = loop {
+            match forge
+                .list_ci_jobs(&provisioned.repository, CiJobQuery::default())
+                .await
+            {
+                Ok(jobs) => {
+                    last = format!(
+                        "{:?}",
+                        jobs.iter()
+                            .map(|j| (j.name.clone(), j.status, j.conclusion))
+                            .collect::<Vec<_>>()
+                    );
+                    if let Some(job) = jobs.iter().find(|job| {
+                        job.status == CiJobStatus::Completed
+                            && job.conclusion == Some(CiJobConclusion::Failure)
+                    }) {
+                        break Some(job.clone());
+                    }
                 }
+                // Transient read errors during cold start are tolerated until the
+                // deadline; a persistent failure surfaces below as a timeout.
+                Err(error) => last = format!("error: {error}"),
             }
-            // Transient read errors during cold start are tolerated until the
-            // deadline; a persistent failure surfaces below as a timeout.
-            Err(error) => last = format!("error: {error}"),
-        }
-        if Instant::now() >= deadline {
-            break None;
-        }
-        temper_io_engine::runtime::sleep_for(Duration::from_secs(3)).await;
-    };
+            if Instant::now() >= deadline {
+                break None;
+            }
+            temper_io_engine::runtime::sleep_for(Duration::from_secs(3)).await;
+        };
 
-    let job = failing.unwrap_or_else(|| {
-        panic!(
-            "expected a Failure CI job read through the web UI; last observation: {last}; \
+        let job = failing.unwrap_or_else(|| {
+            panic!(
+                "expected a Failure CI job read through the web UI; last observation: {last}; \
              runner running={}, log: {}",
-            runner.is_running(),
-            runner.log_tail()
-        )
-    });
-    assert_eq!(job.status, CiJobStatus::Completed);
-    assert_eq!(job.conclusion, Some(CiJobConclusion::Failure));
+                runner.is_running(),
+                runner.log_tail()
+            )
+        });
+        assert_eq!(job.status, CiJobStatus::Completed);
+        assert_eq!(job.conclusion, Some(CiJobConclusion::Failure));
 
-    // Tear down explicitly so any panic in drop surfaces here, not at unwind.
-    drop(runner);
-    drop(server);
+        // Tear down explicitly so any panic in drop surfaces here, not at unwind.
+        drop(runner);
+        drop(server);
     })
 }

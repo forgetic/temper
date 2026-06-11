@@ -27,15 +27,15 @@ use temper_worker_registry::daemon_core::QueuedJob;
 use temper_worker_registry::DaemonCore;
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
+use temper_io_engine::http::{HttpRequestData, HttpResponder, HttpResponseData};
+use temper_io_engine::{
+    arm_timer, channel, drive, CqSender, EngineTime, Executor as EngineExecutor, Machine,
+};
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
     find_pull_request_by_correlation, ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow,
     Effect, ExecutionContext, ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy,
     RoleId, ToolManifest, TransitionId, ValidatedWorkflow, VerdictId,
-};
-use temper_io_engine::http::{HttpRequestData, HttpResponder, HttpResponseData};
-use temper_io_engine::{
-    arm_timer, channel, drive, CqSender, EngineTime, Executor as EngineExecutor, Machine,
 };
 
 pub mod config;
@@ -1884,7 +1884,11 @@ impl Daemon {
     #[cfg(test)]
     async fn queued_jobs(&self) -> Vec<WorkItemJob> {
         let (reply, rx) = temper_io_engine::oneshot();
-        if self.cq.send(DaemonCompletion::QueuedJobs { reply }).is_err() {
+        if self
+            .cq
+            .send(DaemonCompletion::QueuedJobs { reply })
+            .is_err()
+        {
             return Vec::new();
         }
         rx.recv()
@@ -2141,86 +2145,86 @@ mod tests {
     }
 
     #[test]
-     fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
+    fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
         temper_io_engine::block_on(async move {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(CreateRepository {
-                owner: "ai".to_string(),
-                name: "temper".to_string(),
-                default_branch: "main".to_string(),
-                description: None,
-            })
-            .await
-            .expect("repository is created")
-            .id;
-        let issue = forge
-            .create_issue(
-                &repo,
-                temper_forge::CreateIssue {
-                    title: "ready".to_string(),
-                    body: "needs implementation".to_string(),
-                    labels: vec!["code".to_string(), "ready".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("issue is created");
-        let correlation_key = format!("pr-for-code-{}", issue.number.get());
-        let pull_request = forge
-            .create_pull_request(
-                &repo,
-                CreatePullRequest {
-                    title: "Implement ready issue".to_string(),
-                    body: format!(
-                        "Implementation PR.\n\n{}",
-                        render_metadata_block(&WorkflowMetadata {
-                            correlation_key: Some(correlation_key.clone()),
-                            ..WorkflowMetadata::default()
-                        })
-                    ),
-                    source: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: format!("agent/{correlation_key}"),
-                    },
-                    target: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "main".to_string(),
-                    },
-                    labels: vec!["implementation".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("pull request is created");
-        forge
-            .merge_pull_request(
-                &pull_request.id,
-                temper_forge::MergePullRequest {
-                    method: temper_forge::MergeMethod::Squash,
-                    commit_title: None,
-                    commit_body: None,
-                },
-            )
-            .await
-            .expect("pull request is merged");
-        let item = work_item(ArtifactSource::Issue {
-            number: issue.number,
-        });
-        let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec =
-            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
-        let workflow = workflow
-            .validate()
-            .expect("basic-delivery workflow validates");
-        let compiled = workflow.compile();
-
-        assert_eq!(
-            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+            let forge = MemoryForge::new();
+            let repo = forge
+                .create_repository(CreateRepository {
+                    owner: "ai".to_string(),
+                    name: "temper".to_string(),
+                    default_branch: "main".to_string(),
+                    description: None,
+                })
                 .await
-                .expect("enrichment skip succeeds"),
-            EnrichOutcome::SkipExistingPullRequest
-        );
+                .expect("repository is created")
+                .id;
+            let issue = forge
+                .create_issue(
+                    &repo,
+                    temper_forge::CreateIssue {
+                        title: "ready".to_string(),
+                        body: "needs implementation".to_string(),
+                        labels: vec!["code".to_string(), "ready".to_string()],
+                        assignees: Vec::new(),
+                    },
+                )
+                .await
+                .expect("issue is created");
+            let correlation_key = format!("pr-for-code-{}", issue.number.get());
+            let pull_request = forge
+                .create_pull_request(
+                    &repo,
+                    CreatePullRequest {
+                        title: "Implement ready issue".to_string(),
+                        body: format!(
+                            "Implementation PR.\n\n{}",
+                            render_metadata_block(&WorkflowMetadata {
+                                correlation_key: Some(correlation_key.clone()),
+                                ..WorkflowMetadata::default()
+                            })
+                        ),
+                        source: BranchRef {
+                            repository_id: repo.clone(),
+                            branch: format!("agent/{correlation_key}"),
+                        },
+                        target: BranchRef {
+                            repository_id: repo.clone(),
+                            branch: "main".to_string(),
+                        },
+                        labels: vec!["implementation".to_string()],
+                        assignees: Vec::new(),
+                    },
+                )
+                .await
+                .expect("pull request is created");
+            forge
+                .merge_pull_request(
+                    &pull_request.id,
+                    temper_forge::MergePullRequest {
+                        method: temper_forge::MergeMethod::Squash,
+                        commit_title: None,
+                        commit_body: None,
+                    },
+                )
+                .await
+                .expect("pull request is merged");
+            let item = work_item(ArtifactSource::Issue {
+                number: issue.number,
+            });
+            let mut job = job_from_work_item("ai/temper", &item);
+            let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
+                .expect("basic-delivery workflow parses");
+            let workflow = workflow
+                .validate()
+                .expect("basic-delivery workflow validates");
+            let compiled = workflow.compile();
+
+            assert_eq!(
+                enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                    .await
+                    .expect("enrichment skip succeeds"),
+                EnrichOutcome::SkipExistingPullRequest
+            );
         })
     }
 
@@ -2364,220 +2368,220 @@ mod tests {
     }
 
     #[test]
-     fn enqueue_work_item_stores_mapped_job() {
+    fn enqueue_work_item_stores_mapped_job() {
         temper_io_engine::block_on(async move {
-        let daemon = Daemon::new();
-        let item = work_item(ArtifactSource::Issue {
-            number: ItemNumber::new(103),
-        });
-        let expected = job_from_work_item("ai/temper", &item);
+            let daemon = Daemon::new();
+            let item = work_item(ArtifactSource::Issue {
+                number: ItemNumber::new(103),
+            });
+            let expected = job_from_work_item("ai/temper", &item);
 
-        daemon.enqueue_work_item("ai/temper", &item).await;
+            daemon.enqueue_work_item("ai/temper", &item).await;
 
-        assert_eq!(daemon.queued_jobs().await, vec![expected]);
+            assert_eq!(daemon.queued_jobs().await, vec![expected]);
         })
     }
 
     #[test]
-     fn enrich_work_item_job_skips_closed_issue() {
+    fn enrich_work_item_job_skips_closed_issue() {
         temper_io_engine::block_on(async move {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(CreateRepository {
-                owner: "ai".to_string(),
-                name: "temper".to_string(),
-                default_branch: "main".to_string(),
-                description: None,
-            })
-            .await
-            .expect("repository is created")
-            .id;
-        let issue = forge
-            .create_issue(
-                &repo,
-                temper_forge::CreateIssue {
-                    title: "closed".to_string(),
-                    body: "done".to_string(),
-                    labels: vec!["code".to_string(), "ready".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("issue is created");
-        forge
-            .update_issue(
-                &issue.id,
-                UpdateIssue {
-                    state: Some(IssueState::Closed),
-                    ..UpdateIssue::default()
-                },
-            )
-            .await
-            .expect("issue is closed");
-        let item = work_item(ArtifactSource::Issue {
-            number: issue.number,
-        });
-        let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec =
-            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
-        let workflow = workflow
-            .validate()
-            .expect("basic-delivery workflow validates");
-        let compiled = workflow.compile();
-
-        assert_eq!(
-            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+            let forge = MemoryForge::new();
+            let repo = forge
+                .create_repository(CreateRepository {
+                    owner: "ai".to_string(),
+                    name: "temper".to_string(),
+                    default_branch: "main".to_string(),
+                    description: None,
+                })
                 .await
-                .expect("enrichment skip succeeds"),
-            EnrichOutcome::SkipTerminalArtifact
-        );
+                .expect("repository is created")
+                .id;
+            let issue = forge
+                .create_issue(
+                    &repo,
+                    temper_forge::CreateIssue {
+                        title: "closed".to_string(),
+                        body: "done".to_string(),
+                        labels: vec!["code".to_string(), "ready".to_string()],
+                        assignees: Vec::new(),
+                    },
+                )
+                .await
+                .expect("issue is created");
+            forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        state: Some(IssueState::Closed),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+                .expect("issue is closed");
+            let item = work_item(ArtifactSource::Issue {
+                number: issue.number,
+            });
+            let mut job = job_from_work_item("ai/temper", &item);
+            let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
+                .expect("basic-delivery workflow parses");
+            let workflow = workflow
+                .validate()
+                .expect("basic-delivery workflow validates");
+            let compiled = workflow.compile();
+
+            assert_eq!(
+                enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                    .await
+                    .expect("enrichment skip succeeds"),
+                EnrichOutcome::SkipTerminalArtifact
+            );
         })
     }
 
     #[test]
-     fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
+    fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
         temper_io_engine::block_on(async move {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(CreateRepository {
-                owner: "ai".to_string(),
-                name: "temper".to_string(),
-                default_branch: "main".to_string(),
-                description: None,
-            })
-            .await
-            .expect("repository is created")
-            .id;
-        let pull_request = forge
-            .create_pull_request(
-                &repo,
-                CreatePullRequest {
-                    title: "Fix failing CI".to_string(),
-                    body: "Address the failing PR.".to_string(),
-                    source: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "agent/pr-for-code-42".to_string(),
-                    },
-                    target: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "main".to_string(),
-                    },
-                    labels: vec!["implementation".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("pull request is created");
-        let item = work_item(ArtifactSource::PullRequest {
-            number: pull_request.number,
-        });
-        let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec =
-            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
-        let workflow = workflow
-            .validate()
-            .expect("basic-delivery workflow validates");
-        let compiled = workflow.compile();
-
-        assert_eq!(
-            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+            let forge = MemoryForge::new();
+            let repo = forge
+                .create_repository(CreateRepository {
+                    owner: "ai".to_string(),
+                    name: "temper".to_string(),
+                    default_branch: "main".to_string(),
+                    description: None,
+                })
                 .await
-                .expect("enrichment succeeds for pull request targets"),
-            EnrichOutcome::Enriched
-        );
+                .expect("repository is created")
+                .id;
+            let pull_request = forge
+                .create_pull_request(
+                    &repo,
+                    CreatePullRequest {
+                        title: "Fix failing CI".to_string(),
+                        body: "Address the failing PR.".to_string(),
+                        source: BranchRef {
+                            repository_id: repo.clone(),
+                            branch: "agent/pr-for-code-42".to_string(),
+                        },
+                        target: BranchRef {
+                            repository_id: repo.clone(),
+                            branch: "main".to_string(),
+                        },
+                        labels: vec!["implementation".to_string()],
+                        assignees: Vec::new(),
+                    },
+                )
+                .await
+                .expect("pull request is created");
+            let item = work_item(ArtifactSource::PullRequest {
+                number: pull_request.number,
+            });
+            let mut job = job_from_work_item("ai/temper", &item);
+            let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
+                .expect("basic-delivery workflow parses");
+            let workflow = workflow
+                .validate()
+                .expect("basic-delivery workflow validates");
+            let compiled = workflow.compile();
 
-        let context: JobContext =
-            serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
-        assert_eq!(context.base_branch.as_deref(), Some("main"));
-        assert_eq!(
-            context.repository,
-            Some(JobRepository {
-                owner: "ai".to_string(),
-                name: "temper".to_string(),
-                default_branch: "main".to_string(),
-            })
-        );
-        assert_eq!(
-            context.branch_hint.as_deref(),
-            Some(format!("agent/pr-for-code-{}", pull_request.number.get()).as_str())
-        );
-        assert_eq!(
-            context.correlation_key.as_deref(),
-            Some(format!("pr-for-code-{}", pull_request.number.get()).as_str())
-        );
-        let artifact = context.artifact.expect("pull request snapshot is present");
-        assert_eq!(artifact.number, pull_request.number.get());
-        assert_eq!(artifact.title, "Fix failing CI");
-        assert_eq!(artifact.body, "Address the failing PR.");
-        assert_eq!(artifact.labels, vec!["implementation".to_string()]);
-        assert_eq!(artifact.state, "Open");
-        assert_eq!(context.action.as_deref(), Some("open_pr"));
-        assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
-        assert!(context.allowed_verdicts.is_empty());
+            assert_eq!(
+                enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                    .await
+                    .expect("enrichment succeeds for pull request targets"),
+                EnrichOutcome::Enriched
+            );
+
+            let context: JobContext =
+                serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
+            assert_eq!(context.base_branch.as_deref(), Some("main"));
+            assert_eq!(
+                context.repository,
+                Some(JobRepository {
+                    owner: "ai".to_string(),
+                    name: "temper".to_string(),
+                    default_branch: "main".to_string(),
+                })
+            );
+            assert_eq!(
+                context.branch_hint.as_deref(),
+                Some(format!("agent/pr-for-code-{}", pull_request.number.get()).as_str())
+            );
+            assert_eq!(
+                context.correlation_key.as_deref(),
+                Some(format!("pr-for-code-{}", pull_request.number.get()).as_str())
+            );
+            let artifact = context.artifact.expect("pull request snapshot is present");
+            assert_eq!(artifact.number, pull_request.number.get());
+            assert_eq!(artifact.title, "Fix failing CI");
+            assert_eq!(artifact.body, "Address the failing PR.");
+            assert_eq!(artifact.labels, vec!["implementation".to_string()]);
+            assert_eq!(artifact.state, "Open");
+            assert_eq!(context.action.as_deref(), Some("open_pr"));
+            assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
+            assert!(context.allowed_verdicts.is_empty());
         })
     }
 
     #[test]
-     fn enrich_work_item_job_skips_closed_pull_request() {
+    fn enrich_work_item_job_skips_closed_pull_request() {
         temper_io_engine::block_on(async move {
-        let forge = MemoryForge::new();
-        let repo = forge
-            .create_repository(CreateRepository {
-                owner: "ai".to_string(),
-                name: "temper".to_string(),
-                default_branch: "main".to_string(),
-                description: None,
-            })
-            .await
-            .expect("repository is created")
-            .id;
-        let pull_request = forge
-            .create_pull_request(
-                &repo,
-                CreatePullRequest {
-                    title: "closed PR".to_string(),
-                    body: "closed".to_string(),
-                    source: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "agent/pr-for-code-7".to_string(),
-                    },
-                    target: BranchRef {
-                        repository_id: repo.clone(),
-                        branch: "main".to_string(),
-                    },
-                    labels: vec!["implementation".to_string()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("pull request is created");
-        forge
-            .update_pull_request(
-                &pull_request.id,
-                UpdatePullRequest {
-                    state: Some(temper_forge::PullRequestUpdateState::Closed),
-                    ..UpdatePullRequest::default()
-                },
-            )
-            .await
-            .expect("pull request is closed");
-        let item = work_item(ArtifactSource::PullRequest {
-            number: pull_request.number,
-        });
-        let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec =
-            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
-        let workflow = workflow
-            .validate()
-            .expect("basic-delivery workflow validates");
-        let compiled = workflow.compile();
-
-        assert_eq!(
-            enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+            let forge = MemoryForge::new();
+            let repo = forge
+                .create_repository(CreateRepository {
+                    owner: "ai".to_string(),
+                    name: "temper".to_string(),
+                    default_branch: "main".to_string(),
+                    description: None,
+                })
                 .await
-                .expect("enrichment skip succeeds"),
-            EnrichOutcome::SkipTerminalArtifact
-        );
+                .expect("repository is created")
+                .id;
+            let pull_request = forge
+                .create_pull_request(
+                    &repo,
+                    CreatePullRequest {
+                        title: "closed PR".to_string(),
+                        body: "closed".to_string(),
+                        source: BranchRef {
+                            repository_id: repo.clone(),
+                            branch: "agent/pr-for-code-7".to_string(),
+                        },
+                        target: BranchRef {
+                            repository_id: repo.clone(),
+                            branch: "main".to_string(),
+                        },
+                        labels: vec!["implementation".to_string()],
+                        assignees: Vec::new(),
+                    },
+                )
+                .await
+                .expect("pull request is created");
+            forge
+                .update_pull_request(
+                    &pull_request.id,
+                    UpdatePullRequest {
+                        state: Some(temper_forge::PullRequestUpdateState::Closed),
+                        ..UpdatePullRequest::default()
+                    },
+                )
+                .await
+                .expect("pull request is closed");
+            let item = work_item(ArtifactSource::PullRequest {
+                number: pull_request.number,
+            });
+            let mut job = job_from_work_item("ai/temper", &item);
+            let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
+                .expect("basic-delivery workflow parses");
+            let workflow = workflow
+                .validate()
+                .expect("basic-delivery workflow validates");
+            let compiled = workflow.compile();
+
+            assert_eq!(
+                enrich_work_item_job(&forge, &repo, &item, &mut job, &workflow, &compiled)
+                    .await
+                    .expect("enrichment skip succeeds"),
+                EnrichOutcome::SkipTerminalArtifact
+            );
         })
     }
 }

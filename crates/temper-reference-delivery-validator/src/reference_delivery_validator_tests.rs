@@ -30,121 +30,120 @@ fn parse_requires_token_from_env_and_redacts_debug() {
 }
 
 #[test]
- fn zero_dependency_blocked_parent_reports_original_incident_shape() {
+fn zero_dependency_blocked_parent_reports_original_incident_shape() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let source = create_repo(&forge, "acme", "service").await;
-    let parent = create_issue(
-        &forge,
-        &source,
-        "Coordinate greeting",
-        &["code", "blocked"],
-        WorkflowMetadata {
-            kind: Some(ArtifactKindId::new("code")),
-            ..WorkflowMetadata::default()
-        },
-        false,
-    )
-    .await;
+        let forge = MemoryForge::new();
+        let source = create_repo(&forge, "acme", "service").await;
+        let parent = create_issue(
+            &forge,
+            &source,
+            "Coordinate greeting",
+            &["code", "blocked"],
+            WorkflowMetadata {
+                kind: Some(ArtifactKindId::new("code")),
+                ..WorkflowMetadata::default()
+            },
+            false,
+        )
+        .await;
 
-    let report = validate_state(
-        &forge,
-        &ValidatorConfig {
-            source_repo: RepositoryPath::new("acme", "service"),
-            repositories: vec![RepositoryPath::new("acme", "service")],
-            parent_number: parent.number,
-            expected_children: 2,
-        },
-    )
-    .await
-    .expect("validation reads state");
+        let report = validate_state(
+            &forge,
+            &ValidatorConfig {
+                source_repo: RepositoryPath::new("acme", "service"),
+                repositories: vec![RepositoryPath::new("acme", "service")],
+                parent_number: parent.number,
+                expected_children: 2,
+            },
+        )
+        .await
+        .expect("validation reads state");
 
-    assert!(!report.is_ok());
-    let rendered = report.render();
-    assert!(rendered.contains("blocked parent acme/service#1 has zero dependencies"));
-    assert!(rendered
-        .contains("cross-repo parent acme/service#1 expected 2 child dependencies, found 0"));
-    assert!(
-        rendered.contains("architect blocked the parent but no fan-out side effects were recorded")
-    );
+        assert!(!report.is_ok());
+        let rendered = report.render();
+        assert!(rendered.contains("blocked parent acme/service#1 has zero dependencies"));
+        assert!(rendered
+            .contains("cross-repo parent acme/service#1 expected 2 child dependencies, found 0"));
+        assert!(rendered
+            .contains("architect blocked the parent but no fan-out side effects were recorded"));
     })
 }
 
 #[test]
- fn parent_with_child_backrefs_and_correlation_passes() {
+fn parent_with_child_backrefs_and_correlation_passes() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let source = create_repo(&forge, "acme", "service").await;
-    let target = create_repo(&forge, "acme", "service-canary").await;
-    let parent = create_issue(
-        &forge,
-        &source,
-        "parent",
-        &["code", "blocked"],
-        WorkflowMetadata {
+        let forge = MemoryForge::new();
+        let source = create_repo(&forge, "acme", "service").await;
+        let target = create_repo(&forge, "acme", "service-canary").await;
+        let parent = create_issue(
+            &forge,
+            &source,
+            "parent",
+            &["code", "blocked"],
+            WorkflowMetadata {
+                kind: Some(ArtifactKindId::new("code")),
+                ..WorkflowMetadata::default()
+            },
+            false,
+        )
+        .await;
+        let child_a = create_issue(
+            &forge,
+            &source,
+            "service child",
+            &["code", "ready"],
+            child_metadata(&source, parent.number, "child-a"),
+            false,
+        )
+        .await;
+        let child_b = create_issue(
+            &forge,
+            &target,
+            "canary child",
+            &["code", "ready"],
+            child_metadata(&source, parent.number, "child-b"),
+            false,
+        )
+        .await;
+        let parent_metadata = WorkflowMetadata {
             kind: Some(ArtifactKindId::new("code")),
+            dependencies: vec![
+                ArtifactRef::in_repo(source.clone(), child_a.number),
+                ArtifactRef::in_repo(target.clone(), child_b.number),
+            ],
             ..WorkflowMetadata::default()
-        },
-        false,
-    )
-    .await;
-    let child_a = create_issue(
-        &forge,
-        &source,
-        "service child",
-        &["code", "ready"],
-        child_metadata(&source, parent.number, "child-a"),
-        false,
-    )
-    .await;
-    let child_b = create_issue(
-        &forge,
-        &target,
-        "canary child",
-        &["code", "ready"],
-        child_metadata(&source, parent.number, "child-b"),
-        false,
-    )
-    .await;
-    let parent_metadata = WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("code")),
-        dependencies: vec![
-            ArtifactRef::in_repo(source.clone(), child_a.number),
-            ArtifactRef::in_repo(target.clone(), child_b.number),
-        ],
-        ..WorkflowMetadata::default()
-    };
-    forge
-        .update_issue(
-            &parent.id,
-            UpdateIssue {
-                body: Some(render_metadata_block(&parent_metadata)),
-                ..UpdateIssue::default()
+        };
+        forge
+            .update_issue(
+                &parent.id,
+                UpdateIssue {
+                    body: Some(render_metadata_block(&parent_metadata)),
+                    ..UpdateIssue::default()
+                },
+            )
+            .await
+            .expect("parent dependencies updated");
+
+        let report = validate_state(
+            &forge,
+            &ValidatorConfig {
+                source_repo: RepositoryPath::new("acme", "service"),
+                repositories: vec![
+                    RepositoryPath::new("acme", "service"),
+                    RepositoryPath::new("acme", "service-canary"),
+                ],
+                parent_number: ItemNumber::new(1),
+                expected_children: 2,
             },
         )
         .await
-        .expect("parent dependencies updated");
+        .expect("validation reads state");
 
-    let report = validate_state(
-        &forge,
-        &ValidatorConfig {
-            source_repo: RepositoryPath::new("acme", "service"),
-            repositories: vec![
-                RepositoryPath::new("acme", "service"),
-                RepositoryPath::new("acme", "service-canary"),
-            ],
-            parent_number: ItemNumber::new(1),
-            expected_children: 2,
-        },
-    )
-    .await
-    .expect("validation reads state");
-
-    assert!(report.is_ok(), "{}", report.render());
-    assert!(report
-        .lines()
-        .iter()
-        .any(|line| line.contains("expected 2 child dependencies, found 2")));
+        assert!(report.is_ok(), "{}", report.render());
+        assert!(report
+            .lines()
+            .iter()
+            .any(|line| line.contains("expected 2 child dependencies, found 2")));
     })
 }
 

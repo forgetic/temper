@@ -103,84 +103,84 @@ async fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumb
 }
 
 #[test]
- fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
+fn run_mechanical_backstop_tick_applies_dependency_unblock_once() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let repo = new_repo(&forge).await;
-    let dependency = create_issue(&forge, &repo.id, &["code", "ready"]).await;
-    close_issue(&forge, &repo.id, dependency).await;
-    let blocked = create_issue(&forge, &repo.id, &["code", "blocked"]).await;
-    add_issue_dependency(&forge, &repo.id, blocked, dependency).await;
-    let workflow = workflow();
-    let config = MechanicalBackstopConfig {
-        repositories: RepositorySet::new(vec![repo.clone()]),
-        cadence: Duration::from_millis(10),
-        lease_policy: lease_policy(),
-    };
-    let journals = vec![InMemoryJournal::new()];
+        let forge = MemoryForge::new();
+        let repo = new_repo(&forge).await;
+        let dependency = create_issue(&forge, &repo.id, &["code", "ready"]).await;
+        close_issue(&forge, &repo.id, dependency).await;
+        let blocked = create_issue(&forge, &repo.id, &["code", "blocked"]).await;
+        add_issue_dependency(&forge, &repo.id, blocked, dependency).await;
+        let workflow = workflow();
+        let config = MechanicalBackstopConfig {
+            repositories: RepositorySet::new(vec![repo.clone()]),
+            cadence: Duration::from_millis(10),
+            lease_policy: lease_policy(),
+        };
+        let journals = vec![InMemoryJournal::new()];
 
-    assert_eq!(
-        run_mechanical_backstop_tick(
-            &forge,
-            &workflow,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-            &journals,
-        )
-        .await
-        .expect("tick succeeds"),
-        Progress {
-            changed: true,
-            actions: 1,
-        }
-    );
-    assert_eq!(
-        issue_labels(&forge, &repo.id, blocked).await,
-        vec!["code".to_string(), "ready".to_string()]
-    );
+        assert_eq!(
+            run_mechanical_backstop_tick(
+                &forge,
+                &workflow,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+                &journals,
+            )
+            .await
+            .expect("tick succeeds"),
+            Progress {
+                changed: true,
+                actions: 1,
+            }
+        );
+        assert_eq!(
+            issue_labels(&forge, &repo.id, blocked).await,
+            vec!["code".to_string(), "ready".to_string()]
+        );
 
-    assert_eq!(
-        run_mechanical_backstop_tick(
-            &forge,
-            &workflow,
-            ts("2026-05-29T00:00:01Z"),
-            &config,
-            &journals,
-        )
-        .await
-        .expect("second tick succeeds"),
-        Progress::unchanged()
-    );
-    assert_eq!(
-        issue_labels(&forge, &repo.id, blocked).await,
-        vec!["code".to_string(), "ready".to_string()]
-    );
+        assert_eq!(
+            run_mechanical_backstop_tick(
+                &forge,
+                &workflow,
+                ts("2026-05-29T00:00:01Z"),
+                &config,
+                &journals,
+            )
+            .await
+            .expect("second tick succeeds"),
+            Progress::unchanged()
+        );
+        assert_eq!(
+            issue_labels(&forge, &repo.id, blocked).await,
+            vec!["code".to_string(), "ready".to_string()]
+        );
     })
 }
 
 #[test]
- fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
+fn run_mechanical_backstop_tick_with_no_repositories_is_unchanged() {
     temper_io_engine::block_on(async move {
-    let forge = MemoryForge::new();
-    let workflow = workflow();
-    let config = MechanicalBackstopConfig {
-        repositories: RepositorySet::new(Vec::new()),
-        cadence: Duration::from_millis(10),
-        lease_policy: lease_policy(),
-    };
-    let journals = Vec::new();
+        let forge = MemoryForge::new();
+        let workflow = workflow();
+        let config = MechanicalBackstopConfig {
+            repositories: RepositorySet::new(Vec::new()),
+            cadence: Duration::from_millis(10),
+            lease_policy: lease_policy(),
+        };
+        let journals = Vec::new();
 
-    assert_eq!(
-        run_mechanical_backstop_tick(
-            &forge,
-            &workflow,
-            ts("2026-05-29T00:00:00Z"),
-            &config,
-            &journals,
-        )
-        .await
-        .expect("tick succeeds"),
-        Progress::unchanged()
-    );
+        assert_eq!(
+            run_mechanical_backstop_tick(
+                &forge,
+                &workflow,
+                ts("2026-05-29T00:00:00Z"),
+                &config,
+                &journals,
+            )
+            .await
+            .expect("tick succeeds"),
+            Progress::unchanged()
+        );
     })
 }

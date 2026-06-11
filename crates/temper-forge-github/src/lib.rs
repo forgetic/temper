@@ -28,7 +28,7 @@ mod pulls;
 mod repos;
 mod types;
 
-pub use client::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse, EngineHttpClient};
+pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
 pub use config::{CasMode, ConfigError, GitHubConfig, DEFAULT_PAGE_LIMIT};
 
 use serde::de::DeserializeOwned;

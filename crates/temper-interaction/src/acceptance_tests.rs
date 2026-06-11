@@ -217,207 +217,207 @@ async fn open_session<R: InteractiveResponder + ?Sized>(
 }
 
 #[test]
- fn arbitrary_profile_issue_creation_acceptance_uses_manifest_effects() {
+fn arbitrary_profile_issue_creation_acceptance_uses_manifest_effects() {
     temper_io_engine::block_on(async move {
-    let manifest = support_manifest();
-    let (human, agent, _repo) = seeded(&manifest).await;
-    let mut session = open_session(
-        human.clone(),
-        agent,
-        Arc::new(StaticResponder {
-            reply: issue_reply(),
-        }),
-        manifest,
-        None,
-    )
-    .await;
-
-    session
-        .send_human_turn("Please file support work.")
-        .await
-        .unwrap();
-    let outcome = session
-        .accept_issue_proposal(&proposal_id("support-mvp"))
-        .await
-        .unwrap();
-
-    assert!(outcome.created);
-    assert_eq!(outcome.issue.title, "Support MVP");
-    assert_eq!(
-        outcome.issue.labels,
-        ["proposal-support-mvp", "support-intake"]
-    );
-    assert_eq!(outcome.issue.assignees, [UserId::new("customer")]);
-    assert!(outcome.issue.body.contains("Build a support MVP."));
-    assert!(outcome
-        .issue
-        .body
-        .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
-    assert!(outcome
-        .issue
-        .body
-        .contains("temper:support-chat-accept-issue="));
-
-    let comments = human
-        .list_issue_comments(&session.transcript_issue().id)
-        .await
-        .unwrap();
-    assert!(comments
-        .iter()
-        .any(|comment| comment.body.contains("Accepted support-mvp")));
-    })
-}
-
-#[test]
- fn product_manager_fixture_acceptance_preserves_filed_issue_shape() {
-    temper_io_engine::block_on(async move {
-    let manifest = product_manifest();
-    let (human, agent, _repo) = seeded(&manifest).await;
-    let mut session = open_session(
-        human,
-        agent,
-        Arc::new(StaticResponder {
-            reply: issue_reply(),
-        }),
-        manifest,
-        None,
-    )
-    .await;
-
-    session
-        .send_human_turn("Please file product work.")
-        .await
-        .unwrap();
-    let outcome = session
-        .accept_issue_proposal(&proposal_id("support-mvp"))
-        .await
-        .unwrap();
-
-    assert_eq!(outcome.issue.labels, ["untriaged"]);
-    assert!(outcome
-        .issue
-        .body
-        .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
-    assert!(outcome.issue.body.contains("requested-by: human"));
-    assert!(outcome.issue.body.contains("temper:product-chat-file="));
-    })
-}
-
-#[test]
- fn acceptance_retry_is_idempotent_for_issue_and_comment_effects() {
-    temper_io_engine::block_on(async move {
-    let manifest = support_manifest();
-    let (human, agent, _repo) = seeded(&manifest).await;
-    let mut session = open_session(
-        human.clone(),
-        agent,
-        Arc::new(StaticResponder {
-            reply: issue_reply(),
-        }),
-        manifest,
-        None,
-    )
-    .await;
-    session
-        .send_human_turn("Please file support work.")
-        .await
-        .unwrap();
-
-    let first = session
-        .accept_issue_proposal(&proposal_id("support-mvp"))
-        .await
-        .unwrap();
-    let second = session
-        .accept_issue_proposal(&proposal_id("support-mvp"))
-        .await
-        .unwrap();
-
-    assert!(first.created);
-    assert!(!second.created);
-    assert_eq!(first.issue.number, second.issue.number);
-    let comments = human
-        .list_issue_comments(&session.transcript_issue().id)
-        .await
-        .unwrap();
-    let acceptance_comments = comments
-        .iter()
-        .filter(|comment| comment.body.contains("Accepted support-mvp"))
-        .count();
-    assert_eq!(acceptance_comments, 1);
-    })
-}
-
-#[test]
- fn restart_resume_reconstructs_latest_proposals_and_accepts() {
-    temper_io_engine::block_on(async move {
-    let manifest = support_manifest();
-    let (human, agent, _repo) = seeded(&manifest).await;
-    let mut first = open_session(
-        human.clone(),
-        agent.clone(),
-        Arc::new(StaticResponder {
-            reply: issue_reply(),
-        }),
-        manifest.clone(),
-        None,
-    )
-    .await;
-    first
-        .send_human_turn("Please file support work.")
-        .await
-        .unwrap();
-    let transcript_number = first.transcript_issue().number;
-    drop(first);
-
-    let resumed = open_session(
-        human,
-        agent,
-        Arc::new(NeverResponder),
-        manifest,
-        Some(transcript_number),
-    )
-    .await;
-
-    assert_eq!(resumed.latest_proposals()[0].id.as_str(), "support-mvp");
-    let outcome = resumed
-        .accept_issue_proposal(&proposal_id("support-mvp"))
-        .await
-        .unwrap();
-    assert!(outcome.created);
-    })
-}
-
-#[test]
- fn unsupported_proposal_kind_is_rejected_before_persistence() {
-    temper_io_engine::block_on(async move {
-    let manifest = support_manifest();
-    let (human, agent, _repo) = seeded(&manifest).await;
-    let reply = ConversationReply {
-        message: "custom proposal".into(),
-        proposals: vec![Proposal::custom(
-            proposal_id("custom-work"),
-            ProposalKind::new("custom-kind").unwrap(),
-            "Custom work",
+        let manifest = support_manifest();
+        let (human, agent, _repo) = seeded(&manifest).await;
+        let mut session = open_session(
+            human.clone(),
+            agent,
+            Arc::new(StaticResponder {
+                reply: issue_reply(),
+            }),
+            manifest,
             None,
-            json!({ "title": "Custom" }),
-        )],
-    };
-    let mut session = open_session(
-        human,
-        agent,
-        Arc::new(StaticResponder { reply }),
-        manifest,
-        None,
-    )
-    .await;
-    let error = session
-        .send_human_turn("Please file custom work.")
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        InteractionError::UnsupportedProposalKind { .. }
-    ));
+        )
+        .await;
+
+        session
+            .send_human_turn("Please file support work.")
+            .await
+            .unwrap();
+        let outcome = session
+            .accept_issue_proposal(&proposal_id("support-mvp"))
+            .await
+            .unwrap();
+
+        assert!(outcome.created);
+        assert_eq!(outcome.issue.title, "Support MVP");
+        assert_eq!(
+            outcome.issue.labels,
+            ["proposal-support-mvp", "support-intake"]
+        );
+        assert_eq!(outcome.issue.assignees, [UserId::new("customer")]);
+        assert!(outcome.issue.body.contains("Build a support MVP."));
+        assert!(outcome
+            .issue
+            .body
+            .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
+        assert!(outcome
+            .issue
+            .body
+            .contains("temper:support-chat-accept-issue="));
+
+        let comments = human
+            .list_issue_comments(&session.transcript_issue().id)
+            .await
+            .unwrap();
+        assert!(comments
+            .iter()
+            .any(|comment| comment.body.contains("Accepted support-mvp")));
+    })
+}
+
+#[test]
+fn product_manager_fixture_acceptance_preserves_filed_issue_shape() {
+    temper_io_engine::block_on(async move {
+        let manifest = product_manifest();
+        let (human, agent, _repo) = seeded(&manifest).await;
+        let mut session = open_session(
+            human,
+            agent,
+            Arc::new(StaticResponder {
+                reply: issue_reply(),
+            }),
+            manifest,
+            None,
+        )
+        .await;
+
+        session
+            .send_human_turn("Please file product work.")
+            .await
+            .unwrap();
+        let outcome = session
+            .accept_issue_proposal(&proposal_id("support-mvp"))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.issue.labels, ["untriaged"]);
+        assert!(outcome
+            .issue
+            .body
+            .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
+        assert!(outcome.issue.body.contains("requested-by: human"));
+        assert!(outcome.issue.body.contains("temper:product-chat-file="));
+    })
+}
+
+#[test]
+fn acceptance_retry_is_idempotent_for_issue_and_comment_effects() {
+    temper_io_engine::block_on(async move {
+        let manifest = support_manifest();
+        let (human, agent, _repo) = seeded(&manifest).await;
+        let mut session = open_session(
+            human.clone(),
+            agent,
+            Arc::new(StaticResponder {
+                reply: issue_reply(),
+            }),
+            manifest,
+            None,
+        )
+        .await;
+        session
+            .send_human_turn("Please file support work.")
+            .await
+            .unwrap();
+
+        let first = session
+            .accept_issue_proposal(&proposal_id("support-mvp"))
+            .await
+            .unwrap();
+        let second = session
+            .accept_issue_proposal(&proposal_id("support-mvp"))
+            .await
+            .unwrap();
+
+        assert!(first.created);
+        assert!(!second.created);
+        assert_eq!(first.issue.number, second.issue.number);
+        let comments = human
+            .list_issue_comments(&session.transcript_issue().id)
+            .await
+            .unwrap();
+        let acceptance_comments = comments
+            .iter()
+            .filter(|comment| comment.body.contains("Accepted support-mvp"))
+            .count();
+        assert_eq!(acceptance_comments, 1);
+    })
+}
+
+#[test]
+fn restart_resume_reconstructs_latest_proposals_and_accepts() {
+    temper_io_engine::block_on(async move {
+        let manifest = support_manifest();
+        let (human, agent, _repo) = seeded(&manifest).await;
+        let mut first = open_session(
+            human.clone(),
+            agent.clone(),
+            Arc::new(StaticResponder {
+                reply: issue_reply(),
+            }),
+            manifest.clone(),
+            None,
+        )
+        .await;
+        first
+            .send_human_turn("Please file support work.")
+            .await
+            .unwrap();
+        let transcript_number = first.transcript_issue().number;
+        drop(first);
+
+        let resumed = open_session(
+            human,
+            agent,
+            Arc::new(NeverResponder),
+            manifest,
+            Some(transcript_number),
+        )
+        .await;
+
+        assert_eq!(resumed.latest_proposals()[0].id.as_str(), "support-mvp");
+        let outcome = resumed
+            .accept_issue_proposal(&proposal_id("support-mvp"))
+            .await
+            .unwrap();
+        assert!(outcome.created);
+    })
+}
+
+#[test]
+fn unsupported_proposal_kind_is_rejected_before_persistence() {
+    temper_io_engine::block_on(async move {
+        let manifest = support_manifest();
+        let (human, agent, _repo) = seeded(&manifest).await;
+        let reply = ConversationReply {
+            message: "custom proposal".into(),
+            proposals: vec![Proposal::custom(
+                proposal_id("custom-work"),
+                ProposalKind::new("custom-kind").unwrap(),
+                "Custom work",
+                None,
+                json!({ "title": "Custom" }),
+            )],
+        };
+        let mut session = open_session(
+            human,
+            agent,
+            Arc::new(StaticResponder { reply }),
+            manifest,
+            None,
+        )
+        .await;
+        let error = session
+            .send_human_turn("Please file custom work.")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InteractionError::UnsupportedProposalKind { .. }
+        ));
     })
 }
 

@@ -578,7 +578,7 @@ impl Workspace<'_> {
         }
         git.args(args);
         let output = git
-            .output_async()
+            .output_async(&temper_io_engine::runtime::ambient_cx())
             .await
             .map_err(|error| JobError::transient(format!("spawning git failed: {error}")))?;
         if output.status.success() {

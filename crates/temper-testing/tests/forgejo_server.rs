@@ -48,7 +48,10 @@ fn server_boots_serves_version_and_tears_down() {
     drop(server);
     let mut still_up = true;
     for _ in 0..25 {
-        if client.send("GET", version_url.as_str(), None, None).is_err() {
+        if client
+            .send("GET", version_url.as_str(), None, None)
+            .is_err()
+        {
             still_up = false;
             break;
         }

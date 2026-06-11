@@ -287,410 +287,384 @@ async fn eventually_enqueue_and_assign(
 }
 
 #[test]
- fn accepted_result_invokes_applier_with_in_flight_context() {
+fn accepted_result_invokes_applier_with_in_flight_context() {
     temper_io_engine::block_on(async move {
-    let (daemon, url, mut rx) = spawn_recording().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
+        let (daemon, url, mut rx) = spawn_recording().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-    let artifact = artifact();
-    let payload = json!({"prompt":"implement", "issue":114});
-    daemon
-        .enqueue_job(
+        let artifact = artifact();
+        let payload = json!({"prompt":"implement", "issue":114});
+        daemon
+            .enqueue_job(
+                "job-apply-1",
+                "engineer",
+                "ai/temper",
+                artifact.clone(),
+                payload.clone(),
+            )
+            .await;
+
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
             "job-apply-1",
-            "engineer",
-            "ai/temper",
-            artifact.clone(),
-            payload.clone(),
-        )
-        .await;
+        );
 
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "job-apply-1",
-    );
+        let branch = Branch {
+            name: "agent/pr-for-code-114".to_string(),
+            head_sha: "abc123".to_string(),
+        };
+        let posted_result = job_result("worker-a", "job-apply-1", Some(branch));
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(posted_result.clone()),
+            )
+            .await,
+            "worker-a",
+            "job-apply-1",
+        );
 
-    let branch = Branch {
-        name: "agent/pr-for-code-114".to_string(),
-        head_sha: "abc123".to_string(),
-    };
-    let posted_result = job_result("worker-a", "job-apply-1", Some(branch));
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(posted_result.clone()),
-        )
-        .await,
-        "worker-a",
-        "job-apply-1",
-    );
-
-    let (job, recorded_result) = rx.recv().await.expect("applier records accepted result");
-    assert_eq!(job.job_id, "job-apply-1");
-    assert_eq!(job.role, "engineer");
-    assert_eq!(job.repo, "ai/temper");
-    assert_eq!(job.artifact, artifact);
-    assert_eq!(job.job_payload, payload);
-    assert_eq!(recorded_result.job_id, posted_result.job_id);
-    assert_eq!(recorded_result.status, posted_result.status);
-    assert_eq!(recorded_result.branch, posted_result.branch);
-    assert!(rx.try_recv().is_none());
+        let (job, recorded_result) = rx.recv().await.expect("applier records accepted result");
+        assert_eq!(job.job_id, "job-apply-1");
+        assert_eq!(job.role, "engineer");
+        assert_eq!(job.repo, "ai/temper");
+        assert_eq!(job.artifact, artifact);
+        assert_eq!(job.job_payload, payload);
+        assert_eq!(recorded_result.job_id, posted_result.job_id);
+        assert_eq!(recorded_result.status, posted_result.status);
+        assert_eq!(recorded_result.branch, posted_result.branch);
+        assert!(rx.try_recv().is_none());
     })
 }
 
 #[test]
- fn result_without_in_flight_job_does_not_invoke_applier() {
+fn result_without_in_flight_job_does_not_invoke_applier() {
     temper_io_engine::block_on(async move {
-    let (daemon, url, mut rx) = spawn_recording().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
+        let (daemon, url, mut rx) = spawn_recording().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(job_result("worker-a", "phantom-job", None)),
-        )
-        .await,
-        "worker-a",
-        "phantom-job",
-    );
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(job_result("worker-a", "phantom-job", None)),
+            )
+            .await,
+            "worker-a",
+            "phantom-job",
+        );
 
-    daemon
-        .enqueue_job(
+        daemon
+            .enqueue_job(
+                "pending-job",
+                "architect",
+                "ai/temper",
+                artifact(),
+                json!({"n":"pending"}),
+            )
+            .await;
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(job_result("worker-a", "pending-job", None)),
+            )
+            .await,
+            "worker-a",
             "pending-job",
-            "architect",
-            "ai/temper",
-            artifact(),
-            json!({"n":"pending"}),
-        )
-        .await;
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(job_result("worker-a", "pending-job", None)),
-        )
-        .await,
-        "worker-a",
-        "pending-job",
-    );
+        );
 
-    daemon
-        .enqueue_job(
+        daemon
+            .enqueue_job(
+                "real-job",
+                "engineer",
+                "ai/temper",
+                artifact(),
+                json!({"n":1}),
+            )
+            .await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
             "real-job",
-            "engineer",
-            "ai/temper",
-            artifact(),
-            json!({"n":1}),
+        );
+
+        let real_result = job_result("worker-a", "real-job", None);
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(real_result.clone()),
+            )
+            .await,
+            "worker-a",
+            "real-job",
+        );
+
+        let (job, recorded_result) = rx.recv().await.expect("applier records real result");
+        assert_eq!(job.job_id, "real-job");
+        assert_eq!(recorded_result.job_id, real_result.job_id);
+        assert!(rx.try_recv().is_none());
+    })
+}
+
+#[test]
+fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
+    temper_io_engine::block_on(async move {
+        let (record_tx, mut rx) = temper_io_engine::channel();
+        let (release_tx, release_rx) = temper_io_engine::oneshot();
+        let (daemon, url) = spawn_with_applier_and_apply_grace(
+            Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+            Duration::ZERO,
         )
         .await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "real-job",
-    );
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-    let real_result = job_result("worker-a", "real-job", None);
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(real_result.clone()),
-        )
-        .await,
-        "worker-a",
-        "real-job",
-    );
+        enqueue_standard_job(&daemon, "job-apply-window-1").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
+            "job-apply-window-1",
+        );
 
-    let (job, recorded_result) = rx.recv().await.expect("applier records real result");
-    assert_eq!(job.job_id, "real-job");
-    assert_eq!(recorded_result.job_id, real_result.job_id);
-    assert!(rx.try_recv().is_none());
+        let result = success_result("worker-a", "job-apply-window-1");
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(result.clone()),
+            )
+            .await,
+            "worker-a",
+            "job-apply-window-1",
+        );
+        let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+        assert_eq!(job.job_id, "job-apply-window-1");
+        assert_eq!(recorded_result.job_id, result.job_id);
+
+        enqueue_standard_job(&daemon, "job-apply-window-1").await;
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+
+        release_tx.send(());
+        eventually_enqueue_and_assign(&daemon, &client, &url, "worker-a", "job-apply-window-1")
+            .await;
     })
 }
 
 #[test]
- fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
+fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
     temper_io_engine::block_on(async move {
-    let (record_tx, mut rx) = temper_io_engine::channel();
-    let (release_tx, release_rx) = temper_io_engine::oneshot();
-    let (daemon, url) = spawn_with_applier_and_apply_grace(
-        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
-        Duration::ZERO,
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
-
-    enqueue_standard_job(&daemon, "job-apply-window-1").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "job-apply-window-1",
-    );
-
-    let result = success_result("worker-a", "job-apply-window-1");
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(result.clone()),
+        let (record_tx, mut rx) = temper_io_engine::channel();
+        let (release_tx, release_rx) = temper_io_engine::oneshot();
+        let (daemon, url) = spawn_with_applier_and_apply_grace(
+            Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+            Duration::from_millis(200),
         )
-        .await,
-        "worker-a",
-        "job-apply-window-1",
-    );
-    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
-    assert_eq!(job.job_id, "job-apply-window-1");
-    assert_eq!(recorded_result.job_id, result.job_id);
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-    enqueue_standard_job(&daemon, "job-apply-window-1").await;
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+        enqueue_standard_job(&daemon, "job-apply-grace-1").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
+            "job-apply-grace-1",
+        );
 
-    release_tx.send(());
-    eventually_enqueue_and_assign(&daemon, &client, &url, "worker-a", "job-apply-window-1").await;
+        let result = success_result("worker-a", "job-apply-grace-1");
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(result.clone()),
+            )
+            .await,
+            "worker-a",
+            "job-apply-grace-1",
+        );
+        let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+        assert_eq!(job.job_id, "job-apply-grace-1");
+        assert_eq!(recorded_result.job_id, result.job_id);
+        release_tx.send(());
+        temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
+
+        enqueue_standard_job(&daemon, "job-apply-grace-1").await;
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+
+        temper_io_engine::runtime::sleep_for(Duration::from_millis(225)).await;
+        enqueue_standard_job(&daemon, "job-apply-grace-1").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
+            "job-apply-grace-1",
+        );
     })
 }
 
 #[test]
- fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
+fn apply_block_and_grace_are_per_job_id() {
     temper_io_engine::block_on(async move {
-    let (record_tx, mut rx) = temper_io_engine::channel();
-    let (release_tx, release_rx) = temper_io_engine::oneshot();
-    let (daemon, url) = spawn_with_applier_and_apply_grace(
-        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
-        Duration::from_millis(200),
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
-
-    enqueue_standard_job(&daemon, "job-apply-grace-1").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "job-apply-grace-1",
-    );
-
-    let result = success_result("worker-a", "job-apply-grace-1");
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(result.clone()),
+        let (record_tx, mut rx) = temper_io_engine::channel();
+        let (release_tx, release_rx) = temper_io_engine::oneshot();
+        let (daemon, url) = spawn_with_applier_and_apply_grace(
+            Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+            Duration::from_millis(200),
         )
-        .await,
-        "worker-a",
-        "job-apply-grace-1",
-    );
-    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
-    assert_eq!(job.job_id, "job-apply-grace-1");
-    assert_eq!(recorded_result.job_id, result.job_id);
-    release_tx.send(());
-    temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
+        assert_eq!(post(&client, &url, &register("worker-b")).await.status, 204);
+        assert_eq!(post(&client, &url, &register("worker-c")).await.status, 204);
 
-    enqueue_standard_job(&daemon, "job-apply-grace-1").await;
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+        enqueue_standard_job(&daemon, "job-blocked").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
+            "job-blocked",
+        );
 
-    temper_io_engine::runtime::sleep_for(Duration::from_millis(225)).await;
-    enqueue_standard_job(&daemon, "job-apply-grace-1").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "job-apply-grace-1",
-    );
+        let result = success_result("worker-a", "job-blocked");
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(result.clone()),
+            )
+            .await,
+            "worker-a",
+            "job-blocked",
+        );
+        let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+        assert_eq!(job.job_id, "job-blocked");
+        assert_eq!(recorded_result.job_id, result.job_id);
+
+        enqueue_standard_job(&daemon, "job-blocked").await;
+        enqueue_standard_job(&daemon, "job-independent-apply").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-b")).await,
+            "job-independent-apply",
+        );
+
+        release_tx.send(());
+        temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
+        assert!(rx.try_recv().is_none());
+
+        enqueue_standard_job(&daemon, "job-blocked").await;
+        enqueue_standard_job(&daemon, "job-independent-grace").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-c")).await,
+            "job-independent-grace",
+        );
     })
 }
 
 #[test]
- fn apply_block_and_grace_are_per_job_id() {
+fn transient_failure_drops_job_for_rescan() {
     temper_io_engine::block_on(async move {
-    let (record_tx, mut rx) = temper_io_engine::channel();
-    let (release_tx, release_rx) = temper_io_engine::oneshot();
-    let (daemon, url) = spawn_with_applier_and_apply_grace(
-        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
-        Duration::from_millis(200),
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
-    assert_eq!(
-        post(&client, &url, &register("worker-b")).await.status,
-        204
-    );
-    assert_eq!(
-        post(&client, &url, &register("worker-c")).await.status,
-        204
-    );
+        let (daemon, url, mut rx) = spawn_recording().await;
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-    enqueue_standard_job(&daemon, "job-blocked").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "job-blocked",
-    );
+        enqueue_standard_job(&daemon, "job-retry-1").await;
 
-    let result = success_result("worker-a", "job-blocked");
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(result.clone()),
-        )
-        .await,
-        "worker-a",
-        "job-blocked",
-    );
-    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
-    assert_eq!(job.job_id, "job-blocked");
-    assert_eq!(recorded_result.job_id, result.job_id);
+        let first_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
+        assert_eq!(first_job_id, "job-retry-1");
 
-    enqueue_standard_job(&daemon, "job-blocked").await;
-    enqueue_standard_job(&daemon, "job-independent-apply").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-b")).await,
-        "job-independent-apply",
-    );
+        let transient = transient_failure_result("worker-a", &first_job_id);
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(transient.clone()),
+            )
+            .await,
+            "worker-a",
+            &first_job_id,
+        );
 
-    release_tx.send(());
-    temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
-    assert!(rx.try_recv().is_none());
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+        assert!(rx.try_recv().is_none());
 
-    enqueue_standard_job(&daemon, "job-blocked").await;
-    enqueue_standard_job(&daemon, "job-independent-grace").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-c")).await,
-        "job-independent-grace",
-    );
+        enqueue_standard_job(&daemon, &first_job_id).await;
+        let retry_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
+        assert_eq!(retry_job_id, first_job_id);
+
+        let final_result = success_result("worker-a", &retry_job_id);
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(final_result.clone()),
+            )
+            .await,
+            "worker-a",
+            &retry_job_id,
+        );
+
+        let (job, recorded_result) = rx
+            .recv()
+            .await
+            .expect("applier records final success result");
+        assert_eq!(job.job_id, retry_job_id);
+        assert_eq!(recorded_result.job_id, final_result.job_id);
+        assert_eq!(recorded_result.status, ResultStatus::Success);
+        assert_eq!(recorded_result.branch, final_result.branch);
+        assert!(rx.try_recv().is_none());
     })
 }
 
 #[test]
- fn transient_failure_drops_job_for_rescan() {
+fn permanent_failure_apply_window_unblocks_after_apply_completes() {
     temper_io_engine::block_on(async move {
-    let (daemon, url, mut rx) = spawn_recording().await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
+        let (record_tx, mut rx) = temper_io_engine::channel();
+        let (release_tx, release_rx) = temper_io_engine::oneshot();
+        let (daemon, url) = spawn_with_applier_and_apply_grace(
+            Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
+            Duration::ZERO,
+        )
+        .await;
+        let client = temper_io_engine::http::JsonClient::new();
+        assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
-    enqueue_standard_job(&daemon, "job-retry-1").await;
+        enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
+        assert_assigned(
+            post_json(&client, &url, &poll("worker-a")).await,
+            "job-permanent-failure-1",
+        );
 
-    let first_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
-    assert_eq!(first_job_id, "job-retry-1");
+        let failure = permanent_failure_result("worker-a", "job-permanent-failure-1");
+        assert_release(
+            post_json(
+                &client,
+                &url,
+                &WorkerProtocolMessage::Result(failure.clone()),
+            )
+            .await,
+            "worker-a",
+            "job-permanent-failure-1",
+        );
+        let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+        assert_eq!(job.job_id, "job-permanent-failure-1");
+        assert_eq!(recorded_result.job_id, failure.job_id);
+        assert_eq!(recorded_result.status, ResultStatus::Failure);
+        assert_eq!(
+            recorded_result
+                .failure
+                .as_ref()
+                .map(|failure| failure.class),
+            Some(FailureClass::Permanent)
+        );
 
-    let transient = transient_failure_result("worker-a", &first_job_id);
-    assert_release(
-        post_json(
+        enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
+        assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+
+        release_tx.send(());
+        eventually_enqueue_and_assign(
+            &daemon,
             &client,
             &url,
-            &WorkerProtocolMessage::Result(transient.clone()),
+            "worker-a",
+            "job-permanent-failure-1",
         )
-        .await,
-        "worker-a",
-        &first_job_id,
-    );
-
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
-    assert!(rx.try_recv().is_none());
-
-    enqueue_standard_job(&daemon, &first_job_id).await;
-    let retry_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
-    assert_eq!(retry_job_id, first_job_id);
-
-    let final_result = success_result("worker-a", &retry_job_id);
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(final_result.clone()),
-        )
-        .await,
-        "worker-a",
-        &retry_job_id,
-    );
-
-    let (job, recorded_result) = rx
-        .recv()
-        .await
-        .expect("applier records final success result");
-    assert_eq!(job.job_id, retry_job_id);
-    assert_eq!(recorded_result.job_id, final_result.job_id);
-    assert_eq!(recorded_result.status, ResultStatus::Success);
-    assert_eq!(recorded_result.branch, final_result.branch);
-    assert!(rx.try_recv().is_none());
-    })
-}
-
-#[test]
- fn permanent_failure_apply_window_unblocks_after_apply_completes() {
-    temper_io_engine::block_on(async move {
-    let (record_tx, mut rx) = temper_io_engine::channel();
-    let (release_tx, release_rx) = temper_io_engine::oneshot();
-    let (daemon, url) = spawn_with_applier_and_apply_grace(
-        Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
-        Duration::ZERO,
-    )
-    .await;
-    let client = temper_io_engine::http::JsonClient::new();
-    assert_eq!(
-        post(&client, &url, &register("worker-a")).await.status,
-        204
-    );
-
-    enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
-    assert_assigned(
-        post_json(&client, &url, &poll("worker-a")).await,
-        "job-permanent-failure-1",
-    );
-
-    let failure = permanent_failure_result("worker-a", "job-permanent-failure-1");
-    assert_release(
-        post_json(
-            &client,
-            &url,
-            &WorkerProtocolMessage::Result(failure.clone()),
-        )
-        .await,
-        "worker-a",
-        "job-permanent-failure-1",
-    );
-    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
-    assert_eq!(job.job_id, "job-permanent-failure-1");
-    assert_eq!(recorded_result.job_id, failure.job_id);
-    assert_eq!(recorded_result.status, ResultStatus::Failure);
-    assert_eq!(
-        recorded_result
-            .failure
-            .as_ref()
-            .map(|failure| failure.class),
-        Some(FailureClass::Permanent)
-    );
-
-    enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
-    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
-
-    release_tx.send(());
-    eventually_enqueue_and_assign(
-        &daemon,
-        &client,
-        &url,
-        "worker-a",
-        "job-permanent-failure-1",
-    )
-    .await;
+        .await;
     })
 }

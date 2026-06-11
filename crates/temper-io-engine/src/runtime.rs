@@ -105,7 +105,8 @@ where
 /// `Cx::now()` is the logical clock, whose epoch can drift from the wall
 /// timer wheel and skew every sleep/timeout computed from it.
 pub fn timer_now(cx: &Cx) -> asupersync::types::Time {
-    cx.timer_driver().map_or_else(|| cx.now(), |driver| driver.now())
+    cx.timer_driver()
+        .map_or_else(|| cx.now(), |driver| driver.now())
 }
 
 /// Engine-clock "now" usable from any thread.

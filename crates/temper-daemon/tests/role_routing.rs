@@ -13,7 +13,10 @@ struct RecordingApplier {
 }
 
 impl RecordingApplier {
-    fn new(name: &'static str, tx: temper_io_engine::CqSender<(&'static str, String, String)>) -> Self {
+    fn new(
+        name: &'static str,
+        tx: temper_io_engine::CqSender<(&'static str, String, String)>,
+    ) -> Self {
         Self { name, tx }
     }
 }
@@ -56,49 +59,51 @@ fn success_result(job_id: &str) -> JobResult {
 }
 
 #[test]
- fn role_routing_applier_dispatches_known_role_to_registered_applier() {
+fn role_routing_applier_dispatches_known_role_to_registered_applier() {
     temper_io_engine::block_on(async move {
-    let (tx, mut rx) = temper_io_engine::channel();
-    let routing = RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
-        .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
-    let job = in_flight_job("engineer");
+        let (tx, mut rx) = temper_io_engine::channel();
+        let routing =
+            RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
+                .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
+        let job = in_flight_job("engineer");
 
-    routing
-        .apply(job.clone(), success_result(&job.job_id))
-        .await;
+        routing
+            .apply(job.clone(), success_result(&job.job_id))
+            .await;
 
-    assert_eq!(
-        rx.recv().await,
-        Some((
-            "engineer",
-            "engineer".to_string(),
-            "job-engineer".to_string()
-        ))
-    );
-    assert!(rx.try_recv().is_none());
+        assert_eq!(
+            rx.recv().await,
+            Some((
+                "engineer",
+                "engineer".to_string(),
+                "job-engineer".to_string()
+            ))
+        );
+        assert!(rx.try_recv().is_none());
     })
 }
 
 #[test]
- fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
+fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
     temper_io_engine::block_on(async move {
-    let (tx, mut rx) = temper_io_engine::channel();
-    let routing = RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
-        .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
-    let job = in_flight_job("reviewer");
+        let (tx, mut rx) = temper_io_engine::channel();
+        let routing =
+            RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
+                .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
+        let job = in_flight_job("reviewer");
 
-    routing
-        .apply(job.clone(), success_result(&job.job_id))
-        .await;
+        routing
+            .apply(job.clone(), success_result(&job.job_id))
+            .await;
 
-    assert_eq!(
-        rx.recv().await,
-        Some((
-            "default",
-            "reviewer".to_string(),
-            "job-reviewer".to_string()
-        ))
-    );
-    assert!(rx.try_recv().is_none());
+        assert_eq!(
+            rx.recv().await,
+            Some((
+                "default",
+                "reviewer".to_string(),
+                "job-reviewer".to_string()
+            ))
+        );
+        assert!(rx.try_recv().is_none());
     })
 }
