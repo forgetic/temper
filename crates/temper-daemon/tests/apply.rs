@@ -1,18 +1,60 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{future::IntoFuture, sync::Arc};
+use std::{
+    future::IntoFuture,
+    sync::{Arc, Mutex as StdMutex},
+};
 
 use axum::http::StatusCode;
 use serde_json::json;
 use temper_worker_protocol::{
-    Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobResult, Poll, Register,
-    ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Artifact, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobResult, Poll,
+    Register, ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
-use tokio::sync::mpsc;
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::{sleep, Duration},
+};
 
 struct RecordingApplier {
     tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
+}
+
+struct GatedApplier {
+    tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
+    releases: StdMutex<Vec<oneshot::Receiver<()>>>,
+}
+
+impl GatedApplier {
+    fn new(
+        tx: mpsc::UnboundedSender<(InFlightJob, JobResult)>,
+        releases: Vec<oneshot::Receiver<()>>,
+    ) -> Self {
+        Self {
+            tx,
+            releases: StdMutex::new(releases),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl temper_daemon::ResultApplier for GatedApplier {
+    async fn apply(&self, job: InFlightJob, result: JobResult) {
+        let release = {
+            let mut releases = self
+                .releases
+                .lock()
+                .expect("release gate lock is not poisoned");
+            assert!(
+                !releases.is_empty(),
+                "test supplies one release gate per apply call"
+            );
+            releases.remove(0)
+        };
+        let _ = self.tx.send((job, result));
+        let _ = release.await;
+    }
 }
 
 #[async_trait::async_trait]
@@ -59,13 +101,17 @@ fn register(worker_id: &str) -> WorkerProtocolMessage {
     })
 }
 
-fn poll(worker_id: &str) -> WorkerProtocolMessage {
+fn poll_with_wait(worker_id: &str, max_wait_ms: u64) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Poll(Poll {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         free_capacity: 1,
-        max_wait_ms: Some(30_000),
+        max_wait_ms: Some(max_wait_ms),
     })
+}
+
+fn poll(worker_id: &str) -> WorkerProtocolMessage {
+    poll_with_wait(worker_id, 30_000)
 }
 
 fn job_result(worker_id: &str, job_id: &str, branch: Option<Branch>) -> JobResult {
@@ -84,6 +130,32 @@ fn job_result(worker_id: &str, job_id: &str, branch: Option<Branch>) -> JobResul
 }
 
 fn transient_failure_result(worker_id: &str, job_id: &str) -> JobResult {
+    failure_result(
+        worker_id,
+        job_id,
+        FailureClass::Transient,
+        "temporary worker failure",
+        "transient failure",
+    )
+}
+
+fn permanent_failure_result(worker_id: &str, job_id: &str) -> JobResult {
+    failure_result(
+        worker_id,
+        job_id,
+        FailureClass::Permanent,
+        "worker could not complete the job",
+        "permanent failure",
+    )
+}
+
+fn failure_result(
+    worker_id: &str,
+    job_id: &str,
+    class: FailureClass,
+    message: &str,
+    summary: &str,
+) -> JobResult {
     JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
@@ -93,10 +165,10 @@ fn transient_failure_result(worker_id: &str, job_id: &str) -> JobResult {
         verdict: None,
         body: None,
         failure: Some(Failure {
-            class: FailureClass::Transient,
-            message: "temporary worker failure".to_string(),
+            class,
+            message: message.to_string(),
         }),
-        summary: Some("transient failure".to_string()),
+        summary: Some(summary.to_string()),
         details: None,
     }
 }
@@ -165,6 +237,46 @@ fn assignment_job_id(msg: WorkerProtocolMessage) -> String {
         WorkerProtocolMessage::Assign(assign) => assign.job_id,
         other => panic!("expected assign, got {other:?}"),
     }
+}
+
+fn assert_poll_timeout(msg: WorkerProtocolMessage) {
+    match msg {
+        WorkerProtocolMessage::Error(error) => assert_eq!(error.code, ErrorCode::PollTimeout),
+        other => panic!("expected poll timeout, got {other:?}"),
+    }
+}
+
+async fn enqueue_standard_job(daemon: &temper_daemon::Daemon, job_id: &str) {
+    daemon
+        .enqueue_job(
+            job_id,
+            "engineer",
+            "ai/temper",
+            artifact(),
+            json!({"prompt":"implement", "issue":114}),
+        )
+        .await;
+}
+
+async fn eventually_enqueue_and_assign(
+    daemon: &temper_daemon::Daemon,
+    client: &reqwest::Client,
+    url: &str,
+    worker_id: &str,
+    job_id: &str,
+) {
+    for _ in 0..20 {
+        enqueue_standard_job(daemon, job_id).await;
+        match post_json(client, url, &poll_with_wait(worker_id, 25)).await {
+            WorkerProtocolMessage::Assign(assign) if assign.job_id == job_id => return,
+            WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout => {
+                sleep(Duration::from_millis(10)).await;
+            }
+            other => panic!("expected assign for {job_id} or poll timeout, got {other:?}"),
+        }
+    }
+
+    panic!("job {job_id} did not become dispatchable after apply finished");
 }
 
 #[tokio::test]
@@ -300,7 +412,47 @@ async fn result_without_in_flight_job_does_not_invoke_applier() {
 }
 
 #[tokio::test]
-async fn transient_failure_reenqueues_job() {
+async fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
+    let (record_tx, mut rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let (daemon, url) =
+        spawn_with_applier(Arc::new(GatedApplier::new(record_tx, vec![release_rx]))).await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(&client, &url, &register("worker-a")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    enqueue_standard_job(&daemon, "job-apply-window-1").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-a")).await,
+        "job-apply-window-1",
+    );
+
+    let result = success_result("worker-a", "job-apply-window-1");
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(result.clone()),
+        )
+        .await,
+        "worker-a",
+        "job-apply-window-1",
+    );
+    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+    assert_eq!(job.job_id, "job-apply-window-1");
+    assert_eq!(recorded_result.job_id, result.job_id);
+
+    enqueue_standard_job(&daemon, "job-apply-window-1").await;
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+
+    release_tx.send(()).expect("release apply gate");
+    eventually_enqueue_and_assign(&daemon, &client, &url, "worker-a", "job-apply-window-1").await;
+}
+
+#[tokio::test]
+async fn transient_failure_drops_job_for_rescan() {
     let (daemon, url, mut rx) = spawn_recording().await;
     let client = reqwest::Client::new();
     assert_eq!(
@@ -308,15 +460,7 @@ async fn transient_failure_reenqueues_job() {
         StatusCode::NO_CONTENT
     );
 
-    daemon
-        .enqueue_job(
-            "job-retry-1",
-            "engineer",
-            "ai/temper",
-            artifact(),
-            json!({"prompt":"implement", "issue":114}),
-        )
-        .await;
+    enqueue_standard_job(&daemon, "job-retry-1").await;
 
     let first_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
     assert_eq!(first_job_id, "job-retry-1");
@@ -333,6 +477,13 @@ async fn transient_failure_reenqueues_job() {
         &first_job_id,
     );
 
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    enqueue_standard_job(&daemon, &first_job_id).await;
     let retry_job_id = assignment_job_id(post_json(&client, &url, &poll("worker-a")).await);
     assert_eq!(retry_job_id, first_job_id);
 
@@ -360,4 +511,59 @@ async fn transient_failure_reenqueues_job() {
         rx.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
     ));
+}
+
+#[tokio::test]
+async fn permanent_failure_apply_window_unblocks_after_apply_completes() {
+    let (record_tx, mut rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let (daemon, url) =
+        spawn_with_applier(Arc::new(GatedApplier::new(record_tx, vec![release_rx]))).await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(&client, &url, &register("worker-a")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
+    assert_assigned(
+        post_json(&client, &url, &poll("worker-a")).await,
+        "job-permanent-failure-1",
+    );
+
+    let failure = permanent_failure_result("worker-a", "job-permanent-failure-1");
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(failure.clone()),
+        )
+        .await,
+        "worker-a",
+        "job-permanent-failure-1",
+    );
+    let (job, recorded_result) = rx.recv().await.expect("applier starts and parks");
+    assert_eq!(job.job_id, "job-permanent-failure-1");
+    assert_eq!(recorded_result.job_id, failure.job_id);
+    assert_eq!(recorded_result.status, ResultStatus::Failure);
+    assert_eq!(
+        recorded_result
+            .failure
+            .as_ref()
+            .map(|failure| failure.class),
+        Some(FailureClass::Permanent)
+    );
+
+    enqueue_standard_job(&daemon, "job-permanent-failure-1").await;
+    assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
+
+    release_tx.send(()).expect("release apply gate");
+    eventually_enqueue_and_assign(
+        &daemon,
+        &client,
+        &url,
+        "worker-a",
+        "job-permanent-failure-1",
+    )
+    .await;
 }

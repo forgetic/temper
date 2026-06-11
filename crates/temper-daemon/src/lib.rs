@@ -2,7 +2,12 @@
 
 //! Standalone async daemon transport for the Worker/Daemon wire protocol.
 
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
     body::Bytes,
@@ -1001,6 +1006,9 @@ enum DaemonCommand {
         artifact: Artifact,
         job_payload: serde_json::Value,
     },
+    ApplyFinished {
+        job_id: String,
+    },
     #[cfg(test)]
     QueuedJobs {
         reply: oneshot::Sender<Vec<QueuedJob>>,
@@ -1019,6 +1027,7 @@ async fn run_core(
 ) {
     let mut core = DaemonCore::new();
     let mut waiters = BTreeMap::new();
+    let mut applying = BTreeSet::new();
     let mut next_id = 0_u64;
 
     while let Some(command) = rx.recv().await {
@@ -1046,24 +1055,19 @@ async fn run_core(
 
                     match disposition {
                         ResultDisposition::Apply => {
+                            let job_id = job.job_id.clone();
+                            applying.insert(job_id.clone());
                             let applier = applier.clone();
+                            let apply_finished_tx = cmd_tx.clone();
                             tokio::spawn(async move {
                                 applier.apply(job, result).await;
+                                let _ =
+                                    apply_finished_tx.send(DaemonCommand::ApplyFinished { job_id });
                             });
                         }
-                        ResultDisposition::Reenqueue => {
-                            // The daemon only holds a durable Forge lease during apply.
-                            // Transient failures do not enter apply, so there is no Forge
-                            // lease to release here; `DaemonCore` has already completed the
-                            // registry assignment above and the remaining work is to retry.
-                            core.enqueue_job(
-                                job.job_id,
-                                job.role,
-                                job.repo,
-                                job.artifact,
-                                job.job_payload,
-                            );
-                            fulfil_waiters(&mut core, &mut waiters);
+                        ResultDisposition::DropForRescan => {
+                            // Let the next webhook wake or poll-backstop tick re-feed this
+                            // through the guarded scan path instead of hot re-enqueuing.
                         }
                         ResultDisposition::Drop => {}
                     }
@@ -1113,8 +1117,17 @@ async fn run_core(
                 artifact,
                 job_payload,
             } => {
+                if applying.contains(&job_id) {
+                    eprintln!(
+                        "temper-daemon: skipped enqueue for job in apply window job_id={job_id}"
+                    );
+                    continue;
+                }
                 core.enqueue_job(job_id, role, repo, artifact, job_payload);
                 fulfil_waiters(&mut core, &mut waiters);
+            }
+            DaemonCommand::ApplyFinished { job_id } => {
+                applying.remove(&job_id);
             }
             #[cfg(test)]
             DaemonCommand::QueuedJobs { reply } => {
@@ -1206,7 +1219,7 @@ fn failure_class_log_value(class: FailureClass) -> &'static str {
 fn result_disposition_log_value(disposition: ResultDisposition) -> &'static str {
     match disposition {
         ResultDisposition::Apply => "apply",
-        ResultDisposition::Reenqueue => "reenqueue",
+        ResultDisposition::DropForRescan => "rescan",
         ResultDisposition::Drop => "drop",
     }
 }
@@ -1218,7 +1231,7 @@ fn poll_backstop_log_line(enqueued: usize) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultDisposition {
     Apply,
-    Reenqueue,
+    DropForRescan,
     Drop,
 }
 
@@ -1226,7 +1239,7 @@ fn result_disposition(result: &JobResult) -> ResultDisposition {
     match result.status {
         ResultStatus::Success => ResultDisposition::Apply,
         ResultStatus::Failure => match result.failure.as_ref().map(|failure| failure.class) {
-            Some(FailureClass::Transient) => ResultDisposition::Reenqueue,
+            Some(FailureClass::Transient) => ResultDisposition::DropForRescan,
             Some(FailureClass::Canceled) => ResultDisposition::Drop,
             Some(FailureClass::Permanent | FailureClass::Protocol) | None => {
                 ResultDisposition::Apply
@@ -1601,7 +1614,7 @@ mod tests {
     #[test]
     fn result_received_log_line_formats_each_failure_class() {
         let cases = [
-            (FailureClass::Transient, "transient", "reenqueue"),
+            (FailureClass::Transient, "transient", "rescan"),
             (FailureClass::Permanent, "permanent", "apply"),
             (FailureClass::Canceled, "canceled", "drop"),
             (FailureClass::Protocol, "protocol", "apply"),
@@ -1636,13 +1649,13 @@ mod tests {
     }
 
     #[test]
-    fn result_disposition_routes_transient_failure_to_reenqueue() {
+    fn result_disposition_routes_transient_failure_to_drop_for_rescan() {
         assert_eq!(
             result_disposition(&result_for_disposition(
                 ResultStatus::Failure,
                 Some(FailureClass::Transient),
             )),
-            ResultDisposition::Reenqueue
+            ResultDisposition::DropForRescan
         );
     }
 
