@@ -6,8 +6,8 @@ use axum::http::StatusCode;
 use serde_json::json;
 use temper_daemon::{Daemon, ForgeApplier, JobContext, LeaseApplier, ResultApplier, RoleFeedMode};
 use temper_forge::{
-    CreateIssue, CreateRepository, Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
-    UpdateIssue, UserId,
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, ItemNumber, PullRequest,
+    PullRequestQuery, PullRequestReview, RepositoryId, ReviewDecision, UpdateIssue, UserId,
 };
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
@@ -85,6 +85,33 @@ async fn create_untriaged_intake_issue(forge: &MemoryForge, repo: &RepositoryId)
         )
         .await
         .expect("intake issue is created")
+        .number
+}
+
+async fn create_pull_request_needing_review(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+) -> ItemNumber {
+    forge
+        .create_pull_request(
+            repo,
+            CreatePullRequest {
+                title: "Implement ready code issue".to_string(),
+                body: "Implementation ready for review.".to_string(),
+                source: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "agent/pr-for-code-1".to_string(),
+                },
+                target: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "stable".to_string(),
+                },
+                labels: vec!["implementation".to_string(), "needs-reviewer".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("pull request is created")
         .number
 }
 
@@ -221,6 +248,7 @@ fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
     job_for_context(
         repo_path,
         number,
+        "issue",
         JobContext {
             role: "engineer".to_string(),
             repo: repo_path.to_string(),
@@ -242,6 +270,7 @@ fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
     job_for_context(
         repo_path,
         number,
+        "issue",
         JobContext {
             role: "architect".to_string(),
             repo: repo_path.to_string(),
@@ -259,10 +288,41 @@ fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
     )
 }
 
-fn job_for_context(repo_path: &str, number: ItemNumber, context: JobContext) -> InFlightJob {
+fn review_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
+    job_for_context(
+        repo_path,
+        number,
+        "pull_request",
+        JobContext {
+            role: "reviewer".to_string(),
+            repo: repo_path.to_string(),
+            queue: "pr_needs_review".to_string(),
+            artifact_kind: "implementation_pr".to_string(),
+            repository: None,
+            base_branch: None,
+            branch_hint: None,
+            correlation_key: None,
+            artifact: None,
+            action: Some("review_pr".to_string()),
+            checkout_capability: Some("pull_request_read_only".to_string()),
+            allowed_verdicts: vec![
+                "approve".to_string(),
+                "changes".to_string(),
+                "escalate".to_string(),
+            ],
+        },
+    )
+}
+
+fn job_for_context(
+    repo_path: &str,
+    number: ItemNumber,
+    artifact_kind: &str,
+    context: JobContext,
+) -> InFlightJob {
     InFlightJob {
         job_id: format!(
-            "{repo_path}/issue-{}/{}/{}",
+            "{repo_path}/{artifact_kind}-{}/{}/{}",
             number.get(),
             context.role,
             context.queue
@@ -271,7 +331,7 @@ fn job_for_context(repo_path: &str, number: ItemNumber, context: JobContext) -> 
         repo: repo_path.to_string(),
         artifact: Artifact {
             item: json!(number.get()),
-            kind: "issue".to_string(),
+            kind: artifact_kind.to_string(),
         },
         job_payload: serde_json::to_value(context).expect("JobContext serializes"),
     }
@@ -316,14 +376,15 @@ async fn poll_assignment_for_role(
     url: &str,
     worker_id: &str,
     expected_role: &str,
-    issue: ItemNumber,
+    expected_artifact_kind: &str,
+    number: ItemNumber,
 ) -> temper_worker_protocol::Assign {
     match post_json(client, url, &poll(worker_id)).await {
         WorkerProtocolMessage::Assign(assign) => {
             assert_eq!(assign.repo, "acme/service");
             assert_eq!(assign.role, expected_role);
-            assert_eq!(assign.artifact.kind, "issue");
-            assert_eq!(assign.artifact.item, json!(issue.get()));
+            assert_eq!(assign.artifact.kind, expected_artifact_kind);
+            assert_eq!(assign.artifact.item, json!(number.get()));
             assign
         }
         other => panic!("expected assign, got {other:?}"),
@@ -336,7 +397,24 @@ async fn poll_assignment(
     worker_id: &str,
     issue: ItemNumber,
 ) -> temper_worker_protocol::Assign {
-    poll_assignment_for_role(client, url, worker_id, "engineer", issue).await
+    poll_assignment_for_role(client, url, worker_id, "engineer", "issue", issue).await
+}
+
+async fn poll_review_assignment(
+    client: &reqwest::Client,
+    url: &str,
+    worker_id: &str,
+    pull_request: ItemNumber,
+) -> temper_worker_protocol::Assign {
+    poll_assignment_for_role(
+        client,
+        url,
+        worker_id,
+        "reviewer",
+        "pull_request",
+        pull_request,
+    )
+    .await
 }
 
 async fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) -> Vec<String> {
@@ -346,6 +424,46 @@ async fn issue_labels(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumb
         .expect("issue reload succeeds")
         .expect("issue exists")
         .labels
+}
+
+async fn pull_request_labels(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) -> Vec<String> {
+    forge
+        .get_pull_request_by_number(repo, number)
+        .await
+        .expect("pull request reload succeeds")
+        .expect("pull request exists")
+        .labels
+}
+
+async fn pull_request_reviews(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) -> Vec<PullRequestReview> {
+    let pull_request = forge
+        .get_pull_request_by_number(repo, number)
+        .await
+        .expect("pull request reload succeeds")
+        .expect("pull request exists");
+    forge
+        .list_pull_request_reviews(&pull_request.id)
+        .await
+        .expect("list pull request reviews succeeds")
+}
+
+async fn pull_request_labels_and_reviews(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) -> (Vec<String>, Vec<PullRequestReview>) {
+    (
+        pull_request_labels(forge, repo, number).await,
+        pull_request_reviews(forge, repo, number).await,
+    )
 }
 
 async fn issue_comment_bodies(
@@ -406,6 +524,48 @@ async fn assert_no_pull_requests(forge: &MemoryForge, repo: &RepositoryId) {
     assert!(pulls.is_empty());
 }
 
+fn has_label(labels: &[String], expected: &str) -> bool {
+    labels.iter().any(|label| label == expected)
+}
+
+async fn wait_for_review_apply(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    pull_request: ItemNumber,
+    done: impl Fn(&[String], &[PullRequestReview]) -> bool,
+) -> (Vec<String>, Vec<PullRequestReview>) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let state = pull_request_labels_and_reviews(forge, repo, pull_request).await;
+        if done(&state.0, &state.1) {
+            return state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for review verdict apply, saw labels {:?} reviews {:?}",
+            state.0,
+            state.1
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn assert_pull_request_state_stays(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+    expected_labels: Vec<String>,
+    expected_reviews: usize,
+) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        let (labels, reviews) = pull_request_labels_and_reviews(forge, repo, number).await;
+        assert_eq!(labels, expected_labels);
+        assert_eq!(reviews.len(), expected_reviews);
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn wait_for_pull_request_count(
     forge: &MemoryForge,
     repo: &RepositoryId,
@@ -443,6 +603,193 @@ async fn assert_pull_request_count_stays(
         assert_eq!(pulls.len(), expected);
         sleep(Duration::from_millis(10)).await;
     }
+}
+
+async fn assign_review_job(
+    forge: Arc<MemoryForge>,
+    repo: &RepositoryId,
+    pull_request: ItemNumber,
+) -> (reqwest::Client, String, temper_worker_protocol::Assign) {
+    let workflow = Arc::new(workflow());
+    let compiled = workflow.compile();
+    let applier = Arc::new(LeaseApplier::new(
+        forge.clone(),
+        policy(),
+        "daemon-1",
+        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+    ));
+    let daemon = Daemon::with_applier(applier);
+    let url = spawn(&daemon).await;
+    let client = reqwest::Client::new();
+    let role = RoleId::new("reviewer");
+
+    assert_eq!(
+        post(
+            &client,
+            &url,
+            &register("worker-a", "reviewer", "acme/service")
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        daemon
+            .enqueue_scanned_role_work(
+                forge.as_ref(),
+                repo,
+                workflow.as_ref(),
+                &compiled,
+                ts("2026-05-29T00:00:00Z"),
+                &role,
+                RoleFeedMode::Normal,
+            )
+            .await
+            .expect("review feed succeeds"),
+        1
+    );
+
+    let assignment = poll_review_assignment(&client, &url, "worker-a", pull_request).await;
+    let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
+        .expect("assignment payload is a JobContext");
+    assert_eq!(context.role, "reviewer");
+    assert_eq!(context.queue, "pr_needs_review");
+    assert_eq!(context.artifact_kind, "implementation_pr");
+    assert_eq!(context.action.as_deref(), Some("review_pr"));
+    assert_eq!(
+        context.checkout_capability.as_deref(),
+        Some("pull_request_read_only")
+    );
+    assert_eq!(
+        context.allowed_verdicts,
+        vec!["approve", "changes", "escalate"]
+    );
+
+    (client, url, assignment)
+}
+
+#[tokio::test]
+async fn review_verdict_approve_submits_native_review_and_routes_landing_label() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+
+    let result = verdict_result("worker-a", &assignment.job_id, "approve", None);
+    assert_release(
+        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+        "worker-a",
+        &assignment.job_id,
+    );
+
+    let (labels, reviews) =
+        wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+            !has_label(labels, "needs-reviewer")
+                && has_label(labels, "landing")
+                && reviews.len() == 1
+        })
+        .await;
+
+    assert!(has_label(&labels, "implementation"));
+    assert!(!has_label(&labels, "needs-reviewer"));
+    assert!(has_label(&labels, "landing"));
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].decision, ReviewDecision::Approved);
+}
+
+#[tokio::test]
+async fn review_verdict_changes_attaches_changes_requested_review_with_body() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+    let authored = "please add error handling";
+
+    let result = verdict_result("worker-a", &assignment.job_id, "changes", Some(authored));
+    assert_release(
+        post_json(
+            &client,
+            &url,
+            &WorkerProtocolMessage::Result(result.clone()),
+        )
+        .await,
+        "worker-a",
+        &assignment.job_id,
+    );
+
+    let (labels, reviews) =
+        wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+            !has_label(labels, "needs-reviewer") && reviews.len() == 1
+        })
+        .await;
+
+    assert!(has_label(&labels, "implementation"));
+    assert!(!has_label(&labels, "needs-reviewer"));
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].decision, ReviewDecision::ChangesRequested);
+    let body = reviews[0].body.as_deref().expect("review carries a body");
+    assert!(
+        body.contains(authored),
+        "review body should carry authored text, got `{body}`"
+    );
+
+    assert_release(
+        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+        "worker-a",
+        &assignment.job_id,
+    );
+
+    let replay_job = review_in_flight_job("acme/service", pull_request);
+    let replay_result = verdict_result("worker-a", &replay_job.job_id, "changes", Some(authored));
+    ForgeApplier::new(forge.clone(), Arc::new(workflow()))
+        .apply(replay_job, replay_result)
+        .await;
+
+    assert_pull_request_state_stays(&forge, &repo, pull_request, labels, 1).await;
+}
+
+#[tokio::test]
+async fn review_verdict_escalate_adds_needs_architect_label() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+
+    let result = verdict_result("worker-a", &assignment.job_id, "escalate", None);
+    assert_release(
+        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+        "worker-a",
+        &assignment.job_id,
+    );
+
+    let (labels, reviews) =
+        wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+            has_label(labels, "needs-architect") && reviews.is_empty()
+        })
+        .await;
+
+    assert!(has_label(&labels, "implementation"));
+    assert!(has_label(&labels, "needs-architect"));
+    assert!(reviews.is_empty());
+}
+
+#[tokio::test]
+async fn undeclared_review_verdict_does_not_mutate_pull_request() {
+    let forge = Arc::new(MemoryForge::new());
+    let repo = new_repo(&forge, "stable").await;
+    let pull_request = create_pull_request_needing_review(&forge, &repo).await;
+    let before = pull_request_labels_and_reviews(&forge, &repo, pull_request).await;
+    let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+
+    let result = verdict_result("worker-a", &assignment.job_id, "merge_now", None);
+    assert_release(
+        post_json(&client, &url, &WorkerProtocolMessage::Result(result)).await,
+        "worker-a",
+        &assignment.job_id,
+    );
+
+    assert_pull_request_state_stays(&forge, &repo, pull_request, before.0, before.1.len()).await;
 }
 
 #[tokio::test]
@@ -489,7 +836,8 @@ async fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
             .expect("feed succeeds"),
         1
     );
-    let assignment = poll_assignment_for_role(&client, &url, "worker-a", "architect", issue).await;
+    let assignment =
+        poll_assignment_for_role(&client, &url, "worker-a", "architect", "issue", issue).await;
     let context: JobContext = serde_json::from_value(assignment.job_payload.clone())
         .expect("assignment payload is a JobContext");
     assert_eq!(context.action.as_deref(), Some("triage_intake"));
