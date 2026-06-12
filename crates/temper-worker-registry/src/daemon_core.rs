@@ -105,6 +105,20 @@ impl DaemonCore {
         })
     }
 
+    /// The in-flight job whose payload carries this workspace correlation key
+    /// (the one cross-plane identifier; step-progress messages are keyed by
+    /// it rather than `job_id`). `None` when no assigned job matches.
+    pub fn in_flight_job_by_correlation_key(&self, correlation_key: &str) -> Option<InFlightJob> {
+        self.job_context.iter().find_map(|(job_id, (_, payload))| {
+            (payload
+                .get("correlation_key")
+                .and_then(serde_json::Value::as_str)
+                == Some(correlation_key))
+            .then(|| self.in_flight_job(job_id))
+            .flatten()
+        })
+    }
+
     pub fn handle(&mut self, msg: WorkerProtocolMessage) -> Option<WorkerProtocolMessage> {
         if protocol_version(&msg) != WORKER_PROTOCOL_VERSION {
             return Some(error(
@@ -125,6 +139,10 @@ impl DaemonCore {
             WorkerProtocolMessage::Heartbeat(heartbeat) => self.handle_heartbeat(heartbeat),
             WorkerProtocolMessage::Result(result) => Some(self.handle_result(result)),
             WorkerProtocolMessage::LeaseAck(lease_ack) => self.handle_lease_ack(lease_ack),
+            // Progress is observability bookkeeping the daemon machine routes
+            // to the forge applier before reaching the core; no reply either
+            // way (fire-and-forget by contract).
+            WorkerProtocolMessage::Progress(_) => None,
             WorkerProtocolMessage::Error(_) => None,
         }
     }
@@ -199,6 +217,7 @@ fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
         WorkerProtocolMessage::Assign(msg) => msg.protocol_version,
         WorkerProtocolMessage::Heartbeat(msg) => msg.protocol_version,
         WorkerProtocolMessage::Result(msg) => msg.protocol_version,
+        WorkerProtocolMessage::Progress(msg) => msg.protocol_version,
         WorkerProtocolMessage::Release(msg) => msg.protocol_version,
         WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
         WorkerProtocolMessage::Error(msg) => msg.protocol_version,

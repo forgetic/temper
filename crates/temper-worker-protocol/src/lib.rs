@@ -20,6 +20,7 @@ pub enum WorkerProtocolMessage {
     Assign(Assign),
     Heartbeat(Heartbeat),
     Result(JobResult),
+    Progress(JobProgress),
     Release(Release),
     LeaseAck(LeaseAck),
     Error(ProtocolError),
@@ -236,6 +237,41 @@ pub struct JobResult {
     pub details: Option<Value>,
 }
 
+/// One agent step-progress checkpoint, relayed worker → daemon (v1.1,
+/// additive).
+///
+/// Carries exactly the agent protocol's `StepProgress` fields plus the
+/// message envelope. Per the agent/orchestration split's bright-line rule,
+/// this is durable human-facing PR state only (step label, lifecycle phase,
+/// pushed sha) — high-frequency observability (token deltas, tool calls)
+/// belongs to the out-of-band control plane and must not grow fields here.
+///
+/// There is deliberately no `job_id`: the workspace `correlation_key` is the
+/// one cross-plane identifier, and the daemon resolves it to its in-flight
+/// job. Delivery is fire-and-forget and the daemon applies progress
+/// idempotently keyed by `(correlation_key, step, state)`, so re-delivery
+/// after worker retry or daemon restart is safe. The daemon replies `204`;
+/// older daemons reject the unknown message type, which workers swallow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobProgress {
+    pub protocol_version: u32,
+    pub worker_id: String,
+    /// Workspace correlation key (echoes `WorkspaceContext.correlation_key`).
+    pub correlation_key: String,
+    /// Monotonic step index from the agent, starting at 1.
+    pub step: u32,
+    /// Short imperative step label, e.g. "write failing test".
+    pub status: String,
+    /// Lifecycle phase: `"started"` or `"done"`.
+    pub state: String,
+    /// Commit sha the step pushed, when it pushed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_sha: Option<String>,
+    /// Optional one-line human note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseDisposition {
@@ -313,6 +349,7 @@ mod tests {
             WorkerProtocolMessage::Assign(msg) => msg.protocol_version,
             WorkerProtocolMessage::Heartbeat(msg) => msg.protocol_version,
             WorkerProtocolMessage::Result(msg) => msg.protocol_version,
+            WorkerProtocolMessage::Progress(msg) => msg.protocol_version,
             WorkerProtocolMessage::Release(msg) => msg.protocol_version,
             WorkerProtocolMessage::LeaseAck(msg) => msg.protocol_version,
             WorkerProtocolMessage::Error(msg) => msg.protocol_version,
@@ -363,6 +400,7 @@ mod tests {
                 | ("result", WorkerProtocolMessage::Result(_))
                 | ("result-verdict", WorkerProtocolMessage::Result(_))
                 | ("result-verdict-children", WorkerProtocolMessage::Result(_))
+                | ("progress", WorkerProtocolMessage::Progress(_))
                 | ("release", WorkerProtocolMessage::Release(_))
                 | ("lease-ack", WorkerProtocolMessage::LeaseAck(_))
                 | ("error", WorkerProtocolMessage::Error(_)) => {}

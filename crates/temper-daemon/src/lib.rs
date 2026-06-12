@@ -20,8 +20,8 @@ use temper_runner::{
     ScanError, WorkItem,
 };
 use temper_worker_protocol::{
-    Artifact, Assign, ErrorCode, FailureClass, JobChild, JobResult, Poll, ResultStatus,
-    WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, FailureClass, JobChild, JobProgress, JobResult, Poll,
+    ResultStatus, WorkerProtocolMessage,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -90,6 +90,15 @@ pub struct PollBackstopConfig {
 #[async_trait::async_trait]
 pub trait ResultApplier: Send + Sync {
     async fn apply(&self, job: InFlightJob, result: JobResult);
+
+    /// Applies one agent step-progress checkpoint for an in-flight job.
+    ///
+    /// Default: no-op. Implementations must be **idempotent keyed by
+    /// `(correlation_key, step, state)`** — workers fire-and-forget and may
+    /// re-deliver after retry or daemon restart.
+    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        let _ = (job, progress);
+    }
 }
 
 /// Default applier that preserves existing daemon transport behavior.
@@ -128,6 +137,13 @@ impl ResultApplier for RoleRoutingApplier {
         match self.routes.get(&job.role) {
             Some(applier) => applier.apply(job, result).await,
             None => self.default.apply(job, result).await,
+        }
+    }
+
+    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        match self.routes.get(&job.role) {
+            Some(applier) => applier.apply_progress(job, progress).await,
+            None => self.default.apply_progress(job, progress).await,
         }
     }
 }
@@ -827,6 +843,79 @@ impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
             ResultStatus::Failure => self.apply_failure(job, result).await,
         }
     }
+
+    /// Records one step-progress checkpoint as a comment on the job's source
+    /// issue.
+    ///
+    /// Idempotent keyed by `(correlation_key, step, state)`: every progress
+    /// comment carries a machine-readable marker line, and a checkpoint whose
+    /// marker already exists on the issue is skipped, so worker re-delivery
+    /// and daemon restarts cannot duplicate forge state.
+    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        let Some((repository, issue)) = self.resolve_issue(&job).await else {
+            return;
+        };
+        let issue_id = issue.id;
+        let number = issue.number;
+
+        let marker = progress_marker(&progress);
+        match self.forge.list_issue_comments(&issue_id).await {
+            Ok(comments) => {
+                if comments
+                    .iter()
+                    .any(|comment| comment.body.contains(&marker))
+                {
+                    return;
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier could not list comments for progress on job_id={} repo={} issue={}: {error}",
+                    job.job_id, job.repo, number
+                );
+                return;
+            }
+        }
+
+        let body = progress_comment_body(&job.role, &progress, &marker);
+        if let Err(error) = self
+            .forge
+            .add_issue_comment(&issue_id, CreateComment { body })
+            .await
+        {
+            eprintln!(
+                "temper-daemon: forge applier could not record progress for job_id={} repo={} issue={}: {error}",
+                job.job_id, job.repo, number
+            );
+        }
+        let _ = repository;
+    }
+}
+
+/// The machine-readable idempotency marker for one progress checkpoint.
+fn progress_marker(progress: &JobProgress) -> String {
+    format!(
+        "<!-- temper-progress correlation_key={} step={} state={} -->",
+        progress.correlation_key, progress.step, progress.state
+    )
+}
+
+/// The human-facing progress comment (marker line + one checklist line).
+fn progress_comment_body(role: &str, progress: &JobProgress, marker: &str) -> String {
+    let tick = if progress.state == "done" { "x" } else { " " };
+    let mut line = format!(
+        "- [{tick}] step {}: {} ({role}",
+        progress.step, progress.status
+    );
+    if let Some(sha) = progress.pushed_sha.as_deref() {
+        let short = &sha[..sha.len().min(12)];
+        line.push_str(&format!(", pushed {short}"));
+    }
+    line.push(')');
+    if let Some(note) = progress.note.as_deref() {
+        line.push_str(&format!("\n\n{note}"));
+    }
+    format!("{marker}\n{line}")
 }
 
 const FAILURE_AUDIT_COMMENT_KEY_PREFIX: &str = "daemon_failure_audit:";
@@ -912,6 +1001,12 @@ impl<F: Forge> LeaseApplier<F> {
 
 #[async_trait::async_trait]
 impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
+    /// Progress checkpoints are daemon-authored bookkeeping comments, not
+    /// role-authored workflow mutations, so they bypass the lease gate.
+    async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        self.inner.apply_progress(job, progress).await;
+    }
+
     async fn apply(&self, job: InFlightJob, result: JobResult) {
         let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
             eprintln!(
@@ -1347,6 +1442,8 @@ enum DaemonCompletion {
     PollDeadline { id: u64 },
     /// A result applier finished off-loop.
     ApplyFinished { job_id: String },
+    /// A progress-checkpoint application finished off-loop (no state).
+    ProgressApplyFinished,
     /// Daemon API: enqueue one job (scans, backstops, tests).
     Enqueue {
         job_id: String,
@@ -1380,6 +1477,10 @@ enum DaemonRequest {
     RunApply {
         job: InFlightJob,
         result: JobResult,
+    },
+    RunProgressApply {
+        job: InFlightJob,
+        progress: JobProgress,
     },
     RunWakeScan {
         token: u64,
@@ -1541,6 +1642,33 @@ impl DaemonMachine {
                 });
                 requests
             }
+            WorkerProtocolMessage::Progress(progress) => {
+                // Fire-and-forget bookkeeping: ack with 204 either way, route
+                // to the applier only when the correlation key names a job
+                // that is still in flight (idempotent application makes late
+                // or duplicate delivery harmless).
+                let mut requests = Vec::new();
+                match self
+                    .core
+                    .in_flight_job_by_correlation_key(&progress.correlation_key)
+                {
+                    Some(job) => {
+                        requests.push(DaemonRequest::Log(progress_log_line(&job, &progress)));
+                        requests.push(DaemonRequest::RunProgressApply { job, progress });
+                    }
+                    None => {
+                        requests.push(DaemonRequest::Log(format!(
+                            "temper-daemon: dropped progress for unknown correlation_key={} step={}",
+                            progress.correlation_key, progress.step
+                        )));
+                    }
+                }
+                requests.push(DaemonRequest::Respond {
+                    responder,
+                    response: protocol_response(None),
+                });
+                requests
+            }
             other => {
                 let response = self.core.handle(other);
                 vec![DaemonRequest::Respond {
@@ -1684,6 +1812,10 @@ impl Machine for DaemonMachine {
                     .insert(job_id, self.now + self.apply_grace);
                 Vec::new()
             }
+            // Progress application carries no machine state; the completion
+            // exists only so the executor's async work feeds back per engine
+            // discipline.
+            DaemonCompletion::ProgressApplyFinished => Vec::new(),
             DaemonCompletion::Enqueue {
                 job_id,
                 role,
@@ -1800,6 +1932,24 @@ fn result_disposition(result: &JobResult) -> ResultDisposition {
 
 /// Renders a worker-protocol core response as an HTTP response: `200` with a
 /// JSON body, or `204` when the core had nothing to say.
+/// One structured log line per accepted progress checkpoint.
+fn progress_log_line(job: &InFlightJob, progress: &JobProgress) -> String {
+    format!(
+        "temper-daemon: progress job_id={} correlation_key={} step={} state={} sha={}{} :: {}",
+        job.job_id,
+        progress.correlation_key,
+        progress.step,
+        progress.state,
+        progress.pushed_sha.as_deref().unwrap_or("-"),
+        progress
+            .note
+            .as_deref()
+            .map(|note| format!(" note={note:?}"))
+            .unwrap_or_default(),
+        progress.status,
+    )
+}
+
 fn protocol_response(message: Option<WorkerProtocolMessage>) -> HttpResponseData {
     match message {
         Some(message) => HttpResponseData::json(
@@ -1838,6 +1988,14 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 self.spawner.spawn_with_cx(move |_cx| async move {
                     applier.apply(job, result).await;
                     let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
+                });
+            }
+            DaemonRequest::RunProgressApply { job, progress } => {
+                let applier = Arc::clone(&self.applier);
+                let cq = self.cq.clone();
+                self.spawner.spawn_with_cx(move |_cx| async move {
+                    applier.apply_progress(job, progress).await;
+                    let _ = cq.send(DaemonCompletion::ProgressApplyFinished);
                 });
             }
             DaemonRequest::RunWakeScan { token, hint } => {
