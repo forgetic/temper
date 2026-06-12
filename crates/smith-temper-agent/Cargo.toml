@@ -1,0 +1,31 @@
+[package]
+name = "smith-temper-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Temper-specific provider/auth/decision core for Smith agents."
+
+[dependencies]
+anvil-process-protocol = { path = "../anvil-process-protocol" }
+pi_agent_rust.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smith-agent = { path = "../smith-agent" }
+temper-process-protocol = { path = "../../../temper/crates/temper-process-protocol" }
+uuid.workspace = true
+
+[features]
+default = []
+test-provider-base-url-override = []
+
+[dev-dependencies]
+smith-temper-agent = { path = ".", features = ["test-provider-base-url-override"] }
+smith-io-engine = { path = "../smith-io-engine" }
+jig-server = { path = "../../../jig/crates/jig-server" }
+jig-core = { path = "../../../jig/crates/jig-core" }
+jig-record = { path = "../../../jig/crates/jig-record" }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true

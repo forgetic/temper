@@ -1,0 +1,15 @@
+/target/
+/.cache/
+**/*.rs.bk
+__pycache__/
+.DS_Store
+.idea/
+.vscode/
+
+# Never commit local provider credentials or copied pi auth files.
+auth.json
+*.auth.json
+*.token
+*.secret
+.env
+.env.*

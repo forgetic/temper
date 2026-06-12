@@ -1,0 +1,15 @@
+[package]
+name = "smith-io-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sans-IO completion engine for Smith: pure Machine cores driven by an asupersync imperative shell."
+
+[dependencies]
+asupersync.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

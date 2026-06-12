@@ -1,0 +1,51 @@
+[workspace]
+members = [
+    "crates/anvil-process-protocol",
+    "crates/smith-agent",
+    "crates/smith-io-engine",
+    "crates/smith-temper-agent",
+    "crates/smith-temper-agent-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+# asupersync 0.3.2 uses let-chains (stable since 1.88) without declaring its own
+# MSRV, so the workspace floor is 1.88 to match — same as smith/temper, whose
+# serde DTO crates this repo depends on by path.
+rust-version = "1.88"
+version = "0.1.0"
+
+[workspace.dependencies]
+# Pinned to the exact version `pi_agent_rust 0.1.18` pulls in, kept in lockstep
+# with smith/temper's `=0.3.2` so the whole local toolchain resolves one
+# asupersync version. anvil is the agent side of the agent/orchestration split:
+# it owns the pi-SDK coding loop; smith-worker spawns its binary over a versioned
+# process protocol and never links pi-SDK.
+asupersync = "=0.3.2"
+pi_agent_rust = "0.1.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.dev]
+opt-level = 0
+debug = 0
+incremental = true
+codegen-units = 256
+lto = false
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+opt-level = 0
+debug = 0
+incremental = true
+codegen-units = 256
+lto = false
