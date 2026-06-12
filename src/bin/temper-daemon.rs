@@ -113,7 +113,11 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
         .map_err(|error| format!("serve failed: {error}"))?;
 
     if let Err(error) = skein::signal::ctrl_c().await {
-        eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
+        // skein's signal handling is a Phase 0 stub: ctrl_c() returns an error
+        // immediately. Exiting here would tear the daemon down at startup, so
+        // park instead and serve until the process is killed externally.
+        eprintln!("temper-daemon: shutdown signal unavailable ({error}); serving until killed");
+        std::future::pending::<()>().await;
     }
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
