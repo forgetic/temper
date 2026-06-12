@@ -93,7 +93,13 @@ fn run() -> Result<(), String> {
             options.enable_subagents,
         )
         .await
-        .map(|result| (result, context.correlation_key.clone(), context.work_item.role.clone()))
+        .map(|result| {
+            (
+                result,
+                context.correlation_key.clone(),
+                context.work_item.role.clone(),
+            )
+        })
     });
 
     let (result, correlation_key, role) = match result {
@@ -129,8 +135,8 @@ fn emit(progress: &StepProgress) {
 }
 
 fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(result)
-        .map_err(|error| format!("serialize result: {error}"))?;
+    let bytes =
+        serde_json::to_vec_pretty(result).map_err(|error| format!("serialize result: {error}"))?;
     std::fs::write(result_path, bytes)
         .map_err(|error| format!("write result file {result_path}: {error}"))
 }
@@ -157,12 +163,14 @@ impl Options {
                 "--auth" => auth = parse_auth(&value(&mut iter, "--auth")?)?,
                 "--codex-model" => codex_model = Some(value(&mut iter, "--codex-model")?),
                 "--auth-file" => auth_file = Some(PathBuf::from(value(&mut iter, "--auth-file")?)),
-                "--config-dir" => config_dir = Some(PathBuf::from(value(&mut iter, "--config-dir")?)),
+                "--config-dir" => {
+                    config_dir = Some(PathBuf::from(value(&mut iter, "--config-dir")?))
+                }
                 "--max-iterations" => {
                     let raw = value(&mut iter, "--max-iterations")?;
-                    max_iterations = raw
-                        .parse::<usize>()
-                        .map_err(|_| format!("--max-iterations expects a positive integer, got `{raw}`"))?;
+                    max_iterations = raw.parse::<usize>().map_err(|_| {
+                        format!("--max-iterations expects a positive integer, got `{raw}`")
+                    })?;
                     if max_iterations == 0 {
                         return Err("--max-iterations must be greater than zero".to_string());
                     }
@@ -187,7 +195,8 @@ impl Options {
 const USAGE: &str = "anvil-agent [--auth <deepseek|chatgpt-oauth|anthropic-oauth>] [--auth-file <path>] [--codex-model <id>] [--max-iterations <n>] [--config-dir <path>] [--enable-subagents]\n  reads context from $TEMPER_CODING_WORKSPACE_CONTEXT, runs in cwd, writes result to $TEMPER_CODING_WORKSPACE_RESULT, emits step-progress JSON lines on stdout";
 
 fn value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    iter.next().ok_or_else(|| format!("{flag} requires a value"))
+    iter.next()
+        .ok_or_else(|| format!("{flag} requires a value"))
 }
 
 fn parse_auth(value: &str) -> Result<AuthChoice, String> {

@@ -21,9 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use pi::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
-};
+use pi::model::{AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
 use pi::tools::{ToolEffects, ToolOutput};
 
 /// An observability event the machine emits as data (the shell renders/records
@@ -189,7 +187,10 @@ impl AgentMachine {
     /// The effect declaration for a tool name, defaulting to write (serialize)
     /// for unknown tools — fail-closed, matching pi.
     fn effects_for(&self, name: &str) -> ToolEffects {
-        self.effects.get(name).copied().unwrap_or_else(ToolEffects::write)
+        self.effects
+            .get(name)
+            .copied()
+            .unwrap_or_else(ToolEffects::write)
     }
 
     /// The current conversation (test/observability accessor).
@@ -224,7 +225,9 @@ impl AgentMachine {
             self.messages.extend(steering);
         }
         self.phase = Phase::AwaitingLlm;
-        requests.push(AgentRequest::Emit(AgentEvent::TurnStart { turn: self.turn }));
+        requests.push(AgentRequest::Emit(AgentEvent::TurnStart {
+            turn: self.turn,
+        }));
         requests.push(AgentRequest::CallLlm {
             messages: self.messages.clone(),
         });
@@ -288,7 +291,11 @@ impl AgentMachine {
                 None => true,
             };
             if compatible && !current.is_empty() {
-                active = Some(active.expect("active set when current non-empty").union(call_effects));
+                active = Some(
+                    active
+                        .expect("active set when current non-empty")
+                        .union(call_effects),
+                );
                 current.push(PendingTool {
                     call: call.clone(),
                     result: None,

@@ -18,12 +18,12 @@
 use std::collections::BTreeMap;
 
 use pi::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, UserContent,
-    UserMessage, Usage,
+    AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, Usage, UserContent,
+    UserMessage,
 };
 use pi::tools::{ToolEffects, ToolOutput};
-use smith_io_engine::{EngineTime, Machine};
 use smith_agent::{AgentCompletion, AgentMachine, AgentRequest};
+use smith_io_engine::{EngineTime, Machine};
 
 /// SplitMix64 — deterministic, dependency-free.
 struct Rng(u64);
@@ -117,7 +117,9 @@ fn collect_run_tool_ids(requests: &[AgentRequest]) -> Vec<String> {
 }
 
 fn has_call_llm(requests: &[AgentRequest]) -> bool {
-    requests.iter().any(|r| matches!(r, AgentRequest::CallLlm { .. }))
+    requests
+        .iter()
+        .any(|r| matches!(r, AgentRequest::CallLlm { .. }))
 }
 
 #[test]
@@ -163,7 +165,10 @@ fn batching_invariants_hold_across_random_turns() {
                 let id = outstanding.remove(idx);
                 let step = m.on_completion(
                     EngineTime::ZERO,
-                    AgentCompletion::ToolFinished { id, output: output() },
+                    AgentCompletion::ToolFinished {
+                        id,
+                        output: output(),
+                    },
                 );
                 delivered += 1;
 
@@ -194,13 +199,14 @@ fn batching_invariants_hold_across_random_turns() {
                         newly.is_empty(),
                         "seed {seed}: nothing new dispatches mid-batch"
                     );
-                    assert!(
-                        !has_call_llm(&step),
-                        "seed {seed}: no model call mid-batch"
-                    );
+                    assert!(!has_call_llm(&step), "seed {seed}: no model call mid-batch");
                 }
             }
-            assert_eq!(delivered, calls.len(), "seed {seed}: every tool ran exactly once");
+            assert_eq!(
+                delivered,
+                calls.len(),
+                "seed {seed}: every tool ran exactly once"
+            );
 
             // After the turn, requests should hold the next CallLlm; capture it
             // for the next loop's assertion is implicit (we just re-respond).
@@ -239,7 +245,10 @@ fn assert_batch_is_valid(
         .iter()
         .map(|id| {
             let name = &calls.iter().find(|(cid, _)| cid == id).expect("known id").1;
-            effects.get(name).copied().unwrap_or_else(ToolEffects::write)
+            effects
+                .get(name)
+                .copied()
+                .unwrap_or_else(ToolEffects::write)
         })
         .collect();
     if batch_ids.len() > 1 {
@@ -309,8 +318,10 @@ fn every_arrival_order_of_a_parallel_batch_is_safe() {
     for perm in permutations(&ids) {
         let mut m = AgentMachine::with_effects(vec![user("go")], 10, effects.clone());
         let _ = m.on_start(EngineTime::ZERO);
-        let dispatched =
-            m.on_completion(EngineTime::ZERO, AgentCompletion::LlmResponded(assistant_tool_calls(&calls)));
+        let dispatched = m.on_completion(
+            EngineTime::ZERO,
+            AgentCompletion::LlmResponded(assistant_tool_calls(&calls)),
+        );
         // All four dispatched in one batch.
         let mut running = collect_run_tool_ids(&dispatched);
         running.sort();

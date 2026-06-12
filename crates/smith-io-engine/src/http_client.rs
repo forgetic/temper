@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use asupersync::cx::Cx;
-use asupersync::http::h1::http_client::{ClientError, HttpClient, HttpClientBuilder};
 use asupersync::http::h1::Method;
+use asupersync::http::h1::http_client::{ClientError, HttpClient, HttpClientBuilder};
 
 /// One buffered HTTP response, as plain data.
 #[derive(Clone, Debug, Eq, PartialEq)]

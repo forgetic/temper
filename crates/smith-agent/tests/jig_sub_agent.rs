@@ -48,8 +48,7 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
     let outcome = smith_io_engine::block_on(async move {
         run_sub_agent(SubAgent {
             system_prompt: Some(
-                "You are a sub-agent. Use the write tool to create the requested file."
-                    .to_string(),
+                "You are a sub-agent. Use the write tool to create the requested file.".to_string(),
             ),
             user_message: "Create NOTES.md whose first line is exactly `project notes`."
                 .to_string(),
@@ -65,7 +64,11 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
     })
     .expect("sub-agent runs");
 
-    assert_eq!(outcome.stop, AgentStop::Completed, "run should complete cleanly");
+    assert_eq!(
+        outcome.stop,
+        AgentStop::Completed,
+        "run should complete cleanly"
+    );
 
     // The write tool actually created the file in the checkout.
     let notes = fs::read_to_string(checkout.path().join("NOTES.md")).expect("NOTES.md was written");
@@ -148,8 +151,8 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
 
 #[test]
 fn sub_agent_forwards_live_events_to_the_sink() {
-    use std::sync::Mutex;
     use smith_agent::{AgentEvent, EventSink, StreamDelta, run_sub_agent_with_events};
+    use std::sync::Mutex;
 
     // A sink that records every event it sees.
     #[derive(Default)]
@@ -206,15 +209,21 @@ fn sub_agent_forwards_live_events_to_the_sink() {
     let events = recorder.events.lock().expect("events lock");
     // Lifecycle events present.
     assert!(
-        events.iter().any(|e| matches!(e, AgentEvent::TurnStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TurnStart { .. })),
         "expected a TurnStart event"
     );
     assert!(
-        events.iter().any(|e| matches!(e, AgentEvent::ToolStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { .. })),
         "expected a ToolStart event (the write tool)"
     );
     assert!(
-        events.iter().any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::AgentEnd { .. })),
         "expected an AgentEnd event"
     );
     // Live streaming deltas were forwarded by the shell. The jig fake streams a
@@ -305,7 +314,11 @@ fn sub_agent_can_be_aborted_mid_run() {
     })
     .expect("run resolves");
 
-    assert_eq!(outcome.stop, AgentStop::Aborted, "abort should stop the run");
+    assert_eq!(
+        outcome.stop,
+        AgentStop::Aborted,
+        "abort should stop the run"
+    );
     // It did not run anywhere near the 100-iteration budget.
     assert!(
         fake.requests().len() < 100,

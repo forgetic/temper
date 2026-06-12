@@ -228,10 +228,9 @@ mod tests {
 
     #[test]
     fn step_state_defaults_to_done_when_absent() {
-        let parsed: StepProgress = serde_json::from_str(
-            r#"{"correlation_key":"k","step":1,"status":"did a thing"}"#,
-        )
-        .expect("parse without state");
+        let parsed: StepProgress =
+            serde_json::from_str(r#"{"correlation_key":"k","step":1,"status":"did a thing"}"#)
+                .expect("parse without state");
         assert_eq!(parsed.state, StepState::Done);
         assert_eq!(parsed.pushed_sha, None);
     }

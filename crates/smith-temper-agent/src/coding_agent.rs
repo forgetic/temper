@@ -43,12 +43,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::prompt_overlays::PromptOverlays;
+use crate::provider::{ProviderConfig, ProviderError};
 use pi::sdk::{
     Agent, AgentConfig, ContentBlock, StopReason, ToolRegistry, create_bash_tool, create_edit_tool,
     create_find_tool, create_grep_tool, create_ls_tool, create_read_tool, create_write_tool,
 };
-use crate::prompt_overlays::PromptOverlays;
-use crate::provider::{ProviderConfig, ProviderError};
 
 /// Default ceiling on tool-using iterations for one workspace run. The agent
 /// must do real multi-step work (read, edit, verify) on substantial work items,

@@ -22,11 +22,7 @@ use smith_temper_agent::ProviderConfig;
 #[test]
 fn parent_agent_delegates_to_a_sub_agent() {
     let checkout = TempCheckout::new("subagent-tool");
-    fs::write(
-        checkout.path().join("FACTS.md"),
-        "the answer is 42\n",
-    )
-    .expect("seed FACTS.md");
+    fs::write(checkout.path().join("FACTS.md"), "the answer is 42\n").expect("seed FACTS.md");
 
     // Sub-agent fake: reads FACTS.md, then reports the finding.
     let sub_fake = FakeLlm::start(Script::rule(|view| {
@@ -153,8 +149,14 @@ fn parent_agent_delegates_to_a_sub_agent() {
     );
 
     // Both fakes were exercised (parent did a tool round; sub did its own loop).
-    assert!(parent_fake.requests().len() >= 2, "parent should loop after the tool");
-    assert!(sub_fake.requests().len() >= 2, "sub-agent should run its own tool loop");
+    assert!(
+        parent_fake.requests().len() >= 2,
+        "parent should loop after the tool"
+    );
+    assert!(
+        sub_fake.requests().len() >= 2,
+        "sub-agent should run its own tool loop"
+    );
 }
 
 #[test]

@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use pi::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, UserContent,
-    UserMessage, Usage,
+    AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, Usage, UserContent,
+    UserMessage,
 };
 use pi::tools::{ToolEffects, ToolOutput};
 use smith_io_engine::{EngineTime, Machine};

@@ -87,9 +87,9 @@ pub enum SubAgentError {
 impl std::fmt::Display for SubAgentError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SubAgentError::RuntimeUnavailable => formatter.write_str(
-                "run_sub_agent must be driven on an asupersync engine runtime",
-            ),
+            SubAgentError::RuntimeUnavailable => {
+                formatter.write_str("run_sub_agent must be driven on an asupersync engine runtime")
+            }
             SubAgentError::NoOutcome => {
                 formatter.write_str("sub-agent drive loop ended without an outcome")
             }
@@ -136,8 +136,8 @@ pub fn run_sub_agent_controllable(
     ),
     SubAgentError,
 > {
-    let handle = asupersync::runtime::Runtime::current_handle()
-        .ok_or(SubAgentError::RuntimeUnavailable)?;
+    let handle =
+        asupersync::runtime::Runtime::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
 
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools

@@ -11,8 +11,12 @@ use crate::queue::CqSender;
 /// where the shell may stamp "now") and the result is submitted to the
 /// completion queue. The machine sees time purely as data: it requested a
 /// timer, and learns it fired only when the resulting completion arrives.
-pub fn arm_timer<C, F>(handle: &RuntimeHandle, cq: &CqSender<C>, delay: Duration, make_completion: F)
-where
+pub fn arm_timer<C, F>(
+    handle: &RuntimeHandle,
+    cq: &CqSender<C>,
+    delay: Duration,
+    make_completion: F,
+) where
     C: Send + 'static,
     F: FnOnce() -> C + Send + 'static,
 {

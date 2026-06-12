@@ -103,7 +103,10 @@ impl Tool for SubAgentTool {
             .get("task")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                Error::tool(self.name.clone(), "sub-agent input must include a string `task`")
+                Error::tool(
+                    self.name.clone(),
+                    "sub-agent input must include a string `task`",
+                )
             })?
             .to_string();
 

@@ -113,14 +113,15 @@ impl Executor<AgentMachine> for AgentShell {
                 let cq = self.cq.clone();
                 self.handle.spawn(async move {
                     let output = match tools.get(&call.name) {
-                        Some(tool) => match tool.execute(&call.id, call.arguments.clone(), None).await
-                        {
-                            Ok(output) => output,
-                            Err(error) => tool_error_output(&format!(
-                                "tool `{}` failed: {error}",
-                                call.name
-                            )),
-                        },
+                        Some(tool) => {
+                            match tool.execute(&call.id, call.arguments.clone(), None).await {
+                                Ok(output) => output,
+                                Err(error) => tool_error_output(&format!(
+                                    "tool `{}` failed: {error}",
+                                    call.name
+                                )),
+                            }
+                        }
                         None => tool_error_output(&format!("unknown tool `{}`", call.name)),
                     };
                     let _ = cq.send(AgentCompletion::ToolFinished {

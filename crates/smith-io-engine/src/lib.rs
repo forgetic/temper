@@ -51,12 +51,12 @@ pub mod queue;
 pub mod runtime;
 pub mod timer;
 
-pub use engine::{drive, drive_sync, Executor};
-pub use http_client::{build_http_client, http_call, HttpCall, HttpCallResult, HttpResponseData};
+pub use engine::{Executor, drive, drive_sync};
+pub use http_client::{HttpCall, HttpCallResult, HttpResponseData, build_http_client, http_call};
 pub use machine::{EngineTime, Machine};
-pub use queue::{channel, oneshot, CqReceiver, CqSender, OneshotReceiver, OneshotSender};
+pub use queue::{CqReceiver, CqSender, OneshotReceiver, OneshotSender, channel, oneshot};
 pub use runtime::{
-    block_on, block_on_runtime, build_runtime, current_cx, engine_now, sleep_for, timer_now,
-    EngineRuntime,
+    EngineRuntime, block_on, block_on_runtime, build_runtime, current_cx, engine_now, sleep_for,
+    timer_now,
 };
 pub use timer::arm_timer;

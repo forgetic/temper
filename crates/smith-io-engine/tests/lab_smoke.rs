@@ -46,10 +46,7 @@ fn run_once(seed: u64, task_count: u32) -> (u32, u64) {
     }
 
     let report = runtime.run_with_auto_advance();
-    (
-        counter.load(Ordering::SeqCst),
-        report.virtual_elapsed_nanos,
-    )
+    (counter.load(Ordering::SeqCst), report.virtual_elapsed_nanos)
 }
 
 #[test]

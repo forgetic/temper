@@ -63,8 +63,12 @@ where
 ///
 /// `clock` is invoked once per delivery to stamp the transition, mirroring the
 /// production drive loop's once-per-delivery snapshot.
-pub fn drive_sync<M, X, C>(machine: &mut M, executor: &X, completions: Vec<M::Completion>, mut clock: C)
-where
+pub fn drive_sync<M, X, C>(
+    machine: &mut M,
+    executor: &X,
+    completions: Vec<M::Completion>,
+    mut clock: C,
+) where
     M: Machine,
     X: Executor<M>,
     C: FnMut() -> EngineTime,
@@ -138,12 +142,9 @@ mod tests {
             requests: RefCell::new(Vec::new()),
         };
         // Three completions offered, but the machine stops after 2 ticks.
-        drive_sync(
-            &mut machine,
-            &recorder,
-            vec![(), (), ()],
-            || EngineTime::ZERO,
-        );
+        drive_sync(&mut machine, &recorder, vec![(), (), ()], || {
+            EngineTime::ZERO
+        });
         assert_eq!(
             *recorder.requests.borrow(),
             vec![Req::Pong(0), Req::Pong(1), Req::Pong(2)]
