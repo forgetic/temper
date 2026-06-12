@@ -67,13 +67,8 @@ fn run() -> Result<(), String> {
     let context: WorkspaceContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| format!("parse context file {context_path}: {error}"))?;
 
-    let provider = ProviderConfig::from_auth(options.auth, options.codex_model, options.auth_file)
-        .map_err(|error| format!("provider preflight: {error}"))?;
-
-    // The checkout is our cwd: the worker runs us there, exactly as the legacy
-    // file-protocol coder was run.
-    let cwd = std::env::current_dir().map_err(|error| format!("resolve cwd: {error}"))?;
-
+    // Emit the Started checkpoint before any preamble (auth, cwd) so the worker
+    // sees the correlation/start even if credential preflight fails.
     emit(&StepProgress {
         correlation_key: context.correlation_key.clone(),
         step: 1,
@@ -82,6 +77,13 @@ fn run() -> Result<(), String> {
         pushed_sha: None,
         note: Some(format!("protocol v{PROTOCOL_VERSION}")),
     });
+
+    let provider = ProviderConfig::from_auth(options.auth, options.codex_model, options.auth_file)
+        .map_err(|error| format!("provider preflight: {error}"))?;
+
+    // The checkout is our cwd: the worker runs us there, exactly as the legacy
+    // file-protocol coder was run.
+    let cwd = std::env::current_dir().map_err(|error| format!("resolve cwd: {error}"))?;
 
     let result = smith_io_engine::block_on(async move {
         run_coding_agent_native_with_options(
