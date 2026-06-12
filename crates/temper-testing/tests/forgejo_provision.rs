@@ -34,7 +34,7 @@ fn provisions_identity_repo_labels_and_workflow() {
         // polling; building/dropping that client inside the async test context trips
         // Tokio's "cannot drop a runtime in an async context" guard. Boot it on a
         // blocking thread so the nested blocking runtime lives and dies off-reactor.
-        let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
+        let cached = skein::runtime::spawn_blocking(start_cached_provisioned_server)
             .await
             .expect("forgejo cached provisioned state starts");
         let server = cached.server;

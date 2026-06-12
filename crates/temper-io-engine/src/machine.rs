@@ -50,8 +50,8 @@ impl std::ops::Add<std::time::Duration> for EngineTime {
     }
 }
 
-impl From<asupersync::types::Time> for EngineTime {
-    fn from(time: asupersync::types::Time) -> Self {
+impl From<skein::types::Time> for EngineTime {
+    fn from(time: skein::types::Time) -> Self {
         Self(time.as_nanos())
     }
 }

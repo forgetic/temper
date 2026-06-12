@@ -114,7 +114,7 @@ async fn boot_world() -> LiveWorld {
         "repo": REPO,
     }))
     .expect("live smoke state serializes");
-    let cached = asupersync::runtime::spawn_blocking(move || {
+    let cached = skein::runtime::spawn_blocking(move || {
         ForgejoServer::start_with_state(&state, |server| {
             let base = server.base_url().to_string();
             let admin_token = bootstrap_admin(server).expect("admin token bootstraps");

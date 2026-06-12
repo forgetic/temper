@@ -66,7 +66,7 @@ fn read_secret(path: &Path) -> Result<String, WakeError> {
 
 #[cfg(unix)]
 pub struct WakeListener {
-    socket: asupersync::net::unix::UnixDatagram,
+    socket: skein::net::unix::UnixDatagram,
     path: PathBuf,
     secret: Option<String>,
 }
@@ -80,7 +80,7 @@ impl WakeListener {
             }
         }
         let _ = std::fs::remove_file(&config.socket);
-        let socket = asupersync::net::unix::UnixDatagram::bind(&config.socket)?;
+        let socket = skein::net::unix::UnixDatagram::bind(&config.socket)?;
         Ok(Self {
             socket,
             path: config.socket,
@@ -217,7 +217,7 @@ pub async fn wait_for_wake_or_poll(
         let window = remaining.min(STOP_CHECK_INTERVAL);
         match wake.as_deref_mut() {
             Some(listener) => {
-                let received = asupersync::time::timeout(
+                let received = skein::time::timeout(
                     temper_io_engine::runtime::engine_now(),
                     window,
                     Box::pin(listener.recv()),
@@ -226,7 +226,7 @@ pub async fn wait_for_wake_or_poll(
                 match received {
                     Err(_elapsed) => {}
                     Ok(Ok(hint)) => {
-                        asupersync::time::sleep(
+                        skein::time::sleep(
                             temper_io_engine::runtime::engine_now(),
                             wake_debounce(),
                         )
@@ -240,7 +240,7 @@ pub async fn wait_for_wake_or_poll(
                 }
             }
             None => {
-                asupersync::time::sleep(temper_io_engine::runtime::engine_now(), window).await;
+                skein::time::sleep(temper_io_engine::runtime::engine_now(), window).await;
             }
         }
     }

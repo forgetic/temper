@@ -122,9 +122,9 @@ fn machine_is_pure_and_deterministic() {
     assert!(machine.is_stopped());
 }
 
-/// Shell: executes requests on the asupersync runtime.
+/// Shell: executes requests on the skein runtime.
 struct PingExecutor {
-    handle: asupersync::runtime::RuntimeHandle,
+    handle: skein::runtime::RuntimeHandle,
     cq: CqSender<Completion>,
 }
 
@@ -171,7 +171,11 @@ fn engine_serves_http_with_timers() {
             handle.spawn(async move { drive(PingMachine::default(), &executor, cq_rx).await });
 
         // Give a few timer ticks a chance to land, then call the service.
-        asupersync::time::sleep(cx.now(), Duration::from_millis(50)).await;
+        skein::time::sleep(
+            temper_io_engine::runtime::timer_now(&cx),
+            Duration::from_millis(50),
+        )
+        .await;
 
         let client = temper_io_engine::http::build_http_client();
         let response = temper_io_engine::http::http_call(

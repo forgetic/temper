@@ -38,7 +38,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-asupersync = { workspace = true }
+skein = { workspace = true }
 chrono = { workspace = true }
 temper-daemon = { path = "crates/temper-daemon" }
 temper-forge = { path = "crates/temper-forge" }
@@ -89,18 +89,16 @@ workspace = true
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-# asupersync 0.3.2 uses let-chains (stable since 1.88) without declaring an
-# MSRV of its own; nothing else in the tree needs more than 1.87.
+# skein (the vendored async runtime) uses edition-2024 and let-chains; nothing
+# in temper itself needs more than 1.88.
 rust-version = "1.88"
 
 [workspace.dependencies]
-# Pinned exactly: asupersync is young and patch releases have carried
-# behavioral scheduler changes (0.3.2 fixed the timer lost-wakeup hang that
-# 0.3.1 needed a vendored patch for), so bumps should be deliberate and
-# tested, not picked up silently. 0.3.2 is the newest release that builds on
-# stable rustc — 0.3.3/0.3.4 declare `#![feature(try_trait_v2)]` and require
-# nightly; re-check when upstream drops the unconditional gates.
-asupersync = "=0.3.2"
+# skein: our maintained, MIT, cancel-correct async runtime (a clean-room fork of
+# asupersync 0.2.4 — the last plain-MIT upstream release; 0.2.5+ carry an
+# OpenAI/Anthropic license rider and 0.3.3+ require nightly). Lives in its own
+# repo at ../skein and is shared across projects (temper, smith, …).
+skein = { path = "../skein/crates/skein" }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"

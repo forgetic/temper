@@ -64,7 +64,7 @@ pub type Result<T> = std::result::Result<T, RestError>;
 /// reqwest-based client so call sites stay unchanged.
 #[derive(Clone)]
 pub struct Client {
-    inner: std::sync::Arc<asupersync::http::h1::http_client::HttpClient>,
+    inner: std::sync::Arc<skein::http::h1::http_client::HttpClient>,
 }
 
 impl std::fmt::Debug for Client {
@@ -120,9 +120,9 @@ impl Client {
 
         // Apply the request deadline only with a real task context: a detached
         // context has no clock, which would make the deadline meaningless.
-        let result = match asupersync::cx::Cx::current() {
+        let result = match skein::cx::Cx::current() {
             Some(cx) => {
-                match asupersync::time::timeout(
+                match skein::time::timeout(
                     temper_io_engine::runtime::timer_now(&cx),
                     REQUEST_TIMEOUT,
                     Box::pin(http_call(&cx, &self.inner, call)),

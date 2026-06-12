@@ -3,7 +3,7 @@
 //! Completion-queue plumbing: an unbounded MPSC channel and a oneshot cell.
 //!
 //! These are runtime-agnostic (plain `Mutex` + `Waker`) so they can be used
-//! from any task — including callbacks deep inside asupersync's HTTP server,
+//! from any task — including callbacks deep inside skein's HTTP server,
 //! where no capability context is threaded through. They carry completions
 //! from executors back to the engine loop; they are imperative-shell internals
 //! and never appear inside a [`crate::Machine`].

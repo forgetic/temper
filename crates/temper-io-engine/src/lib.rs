@@ -12,7 +12,7 @@
 //!   no clocks, no spawning, no side effects. Time only enters as data carried
 //!   by completions.
 //! - an **imperative shell** — an [`Executor`] that performs the actual I/O
-//!   for each request on the asupersync runtime and eventually feeds an
+//!   for each request on the skein runtime and eventually feeds an
 //!   `<io-event-completion>` back into the engine's completion queue.
 //!
 //! The arrow loops:
@@ -21,7 +21,7 @@
 //!   <io-event-completion> ──▶ Machine::on_completion (pure)
 //!            ▲                          │
 //!            │                          ▼
-//!     Executor (asupersync I/O) ◀── <io-event-request>
+//!     Executor (skein I/O) ◀── <io-event-request>
 //! ```
 //!
 //! [`drive`] is the only loop: it receives one completion at a time, runs the

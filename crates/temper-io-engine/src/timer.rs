@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use asupersync::runtime::RuntimeHandle;
-use asupersync::time::sleep;
+use skein::runtime::RuntimeHandle;
+use skein::time::sleep;
 
 use crate::queue::CqSender;
 

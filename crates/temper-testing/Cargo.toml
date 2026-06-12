@@ -49,7 +49,7 @@ base64 = "0.22"
 # crate's no-op `block_on`; it drives the poll loop as an engine task instead.
 # The filesystem path keeps using `block_on`. This is a normal dependency (not
 # dev-only) because the production binaries need the engine runtime.
-asupersync.workspace = true
+skein.workspace = true
 temper-io-engine = { path = "../temper-io-engine" }
 
 [dev-dependencies]
