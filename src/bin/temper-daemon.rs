@@ -108,17 +108,23 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
         daemon
     };
 
+    let mut sigint = skein::signal::sigint()
+        .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
+    let mut sigterm = skein::signal::sigterm()
+        .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
+
     let server = temper_daemon::serve(&daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
 
-    if let Err(error) = skein::signal::ctrl_c().await {
-        // skein's signal handling is a Phase 0 stub: ctrl_c() returns an error
-        // immediately. Exiting here would tear the daemon down at startup, so
-        // park instead and serve until the process is killed externally.
-        eprintln!("temper-daemon: shutdown signal unavailable ({error}); serving until killed");
-        std::future::pending::<()>().await;
-    }
+    std::future::poll_fn(|task_cx| {
+        if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
+    })
+    .await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
 }
