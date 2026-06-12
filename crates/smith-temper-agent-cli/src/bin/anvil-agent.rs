@@ -1,7 +1,7 @@
 //! `anvil-agent` — the out-of-process coding agent the orchestration worker spawns.
 //!
 //! This binary *is* the worker ↔ agent process boundary (plane 1). It speaks the
-//! `anvil-process-protocol`:
+//! `smith-agent-protocol`:
 //!
 //! 1. read the [`WorkspaceContext`] JSON from the file named by `CONTEXT_ENV`;
 //! 2. run the native sans-IO coding loop in the current directory (the prepared
@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anvil_process_protocol::{
+use smith_agent_protocol::{
     CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
     WorkspaceResult,
 };

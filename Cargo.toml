@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "crates/anvil-process-protocol",
     "crates/smith-agent",
     "crates/smith-io-engine",
     "crates/smith-temper-agent",

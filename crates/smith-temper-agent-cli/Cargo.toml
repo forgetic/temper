@@ -7,7 +7,7 @@ license.workspace = true
 description = "Small Smith utility binaries for Temper agent provider setup."
 
 [dependencies]
-anvil-process-protocol = { path = "../anvil-process-protocol" }
+smith-agent-protocol = { path = "../../../smith/crates/smith-agent-protocol" }
 asupersync.workspace = true
 serde_json.workspace = true
 smith-io-engine = { path = "../smith-io-engine" }

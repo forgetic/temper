@@ -63,7 +63,7 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 //
 // The context (input, `$TEMPER_CODING_WORKSPACE_CONTEXT`) and result (output,
 // `$TEMPER_CODING_WORKSPACE_RESULT`) shapes are owned by the serde-only
-// `anvil-process-protocol` crate — the contract a third-party agent speaks and
+// `smith-agent-protocol` crate — the contract a third-party agent speaks and
 // the worker consumes without linking anvil's internals. We re-export them here
 // so this crate's API (and all its callers) are unchanged by the move. The
 // result shape must still match temper's `WorkspaceResult` /
@@ -71,7 +71,7 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // `deny_unknown_fields`).
 // ---------------------------------------------------------------------------
 
-pub use anvil_process_protocol::{
+pub use smith_agent_protocol::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
     WorkspaceResultChild, WorkspaceWorkItem,
 };

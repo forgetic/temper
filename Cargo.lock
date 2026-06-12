@@ -95,14 +95,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anvil-process-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4230,6 +4222,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "smith-io-engine"
 version = "0.1.0"
 dependencies = [
@@ -4242,7 +4242,6 @@ dependencies = [
 name = "smith-temper-agent"
 version = "0.1.0"
 dependencies = [
- "anvil-process-protocol",
  "jig-core",
  "jig-record",
  "jig-server",
@@ -4250,6 +4249,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smith-agent",
+ "smith-agent-protocol",
  "smith-io-engine",
  "smith-temper-agent",
  "temper-process-protocol",
@@ -4261,11 +4261,11 @@ dependencies = [
 name = "smith-temper-agent-cli"
 version = "0.1.0"
 dependencies = [
- "anvil-process-protocol",
  "asupersync",
  "jig-core",
  "jig-server",
  "serde_json",
+ "smith-agent-protocol",
  "smith-io-engine",
  "smith-temper-agent",
  "temper-process-protocol",

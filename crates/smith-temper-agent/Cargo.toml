@@ -7,7 +7,7 @@ license.workspace = true
 description = "Temper-specific provider/auth/decision core for Smith agents."
 
 [dependencies]
-anvil-process-protocol = { path = "../anvil-process-protocol" }
+smith-agent-protocol = { path = "../../../smith/crates/smith-agent-protocol" }
 pi_agent_rust.workspace = true
 serde.workspace = true
 serde_json.workspace = true
