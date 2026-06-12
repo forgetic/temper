@@ -301,10 +301,13 @@ pub(super) type Result<T> = std::result::Result<T, ProvisionError>;
 /// The owner/name come from `runner_config().repository`; nothing is hardcoded
 /// elsewhere. Idempotent where Forgejo allows it (re-creating an org/user/label
 /// is tolerated), so a retried provision does not wedge.
-pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
+pub async fn provision(cx: &temper_io_engine::Cx, server: &ForgejoServer) -> Result<Provisioned> {
     let config = runner_config();
+    let admin_token = bootstrap_admin(server)?;
     let repos = super::provision_cache::provision_repositories(
-        server,
+        cx,
+        server.base_url(),
+        &admin_token,
         std::slice::from_ref(&config.repository.name),
     )
     .await?;
@@ -334,6 +337,7 @@ pub async fn provision(server: &ForgejoServer) -> Result<Provisioned> {
 /// repos in one live world, prefer [`provision_role_identities`] once and then
 /// [`provision_repository`] per repo so same-name tokens are not reminted.
 pub async fn provision_world(
+    cx: &temper_io_engine::Cx,
     base_url: &str,
     admin_token: &str,
     owner: &str,
@@ -341,8 +345,8 @@ pub async fn provision_world(
     roles: &[RoleBinding],
     default_branch: &str,
 ) -> Result<Provisioned> {
-    let identities = provision_role_identities(base_url, admin_token, owner, roles).await?;
-    provision_repository(base_url, &identities, name, default_branch).await
+    let identities = provision_role_identities(cx, base_url, admin_token, owner, roles).await?;
+    provision_repository(cx, base_url, &identities, name, default_branch).await
 }
 
 /// Provisions the org and per-role Forgejo identities once for a live world.
@@ -351,12 +355,13 @@ pub async fn provision_world(
 /// repeated same-name token minting while still giving each role token access via
 /// Owners-team membership.
 pub async fn provision_role_identities(
+    cx: &temper_io_engine::Cx,
     base_url: &str,
     admin_token: &str,
     owner: &str,
     roles: &[RoleBinding],
 ) -> Result<ProvisionedRoles> {
-    let client = rest::http_client()?;
+    let client = rest::http_client(cx.clone())?;
     rest::ensure_org(&client, base_url, admin_token, owner).await?;
     let owners_team = rest::owners_team_id(&client, base_url, admin_token, owner).await?;
 
@@ -392,12 +397,13 @@ pub async fn provision_role_identities(
 
 /// Provisions one repository using an already-created role identity map.
 pub async fn provision_repository(
+    cx: &temper_io_engine::Cx,
     base_url: &str,
     identities: &ProvisionedRoles,
     name: &str,
     default_branch: &str,
 ) -> Result<Provisioned> {
-    let client = rest::http_client()?;
+    let client = rest::http_client(cx.clone())?;
     rest::ensure_repo(
         &client,
         base_url,

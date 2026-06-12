@@ -15,8 +15,13 @@ pub fn run_serve(args: &InteractionServeArgs) -> Result<(), InteractionDeploymen
         args.allow_non_loopback,
         |key| std::env::var(key).ok(),
     )?;
-    let service = build_service(&spec, &bindings, |key| std::env::var(key).ok())?;
     let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
+    let service = temper_io_engine::runtime::block_on_runtime_with(
+        &runtime,
+        move |cx, _handle| async move {
+            build_service(&cx, &spec, &bindings, |key| std::env::var(key).ok())
+        },
+    )?;
     let app = InteractionHttpApp::new(service, options.service_token);
     run_http(options.bind, app, &runtime)?;
     Ok(())

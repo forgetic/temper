@@ -208,8 +208,9 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         let name = args.name.clone();
         let role_bindings = config.role_bindings.clone();
         let default_branch = config.repository.default_branch.clone();
-        temper_io_engine::runtime::block_on_runtime(&runtime, async move {
+        temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
             let provisioned = provision_world(
+                &cx,
                 &base_url,
                 &admin_token,
                 &owner,

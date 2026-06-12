@@ -131,10 +131,14 @@ async fn issue_body_and_labels(
     (issue.body, issue.labels)
 }
 
-async fn spawn(daemon: &Daemon) -> String {
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("bind test server");
+async fn spawn(handle: &skein::runtime::RuntimeHandle, daemon: &Daemon) -> String {
+    let server = temper_daemon::serve(
+        handle,
+        daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
     let addr = server.local_addr();
     format!("http://{addr}/v1/message")
 }
@@ -469,6 +473,7 @@ async fn list_issues(forge: &MemoryForge, repo: &RepositoryId) -> Vec<Issue> {
 }
 
 async fn wait_for_issue_count(
+    cx: &temper_io_engine::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     expected: usize,
@@ -484,16 +489,21 @@ async fn wait_for_issue_count(
             "timed out waiting for {expected} issue(s), saw {}",
             issues.len()
         );
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
-async fn assert_issue_count_stays(forge: &MemoryForge, repo: &RepositoryId, expected: usize) {
+async fn assert_issue_count_stays(
+    cx: &temper_io_engine::Cx,
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    expected: usize,
+) {
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         let issues = list_issues(forge, repo).await;
         assert_eq!(issues.len(), expected);
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
@@ -639,6 +649,7 @@ fn has_label(labels: &[String], expected: &str) -> bool {
 }
 
 async fn wait_for_review_apply(
+    cx: &temper_io_engine::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     pull_request: ItemNumber,
@@ -656,11 +667,12 @@ async fn wait_for_review_apply(
             state.0,
             state.1
         );
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
 async fn assert_pull_request_state_stays(
+    cx: &temper_io_engine::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     number: ItemNumber,
@@ -672,11 +684,12 @@ async fn assert_pull_request_state_stays(
         let (labels, reviews) = pull_request_labels_and_reviews(forge, repo, number).await;
         assert_eq!(labels, expected_labels);
         assert_eq!(reviews.len(), expected_reviews);
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
 async fn wait_for_pull_request_count(
+    cx: &temper_io_engine::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     expected: usize,
@@ -695,11 +708,12 @@ async fn wait_for_pull_request_count(
             "timed out waiting for {expected} pull request(s), saw {}",
             pulls.len()
         );
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
 async fn assert_pull_request_count_stays(
+    cx: &temper_io_engine::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     expected: usize,
@@ -711,11 +725,12 @@ async fn assert_pull_request_count_stays(
             .await
             .expect("list pull requests succeeds");
         assert_eq!(pulls.len(), expected);
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
 async fn assign_review_job(
+    handle: &skein::runtime::RuntimeHandle,
     forge: Arc<MemoryForge>,
     repo: &RepositoryId,
     pull_request: ItemNumber,
@@ -731,9 +746,10 @@ async fn assign_review_job(
         policy(),
         "daemon-1",
         Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+        temper_daemon::system_clock(),
     ));
-    let daemon = Daemon::with_applier(applier);
-    let url = spawn(&daemon).await;
+    let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
+    let url = spawn(&handle, &daemon).await;
     let client = temper_io_engine::http::JsonClient::new();
     let role = RoleId::new("reviewer");
 
@@ -785,11 +801,12 @@ async fn assign_review_job(
 
 #[test]
 fn review_verdict_approve_submits_native_review_and_routes_landing_label() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+        let (client, url, assignment) =
+            assign_review_job(&handle, forge.clone(), &repo, pull_request).await;
 
         let result = verdict_result("worker-a", &assignment.job_id, "approve", None);
         assert_release(
@@ -799,7 +816,7 @@ fn review_verdict_approve_submits_native_review_and_routes_landing_label() {
         );
 
         let (labels, reviews) =
-            wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+            wait_for_review_apply(&cx, &forge, &repo, pull_request, |labels, reviews| {
                 !has_label(labels, "needs-reviewer")
                     && has_label(labels, "landing")
                     && reviews.len() == 1
@@ -816,11 +833,12 @@ fn review_verdict_approve_submits_native_review_and_routes_landing_label() {
 
 #[test]
 fn review_verdict_changes_attaches_changes_requested_review_with_body() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+        let (client, url, assignment) =
+            assign_review_job(&handle, forge.clone(), &repo, pull_request).await;
         let authored = "please add error handling";
 
         let result = verdict_result("worker-a", &assignment.job_id, "changes", Some(authored));
@@ -836,7 +854,7 @@ fn review_verdict_changes_attaches_changes_requested_review_with_body() {
         );
 
         let (labels, reviews) =
-            wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+            wait_for_review_apply(&cx, &forge, &repo, pull_request, |labels, reviews| {
                 !has_label(labels, "needs-reviewer") && reviews.len() == 1
             })
             .await;
@@ -864,17 +882,18 @@ fn review_verdict_changes_attaches_changes_requested_review_with_body() {
             .apply(replay_job, replay_result)
             .await;
 
-        assert_pull_request_state_stays(&forge, &repo, pull_request, labels, 1).await;
+        assert_pull_request_state_stays(&cx, &forge, &repo, pull_request, labels, 1).await;
     })
 }
 
 #[test]
 fn review_verdict_escalate_adds_needs_architect_label() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let pull_request = create_pull_request_needing_review(&forge, &repo).await;
-        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+        let (client, url, assignment) =
+            assign_review_job(&handle, forge.clone(), &repo, pull_request).await;
 
         let result = verdict_result("worker-a", &assignment.job_id, "escalate", None);
         assert_release(
@@ -884,7 +903,7 @@ fn review_verdict_escalate_adds_needs_architect_label() {
         );
 
         let (labels, reviews) =
-            wait_for_review_apply(&forge, &repo, pull_request, |labels, reviews| {
+            wait_for_review_apply(&cx, &forge, &repo, pull_request, |labels, reviews| {
                 has_label(labels, "needs-architect") && reviews.is_empty()
             })
             .await;
@@ -897,12 +916,13 @@ fn review_verdict_escalate_adds_needs_architect_label() {
 
 #[test]
 fn undeclared_review_verdict_does_not_mutate_pull_request() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let pull_request = create_pull_request_needing_review(&forge, &repo).await;
         let before = pull_request_labels_and_reviews(&forge, &repo, pull_request).await;
-        let (client, url, assignment) = assign_review_job(forge.clone(), &repo, pull_request).await;
+        let (client, url, assignment) =
+            assign_review_job(&handle, forge.clone(), &repo, pull_request).await;
 
         let result = verdict_result("worker-a", &assignment.job_id, "merge_now", None);
         assert_release(
@@ -911,14 +931,14 @@ fn undeclared_review_verdict_does_not_mutate_pull_request() {
             &assignment.job_id,
         );
 
-        assert_pull_request_state_stays(&forge, &repo, pull_request, before.0, before.1.len())
+        assert_pull_request_state_stays(&cx, &forge, &repo, pull_request, before.0, before.1.len())
             .await;
     })
 }
 
 #[test]
 fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_untriaged_intake_issue(&forge, &repo).await;
@@ -929,9 +949,10 @@ fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
             policy(),
             "daemon-1",
             Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+            temper_daemon::system_clock(),
         ));
-        let daemon = Daemon::with_applier(applier);
-        let url = spawn(&daemon).await;
+        let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        let url = spawn(&handle, &daemon).await;
         let client = temper_io_engine::http::JsonClient::new();
         let role = RoleId::new("architect");
 
@@ -996,7 +1017,7 @@ fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
                 state.0,
                 state.1
             );
-            temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+            temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(10)).await;
         };
 
         assert_eq!(body, "rewritten spec");
@@ -1009,7 +1030,7 @@ fn triage_verdict_success_rewrites_body_and_routes_labels_without_pr() {
 
 #[test]
 fn triage_verdict_replay_is_quiet_no_op() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_untriaged_intake_issue(&forge, &repo).await;
@@ -1039,7 +1060,7 @@ fn triage_verdict_replay_is_quiet_no_op() {
 
 #[test]
 fn breakdown_verdict_creates_children_across_repos() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo_a = new_repo(&forge, "stable").await;
         let repo_b = create_repo(&forge, "acme", "web", "stable").await;
@@ -1051,9 +1072,10 @@ fn breakdown_verdict_creates_children_across_repos() {
             policy(),
             "daemon-1",
             Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+            temper_daemon::system_clock(),
         ));
-        let daemon = Daemon::with_applier(applier);
-        let url = spawn(&daemon).await;
+        let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        let url = spawn(&handle, &daemon).await;
         let client = temper_io_engine::http::JsonClient::new();
         let role = RoleId::new("architect");
 
@@ -1133,11 +1155,11 @@ fn breakdown_verdict_creates_children_across_repos() {
                 "timed out waiting for breakdown verdict apply, saw labels {:?}",
                 labels
             );
-            temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+            temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(10)).await;
         }
 
-        let repo_a_issues = wait_for_issue_count(&forge, &repo_a, 2).await;
-        let repo_b_issues = wait_for_issue_count(&forge, &repo_b, 1).await;
+        let repo_a_issues = wait_for_issue_count(&cx, &forge, &repo_a, 2).await;
+        let repo_b_issues = wait_for_issue_count(&cx, &forge, &repo_b, 1).await;
         let api_child = issue_by_slug(&repo_a_issues, "api-schema");
         let web_child = issue_by_slug(&repo_b_issues, "web-client");
 
@@ -1192,7 +1214,7 @@ fn breakdown_verdict_creates_children_across_repos() {
 
 #[test]
 fn breakdown_verdict_replay_is_idempotent() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo_a = new_repo(&forge, "stable").await;
         let repo_b = create_repo(&forge, "acme", "web", "stable").await;
@@ -1249,8 +1271,8 @@ fn breakdown_verdict_replay_is_idempotent() {
 
         applier.apply(job, result).await;
 
-        assert_issue_count_stays(&forge, &repo_a, 2).await;
-        assert_issue_count_stays(&forge, &repo_b, 1).await;
+        assert_issue_count_stays(&cx, &forge, &repo_a, 2).await;
+        assert_issue_count_stays(&cx, &forge, &repo_b, 1).await;
         let parent = forge
             .get_issue_by_number(&repo_a, issue)
             .await
@@ -1266,7 +1288,7 @@ fn breakdown_verdict_replay_is_idempotent() {
 
 #[test]
 fn children_without_create_issues_effect_are_ignored() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_untriaged_intake_issue(&forge, &repo).await;
@@ -1298,7 +1320,7 @@ fn children_without_create_issues_effect_are_ignored() {
 
 #[test]
 fn unresolvable_child_target_repo_drops_apply() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo_a = new_repo(&forge, "stable").await;
         let repo_b = create_repo(&forge, "acme", "web", "stable").await;
@@ -1327,7 +1349,7 @@ fn unresolvable_child_target_repo_drops_apply() {
 
 #[test]
 fn undeclared_verdict_does_not_mutate_issue() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_untriaged_intake_issue(&forge, &repo).await;
@@ -1351,7 +1373,7 @@ fn undeclared_verdict_does_not_mutate_issue() {
 
 #[test]
 fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1362,9 +1384,10 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
             policy(),
             "daemon-1",
             Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+            temper_daemon::system_clock(),
         ));
-        let daemon = Daemon::with_applier(applier);
-        let url = spawn(&daemon).await;
+        let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
+        let url = spawn(&handle, &daemon).await;
         let client = temper_io_engine::http::JsonClient::new();
         let role = RoleId::new("engineer");
 
@@ -1404,7 +1427,7 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
             &assignment.job_id,
         );
 
-        let pulls = wait_for_pull_request_count(&forge, &repo, 1).await;
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
         let pull = &pulls[0];
         assert_eq!(
             pull.title,
@@ -1453,7 +1476,7 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
         ForgeApplier::new(forge.clone(), workflow.clone())
             .apply(replay_job, replay_result)
             .await;
-        assert_pull_request_count_stays(&forge, &repo, 1).await;
+        assert_pull_request_count_stays(&cx, &forge, &repo, 1).await;
         assert_eq!(
             pull_request_labels(&forge, &repo, pull_number).await,
             vec!["implementation".to_string()]
@@ -1475,13 +1498,13 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
             0
         );
 
-        assert_pull_request_count_stays(&forge, &repo, 1).await;
+        assert_pull_request_count_stays(&cx, &forge, &repo, 1).await;
     })
 }
 
 #[test]
 fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1503,6 +1526,7 @@ fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
             policy(),
             "daemon-1",
             Arc::new(ForgeApplier::new(forge.clone(), workflow)),
+            temper_daemon::system_clock(),
         );
         let job = in_flight_job("acme/service", issue);
         let result = success_result(
@@ -1535,7 +1559,7 @@ fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
 
 #[test]
 fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1554,7 +1578,7 @@ fn success_without_branch_does_not_create_pull_request_or_mark_issue() {
 
 #[test]
 fn permanent_failure_marks_issue_for_human_attention_and_audit() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1588,7 +1612,7 @@ fn permanent_failure_marks_issue_for_human_attention_and_audit() {
 
 #[test]
 fn failure_marking_applies_for_human_audit_classes() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         for (failure_class, expected_class, message) in [
             (
                 Some(FailureClass::Permanent),
@@ -1636,7 +1660,7 @@ fn failure_marking_applies_for_human_audit_classes() {
 
 #[test]
 fn transient_failure_does_not_create_pull_request_or_mark_issue() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1663,7 +1687,7 @@ fn transient_failure_does_not_create_pull_request_or_mark_issue() {
 
 #[test]
 fn canceled_failure_does_not_create_pull_request_or_mark_issue() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1690,7 +1714,7 @@ fn canceled_failure_does_not_create_pull_request_or_mark_issue() {
 
 #[test]
 fn permanent_failure_replay_is_idempotent() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -1723,7 +1747,7 @@ fn permanent_failure_replay_is_idempotent() {
 
 #[test]
 fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;

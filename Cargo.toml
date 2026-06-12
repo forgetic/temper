@@ -23,6 +23,7 @@ members = [
     "crates/temper-forgejo-provision",
     "crates/temper-reference-delivery-validator",
     "crates/temper-worker",
+    "crates/temper-sim",
 ]
 resolver = "2"
 

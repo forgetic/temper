@@ -163,6 +163,9 @@ impl Error for WorkflowRoleDecisionProcessError {
 
 /// Agent adapter that obtains one workflow-role decision from a subprocess.
 pub struct WorkflowRoleDecisionProcessAgent {
+    /// Clock/deadline capability of the engine task this agent runs under,
+    /// injected at construction — process timeouts are computed against it.
+    cx: temper_io_engine::Cx,
     workflow_id: String,
     manifest: RoleManifest,
     bound_external_tools: Vec<BoundExternalTool>,
@@ -173,21 +176,24 @@ pub struct WorkflowRoleDecisionProcessAgent {
 impl WorkflowRoleDecisionProcessAgent {
     /// Builds a process-backed agent with no bound external-tool metadata.
     pub fn new(
+        cx: temper_io_engine::Cx,
         workflow_id: impl Into<String>,
         manifest: RoleManifest,
         config: WorkflowRoleDecisionProcessConfig,
     ) -> Result<Self, WorkflowRoleDecisionProcessError> {
-        Self::with_bound_external_tools(workflow_id, manifest, config, Vec::new())
+        Self::with_bound_external_tools(cx, workflow_id, manifest, config, Vec::new())
     }
 
     /// Builds a process-backed agent with runner-bound external-tool metadata.
     pub fn with_bound_external_tools(
+        cx: temper_io_engine::Cx,
         workflow_id: impl Into<String>,
         manifest: RoleManifest,
         config: WorkflowRoleDecisionProcessConfig,
         bound_external_tools: Vec<BoundExternalTool>,
     ) -> Result<Self, WorkflowRoleDecisionProcessError> {
         Self::with_bound_external_tools_and_executors(
+            cx,
             workflow_id,
             manifest,
             config,
@@ -198,6 +204,7 @@ impl WorkflowRoleDecisionProcessAgent {
 
     /// Builds a process-backed agent with metadata plus executable providers.
     pub fn with_bound_external_tools_and_executors(
+        cx: temper_io_engine::Cx,
         workflow_id: impl Into<String>,
         manifest: RoleManifest,
         config: WorkflowRoleDecisionProcessConfig,
@@ -207,6 +214,7 @@ impl WorkflowRoleDecisionProcessAgent {
         validate_config(&config)?;
         let bound_external_tools = declared_bound_tools(&manifest, bound_external_tools);
         Ok(Self {
+            cx,
             workflow_id: workflow_id.into(),
             manifest,
             bound_external_tools,
@@ -280,20 +288,23 @@ impl WorkflowRoleDecisionProcessAgent {
             }
         }
 
-        let cx = temper_io_engine::runtime::current_cx();
-        let output = run_process(&cx, call).await.map_err(|error| match error {
-            ProcessCallError::Spawn(message) => WorkflowRoleDecisionProcessError::Io {
-                operation: "spawn",
-                source: std::io::Error::other(message),
-            },
-            ProcessCallError::Io { operation, message } => WorkflowRoleDecisionProcessError::Io {
-                operation,
-                source: std::io::Error::other(message),
-            },
-            ProcessCallError::TimedOut => WorkflowRoleDecisionProcessError::Timeout {
-                timeout: self.config.timeout,
-            },
-        })?;
+        let output = run_process(&self.cx, call)
+            .await
+            .map_err(|error| match error {
+                ProcessCallError::Spawn(message) => WorkflowRoleDecisionProcessError::Io {
+                    operation: "spawn",
+                    source: std::io::Error::other(message),
+                },
+                ProcessCallError::Io { operation, message } => {
+                    WorkflowRoleDecisionProcessError::Io {
+                        operation,
+                        source: std::io::Error::other(message),
+                    }
+                }
+                ProcessCallError::TimedOut => WorkflowRoleDecisionProcessError::Timeout {
+                    timeout: self.config.timeout,
+                },
+            })?;
         if !output.success {
             return Err(WorkflowRoleDecisionProcessError::Exit {
                 status: output.status_display,

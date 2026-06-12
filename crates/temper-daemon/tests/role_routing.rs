@@ -61,7 +61,7 @@ fn success_result(job_id: &str) -> JobResult {
 
 #[test]
 fn role_routing_applier_dispatches_known_role_to_registered_applier() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let (tx, mut rx) = temper_io_engine::channel();
         let routing =
             RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
@@ -86,7 +86,7 @@ fn role_routing_applier_dispatches_known_role_to_registered_applier() {
 
 #[test]
 fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let (tx, mut rx) = temper_io_engine::channel();
         let routing =
             RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))

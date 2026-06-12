@@ -167,8 +167,9 @@ fn engine_serves_http_with_timers() {
             handle: handle.clone(),
             cq: cq_tx.clone(),
         };
-        let driver =
-            handle.spawn(async move { drive(PingMachine::default(), &executor, cq_rx).await });
+        let drive_cx = cx.clone();
+        let driver = handle
+            .spawn(async move { drive(drive_cx, PingMachine::default(), &executor, cq_rx).await });
 
         // Give a few timer ticks a chance to land, then call the service.
         skein::time::sleep(
@@ -179,7 +180,6 @@ fn engine_serves_http_with_timers() {
 
         let client = temper_io_engine::http::build_http_client();
         let response = temper_io_engine::http::http_call(
-            &cx,
             &client,
             HttpCall {
                 method: "POST".into(),

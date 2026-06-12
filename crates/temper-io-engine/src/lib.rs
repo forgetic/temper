@@ -38,11 +38,17 @@ pub mod machine;
 pub mod process;
 pub mod queue;
 pub mod runtime;
+pub mod spawn;
 pub mod timer;
+
+/// The capability context type engine code passes around explicitly
+/// (re-exported so dependents need no direct skein dependency).
+pub use skein::cx::Cx;
 
 pub use cadence::spawn_cadence_loop;
 pub use engine::{drive, Executor};
 pub use machine::{EngineTime, Machine};
 pub use queue::{channel, oneshot, CqReceiver, CqSender, OneshotReceiver, OneshotSender};
-pub use runtime::{block_on, build_runtime, EngineRuntime};
+pub use runtime::{block_on, block_on_with, build_runtime, EngineRuntime};
+pub use spawn::{SpawnFactory, Spawner};
 pub use timer::arm_timer;

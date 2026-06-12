@@ -86,14 +86,20 @@ impl ProcessResponderConfig {
 /// the reply to the session runtime.
 #[derive(Debug)]
 pub struct ProcessResponder {
+    /// Clock/deadline capability of the engine task this responder runs
+    /// under, injected at construction — process timeouts compute against it.
+    cx: temper_io_engine::Cx,
     config: ProcessResponderConfig,
 }
 
 impl ProcessResponder {
     /// Builds a process responder after validating static configuration.
-    pub fn new(config: ProcessResponderConfig) -> Result<Self, InteractionError> {
+    pub fn new(
+        cx: temper_io_engine::Cx,
+        config: ProcessResponderConfig,
+    ) -> Result<Self, InteractionError> {
         validate_config(&config)?;
-        Ok(Self { config })
+        Ok(Self { cx, config })
     }
 
     /// Returns the process configuration.
@@ -127,20 +133,23 @@ impl InteractiveResponder for ProcessResponder {
             }
         }
 
-        let cx = temper_io_engine::runtime::current_cx();
-        let output = run_process(&cx, call).await.map_err(|error| match error {
-            ProcessCallError::Spawn(message) => InteractionError::ProcessResponderIo {
-                operation: "spawn",
-                source: std::io::Error::other(message),
-            },
-            ProcessCallError::Io { operation, message } => InteractionError::ProcessResponderIo {
-                operation,
-                source: std::io::Error::other(message),
-            },
-            ProcessCallError::TimedOut => InteractionError::ProcessResponderTimeout {
-                timeout: self.config.timeout,
-            },
-        })?;
+        let output = run_process(&self.cx, call)
+            .await
+            .map_err(|error| match error {
+                ProcessCallError::Spawn(message) => InteractionError::ProcessResponderIo {
+                    operation: "spawn",
+                    source: std::io::Error::other(message),
+                },
+                ProcessCallError::Io { operation, message } => {
+                    InteractionError::ProcessResponderIo {
+                        operation,
+                        source: std::io::Error::other(message),
+                    }
+                }
+                ProcessCallError::TimedOut => InteractionError::ProcessResponderTimeout {
+                    timeout: self.config.timeout,
+                },
+            })?;
         if !output.success {
             return Err(InteractionError::ProcessResponderExit {
                 status: output.status_display,

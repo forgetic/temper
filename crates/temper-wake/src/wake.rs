@@ -197,6 +197,7 @@ fn drain_wake_batch(
 }
 
 pub async fn wait_for_wake_or_poll(
+    cx: &skein::cx::Cx,
     mut should_stop: impl FnMut() -> bool,
     interval: StdDuration,
     mut wake: Option<&mut WakeListener>,
@@ -218,7 +219,7 @@ pub async fn wait_for_wake_or_poll(
         match wake.as_deref_mut() {
             Some(listener) => {
                 let received = skein::time::timeout(
-                    temper_io_engine::runtime::engine_now(),
+                    temper_io_engine::runtime::timer_now(cx),
                     window,
                     Box::pin(listener.recv()),
                 )
@@ -227,7 +228,7 @@ pub async fn wait_for_wake_or_poll(
                     Err(_elapsed) => {}
                     Ok(Ok(hint)) => {
                         skein::time::sleep(
-                            temper_io_engine::runtime::engine_now(),
+                            temper_io_engine::runtime::timer_now(cx),
                             wake_debounce(),
                         )
                         .await;
@@ -240,7 +241,7 @@ pub async fn wait_for_wake_or_poll(
                 }
             }
             None => {
-                skein::time::sleep(temper_io_engine::runtime::engine_now(), window).await;
+                skein::time::sleep(temper_io_engine::runtime::timer_now(cx), window).await;
             }
         }
     }

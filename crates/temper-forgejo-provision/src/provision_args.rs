@@ -254,20 +254,29 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
     } else {
         None
     };
-    let (provisioned, issue) = runtime.block_on(provision::provision_and_seed(
-        &args.base_url,
-        &args.admin_token,
-        &args.owner,
-        &args.name,
-        args.webhook_url.as_deref(),
-        args.webhook_secret_file.as_deref(),
-        intake_seed.as_ref(),
-        &workflow,
-        ProvisionOptions {
-            existing_repo: args.existing_repo,
-            access: args.access,
+    let provision_args = args.clone();
+    let provision_workflow = workflow;
+    let (provisioned, issue) = temper_io_engine::runtime::block_on_runtime_with(
+        &runtime,
+        move |cx, _handle| async move {
+            provision::provision_and_seed(
+                &cx,
+                &provision_args.base_url,
+                &provision_args.admin_token,
+                &provision_args.owner,
+                &provision_args.name,
+                provision_args.webhook_url.as_deref(),
+                provision_args.webhook_secret_file.as_deref(),
+                intake_seed.as_ref(),
+                &provision_workflow,
+                ProvisionOptions {
+                    existing_repo: provision_args.existing_repo,
+                    access: provision_args.access,
+                },
+            )
+            .await
         },
-    ))?;
+    )?;
     provision::write_secrets_file(&args.out, &provision::format_secrets_env(&provisioned))?;
     let intake = issue
         .map(|number| format!("intake issue #{number}"))
@@ -297,14 +306,21 @@ fn run_seed_only(args: &ProvisionArgs) -> Result<String, RunError> {
         Some(IntakeAuthor::Role(role)) => provision::role_token_from_secrets_file(&args.out, role)?,
         None => provision::role_token_from_secrets_file(&args.out, &RoleId::new("human"))?,
     };
-    let number = runtime.block_on(provision::seed_intake_issue(
-        &args.base_url,
-        &token,
-        &args.owner,
-        &args.name,
-        &seed,
-        &workflow,
-    ))?;
+    let seed_args = args.clone();
+    let number = temper_io_engine::runtime::block_on_runtime_with(
+        &runtime,
+        move |_cx, _handle| async move {
+            provision::seed_intake_issue(
+                &seed_args.base_url,
+                &token,
+                &seed_args.owner,
+                &seed_args.name,
+                &seed,
+                &workflow,
+            )
+            .await
+        },
+    )?;
     Ok(format!(
         "seeded {}/{}: intake issue #{number}",
         args.owner, args.name,

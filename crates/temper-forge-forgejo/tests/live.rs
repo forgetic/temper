@@ -52,7 +52,7 @@ struct LiveWorld {
 #[test]
 #[ignore = "boots local Forgejo + host-mode forgejo-runner; run with --ignored"]
 fn live_smoke_suite_against_throwaway_forgejo() {
-    temper_io_engine::block_on(async {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let world = boot_world().await;
 
         let user = world
@@ -102,7 +102,7 @@ fn live_smoke_suite_against_throwaway_forgejo() {
         assert!(pulls.iter().all(|pull| pull.repo_id == world.repo_id));
 
         create_and_close_issue(&world).await;
-        wait_for_ci_success(&world).await;
+        wait_for_ci_success(&cx, &world).await;
     });
 }
 
@@ -190,9 +190,7 @@ fn bootstrap_admin(server: &ForgejoServer) -> Result<String, ServerError> {
 /// Send one authorized JSON request through the engine HTTP client.
 async fn api_json(method: &str, url: String, token: &str, body: &Value) -> HttpResponseData {
     let client = temper_io_engine::http::build_http_client();
-    let cx = temper_io_engine::runtime::ambient_cx();
     http_call(
-        &cx,
         &client,
         HttpCall {
             method: method.to_string(),
@@ -300,7 +298,7 @@ async fn create_and_close_issue(world: &LiveWorld) {
     assert_eq!(closed.state, IssueState::Closed);
 }
 
-async fn wait_for_ci_success(world: &LiveWorld) {
+async fn wait_for_ci_success(cx: &temper_io_engine::Cx, world: &LiveWorld) {
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         let observation = match world
@@ -322,6 +320,6 @@ async fn wait_for_ci_success(world: &LiveWorld) {
         if Instant::now() >= deadline {
             panic!("CI success was not observed within 180s; last observation: {observation}");
         }
-        temper_io_engine::runtime::sleep_for(Duration::from_secs(2)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_secs(2)).await;
     }
 }

@@ -85,12 +85,12 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
 /// Tick errors are logged by [`run_mechanical_backstop_tick`] and skipped so a
 /// transient backend failure does not stop the daemon-owned backstop.
 pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + 'static>(
+    spawner: &std::sync::Arc<dyn temper_io_engine::Spawner>,
     forge: std::sync::Arc<F>,
     workflow: std::sync::Arc<ValidatedWorkflow>,
     config: MechanicalBackstopConfig,
+    clock: crate::WallClock,
 ) {
-    let handle = skein::runtime::Runtime::current_handle()
-        .expect("mechanical backstop requires a running engine runtime");
     let journals: std::sync::Arc<Vec<InMemoryJournal>> = std::sync::Arc::new(
         config
             .repositories
@@ -100,16 +100,17 @@ pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + 'static>(
             .collect(),
     );
     let cadence = config.cadence;
-    temper_io_engine::spawn_cadence_loop(&handle, cadence, move || {
+    temper_io_engine::spawn_cadence_loop(spawner, cadence, move || {
         let forge = std::sync::Arc::clone(&forge);
         let workflow = std::sync::Arc::clone(&workflow);
         let journals = std::sync::Arc::clone(&journals);
         let config = config.clone();
+        let now = clock();
         async move {
             let _ = run_mechanical_backstop_tick(
                 forge.as_ref(),
                 workflow.as_ref(),
-                Utc::now(),
+                now,
                 &config,
                 &journals,
             )

@@ -61,14 +61,16 @@ impl From<ForgeError> for RunError {
 /// requests against the engine runtime.
 pub fn run(args: &WorkerArgs) -> Result<RunReport, RunError> {
     let args = args.clone();
-    temper_io_engine::block_on(async move { run_async(&args).await })
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
+        run_async(&cx, &args).await
+    })
 }
 
-async fn run_async(args: &WorkerArgs) -> Result<RunReport, RunError> {
+async fn run_async(cx: &temper_io_engine::Cx, args: &WorkerArgs) -> Result<RunReport, RunError> {
     let forge = build_forge(&args.forgejo);
     match &args.kind {
-        WorkerKind::Role { role, user: _ } => run_role(args, &forge, role).await,
-        WorkerKind::Mechanical => run_mechanical(args, &forge).await,
+        WorkerKind::Role { role, user: _ } => run_role(cx, args, &forge, role).await,
+        WorkerKind::Mechanical => run_mechanical(cx, args, &forge).await,
     }
 }
 
@@ -81,6 +83,7 @@ fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
 }
 
 async fn run_role(
+    cx: &temper_io_engine::Cx,
     args: &WorkerArgs,
     forge: &ForgejoForge,
     role: &str,
@@ -117,6 +120,7 @@ async fn run_role(
         .map(|tool| tool.name.clone())
         .collect::<Vec<_>>();
     let agent = build_role_agent(
+        cx,
         args,
         &compiled,
         &config,
@@ -146,10 +150,14 @@ async fn run_role(
         agent,
         config.execution_context(&role_id),
     );
-    drive_async(args, &worker).await
+    drive_async(cx, args, &worker).await
 }
 
-async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunReport, RunError> {
+async fn run_mechanical(
+    cx: &temper_io_engine::Cx,
+    args: &WorkerArgs,
+    forge: &ForgejoForge,
+) -> Result<RunReport, RunError> {
     let workflow = resolve_workflow(args.workflow_file.as_ref())
         .map_err(|error| RunError::Backend(error.to_string()))?;
     let compiled = workflow.compile();
@@ -203,7 +211,7 @@ async fn run_mechanical(args: &WorkerArgs, forge: &ForgejoForge) -> Result<RunRe
     )
     .map_err(|error| RunError::Backend(error.to_string()))?
     .with_external_tool_executors(external_tool_executors);
-    drive_async(args, &worker).await
+    drive_async(cx, args, &worker).await
 }
 
 async fn resolve_repositories<F: Forge + ?Sized>(
@@ -400,7 +408,11 @@ fn known_hints_for(
     known
 }
 
-async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<RunReport, RunError> {
+async fn drive_async<W: DriveWorker>(
+    cx: &temper_io_engine::Cx,
+    args: &WorkerArgs,
+    worker: &W,
+) -> Result<RunReport, RunError> {
     let stop = StopSignal::new(args.stop_file.clone(), args.run_secs);
     let interval = args
         .poll_interval
@@ -503,7 +515,7 @@ async fn drive_async<W: DriveWorker>(args: &WorkerArgs, worker: &W) -> Result<Ru
             }
         }
         let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
-        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_mut())
+        match wait_for_wake_or_poll(cx, || stop.should_stop(), wait_interval, wake.as_mut())
             .await
             .map_err(|error| RunError::Backend(error.to_string()))?
         {

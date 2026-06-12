@@ -215,6 +215,7 @@ where
 }
 
 pub fn build_service<E>(
+    cx: &temper_io_engine::Cx,
     spec: &CompiledInteractionSpec,
     bindings: &InteractionDeploymentBindings,
     env: E,
@@ -233,7 +234,7 @@ where
                 "profile `{profile_id}` is bound but not declared in the interaction spec"
             ))
         })?;
-        let responder = responder_for(&manifest.responder.id, bindings, &mut responders)?;
+        let responder = responder_for(cx, &manifest.responder.id, bindings, &mut responders)?;
         let human_token = require_env(&env, &binding.human_token_env)?;
         let agent_token = require_env(&env, &binding.agent_token_env)?;
         profiles.push(InteractionProfileRuntime {
@@ -258,6 +259,7 @@ where
 }
 
 fn responder_for(
+    cx: &temper_io_engine::Cx,
     responder_id: &ResponderId,
     bindings: &InteractionDeploymentBindings,
     cache: &mut BTreeMap<ResponderId, Arc<dyn InteractiveResponder>>,
@@ -277,8 +279,8 @@ fn responder_for(
                 responder_id
             ))
         })?;
-    let responder =
-        Arc::new(ProcessResponder::new(process_config(binding)?)?) as Arc<dyn InteractiveResponder>;
+    let responder = Arc::new(ProcessResponder::new(cx.clone(), process_config(binding)?)?)
+        as Arc<dyn InteractiveResponder>;
     cache.insert(responder_id.clone(), Arc::clone(&responder));
     Ok(responder)
 }

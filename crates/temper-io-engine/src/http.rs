@@ -16,7 +16,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use skein::cx::Cx;
 use skein::http::h1::http_client::{
     ClientError, HttpClient, HttpClientConfig, RedirectPolicy,
 };
@@ -27,6 +26,7 @@ use skein::runtime::RuntimeHandle;
 use skein::server::shutdown::ShutdownSignal;
 
 use crate::queue::{oneshot, CqSender, OneshotSender};
+use crate::spawn::Spawner;
 
 /// One parsed inbound HTTP request, as data.
 #[derive(Debug)]
@@ -106,11 +106,56 @@ impl EngineHttpServer {
     }
 }
 
-/// Bind and serve HTTP/1.1 on `bind`. Every inbound request is converted to a
-/// completion via `to_completion` and submitted to the queue; the connection
-/// task then waits for the machine's response through the responder. If the
-/// engine is gone (queue closed or responder dropped), the connection answers
-/// 500.
+/// A boxed h1 request handler bridging connections to an engine queue — what
+/// [`h1_completion_handler`] builds. The TCP listener path and in-memory
+/// simulation gateways both serve connections through one of these, so
+/// simulated traffic exercises the exact production conversion.
+pub type H1CompletionHandler = Arc<
+    dyn Fn(H1Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = H1Response> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Build the handler that converts one parsed h1 request into an engine
+/// completion via `to_completion`, submits it to the queue, and waits for the
+/// machine's response through the responder. If the engine is gone (queue
+/// closed or responder dropped), the request answers 500.
+pub fn h1_completion_handler<C, F>(cq: CqSender<C>, to_completion: F) -> H1CompletionHandler
+where
+    C: Send + 'static,
+    F: Fn(HttpRequestData, HttpResponder) -> C + Send + Sync + 'static,
+{
+    Arc::new(move |request: H1Request| {
+        let cq = cq.clone();
+        let data = HttpRequestData {
+            method: request.method.as_str().to_string(),
+            uri: request.uri,
+            headers: request.headers,
+            body: request.body,
+        };
+        let (reply_tx, reply_rx) = oneshot();
+        let completion = to_completion(data, HttpResponder(reply_tx));
+        Box::pin(async move {
+            if cq.send(completion).is_err() {
+                return H1Response::new(500, "Internal Server Error", Vec::new());
+            }
+            match reply_rx.recv().await {
+                Some(response) => {
+                    let reason = skein::http::h1::types::default_reason(response.status);
+                    let mut h1 = H1Response::new(response.status, reason, response.body);
+                    for (name, value) in response.headers {
+                        h1 = h1.with_header(name, value);
+                    }
+                    h1
+                }
+                None => H1Response::new(500, "Internal Server Error", Vec::new()),
+            }
+        })
+    })
+}
+
+/// Bind and serve HTTP/1.1 on `bind`. Every inbound request is handled by
+/// [`h1_completion_handler`] semantics against the given queue.
 pub async fn serve_http<C, F>(
     handle: &RuntimeHandle,
     bind: SocketAddr,
@@ -121,46 +166,16 @@ where
     C: Send + 'static,
     F: Fn(HttpRequestData, HttpResponder) -> C + Send + Sync + 'static,
 {
-    let to_completion = Arc::new(to_completion);
+    let handler = h1_completion_handler(cq, to_completion);
     // The skein runtime (our asupersync 0.2.4 fork) accepts any Host header by default;
     // it predates the 421-by-default host policy introduced upstream in 0.2.5+.
     // Engine services are reached by IP, localhost, or hostname interchangeably,
     // authenticate at the application layer (webhook HMAC, job protocol), and
     // never derive absolute URLs from Host, so accept-all is the correct policy.
     let config = Http1ListenerConfig::default();
-    let listener = Http1Listener::bind_with_config(
-        bind,
-        move |request: H1Request| {
-            let cq = cq.clone();
-            let to_completion = Arc::clone(&to_completion);
-            async move {
-                let data = HttpRequestData {
-                    method: request.method.as_str().to_string(),
-                    uri: request.uri,
-                    headers: request.headers,
-                    body: request.body,
-                };
-                let (reply_tx, reply_rx) = oneshot();
-                let completion = to_completion(data, HttpResponder(reply_tx));
-                if cq.send(completion).is_err() {
-                    return H1Response::new(500, "Internal Server Error", Vec::new());
-                }
-                match reply_rx.recv().await {
-                    Some(response) => {
-                        let reason = skein::http::h1::types::default_reason(response.status);
-                        let mut h1 = H1Response::new(response.status, reason, response.body);
-                        for (name, value) in response.headers {
-                            h1 = h1.with_header(name, value);
-                        }
-                        h1
-                    }
-                    None => H1Response::new(500, "Internal Server Error", Vec::new()),
-                }
-            }
-        },
-        config,
-    )
-    .await?;
+    let listener =
+        Http1Listener::bind_with_config(bind, move |request: H1Request| handler(request), config)
+            .await?;
 
     let local_addr = listener.local_addr()?;
     let shutdown = listener.shutdown_signal();
@@ -241,11 +256,11 @@ fn parse_method(method: &str) -> Result<Method, String> {
 
 /// Perform one HTTP call on the pooled client. Used directly by forge
 /// executors running inside engine tasks.
-pub async fn http_call(cx: &Cx, client: &HttpClient, call: HttpCall) -> HttpCallResult {
-    // The 0.2.4 client request is not Cx-threaded; cancellation of the calling
-    // task still tears down the in-flight future. Kept in the signature so
-    // callers (and a future cancel-aware client) need no change.
-    let _ = cx;
+///
+/// The skein 0.2.4 client request is not `Cx`-threaded; cancellation of the
+/// calling task still tears down the in-flight future. When the client grows
+/// cancel-awareness, this takes an explicit `&Cx` — never an ambient one.
+pub async fn http_call(client: &HttpClient, call: HttpCall) -> HttpCallResult {
     let method = parse_method(&call.method)?;
     let response = client
         .request(method, &call.url, call.headers, call.body)
@@ -301,8 +316,7 @@ impl JsonClient {
                 .map(|value| value.to_string().into_bytes())
                 .unwrap_or_default(),
         };
-        let cx = crate::runtime::ambient_cx();
-        http_call(&cx, &self.client, call).await
+        http_call(&self.client, call).await
     }
 
     /// Send and parse the response body as JSON, panicking with `what` context
@@ -393,7 +407,7 @@ impl BlockingJsonClient {
 /// Execute an HTTP call as a detached engine request: spawn, perform, and
 /// submit the result as a completion.
 pub fn execute_http_call<C, F>(
-    handle: &RuntimeHandle,
+    spawner: &dyn Spawner,
     client: Arc<HttpClient>,
     call: HttpCall,
     cq: &CqSender<C>,
@@ -403,8 +417,8 @@ pub fn execute_http_call<C, F>(
     F: FnOnce(HttpCallResult) -> C + Send + 'static,
 {
     let cq = cq.clone();
-    handle.spawn_with_cx(move |cx| async move {
-        let result = http_call(&cx, &client, call).await;
+    spawner.spawn_with_cx(move |_cx| async move {
+        let result = http_call(&client, call).await;
         let _ = cq.send(to_completion(result));
     });
 }

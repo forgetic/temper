@@ -48,10 +48,11 @@ pub fn build_runtime() -> Result<EngineRuntime, String> {
     Ok(EngineRuntime { runtime })
 }
 
-/// Build a runtime and run one future to completion **as a task**, so the
-/// body has an ambient [`Cx`] (timers, HTTP calls, and process deadlines all
-/// need one). This is the standard `main()` entry for temper binaries and the
-/// test-harness replacement for `#[tokio::test]` bodies:
+/// Build a runtime and run one future to completion **as a task**. The body
+/// receives no capabilities — code that needs the task's [`Cx`] (timers,
+/// process deadlines) or a spawner must use [`block_on_with`]. This is the
+/// standard entry for bodies that only call APIs taking their capabilities
+/// explicitly:
 ///
 /// ```text
 /// #[test]
@@ -66,8 +67,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let runtime = build_runtime().expect("build skein runtime");
-    block_on_runtime(&runtime, future)
+    block_on_with(move |_cx, _handle| future)
 }
 
 /// [`block_on`] on an already-built runtime.
@@ -76,9 +76,41 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
+    block_on_runtime_with(runtime, move |_cx, _handle| future)
+}
+
+/// Build a runtime and run one future to completion as a task, handing the
+/// body its capabilities **explicitly**: the root task's [`Cx`] (the clock
+/// capability — pass it to anything computing deadlines) and the runtime's
+/// [`RuntimeHandle`] (the spawn capability; it implements
+/// [`crate::spawn::Spawner`], so `Arc::new(handle)` coerces to
+/// `Arc<dyn Spawner>` wherever one is required). There is no ambient way to
+/// recover either — this signature is the only source.
+///
+/// ```text
+/// temper_io_engine::block_on_with(|cx, handle| async move { ... });
+/// ```
+pub fn block_on_with<F, Fut>(f: F) -> Fut::Output
+where
+    F: FnOnce(Cx, RuntimeHandle) -> Fut + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    let runtime = build_runtime().expect("build skein runtime");
+    block_on_runtime_with(&runtime, f)
+}
+
+/// [`block_on_with`] on an already-built runtime.
+pub fn block_on_runtime_with<F, Fut>(runtime: &EngineRuntime, f: F) -> Fut::Output
+where
+    F: FnOnce(Cx, RuntimeHandle) -> Fut + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
     let (result_tx, result_rx) = crate::queue::oneshot();
-    runtime.handle().spawn_with_cx(move |_cx| async move {
-        let mut future = Box::pin(future);
+    let handle = runtime.handle();
+    runtime.handle().spawn_with_cx(move |cx| async move {
+        let mut future = Box::pin(f(cx, handle));
         let outcome = std::future::poll_fn(move |task_cx| {
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 future.as_mut().poll(task_cx)
@@ -113,38 +145,9 @@ pub fn timer_now(cx: &Cx) -> skein::types::Time {
         .map_or_else(skein::time::wall_now, |driver| driver.now())
 }
 
-/// Engine-clock "now" usable from any thread.
-///
-/// Inside an engine task this is the ambient timer-driver clock (the one that
-/// fires timers). Outside one — e.g. a raw `EngineRuntime::block_on` future —
-/// it is the process wall clock, which is the same base driverless sleeps are
-/// checked against (they fire via skein's fallback timing thread), so
-/// deadlines stay consistent in both contexts.
-pub fn engine_now() -> skein::types::Time {
-    Cx::current().map_or_else(skein::time::wall_now, |cx| timer_now(&cx))
-}
-
 /// Sleep helper for shell and test code running inside an engine task.
-/// (Machines never sleep — they request timers.)
-pub async fn sleep_for(duration: std::time::Duration) {
-    skein::time::sleep(engine_now(), duration).await;
-}
-
-/// The ambient capability context of the current skein task.
-///
-/// The scheduler installs each task's `Cx` while polling it, so this is
-/// always available inside spawned tasks. It panics outside of one — engine
-/// executors only call it from task context.
-pub fn current_cx() -> Cx {
-    Cx::current().expect("called outside an skein task")
-}
-
-/// The ambient task context if present, or a detached root context.
-///
-/// The detached context is never cancelled and carries an infinite budget —
-/// exactly the semantics non-cancellable shell I/O (e.g. a forge HTTP call
-/// from a `block_on` main future) had under the previous runtime. It carries
-/// no clock: never use it for timers; use a spawned task's `Cx` for time.
-pub fn ambient_cx() -> Cx {
-    Cx::current().unwrap_or_else(Cx::for_testing)
+/// (Machines never sleep — they request timers.) The caller's task `Cx`
+/// supplies the clock that deadlines are computed against.
+pub async fn sleep_for(cx: &Cx, duration: std::time::Duration) {
+    skein::time::sleep(timer_now(cx), duration).await;
 }

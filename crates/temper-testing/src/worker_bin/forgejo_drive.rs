@@ -296,6 +296,7 @@ fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<Ch
 /// runtime. Authenticated wake hints interrupt the wait; known repo hints narrow
 /// the immediate multi-repo role tick, while polls and audits scan configured repos.
 pub(super) async fn drive_async<W: ForgejoDriveWorker>(
+    cx: &temper_io_engine::Cx,
     args: &WorkerArgs,
     worker: &W,
 ) -> Result<RunReport, RunError> {
@@ -404,7 +405,7 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
             break;
         }
         let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
-        match wait_for_wake_or_poll(|| stop.should_stop(), wait_interval, wake.as_mut())
+        match wait_for_wake_or_poll(cx, || stop.should_stop(), wait_interval, wake.as_mut())
             .await
             .map_err(|error| RunError::Backend(error.to_string()))?
         {
@@ -642,8 +643,10 @@ mod tests {
         });
         let worker_for_drive = std::sync::Arc::clone(&worker);
         let report =
-            temper_io_engine::block_on(async move { drive_async(&args, &*worker_for_drive).await })
-                .expect("drive succeeds");
+            temper_io_engine::block_on_with(move |cx, _handle| async move {
+                drive_async(&cx, &args, &*worker_for_drive).await
+            })
+            .expect("drive succeeds");
         stopper.join().expect("stopper joins");
 
         assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);

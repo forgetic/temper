@@ -49,10 +49,16 @@ const ENGINEER_ROLE: &str = "engineer";
 pub(super) fn run(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport, RunError> {
     let args = args.clone();
     let forgejo = forgejo.clone();
-    temper_io_engine::block_on(async move { run_async(&args, &forgejo).await })
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
+        run_async(&cx, &args, &forgejo).await
+    })
 }
 
-async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport, RunError> {
+async fn run_async(
+    cx: &temper_io_engine::Cx,
+    args: &WorkerArgs,
+    forgejo: &ForgejoArgs,
+) -> Result<RunReport, RunError> {
     let forge = build_forge(forgejo);
     match &args.kind {
         WorkerKind::Provision => {
@@ -68,7 +74,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
             let compiled = workflow.compile();
             let role_id = RoleId::new(role);
 
-            let registry = registry_with_forgejo_engineer(forgejo, *behavior);
+            let registry = registry_with_forgejo_engineer(cx, forgejo, *behavior);
             let agent = registry
                 .get(&role_id)
                 .ok_or_else(|| RunError::UnknownRole { role: role.clone() })?
@@ -87,7 +93,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
                     agent,
                     config.execution_context(&role_id),
                 );
-                drive_async(args, &worker).await
+                drive_async(cx, args, &worker).await
             } else {
                 let repositories = resolve_repository_set(&forge, &args.repositories).await?;
                 let worker = MultiRepoRoleWorker::new(
@@ -99,7 +105,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
                     agent,
                     config.execution_context(&role_id),
                 );
-                drive_async(args, &worker).await
+                drive_async(cx, args, &worker).await
             }
         }
         WorkerKind::Mechanical => {
@@ -114,7 +120,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
                     &journal,
                     LeasePolicy::new(config.lease_ttl),
                 );
-                drive_async(args, &worker).await
+                drive_async(cx, args, &worker).await
             } else {
                 let repositories = resolve_repository_set(&forge, &args.repositories).await?;
                 let journals: Vec<InMemoryJournal> = repositories
@@ -139,7 +145,7 @@ async fn run_async(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport
                     LeasePolicy::new(config.lease_ttl),
                 )
                 .map_err(|error| RunError::Backend(error.to_string()))?;
-                drive_async(args, &worker).await
+                drive_async(cx, args, &worker).await
             }
         }
         // Unreachable: parsing rejects `--kind ci` for the Forgejo backend.
@@ -179,6 +185,7 @@ fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
 /// regardless of `role_id` so the registry is consistent; the worker then selects
 /// the one agent it runs.
 fn registry_with_forgejo_engineer(
+    cx: &temper_io_engine::Cx,
     forgejo: &ForgejoArgs,
     behavior: RoleBehavior,
 ) -> temper_runner::AgentRegistry<dyn Forge> {
@@ -189,11 +196,13 @@ fn registry_with_forgejo_engineer(
     // side-effects (real PR head + CI sentinel) are identical.
     let engineer: Arc<dyn Agent<dyn Forge>> = match behavior.profile {
         ProfileKind::Reference => Arc::new(ForgejoEngineer::new(
+            cx.clone(),
             forgejo.base_url.clone(),
             forgejo.token.clone(),
             behavior.ci_sentinel,
         )),
         ProfileKind::Basic => Arc::new(ForgejoBasicEngineer::new(
+            cx.clone(),
             forgejo.base_url.clone(),
             forgejo.token.clone(),
             behavior.ci_sentinel,

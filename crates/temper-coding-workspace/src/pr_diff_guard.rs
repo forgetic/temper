@@ -61,6 +61,9 @@ pub enum GuardRole {
 }
 
 pub struct PullRequestDiffGuard<F: Forge + ?Sized> {
+    /// REST client injected at construction; it carries the clock capability
+    /// its request deadlines are computed against.
+    client: forgejo_rest::Client,
     inner: Arc<dyn Agent<F>>,
     role: GuardRole,
     base_url: String,
@@ -68,8 +71,15 @@ pub struct PullRequestDiffGuard<F: Forge + ?Sized> {
 }
 
 impl<F: Forge + ?Sized> PullRequestDiffGuard<F> {
-    pub fn new(inner: Arc<dyn Agent<F>>, role: GuardRole, base_url: String, token: String) -> Self {
+    pub fn new(
+        client: forgejo_rest::Client,
+        inner: Arc<dyn Agent<F>>,
+        role: GuardRole,
+        base_url: String,
+        token: String,
+    ) -> Self {
         Self {
+            client,
             inner,
             role,
             base_url,
@@ -85,9 +95,8 @@ impl<F: Forge + ?Sized> PullRequestDiffGuard<F> {
     }
 
     async fn inspect(&self, owner: &str, name: &str, number: u64) -> Result<DiffSafety, RestError> {
-        let client = forgejo_rest::http_client()?;
         let files = forgejo_rest::list_pull_request_files(
-            &client,
+            &self.client,
             &self.base_url,
             &self.token,
             owner,
@@ -105,9 +114,8 @@ impl<F: Forge + ?Sized> PullRequestDiffGuard<F> {
         number: u64,
         safety: &DiffSafety,
     ) -> Result<bool, RestError> {
-        let client = forgejo_rest::http_client()?;
         let comments = forgejo_rest::list_issue_comment_bodies(
-            &client,
+            &self.client,
             &self.base_url,
             &self.token,
             owner,
@@ -120,7 +128,7 @@ impl<F: Forge + ?Sized> PullRequestDiffGuard<F> {
         }
         let body = guard_comment_body(&self.role, safety.files());
         forgejo_rest::create_issue_comment(
-            &client,
+            &self.client,
             &self.base_url,
             &self.token,
             owner,

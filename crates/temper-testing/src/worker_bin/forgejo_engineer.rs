@@ -40,6 +40,9 @@ use crate::worker_bin::args::CiSentinelKind;
 /// [`FakeEngineer`] lacks, plus the [`CiSentinelKind`] policy that decides whether
 /// a freshly opened PR head already carries the `ci-ok` sentinel.
 pub(crate) struct ForgejoEngineer {
+    /// Clock capability of the engine task the agent runs under; REST
+    /// request deadlines compute against it.
+    cx: temper_io_engine::Cx,
     base_url: String,
     /// The engineer's own role token (authorized to write the repo). Never logged.
     token: String,
@@ -47,8 +50,14 @@ pub(crate) struct ForgejoEngineer {
 }
 
 impl ForgejoEngineer {
-    pub(crate) fn new(base_url: String, token: String, sentinel: CiSentinelKind) -> Self {
+    pub(crate) fn new(
+        cx: temper_io_engine::Cx,
+        base_url: String,
+        token: String,
+        sentinel: CiSentinelKind,
+    ) -> Self {
         Self {
+            cx,
             base_url,
             token,
             sentinel,
@@ -94,7 +103,7 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
         let (owner, name) = self.repo_path(tools).await?;
         // Make the head branch real (branch + a differing commit) before the PR
         // is opened; idempotent across re-attempts.
-        prepare_pull_request_head(&self.base_url, &self.token, &owner, &name, input)
+        prepare_pull_request_head(&self.cx, &self.base_url, &self.token, &owner, &name, input)
             .await
             .map_err(|error| AgentError::message(format!("forgejo PR prep failed: {error}")))?;
 
@@ -103,6 +112,7 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
         // run fails and the fix commit supplies the passing head SHA.
         if matches!(self.sentinel, CiSentinelKind::Present) {
             commit_ci_sentinel(
+                &self.cx,
                 &self.base_url,
                 &self.token,
                 &owner,
@@ -129,7 +139,7 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
             return Ok(());
         };
         let (owner, name) = self.repo_path(tools).await?;
-        commit_ci_sentinel(&self.base_url, &self.token, &owner, &name, &branch)
+        commit_ci_sentinel(&self.cx, &self.base_url, &self.token, &owner, &name, &branch)
             .await
             .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
     }
@@ -143,7 +153,7 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
             return Ok(());
         };
         let (owner, name) = self.repo_path(tools).await?;
-        commit_conflict_resolution_update(&self.base_url, &self.token, &owner, &name, &branch)
+        commit_conflict_resolution_update(&self.cx, &self.base_url, &self.token, &owner, &name, &branch)
             .await
             .map_err(|error| {
                 AgentError::message(format!(
@@ -178,9 +188,14 @@ pub(crate) struct ForgejoBasicEngineer {
 }
 
 impl ForgejoBasicEngineer {
-    pub(crate) fn new(base_url: String, token: String, sentinel: CiSentinelKind) -> Self {
+    pub(crate) fn new(
+        cx: temper_io_engine::Cx,
+        base_url: String,
+        token: String,
+        sentinel: CiSentinelKind,
+    ) -> Self {
         Self {
-            prep: ForgejoEngineer::new(base_url, token, sentinel),
+            prep: ForgejoEngineer::new(cx, base_url, token, sentinel),
         }
     }
 }

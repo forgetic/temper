@@ -1621,6 +1621,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-sim"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "skein",
+ "temper-daemon",
+ "temper-forge",
+ "temper-forge-memory",
+ "temper-io-engine",
+ "temper-worker-protocol",
+ "temper-workflow",
+]
+
+[[package]]
 name = "temper-testing"
 version = "0.1.0"
 dependencies = [
@@ -1683,6 +1699,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-forgejo-ops",
  "temper-io-engine",
  "temper-reference-delivery",
  "temper-runner",

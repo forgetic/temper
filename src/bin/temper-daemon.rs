@@ -38,10 +38,16 @@ fn run(config: DaemonRunConfig) -> Result<(), String> {
     // The daemon runs entirely as engine tasks: the HTTP listener, the pure
     // daemon machine's engine loop, backstop cadence machines, appliers, and
     // wake scans are all completion-driven I/O on the skein runtime.
-    temper_io_engine::block_on(async move { run_async(config).await })
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
+        run_async(handle, config).await
+    })
 }
 
-async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
+async fn run_async(
+    handle: skein::runtime::RuntimeHandle,
+    config: DaemonRunConfig,
+) -> Result<(), String> {
+    let spawner: Arc<dyn temper_io_engine::Spawner> = Arc::new(handle.clone());
     let forge_config =
         ForgejoConfig::from_env().map_err(|error| format!("Forgejo config: {error}"))?;
     let forge_base_url = forge_config.base_url.clone();
@@ -62,24 +68,29 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
     let lease_ttl = chrono::Duration::from_std(config.lease_ttl)
         .map_err(|error| format!("invalid --lease-ttl-secs: {error}"))?;
 
-    let daemon = Daemon::with_applier(result_applier(
-        forge.clone(),
-        forge_base_url,
-        workflow.clone(),
-        &config,
-        lease_ttl,
-    ));
+    let daemon = Daemon::with_applier(
+        Arc::clone(&spawner),
+        result_applier(
+            forge.clone(),
+            forge_base_url,
+            workflow.clone(),
+            &config,
+            lease_ttl,
+        ),
+    );
 
     let poll_config = PollBackstopConfig {
         targets: normal_targets,
         cadence: config.poll_cadence,
     };
     spawn_poll_backstop(
+        &spawner,
         daemon.clone(),
         forge.clone(),
         workflow.clone(),
         compiled.clone(),
         poll_config,
+        temper_daemon::system_clock(),
     );
 
     if let Some(cadence) = config.mechanical_cadence {
@@ -89,7 +100,13 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
             cadence,
             lease_policy: LeasePolicy::new(lease_ttl),
         };
-        spawn_mechanical_backstop(forge.clone(), workflow.clone(), mechanical_config);
+        spawn_mechanical_backstop(
+            &spawner,
+            forge.clone(),
+            workflow.clone(),
+            mechanical_config,
+            temper_daemon::system_clock(),
+        );
     }
 
     let daemon = if let Some(path) = config.webhook_secret_file.as_ref() {
@@ -103,7 +120,13 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
             secret: secret.trim().to_string(),
             targets: wake_targets,
         });
-        daemon.with_webhook(forge, workflow, compiled, webhook_config)
+        daemon.with_webhook(
+            forge,
+            workflow,
+            compiled,
+            webhook_config,
+            temper_daemon::system_clock(),
+        )
     } else {
         daemon
     };
@@ -113,7 +136,7 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
     let mut sigterm = skein::signal::sigterm()
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
 
-    let server = temper_daemon::serve(&daemon, config.bind)
+    let server = temper_daemon::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
 
@@ -194,6 +217,7 @@ fn applier_chain(
         LeasePolicy::new(lease_ttl),
         daemon_id,
         Arc::new(ForgeApplier::new(forge, workflow)),
+        temper_daemon::system_clock(),
     ))
 }
 

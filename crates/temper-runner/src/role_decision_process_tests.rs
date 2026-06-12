@@ -212,10 +212,11 @@ fn inline_config(command: &str) -> WorkflowRoleDecisionProcessConfig {
 }
 
 fn agent(
+    cx: temper_io_engine::Cx,
     manifest: RoleManifest,
     config: WorkflowRoleDecisionProcessConfig,
 ) -> WorkflowRoleDecisionProcessAgent {
-    WorkflowRoleDecisionProcessAgent::new("generic-agent-test", manifest, config)
+    WorkflowRoleDecisionProcessAgent::new(cx, "generic-agent-test", manifest, config)
         .expect("process config validates")
 }
 
@@ -306,7 +307,7 @@ fn process_error_classification_distinguishes_failure_branches() {
 
 #[test]
 fn process_agent_sends_request_filters_environment_and_executes_action() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
         let request_path = temp_path("request.json");
         let config = script_config(
@@ -323,6 +324,7 @@ fi
         std::env::set_var("TEMPER_RUNNER_ROLE_DECISION_ALLOWED", "allowed-value");
         std::env::set_var("TEMPER_RUNNER_ROLE_DECISION_BLOCKED", "blocked-value");
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools(
+            cx.clone(),
             "generic-agent-test",
             fixture.manifest.clone(),
             config,
@@ -380,9 +382,10 @@ fi
 
 #[test]
 fn process_agent_treats_unauthorized_action_as_no_action() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
         let agent = agent(
+            cx.clone(),
             fixture.manifest.clone(),
             inline_config(
                 r#"printf '%s' '{"protocol_version":1,"action":"delete_everything","reason":"bad"}'"#,
@@ -401,7 +404,7 @@ fn process_agent_treats_unauthorized_action_as_no_action() {
 
 #[test]
 fn process_agent_reports_timeout_exit_and_malformed_replies() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
         let cases = [
             (
@@ -439,7 +442,7 @@ fn process_agent_reports_timeout_exit_and_malformed_replies() {
         ];
 
         for (config, expected) in cases {
-            let error = agent(fixture.manifest.clone(), config)
+            let error = agent(cx.clone(), fixture.manifest.clone(), config)
                 .service(&fixture.item, &tools(&fixture))
                 .await
                 .expect_err("process failure is an agent error");
@@ -454,9 +457,10 @@ fn process_agent_reports_timeout_exit_and_malformed_replies() {
 
 #[test]
 fn process_agent_redacts_secret_like_stderr() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], basic_workflow()).await;
         let error = agent(
+            cx.clone(),
             fixture.manifest.clone(),
             inline_config("printf 'token=super-secret' >&2; exit 7"),
         )
@@ -511,7 +515,7 @@ impl CodingWorkspace for FixtureWorkspace {
 
 #[test]
 fn process_agent_uses_coding_workspace_for_pr_actions() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow()).await;
         let workspace = Arc::new(FixtureWorkspace::default());
         let workspace_provider: Arc<dyn CodingWorkspace> = workspace.clone();
@@ -521,6 +525,7 @@ fn process_agent_uses_coding_workspace_for_pr_actions() {
             workspace_provider,
         );
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        cx.clone(),
         "generic-agent-test",
         fixture.manifest.clone(),
         inline_config(
@@ -631,7 +636,7 @@ impl CodingWorkspace for VerdictWorkspace {
 
 #[test]
 fn workspace_verdict_routes_open_pr_to_escalation_without_pr_create() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow_with_outcomes()).await;
         let workspace: Arc<dyn CodingWorkspace> = Arc::new(VerdictWorkspace {
             verdict: temper_workflow::VerdictId::new("needs_architect"),
@@ -644,6 +649,7 @@ fn workspace_verdict_routes_open_pr_to_escalation_without_pr_create() {
             workspace,
         );
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        cx.clone(),
         "generic-agent-test",
         fixture.manifest.clone(),
         inline_config(
@@ -762,7 +768,7 @@ async fn issue_body(fixture: &Fixture) -> String {
 
 #[test]
 fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture =
             fixture_from_workflow(&["task", "todo"], set_body_workflow_with_outcomes()).await;
         let authored = "# Crisp spec\n\nImplementable, authored by the architect workspace.";
@@ -776,6 +782,7 @@ fn workspace_verdict_routes_to_set_body_and_writes_the_authored_body() {
             workspace,
         );
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        cx.clone(),
         "generic-agent-test",
         fixture.manifest.clone(),
         inline_config(
@@ -887,7 +894,7 @@ impl CodingWorkspace for ChildrenWorkspace {
 
 #[test]
 fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture =
             fixture_from_workflow(&["task", "todo"], create_issues_workflow_with_outcomes()).await;
         let children = vec![
@@ -907,6 +914,7 @@ fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
             workspace,
         );
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        cx.clone(),
         "generic-agent-test",
         fixture.manifest.clone(),
         inline_config(
@@ -970,7 +978,7 @@ fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
 
 #[test]
 fn workspace_undeclared_verdict_is_an_error() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let fixture = fixture_from_workflow(&["task", "todo"], pr_workflow_with_outcomes()).await;
         let workspace: Arc<dyn CodingWorkspace> = Arc::new(VerdictWorkspace {
             verdict: temper_workflow::VerdictId::new("unknown_verdict"),
@@ -982,6 +990,7 @@ fn workspace_undeclared_verdict_is_an_error() {
             workspace,
         );
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        cx.clone(),
         "generic-agent-test",
         fixture.manifest.clone(),
         inline_config(
@@ -1106,7 +1115,7 @@ impl CodingWorkspace for ReviewWorkspace {
 
 #[test]
 fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         use temper_forge::{BranchRef, CreatePullRequest, PullRequestQuery};
 
         let forge = MemoryForge::new();
@@ -1174,6 +1183,7 @@ fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create() {
             provider: "workspace-local".to_string(),
         };
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+        cx.clone(),
         "generic-agent-test",
         manifest,
         inline_config(

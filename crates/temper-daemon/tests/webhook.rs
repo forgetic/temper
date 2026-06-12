@@ -25,11 +25,15 @@ fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
     value.parse().expect("valid RFC 3339 timestamp")
 }
 
-async fn spawn() -> (Daemon, String) {
-    let daemon = Daemon::new();
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("bind test server");
+async fn spawn(handle: &skein::runtime::RuntimeHandle) -> (Daemon, String) {
+    let daemon = Daemon::new(std::sync::Arc::new(handle.clone()));
+    let server = temper_daemon::serve(
+        handle,
+        &daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
     let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"))
 }
@@ -162,13 +166,13 @@ fn webhook_config(repo: RepositoryId) -> WebhookConfig {
 
 #[test]
 fn verified_webhook_wakes_matching_target_then_dispatches() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = create_repo(&forge, "acme", "service").await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
-        let (daemon, url) = spawn().await;
+        let (daemon, url) = spawn(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         let config = webhook_config(repo.clone());
         let body = serde_json::to_vec(&json!({
@@ -209,13 +213,13 @@ fn verified_webhook_wakes_matching_target_then_dispatches() {
 
 #[test]
 fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = create_repo(&forge, "acme", "service").await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
-        let (daemon, url) = spawn().await;
+        let (daemon, url) = spawn(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         let config = webhook_config(repo);
         let body = serde_json::to_vec(&json!({
@@ -258,7 +262,7 @@ fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
 
 #[test]
 fn webhook_for_unconfigured_repo_enqueues_nothing() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let configured_repo = create_repo(&forge, "acme", "service").await;
         let other_repo = create_repo(&forge, "acme", "other").await;
@@ -266,7 +270,7 @@ fn webhook_for_unconfigured_repo_enqueues_nothing() {
         let issue = create_issue(&forge, &other_repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
-        let (daemon, url) = spawn().await;
+        let (daemon, url) = spawn(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         let config = webhook_config(configured_repo);
         let body = serde_json::to_vec(&json!({

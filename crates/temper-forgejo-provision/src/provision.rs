@@ -208,6 +208,7 @@ pub type Result<T> = std::result::Result<T, ProvisionError>;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_world(
+    cx: &temper_io_engine::Cx,
     base_url: &str,
     admin_token: &str,
     owner: &str,
@@ -217,7 +218,7 @@ pub async fn provision_world(
     workflow: &ValidatedWorkflow,
     options: ProvisionOptions,
 ) -> Result<Provisioned> {
-    let client = forgejo_rest::http_client()?;
+    let client = forgejo_rest::http_client(cx.clone())?;
     // The org must exist under both access scopes; only the Owners-team
     // membership differs.
     forgejo_rest::ensure_org(&client, base_url, admin_token, owner).await?;
@@ -327,7 +328,7 @@ pub async fn provision_world(
     }
     forgejo_rest::enable_actions(&client, base_url, admin_token, owner, name).await?;
     if !options.existing_repo {
-        commit_ci_sentinel(base_url, admin_token, owner, name, default_branch).await?;
+        commit_ci_sentinel(cx, base_url, admin_token, owner, name, default_branch).await?;
     }
 
     Ok(Provisioned {
@@ -530,6 +531,7 @@ pub fn write_secrets_file(path: &Path, contents: &str) -> std::io::Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_and_seed(
+    cx: &temper_io_engine::Cx,
     base_url: &str,
     admin_token: &str,
     owner: &str,
@@ -542,6 +544,7 @@ pub async fn provision_and_seed(
 ) -> Result<(Provisioned, Option<ItemNumber>)> {
     let config = runner_config_for(workflow, repo_input());
     let provisioned = provision_world(
+        cx,
         base_url,
         admin_token,
         owner,
@@ -561,7 +564,7 @@ pub async fn provision_and_seed(
         };
         let secret = std::fs::read_to_string(secret_file)?.trim().to_string();
         forgejo_rest::ensure_repo_webhook(
-            &forgejo_rest::http_client()?,
+            &forgejo_rest::http_client(cx.clone())?,
             base_url,
             admin_token,
             owner,

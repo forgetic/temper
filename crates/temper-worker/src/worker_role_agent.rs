@@ -10,6 +10,7 @@ use crate::worker_args::WorkerArgs;
 use temper_coding_workspace::pr_diff_guard::{GuardRole, PullRequestDiffGuard};
 
 pub(crate) fn build_role_agent(
+    cx: &temper_io_engine::Cx,
     args: &WorkerArgs,
     compiled: &CompiledWorkflow,
     config: &RunnerConfig,
@@ -35,6 +36,7 @@ pub(crate) fn build_role_agent(
         .map_err(|error| error.to_string())?;
     let agent = Arc::new(
         WorkflowRoleDecisionProcessAgent::with_bound_external_tools_and_executors(
+            cx.clone(),
             compiled.name(),
             role_manifest.clone(),
             process_config,
@@ -43,10 +45,11 @@ pub(crate) fn build_role_agent(
         )
         .map_err(|error| error.to_string())?,
     ) as Arc<dyn Agent<dyn Forge>>;
-    Ok(guard_agent_if_needed(args, compiled, role_manifest, agent))
+    Ok(guard_agent_if_needed(cx, args, compiled, role_manifest, agent))
 }
 
 fn guard_agent_if_needed(
+    cx: &temper_io_engine::Cx,
     args: &WorkerArgs,
     compiled: &CompiledWorkflow,
     role: &RoleManifest,
@@ -58,7 +61,10 @@ fn guard_agent_if_needed(
     let Some(guard_role) = guard_role_for_manifest(compiled, role) else {
         return agent;
     };
+    let client = temper_forgejo_ops::forgejo_rest::http_client(cx.clone())
+        .expect("REST client builds");
     Arc::new(PullRequestDiffGuard::new(
+        client,
         agent,
         guard_role,
         args.forgejo.base_url.clone(),

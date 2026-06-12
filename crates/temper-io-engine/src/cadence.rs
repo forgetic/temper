@@ -11,11 +11,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use skein::runtime::RuntimeHandle;
-
 use crate::engine::{drive, Executor};
 use crate::machine::{EngineTime, Machine};
 use crate::queue::{channel, CqSender};
+use crate::spawn::Spawner;
 use crate::timer::arm_timer;
 
 pub enum CadenceCompletion {
@@ -58,7 +57,7 @@ impl Machine for CadenceMachine {
 type BoxedTick = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 struct CadenceExecutor {
-    handle: RuntimeHandle,
+    spawner: Arc<dyn Spawner>,
     cq: CqSender<CadenceCompletion>,
     tick: BoxedTick,
 }
@@ -69,13 +68,13 @@ impl Executor<CadenceMachine> for CadenceExecutor {
             CadenceRequest::RunTick => {
                 let tick = Arc::clone(&self.tick);
                 let cq = self.cq.clone();
-                self.handle.spawn(async move {
+                self.spawner.spawn_with_cx(move |_cx| async move {
                     tick().await;
                     let _ = cq.send(CadenceCompletion::TickDone);
                 });
             }
             CadenceRequest::StartTimer(delay) => {
-                arm_timer(&self.handle, &self.cq, delay, || {
+                arm_timer(&*self.spawner, &self.cq, delay, || {
                     CadenceCompletion::TimerFired
                 });
             }
@@ -85,19 +84,19 @@ impl Executor<CadenceMachine> for CadenceExecutor {
 
 /// Spawn a cadence loop onto the runtime. The loop runs until the runtime
 /// shuts down. `tick` is invoked once per cycle on an engine task.
-pub fn spawn_cadence_loop<F, Fut>(handle: &RuntimeHandle, cadence: Duration, tick: F)
+pub fn spawn_cadence_loop<F, Fut>(spawner: &Arc<dyn Spawner>, cadence: Duration, tick: F)
 where
     F: Fn() -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     let (cq_tx, cq_rx) = channel();
     let executor = CadenceExecutor {
-        handle: handle.clone(),
+        spawner: Arc::clone(spawner),
         cq: cq_tx,
         tick: Arc::new(move || Box::pin(tick()) as Pin<Box<dyn Future<Output = ()> + Send>>),
     };
-    handle.spawn(async move {
-        let _ = drive(CadenceMachine { cadence }, &executor, cq_rx).await;
+    spawner.spawn_with_cx(move |cx| async move {
+        let _ = drive(cx, CadenceMachine { cadence }, &executor, cq_rx).await;
     });
 }
 

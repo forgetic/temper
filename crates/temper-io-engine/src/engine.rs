@@ -25,10 +25,11 @@ pub trait Executor<M: Machine + ?Sized> {
 /// handed to the transition as data. The machine it returns can be inspected
 /// by the shell for teardown decisions.
 ///
-/// Must run inside an engine task (it reads the task's capability context for
-/// the runtime clock) — spawn it, or run it under
-/// [`crate::runtime::block_on`].
+/// `cx` is the clock capability of the task running the loop — pass the `Cx`
+/// the spawn closure was handed (or the one [`crate::runtime::block_on_with`]
+/// gives the root body). There is no ambient fallback.
 pub async fn drive<M, X>(
+    cx: skein::cx::Cx,
     mut machine: M,
     executor: &X,
     mut completions: CqReceiver<M::Completion>,
@@ -37,7 +38,6 @@ where
     M: Machine,
     X: Executor<M>,
 {
-    let cx = crate::runtime::current_cx();
     let now = || EngineTime::from(crate::runtime::timer_now(&cx));
 
     for request in machine.on_start(now()) {

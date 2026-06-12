@@ -41,16 +41,25 @@ fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
     value.parse().expect("valid RFC 3339 timestamp")
 }
 
-async fn spawn_recording() -> (
+async fn spawn_recording(
+    handle: &skein::runtime::RuntimeHandle,
+) -> (
     Daemon,
     String,
     temper_io_engine::CqReceiver<(InFlightJob, JobResult)>,
 ) {
     let (tx, rx) = temper_io_engine::channel();
-    let daemon = Daemon::with_applier(Arc::new(RecordingApplier { tx }));
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("bind test server");
+    let daemon = Daemon::with_applier(
+        std::sync::Arc::new(handle.clone()),
+        Arc::new(RecordingApplier { tx }),
+    );
+    let server = temper_daemon::serve(
+        handle,
+        &daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
     let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"), rx)
 }
@@ -218,7 +227,7 @@ fn assert_poll_timeout(msg: WorkerProtocolMessage) {
 
 #[test]
 fn scanned_role_work_skips_terminal_labeled_closed_issue() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue_record(&forge, &repo, &["code", "ready"]).await;
@@ -235,7 +244,7 @@ fn scanned_role_work_skips_terminal_labeled_closed_issue() {
         let workflow = workflow();
         let compiled = workflow.compile();
         let role = RoleId::new("engineer");
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -270,14 +279,14 @@ fn scanned_role_work_skips_terminal_labeled_closed_issue() {
 
 #[test]
 fn scanned_role_work_skips_item_when_enrichment_fails() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let _issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
         let role = RoleId::new("engineer");
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -313,7 +322,7 @@ fn scanned_role_work_skips_item_when_enrichment_fails() {
 
 #[test]
 fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
@@ -323,7 +332,7 @@ fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
         let correlation_key = format!("pr-for-code-{}", issue.get());
         let _pull_request =
             create_implementation_pull_request(&forge, &repo, &correlation_key).await;
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -360,7 +369,7 @@ fn scanned_writable_issue_skips_while_open_pr_has_correlation_key() {
 
 #[test]
 fn scanned_writable_issue_skips_while_merged_pr_has_correlation_key() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
@@ -381,7 +390,7 @@ fn scanned_writable_issue_skips_while_merged_pr_has_correlation_key() {
             )
             .await
             .expect("pull request is merged");
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -418,7 +427,7 @@ fn scanned_writable_issue_skips_while_merged_pr_has_correlation_key() {
 
 #[test]
 fn scanned_writable_issue_enqueues_after_correlated_pr_closes_unmerged() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
@@ -438,7 +447,7 @@ fn scanned_writable_issue_enqueues_after_correlated_pr_closes_unmerged() {
             )
             .await
             .expect("pull request is closed unmerged");
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -481,7 +490,7 @@ fn scanned_writable_issue_enqueues_after_correlated_pr_closes_unmerged() {
 
 #[test]
 fn scanned_read_only_triage_item_enqueues_even_when_open_pr_exists() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["untriaged"]).await;
@@ -490,7 +499,7 @@ fn scanned_read_only_triage_item_enqueues_even_when_open_pr_exists() {
         let workflow = workflow();
         let compiled = workflow.compile();
         let role = RoleId::new("architect");
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -536,14 +545,14 @@ fn scanned_read_only_triage_item_enqueues_even_when_open_pr_exists() {
 
 #[test]
 fn scanned_architect_triage_item_carries_verdict_job_enrichment() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["untriaged"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
         let role = RoleId::new("architect");
-        let (daemon, url, _rx) = spawn_recording().await;
+        let (daemon, url, _rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(
@@ -605,14 +614,14 @@ fn scanned_architect_triage_item_carries_verdict_job_enrichment() {
 
 #[test]
 fn scanned_role_work_dispatches_to_worker_and_applies_once() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
         let role = RoleId::new("engineer");
-        let (daemon, url, mut rx) = spawn_recording().await;
+        let (daemon, url, mut rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
 
         assert_eq!(

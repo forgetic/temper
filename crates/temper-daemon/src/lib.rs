@@ -30,7 +30,7 @@ use temper_worker_registry::DaemonCore;
 // the trait passes them.
 use temper_io_engine::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_io_engine::{
-    arm_timer, channel, drive, CqSender, EngineTime, Executor as EngineExecutor, Machine,
+    arm_timer, channel, drive, CqSender, EngineTime, Executor as EngineExecutor, Machine, Spawner,
 };
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
@@ -873,11 +873,23 @@ fn is_stale(error: &ExecutionError) -> bool {
 /// the inner applier only while that lease is held, and then releases the lease
 /// best-effort. Duplicate or double-dispatched results that lose the lease race
 /// no-op without disturbing the peer's live lease.
+/// Wall-clock capability for daemon code needing calendar timestamps (lease
+/// acquisition, scan feeds). Always injected — production passes
+/// [`system_clock`], the simulation passes a virtual-time-derived clock —
+/// so daemon-owned loops never read ambient wall time.
+pub type WallClock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
+
+/// The production wall clock.
+pub fn system_clock() -> WallClock {
+    Arc::new(Utc::now)
+}
+
 pub struct LeaseApplier<F: Forge> {
     forge: Arc<F>,
     policy: LeasePolicy,
     owner: String,
     inner: Arc<dyn ResultApplier>,
+    clock: WallClock,
 }
 
 impl<F: Forge> LeaseApplier<F> {
@@ -886,12 +898,14 @@ impl<F: Forge> LeaseApplier<F> {
         policy: LeasePolicy,
         owner: impl Into<String>,
         inner: Arc<dyn ResultApplier>,
+        clock: WallClock,
     ) -> Self {
         Self {
             forge,
             policy,
             owner: owner.into(),
             inner,
+            clock,
         }
     }
 }
@@ -914,7 +928,7 @@ impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
                 target,
                 RoleId::new(job.role.clone()),
                 self.owner.clone(),
-                Utc::now(),
+                (self.clock)(),
             )
             .await
         {
@@ -1799,7 +1813,7 @@ fn protocol_response(message: Option<WorkerProtocolMessage>) -> HttpResponseData
 /// The daemon's imperative shell: performs each machine request on the engine
 /// runtime and feeds the resulting completions back into the queue.
 struct DaemonExecutor {
-    handle: skein::runtime::RuntimeHandle,
+    spawner: Arc<dyn Spawner>,
     cq: CqSender<DaemonCompletion>,
     applier: Arc<dyn ResultApplier>,
     scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
@@ -1813,7 +1827,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 response,
             } => responder.respond(response),
             DaemonRequest::StartPollTimer { id, delay } => {
-                arm_timer(&self.handle, &self.cq, delay, move || {
+                arm_timer(&*self.spawner, &self.cq, delay, move || {
                     DaemonCompletion::PollDeadline { id }
                 });
             }
@@ -1821,7 +1835,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let applier = Arc::clone(&self.applier);
                 let cq = self.cq.clone();
                 let job_id = job.job_id.clone();
-                self.handle.spawn(async move {
+                self.spawner.spawn_with_cx(move |_cx| async move {
                     applier.apply(job, result).await;
                     let _ = cq.send(DaemonCompletion::ApplyFinished { job_id });
                 });
@@ -1831,7 +1845,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                 let cq = self.cq.clone();
                 match scanner {
                     Some(scanner) => {
-                        self.handle.spawn(async move {
+                        self.spawner.spawn_with_cx(move |_cx| async move {
                             scanner.scan(hint).await;
                             let _ = cq.send(DaemonCompletion::WakeScanFinished { token });
                         });
@@ -1849,12 +1863,15 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
 }
 
 impl Daemon {
-    pub fn new() -> Self {
-        Self::with_applier(Arc::new(NoopApplier))
+    /// Create a daemon that discards applied results. The spawner is the
+    /// engine's spawn capability — `Arc::new(handle)` for the production
+    /// runtime, a lab spawner under simulation.
+    pub fn new(spawner: Arc<dyn Spawner>) -> Self {
+        Self::with_applier(spawner, Arc::new(NoopApplier))
     }
 
-    pub fn with_applier(applier: Arc<dyn ResultApplier>) -> Self {
-        Self::with_applier_and_apply_grace(applier, APPLY_GRACE)
+    pub fn with_applier(spawner: Arc<dyn Spawner>, applier: Arc<dyn ResultApplier>) -> Self {
+        Self::with_applier_and_apply_grace(spawner, applier, APPLY_GRACE)
     }
 
     pub fn with_apply_grace(self, apply_grace: Duration) -> Self {
@@ -1865,23 +1882,22 @@ impl Daemon {
     }
 
     fn with_applier_and_apply_grace(
+        spawner: Arc<dyn Spawner>,
         applier: Arc<dyn ResultApplier>,
         apply_grace: Duration,
     ) -> Self {
-        let handle = skein::runtime::Runtime::current_handle()
-            .expect("Daemon requires a running engine runtime");
         let (cq_tx, cq_rx) = channel();
         let scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>> =
             Arc::new(std::sync::Mutex::new(None));
         let executor = DaemonExecutor {
-            handle: handle.clone(),
+            spawner: Arc::clone(&spawner),
             cq: cq_tx.clone(),
             applier,
             scanner_slot: Arc::clone(&scanner_slot),
         };
         let machine = DaemonMachine::new(apply_grace, DEFAULT_MAX_POLL_WAIT_MS);
-        handle.spawn(async move {
-            let _ = drive(machine, &executor, cq_rx).await;
+        spawner.spawn_with_cx(move |cx| async move {
+            let _ = drive(cx, machine, &executor, cq_rx).await;
         });
 
         Self {
@@ -1900,6 +1916,7 @@ impl Daemon {
         workflow: Arc<ValidatedWorkflow>,
         compiled: Arc<CompiledWorkflow>,
         config: Arc<WebhookConfig>,
+        clock: WallClock,
     ) -> Self {
         struct ForgeWakeScanner<F: Forge + Send + Sync + 'static> {
             daemon: Daemon,
@@ -1907,6 +1924,7 @@ impl Daemon {
             workflow: Arc<ValidatedWorkflow>,
             compiled: Arc<CompiledWorkflow>,
             config: Arc<WebhookConfig>,
+            clock: WallClock,
         }
 
         impl<F: Forge + Send + Sync + 'static> WakeScanner for ForgeWakeScanner<F> {
@@ -1919,13 +1937,14 @@ impl Daemon {
                 let workflow = Arc::clone(&self.workflow);
                 let compiled = Arc::clone(&self.compiled);
                 let config = Arc::clone(&self.config);
+                let now = (self.clock)();
                 Box::pin(async move {
                     run_wake_scan(
                         &daemon,
                         forge.as_ref(),
                         workflow.as_ref(),
                         compiled.as_ref(),
-                        Utc::now(),
+                        now,
                         config.as_ref(),
                         &hint,
                     )
@@ -1940,6 +1959,7 @@ impl Daemon {
             workflow,
             compiled,
             config: Arc::clone(&config),
+            clock,
         });
         *self.scanner_slot.lock().expect("scanner slot") = Some(scanner);
         let _ = self.cq.send(DaemonCompletion::ConfigureWebhook {
@@ -2103,39 +2123,34 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
 /// requests one tick, the shell executes the scan, and the next tick is
 /// scheduled one cadence after the previous tick completed.
 pub fn spawn_poll_backstop<F: Forge + Send + Sync + 'static>(
+    spawner: &Arc<dyn Spawner>,
     daemon: Daemon,
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: Arc<CompiledWorkflow>,
     config: PollBackstopConfig,
+    clock: WallClock,
 ) {
-    let handle = skein::runtime::Runtime::current_handle()
-        .expect("poll backstop requires a running engine runtime");
     let cadence = config.cadence;
-    temper_io_engine::spawn_cadence_loop(&handle, cadence, move || {
+    temper_io_engine::spawn_cadence_loop(spawner, cadence, move || {
         let daemon = daemon.clone();
         let forge = Arc::clone(&forge);
         let workflow = Arc::clone(&workflow);
         let compiled = Arc::clone(&compiled);
         let config = config.clone();
+        let now = clock();
         async move {
             run_poll_backstop_tick(
                 &daemon,
                 forge.as_ref(),
                 workflow.as_ref(),
                 compiled.as_ref(),
-                Utc::now(),
+                now,
                 &config,
             )
             .await;
         }
     });
-}
-
-impl Default for Daemon {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Resolves the `owner/name` protocol repo label for a scanned `RepositoryId`.
@@ -2156,13 +2171,12 @@ async fn repo_label<F: Forge + ?Sized>(
 /// tasks. Use the returned server handle for the bound address and graceful
 /// drain.
 pub async fn serve(
+    handle: &skein::runtime::RuntimeHandle,
     daemon: &Daemon,
     bind: SocketAddr,
 ) -> std::io::Result<temper_io_engine::http::EngineHttpServer> {
-    let handle = skein::runtime::Runtime::current_handle()
-        .expect("serve requires a running engine runtime");
     let server = temper_io_engine::http::serve_http(
-        &handle,
+        handle,
         bind,
         daemon.cq.clone(),
         |request, responder| DaemonCompletion::Http { request, responder },
@@ -2170,6 +2184,15 @@ pub async fn serve(
     .await?;
     eprintln!("temper-daemon: serving on {}", server.local_addr());
     Ok(server)
+}
+
+/// The daemon's h1 request handler — the same request→completion conversion
+/// [`serve`] installs on the TCP listener, exposed so in-memory simulation
+/// gateways can serve connections against the daemon's queue.
+pub fn h1_handler(daemon: &Daemon) -> temper_io_engine::http::H1CompletionHandler {
+    temper_io_engine::http::h1_completion_handler(daemon.cq.clone(), |request, responder| {
+        DaemonCompletion::Http { request, responder }
+    })
 }
 
 #[cfg(test)]
@@ -2523,8 +2546,8 @@ mod tests {
 
     #[test]
     fn enqueue_work_item_stores_mapped_job() {
-        temper_io_engine::block_on(async move {
-            let daemon = Daemon::new();
+        temper_io_engine::block_on_with(move |_cx, handle| async move {
+            let daemon = Daemon::new(Arc::new(handle));
             let item = work_item(ArtifactSource::Issue {
                 number: ItemNumber::new(103),
             });

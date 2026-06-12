@@ -28,7 +28,7 @@ fn basic_request() -> ConversationRequest {
 
 #[test]
 fn process_responder_sends_request_reads_reply_and_filters_environment() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let request_path = temp_path("request.json");
         let script_path = temp_path("responder.sh");
         fs::write(
@@ -52,6 +52,7 @@ fi
         );
 
         let responder = ProcessResponder::new(
+            cx.clone(),
             ProcessResponderConfig::new("/bin/sh")
                 .with_args([
                     script_path.to_string_lossy().into_owned(),
@@ -77,8 +78,9 @@ fi
 
 #[test]
 fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let timeout = ProcessResponder::new(
+            cx.clone(),
             ProcessResponderConfig::new("/bin/sh")
                 .with_args(["-c".to_string(), "cat >/dev/null; sleep 1".to_string()])
                 .with_timeout(Duration::from_millis(20)),
@@ -92,10 +94,13 @@ fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
             InteractionError::ProcessResponderTimeout { .. }
         ));
 
-        let exit = ProcessResponder::new(ProcessResponderConfig::new("/bin/sh").with_args([
-            "-c".to_string(),
-            "cat >/dev/null; printf 'bad news' >&2; exit 7".to_string(),
-        ]))
+        let exit = ProcessResponder::new(
+            cx.clone(),
+            ProcessResponderConfig::new("/bin/sh").with_args([
+                "-c".to_string(),
+                "cat >/dev/null; printf 'bad news' >&2; exit 7".to_string(),
+            ]),
+        )
         .expect("config validates")
         .respond(&basic_request())
         .await
@@ -107,6 +112,7 @@ fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
         ));
 
         let malformed = ProcessResponder::new(
+            cx.clone(),
         ProcessResponderConfig::new("/bin/sh").with_args([
             "-c".to_string(),
             "cat >/dev/null; printf '%s' '{\"message\":\"one\",\"proposals\":[]}{\"message\":\"two\",\"proposals\":[]}'".to_string(),
@@ -122,6 +128,7 @@ fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
         ));
 
         let duplicate = ProcessResponder::new(
+            cx.clone(),
         ProcessResponderConfig::new("/bin/sh").with_args([
             "-c".to_string(),
             "cat >/dev/null; printf '%s' '{\"message\":\"dup\",\"proposals\":[{\"id\":\"same\",\"kind\":\"issue\",\"title\":\"First\",\"payload\":{}},{\"id\":\"same\",\"kind\":\"issue\",\"title\":\"Second\",\"payload\":{}}]}'".to_string(),

@@ -184,8 +184,7 @@ impl HttpClient for EngineHttpClient {
             headers: request.headers,
             body: request.body.map(String::into_bytes).unwrap_or_default(),
         };
-        let cx = temper_io_engine::runtime::ambient_cx();
-        let response = temper_io_engine::http::http_call(&cx, &self.client, call)
+        let response = temper_io_engine::http::http_call(&self.client, call)
             .await
             .map_err(HttpError::Transport)?;
         Ok(HttpResponse {

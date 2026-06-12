@@ -75,7 +75,8 @@ fn generic_bindings_build_service_from_profile_and_responder_env_names() {
         },
     );
 
-    let service = build_service(&spec, &bindings, |key| match key {
+    let cx = temper_io_engine::Cx::for_testing();
+    let service = build_service(&cx, &spec, &bindings, |key| match key {
         "TEMPER_INTERACTION_HUMAN_TOKEN" => Some("human-token".into()),
         "TEMPER_INTERACTION_AGENT_TOKEN" => Some("agent-token".into()),
         _ => None,

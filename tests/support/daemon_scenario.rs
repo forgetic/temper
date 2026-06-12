@@ -261,13 +261,16 @@ fn drive_variant(
 
             // Phase B: push the CI sentinel fix to the PR head as the engineer;
             // the new head goes green and the mechanical backstop lands it.
-            block_on(commit_ci_sentinel(
-                server.base_url(),
-                &engineer.token,
-                &provisioned.owner,
-                &provisioned.name,
-                &head_branch,
-            ))
+            {
+                let base_url = server.base_url().to_string();
+                let token = engineer.token.clone();
+                let owner = provisioned.owner.clone();
+                let name = provisioned.name.clone();
+                let branch = head_branch.clone();
+                block_on_with_cx(move |cx| async move {
+                    commit_ci_sentinel(&cx, &base_url, &token, &owner, &name, &branch).await
+                })
+            }
             .map_err(|error| format!("ci sentinel commit failed: {error}"))?;
             eprintln!(
                 "daemon_forgejo_e2e scenario '{}' pushed CI sentinel fix to {head_branch}",
@@ -635,13 +638,17 @@ fn daemon_worker_binary() -> PathBuf {
 
 fn register_webhook(server: &ForgejoServer, provisioned: &Provisioned, port: u16) {
     let url = format!("http://127.0.0.1:{port}/forgejo/webhook");
-    block_on(async {
+    let base_url = server.base_url().to_string();
+    let admin_token = provisioned.admin_token.clone();
+    let owner = provisioned.owner.clone();
+    let name = provisioned.name.clone();
+    block_on_with_cx(move |cx| async move {
         temper_forgejo_ops::forgejo_rest::ensure_repo_webhook(
-            &temper_forgejo_ops::forgejo_rest::http_client().expect("HTTP client builds"),
-            server.base_url(),
-            &provisioned.admin_token,
-            &provisioned.owner,
-            &provisioned.name,
+            &temper_forgejo_ops::forgejo_rest::http_client(cx.clone()).expect("HTTP client builds"),
+            &base_url,
+            &admin_token,
+            &owner,
+            &name,
             &url,
             WEBHOOK_SECRET,
         )
@@ -741,6 +748,18 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     temper_io_engine::build_runtime()
         .expect("engine runtime builds")
         .block_on(future)
+}
+
+/// [`block_on`] handing the body the root task's `Cx` (clock capability) for
+/// code whose deadlines must be computed against the engine clock.
+fn block_on_with_cx<F, Fut>(f: F) -> Fut::Output
+where
+    F: FnOnce(temper_io_engine::Cx) -> Fut + Send + 'static,
+    Fut: std::future::Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    let runtime = temper_io_engine::build_runtime().expect("engine runtime builds");
+    temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| f(cx))
 }
 
 /// Kills the spawned child on drop so a panic cannot leak daemon or worker

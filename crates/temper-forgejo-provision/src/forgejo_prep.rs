@@ -12,6 +12,7 @@ const CI_SENTINEL_DIR: &str = ".temper-ci";
 pub const CI_PASS_MARKER: &str = "[ci-pass]";
 
 pub async fn commit_ci_sentinel(
+    cx: &temper_io_engine::Cx,
     base_url: &str,
     token: &str,
     owner: &str,
@@ -24,7 +25,7 @@ pub async fn commit_ci_sentinel(
             detail: "target branch is empty".into(),
         });
     }
-    let client = forgejo_rest::http_client()?;
+    let client = forgejo_rest::http_client(cx.clone())?;
     let safe: String = branch
         .chars()
         .map(|c| if c == '/' { '-' } else { c })

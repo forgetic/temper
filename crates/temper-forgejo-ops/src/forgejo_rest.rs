@@ -64,6 +64,9 @@ pub type Result<T> = std::result::Result<T, RestError>;
 /// reqwest-based client so call sites stay unchanged.
 #[derive(Clone)]
 pub struct Client {
+    /// Clock capability of the task the client was built on; request
+    /// deadlines are computed against it.
+    cx: skein::cx::Cx,
     inner: std::sync::Arc<skein::http::h1::http_client::HttpClient>,
 }
 
@@ -118,28 +121,18 @@ impl Client {
                 .unwrap_or_default(),
         };
 
-        // Apply the request deadline only with a real task context: a detached
-        // context has no clock, which would make the deadline meaningless.
-        let result = match skein::cx::Cx::current() {
-            Some(cx) => {
-                match skein::time::timeout(
-                    temper_io_engine::runtime::timer_now(&cx),
-                    REQUEST_TIMEOUT,
-                    Box::pin(http_call(&cx, &self.inner, call)),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(_elapsed) => Err(format!(
-                        "request timed out after {}s",
-                        REQUEST_TIMEOUT.as_secs()
-                    )),
-                }
-            }
-            None => {
-                let cx = temper_io_engine::runtime::ambient_cx();
-                http_call(&cx, &self.inner, call).await
-            }
+        let result = match skein::time::timeout(
+            temper_io_engine::runtime::timer_now(&self.cx),
+            REQUEST_TIMEOUT,
+            Box::pin(http_call(&self.inner, call)),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_elapsed) => Err(format!(
+                "request timed out after {}s",
+                REQUEST_TIMEOUT.as_secs()
+            )),
         };
 
         let response = result.map_err(RestError::Http)?;
@@ -150,8 +143,11 @@ impl Client {
     }
 }
 
-pub fn http_client() -> Result<Client> {
+/// Builds the REST client. The `cx` is the calling task's clock capability;
+/// every request deadline is computed against it.
+pub fn http_client(cx: skein::cx::Cx) -> Result<Client> {
     Ok(Client {
+        cx,
         inner: temper_io_engine::http::build_http_client(),
     })
 }

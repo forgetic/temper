@@ -226,7 +226,11 @@ fn parse_capability(raw: &str) -> Result<Capability, String> {
 /// `register` → `poll` → on `assign` execute the job and send `result` →
 /// re-poll. Transport errors are logged and retried (the e2e driver bounds the
 /// run with the stop-file and its own convergence timeout).
-pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<(), String> {
+pub async fn run(
+    cx: &temper_io_engine::Cx,
+    config: &DaemonWorkerConfig,
+    identity: &GitIdentity,
+) -> Result<(), String> {
     let client = temper_io_engine::http::JsonClient::new();
     let endpoint = format!("{}/v1/message", config.daemon_url.trim_end_matches('/'));
 
@@ -263,7 +267,7 @@ pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<
             Ok(response) => response,
             Err(error) => {
                 eprintln!("temper-testing-daemon-worker: poll failed: {error}");
-                temper_io_engine::runtime::sleep_for(Duration::from_millis(200)).await;
+                temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(200)).await;
                 continue;
             }
         };
@@ -273,7 +277,7 @@ pub async fn run(config: &DaemonWorkerConfig, identity: &GitIdentity) -> Result<
                     "temper-testing-daemon-worker: assigned job_id={} repo={} role={} artifact={}/{}",
                     assign.job_id, assign.repo, assign.role, assign.artifact.kind, assign.artifact.item
                 );
-                let result = execute_job(config, identity, &assign).await;
+                let result = execute_job(cx, config, identity, &assign).await;
                 eprintln!(
                     "temper-testing-daemon-worker: job_id={} finished status={:?} failure={:?}",
                     assign.job_id,
@@ -357,11 +361,12 @@ impl JobError {
 }
 
 async fn execute_job(
+    cx: &temper_io_engine::Cx,
     config: &DaemonWorkerConfig,
     identity: &GitIdentity,
     assign: &Assign,
 ) -> JobResult {
-    match run_job(config, identity, assign).await {
+    match run_job(cx, config, identity, assign).await {
         Ok((branch, summary)) => JobResult {
             protocol_version: WORKER_PROTOCOL_VERSION,
             worker_id: config.worker_id.clone(),
@@ -395,6 +400,7 @@ async fn execute_job(
 }
 
 async fn run_job(
+    cx: &temper_io_engine::Cx,
     config: &DaemonWorkerConfig,
     identity: &GitIdentity,
     assign: &Assign,
@@ -425,6 +431,7 @@ async fn run_job(
     let issue_number = context.artifact.as_ref().map(|artifact| artifact.number);
 
     let workspace = Workspace {
+        cx,
         path: config
             .workspace_root
             .join(context.repo.replace('/', "__"))
@@ -488,6 +495,7 @@ async fn run_job(
 /// the production smith-worker workspace shape (auth via `http.extraheader`,
 /// token redacted from errors).
 struct Workspace<'a> {
+    cx: &'a temper_io_engine::Cx,
     path: PathBuf,
     remote_url: String,
     identity: &'a GitIdentity,
@@ -580,7 +588,7 @@ impl Workspace<'_> {
         }
         git.args(args);
         let output = git
-            .output_async(&temper_io_engine::runtime::ambient_cx())
+            .output_async(self.cx)
             .await
             .map_err(|error| JobError::transient(format!("spawning git failed: {error}")))?;
         if output.status.success() {

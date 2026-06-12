@@ -60,33 +60,53 @@ impl temper_daemon::ResultApplier for RecordingApplier {
 }
 
 async fn spawn_with_applier(
+    handle: &skein::runtime::RuntimeHandle,
     applier: Arc<dyn temper_daemon::ResultApplier>,
 ) -> (temper_daemon::Daemon, String) {
-    spawn_daemon(temper_daemon::Daemon::with_applier(applier)).await
+    spawn_daemon(
+        handle,
+        temper_daemon::Daemon::with_applier(Arc::new(handle.clone()), applier),
+    )
+    .await
 }
 
 async fn spawn_with_applier_and_apply_grace(
+    handle: &skein::runtime::RuntimeHandle,
     applier: Arc<dyn temper_daemon::ResultApplier>,
     apply_grace: Duration,
 ) -> (temper_daemon::Daemon, String) {
-    spawn_daemon(temper_daemon::Daemon::with_applier(applier).with_apply_grace(apply_grace)).await
+    spawn_daemon(
+        handle,
+        temper_daemon::Daemon::with_applier(Arc::new(handle.clone()), applier)
+            .with_apply_grace(apply_grace),
+    )
+    .await
 }
 
-async fn spawn_daemon(daemon: temper_daemon::Daemon) -> (temper_daemon::Daemon, String) {
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("bind test server");
+async fn spawn_daemon(
+    handle: &skein::runtime::RuntimeHandle,
+    daemon: temper_daemon::Daemon,
+) -> (temper_daemon::Daemon, String) {
+    let server = temper_daemon::serve(
+        handle,
+        &daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
     let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"))
 }
 
-async fn spawn_recording() -> (
+async fn spawn_recording(
+    handle: &skein::runtime::RuntimeHandle,
+) -> (
     temper_daemon::Daemon,
     String,
     temper_io_engine::CqReceiver<(InFlightJob, JobResult)>,
 ) {
     let (tx, rx) = temper_io_engine::channel();
-    let (daemon, url) = spawn_with_applier(Arc::new(RecordingApplier { tx })).await;
+    let (daemon, url) = spawn_with_applier(handle, Arc::new(RecordingApplier { tx })).await;
     (daemon, url, rx)
 }
 
@@ -268,6 +288,7 @@ async fn enqueue_standard_job(daemon: &temper_daemon::Daemon, job_id: &str) {
 }
 
 async fn eventually_enqueue_and_assign(
+    cx: &temper_io_engine::Cx,
     daemon: &temper_daemon::Daemon,
     client: &temper_io_engine::http::JsonClient,
     url: &str,
@@ -279,7 +300,7 @@ async fn eventually_enqueue_and_assign(
         match post_json(client, url, &poll_with_wait(worker_id, 25)).await {
             WorkerProtocolMessage::Assign(assign) if assign.job_id == job_id => return,
             WorkerProtocolMessage::Error(error) if error.code == ErrorCode::PollTimeout => {
-                temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+                temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
             }
             other => panic!("expected assign for {job_id} or poll timeout, got {other:?}"),
         }
@@ -290,8 +311,8 @@ async fn eventually_enqueue_and_assign(
 
 #[test]
 fn accepted_result_invokes_applier_with_in_flight_context() {
-    temper_io_engine::block_on(async move {
-        let (daemon, url, mut rx) = spawn_recording().await;
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
+        let (daemon, url, mut rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
@@ -343,8 +364,8 @@ fn accepted_result_invokes_applier_with_in_flight_context() {
 
 #[test]
 fn result_without_in_flight_job_does_not_invoke_applier() {
-    temper_io_engine::block_on(async move {
-        let (daemon, url, mut rx) = spawn_recording().await;
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
+        let (daemon, url, mut rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
@@ -414,10 +435,11 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
 
 #[test]
 fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let (record_tx, mut rx) = temper_io_engine::channel();
         let (release_tx, release_rx) = temper_io_engine::oneshot();
         let (daemon, url) = spawn_with_applier_and_apply_grace(
+            &handle,
             Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
             Duration::ZERO,
         )
@@ -450,17 +472,25 @@ fn apply_window_blocks_duplicate_enqueue_until_apply_finishes() {
         assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
         release_tx.send(());
-        eventually_enqueue_and_assign(&daemon, &client, &url, "worker-a", "job-apply-window-1")
-            .await;
+        eventually_enqueue_and_assign(
+            &cx,
+            &daemon,
+            &client,
+            &url,
+            "worker-a",
+            "job-apply-window-1",
+        )
+        .await;
     })
 }
 
 #[test]
 fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let (record_tx, mut rx) = temper_io_engine::channel();
         let (release_tx, release_rx) = temper_io_engine::oneshot();
         let (daemon, url) = spawn_with_applier_and_apply_grace(
+            &handle,
             Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
             Duration::from_millis(200),
         )
@@ -489,12 +519,12 @@ fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
         assert_eq!(job.job_id, "job-apply-grace-1");
         assert_eq!(recorded_result.job_id, result.job_id);
         release_tx.send(());
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
+        temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(25)).await;
 
         enqueue_standard_job(&daemon, "job-apply-grace-1").await;
         assert_poll_timeout(post_json(&client, &url, &poll_with_wait("worker-a", 25)).await);
 
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(225)).await;
+        temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(225)).await;
         enqueue_standard_job(&daemon, "job-apply-grace-1").await;
         assert_assigned(
             post_json(&client, &url, &poll("worker-a")).await,
@@ -505,10 +535,11 @@ fn post_apply_grace_blocks_immediate_duplicate_enqueue_then_expires() {
 
 #[test]
 fn apply_block_and_grace_are_per_job_id() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let (record_tx, mut rx) = temper_io_engine::channel();
         let (release_tx, release_rx) = temper_io_engine::oneshot();
         let (daemon, url) = spawn_with_applier_and_apply_grace(
+            &handle,
             Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
             Duration::from_millis(200),
         )
@@ -547,7 +578,7 @@ fn apply_block_and_grace_are_per_job_id() {
         );
 
         release_tx.send(());
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(25)).await;
+        temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(25)).await;
         assert!(rx.try_recv().is_none());
 
         enqueue_standard_job(&daemon, "job-blocked").await;
@@ -561,8 +592,8 @@ fn apply_block_and_grace_are_per_job_id() {
 
 #[test]
 fn transient_failure_drops_job_for_rescan() {
-    temper_io_engine::block_on(async move {
-        let (daemon, url, mut rx) = spawn_recording().await;
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
+        let (daemon, url, mut rx) = spawn_recording(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         assert_eq!(post(&client, &url, &register("worker-a")).await.status, 204);
 
@@ -616,10 +647,11 @@ fn transient_failure_drops_job_for_rescan() {
 
 #[test]
 fn permanent_failure_apply_window_unblocks_after_apply_completes() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let (record_tx, mut rx) = temper_io_engine::channel();
         let (release_tx, release_rx) = temper_io_engine::oneshot();
         let (daemon, url) = spawn_with_applier_and_apply_grace(
+            &handle,
             Arc::new(GatedApplier::new(record_tx, vec![release_rx])),
             Duration::ZERO,
         )
@@ -661,6 +693,7 @@ fn permanent_failure_apply_window_unblocks_after_apply_completes() {
 
         release_tx.send(());
         eventually_enqueue_and_assign(
+            &cx,
             &daemon,
             &client,
             &url,

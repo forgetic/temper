@@ -18,16 +18,18 @@ use crate::interaction_service::InteractionService;
 pub fn run_repl(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {
     let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
     let args = args.clone();
-    temper_io_engine::runtime::block_on_runtime(
-        &runtime,
-        async move { run_repl_async(&args).await },
-    )
+    temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
+        run_repl_async(&cx, &args).await
+    })
 }
 
-async fn run_repl_async(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {
+async fn run_repl_async(
+    cx: &temper_io_engine::Cx,
+    args: &InteractionReplArgs,
+) -> Result<(), InteractionDeploymentError> {
     let spec = load_compiled_spec(&args.spec_path)?;
     let bindings = load_bindings(&args.bindings_path)?;
-    let service = build_service(&spec, &bindings, |key| std::env::var(key).ok())?;
+    let service = build_service(cx, &spec, &bindings, |key| std::env::var(key).ok())?;
     let profile = service
         .profile_manifest(&args.profile_id)
         .cloned()

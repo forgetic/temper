@@ -60,7 +60,7 @@ impl Drop for WorkerGuard {
 
 #[test]
 fn daemon_worker_pushes_branch_and_daemon_sees_success() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let workspace = RunWorkspace::new("temper-daemon-worker-hermetic");
 
         // A seeded bare origin reachable over file:// (no credentials needed).
@@ -71,10 +71,11 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
 
         // In-process daemon transport with a recording applier seam.
         let (tx, mut rx) = temper_io_engine::channel();
-        let daemon = Daemon::with_applier(Arc::new(RecordingApplier { tx }));
-        let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-            .await
-            .expect("ephemeral daemon server binds");
+        let daemon = Daemon::with_applier(Arc::new(handle.clone()), Arc::new(RecordingApplier { tx }));
+        let server =
+            temper_daemon::serve(&handle, &daemon, "127.0.0.1:0".parse().expect("loopback addr"))
+                .await
+                .expect("ephemeral daemon server binds");
         let addr = server.local_addr();
 
         // One enriched issue job, exactly what the daemon's scan feed enqueues.
@@ -119,7 +120,6 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
         let log = workspace.join("worker.log");
         let mut worker = spawn_worker(workspace.path(), addr, &stop_file, &log);
 
-        let cx = temper_io_engine::runtime::current_cx();
         let (job, result) = skein::time::timeout(
         temper_io_engine::runtime::timer_now(&cx),
         RESULT_TIMEOUT,

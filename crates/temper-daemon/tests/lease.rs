@@ -107,7 +107,7 @@ fn job_result(job_id: &str) -> JobResult {
 
 #[test]
 fn lease_won_inner_applied_then_lease_released() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge).await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -120,7 +120,13 @@ fn lease_won_inner_applied_then_lease_released() {
             issue: Some(issue),
             lease_tx: Some(lease_tx),
         });
-        let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner);
+        let applier = LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            inner,
+            temper_daemon::system_clock(),
+        );
         let job = in_flight_job(issue);
         let result = job_result(&job.job_id);
 
@@ -155,7 +161,7 @@ fn lease_won_inner_applied_then_lease_released() {
 
 #[test]
 fn peer_owned_lease_noops_and_preserves_peer_lease() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge).await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -180,7 +186,13 @@ fn peer_owned_lease_noops_and_preserves_peer_lease() {
             issue: None,
             lease_tx: None,
         });
-        let applier = LeaseApplier::new(forge.clone(), policy(), "daemon-1", inner);
+        let applier = LeaseApplier::new(
+            forge.clone(),
+            policy(),
+            "daemon-1",
+            inner,
+            temper_daemon::system_clock(),
+        );
         let job = in_flight_job(issue);
         let result = job_result(&job.job_id);
 

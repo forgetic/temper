@@ -153,11 +153,12 @@ fn local_git_workspace_pushes_meaningful_pr_diff() {
     ))
     .expect("PR opens from workspace branch");
 
-    let files = block_on(async {
-        let client = forgejo_rest::http_client().expect("HTTP client builds");
+    let base_url = server.base_url().to_string();
+    let files = temper_io_engine::block_on_with(move |cx, _handle| async move {
+        let client = forgejo_rest::http_client(cx).expect("HTTP client builds");
         forgejo_rest::list_pull_request_files(
             &client,
-            server.base_url(),
+            &base_url,
             &engineer.token,
             &provisioned.owner,
             &provisioned.name,

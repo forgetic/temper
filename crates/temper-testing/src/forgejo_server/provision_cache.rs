@@ -91,7 +91,12 @@ pub fn start_cached_provisioned_repositories(
     let state = ForgejoState::new(reference_delivery_state_description(&repo_names))
         .map_err(ProvisionError::Fixture)?;
     let cached = ForgejoServer::start_with_state(&state, |server| {
-        block_on_fixture(provision_repositories(server, &repo_names))
+        let admin_token = bootstrap_admin(server)?;
+        let base_url = server.base_url().to_string();
+        let repo_names = repo_names.clone();
+        block_on_fixture(move |cx| async move {
+            provision_repositories(&cx, &base_url, &admin_token, &repo_names).await
+        })
     })
     .map_err(ProvisionError::Fixture)?;
     Ok(CachedProvisionedWorld {
@@ -103,14 +108,16 @@ pub fn start_cached_provisioned_repositories(
 }
 
 pub(super) async fn provision_repositories(
-    server: &ForgejoServer,
+    cx: &temper_io_engine::Cx,
+    base_url: &str,
+    admin_token: &str,
     repo_names: &[String],
 ) -> Result<ProvisionedRepositories> {
-    let admin_token = bootstrap_admin(server)?;
     let config = runner_config();
     let roles = provision_role_identities(
-        server.base_url(),
-        &admin_token,
+        cx,
+        base_url,
+        admin_token,
         &config.repository.owner,
         &config.role_bindings,
     )
@@ -119,7 +126,8 @@ pub(super) async fn provision_repositories(
     let mut repositories = BTreeMap::new();
     for name in repo_names {
         let provisioned = provision_repository(
-            server.base_url(),
+            cx,
+            base_url,
             &roles,
             name,
             &config.repository.default_branch,
@@ -187,9 +195,14 @@ fn reference_delivery_state_description(repo_names: &[String]) -> serde_json::Va
 /// The future is polled on this thread (no ambient task context); the REST
 /// helpers it uses fall back to a detached capability context, which is fine
 /// for fixture provisioning (no deadlines or timers inside).
-fn block_on_fixture<F: std::future::Future>(future: F) -> F::Output {
+fn block_on_fixture<F, Fut>(f: F) -> Fut::Output
+where
+    F: FnOnce(temper_io_engine::Cx) -> Fut + Send + 'static,
+    Fut: std::future::Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
     let runtime = temper_io_engine::build_runtime().expect("engine runtime builds");
-    runtime.block_on(future)
+    temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| f(cx))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

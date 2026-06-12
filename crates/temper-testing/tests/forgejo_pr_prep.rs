@@ -33,7 +33,7 @@ use temper_workflow::RoleId;
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn prep_makes_head_real_and_pr_is_mergeable() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
         // boot it off-reactor so its nested blocking runtime lives and dies off the async
         // test thread (same pattern as the Phase 2 provisioning test).
@@ -77,6 +77,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
 
         // 2. Prep creates the head branch + a trivial differing commit.
         prepare_pull_request_head(
+            &cx,
             &base,
             &engineer.token,
             &provisioned.owner,
@@ -121,7 +122,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
             provisioned.name,
             pull.number.get()
         );
-        let mergeable = poll_mergeable(&client, &pr_url, &engineer.token).await;
+        let mergeable = poll_mergeable(&cx, &client, &pr_url, &engineer.token).await;
         assert!(
             mergeable,
             "PR should become mergeable after prep (head diverges from base)"
@@ -130,6 +131,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
         // 4. Re-running prep is a no-op: the branch and file already exist, and the
         //    idempotent conflict handling must not error.
         prepare_pull_request_head(
+            &cx,
             &base,
             &engineer.token,
             &provisioned.owner,
@@ -148,6 +150,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
 /// passes. Forgejo runs the merge-conflict check in the background after the PR
 /// is created, so the field is briefly `false`/null before settling.
 async fn poll_mergeable(
+    cx: &temper_io_engine::Cx,
     client: &temper_io_engine::http::JsonClient,
     pr_url: &str,
     token: &str,
@@ -164,6 +167,6 @@ async fn poll_mergeable(
         if std::time::Instant::now() >= deadline {
             return false;
         }
-        temper_io_engine::runtime::sleep_for(std::time::Duration::from_millis(500)).await;
+        temper_io_engine::runtime::sleep_for(cx, std::time::Duration::from_millis(500)).await;
     }
 }

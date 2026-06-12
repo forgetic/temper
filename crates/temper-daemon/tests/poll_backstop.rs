@@ -24,11 +24,15 @@ fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
     value.parse().expect("valid RFC 3339 timestamp")
 }
 
-async fn spawn() -> (Daemon, String) {
-    let daemon = Daemon::new();
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("bind test server");
+async fn spawn(handle: &skein::runtime::RuntimeHandle) -> (Daemon, String) {
+    let daemon = Daemon::new(std::sync::Arc::new(handle.clone()));
+    let server = temper_daemon::serve(
+        handle,
+        &daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
     let addr = server.local_addr();
     (daemon, format!("http://{addr}/v1/message"))
 }
@@ -140,13 +144,13 @@ fn assert_scanned_issue_assignment(msg: WorkerProtocolMessage, issue: ItemNumber
 
 #[test]
 fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
-        let (daemon, url) = spawn().await;
+        let (daemon, url) = spawn(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         let config = PollBackstopConfig {
             targets: vec![RoleFeedTarget {
@@ -187,11 +191,11 @@ fn run_poll_backstop_tick_enqueues_scanned_work_then_dispatches() {
 
 #[test]
 fn run_poll_backstop_tick_with_no_targets_is_zero() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let workflow = workflow();
         let compiled = workflow.compile();
-        let (daemon, url) = spawn().await;
+        let (daemon, url) = spawn(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         let config = PollBackstopConfig {
             targets: vec![],
@@ -227,13 +231,13 @@ fn run_poll_backstop_tick_with_no_targets_is_zero() {
 
 #[test]
 fn run_poll_backstop_tick_skips_failing_target_and_continues() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
-        let (daemon, url) = spawn().await;
+        let (daemon, url) = spawn(&handle).await;
         let client = temper_io_engine::http::JsonClient::new();
         let config = PollBackstopConfig {
             targets: vec![

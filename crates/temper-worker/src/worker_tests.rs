@@ -297,6 +297,7 @@ fn authenticated_wake_interrupts_long_wait() {
 
     let outcome = runtime
         .block_on(wait_for_wake_or_poll(
+            &temper_io_engine::Cx::for_testing(),
             || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&mut listener),
@@ -330,6 +331,7 @@ fn wake_payload_carries_repository_hint_to_waiter() {
 
     let outcome = runtime
         .block_on(wait_for_wake_or_poll(
+            &temper_io_engine::Cx::for_testing(),
             || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&mut listener),
@@ -361,6 +363,7 @@ fn broad_wake_in_coalesced_batch_forces_broad_wait_outcome() {
 
     let outcome = runtime
         .block_on(wait_for_wake_or_poll(
+            &temper_io_engine::Cx::for_testing(),
             || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&mut listener),
@@ -392,6 +395,7 @@ fn unauthorized_wake_is_ignored_until_stop_or_poll() {
 
     let outcome = runtime
         .block_on(wait_for_wake_or_poll(
+            &temper_io_engine::Cx::for_testing(),
             || stop.should_stop(),
             StdDuration::from_secs(60),
             Some(&mut listener),

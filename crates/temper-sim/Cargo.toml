@@ -1,0 +1,25 @@
+[package]
+name = "temper-sim"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic simulation harness: production daemon code under skein's lab runtime."
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+skein.workspace = true
+serde_json.workspace = true
+temper-io-engine = { path = "../temper-io-engine" }
+temper-daemon = { path = "../temper-daemon" }
+temper-worker-protocol = { path = "../temper-worker-protocol" }
+
+[dev-dependencies]
+temper-forge = { path = "../temper-forge" }
+temper-forge-memory = { path = "../temper-forge-memory" }
+temper-workflow = { path = "../temper-workflow" }
+
+[lints]
+workspace = true

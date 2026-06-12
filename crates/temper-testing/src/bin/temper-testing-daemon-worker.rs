@@ -36,8 +36,8 @@ fn main() -> ExitCode {
         }
     };
 
-    match temper_io_engine::runtime::block_on_runtime(&runtime, async move {
-        run(&config, &identity).await
+    match temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
+        run(&cx, &config, &identity).await
     }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

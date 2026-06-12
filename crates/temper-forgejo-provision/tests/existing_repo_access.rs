@@ -280,7 +280,7 @@ async fn has_actions(
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let (server, admin) = start_server_with_admin().await;
         let base = server.base_url().to_string();
         let name = "smith";
@@ -295,6 +295,7 @@ fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
         let config = runner_config();
         let workflow = workflow();
         let provisioned = provision_world(
+            &cx,
             &base,
             &admin,
             OWNER,
@@ -379,7 +380,7 @@ fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_errors_when_repo_absent() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         let (server, admin) = start_server_with_admin().await;
         let base = server.base_url().to_string();
         let client = http();
@@ -390,6 +391,7 @@ fn existing_repo_errors_when_repo_absent() {
         let config = runner_config();
         let workflow = workflow();
         let error = provision_world(
+            &cx,
             &base,
             &admin,
             OWNER,
@@ -417,7 +419,7 @@ fn existing_repo_errors_when_repo_absent() {
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, _handle| async move {
         // Exercises the full `provision_and_seed` path with `--existing-repo` and a
         // webhook, mirroring the intended Smith caller (`--seed-intake no`).
         let (server, admin) = start_server_with_admin().await;
@@ -436,6 +438,7 @@ fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
 
         let workflow = workflow();
         let (_provisioned, issue) = provision_and_seed(
+            &cx,
             &base,
             &admin,
             OWNER,

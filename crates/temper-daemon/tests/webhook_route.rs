@@ -64,18 +64,27 @@ async fn create_ready_issue(forge: &MemoryForge, repo: &RepositoryId) -> ItemNum
 }
 
 async fn spawn_with_webhook(
+    handle: &skein::runtime::RuntimeHandle,
     daemon: &Daemon,
     forge: Arc<MemoryForge>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: Arc<CompiledWorkflow>,
     config: Arc<WebhookConfig>,
 ) -> (String, String) {
-    let daemon = daemon
-        .clone()
-        .with_webhook(forge, workflow, compiled, config);
-    let server = temper_daemon::serve(&daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-        .await
-        .expect("bind test server");
+    let daemon = daemon.clone().with_webhook(
+        forge,
+        workflow,
+        compiled,
+        config,
+        temper_daemon::system_clock(),
+    );
+    let server = temper_daemon::serve(
+        handle,
+        &daemon,
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    )
+    .await
+    .expect("bind test server");
     let addr = server.local_addr();
     (
         format!("http://{addr}/v1/message"),
@@ -119,9 +128,7 @@ async fn post_webhook_with_signature(
     body: Vec<u8>,
 ) -> temper_io_engine::http::HttpResponseData {
     let pooled = temper_io_engine::http::build_http_client();
-    let cx = temper_io_engine::runtime::ambient_cx();
     temper_io_engine::http::http_call(
-        &cx,
         &pooled,
         temper_io_engine::http::HttpCall {
             method: "POST".into(),
@@ -258,6 +265,7 @@ async fn register_engineer(client: &temper_io_engine::http::JsonClient, message_
 }
 
 async fn wait_for_pull_request_count(
+    cx: &temper_io_engine::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     expected: usize,
@@ -276,21 +284,22 @@ async fn wait_for_pull_request_count(
             "timed out waiting for {expected} pull request(s), saw {}",
             pulls.len()
         );
-        temper_io_engine::runtime::sleep_for(Duration::from_millis(10)).await;
+        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
 #[test]
 fn posted_webhook_wakes_target_then_worker_is_assigned() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "main").await;
         let issue = create_ready_issue(&forge, &repo).await;
         let workflow = Arc::new(workflow());
         let compiled = Arc::new(workflow.compile());
-        let daemon = Daemon::new();
+        let daemon = Daemon::new(Arc::new(handle.clone()));
         let config = Arc::new(webhook_config(repo));
         let (message_url, webhook_url) = spawn_with_webhook(
+            &handle,
             &daemon,
             forge.clone(),
             workflow,
@@ -318,15 +327,16 @@ fn posted_webhook_wakes_target_then_worker_is_assigned() {
 
 #[test]
 fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "main").await;
         let issue = create_ready_issue(&forge, &repo).await;
         let workflow = Arc::new(workflow());
         let compiled = Arc::new(workflow.compile());
-        let daemon = Daemon::new();
+        let daemon = Daemon::new(Arc::new(handle.clone()));
         let config = Arc::new(webhook_config(repo));
         let (message_url, webhook_url) = spawn_with_webhook(
+            &handle,
             &daemon,
             forge.clone(),
             workflow,
@@ -353,15 +363,16 @@ fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() 
 
 #[test]
 fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "main").await;
         create_ready_issue(&forge, &repo).await;
         let workflow = Arc::new(workflow());
         let compiled = Arc::new(workflow.compile());
-        let daemon = Daemon::new();
+        let daemon = Daemon::new(Arc::new(handle.clone()));
         let config = Arc::new(webhook_config(repo));
         let (message_url, webhook_url) = spawn_with_webhook(
+            &handle,
             &daemon,
             forge.clone(),
             workflow,
@@ -388,20 +399,25 @@ fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
 
 #[test]
 fn posted_webhook_drives_success_apply_to_pull_request() {
-    temper_io_engine::block_on(async move {
+    temper_io_engine::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
         let workflow = Arc::new(workflow());
         let compiled = Arc::new(workflow.compile());
-        let daemon = Daemon::with_applier(Arc::new(LeaseApplier::new(
-            forge.clone(),
-            LeasePolicy::new(chrono::Duration::seconds(300)),
-            "daemon-1",
-            Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-        )));
+        let daemon = Daemon::with_applier(
+            Arc::new(handle.clone()),
+            Arc::new(LeaseApplier::new(
+                forge.clone(),
+                LeasePolicy::new(chrono::Duration::seconds(300)),
+                "daemon-1",
+                Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
+                temper_daemon::system_clock(),
+            )),
+        );
         let config = Arc::new(webhook_config(repo.clone()));
         let (message_url, webhook_url) = spawn_with_webhook(
+            &handle,
             &daemon,
             forge.clone(),
             workflow,
@@ -438,7 +454,7 @@ fn posted_webhook_drives_success_apply_to_pull_request() {
             &assignment.job_id,
         );
 
-        let pulls = wait_for_pull_request_count(&forge, &repo, 1).await;
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
         let pull = &pulls[0];
         assert_eq!(
             pull.title,
