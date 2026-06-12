@@ -1646,7 +1646,7 @@ fn protocol_response(message: Option<WorkerProtocolMessage>) -> HttpResponseData
 /// The daemon's imperative shell: performs each machine request on the engine
 /// runtime and feeds the resulting completions back into the queue.
 struct DaemonExecutor {
-    handle: asupersync::runtime::RuntimeHandle,
+    handle: skein::runtime::RuntimeHandle,
     cq: CqSender<DaemonCompletion>,
     applier: Arc<dyn ResultApplier>,
     scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>>,
@@ -1715,7 +1715,7 @@ impl Daemon {
         applier: Arc<dyn ResultApplier>,
         apply_grace: Duration,
     ) -> Self {
-        let handle = asupersync::runtime::Runtime::current_handle()
+        let handle = skein::runtime::Runtime::current_handle()
             .expect("Daemon requires a running engine runtime");
         let (cq_tx, cq_rx) = channel();
         let scanner_slot: Arc<std::sync::Mutex<Option<Arc<dyn WakeScanner>>>> =
@@ -1956,7 +1956,7 @@ pub fn spawn_poll_backstop<F: Forge + Send + Sync + 'static>(
     compiled: Arc<CompiledWorkflow>,
     config: PollBackstopConfig,
 ) {
-    let handle = asupersync::runtime::Runtime::current_handle()
+    let handle = skein::runtime::Runtime::current_handle()
         .expect("poll backstop requires a running engine runtime");
     let cadence = config.cadence;
     temper_io_engine::spawn_cadence_loop(&handle, cadence, move || {
@@ -2006,7 +2006,7 @@ pub async fn serve(
     daemon: &Daemon,
     bind: SocketAddr,
 ) -> std::io::Result<temper_io_engine::http::EngineHttpServer> {
-    let handle = asupersync::runtime::Runtime::current_handle()
+    let handle = skein::runtime::Runtime::current_handle()
         .expect("serve requires a running engine runtime");
     let server = temper_io_engine::http::serve_http(
         &handle,

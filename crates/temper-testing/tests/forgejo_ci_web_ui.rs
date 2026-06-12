@@ -31,7 +31,7 @@ fn list_ci_jobs_reads_failure_through_web_ui() {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
         // polling; boot it on a blocking thread so that nested runtime lives and dies
         // off-reactor (matching the Phase 2 provisioning test).
-        let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
+        let cached = skein::runtime::spawn_blocking(start_cached_provisioned_server)
             .await
             .expect("forgejo cached provisioned state starts");
         let server = cached.server;

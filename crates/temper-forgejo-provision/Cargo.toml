@@ -16,7 +16,7 @@ temper-workflow = { path = "../temper-workflow" }
 temper-io-engine = { path = "../temper-io-engine" }
 
 [dev-dependencies]
-asupersync.workspace = true
+skein.workspace = true
 # Boots a throwaway Forgejo (admin bootstrap + lifecycle) so the ignored
 # behavior tests can drive the production `provision_world` against a real
 # backend. Dev-only: production provisioning never depends on the test fixture.

@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use asupersync::cx::Cx;
-use asupersync::io::AsyncWriteExt;
-use asupersync::process::{Command, Stdio};
-use asupersync::time::timeout;
+use skein::cx::Cx;
+use skein::io::AsyncWriteExt;
+use skein::process::{Command, Stdio};
+use skein::time::timeout;
 
 /// One child-process run, as data.
 #[derive(Debug, Clone)]

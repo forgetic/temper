@@ -5,26 +5,26 @@
 //! Server side: inbound HTTP requests become `<io-event-completion>`s carrying
 //! an [`HttpResponder`]; the machine answers by emitting a respond request,
 //! which the executor fulfils through the responder. Connection handling,
-//! parsing, and keep-alive all live in the shell (asupersync's HTTP/1.1
+//! parsing, and keep-alive all live in the shell (skein's HTTP/1.1
 //! listener); the machine only ever sees plain data.
 //!
 //! Client side: an outbound HTTP call is a single request from the machine's
-//! perspective; the executor performs it on asupersync's pooled HTTP/1.1
+//! perspective; the executor performs it on skein's pooled HTTP/1.1
 //! client and submits the outcome as a completion.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use asupersync::cx::Cx;
-use asupersync::http::h1::http_client::{ClientError, HttpClient, HttpClientBuilder};
-use asupersync::http::h1::server::HostPolicy;
-use asupersync::http::h1::{
-    Http1Config, Http1Listener, Http1ListenerConfig, Method, Request as H1Request,
-    Response as H1Response,
+use skein::cx::Cx;
+use skein::http::h1::http_client::{
+    ClientError, HttpClient, HttpClientConfig, RedirectPolicy,
 };
-use asupersync::runtime::RuntimeHandle;
-use asupersync::server::shutdown::ShutdownSignal;
+use skein::http::h1::{
+    Http1Listener, Http1ListenerConfig, Method, Request as H1Request, Response as H1Response,
+};
+use skein::runtime::RuntimeHandle;
+use skein::server::shutdown::ShutdownSignal;
 
 use crate::queue::{oneshot, CqSender, OneshotSender};
 
@@ -122,14 +122,12 @@ where
     F: Fn(HttpRequestData, HttpResponder) -> C + Send + Sync + 'static,
 {
     let to_completion = Arc::new(to_completion);
-    // Accept any Host header. asupersync 0.3.2 rejects all requests by
-    // default (421) unless a host policy is set; engine services are reached
-    // by IP, localhost, or hostname interchangeably, authenticate at the
-    // application layer (webhook HMAC, job protocol), and never derive
-    // absolute URLs from Host — the injection surface the policy guards
-    // against does not exist here.
-    let config = Http1ListenerConfig::default()
-        .http_config(Http1Config::default().host_policy(HostPolicy::AllowAll));
+    // The skein runtime (our asupersync 0.2.4 fork) accepts any Host header by default;
+    // it predates the 421-by-default host policy introduced upstream in 0.2.5+.
+    // Engine services are reached by IP, localhost, or hostname interchangeably,
+    // authenticate at the application layer (webhook HMAC, job protocol), and
+    // never derive absolute URLs from Host, so accept-all is the correct policy.
+    let config = Http1ListenerConfig::default();
     let listener = Http1Listener::bind_with_config(
         bind,
         move |request: H1Request| {
@@ -149,11 +147,12 @@ where
                 }
                 match reply_rx.recv().await {
                     Some(response) => {
-                        let mut h1 = H1Response::builder(response.status);
+                        let reason = skein::http::h1::types::default_reason(response.status);
+                        let mut h1 = H1Response::new(response.status, reason, response.body);
                         for (name, value) in response.headers {
-                            h1 = h1.header(name, value);
+                            h1 = h1.with_header(name, value);
                         }
-                        h1.body(response.body).build()
+                        h1
                     }
                     None => H1Response::new(500, "Internal Server Error", Vec::new()),
                 }
@@ -191,7 +190,11 @@ pub type HttpCallResult = Result<HttpResponseData, String>;
 /// Build the pooled engine HTTP client (no redirects — forge code treats
 /// redirects as data, mirroring the previous reqwest configuration).
 pub fn build_http_client() -> Arc<HttpClient> {
-    Arc::new(HttpClientBuilder::new().no_redirects().build())
+    let config = HttpClientConfig {
+        redirect_policy: RedirectPolicy::None,
+        ..HttpClientConfig::default()
+    };
+    Arc::new(HttpClient::with_config(config))
 }
 
 /// Percent-encode one query component (RFC 3986 unreserved set kept verbatim).
@@ -239,9 +242,13 @@ fn parse_method(method: &str) -> Result<Method, String> {
 /// Perform one HTTP call on the pooled client. Used directly by forge
 /// executors running inside engine tasks.
 pub async fn http_call(cx: &Cx, client: &HttpClient, call: HttpCall) -> HttpCallResult {
+    // The 0.2.4 client request is not Cx-threaded; cancellation of the calling
+    // task still tears down the in-flight future. Kept in the signature so
+    // callers (and a future cancel-aware client) need no change.
+    let _ = cx;
     let method = parse_method(&call.method)?;
     let response = client
-        .request(cx, method, &call.url, call.headers, call.body)
+        .request(method, &call.url, call.headers, call.body)
         .await
         .map_err(|error: ClientError| error.to_string())?;
     Ok(HttpResponseData {

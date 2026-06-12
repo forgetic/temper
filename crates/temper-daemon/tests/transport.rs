@@ -226,7 +226,7 @@ fn enqueue_mid_poll_wakes_and_assigns_promptly() {
 
         let poll_client = client.clone();
         let poll_url = url.clone();
-        let poll_task = asupersync::runtime::Runtime::current_handle()
+        let poll_task = skein::runtime::Runtime::current_handle()
             .expect("engine runtime")
             .spawn(async move {
                 let started = Instant::now();

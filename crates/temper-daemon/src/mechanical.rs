@@ -89,7 +89,7 @@ pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + 'static>(
     workflow: std::sync::Arc<ValidatedWorkflow>,
     config: MechanicalBackstopConfig,
 ) {
-    let handle = asupersync::runtime::Runtime::current_handle()
+    let handle = skein::runtime::Runtime::current_handle()
         .expect("mechanical backstop requires a running engine runtime");
     let journals: std::sync::Arc<Vec<InMemoryJournal>> = std::sync::Arc::new(
         config

@@ -120,7 +120,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
         let mut worker = spawn_worker(workspace.path(), addr, &stop_file, &log);
 
         let cx = temper_io_engine::runtime::current_cx();
-        let (job, result) = asupersync::time::timeout(
+        let (job, result) = skein::time::timeout(
         temper_io_engine::runtime::timer_now(&cx),
         RESULT_TIMEOUT,
         Box::pin(rx.recv()),
@@ -189,7 +189,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
 
         // The stop-file ends the loop and the worker exits cleanly.
         std::fs::write(&stop_file, b"stop").expect("stop file writes");
-        let status = asupersync::runtime::spawn_blocking(move || worker.child.wait())
+        let status = skein::runtime::spawn_blocking(move || worker.child.wait())
             .await
             .expect("worker child waits");
         assert!(status.success(), "worker exited with {status:?}");

@@ -8,7 +8,7 @@ description = "Forgejo-backed Forge implementation (best-effort, offline-tested)
 
 [dependencies]
 async-trait.workspace = true
-asupersync.workspace = true
+skein.workspace = true
 chrono.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-io-engine = { path = "../temper-io-engine" }

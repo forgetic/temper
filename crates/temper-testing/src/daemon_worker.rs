@@ -560,8 +560,8 @@ impl Workspace<'_> {
         current_dir: Option<&Path>,
         include_remote_auth: bool,
         args: &[&str],
-    ) -> Result<asupersync::process::Output, JobError> {
-        let mut git = asupersync::process::Command::new("git");
+    ) -> Result<skein::process::Output, JobError> {
+        let mut git = skein::process::Command::new("git");
         git.env("GIT_TERMINAL_PROMPT", "0")
             .arg("-c")
             .arg(format!("user.name={}", self.identity.user))

@@ -37,7 +37,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
         // boot it off-reactor so its nested blocking runtime lives and dies off the async
         // test thread (same pattern as the Phase 2 provisioning test).
-        let cached = asupersync::runtime::spawn_blocking(start_cached_provisioned_server)
+        let cached = skein::runtime::spawn_blocking(start_cached_provisioned_server)
             .await
             .expect("forgejo cached provisioned state starts");
         let server = cached.server;

@@ -36,7 +36,7 @@ const SENTINEL_BODY: &str = "name: project-owned-ci\non: [push]\njobs:\n  noop:\
 /// blocking client that must not be dropped on the reactor) and returns it with
 /// a freshly bootstrapped admin token.
 async fn start_server_with_admin() -> (ForgejoServer, String) {
-    asupersync::runtime::spawn_blocking(|| {
+    skein::runtime::spawn_blocking(|| {
         let server = ForgejoServer::start().expect("forgejo server boots");
         let admin_token = bootstrap_admin(&server).expect("admin bootstrap mints a token");
         (server, admin_token)

@@ -134,16 +134,16 @@ pub(crate) fn build_request(
     }
 }
 
-/// Real [`HttpClient`] backed by the engine's pooled asupersync HTTP client.
+/// Real [`HttpClient`] backed by the engine's pooled skein HTTP client.
 ///
 /// From the logic layer's point of view one `execute` call is a single
 /// `<io-event-request>`; this adapter is the imperative-shell executor that
-/// performs it. Note: `https` API roots additionally require asupersync's
+/// performs it. Note: `https` API roots additionally require skein's
 /// `tls` feature; the offline tests use the mock client instead.
 #[derive(Clone)]
 pub struct EngineHttpClient {
     base_url: String,
-    client: std::sync::Arc<asupersync::http::h1::http_client::HttpClient>,
+    client: std::sync::Arc<skein::http::h1::http_client::HttpClient>,
 }
 
 impl std::fmt::Debug for EngineHttpClient {

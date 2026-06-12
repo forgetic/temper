@@ -37,7 +37,7 @@ fn main() -> ExitCode {
 fn run(config: DaemonRunConfig) -> Result<(), String> {
     // The daemon runs entirely as engine tasks: the HTTP listener, the pure
     // daemon machine's engine loop, backstop cadence machines, appliers, and
-    // wake scans are all completion-driven I/O on the asupersync runtime.
+    // wake scans are all completion-driven I/O on the skein runtime.
     temper_io_engine::block_on(async move { run_async(config).await })
 }
 
@@ -112,7 +112,7 @@ async fn run_async(config: DaemonRunConfig) -> Result<(), String> {
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
 
-    if let Err(error) = asupersync::signal::ctrl_c().await {
+    if let Err(error) = skein::signal::ctrl_c().await {
         eprintln!("temper-daemon: failed to listen for shutdown signal: {error}");
     }
     server.begin_drain(std::time::Duration::from_secs(5));
