@@ -1,11 +1,57 @@
 [workspace]
 members = [
-    "crates/smith-agent",
-    "crates/smith-io-engine",
-    "crates/smith-temper-agent",
-    "crates/smith-temper-agent-cli",
+    "crates/anvil-agent",
+    "crates/anvil-io-engine",
+    "crates/anvil-temper-agent",
 ]
 resolver = "2"
+
+# The project binaries are minimal glue around the library crates and live in
+# src/bin/ (same pattern as temper). Crates under crates/ are libraries only.
+[package]
+name = "anvil"
+version.workspace = true
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "anvil: an out-of-process coding agent implementing smith's agent process protocol."
+
+[features]
+default = []
+test-provider-base-url-override = ["anvil-temper-agent/test-provider-base-url-override"]
+
+[dependencies]
+anvil-io-engine = { path = "crates/anvil-io-engine" }
+anvil-temper-agent = { path = "crates/anvil-temper-agent" }
+asupersync.workspace = true
+serde_json.workspace = true
+smith-agent-protocol = { path = "../smith/crates/smith-agent-protocol" }
+temper-process-protocol = { path = "../temper/crates/temper-process-protocol" }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[dev-dependencies]
+jig-core = { path = "../jig/crates/jig-core" }
+jig-server = { path = "../jig/crates/jig-server" }
+
+[[bin]]
+name = "anvil"
+path = "src/bin/anvil.rs"
+
+[[bin]]
+name = "anvil-agent"
+path = "src/bin/anvil-agent.rs"
+
+[[bin]]
+name = "anvil-product-manager-responder"
+path = "src/bin/anvil-product-manager-responder.rs"
+
+[[bin]]
+name = "anvil-workflow-role-decision"
+path = "src/bin/anvil-workflow-role-decision.rs"
+
+[lints]
+workspace = true
 
 [workspace.package]
 edition = "2024"
@@ -17,11 +63,11 @@ rust-version = "1.88"
 version = "0.1.0"
 
 [workspace.dependencies]
-# Pinned to the exact version `pi_agent_rust 0.1.18` pulls in, kept in lockstep
-# with smith/temper's `=0.3.2` so the whole local toolchain resolves one
-# asupersync version. anvil is the agent side of the agent/orchestration split:
-# it owns the pi-SDK coding loop; smith-worker spawns its binary over a versioned
-# process protocol and never links pi-SDK.
+# Pinned to the exact version `pi_agent_rust 0.1.18` pulls in, so the two
+# resolve one asupersync version. anvil is the agent side of the
+# agent/orchestration split: it owns the pi-SDK coding loop; smith-worker
+# spawns its binary over a versioned process protocol and never links pi-SDK.
+# (Both deps are slated for replacement by skein + tongs.)
 asupersync = "=0.3.2"
 pi_agent_rust = "0.1.18"
 serde = { version = "1", features = ["derive"] }

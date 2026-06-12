@@ -95,6 +95,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "anvil"
+version = "0.1.0"
+dependencies = [
+ "anvil-io-engine",
+ "anvil-temper-agent",
+ "asupersync",
+ "jig-core",
+ "jig-server",
+ "serde_json",
+ "smith-agent-protocol",
+ "temper-process-protocol",
+ "tokio",
+]
+
+[[package]]
+name = "anvil-agent"
+version = "0.1.0"
+dependencies = [
+ "anvil-io-engine",
+ "anvil-temper-agent",
+ "asupersync",
+ "async-trait",
+ "futures",
+ "jig-core",
+ "jig-server",
+ "pi_agent_rust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "anvil-io-engine"
+version = "0.1.0"
+dependencies = [
+ "asupersync",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "anvil-temper-agent"
+version = "0.1.0"
+dependencies = [
+ "anvil-agent",
+ "anvil-io-engine",
+ "anvil-temper-agent",
+ "jig-core",
+ "jig-record",
+ "jig-server",
+ "pi_agent_rust",
+ "serde",
+ "serde_json",
+ "smith-agent-protocol",
+ "temper-process-protocol",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4206,70 +4265,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7c388c1b5e93756d0c740965c41e8822f866621d41acbdf6336a6a168f8840c"
 
 [[package]]
-name = "smith-agent"
-version = "0.1.0"
-dependencies = [
- "asupersync",
- "async-trait",
- "futures",
- "jig-core",
- "jig-server",
- "pi_agent_rust",
- "serde",
- "serde_json",
- "smith-io-engine",
- "smith-temper-agent",
-]
-
-[[package]]
 name = "smith-agent-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "smith-io-engine"
-version = "0.1.0"
-dependencies = [
- "asupersync",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "smith-temper-agent"
-version = "0.1.0"
-dependencies = [
- "jig-core",
- "jig-record",
- "jig-server",
- "pi_agent_rust",
- "serde",
- "serde_json",
- "smith-agent",
- "smith-agent-protocol",
- "smith-io-engine",
- "smith-temper-agent",
- "temper-process-protocol",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "smith-temper-agent-cli"
-version = "0.1.0"
-dependencies = [
- "asupersync",
- "jig-core",
- "jig-server",
- "serde_json",
- "smith-agent-protocol",
- "smith-io-engine",
- "smith-temper-agent",
- "temper-process-protocol",
- "tokio",
 ]
 
 [[package]]
