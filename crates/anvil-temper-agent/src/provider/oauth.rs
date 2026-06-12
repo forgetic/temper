@@ -55,7 +55,7 @@ const EXPIRY_SAFETY_MS: i64 = 5 * 60 * 1000;
 /// (`~/.pi/agent/auth.json`). Exposed so callers/tests can locate the real file
 /// without depending on the SDK directly.
 pub fn default_auth_path() -> PathBuf {
-    pi::config::Config::auth_path()
+    tongs::config::Config::auth_path()
 }
 
 /// Resolves the configured codex model id (env override or default).
@@ -98,7 +98,7 @@ impl OAuthSettings {
                     .filter(|value| !value.trim().is_empty())
                     .map(PathBuf::from)
             })
-            .unwrap_or_else(pi::config::Config::auth_path);
+            .unwrap_or_else(tongs::config::Config::auth_path);
         Self { auth_file }
     }
 
@@ -207,7 +207,7 @@ impl CodexEntry {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| CODEX_TOKEN_URL.to_string());
 
-        let client = pi::http::client::Client::new();
+        let client = tongs::http::client::Client::new();
         let request = client
             .post(&token_url)
             .json(&serde_json::json!({

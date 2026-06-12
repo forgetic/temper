@@ -39,10 +39,6 @@ fn anthropic_oauth_validation() {
         return;
     }
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
 
     let provider = ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, None)
         .expect("Anthropic OAuth provider builds (run `pi /login anthropic` first)");
@@ -54,9 +50,13 @@ fn anthropic_oauth_validation() {
     );
     let context = role_context(&role);
     let start = Instant::now();
-    let decision: RoleDecision = runtime
-        .block_on(run_decision(&provider, &role.prompt.render(), &context))
-        .expect("Anthropic OAuth generic role decision succeeds and parses");
+    let decision: RoleDecision = {
+        let prompt = role.prompt.render();
+        anvil_io_engine::block_on(async move {
+            run_decision(&provider, &prompt, &context).await
+        })
+        .expect("Anthropic OAuth generic role decision succeeds and parses")
+    };
     assert_eq!(decision.action, "advance");
     eprintln!(
         "[anthropic] generic role decision: {decision:?} latency={:?}",

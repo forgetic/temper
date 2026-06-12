@@ -1,16 +1,18 @@
-//! Running a one-shot LLM decision through the `pi` SDK.
+//! Running a one-shot LLM decision on anvil's native agent loop.
 //!
-//! [`run_decision`] builds a fresh in-process [`pi::sdk::Agent`] with the role
-//! system prompt, runs it once with the work-item context as the user message,
-//! collects the assistant's text, and parses it into a structured decision `D`.
-//! No SDK tools are registered: the agent must answer in one turn with a single
-//! JSON object, keeping all workflow mutation in the calling adapter (the
+//! [`run_decision`] runs one bounded [`anvil_agent::SubAgent`] turn with the
+//! role system prompt and the work-item context as the user message, collects
+//! the assistant's text, and parses it into a structured decision `D`. No
+//! tools are registered: the agent must answer in one turn with a single JSON
+//! object, keeping all workflow mutation in the calling adapter (the
 //! authority boundary).
+//!
+//! Must be awaited inside a skein engine task (the sub-agent's drive loop
+//! reads the runtime clock and its shell spawns I/O) — see
+//! `anvil_io_engine::block_on`.
 
-use std::sync::Arc;
-
-use pi::sdk::{Agent, AgentConfig, ContentBlock};
 use serde::de::DeserializeOwned;
+use tongs::model::ContentBlock;
 
 use crate::provider::{ProviderConfig, ProviderError};
 
@@ -19,7 +21,7 @@ use crate::provider::{ProviderConfig, ProviderError};
 pub enum DecisionError {
     /// Building the provider or loading the key failed (a setup error).
     Provider(ProviderError),
-    /// The SDK agent run failed (network, provider rejection, abort).
+    /// The agent run failed (network, provider rejection, abort).
     Run(String),
     /// The model returned no text content.
     Empty,
@@ -52,7 +54,7 @@ impl From<ProviderError> for DecisionError {
 }
 
 /// Maximum tool iterations. We register no tools, so one model turn suffices;
-/// keep a small ceiling as a guard rather than the SDK default of 50.
+/// keep a small ceiling as a guard.
 const MAX_TOOL_ITERATIONS: usize = 1;
 
 /// Runs one LLM turn and parses the reply into `D`.
@@ -76,35 +78,44 @@ pub async fn run_decision<D: DeserializeOwned>(
         None => (system_prompt.to_string(), user_context.to_string()),
     };
 
-    let mut config = AgentConfig {
-        system_prompt: Some(effective_system),
-        max_tool_iterations: MAX_TOOL_ITERATIONS,
-        ..AgentConfig::default()
-    };
     // The provider authenticates from the per-request bearer carried in stream
     // options; never bake it into the provider object. For ChatGPT OAuth the
     // bearer is resolved (and refreshed if near expiry) fresh on each decision.
-    config.stream_options.api_key = Some(provider_config.resolve_bearer().await?);
     // Mode-specific knobs: API-key (DeepSeek) pins temperature 0.0 and no
     // reasoning; the codex reasoning models leave temperature unset and request
-    // the lowest supported reasoning effort; Anthropic OAuth injects Claude Code-compatible
-    // identity headers through the SDK's per-request header override path.
-    config.stream_options.temperature = provider_config.temperature();
-    config.stream_options.thinking_level = provider_config.thinking_level();
-    config.stream_options.headers = provider_config.request_headers();
+    // the lowest supported reasoning effort; Anthropic OAuth injects Claude
+    // Code-compatible identity headers through the per-request header path.
+    let stream_options = tongs::provider::StreamOptions {
+        api_key: Some(provider_config.resolve_bearer().await?),
+        temperature: provider_config.temperature(),
+        thinking_level: provider_config.thinking_level(),
+        headers: provider_config.request_headers(),
+        ..tongs::provider::StreamOptions::default()
+    };
 
-    // No tools: a `ToolRegistry` built from an empty enabled-list is empty, so
-    // the model cannot reach bash/file tools — the workflow mutation path stays
-    // exclusively in the adapter.
-    let tools = pi::sdk::ToolRegistry::from_tools(Vec::new());
-    let mut agent = Agent::new(Arc::clone(&provider), tools, config);
+    // No tools: the registry is empty, so the model cannot reach bash/file
+    // tools — the workflow mutation path stays exclusively in the adapter.
+    let outcome = anvil_agent::run_sub_agent(anvil_agent::SubAgent {
+        system_prompt: Some(effective_system),
+        user_message: effective_user,
+        tools: tongs::tools::ToolRegistry::from_tools(Vec::new()),
+        max_iterations: MAX_TOOL_ITERATIONS,
+        provider,
+        stream_options,
+    })
+    .await
+    .map_err(|error| DecisionError::Run(error.to_string()))?;
+    if matches!(outcome.stop, anvil_agent::AgentStop::ModelError) {
+        return Err(DecisionError::Run(
+            outcome
+                .final_message
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "provider reported an error stop".to_string()),
+        ));
+    }
 
-    let assistant = agent
-        .run(effective_user, |_event| {})
-        .await
-        .map_err(|error| DecisionError::Run(error.to_string()))?;
-
-    let text = collect_text(&assistant.content);
+    let text = collect_text(&outcome.final_message.content);
     if text.trim().is_empty() {
         return Err(DecisionError::Empty);
     }

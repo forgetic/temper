@@ -5,12 +5,12 @@
 //! iteration budget. Its loop — call the model, run the tools it asks for,
 //! repeat until it stops or the budget is spent — is expressed as a pure
 //! [`AgentMachine`] (`machine`) driven by an imperative shell that reuses
-//! pi-SDK providers and tools for the actual model streaming and tool
+//! tongs providers and tools for the actual model streaming and tool
 //! execution.
 //!
 //! This is the same sans-IO discipline as [`anvil_io_engine`] and the worker:
 //! the loop is deterministic and replayable, so it is unit-testable with
-//! synthetic completions and drivable under the asupersync lab for
+//! synthetic completions and drivable under the skein lab for
 //! simulation/fuzz testing. It is designed for observability (events are
 //! emitted as data, not callbacks), control (steering at turn boundaries +
 //! abort), and testability from the start.

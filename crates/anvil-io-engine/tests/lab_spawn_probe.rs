@@ -8,8 +8,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use asupersync::lab::{LabConfig, LabRuntime};
-use asupersync::types::Budget;
+use skein::lab::{LabConfig, LabRuntime};
+use skein::types::Budget;
 
 #[test]
 fn current_handle_and_spawn_work_inside_a_lab_task() {
@@ -25,11 +25,11 @@ fn current_handle_and_spawn_work_inside_a_lab_task() {
         .state
         .create_task(region, Budget::INFINITE, async move {
             // The drive loop only needs the ambient Cx (for the clock).
-            if asupersync::cx::Cx::current().is_some() {
+            if skein::cx::Cx::current().is_some() {
                 cx_resolved_in.fetch_add(1, Ordering::SeqCst);
             }
             // The shell needs the runtime handle (for spawning).
-            if asupersync::runtime::Runtime::current_handle().is_some() {
+            if skein::runtime::Runtime::current_handle().is_some() {
                 handle_resolved_in.fetch_add(1, Ordering::SeqCst);
             }
         })

@@ -460,8 +460,14 @@ mod tests {
     // ConversationRequest/Reply parsing stays covered by the
     // `temper-process-protocol` fixture tests above.
 
-    #[tokio::test]
-    async fn product_manager_responder_rejects_other_profiles_without_provider_call() {
+    #[test]
+    fn product_manager_responder_rejects_other_profiles_without_provider_call() {
+        anvil_io_engine::block_on(async {
+            rejects_other_profiles_without_provider_call_inner().await;
+        });
+    }
+
+    async fn rejects_other_profiles_without_provider_call_inner() {
         let responder = ProductManagerResponder::new(ProviderConfig::new(
             "test-provider",
             "test-model",

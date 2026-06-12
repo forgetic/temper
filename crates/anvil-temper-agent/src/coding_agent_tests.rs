@@ -383,7 +383,7 @@ fn validate_verdict_vocabulary_allows_head_path_and_empty_vocabulary() {
 // ---------------------------------------------------------------------------
 // Prompt overlay integration: precedence (built-in → overlay → repo AGENTS.md)
 // and Anthropic-OAuth folding, exercised against the real `system_prompt`.
-// These mirror exactly how `run_coding_agent` assembles the effective prompt.
+// These mirror exactly how `run_coding_agent_native` assembles the effective prompt.
 // ---------------------------------------------------------------------------
 
 /// Creates a unique temp dir for one test (folds tag + pid to avoid collisions).

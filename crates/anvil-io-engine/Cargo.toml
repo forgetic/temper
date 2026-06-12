@@ -4,10 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Sans-IO completion engine for anvil: pure Machine cores driven by an asupersync imperative shell."
+description = "Sans-IO completion engine for anvil: pure Machine cores driven by a skein imperative shell."
 
 [dependencies]
-asupersync.workspace = true
+skein.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

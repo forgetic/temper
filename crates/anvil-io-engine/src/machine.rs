@@ -55,8 +55,8 @@ impl std::ops::Add<std::time::Duration> for EngineTime {
     }
 }
 
-impl From<asupersync::types::Time> for EngineTime {
-    fn from(time: asupersync::types::Time) -> Self {
+impl From<skein::types::Time> for EngineTime {
+    fn from(time: skein::types::Time) -> Self {
         Self(time.as_nanos())
     }
 }
@@ -76,7 +76,7 @@ impl From<asupersync::types::Time> for EngineTime {
 /// done leaves as a request. This makes machines unit-testable by feeding a
 /// completion sequence (with synthetic times) and asserting on the produced
 /// requests — no runtime, no sleeps, no race conditions. The same property is
-/// what lets the asupersync lab runtime replay a recorded schedule and explore
+/// what lets the skein lab runtime replay a recorded schedule and explore
 /// interleavings under chaos.
 pub trait Machine {
     /// `<io-event-completion>`: one finished I/O event, delivered by the engine.

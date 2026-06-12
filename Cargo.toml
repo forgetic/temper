@@ -24,11 +24,10 @@ test-provider-base-url-override = ["anvil-temper-agent/test-provider-base-url-ov
 [dependencies]
 anvil-io-engine = { path = "crates/anvil-io-engine" }
 anvil-temper-agent = { path = "crates/anvil-temper-agent" }
-asupersync.workspace = true
 serde_json.workspace = true
+skein.workspace = true
 smith-agent-protocol = { path = "../smith/crates/smith-agent-protocol" }
 temper-process-protocol = { path = "../temper/crates/temper-process-protocol" }
-tokio = { workspace = true, features = ["rt", "macros"] }
 
 [dev-dependencies]
 jig-core = { path = "../jig/crates/jig-core" }
@@ -56,23 +55,19 @@ workspace = true
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-# asupersync 0.3.2 uses let-chains (stable since 1.88) without declaring its own
-# MSRV, so the workspace floor is 1.88 to match — same as smith/temper, whose
+# skein's let-chain usage sets the floor at 1.88 — same as smith/temper, whose
 # serde DTO crates this repo depends on by path.
 rust-version = "1.88"
 version = "0.1.0"
 
 [workspace.dependencies]
-# Pinned to the exact version `pi_agent_rust 0.1.18` pulls in, so the two
-# resolve one asupersync version. anvil is the agent side of the
-# agent/orchestration split: it owns the pi-SDK coding loop; smith-worker
-# spawns its binary over a versioned process protocol and never links pi-SDK.
-# (Both deps are slated for replacement by skein + tongs.)
-asupersync = "=0.3.2"
-pi_agent_rust = "0.1.18"
+# anvil is the agent side of the agent/orchestration split: it owns the agent
+# loop on tongs (the clean-room agent SDK) and skein (the runtime);
+# smith-worker spawns its binary over a versioned process protocol.
+skein = { path = "../skein/crates/skein", features = ["tls", "tls-native-roots"] }
+tongs = { path = "../tongs/crates/tongs" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = "1"
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]

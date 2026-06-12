@@ -10,7 +10,7 @@
 //!   no clocks, no spawning, no side effects. Time only enters as data carried
 //!   by completions.
 //! - an **imperative shell** — an [`Executor`] that performs the actual I/O
-//!   for each request on the asupersync runtime and eventually feeds an
+//!   for each request on the skein runtime and eventually feeds an
 //!   `<io-event-completion>` back into the engine's completion queue.
 //!
 //! The arrow loops:
@@ -19,7 +19,7 @@
 //!   <io-event-completion> ──▶ Machine::on_completion (pure)
 //!            ▲                          │
 //!            │                          ▼
-//!     Executor (asupersync I/O) ◀── <io-event-request>
+//!     Executor (skein I/O) ◀── <io-event-request>
 //! ```
 //!
 //! [`drive`] is the only loop: it receives one completion at a time, runs the
@@ -34,7 +34,7 @@
 //! Because the core is pure, machines are unit-testable with no runtime:
 //! [`drive_sync`] feeds a synthetic completion sequence with synthetic
 //! [`EngineTime`] stamps and lets a test executor record the emitted requests.
-//! The same property is what lets the asupersync **lab** runtime replay a
+//! The same property is what lets the skein **lab** runtime replay a
 //! recorded schedule under a virtual clock and explore interleavings with
 //! chaos injection — the long-term simulation/fuzz-testing goal.
 //!

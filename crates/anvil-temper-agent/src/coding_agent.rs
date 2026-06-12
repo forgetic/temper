@@ -1,12 +1,12 @@
-//! Pi-SDK-backed coding workspace agent.
+//! The coding workspace agent, on anvil's native loop + tongs tools.
 //!
 //! This module implements temper's external coding-workspace command
-//! (`TEMPER_CODING_WORKSPACE_COMMAND`) using the `pi` SDK. Where
-//! [`crate::decision`] runs a single tool-less turn that only *decides*, this
-//! module builds a tool-using [`pi::sdk::Agent`] that *acts*: it reads the
-//! work-item context temper prepared, runs a real LLM agent loop with a
-//! [`pi::sdk::ToolRegistry`] scoped to the checkout, and produces the ADR 0022
-//! work product (a working-tree diff and/or a verdict) for the role.
+//! (`TEMPER_CODING_WORKSPACE_COMMAND`). Where [`crate::decision`] runs a
+//! single tool-less turn that only *decides*, this module runs a tool-using
+//! agent that *acts*: it reads the work-item context temper prepared, runs a
+//! real LLM agent loop with a [`tongs::tools::ToolRegistry`] scoped to the
+//! checkout, and produces the ADR 0022 work product (a working-tree diff
+//! and/or a verdict) for the role.
 //!
 //! # Protocol
 //!
@@ -41,13 +41,13 @@
 //! choice. An empty vocabulary falls back to the per-role menu (back-compat).
 
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::prompt_overlays::PromptOverlays;
 use crate::provider::{ProviderConfig, ProviderError};
-use pi::sdk::{
-    Agent, AgentConfig, ContentBlock, StopReason, ToolRegistry, create_bash_tool, create_edit_tool,
-    create_find_tool, create_grep_tool, create_ls_tool, create_read_tool, create_write_tool,
+use tongs::model::ContentBlock;
+use tongs::tools::{
+    ToolRegistry, create_bash_tool, create_edit_tool, create_find_tool, create_grep_tool,
+    create_ls_tool, create_read_tool, create_write_tool,
 };
 
 /// Default ceiling on tool-using iterations for one workspace run. The agent
@@ -343,7 +343,7 @@ pub fn tool_registry(capability: Capability, cwd: &Path) -> ToolRegistry {
 /// The base tool list for a capability (read-only inspection tools for everyone,
 /// plus edit/write for the writable engineer). Returned as a `Vec` so callers
 /// can append extra tools (e.g. a sub-agent tool) before building the registry.
-fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn pi::tools::Tool>> {
+fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::tools::Tool>> {
     let mut tools = vec![
         create_read_tool(cwd),
         create_ls_tool(cwd),
@@ -373,7 +373,7 @@ const INVESTIGATE_SUBAGENT_PROMPT: &str = "You are an investigation sub-agent. \
 fn add_investigate_subagent(
     mut base: ToolRegistry,
     provider_config: &ProviderConfig,
-    stream_options: &pi::provider::StreamOptions,
+    stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
 ) -> ToolRegistry {
     // Capture what the nested sub-agent needs. The factory runs per call.
@@ -405,7 +405,7 @@ fn add_investigate_subagent(
         "Delegate a read-only investigation of the repository to a sub-agent. \
          Input: { task: string }. Returns the sub-agent's findings. Safe to call \
          several at once.",
-        pi::tools::ToolEffects::read(),
+        tongs::tools::ToolEffects::read(),
         factory,
     )));
     base
@@ -415,93 +415,23 @@ fn add_investigate_subagent(
 // Agent run.
 // ---------------------------------------------------------------------------
 
-/// Runs one capability/role-aware coding-workspace turn.
+/// Runs one capability/role-aware coding-workspace turn on anvil's native
+/// sans-IO agent loop ([`anvil_agent::run_sub_agent`]).
 ///
-/// Builds a `pi` SDK agent with the role's tools scoped to `cwd`, runs the agent
-/// loop with the work-item context, parses the model's final JSON into a
-/// [`WorkspaceResult`], and validates the role contract (an engineer head path
-/// must leave a product diff or route a verdict).
+/// Builds the role prompt + overlays, the role's tongs tools scoped to `cwd`,
+/// and per-request stream options; runs the deterministic
+/// [`anvil_agent::AgentMachine`] driven by a skein shell; parses the model's
+/// final JSON into a [`WorkspaceResult`]; and validates the role contract (an
+/// engineer head path must leave a product diff or route a verdict).
 ///
 /// `config_dir` is the resolved operator config dir (default
 /// `$XDG_CONFIG_HOME/anvil` else `~/.config/anvil`, overridable via
-/// `--config-dir` / `ANVIL_CONFIG_DIR`). When present, per-role operator prompt
-/// overlays from it and the checkout's root `AGENTS.md` are layered onto the
-/// built-in role prompt as clearly-delimited context. Missing dir/files are a
-/// clean no-op. See [`crate::prompt_overlays`].
+/// `--config-dir` / `ANVIL_CONFIG_DIR`). When present, per-role operator
+/// prompt overlays from it and the checkout's root `AGENTS.md` are layered
+/// onto the built-in role prompt as clearly-delimited context. Missing
+/// dir/files are a clean no-op. See [`crate::prompt_overlays`].
 ///
-/// This is an `async fn`; the caller must drive it on an **asupersync** runtime
-/// because the `pi` file/bash tools use asupersync IO. See the
-/// `anvil-agent` binary for the runtime wiring.
-pub async fn run_coding_agent(
-    provider_config: &ProviderConfig,
-    context: &WorkspaceContext,
-    cwd: &Path,
-    max_iterations: usize,
-    config_dir: Option<&Path>,
-) -> Result<WorkspaceResult, CodingAgentError> {
-    let capability = Capability::for_role(&context.work_item.role);
-    let provider = provider_config.build_provider()?;
-
-    let role_prompt = system_prompt(capability, &context.allowed_verdicts);
-    let user = user_context(context);
-
-    // Layer operator overlays + the checkout's AGENTS.md onto the role prompt and
-    // place them in the correct turn. The pieces are additive context; the
-    // built-in role contract stays first. Under Anthropic OAuth the role prompt
-    // and overlays fold into the user turn (the first system block must be the
-    // Claude Code identity, else HTTP 429), mirroring `crate::decision`.
-    let overlays = PromptOverlays::load(config_dir, cwd, capability);
-    let turns = overlays.compose_turns(
-        &role_prompt,
-        &user,
-        provider_config.required_system_identity(),
-    );
-
-    let mut config = AgentConfig {
-        system_prompt: Some(turns.system),
-        max_tool_iterations: max_iterations,
-        ..AgentConfig::default()
-    };
-    config.stream_options.api_key = Some(provider_config.resolve_bearer().await?);
-    config.stream_options.temperature = provider_config.temperature();
-    config.stream_options.thinking_level = provider_config.coding_thinking_level();
-    config.stream_options.headers = provider_config.request_headers();
-
-    let tools = tool_registry(capability, cwd);
-    let mut agent = Agent::new(Arc::clone(&provider), tools, config);
-
-    let assistant = agent
-        .run(turns.user, |_event| {})
-        .await
-        .map_err(|error| CodingAgentError::Run(error.to_string()))?;
-
-    if matches!(assistant.stop_reason, StopReason::Error) {
-        return Err(CodingAgentError::AgentStopped(
-            assistant
-                .error_message
-                .unwrap_or_else(|| "provider reported an error stop".to_string()),
-        ));
-    }
-
-    let text = collect_text(&assistant.content);
-    let result = parse_result(&text)?;
-    validate_verdict_vocabulary(&result, &context.allowed_verdicts)?;
-    validate_contract(capability, &result, cwd)?;
-    Ok(result)
-}
-
-/// Runs one capability/role-aware coding-workspace turn on anvil's **native
-/// sans-IO agent loop** ([`anvil_agent::run_sub_agent`]) instead of pi's
-/// imperative `Agent::run`.
-///
-/// Behaviorally identical to [`run_coding_agent`] — same role prompt, overlays,
-/// tools, stream options, JSON parsing, and contract validation — but the loop
-/// itself is the deterministic [`anvil_agent::AgentMachine`] driven by an
-/// asupersync shell that reuses pi's provider + tools. This is the path the
-/// worker takes in production; the pi-loop version is retained for comparison
-/// and for callers that have not migrated.
-///
-/// Must be awaited inside an asupersync engine task (the sub-agent's drive loop
+/// Must be awaited inside a skein engine task (the sub-agent's drive loop
 /// reads the runtime clock and its shell spawns I/O).
 pub async fn run_coding_agent_native(
     provider_config: &ProviderConfig,
@@ -547,12 +477,12 @@ pub async fn run_coding_agent_native_with_options(
     );
 
     // Same per-request stream options the pi path sets.
-    let stream_options = pi::provider::StreamOptions {
+    let stream_options = tongs::provider::StreamOptions {
         api_key: Some(provider_config.resolve_bearer().await?),
         temperature: provider_config.temperature(),
         thinking_level: provider_config.coding_thinking_level(),
         headers: provider_config.request_headers(),
-        ..pi::provider::StreamOptions::default()
+        ..tongs::provider::StreamOptions::default()
     };
 
     let mut tools = tool_registry(capability, cwd);

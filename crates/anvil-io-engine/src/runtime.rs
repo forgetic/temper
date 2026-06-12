@@ -2,11 +2,11 @@
 
 use std::future::Future;
 
-use asupersync::cx::Cx;
-use asupersync::runtime::reactor::create_reactor;
-use asupersync::runtime::{Runtime, RuntimeBuilder, RuntimeHandle};
+use skein::cx::Cx;
+use skein::runtime::reactor::create_reactor;
+use skein::runtime::{Runtime, RuntimeBuilder, RuntimeHandle};
 
-/// An asupersync runtime configured for anvil services: I/O reactor attached
+/// An skein runtime configured for anvil services: I/O reactor attached
 /// and a small blocking pool for filesystem/git helpers.
 pub struct EngineRuntime {
     runtime: Runtime,
@@ -37,12 +37,12 @@ impl EngineRuntime {
 /// — the serialized core wouldn't benefit from threads.
 pub fn build_runtime() -> Result<EngineRuntime, String> {
     let reactor =
-        create_reactor().map_err(|error| format!("creating asupersync reactor failed: {error}"))?;
+        create_reactor().map_err(|error| format!("creating skein reactor failed: {error}"))?;
     let runtime = RuntimeBuilder::current_thread()
         .blocking_threads(1, 4)
         .with_reactor(reactor)
         .build()
-        .map_err(|error| format!("building asupersync runtime failed: {error}"))?;
+        .map_err(|error| format!("building skein runtime failed: {error}"))?;
     Ok(EngineRuntime { runtime })
 }
 
@@ -64,7 +64,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let runtime = build_runtime().expect("build asupersync runtime");
+    let runtime = build_runtime().expect("build skein runtime");
     block_on_runtime(&runtime, future)
 }
 
@@ -99,12 +99,12 @@ where
 
 /// The current time on the clock that actually fires timers.
 ///
-/// Deadlines must be computed against the runtime's timer-driver clock;
-/// `Cx::now()` is the logical clock, whose epoch can drift from the wall
-/// timer wheel and skew every sleep/timeout computed from it.
-pub fn timer_now(cx: &Cx) -> asupersync::types::Time {
+/// Deadlines must be computed against the runtime's timer-driver clock; with
+/// no ambient driver the process wall clock is the base driverless sleeps are
+/// checked against, so deadlines stay on the clock that fires them.
+pub fn timer_now(cx: &Cx) -> skein::types::Time {
     cx.timer_driver()
-        .map_or_else(|| cx.now(), |driver| driver.now())
+        .map_or_else(skein::time::wall_now, |driver| driver.now())
 }
 
 /// Engine-clock "now" usable from any thread.
@@ -112,25 +112,25 @@ pub fn timer_now(cx: &Cx) -> asupersync::types::Time {
 /// Inside an engine task this is the ambient timer-driver clock (the one that
 /// fires timers). Outside one — e.g. a raw `EngineRuntime::block_on` future —
 /// it is the process wall clock, which is the same base driverless sleeps are
-/// checked against (they fire via asupersync's fallback timing thread), so
+/// checked against (they fire via skein's fallback timing thread), so
 /// deadlines stay consistent in both contexts.
-pub fn engine_now() -> asupersync::types::Time {
-    Cx::current().map_or_else(asupersync::time::wall_now, |cx| timer_now(&cx))
+pub fn engine_now() -> skein::types::Time {
+    Cx::current().map_or_else(skein::time::wall_now, |cx| timer_now(&cx))
 }
 
 /// Sleep helper for shell and test code running inside an engine task.
 /// (Machines never sleep — they request timers.)
 pub async fn sleep_for(duration: std::time::Duration) {
-    asupersync::time::sleep(engine_now(), duration).await;
+    skein::time::sleep(engine_now(), duration).await;
 }
 
-/// The ambient capability context of the current asupersync task.
+/// The ambient capability context of the current skein task.
 ///
 /// The scheduler installs each task's `Cx` while polling it, so this is
 /// always available inside spawned tasks. It panics outside of one — engine
 /// executors only call it from task context.
 pub fn current_cx() -> Cx {
-    Cx::current().expect("called outside an asupersync task")
+    Cx::current().expect("called outside an skein task")
 }
 
 /// The ambient task context if present, or a detached root context.

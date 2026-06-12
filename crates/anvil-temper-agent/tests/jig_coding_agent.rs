@@ -6,70 +6,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anvil_temper_agent::{
     ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
-    run_coding_agent, run_coding_agent_native,
+    run_coding_agent_native,
 };
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 
-#[test]
-fn jig_coding_agent_tool_loop_creates_product_diff() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let checkout = TempCheckout::new("jig-coding-agent-tool-loop");
-    checkout.init_git();
-
-    let observed_continuation = Arc::new(AtomicUsize::new(0));
-    let fake = coding_agent_fake(Arc::clone(&observed_continuation));
-    let provider = ProviderConfig::new(
-        "jig-openai-compatible",
-        "jig-coding-agent-tool-loop",
-        "https://example.invalid/unused-production-url",
-        "sk-jig-test",
-    )
-    .with_base_url_override(fake.base_url());
-
-    let result = runtime
-        .block_on(run_coding_agent(
-            &provider,
-            &workspace_context(),
-            checkout.path(),
-            6,
-            None,
-        ))
-        .expect("jig-backed coding agent succeeds");
-
-    assert_eq!(result.verdict, None);
-    assert!(result.summary.as_deref().unwrap_or("").contains("NOTES.md"));
-    assert_eq!(
-        fs::read_to_string(checkout.path().join("NOTES.md")).expect("NOTES.md was written"),
-        "project notes\n"
-    );
-
-    let status = checkout.git(&["status", "--porcelain=v1", "--untracked-files=all"]);
-    assert!(
-        status.lines().any(|line| line == "?? NOTES.md"),
-        "status was {status:?}"
-    );
-    assert!(
-        !status.lines().any(|line| line.contains(".temper-")),
-        "bookkeeping-only diff leaked into status: {status:?}"
-    );
-    assert!(
-        fake.requests().len() > 1,
-        "expected a tool loop, got one model turn"
-    );
-    assert!(
-        observed_continuation.load(Ordering::SeqCst) >= 1,
-        "fake provider did not observe a tool-result continuation"
-    );
-}
-
-/// The same scenario as above, but driven by the **native sans-IO agent loop**
-/// (`run_coding_agent_native` → `anvil_agent::run_sub_agent`) on the asupersync
-/// runtime instead of pi's `Agent::run` on tokio. This is the path the worker
-/// takes in production; it must produce the same product diff + result.
+/// A jig-backed engineer turn driven by the native sans-IO agent loop
+/// (`run_coding_agent_native` → `anvil_agent::run_sub_agent`) on the skein
+/// runtime. This is the path the worker takes in production; it must produce
+/// a real product diff + result.
 #[test]
 fn jig_coding_agent_native_tool_loop_creates_product_diff() {
     let checkout = TempCheckout::new("jig-coding-agent-native-tool-loop");

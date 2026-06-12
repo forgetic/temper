@@ -19,11 +19,11 @@ use std::collections::BTreeMap;
 
 use anvil_agent::{AgentCompletion, AgentMachine, AgentRequest};
 use anvil_io_engine::{EngineTime, Machine};
-use pi::model::{
+use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, Usage, UserContent,
     UserMessage,
 };
-use pi::tools::{ToolEffects, ToolOutput};
+use tongs::tools::{ToolEffects, ToolOutput};
 
 /// SplitMix64 — deterministic, dependency-free.
 struct Rng(u64);
@@ -59,7 +59,6 @@ fn assistant_tool_calls(calls: &[(String, String)]) -> AssistantMessage {
                     id: id.clone(),
                     name: name.clone(),
                     arguments: serde_json::json!({}),
-                    thought_signature: None,
                 })
             })
             .collect(),

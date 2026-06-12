@@ -6,7 +6,7 @@
 //!
 //! - **`ApiKey`** — the default. DeepSeek behind the SDK's **OpenAI-compatible**
 //!   completions route: an unknown provider id (`deepseek`) plus
-//!   `api = "openai-completions"` selects [`pi::providers::create_provider`]'s
+//!   `api = "openai-completions"` selects [`tongs::providers::create_provider`]'s
 //!   OpenAI path, which appends `chat/completions` to the configured base URL.
 //!   The API key is read **at runtime** from a file (default
 //!   `.cache/deepseek-api-key`, gitignored) or an env var. Behavior is unchanged
@@ -52,9 +52,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pi::model::ThinkingLevel;
-use pi::provider::{InputType, Model, ModelCost, Provider};
-use pi::sdk::ModelEntry;
+use tongs::model::{InputType, Model, ModelCost, ThinkingLevel};
+use tongs::provider::{ModelEntry, Provider};
 
 pub use anthropic_oauth::{ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL};
 pub use oauth::{AUTH_FILE_ENV, CODEX_MODEL_ENV, DEFAULT_CODEX_MODEL, default_auth_path};
@@ -372,7 +371,7 @@ impl ProviderConfig {
     /// provider object itself.
     pub fn build_provider(&self) -> Result<Arc<dyn Provider>, ProviderError> {
         let entry = self.model_entry();
-        pi::providers::create_provider(&entry, None)
+        tongs::providers::create_provider(&entry, None)
             .map_err(|error| ProviderError::Build(error.to_string()))
     }
 

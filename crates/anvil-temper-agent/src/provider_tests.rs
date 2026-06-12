@@ -99,8 +99,14 @@ fn fixture_preflights_for_both_oauth_modes() {
     );
 }
 
-#[tokio::test]
-async fn fixture_resolves_bearers_offline_for_both_oauth_modes() {
+#[test]
+fn fixture_resolves_bearers_offline_for_both_oauth_modes() {
+    anvil_io_engine::block_on(async {
+        fixture_resolves_bearers_offline_for_both_oauth_modes_inner().await;
+    });
+}
+
+async fn fixture_resolves_bearers_offline_for_both_oauth_modes_inner() {
     let anthropic =
         ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, Some(jig_auth_fixture()))
             .expect("anthropic fixture should preflight");

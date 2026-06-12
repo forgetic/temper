@@ -3,7 +3,7 @@
 //! [`AgentShell`] implements [`anvil_io_engine::Executor`] for
 //! [`AgentMachine`](crate::machine::AgentMachine): it performs the two I/O
 //! seams the loop has — streaming a model response and executing a tool — by
-//! reusing pi-SDK [`Provider`]s and [`Tool`]s, and feeds every result back into
+//! reusing tongs [`Provider`]s and [`Tool`]s, and feeds every result back into
 //! the completion queue. Observability events the machine emits as data are
 //! forwarded to a sink; the terminal `Finished` request resolves the run's
 //! outcome through a oneshot.
@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use anvil_io_engine::{CqSender, Executor};
 use futures::StreamExt;
-use pi::model::{AssistantMessage, Message, StopReason, StreamEvent};
-use pi::provider::{Context, Provider, StreamOptions, ToolDef};
-use pi::tools::ToolRegistry;
+use tongs::model::{AssistantMessage, Message, StopReason, StreamEvent};
+use tongs::provider::{Context, Provider, StreamOptions, ToolDef};
+use tongs::tools::ToolRegistry;
 
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, StreamDelta,
@@ -44,9 +44,9 @@ impl EventSink for NullEventSink {
     fn emit(&self, _event: AgentEvent) {}
 }
 
-/// Performs the agent loop's I/O on the asupersync runtime.
+/// Performs the agent loop's I/O on the skein runtime.
 pub struct AgentShell {
-    handle: asupersync::runtime::RuntimeHandle,
+    handle: skein::runtime::RuntimeHandle,
     cq: CqSender<AgentCompletion>,
     provider: Arc<dyn Provider>,
     tools: Arc<ToolRegistry>,
@@ -61,7 +61,7 @@ pub struct AgentShell {
 impl AgentShell {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        handle: asupersync::runtime::RuntimeHandle,
+        handle: skein::runtime::RuntimeHandle,
         cq: CqSender<AgentCompletion>,
         provider: Arc<dyn Provider>,
         tools: Arc<ToolRegistry>,
@@ -220,9 +220,9 @@ async fn stream_to_completion(
 }
 
 /// Builds an error [`ToolOutput`] carrying `message` as text.
-fn tool_error_output(message: &str) -> pi::tools::ToolOutput {
-    pi::tools::ToolOutput {
-        content: vec![pi::model::ContentBlock::Text(pi::model::TextContent {
+fn tool_error_output(message: &str) -> tongs::tools::ToolOutput {
+    tongs::tools::ToolOutput {
+        content: vec![tongs::model::ContentBlock::Text(tongs::model::TextContent {
             text: message.to_string(),
             text_signature: None,
         })],

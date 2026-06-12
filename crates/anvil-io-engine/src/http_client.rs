@@ -1,4 +1,4 @@
-//! Outbound HTTP: a pooled asupersync HTTP/1.1 client for engine executors.
+//! Outbound HTTP: a pooled skein HTTP/1.1 client for engine executors.
 //!
 //! The agent only ever *initiates* HTTP (it does not run a server), so this
 //! module is client-only. An executor builds one [`HttpClient`] and
@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use asupersync::cx::Cx;
-use asupersync::http::h1::Method;
-use asupersync::http::h1::http_client::{ClientError, HttpClient, HttpClientBuilder};
+use skein::cx::Cx;
+use skein::http::h1::Method;
+use skein::http::h1::http_client::{ClientError, HttpClient, HttpClientConfig, RedirectPolicy};
 
 /// One buffered HTTP response, as plain data.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,7 +35,11 @@ pub type HttpCallResult = Result<HttpResponseData, String>;
 /// Build the pooled engine HTTP client (no redirects — the worker protocol
 /// treats any redirect as an error, mirroring the previous reqwest config).
 pub fn build_http_client() -> Arc<HttpClient> {
-    Arc::new(HttpClientBuilder::new().no_redirects().build())
+    let config = HttpClientConfig {
+        redirect_policy: RedirectPolicy::None,
+        ..HttpClientConfig::default()
+    };
+    Arc::new(HttpClient::with_config(config))
 }
 
 fn parse_method(method: &str) -> Result<Method, String> {
@@ -53,9 +57,13 @@ fn parse_method(method: &str) -> Result<Method, String> {
 
 /// Perform one HTTP call on the pooled client from inside an engine task.
 pub async fn http_call(cx: &Cx, client: &HttpClient, call: HttpCall) -> HttpCallResult {
+    // The 0.2.4-lineage client request is not Cx-threaded; cancellation of the
+    // calling task still tears down the in-flight future. Kept in the signature
+    // so callers (and a future cancel-aware client) need no change.
+    let _ = cx;
     let method = parse_method(&call.method)?;
     let response = client
-        .request(cx, method, &call.url, call.headers, call.body)
+        .request(method, &call.url, call.headers, call.body)
         .await
         .map_err(|error: ClientError| error.to_string())?;
     Ok(HttpResponseData {

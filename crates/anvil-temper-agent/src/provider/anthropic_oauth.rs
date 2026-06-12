@@ -95,7 +95,7 @@ impl AnthropicOAuthSettings {
                     .filter(|value| !value.trim().is_empty())
                     .map(PathBuf::from)
             })
-            .unwrap_or_else(pi::config::Config::auth_path);
+            .unwrap_or_else(tongs::config::Config::auth_path);
         Self { auth_file }
     }
 
@@ -238,7 +238,7 @@ impl AnthropicEntry {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| ANTHROPIC_TOKEN_URL.to_string());
 
-        let client = pi::http::client::Client::new();
+        let client = tongs::http::client::Client::new();
         let request = client
             .post(&token_url)
             .json(&serde_json::json!({

@@ -19,9 +19,9 @@ use anvil_agent::{AgentStop, SubAgent, run_sub_agent};
 use anvil_temper_agent::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
-use pi::provider::StreamOptions;
-use pi::sdk::{create_read_tool, create_write_tool};
-use pi::tools::ToolRegistry;
+use tongs::provider::StreamOptions;
+use tongs::tools::{create_read_tool, create_write_tool};
+use tongs::tools::ToolRegistry;
 
 #[test]
 fn sub_agent_runs_a_tool_loop_and_completes() {
@@ -95,7 +95,7 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
             .final_message
             .content
             .iter()
-            .any(|block| matches!(block, pi::model::ContentBlock::Text(_))),
+            .any(|block| matches!(block, tongs::model::ContentBlock::Text(_))),
         "final message should carry the model's closing text"
     );
 }
@@ -299,10 +299,10 @@ fn sub_agent_can_be_aborted_mid_run() {
         .expect("build controllable run");
 
         // Abort from a sibling task after letting the run get going.
-        let handle = asupersync::runtime::Runtime::current_handle().expect("handle");
+        let handle = skein::runtime::Runtime::current_handle().expect("handle");
         handle.spawn_with_cx(move |cx| async move {
             // Let a couple of turns happen first (virtual time).
-            asupersync::time::sleep(
+            skein::time::sleep(
                 anvil_io_engine::timer_now(&cx),
                 std::time::Duration::from_millis(50),
             )

@@ -4,14 +4,14 @@
 //! conversation state and the iteration budget, and decides — purely — when to
 //! call the model, which tools to run, when to inject steering, and when to
 //! stop. It performs no I/O. The actual model streaming and tool execution are
-//! done by the shell ([`crate::shell`]), which reuses pi-SDK providers and
+//! done by the shell ([`crate::shell`]), which reuses tongs providers and
 //! tools and feeds results back as [`AgentCompletion`]s.
 //!
 //! This mirrors the [`anvil_io_engine::Machine`] discipline used by the worker:
 //! `(state, completion) -> [request]`, deterministic and replayable, so the
 //! whole loop — tool orchestration, max-iteration cutoff, stop-reason handling,
 //! steering at turn boundaries — is unit-testable with synthetic completions and
-//! drivable under the asupersync lab for simulation/fuzz testing.
+//! drivable under the skein lab for simulation/fuzz testing.
 //!
 //! Design note (steering): steering messages are injected at **turn
 //! boundaries** — after a model turn and its tool batch complete, before the
@@ -21,8 +21,8 @@
 
 use std::collections::BTreeMap;
 
-use pi::model::{AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
-use pi::tools::{ToolEffects, ToolOutput};
+use tongs::model::{AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
+use tongs::tools::{ToolEffects, ToolOutput};
 
 /// An observability event the machine emits as data (the shell renders/records
 /// it). Keeping events as machine output — rather than callbacks fired from
@@ -468,14 +468,14 @@ fn tool_result_message(
 /// paths where the run ends without a real model message.
 fn error_assistant(message: &str) -> AssistantMessage {
     AssistantMessage {
-        content: vec![ContentBlock::Text(pi::model::TextContent {
+        content: vec![ContentBlock::Text(tongs::model::TextContent {
             text: message.to_string(),
             text_signature: None,
         })],
         api: String::new(),
         provider: String::new(),
         model: String::new(),
-        usage: pi::model::Usage::default(),
+        usage: tongs::model::Usage::default(),
         stop_reason: StopReason::Error,
         error_message: Some(message.to_string()),
         timestamp: 0,

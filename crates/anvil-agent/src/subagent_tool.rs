@@ -1,6 +1,6 @@
 //! Sub-agents as tools.
 //!
-//! A **sub-agent** is exposed to a parent agent as just another [`pi::tools::Tool`]:
+//! A **sub-agent** is exposed to a parent agent as just another [`tongs::tools::Tool`]:
 //! when the parent model calls it, [`SubAgentTool::execute`] runs a nested
 //! [`run_sub_agent`](crate::run::run_sub_agent) with a task string drawn from the
 //! tool arguments, and returns the sub-agent's final message text as the tool
@@ -22,9 +22,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use pi::error::{Error, Result};
-use pi::model::ContentBlock;
-use pi::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
+use tongs::error::{Error, Result};
+use tongs::model::ContentBlock;
+use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
 use crate::run::{SubAgent, run_sub_agent};
 
@@ -121,7 +121,7 @@ impl Tool for SubAgentTool {
         let text = collect_text(&outcome.final_message.content);
         let is_error = matches!(outcome.stop, crate::machine::AgentStop::ModelError);
         Ok(ToolOutput {
-            content: vec![ContentBlock::Text(pi::model::TextContent {
+            content: vec![ContentBlock::Text(tongs::model::TextContent {
                 text,
                 text_signature: None,
             })],

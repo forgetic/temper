@@ -14,10 +14,10 @@
 use std::sync::Arc;
 
 use anvil_io_engine::{CqSender, channel, drive, oneshot};
-use pi::model::{Message, UserContent, UserMessage};
-use pi::provider::{Provider, StreamOptions, ToolDef};
-use pi::sdk::tool_to_definition;
-use pi::tools::ToolRegistry;
+use tongs::model::{Message, UserContent, UserMessage};
+use tongs::provider::{Provider, StreamOptions, ToolDef};
+use tongs::tools::tool_to_definition;
+use tongs::tools::ToolRegistry;
 
 use crate::machine::{AgentCompletion, AgentMachine};
 use crate::shell::{AgentOutcome, AgentShell, EventSink, NullEventSink};
@@ -88,7 +88,7 @@ impl std::fmt::Display for SubAgentError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SubAgentError::RuntimeUnavailable => {
-                formatter.write_str("run_sub_agent must be driven on an asupersync engine runtime")
+                formatter.write_str("run_sub_agent must be driven on an skein engine runtime")
             }
             SubAgentError::NoOutcome => {
                 formatter.write_str("sub-agent drive loop ended without an outcome")
@@ -137,7 +137,7 @@ pub fn run_sub_agent_controllable(
     SubAgentError,
 > {
     let handle =
-        asupersync::runtime::Runtime::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
+        skein::runtime::Runtime::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
 
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools
@@ -148,7 +148,7 @@ pub fn run_sub_agent_controllable(
 
     // Effect map for parallel batching: each tool declares its effects, which
     // the machine uses to plan which adjacent tool calls may run concurrently.
-    let effects: std::collections::BTreeMap<String, pi::tools::ToolEffects> = sub_agent
+    let effects: std::collections::BTreeMap<String, tongs::tools::ToolEffects> = sub_agent
         .tools
         .tools()
         .iter()

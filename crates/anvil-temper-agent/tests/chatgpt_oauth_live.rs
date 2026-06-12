@@ -45,6 +45,21 @@ struct RoleDecision {
     reason: String,
 }
 
+/// Drives one decision on the skein engine runtime (run_decision must be
+/// awaited inside an engine task).
+fn block_on_decision<D: serde::de::DeserializeOwned + Send + 'static>(
+    provider: &ProviderConfig,
+    system_prompt: &str,
+    user_context: &str,
+) -> Result<D, anvil_temper_agent::DecisionError> {
+    let provider = provider.clone();
+    let system_prompt = system_prompt.to_string();
+    let user_context = user_context.to_string();
+    anvil_io_engine::block_on(async move {
+        run_decision(&provider, &system_prompt, &user_context).await
+    })
+}
+
 #[test]
 #[ignore = "makes real ChatGPT (OpenAI Codex) OAuth calls; \
             run with TEMPER_CHATGPT_OAUTH=1 -- --ignored --nocapture"]
@@ -57,10 +72,6 @@ fn chatgpt_oauth_validation() {
         return;
     }
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
 
     // Step 1 — end-to-end proof: build the provider against the *real* auth file
     // (default path, no override) and run one trivial decision. `from_auth` runs
@@ -70,13 +81,12 @@ fn chatgpt_oauth_validation() {
     eprintln!("[a3] codex model id: {}", provider.model_id());
 
     let smoke_start = Instant::now();
-    let pong: Pong = runtime
-        .block_on(run_decision(
-            &provider,
-            "You reply with a single JSON object and nothing else.",
-            r#"Reply with exactly {"reply":"pong"}."#,
-        ))
-        .expect("ChatGPT OAuth smoke decision succeeds and parses");
+    let pong: Pong = block_on_decision(
+        &provider,
+        "You reply with a single JSON object and nothing else.",
+        r#"Reply with exactly {"reply":"pong"}."#,
+    )
+    .expect("ChatGPT OAuth smoke decision succeeds and parses");
     let smoke_latency = smoke_start.elapsed();
     assert_eq!(pong.reply.trim().to_lowercase(), "pong");
     eprintln!("[a3] smoke decision latency: {smoke_latency:?}");
@@ -91,13 +101,12 @@ fn chatgpt_oauth_validation() {
     );
     let role_context = role_context(&role);
     let role_start = Instant::now();
-    let decision: RoleDecision = runtime
-        .block_on(run_decision(
-            &provider,
-            &role.prompt.render(),
-            &role_context,
-        ))
-        .expect("ChatGPT OAuth generic role decision succeeds and parses");
+    let decision: RoleDecision = block_on_decision(
+        &provider,
+        &role.prompt.render(),
+        &role_context,
+    )
+    .expect("ChatGPT OAuth generic role decision succeeds and parses");
     let role_latency = role_start.elapsed();
     eprintln!("[a3] generic role decision: {decision:?} (latency: {role_latency:?})");
     assert_eq!(decision.action, "advance");
@@ -106,14 +115,14 @@ fn chatgpt_oauth_validation() {
     // near-expiry, then run a decision through the copy. `resolve_bearer` must
     // refresh against the real token endpoint, the decision must still succeed,
     // and the rewritten copy must stay in its original (nodejs) on-disk schema.
-    validate_refresh(&runtime);
+    validate_refresh();
 }
 
 /// Exercises the near-expiry refresh path on a throwaway copy of the real auth
 /// file, then syncs the refreshed credential back to the real file so its
 /// (possibly rotated) refresh token stays current for the next run. No token
 /// bytes are ever printed.
-fn validate_refresh(runtime: &tokio::runtime::Runtime) {
+fn validate_refresh() {
     let real_path = default_auth_path();
     let original = std::fs::read_to_string(&real_path).expect("real auth file is readable");
     let original_schema = codex_schema(&original);
@@ -133,13 +142,12 @@ fn validate_refresh(runtime: &tokio::runtime::Runtime) {
     );
 
     let provider = ProviderConfig::chatgpt_oauth(None, Some(copy.path.clone()));
-    let pong: Pong = runtime
-        .block_on(run_decision(
-            &provider,
-            "You reply with a single JSON object and nothing else.",
-            r#"Reply with exactly {"reply":"pong"}."#,
-        ))
-        .expect("decision after a forced refresh succeeds and parses");
+    let pong: Pong = block_on_decision(
+        &provider,
+        "You reply with a single JSON object and nothing else.",
+        r#"Reply with exactly {"reply":"pong"}."#,
+    )
+    .expect("decision after a forced refresh succeeds and parses");
     assert_eq!(pong.reply.trim().to_lowercase(), "pong");
 
     // The refresh must have rewritten the copy: expiry pushed into the future and

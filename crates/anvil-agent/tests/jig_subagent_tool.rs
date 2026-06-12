@@ -15,9 +15,9 @@ use anvil_agent::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
 use anvil_temper_agent::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
-use pi::provider::StreamOptions;
-use pi::sdk::create_read_tool;
-use pi::tools::{ToolEffects, ToolRegistry};
+use tongs::provider::StreamOptions;
+use tongs::tools::create_read_tool;
+use tongs::tools::{ToolEffects, ToolRegistry};
 
 #[test]
 fn parent_agent_delegates_to_a_sub_agent() {
@@ -131,11 +131,11 @@ fn parent_agent_delegates_to_a_sub_agent() {
         .messages
         .iter()
         .filter_map(|m| match m {
-            pi::model::Message::ToolResult(r) => Some(
+            tongs::model::Message::ToolResult(r) => Some(
                 r.content
                     .iter()
                     .filter_map(|b| match b {
-                        pi::model::ContentBlock::Text(t) => Some(t.text.clone()),
+                        tongs::model::ContentBlock::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
                     .collect::<String>(),
@@ -277,7 +277,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
     let tool_result_count = outcome
         .messages
         .iter()
-        .filter(|m| matches!(m, pi::model::Message::ToolResult(_)))
+        .filter(|m| matches!(m, tongs::model::Message::ToolResult(_)))
         .count();
     assert_eq!(
         tool_result_count, 2,

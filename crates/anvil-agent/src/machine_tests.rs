@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anvil_io_engine::{EngineTime, Machine};
-use pi::model::{
+use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, Usage, UserContent,
     UserMessage,
 };
-use pi::tools::{ToolEffects, ToolOutput};
+use tongs::tools::{ToolEffects, ToolOutput};
 
 use super::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
 
@@ -58,7 +58,6 @@ fn assistant_tool_calls(calls: &[(&str, &str)]) -> AssistantMessage {
                     id: (*id).to_string(),
                     name: (*name).to_string(),
                     arguments: serde_json::json!({}),
-                    thought_signature: None,
                 })
             })
             .collect(),

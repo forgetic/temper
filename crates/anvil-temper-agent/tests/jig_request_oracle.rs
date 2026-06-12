@@ -4,7 +4,7 @@
 //! environment-gated, so the default developer/CI test path compiles it but does
 //! not make network calls or require credentials. When opted in, it captures the
 //! actual request emitted by `anvil_temper_agent::run_decision` through
-//! `pi_agent_rust` with `jig-record`, including anvil's Anthropic OAuth Claude
+//! `tongs` with `jig-record`, including anvil's Anthropic OAuth Claude
 //! Code identity workaround, then compares the captured request body with jig's
 //! authoritative `fixtures/<dialect>/single-text/request.template.json` using
 //! `jig_core::conform::grammar::grammar_findings`.
@@ -143,11 +143,9 @@ fn run_leg(
         return;
     };
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let recorder = start_recorder(&runtime, upstream_host_override).expect("start jig recorder");
+    // The recorder runs on its own tokio thread (jig-record is tokio-based);
+    // the decision itself runs on anvil's skein engine runtime.
+    let recorder = start_recorder(upstream_host_override).expect("start jig recorder");
     let provider = provider.with_base_url_override(recorder.base_url.clone());
 
     let role = workflow_role_fixture::role_manifest(
@@ -155,13 +153,19 @@ fn run_leg(
         "When the work item is a task in the todo queue with the todo label, choose the advance action. Reply with one JSON object.",
     );
     let context = workflow_role_fixture::role_context(&role);
-    let decision: RoleDecision = runtime
-        .block_on(run_decision(&provider, &role.prompt.render(), &context))
-        .expect("anvil decision succeeds through recorder and real upstream");
+    let decision: RoleDecision = {
+        let provider = provider.clone();
+        let prompt = role.prompt.render();
+        anvil_io_engine::block_on(async move {
+            run_decision(&provider, &prompt, &context).await
+        })
+        .expect("anvil decision succeeds through recorder and real upstream")
+    };
     assert_eq!(decision.action, "advance");
 
-    let (request, _response, _route) = runtime
-        .block_on(recorder.capture)
+    let (request, _response, _route) = recorder
+        .capture
+        .recv_timeout(Duration::from_secs(30))
         .expect("recorder task joins")
         .expect("recorder captures one provider request");
     let subject_body: Value =
@@ -172,7 +176,7 @@ fn run_leg(
 
 struct Recorder {
     base_url: String,
-    capture: tokio::task::JoinHandle<
+    capture: mpsc::Receiver<
         io::Result<(
             jig_record::ClientRequest,
             jig_record::UpstreamResponse,
@@ -181,16 +185,21 @@ struct Recorder {
     >,
 }
 
-fn start_recorder(
-    runtime: &tokio::runtime::Runtime,
-    upstream_host_override: Option<&'static str>,
-) -> io::Result<Recorder> {
+fn start_recorder(upstream_host_override: Option<&'static str>) -> io::Result<Recorder> {
     let (tx, rx) = mpsc::channel();
-    let capture = runtime.spawn(async move {
-        let listener = bind().await?;
-        tx.send(listener.local_addr()?)
-            .expect("send recorder address");
-        proxy_once(&listener, upstream_host_override).await
+    let (capture_tx, capture) = mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime for jig recorder");
+        let outcome = runtime.block_on(async move {
+            let listener = bind().await?;
+            tx.send(listener.local_addr()?)
+                .expect("send recorder address");
+            proxy_once(&listener, upstream_host_override).await
+        });
+        let _ = capture_tx.send(outcome);
     });
     let addr = rx
         .recv_timeout(Duration::from_secs(5))

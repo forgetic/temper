@@ -1,4 +1,4 @@
-//! Smoke test: confirm the asupersync **lab** runtime drives our kind of
+//! Smoke test: confirm the skein **lab** runtime drives our kind of
 //! workload (spawned tasks that wait on virtual timers) deterministically from
 //! a seed, with no real wall-clock sleeping.
 //!
@@ -17,8 +17,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use asupersync::lab::{LabConfig, LabRuntime};
-use asupersync::types::Budget;
+use skein::lab::{LabConfig, LabRuntime};
+use skein::types::Budget;
 
 /// Run `task_count` tasks that each virtual-sleep then bump a counter, under a
 /// seeded lab runtime with auto-advancing virtual time. Returns how many
@@ -37,8 +37,8 @@ fn run_once(seed: u64, task_count: u32) -> (u32, u64) {
         let (task_id, _handle) = runtime
             .state
             .create_task(region, Budget::INFINITE, async move {
-                let now = asupersync::time::wall_now();
-                asupersync::time::sleep(now, delay).await;
+                let now = skein::time::wall_now();
+                skein::time::sleep(now, delay).await;
                 counter.fetch_add(1, Ordering::SeqCst);
             })
             .expect("create lab task");

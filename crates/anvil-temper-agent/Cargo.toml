@@ -8,7 +8,7 @@ description = "Temper-specific provider/auth/decision core for anvil agents."
 
 [dependencies]
 smith-agent-protocol = { path = "../../../smith/crates/smith-agent-protocol" }
-pi_agent_rust.workspace = true
+tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anvil-agent = { path = "../anvil-agent" }
@@ -25,7 +25,8 @@ anvil-io-engine = { path = "../anvil-io-engine" }
 jig-server = { path = "../../../jig/crates/jig-server" }
 jig-core = { path = "../../../jig/crates/jig-core" }
 jig-record = { path = "../../../jig/crates/jig-record" }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+# Test-only: the jig-record request oracle runs its recorder on a tokio thread.
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [lints]
 workspace = true

@@ -46,12 +46,9 @@ fn run() -> Result<(), String> {
     #[cfg(feature = "test-provider-base-url-override")]
     let provider = apply_test_provider_base_url_override(provider);
     let responder = WorkflowRoleDecisionResponder::new(provider);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("building runtime failed: {error}"))?;
-    let reply = runtime
-        .block_on(responder.respond(&request))
+    // The decision path drives anvil's native agent loop, which must run
+    // inside a skein engine task (runtime clock + I/O spawning).
+    let reply = anvil_io_engine::block_on(async move { responder.respond(&request).await })
         .map_err(|error| error.to_string())?;
 
     let stdout = io::stdout();

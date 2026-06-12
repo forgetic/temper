@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Sans-IO LLM agent loop for anvil: a pure AgentMachine driven by an asupersync shell that reuses pi-SDK providers and tools."
+description = "Sans-IO LLM agent loop for anvil: a pure AgentMachine driven by a skein shell that reuses tongs providers and tools."
 
 [dependencies]
 async-trait = "0.1"
-asupersync.workspace = true
+skein.workspace = true
 futures = "0.3"
-pi_agent_rust.workspace = true
+tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anvil-io-engine = { path = "../anvil-io-engine" }
