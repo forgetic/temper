@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anvil_agent::{AgentStop, SubAgent, run_sub_agent};
+use anvil_agent::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
 use anvil_temper_agent::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
@@ -97,6 +97,83 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
             .iter()
             .any(|block| matches!(block, tongs::model::ContentBlock::Text(_))),
         "final message should carry the model's closing text"
+    );
+}
+
+/// Records the `turn` of every hook invocation (phase 6b's checkpoint seam).
+struct CountingHook {
+    turns: std::sync::Mutex<Vec<usize>>,
+}
+
+#[async_trait::async_trait]
+impl TurnHook for CountingHook {
+    async fn before_model_call(&self, turn: usize) {
+        self.turns.lock().expect("turns lock").push(turn);
+    }
+}
+
+#[test]
+fn turn_hook_runs_before_every_model_call() {
+    let observed_continuation = Arc::new(AtomicUsize::new(0));
+    let fake = sub_agent_fake(Arc::clone(&observed_continuation));
+    let checkout = TempCheckout::new("sub-agent-turn-hook");
+
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-sub-agent-turn-hook",
+        "https://example.invalid/unused-production-url",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url())
+    .build_provider()
+    .expect("build jig provider");
+
+    let tools = ToolRegistry::from_tools(vec![
+        create_read_tool(checkout.path()),
+        create_write_tool(checkout.path()),
+    ]);
+    let hook = Arc::new(CountingHook {
+        turns: std::sync::Mutex::new(Vec::new()),
+    });
+
+    let outcome = anvil_io_engine::block_on({
+        let hook = Arc::clone(&hook);
+        async move {
+            run_sub_agent_with_hook(
+                SubAgent {
+                    system_prompt: Some(
+                        "You are a sub-agent. Use the write tool to create the requested file."
+                            .to_string(),
+                    ),
+                    user_message:
+                        "Create NOTES.md whose first line is exactly `project notes`.".to_string(),
+                    tools,
+                    max_iterations: 6,
+                    provider,
+                    stream_options: StreamOptions {
+                        api_key: Some("sk-jig-test".to_string()),
+                        ..StreamOptions::default()
+                    },
+                },
+                hook,
+            )
+            .await
+        }
+    })
+    .expect("sub-agent runs");
+
+    assert_eq!(outcome.stop, AgentStop::Completed);
+    let turns = hook.turns.lock().expect("turns lock").clone();
+    let model_calls = fake.requests().len();
+    assert_eq!(
+        turns.len(),
+        model_calls,
+        "the hook must run once per model call (saw {turns:?})"
+    );
+    assert_eq!(
+        turns,
+        (0..model_calls).collect::<Vec<_>>(),
+        "turn numbers are zero-based and monotonic"
     );
 }
 

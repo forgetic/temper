@@ -7,7 +7,12 @@
 //! 2. run the native sans-IO coding loop in the current directory (the prepared
 //!    checkout the worker handed us as cwd);
 //! 3. emit [`StepProgress`] records as line-delimited JSON on **stdout** — each
-//!    a crash-recovery checkpoint the worker relays to the forge;
+//!    a crash-recovery checkpoint the worker relays to the forge. On writable
+//!    jobs the run **checkpoints**: before each model turn it commits + pushes
+//!    whatever the previous turn changed and emits a marker carrying the
+//!    pushed sha (the marker never claims more than the branch holds). A
+//!    re-dispatched agent finds those commits on the prepared branch, resumes
+//!    its step numbering from them, and tells the model what already landed;
 //! 4. write the [`WorkspaceResult`] JSON to the file named by `RESULT_ENV`.
 //!
 //! The agent has git credentials only via the prepared checkout (to push), and
@@ -21,12 +26,14 @@
 //! `--enable-subagents`.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anvil_temper_agent::{
     AuthChoice, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
-    run_coding_agent_native_with_options,
+    run_coding_agent_native_with_hooks,
 };
 use smith_agent_protocol::{
     CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
@@ -85,34 +92,70 @@ fn run() -> Result<(), String> {
     // file-protocol coder was run.
     let cwd = std::env::current_dir().map_err(|error| format!("resolve cwd: {error}"))?;
 
-    let result = anvil_io_engine::block_on(async move {
-        run_coding_agent_native_with_options(
-            &provider,
-            &context,
-            &cwd,
-            options.max_iterations,
-            options.config_dir.as_deref(),
-            options.enable_subagents,
+    // Writable jobs checkpoint: commit + push at turn boundaries, resume from
+    // prior checkpoints found on the prepared branch. Read-only jobs never
+    // mutate the tree, so they run hook-less.
+    let writable = context
+        .checkout
+        .as_deref()
+        .map(|capability| capability == "writable")
+        .unwrap_or(true);
+    let checkpointer = writable.then(|| Arc::new(Checkpointer::new(&cwd, &context)));
+    let resume = checkpointer.as_deref().and_then(Checkpointer::detect_resume);
+    if let Some(resume) = &resume {
+        emit(&StepProgress {
+            correlation_key: context.correlation_key.clone(),
+            step: resume.last_step + 1,
+            status: format!("resume {} run from pushed checkpoints", context.work_item.role),
+            state: StepState::Started,
+            pushed_sha: Some(resume.head_sha.clone()),
+            note: Some(format!("{} checkpoint commit(s) on the branch", resume.commits)),
+        });
+    }
+    if let Some(checkpointer) = &checkpointer {
+        checkpointer.start_after(resume.as_ref().map(|resume| resume.last_step + 1));
+    }
+    let resume_note = resume.as_ref().map(|resume| {
+        format!(
+            "A previous run of this task was interrupted after pushing {} checkpoint              commit(s); the working tree already reflects them:\n{}\nContinue from              that state — do not redo work those commits already contain.",
+            resume.commits, resume.log
         )
-        .await
-        .map(|result| {
-            (
-                result,
-                context.correlation_key.clone(),
-                context.work_item.role.clone(),
-            )
-        })
     });
 
-    let (result, correlation_key, role) = match result {
+    let result = anvil_io_engine::block_on({
+        let context = context.clone();
+        let checkpointer = checkpointer.clone();
+        let cwd = cwd.clone();
+        async move {
+            run_coding_agent_native_with_hooks(
+                &provider,
+                &context,
+                &cwd,
+                options.max_iterations,
+                options.config_dir.as_deref(),
+                options.enable_subagents,
+                resume_note.as_deref(),
+                checkpointer.map(|hook| hook as Arc<dyn anvil_agent::TurnHook>),
+            )
+            .await
+        }
+    });
+
+    let result = match result {
         Ok(value) => value,
         Err(error) => return Err(describe_agent_error(&error)),
     };
 
+    // The terminal marker takes the next free step index (after any
+    // checkpoints the run pushed).
+    let final_step = checkpointer
+        .as_ref()
+        .map(|checkpointer| checkpointer.next_step())
+        .unwrap_or(2);
     emit(&StepProgress {
-        correlation_key,
-        step: 2,
-        status: format!("finish {role} run"),
+        correlation_key: context.correlation_key.clone(),
+        step: final_step,
+        status: format!("finish {} run", context.work_item.role),
         state: StepState::Done,
         pushed_sha: None,
         note: result.summary.clone(),
@@ -148,6 +191,246 @@ fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), Strin
 /// a missing result file (⇒ permanent); the message here is for humans.
 fn describe_agent_error(error: &CodingAgentError) -> String {
     format!("coding agent failed: {error}")
+}
+
+/// A prior run's pushed checkpoints, recovered from the prepared branch.
+struct ResumeState {
+    /// Commits beyond the base branch.
+    commits: u32,
+    /// The highest step index encoded in checkpoint commit subjects (or the
+    /// commit count + 1 when none parse), so new markers stay monotonic.
+    last_step: u32,
+    /// Current branch head (what the checkpoints pushed).
+    head_sha: String,
+    /// One subject line per checkpoint commit, oldest first.
+    log: String,
+}
+
+/// Commits + pushes the working tree at turn boundaries and emits the
+/// matching step-progress markers (phase 6b).
+///
+/// Awaited by the agent shell immediately before each model call — the
+/// previous turn's tool batch has fully drained, so the tree is quiescent.
+/// Failures are logged to stderr and swallowed: a checkpoint is an
+/// opportunistic crash-recovery point, never a reason to fail the run. The
+/// marker is emitted only after the push succeeds (it never claims more than
+/// the branch holds).
+struct Checkpointer {
+    cwd: PathBuf,
+    branch: String,
+    base_branch: String,
+    correlation_key: String,
+    /// Per-role git identity + push token from the worker-provided env
+    /// (`TEMPER_FORGEJO_{USER,EMAIL,TOKEN}_<ROLE>`); absent values degrade
+    /// gracefully (generic identity, credential-less push).
+    user: Option<String>,
+    email: Option<String>,
+    token: Option<String>,
+    /// The next step index to hand out (1 = the Started marker).
+    step: AtomicU32,
+}
+
+impl Checkpointer {
+    fn new(cwd: &Path, context: &WorkspaceContext) -> Self {
+        let role_key = context.work_item.role.to_uppercase().replace('-', "_");
+        let env = |prefix: &str| {
+            std::env::var(format!("{prefix}_{role_key}"))
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        Self {
+            cwd: cwd.to_path_buf(),
+            branch: context.branch_hint.clone(),
+            base_branch: context.base_branch.clone(),
+            correlation_key: context.correlation_key.clone(),
+            user: env("TEMPER_FORGEJO_USER"),
+            email: env("TEMPER_FORGEJO_EMAIL"),
+            token: env("TEMPER_FORGEJO_TOKEN"),
+            step: AtomicU32::new(2),
+        }
+    }
+
+    /// Continue step numbering after a resumed run's markers.
+    fn start_after(&self, next: Option<u32>) {
+        if let Some(next) = next {
+            self.step.store(next + 1, Ordering::SeqCst);
+        }
+    }
+
+    /// The next unused step index (the terminal Done marker takes it).
+    fn next_step(&self) -> u32 {
+        self.step.load(Ordering::SeqCst)
+    }
+
+    /// Inspects the prepared branch for checkpoints a previous run pushed.
+    fn detect_resume(&self) -> Option<ResumeState> {
+        let range = format!("origin/{}..HEAD", self.base_branch);
+        let count: u32 = self
+            .git(&["rev-list", "--count", &range])
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        if count == 0 {
+            return None;
+        }
+        let log = self
+            .git(&["log", "--reverse", "--format=%s", &range])
+            .ok()?
+            .trim()
+            .to_string();
+        let head_sha = self.git(&["rev-parse", "HEAD"]).ok()?.trim().to_string();
+        let last_step = log
+            .lines()
+            .filter_map(parse_checkpoint_step)
+            .max()
+            .unwrap_or(count + 1);
+        Some(ResumeState {
+            commits: count,
+            last_step,
+            head_sha,
+            log,
+        })
+    }
+
+    /// One commit+push checkpoint; returns the pushed sha, or `None` when the
+    /// tree was clean.
+    fn checkpoint_sync(&self, step: u32, turn: usize) -> Result<Option<String>, String> {
+        self.git(&["add", "-A"])?;
+        // Exit 0 = nothing staged.
+        if self.git(&["diff", "--cached", "--quiet"]).is_ok() {
+            return Ok(None);
+        }
+        let user = self.user.as_deref().unwrap_or("anvil-agent");
+        let email = self.email.as_deref().unwrap_or("anvil-agent@localhost");
+        self.git(&[
+            "-c",
+            &format!("user.name={user}"),
+            "-c",
+            &format!("user.email={email}"),
+            "commit",
+            "-m",
+            &format!("checkpoint(step {step}): work in progress (turn {turn})"),
+        ])?;
+        let push_ref = format!("HEAD:refs/heads/{}", self.branch);
+        match self.token.as_deref() {
+            Some(token) => self.git(&[
+                "-c",
+                &format!("http.extraheader=AUTHORIZATION: token {token}"),
+                "push",
+                "origin",
+                &push_ref,
+            ])?,
+            None => self.git(&["push", "origin", &push_ref])?,
+        };
+        Ok(Some(self.git(&["rev-parse", "HEAD"])?.trim().to_string()))
+    }
+
+    /// Runs git in the checkout, returning stdout. Errors carry the command
+    /// and stderr with the push token redacted.
+    fn git(&self, args: &[&str]) -> Result<String, String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&self.cwd)
+            .output()
+            .map_err(|error| format!("spawn git: {error}"))?;
+        if !output.status.success() {
+            let mut detail = format!(
+                "git {} failed ({}): {}",
+                args.first().copied().unwrap_or(""),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            if let Some(token) = self.token.as_deref() {
+                detail = detail.replace(token, "<redacted>");
+            }
+            return Err(detail);
+        }
+        String::from_utf8(output.stdout).map_err(|error| format!("git output not UTF-8: {error}"))
+    }
+}
+
+#[async_trait::async_trait]
+impl anvil_agent::TurnHook for Checkpointer {
+    async fn before_model_call(&self, turn: usize) {
+        // Turn 0 is the first model call: nothing has run yet.
+        if turn == 0 {
+            return;
+        }
+        let step = self.step.fetch_add(1, Ordering::SeqCst);
+        let this = CheckpointJob {
+            cwd: self.cwd.clone(),
+            branch: self.branch.clone(),
+            base_branch: self.base_branch.clone(),
+            correlation_key: self.correlation_key.clone(),
+            user: self.user.clone(),
+            email: self.email.clone(),
+            token: self.token.clone(),
+        };
+        let outcome =
+            skein::runtime::spawn_blocking(move || this.into_checkpointer().checkpoint_sync(step, turn))
+                .await;
+        match outcome {
+            Ok(Some(sha)) => emit(&StepProgress {
+                correlation_key: self.correlation_key.clone(),
+                step,
+                status: format!("push checkpoint (turn {turn})"),
+                state: StepState::Done,
+                pushed_sha: Some(sha),
+                note: None,
+            }),
+            Ok(None) => {
+                // Clean tree: hand the unused step index back when possible
+                // (best effort — a concurrent bump just leaves a gap).
+                let _ = self.step.compare_exchange(
+                    step + 1,
+                    step,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+            }
+            Err(error) => {
+                eprintln!("anvil-agent: checkpoint skipped: {error}");
+            }
+        }
+    }
+}
+
+/// The owned snapshot a blocking checkpoint runs from.
+struct CheckpointJob {
+    cwd: PathBuf,
+    branch: String,
+    base_branch: String,
+    correlation_key: String,
+    user: Option<String>,
+    email: Option<String>,
+    token: Option<String>,
+}
+
+impl CheckpointJob {
+    fn into_checkpointer(self) -> Checkpointer {
+        Checkpointer {
+            cwd: self.cwd,
+            branch: self.branch,
+            base_branch: self.base_branch,
+            correlation_key: self.correlation_key,
+            user: self.user,
+            email: self.email,
+            token: self.token,
+            step: AtomicU32::new(0),
+        }
+    }
+}
+
+/// Parses `checkpoint(step N): …` commit subjects.
+fn parse_checkpoint_step(subject: &str) -> Option<u32> {
+    subject
+        .strip_prefix("checkpoint(step ")?
+        .split_once(')')?
+        .0
+        .parse()
+        .ok()
 }
 
 impl Options {
@@ -209,5 +492,21 @@ fn parse_auth(value: &str) -> Result<AuthChoice, String> {
         other => Err(format!(
             "unknown --auth `{other}` (expected deepseek|chatgpt-oauth|anthropic-oauth)"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_checkpoint_step;
+
+    #[test]
+    fn parses_checkpoint_subjects() {
+        assert_eq!(
+            parse_checkpoint_step("checkpoint(step 3): work in progress (turn 2)"),
+            Some(3)
+        );
+        assert_eq!(parse_checkpoint_step("checkpoint(step 12): x"), Some(12));
+        assert_eq!(parse_checkpoint_step("Implement pr-for-code-7"), None);
+        assert_eq!(parse_checkpoint_step("checkpoint(step ): x"), None);
     }
 }

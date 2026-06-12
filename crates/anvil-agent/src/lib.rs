@@ -25,7 +25,7 @@ pub use machine::{
 };
 pub use run::{
     SubAgent, SubAgentControl, SubAgentError, run_sub_agent, run_sub_agent_controllable,
-    run_sub_agent_with_events,
+    run_sub_agent_controllable_with_hook, run_sub_agent_with_events, run_sub_agent_with_hook,
 };
-pub use shell::{AgentOutcome, AgentShell, EventSink, NullEventSink};
+pub use shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
 pub use subagent_tool::{SubAgentFactory, SubAgentTool};

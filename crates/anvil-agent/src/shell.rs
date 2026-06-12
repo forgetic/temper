@@ -44,6 +44,22 @@ impl EventSink for NullEventSink {
     fn emit(&self, _event: AgentEvent) {}
 }
 
+/// An async hook the shell awaits immediately before each model call.
+///
+/// A model call only starts once the previous turn's tool batch has fully
+/// drained (the machine sequences `CallLlm` strictly after the batch), so the
+/// hook runs with **no tool in flight** — the natural coherent step boundary
+/// for committing and pushing a workspace checkpoint (phase 6b). `turn` is
+/// zero-based; the first model call of a run is turn 0 (nothing has happened
+/// yet, so checkpoint hooks typically skip it).
+///
+/// The hook must not fail the run: it returns nothing and implementations
+/// swallow their own errors.
+#[async_trait::async_trait]
+pub trait TurnHook: Send + Sync {
+    async fn before_model_call(&self, turn: usize);
+}
+
 /// Performs the agent loop's I/O on the skein runtime.
 pub struct AgentShell {
     handle: skein::runtime::RuntimeHandle,
@@ -54,6 +70,10 @@ pub struct AgentShell {
     tool_defs: Arc<Vec<ToolDef>>,
     stream_options: Arc<StreamOptions>,
     events: Arc<dyn EventSink>,
+    /// Awaited before each model call (turn boundary); see [`TurnHook`].
+    turn_hook: Option<Arc<dyn TurnHook>>,
+    /// Zero-based count of model calls dispatched, for the hook's `turn`.
+    turns_started: std::sync::atomic::AtomicUsize,
     /// Resolved once, when the machine emits `Finished`.
     outcome: std::sync::Mutex<Option<anvil_io_engine::OneshotSender<AgentOutcome>>>,
 }
@@ -80,8 +100,16 @@ impl AgentShell {
             tool_defs,
             stream_options,
             events,
+            turn_hook: None,
+            turns_started: std::sync::atomic::AtomicUsize::new(0),
             outcome: std::sync::Mutex::new(Some(outcome)),
         }
+    }
+
+    /// Installs a [`TurnHook`] awaited before each model call.
+    pub fn with_turn_hook(mut self, turn_hook: Arc<dyn TurnHook>) -> Self {
+        self.turn_hook = Some(turn_hook);
+        self
     }
 }
 
@@ -95,7 +123,14 @@ impl Executor<AgentMachine> for AgentShell {
                 let stream_options = Arc::clone(&self.stream_options);
                 let events = Arc::clone(&self.events);
                 let cq = self.cq.clone();
+                let turn_hook = self.turn_hook.clone();
+                let turn = self
+                    .turns_started
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 self.handle.spawn(async move {
+                    if let Some(hook) = turn_hook {
+                        hook.before_model_call(turn).await;
+                    }
                     let completion = stream_to_completion(
                         provider.as_ref(),
                         system_prompt.as_deref(),

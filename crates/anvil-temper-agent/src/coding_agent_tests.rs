@@ -294,7 +294,7 @@ fn validate_contract_engineer_requires_diff_or_verdict() {
     std::fs::create_dir_all(&temp).expect("temp dir");
     let empty = WorkspaceResult::default();
     let error =
-        validate_contract(Capability::CodingWorkspace, &empty, &temp).expect_err("no product");
+        validate_contract(Capability::CodingWorkspace, &empty, &temp, "main").expect_err("no product");
     assert!(matches!(error, CodingAgentError::NoProduct));
 
     // A verdict (needs_architect) satisfies the contract even with no diff.
@@ -302,7 +302,7 @@ fn validate_contract_engineer_requires_diff_or_verdict() {
         verdict: Some("needs_architect".to_string()),
         ..WorkspaceResult::default()
     };
-    validate_contract(Capability::CodingWorkspace, &with_verdict, &temp)
+    validate_contract(Capability::CodingWorkspace, &with_verdict, &temp, "main")
         .expect("verdict satisfies engineer contract");
     let _ = std::fs::remove_dir_all(&temp);
 }
@@ -315,11 +315,11 @@ fn validate_contract_readonly_requires_verdict() {
         ..WorkspaceResult::default()
     };
     assert!(matches!(
-        validate_contract(Capability::TriageWorkspace, &no_verdict, &cwd),
+        validate_contract(Capability::TriageWorkspace, &no_verdict, &cwd, "main"),
         Err(CodingAgentError::AgentStopped(_))
     ));
     assert!(matches!(
-        validate_contract(Capability::ReviewWorkspace, &no_verdict, &cwd),
+        validate_contract(Capability::ReviewWorkspace, &no_verdict, &cwd, "main"),
         Err(CodingAgentError::AgentStopped(_))
     ));
 
@@ -327,7 +327,7 @@ fn validate_contract_readonly_requires_verdict() {
         verdict: Some("approve".to_string()),
         ..WorkspaceResult::default()
     };
-    validate_contract(Capability::ReviewWorkspace, &approved, &cwd)
+    validate_contract(Capability::ReviewWorkspace, &approved, &cwd, "main")
         .expect("verdict satisfies reviewer contract");
 }
 

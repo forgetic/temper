@@ -464,11 +464,43 @@ pub async fn run_coding_agent_native_with_options(
     config_dir: Option<&Path>,
     enable_subagents: bool,
 ) -> Result<WorkspaceResult, CodingAgentError> {
+    run_coding_agent_native_with_hooks(
+        provider_config,
+        context,
+        cwd,
+        max_iterations,
+        config_dir,
+        enable_subagents,
+        None,
+        None,
+    )
+    .await
+}
+
+/// [`run_coding_agent_native_with_options`] with the phase-6b hooks: an
+/// optional resume note appended to the user turn (a re-dispatched agent
+/// continuing a checkpointed branch) and an optional [`anvil_agent::TurnHook`]
+/// awaited before each model call (the workspace checkpointer).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coding_agent_native_with_hooks(
+    provider_config: &ProviderConfig,
+    context: &WorkspaceContext,
+    cwd: &Path,
+    max_iterations: usize,
+    config_dir: Option<&Path>,
+    enable_subagents: bool,
+    resume_note: Option<&str>,
+    turn_hook: Option<std::sync::Arc<dyn anvil_agent::TurnHook>>,
+) -> Result<WorkspaceResult, CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
 
     let role_prompt = system_prompt(capability, &context.allowed_verdicts);
-    let user = user_context(context);
+    let mut user = user_context(context);
+    if let Some(note) = resume_note {
+        user.push_str("\n\n## Resume\n");
+        user.push_str(note);
+    }
     let overlays = PromptOverlays::load(config_dir, cwd, capability);
     let turns = overlays.compose_turns(
         &role_prompt,
@@ -490,15 +522,18 @@ pub async fn run_coding_agent_native_with_options(
         tools = add_investigate_subagent(tools, provider_config, &stream_options, cwd);
     }
 
-    let outcome = anvil_agent::run_sub_agent(anvil_agent::SubAgent {
+    let sub_agent = anvil_agent::SubAgent {
         system_prompt: Some(turns.system),
         user_message: turns.user,
         tools,
         max_iterations,
         provider,
         stream_options,
-    })
-    .await
+    };
+    let outcome = match turn_hook {
+        Some(hook) => anvil_agent::run_sub_agent_with_hook(sub_agent, hook).await,
+        None => anvil_agent::run_sub_agent(sub_agent).await,
+    }
     .map_err(|error| CodingAgentError::Run(error.to_string()))?;
 
     if matches!(outcome.stop, anvil_agent::AgentStop::ModelError) {
@@ -514,7 +549,7 @@ pub async fn run_coding_agent_native_with_options(
     let text = collect_text(&outcome.final_message.content);
     let result = parse_result(&text)?;
     validate_verdict_vocabulary(&result, &context.allowed_verdicts)?;
-    validate_contract(capability, &result, cwd)?;
+    validate_contract(capability, &result, cwd, &context.base_branch)?;
     Ok(result)
 }
 
@@ -590,6 +625,7 @@ fn validate_contract(
     capability: Capability,
     result: &WorkspaceResult,
     cwd: &Path,
+    base_branch: &str,
 ) -> Result<(), CodingAgentError> {
     let has_verdict = result
         .verdict
@@ -602,7 +638,10 @@ fn validate_contract(
             if has_verdict {
                 return Ok(());
             }
-            if working_tree_has_changes(cwd) {
+            // A checkpointing run (phase 6b) may have committed and pushed
+            // its whole product, leaving a clean tree: commits beyond the
+            // base branch count as a product too.
+            if working_tree_has_changes(cwd) || commits_ahead_of_base(cwd, base_branch) {
                 Ok(())
             } else {
                 Err(CodingAgentError::NoProduct)
@@ -618,6 +657,27 @@ fn validate_contract(
             }
         }
     }
+}
+
+/// Returns true when `HEAD` carries commits beyond `origin/<base_branch>` in
+/// `cwd` (checkpoint commits a phase-6b run pushed mid-run). Falls back to
+/// `false` when git cannot answer, leaving the working-tree check decisive.
+fn commits_ahead_of_base(cwd: &Path, base_branch: &str) -> bool {
+    let base_branch = base_branch.trim();
+    if base_branch.is_empty() {
+        return false;
+    }
+    std::process::Command::new("git")
+        .arg("rev-list")
+        .arg("--count")
+        .arg(format!("origin/{base_branch}..HEAD"))
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|count| count.trim() != "0")
+        .unwrap_or(false)
 }
 
 /// Returns true when `git status --porcelain` reports any change in `cwd`.

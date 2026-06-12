@@ -22,8 +22,10 @@ default = []
 test-provider-base-url-override = ["anvil-temper-agent/test-provider-base-url-override"]
 
 [dependencies]
+anvil-agent = { path = "crates/anvil-agent" }
 anvil-io-engine = { path = "crates/anvil-io-engine" }
 anvil-temper-agent = { path = "crates/anvil-temper-agent" }
+async-trait = "0.1"
 serde_json.workspace = true
 skein.workspace = true
 smith-agent-protocol = { path = "../smith/crates/smith-agent-protocol" }

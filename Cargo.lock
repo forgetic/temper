@@ -15,8 +15,10 @@ dependencies = [
 name = "anvil"
 version = "0.1.0"
 dependencies = [
+ "anvil-agent",
  "anvil-io-engine",
  "anvil-temper-agent",
+ "async-trait",
  "jig-core",
  "jig-server",
  "serde_json",

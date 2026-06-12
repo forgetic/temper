@@ -20,7 +20,7 @@ use tongs::tools::tool_to_definition;
 use tongs::tools::ToolRegistry;
 
 use crate::machine::{AgentCompletion, AgentMachine};
-use crate::shell::{AgentOutcome, AgentShell, EventSink, NullEventSink};
+use crate::shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
 
 /// A live control handle for a running sub-agent: inject steering messages or
 /// abort it from outside the run.
@@ -104,6 +104,17 @@ pub async fn run_sub_agent(sub_agent: SubAgent) -> Result<AgentOutcome, SubAgent
     run_sub_agent_with_events(sub_agent, Arc::new(NullEventSink)).await
 }
 
+/// Runs a sub-agent to completion with a [`TurnHook`] awaited before each
+/// model call (e.g. the phase-6b workspace checkpointer) and no event sink.
+pub async fn run_sub_agent_with_hook(
+    sub_agent: SubAgent,
+    turn_hook: Arc<dyn TurnHook>,
+) -> Result<AgentOutcome, SubAgentError> {
+    let (_control, run) =
+        run_sub_agent_controllable_with_hook(sub_agent, Arc::new(NullEventSink), Some(turn_hook))?;
+    run.await
+}
+
 /// Runs a sub-agent to completion, forwarding observability events to `events`.
 pub async fn run_sub_agent_with_events(
     sub_agent: SubAgent,
@@ -129,6 +140,22 @@ pub async fn run_sub_agent_with_events(
 pub fn run_sub_agent_controllable(
     sub_agent: SubAgent,
     events: Arc<dyn EventSink>,
+) -> Result<
+    (
+        SubAgentControl,
+        impl std::future::Future<Output = Result<AgentOutcome, SubAgentError>>,
+    ),
+    SubAgentError,
+> {
+    run_sub_agent_controllable_with_hook(sub_agent, events, None)
+}
+
+/// [`run_sub_agent_controllable`] with an optional [`TurnHook`] awaited
+/// before each model call.
+pub fn run_sub_agent_controllable_with_hook(
+    sub_agent: SubAgent,
+    events: Arc<dyn EventSink>,
+    turn_hook: Option<Arc<dyn TurnHook>>,
 ) -> Result<
     (
         SubAgentControl,
@@ -167,7 +194,7 @@ pub fn run_sub_agent_controllable(
     // are just completions the machine already knows how to handle.
     let control = SubAgentControl { cq: cq_tx.clone() };
 
-    let shell = AgentShell::new(
+    let mut shell = AgentShell::new(
         handle,
         cq_tx,
         sub_agent.provider,
@@ -178,6 +205,9 @@ pub fn run_sub_agent_controllable(
         events,
         outcome_tx,
     );
+    if let Some(turn_hook) = turn_hook {
+        shell = shell.with_turn_hook(turn_hook);
+    }
     let machine = AgentMachine::with_effects(initial, sub_agent.max_iterations, effects);
 
     let run = async move {
