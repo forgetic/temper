@@ -1,20 +1,30 @@
+// SPDX-License-Identifier: MPL-2.0
+
+//! `temper trigger-forgejo` — trigger a Forgejo role feed.
+
+use std::process::ExitCode;
+
 use temper_trigger_forgejo::trigger_args::{self, ParseOutcome};
 
-fn main() {
-    let args = std::env::args().skip(1);
+pub fn main<I>(args: I) -> ExitCode
+where
+    I: Iterator<Item = String>,
+{
     match trigger_args::parse(args) {
         Ok(ParseOutcome::Help) => {
             println!("usage: {}", trigger_args::USAGE);
+            ExitCode::SUCCESS
         }
         Ok(ParseOutcome::Run(trigger_args)) => {
             if let Err(error) = trigger_args::run(&trigger_args) {
                 eprintln!("temper-trigger-forgejo: {error}");
-                std::process::exit(1);
+                return ExitCode::FAILURE;
             }
+            ExitCode::SUCCESS
         }
         Err(error) => {
             eprintln!("temper-trigger-forgejo: {error}");
-            std::process::exit(2);
+            ExitCode::from(2)
         }
     }
 }

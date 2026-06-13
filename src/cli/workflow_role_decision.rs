@@ -17,18 +17,21 @@ fn apply_test_provider_base_url_override(provider: ProviderConfig) -> ProviderCo
     }
 }
 
-fn main() {
-    match run() {
-        Ok(()) => {}
+pub fn main<I>(args: I) -> std::process::ExitCode
+where
+    I: Iterator<Item = String>,
+{
+    match run(args.collect()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("anvil-workflow-role-decision: {message}");
-            std::process::exit(2);
+            eprintln!("temper-workflow-role-decision: {message}");
+            std::process::ExitCode::from(2)
         }
     }
 }
 
-fn run() -> Result<(), String> {
-    let options = DecisionOptions::parse(std::env::args().skip(1).collect())?;
+fn run(args: Vec<String>) -> Result<(), String> {
+    let options = DecisionOptions::parse(args)?;
     if options.help {
         print_usage();
         return Ok(());

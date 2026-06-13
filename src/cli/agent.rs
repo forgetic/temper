@@ -1,7 +1,7 @@
-//! `anvil-agent` — the out-of-process coding agent the orchestration worker spawns.
+//! `temper-agent` — the out-of-process coding agent the orchestration worker spawns.
 //!
 //! This binary *is* the worker ↔ agent process boundary (plane 1). It speaks the
-//! `smith-agent-protocol`:
+//! `temper-agent-protocol`:
 //!
 //! 1. read the [`WorkspaceContext`] JSON from the file named by `CONTEXT_ENV`;
 //! 2. run the native sans-IO coding loop in the current directory (the prepared
@@ -40,13 +40,16 @@ use temper_agent_protocol::{
     WorkspaceResult,
 };
 
-fn main() -> ExitCode {
-    match run() {
+pub fn main<I>(args: I) -> ExitCode
+where
+    I: Iterator<Item = String>,
+{
+    match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             // stderr carries diagnostics; stdout is reserved for the framed
             // step-progress stream so the worker can parse it cleanly.
-            eprintln!("anvil-agent: {error}");
+            eprintln!("temper-agent: {error}");
             ExitCode::from(2)
         }
     }
@@ -61,8 +64,11 @@ struct Options {
     enable_subagents: bool,
 }
 
-fn run() -> Result<(), String> {
-    let options = Options::parse(std::env::args().skip(1))?;
+fn run<I>(args: I) -> Result<(), String>
+where
+    I: Iterator<Item = String>,
+{
+    let options = Options::parse(args)?;
 
     let context_path = std::env::var(CONTEXT_ENV)
         .map_err(|_| format!("missing required env var {CONTEXT_ENV} (context file path)"))?;
@@ -175,7 +181,7 @@ fn emit(progress: &StepProgress) {
             let _ = writeln!(stdout, "{line}");
             let _ = stdout.flush();
         }
-        Err(error) => eprintln!("anvil-agent: serialize step-progress: {error}"),
+        Err(error) => eprintln!("temper-agent: serialize step-progress: {error}"),
     }
 }
 
@@ -402,7 +408,7 @@ impl temper_agent_core::TurnHook for Checkpointer {
                 );
             }
             Err(error) => {
-                eprintln!("anvil-agent: checkpoint skipped: {error}");
+                eprintln!("temper-agent: checkpoint skipped: {error}");
             }
         }
     }
@@ -488,7 +494,7 @@ impl Options {
     }
 }
 
-const USAGE: &str = "anvil-agent [--auth <deepseek|chatgpt-oauth|anthropic-oauth>] [--auth-file <path>] [--codex-model <id>] [--max-iterations <n>] [--config-dir <path>] [--enable-subagents]\n  reads context from $TEMPER_CODING_WORKSPACE_CONTEXT, runs in cwd, writes result to $TEMPER_CODING_WORKSPACE_RESULT, emits step-progress JSON lines on stdout";
+const USAGE: &str = "temper-agent [--auth <deepseek|chatgpt-oauth|anthropic-oauth>] [--auth-file <path>] [--codex-model <id>] [--max-iterations <n>] [--config-dir <path>] [--enable-subagents]\n  reads context from $TEMPER_CODING_WORKSPACE_CONTEXT, runs in cwd, writes result to $TEMPER_CODING_WORKSPACE_RESULT, emits step-progress JSON lines on stdout";
 
 fn value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     iter.next()

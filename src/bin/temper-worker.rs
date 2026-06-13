@@ -1,23 +1,11 @@
-use temper_worker::worker_args::{self, ParseOutcome};
+// SPDX-License-Identifier: MPL-2.0
 
-fn main() {
-    let args = std::env::args().skip(1);
-    match worker_args::parse(args) {
-        Ok(ParseOutcome::Help) => {
-            println!("usage: {}", worker_args::USAGE);
-        }
-        Ok(ParseOutcome::Run(worker_args)) => match temper_worker::worker::run(&worker_args) {
-            Ok(report) => {
-                eprintln!("temper-worker: completed after {} tick(s)", report.ticks);
-            }
-            Err(error) => {
-                eprintln!("temper-worker: {error}");
-                std::process::exit(1);
-            }
-        },
-        Err(error) => {
-            eprintln!("temper-worker: {error}");
-            std::process::exit(2);
-        }
-    }
+//! `temper-worker` split binary — a thin wrapper over the shared worker
+//! subcommand (the orchestration worker; formerly `smith-worker`). The same
+//! entrypoint is reachable as `temper worker`.
+
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    temper::cli::worker::main(std::env::args().skip(1))
 }

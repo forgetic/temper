@@ -1873,9 +1873,14 @@ dependencies = [
 name = "temper"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "serde_json",
  "skein",
+ "temper-agent-core",
+ "temper-agent-io-engine",
+ "temper-agent-protocol",
+ "temper-agent-runtime",
  "temper-daemon",
  "temper-forge",
  "temper-forge-forgejo",
@@ -1883,11 +1888,13 @@ dependencies = [
  "temper-forgejo-provision",
  "temper-interaction-service",
  "temper-io-engine",
+ "temper-process-protocol",
  "temper-reference-delivery",
  "temper-reference-delivery-validator",
  "temper-testing",
  "temper-trigger-forgejo",
- "temper-worker",
+ "temper-worker-io-engine",
+ "temper-worker-orchestrator",
  "temper-workflow",
 ]
 
