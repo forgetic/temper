@@ -29,9 +29,15 @@ pub const ANTHROPIC_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_MODEL";
 const TOKEN_URL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_TOKEN_URL";
 
 /// Default Anthropic model targeted by the OAuth mode (overridable).
-/// Matches the Claude Code CLI's current default so anvil runs are directly
-/// comparable with claude-code on the same subscription.
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-fable-5";
+///
+/// `claude-opus-4-8` is the model the standard subscription tier actually
+/// serves over this OAuth path: requesting `claude-fable-5` on a non-Mythos
+/// subscription returns `404 "Claude Fable 5 is not available. Please use
+/// Opus 4.8."`. The Claude Code CLI hides this by transparently falling back;
+/// anvil sends the literal id, so the default must be a model the tier grants.
+/// Override with `TEMPER_AGENTS_ANTHROPIC_MODEL` when a tier with Fable access
+/// is in use.
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
 /// Identity line Anthropic's Claude **subscription OAuth** path requires as the
 /// first `system` block. Any request whose first system block is not exactly
 /// this line is rejected with a generic `429 rate_limit_error`
