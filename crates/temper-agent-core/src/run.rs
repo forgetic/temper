@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use skein::runtime::RuntimeHandle;
 use temper_agent_io_engine::{CqSender, channel, drive, oneshot};
 use tongs::model::{Message, UserContent, UserMessage};
 use tongs::provider::{Provider, StreamOptions, ToolDef};
@@ -100,27 +101,39 @@ impl std::fmt::Display for SubAgentError {
 impl std::error::Error for SubAgentError {}
 
 /// Runs a sub-agent to completion with no event sink.
-pub async fn run_sub_agent(sub_agent: SubAgent) -> Result<AgentOutcome, SubAgentError> {
-    run_sub_agent_with_events(sub_agent, Arc::new(NullEventSink)).await
+///
+/// `handle` is the runtime's spawn capability, passed explicitly from the
+/// caller's engine context (no ambient handle lookup).
+pub async fn run_sub_agent(
+    handle: RuntimeHandle,
+    sub_agent: SubAgent,
+) -> Result<AgentOutcome, SubAgentError> {
+    run_sub_agent_with_events(handle, sub_agent, Arc::new(NullEventSink)).await
 }
 
 /// Runs a sub-agent to completion with a [`TurnHook`] awaited before each
 /// model call (e.g. the phase-6b workspace checkpointer) and no event sink.
 pub async fn run_sub_agent_with_hook(
+    handle: RuntimeHandle,
     sub_agent: SubAgent,
     turn_hook: Arc<dyn TurnHook>,
 ) -> Result<AgentOutcome, SubAgentError> {
-    let (_control, run) =
-        run_sub_agent_controllable_with_hook(sub_agent, Arc::new(NullEventSink), Some(turn_hook))?;
+    let (_control, run) = run_sub_agent_controllable_with_hook(
+        handle,
+        sub_agent,
+        Arc::new(NullEventSink),
+        Some(turn_hook),
+    )?;
     run.await
 }
 
 /// Runs a sub-agent to completion, forwarding observability events to `events`.
 pub async fn run_sub_agent_with_events(
+    handle: RuntimeHandle,
     sub_agent: SubAgent,
     events: Arc<dyn EventSink>,
 ) -> Result<AgentOutcome, SubAgentError> {
-    let (_control, run) = run_sub_agent_controllable(sub_agent, events)?;
+    let (_control, run) = run_sub_agent_controllable(handle, sub_agent, events)?;
     run.await
 }
 
@@ -131,13 +144,14 @@ pub async fn run_sub_agent_with_events(
 /// in flight, e.g.:
 ///
 /// ```ignore
-/// let (control, run) = run_sub_agent_controllable(sub_agent, events)?;
+/// let (control, run) = run_sub_agent_controllable(handle, sub_agent, events)?;
 /// handle.spawn(async move { /* … */ control.abort(); });
 /// let outcome = run.await?;
 /// ```
 ///
-/// Must be called inside an engine task (it needs the runtime handle).
+/// `handle` is the runtime's spawn capability, passed explicitly.
 pub fn run_sub_agent_controllable(
+    handle: RuntimeHandle,
     sub_agent: SubAgent,
     events: Arc<dyn EventSink>,
 ) -> Result<
@@ -147,12 +161,13 @@ pub fn run_sub_agent_controllable(
     ),
     SubAgentError,
 > {
-    run_sub_agent_controllable_with_hook(sub_agent, events, None)
+    run_sub_agent_controllable_with_hook(handle, sub_agent, events, None)
 }
 
 /// [`run_sub_agent_controllable`] with an optional [`TurnHook`] awaited
 /// before each model call.
 pub fn run_sub_agent_controllable_with_hook(
+    handle: RuntimeHandle,
     sub_agent: SubAgent,
     events: Arc<dyn EventSink>,
     turn_hook: Option<Arc<dyn TurnHook>>,
@@ -163,7 +178,6 @@ pub fn run_sub_agent_controllable_with_hook(
     ),
     SubAgentError,
 > {
-    let handle = temper_agent_io_engine::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
 
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools

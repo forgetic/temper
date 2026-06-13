@@ -60,8 +60,8 @@ fn run_fixture_decision(provider: &ProviderConfig) -> RoleDecision {
     );
     let context = role_context(&role);
     let provider = provider.clone();
-    temper_agent_io_engine::block_on(async move {
-        run_decision::<RoleDecision>(&provider, &role.prompt.render(), &context).await
+    temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        run_decision::<RoleDecision>(handle, &provider, &role.prompt.render(), &context).await
     })
     .expect("jig-backed workflow-role decision succeeds and parses")
 }

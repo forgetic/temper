@@ -59,6 +59,7 @@ const MAX_TOOL_ITERATIONS: usize = 1;
 
 /// Runs one LLM turn and parses the reply into `D`.
 pub async fn run_decision<D: DeserializeOwned>(
+    handle: skein::runtime::RuntimeHandle,
     provider_config: &ProviderConfig,
     system_prompt: &str,
     user_context: &str,
@@ -95,7 +96,7 @@ pub async fn run_decision<D: DeserializeOwned>(
 
     // No tools: the registry is empty, so the model cannot reach bash/file
     // tools — the workflow mutation path stays exclusively in the adapter.
-    let outcome = temper_agent_core::run_sub_agent(temper_agent_core::SubAgent {
+    let outcome = temper_agent_core::run_sub_agent(handle, temper_agent_core::SubAgent {
         system_prompt: Some(effective_system),
         user_message: effective_user,
         tools: tongs::tools::ToolRegistry::from_tools(Vec::new()),

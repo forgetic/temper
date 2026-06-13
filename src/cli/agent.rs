@@ -128,24 +128,27 @@ where
         )
     });
 
-    let result = temper_agent_io_engine::block_on({
-        let context = context.clone();
-        let checkpointer = checkpointer.clone();
-        let cwd = cwd.clone();
-        async move {
+    let result = {
+        // Clone the values the run consumes so the originals survive for the
+        // terminal marker below; the closure moves only these clones.
+        let run_context = context.clone();
+        let run_checkpointer = checkpointer.clone();
+        let run_cwd = cwd.clone();
+        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
             run_coding_agent_native_with_hooks(
+                handle,
                 &provider,
-                &context,
-                &cwd,
+                &run_context,
+                &run_cwd,
                 options.max_iterations,
                 options.config_dir.as_deref(),
                 options.enable_subagents,
                 resume_note.as_deref(),
-                checkpointer.map(|hook| hook as Arc<dyn temper_agent_core::TurnHook>),
+                run_checkpointer.map(|hook| hook as Arc<dyn temper_agent_core::TurnHook>),
             )
             .await
-        }
-    });
+        })
+    };
 
     let result = match result {
         Ok(value) => value,

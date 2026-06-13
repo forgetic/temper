@@ -1,59 +1,20 @@
 //! Runtime bootstrap helpers for engine binaries and tests.
 
-use std::cell::RefCell;
 use std::future::Future;
 
 use skein::cx::Cx;
 use skein::runtime::reactor::create_reactor;
 use skein::runtime::{Runtime, RuntimeBuilder, RuntimeHandle};
 
-/// Shared, clearable slot holding the runtime handle for [`current_handle`].
-///
-/// `Mutex<Option<…>>` rather than `OnceLock` so [`EngineRuntime`]'s `Drop` can
-/// clear it: the slot is captured by the runtime's `on_thread_start` callback
-/// (stored in the runtime config), so a handle left inside would form an
-/// `Arc` cycle that keeps the runtime alive forever.
-type HandleSlot = std::sync::Arc<std::sync::Mutex<Option<RuntimeHandle>>>;
-
-thread_local! {
-    /// Ambient engine-runtime handle slot for the current thread.
-    ///
-    /// skein deliberately dropped `Runtime::current_handle()` from its public
-    /// API (consumers must thread handles explicitly); anvil's engine layer
-    /// reinstates the ambient handle *for itself only*: [`build_runtime`]
-    /// registers an `on_thread_start` callback that installs this slot on
-    /// every thread the runtime drives (workers and `block_on` callers), and
-    /// fills the slot with the handle once the runtime exists. Any code polled
-    /// on the engine (shells spawning sub-agent tasks) can then recover the
-    /// handle via [`current_handle`]. Lab-runtime tasks never pass through
-    /// these entry points, so the handle stays absent there — the lab harness
-    /// keeps its explicit Spawner seam.
-    static CURRENT_HANDLE_SLOT: RefCell<Option<HandleSlot>> = const { RefCell::new(None) };
-}
-
-/// The engine-runtime handle ambient to the current thread, if any.
-///
-/// Resolves on threads driven by a [`build_runtime`] runtime — worker threads
-/// and `block_on` callers — while that runtime is alive. Returns `None` on
-/// unrelated threads, inside lab-runtime tasks, and after the
-/// [`EngineRuntime`] has been dropped.
-#[must_use]
-pub fn current_handle() -> Option<RuntimeHandle> {
-    CURRENT_HANDLE_SLOT.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).clone())
-    })
-}
-
-/// An skein runtime configured for anvil services: I/O reactor attached
+/// An skein runtime configured for the temper agent: I/O reactor attached
 /// and a small blocking pool for filesystem/git helpers.
+///
+/// There is no ambient handle: skein dropped `Runtime::current_handle()` and
+/// the agent no longer reinstates a thread-local for it. Code that spawns
+/// sub-agent tasks receives a [`RuntimeHandle`] explicitly (from
+/// [`block_on_with`] or [`EngineRuntime::handle`]).
 pub struct EngineRuntime {
     runtime: Runtime,
-    /// The ambient-handle slot shared with this runtime's threads (see
-    /// [`current_handle`]); cleared on drop to break the `Arc` cycle through
-    /// the runtime config.
-    handle_slot: HandleSlot,
 }
 
 impl EngineRuntime {
@@ -65,15 +26,6 @@ impl EngineRuntime {
     /// Run a future to completion on the current thread.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.runtime.block_on(future)
-    }
-}
-
-impl Drop for EngineRuntime {
-    fn drop(&mut self) {
-        self.handle_slot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
     }
 }
 
@@ -91,33 +43,19 @@ impl Drop for EngineRuntime {
 pub fn build_runtime() -> Result<EngineRuntime, String> {
     let reactor =
         create_reactor().map_err(|error| format!("creating skein reactor failed: {error}"))?;
-    let handle_slot: HandleSlot = std::sync::Arc::default();
-    let thread_slot = std::sync::Arc::clone(&handle_slot);
     let runtime = RuntimeBuilder::current_thread()
         .blocking_threads(1, 4)
         .with_reactor(reactor)
-        .on_thread_start(move || {
-            // Install the ambient-handle slot on every thread this runtime
-            // drives, so `current_handle()` resolves inside engine tasks.
-            let slot = std::sync::Arc::clone(&thread_slot);
-            CURRENT_HANDLE_SLOT.with(|cell| *cell.borrow_mut() = Some(slot));
-        })
         .build()
         .map_err(|error| format!("building skein runtime failed: {error}"))?;
-    handle_slot
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .replace(runtime.handle());
-    Ok(EngineRuntime {
-        runtime,
-        handle_slot,
-    })
+    Ok(EngineRuntime { runtime })
 }
 
-/// Build a runtime and run one future to completion **as a task**, so the
-/// body has an ambient [`Cx`] (timers, HTTP calls, and process deadlines all
-/// need one). This is the standard `main()` entry for anvil engine binaries
-/// and the test-harness replacement for `#[tokio::test]` bodies:
+/// Build a runtime and run one future to completion **as a task**. The body
+/// receives no capabilities — code that needs the task's [`Cx`] or the runtime's
+/// [`RuntimeHandle`] (the spawn capability for sub-agent tasks) must use
+/// [`block_on_with`]. Standard entry for bodies that take their capabilities
+/// explicitly:
 ///
 /// ```text
 /// #[test]
@@ -132,8 +70,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let runtime = build_runtime().expect("build skein runtime");
-    block_on_runtime(&runtime, future)
+    block_on_with(move |_cx, _handle| future)
 }
 
 /// [`block_on`] on an already-built runtime.
@@ -142,9 +79,40 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
+    block_on_runtime_with(runtime, move |_cx, _handle| future)
+}
+
+/// Build a runtime and run one future to completion as a task, handing the body
+/// its capabilities **explicitly**: the task's [`Cx`] (clock) and the runtime's
+/// [`RuntimeHandle`] (spawn capability). There is no ambient way to recover
+/// either — this signature is the only source (skein removed
+/// `Runtime::current_handle`, and the agent no longer reinstates a thread-local
+/// for it).
+///
+/// ```text
+/// temper_agent_io_engine::block_on_with(|cx, handle| async move { ... });
+/// ```
+pub fn block_on_with<F, Fut>(f: F) -> Fut::Output
+where
+    F: FnOnce(Cx, RuntimeHandle) -> Fut + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    let runtime = build_runtime().expect("build skein runtime");
+    block_on_runtime_with(&runtime, f)
+}
+
+/// [`block_on_with`] on an already-built runtime.
+pub fn block_on_runtime_with<F, Fut>(runtime: &EngineRuntime, f: F) -> Fut::Output
+where
+    F: FnOnce(Cx, RuntimeHandle) -> Fut + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
     let (result_tx, result_rx) = crate::queue::oneshot();
-    runtime.handle().spawn_with_cx(move |_cx| async move {
-        let mut future = Box::pin(future);
+    let handle = runtime.handle();
+    runtime.handle().spawn_with_cx(move |cx| async move {
+        let mut future = Box::pin(f(cx, handle));
         let outcome = std::future::poll_fn(move |task_cx| {
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 future.as_mut().poll(task_cx)

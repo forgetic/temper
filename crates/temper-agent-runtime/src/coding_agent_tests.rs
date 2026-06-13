@@ -158,13 +158,23 @@ fn subagent_tools_register_parallel_safe_and_on_the_right_model() {
         ..Default::default()
     };
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
-    let registry = add_subagents(
-        ToolRegistry::new(),
-        &provider_config,
-        &stream_options,
-        std::path::Path::new("."),
-        &totals,
-    );
+    // add_subagents stores a runtime handle in each tool (for its nested runs);
+    // obtain one explicitly from a runtime. Registration itself does no I/O.
+    // Clone the config into the closure so the original survives for the
+    // tier assertion below.
+    let registry = {
+        let provider_config = provider_config.clone();
+        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+            add_subagents(
+                handle,
+                ToolRegistry::new(),
+                &provider_config,
+                &stream_options,
+                std::path::Path::new("."),
+                &totals,
+            )
+        })
+    };
 
     let names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
     assert!(

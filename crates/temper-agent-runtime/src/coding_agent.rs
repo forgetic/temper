@@ -494,6 +494,7 @@ fn subagent_specs() -> &'static [SubAgentSpec] {
 /// is prompt-constrained to read-only inspection, matching Claude's parallel
 /// `general-purpose` reviewers).
 fn add_subagents(
+    handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
     provider_config: &ProviderConfig,
     stream_options: &tongs::provider::StreamOptions,
@@ -501,13 +502,22 @@ fn add_subagents(
     totals: &std::sync::Arc<crate::usage::UsageTotals>,
 ) -> ToolRegistry {
     for spec in subagent_specs() {
-        base = add_one_subagent(base, spec, provider_config, stream_options, cwd, totals);
+        base = add_one_subagent(
+            handle.clone(),
+            base,
+            spec,
+            provider_config,
+            stream_options,
+            cwd,
+            totals,
+        );
     }
     base
 }
 
 /// Wires a single sub-agent role into the registry.
 fn add_one_subagent(
+    handle: skein::runtime::RuntimeHandle,
     mut base: ToolRegistry,
     spec: &'static SubAgentSpec,
     provider_config: &ProviderConfig,
@@ -566,6 +576,7 @@ fn add_one_subagent(
         // parallel `general-purpose` reviewers; this is a deliberate trust
         // decision, not an effect-system guarantee.
         temper_agent_core::SubAgentTool::new(
+            handle.clone(),
             spec.name,
             spec.description,
             tongs::tools::ToolEffects::read(),
@@ -602,6 +613,7 @@ fn add_one_subagent(
 /// Must be awaited inside a skein engine task (the sub-agent's drive loop
 /// reads the runtime clock and its shell spawns I/O).
 pub async fn run_coding_agent_native(
+    handle: skein::runtime::RuntimeHandle,
     provider_config: &ProviderConfig,
     context: &WorkspaceContext,
     cwd: &Path,
@@ -609,6 +621,7 @@ pub async fn run_coding_agent_native(
     config_dir: Option<&Path>,
 ) -> Result<WorkspaceResult, CodingAgentError> {
     run_coding_agent_native_with_options(
+        handle,
         provider_config,
         context,
         cwd,
@@ -624,7 +637,9 @@ pub async fn run_coding_agent_native(
 /// read-only investigation to a nested sub-agent scoped to the same checkout
 /// (the parent can fan out several at once since the tool is read-only /
 /// parallel-safe). Default coding behavior is unchanged when it is off.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_coding_agent_native_with_options(
+    handle: skein::runtime::RuntimeHandle,
     provider_config: &ProviderConfig,
     context: &WorkspaceContext,
     cwd: &Path,
@@ -633,6 +648,7 @@ pub async fn run_coding_agent_native_with_options(
     enable_subagents: bool,
 ) -> Result<WorkspaceResult, CodingAgentError> {
     run_coding_agent_native_with_hooks(
+        handle,
         provider_config,
         context,
         cwd,
@@ -651,6 +667,7 @@ pub async fn run_coding_agent_native_with_options(
 /// awaited before each model call (the workspace checkpointer).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_coding_agent_native_with_hooks(
+    handle: skein::runtime::RuntimeHandle,
     provider_config: &ProviderConfig,
     context: &WorkspaceContext,
     cwd: &Path,
@@ -698,7 +715,14 @@ pub async fn run_coding_agent_native_with_hooks(
 
     let mut tools = tool_registry(capability, cwd);
     if enable_subagents {
-        tools = add_subagents(tools, provider_config, &stream_options, cwd, &totals);
+        tools = add_subagents(
+            handle.clone(),
+            tools,
+            provider_config,
+            &stream_options,
+            cwd,
+            &totals,
+        );
     }
 
     let sub_agent = temper_agent_core::SubAgent {
@@ -711,8 +735,12 @@ pub async fn run_coding_agent_native_with_hooks(
     };
     let model_id = provider_config.model_id().to_string();
     let outcome = async {
-        let (_control, run) =
-            temper_agent_core::run_sub_agent_controllable_with_hook(sub_agent, events, turn_hook)?;
+        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_hook(
+            handle.clone(),
+            sub_agent,
+            events,
+            turn_hook,
+        )?;
         run.await
     }
     .await

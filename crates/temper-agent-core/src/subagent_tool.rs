@@ -22,6 +22,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use skein::runtime::RuntimeHandle;
 use tongs::error::{Error, Result};
 use tongs::model::ContentBlock;
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
@@ -45,6 +46,9 @@ pub struct SubAgentTool {
     /// Observability sink forwarded to every nested run (token usage, tool
     /// starts). `None` keeps nested runs silent.
     events: Option<Arc<dyn EventSink>>,
+    /// Runtime spawn capability, forwarded to each nested run. Passed
+    /// explicitly (no ambient handle lookup).
+    handle: RuntimeHandle,
 }
 
 impl SubAgentTool {
@@ -52,8 +56,10 @@ impl SubAgentTool {
     /// sees (make the description say *when* to delegate to this sub-agent).
     /// `effects` governs batching — [`ToolEffects::read`] for a read-only
     /// sub-agent that is safe to run in parallel with siblings. `factory`
-    /// assembles the nested [`SubAgent`] from the task string.
+    /// assembles the nested [`SubAgent`] from the task string. `handle` is the
+    /// runtime spawn capability each nested run needs.
     pub fn new(
+        handle: RuntimeHandle,
         name: impl Into<String>,
         description: impl Into<String>,
         effects: ToolEffects,
@@ -66,6 +72,7 @@ impl SubAgentTool {
             parameters: default_task_schema(),
             factory,
             events: None,
+            handle,
         }
     }
 
@@ -124,8 +131,10 @@ impl Tool for SubAgentTool {
 
         let sub_agent = (self.factory)(task);
         let outcome = match &self.events {
-            Some(events) => run_sub_agent_with_events(sub_agent, Arc::clone(events)).await,
-            None => run_sub_agent(sub_agent).await,
+            Some(events) => {
+                run_sub_agent_with_events(self.handle.clone(), sub_agent, Arc::clone(events)).await
+            }
+            None => run_sub_agent(self.handle.clone(), sub_agent).await,
         }
         .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
 

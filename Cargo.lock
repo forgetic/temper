@@ -1942,6 +1942,7 @@ dependencies = [
  "jig-server",
  "serde",
  "serde_json",
+ "skein",
  "temper-agent-core",
  "temper-agent-io-engine",
  "temper-agent-protocol",

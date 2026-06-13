@@ -95,14 +95,19 @@ impl GenericInteractionResponder {
     /// `ConversationReply`.
     pub async fn respond(
         &self,
+        handle: skein::runtime::RuntimeHandle,
         request: &ConversationRequest,
     ) -> Result<ConversationReply, InteractionProfileError> {
         self.validate_request(request)?;
         let system_prompt = self.render_system_prompt();
         let user_context = self.render_provider_context(request)?;
-        let reply =
-            run_decision::<ConversationReply>(&self.provider, &system_prompt, &user_context)
-                .await?;
+        let reply = run_decision::<ConversationReply>(
+            handle,
+            &self.provider,
+            &system_prompt,
+            &user_context,
+        )
+        .await?;
         self.validate_reply(&reply)?;
         Ok(reply)
     }

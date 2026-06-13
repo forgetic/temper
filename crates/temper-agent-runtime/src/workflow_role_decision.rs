@@ -45,8 +45,12 @@ impl WorkflowRoleDecisionResponder {
     }
 
     /// Runs one LLM-backed workflow-role decision.
+    ///
+    /// `handle` is the runtime spawn capability the nested decision run needs,
+    /// passed explicitly from the caller's engine context.
     pub async fn respond(
         &self,
+        handle: skein::runtime::RuntimeHandle,
         request: &WorkflowRoleDecisionRequest,
     ) -> Result<WorkflowRoleDecisionReply, WorkflowRoleDecisionError> {
         let trace = WorkflowRoleTrace::from_work_item_context(&request.work_item_context);
@@ -95,6 +99,7 @@ impl WorkflowRoleDecisionResponder {
 
         let provider_call_started = Instant::now();
         let decision_result = run_decision::<WorkflowRoleModelDecision>(
+            handle,
             &self.provider,
             &system_prompt,
             &user_context,

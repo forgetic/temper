@@ -45,8 +45,8 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
         create_write_tool(checkout.path()),
     ]);
 
-    let outcome = temper_agent_io_engine::block_on(async move {
-        run_sub_agent(SubAgent {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        run_sub_agent(handle, SubAgent {
             system_prompt: Some(
                 "You are a sub-agent. Use the write tool to create the requested file.".to_string(),
             ),
@@ -136,10 +136,12 @@ fn turn_hook_runs_before_every_model_call() {
         turns: std::sync::Mutex::new(Vec::new()),
     });
 
-    let outcome = temper_agent_io_engine::block_on({
-        let hook = Arc::clone(&hook);
+    let hook_for_run = Arc::clone(&hook);
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| {
+        let hook = hook_for_run;
         async move {
             run_sub_agent_with_hook(
+                handle,
                 SubAgent {
                     system_prompt: Some(
                         "You are a sub-agent. Use the write tool to create the requested file."
@@ -207,8 +209,8 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = temper_agent_io_engine::block_on(async move {
-        run_sub_agent(SubAgent {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        run_sub_agent(handle, SubAgent {
             system_prompt: None,
             user_message: "read forever".to_string(),
             tools,
@@ -263,8 +265,9 @@ fn sub_agent_forwards_live_events_to_the_sink() {
 
     let recorder = Arc::new(Recorder::default());
     let recorder_for_run = Arc::clone(&recorder);
-    let outcome = temper_agent_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
         run_sub_agent_with_events(
+            handle,
             SubAgent {
                 system_prompt: Some("Use the write tool.".to_string()),
                 user_message: "Create NOTES.md.".to_string(),
@@ -356,10 +359,11 @@ fn sub_agent_can_be_aborted_mid_run() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = temper_agent_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
         // A high iteration budget so the run would otherwise spin for a long
         // time; abort is what ends it.
         let (control, run) = run_sub_agent_controllable(
+            handle.clone(),
             SubAgent {
                 system_prompt: None,
                 user_message: "loop".to_string(),
@@ -376,7 +380,6 @@ fn sub_agent_can_be_aborted_mid_run() {
         .expect("build controllable run");
 
         // Abort from a sibling task after letting the run get going.
-        let handle = temper_agent_io_engine::current_handle().expect("handle");
         handle.spawn_with_cx(move |cx| async move {
             // Let a couple of turns happen first (virtual time).
             skein::time::sleep(
@@ -456,8 +459,9 @@ fn sub_agent_steering_reaches_the_model() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = temper_agent_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
         let (control, run) = run_sub_agent_controllable(
+            handle,
             SubAgent {
                 system_prompt: None,
                 user_message: "do a thing".to_string(),

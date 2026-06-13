@@ -38,6 +38,7 @@ impl ProductManagerResponder {
     /// Runs one LLM turn over a generic interaction request.
     pub async fn respond(
         &self,
+        handle: skein::runtime::RuntimeHandle,
         request: &ConversationRequest,
     ) -> Result<ConversationReply, ProductManagerError> {
         if request.profile_id.as_str() != PRODUCT_MANAGER_PROFILE_ID {
@@ -47,17 +48,19 @@ impl ProductManagerResponder {
             )));
         }
         let request = ProductManagerRequest::from_conversation_request(request)?;
-        let response = self.run_turn(&request).await?;
+        let response = self.run_turn(handle, &request).await?;
         response.to_conversation_reply()
     }
 
     /// Runs one LLM turn over the supplied product-manager request.
     pub async fn run_turn(
         &self,
+        handle: skein::runtime::RuntimeHandle,
         request: &ProductManagerRequest,
     ) -> Result<ProductManagerResponse, ProductManagerError> {
         let context = render_request_context(request)?;
         let response = run_decision::<ProductManagerResponse>(
+            handle,
             &self.provider,
             PRODUCT_MANAGER_SYSTEM_PROMPT,
             &context,
@@ -462,12 +465,12 @@ mod tests {
 
     #[test]
     fn product_manager_responder_rejects_other_profiles_without_provider_call() {
-        temper_agent_io_engine::block_on(async {
-            rejects_other_profiles_without_provider_call_inner().await;
+        temper_agent_io_engine::block_on_with(|_cx, handle| async move {
+            rejects_other_profiles_without_provider_call_inner(handle).await;
         });
     }
 
-    async fn rejects_other_profiles_without_provider_call_inner() {
+    async fn rejects_other_profiles_without_provider_call_inner(handle: skein::runtime::RuntimeHandle) {
         let responder = ProductManagerResponder::new(ProviderConfig::new(
             "test-provider",
             "test-model",
@@ -481,7 +484,7 @@ mod tests {
         );
 
         let error = responder
-            .respond(&request)
+            .respond(handle, &request)
             .await
             .expect_err("non-product profile is rejected before provider call");
         assert!(matches!(

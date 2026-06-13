@@ -88,15 +88,6 @@ fn parent_agent_delegates_to_a_sub_agent() {
         }
     });
 
-    // The investigate tool is read-only ⇒ parallel-safe (a parent could fan out
-    // several at once).
-    let investigate = SubAgentTool::new(
-        "investigate",
-        "Delegate a read-only investigation to a sub-agent. Input: { task }.",
-        ToolEffects::read(),
-        factory,
-    );
-
     let parent_provider = ProviderConfig::new(
         "jig-openai-compatible",
         "jig-parent",
@@ -107,8 +98,18 @@ fn parent_agent_delegates_to_a_sub_agent() {
     .build_provider()
     .expect("build parent provider");
 
-    let outcome = temper_agent_io_engine::block_on(async move {
-        run_sub_agent(SubAgent {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        // The investigate tool is read-only ⇒ parallel-safe (a parent could fan
+        // out several at once). Built inside the engine task so it holds the
+        // runtime handle explicitly for its nested runs.
+        let investigate = SubAgentTool::new(
+            handle.clone(),
+            "investigate",
+            "Delegate a read-only investigation to a sub-agent. Input: { task }.",
+            ToolEffects::read(),
+            factory,
+        );
+        run_sub_agent(handle, SubAgent {
             system_prompt: Some("You are an orchestrator. Use the investigate tool.".into()),
             user_message: "What is the answer? Use the investigate sub-agent.".into(),
             tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
@@ -239,13 +240,6 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
         }
     });
 
-    let investigate = SubAgentTool::new(
-        "investigate",
-        "Read-only investigation. Input: { task }.",
-        ToolEffects::read(),
-        factory,
-    );
-
     let parent_provider = ProviderConfig::new(
         "jig-openai-compatible",
         "jig-parent",
@@ -256,8 +250,15 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
     .build_provider()
     .expect("build parent provider");
 
-    let outcome = temper_agent_io_engine::block_on(async move {
-        run_sub_agent(SubAgent {
+    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        let investigate = SubAgentTool::new(
+            handle.clone(),
+            "investigate",
+            "Read-only investigation. Input: { task }.",
+            ToolEffects::read(),
+            factory,
+        );
+        run_sub_agent(handle, SubAgent {
             system_prompt: Some("Orchestrator.".into()),
             user_message: "Investigate A and B.".into(),
             tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),

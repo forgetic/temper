@@ -32,8 +32,8 @@ fn jig_coding_agent_native_tool_loop_creates_product_diff() {
 
     let context = workspace_context();
     let cwd = checkout.path().to_path_buf();
-    let result = temper_agent_io_engine::block_on(async move {
-        run_coding_agent_native(&provider, &context, &cwd, 6, None).await
+    let result = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        run_coding_agent_native(handle, &provider, &context, &cwd, 6, None).await
     })
     .expect("native jig-backed coding agent succeeds");
 
