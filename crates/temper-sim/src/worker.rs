@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::json;
 use skein::cx::Cx;
 use temper_worker_protocol::{
-    Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ResultStatus,
+    Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, RepoOutcome, ResultStatus,
     WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 
@@ -101,10 +101,13 @@ fn result_message(profile: &WorkerProfile, job_id: &str) -> WorkerProtocolMessag
         worker_id: profile.worker_id.clone(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: Some(Branch {
-            name: format!("agent/{job_id}"),
-            head_sha: "feedc0de".to_string(),
-        }),
+        repos: vec![RepoOutcome {
+            repo: profile.repo.clone(),
+            branch: Branch {
+                name: format!("agent/{job_id}"),
+                head_sha: "feedc0de".to_string(),
+            },
+        }],
         verdict: None,
         body: None,
         children: Vec::new(),

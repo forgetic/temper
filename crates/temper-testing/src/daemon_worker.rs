@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use temper_worker_protocol::{
     Assign, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobContext, JobResult,
-    Poll, Register, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Poll, Register, RepoOutcome, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 
 pub use crate::forgejo_server::provision::CI_PASS_MARKER;
@@ -367,12 +367,12 @@ async fn execute_job(
     assign: &Assign,
 ) -> JobResult {
     match run_job(cx, config, identity, assign).await {
-        Ok((branch, summary)) => JobResult {
+        Ok((repos, summary)) => JobResult {
             protocol_version: WORKER_PROTOCOL_VERSION,
             worker_id: config.worker_id.clone(),
             job_id: assign.job_id.clone(),
             status: ResultStatus::Success,
-            branch: Some(branch),
+            repos,
             verdict: None,
             body: None,
             children: Vec::new(),
@@ -385,7 +385,7 @@ async fn execute_job(
             worker_id: config.worker_id.clone(),
             job_id: assign.job_id.clone(),
             status: ResultStatus::Failure,
-            branch: None,
+            repos: Vec::new(),
             verdict: None,
             body: None,
             children: Vec::new(),
@@ -404,7 +404,7 @@ async fn run_job(
     config: &DaemonWorkerConfig,
     identity: &GitIdentity,
     assign: &Assign,
-) -> Result<(Branch, String), JobError> {
+) -> Result<(Vec<RepoOutcome>, String), JobError> {
     if assign.artifact.kind != "issue" {
         // Mirrors smith-worker: only issue-targeted coding jobs are
         // implemented; PR-targeted feeds (e.g. pr_ci_failed) fail as protocol.
@@ -415,79 +415,108 @@ async fn run_job(
     }
     let context: JobContext = serde_json::from_value(assign.job_payload.clone())
         .map_err(|error| JobError::protocol(format!("job payload is not a JobContext: {error}")))?;
-    let repository = context
-        .repository
-        .ok_or_else(|| JobError::protocol("job payload is missing enriched repository"))?;
-    let branch_name = context
-        .branch_hint
-        .ok_or_else(|| JobError::protocol("job payload is missing enriched branch_hint"))?;
-    let base_branch = context
-        .base_branch
-        .filter(|base| !base.trim().is_empty())
-        .unwrap_or_else(|| "main".to_string());
-    let correlation_key = context
-        .correlation_key
-        .unwrap_or_else(|| branch_name.trim_start_matches("agent/").to_string());
+    let manifest = context
+        .workspace
+        .ok_or_else(|| JobError::protocol("job payload is missing enriched workspace manifest"))?;
     let issue_number = context.artifact.as_ref().map(|artifact| artifact.number);
+    let coordination_key = manifest.coordination_key.clone();
 
-    let workspace = Workspace {
-        cx,
-        path: config
-            .workspace_root
-            .join(context.repo.replace('/', "__"))
-            .join(&context.role),
-        remote_url: format!(
-            "{}/{}/{}.git",
-            config.git_base_url.trim_end_matches('/'),
-            repository.owner,
-            repository.name
-        ),
-        identity,
-    };
+    // One commit/push per writable repo (ADR 0023). This deterministic worker
+    // does not build, so it needs no sibling layout: each writable repo is
+    // checked out independently and produces a RepoOutcome → one PR.
+    let mut outcomes = Vec::new();
+    for (index, repo_spec) in manifest.repos.iter().enumerate() {
+        if !repo_spec.is_writable() {
+            continue;
+        }
+        let branch_name = repo_spec.branch_hint.clone().ok_or_else(|| {
+            JobError::protocol(format!(
+                "writable workspace repo {} is missing a branch hint",
+                repo_spec.repo
+            ))
+        })?;
+        let base_branch = if repo_spec.base_branch.trim().is_empty() {
+            "main".to_string()
+        } else {
+            repo_spec.base_branch.clone()
+        };
+        let (owner, name) = repo_spec.owner_name().ok_or_else(|| {
+            JobError::protocol(format!("malformed workspace repo path {}", repo_spec.repo))
+        })?;
 
-    workspace.prepare(&base_branch, &branch_name).await?;
+        let workspace = Workspace {
+            cx,
+            path: config
+                .workspace_root
+                .join(repo_spec.repo.replace('/', "__"))
+                .join(&context.role),
+            remote_url: format!(
+                "{}/{}/{}.git",
+                config.git_base_url.trim_end_matches('/'),
+                owner,
+                name
+            ),
+            identity,
+        };
 
-    let change_path = workspace
-        .path
-        .join(CHANGE_DIR)
-        .join(format!("{}.txt", branch_name.replace('/', "-")));
-    if let Some(parent) = change_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| JobError::transient(format!("creating change dir failed: {error}")))?;
+        workspace.prepare(&base_branch, &branch_name).await?;
+
+        let change_path = workspace
+            .path
+            .join(CHANGE_DIR)
+            .join(format!("{}.txt", branch_name.replace('/', "-")));
+        if let Some(parent) = change_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                JobError::transient(format!("creating change dir failed: {error}"))
+            })?;
+        }
+        std::fs::write(
+            &change_path,
+            format!(
+                "Deterministic daemon test-worker change.\njob_id: {}\nrepo: {}\nbranch: {branch_name}\n",
+                assign.job_id, repo_spec.repo
+            ),
+        )
+        .map_err(|error| JobError::transient(format!("writing change file failed: {error}")))?;
+
+        let mut message = format!("Implement {coordination_key}");
+        if config.ci_sentinel == CiSentinel::Present {
+            message.push_str(&format!(" {CI_PASS_MARKER}"));
+        }
+        message.push_str(&format!(
+            "\n\nDeterministic test-worker change for job {} ({}).",
+            assign.job_id, repo_spec.repo
+        ));
+        // Native provider close-on-merge only works within the coordinating
+        // issue's own repo, so the `Closes #n` trailer goes on the primary
+        // repo's commit only (the first manifest entry).
+        if index == 0 {
+            if let Some(number) = issue_number {
+                message.push_str(&format!("\n\nCloses #{number}"));
+            }
+        }
+
+        workspace.commit_all(&message).await?;
+        let head_sha = workspace.push_branch(&branch_name).await?;
+
+        outcomes.push(RepoOutcome {
+            repo: repo_spec.repo.clone(),
+            branch: Branch {
+                name: branch_name,
+                head_sha,
+            },
+        });
     }
-    std::fs::write(
-        &change_path,
-        format!(
-            "Deterministic daemon test-worker change.\njob_id: {}\nbranch: {branch_name}\n",
-            assign.job_id
-        ),
-    )
-    .map_err(|error| JobError::transient(format!("writing change file failed: {error}")))?;
 
-    let mut message = format!("Implement {correlation_key}");
-    if config.ci_sentinel == CiSentinel::Present {
-        message.push_str(&format!(" {CI_PASS_MARKER}"));
+    if outcomes.is_empty() {
+        return Err(JobError::protocol(
+            "workspace manifest declared no writable repositories",
+        ));
     }
-    message.push_str(&format!(
-        "\n\nDeterministic test-worker change for job {}.",
-        assign.job_id
-    ));
-    if let Some(number) = issue_number {
-        // Native provider close-on-merge: merging the implementation PR closes
-        // the source issue through this keyword once the commit reaches the
-        // default branch.
-        message.push_str(&format!("\n\nCloses #{number}"));
-    }
-
-    workspace.commit_all(&message).await?;
-    let head_sha = workspace.push_branch(&branch_name).await?;
 
     Ok((
-        Branch {
-            name: branch_name,
-            head_sha,
-        },
-        format!("deterministic test-worker change for {correlation_key}"),
+        outcomes,
+        format!("deterministic test-worker change for {coordination_key}"),
     ))
 }
 

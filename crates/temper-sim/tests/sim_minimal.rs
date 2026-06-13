@@ -15,8 +15,8 @@ use temper_daemon::{Daemon, InFlightJob, ResultApplier};
 use temper_io_engine::{channel, CqSender};
 use temper_sim::{Sim, SimProtocolClient};
 use temper_worker_protocol::{
-    Artifact, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ResultStatus,
-    WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Artifact, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, RepoOutcome,
+    ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 
 struct RecordingApplier {
@@ -60,10 +60,13 @@ fn success_result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: Some(Branch {
-            name: "agent/pr-for-code-7".to_string(),
-            head_sha: "feedc0de".to_string(),
-        }),
+        repos: vec![RepoOutcome {
+            repo: "acme/service".to_string(),
+            branch: Branch {
+                name: "agent/pr-for-code-7".to_string(),
+                head_sha: "feedc0de".to_string(),
+            },
+        }],
         verdict: None,
         body: None,
         children: Vec::new(),
