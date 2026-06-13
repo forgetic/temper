@@ -16,8 +16,8 @@ use std::sync::Arc;
 use anvil_io_engine::{CqSender, channel, drive, oneshot};
 use tongs::model::{Message, UserContent, UserMessage};
 use tongs::provider::{Provider, StreamOptions, ToolDef};
-use tongs::tools::tool_to_definition;
 use tongs::tools::ToolRegistry;
+use tongs::tools::tool_to_definition;
 
 use crate::machine::{AgentCompletion, AgentMachine};
 use crate::shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};

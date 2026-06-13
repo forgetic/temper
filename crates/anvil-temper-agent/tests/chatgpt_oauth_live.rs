@@ -72,7 +72,6 @@ fn chatgpt_oauth_validation() {
         return;
     }
 
-
     // Step 1 — end-to-end proof: build the provider against the *real* auth file
     // (default path, no override) and run one trivial decision. `from_auth` runs
     // the credential preflight, so a missing login fails here with a clear error.
@@ -101,12 +100,8 @@ fn chatgpt_oauth_validation() {
     );
     let role_context = role_context(&role);
     let role_start = Instant::now();
-    let decision: RoleDecision = block_on_decision(
-        &provider,
-        &role.prompt.render(),
-        &role_context,
-    )
-    .expect("ChatGPT OAuth generic role decision succeeds and parses");
+    let decision: RoleDecision = block_on_decision(&provider, &role.prompt.render(), &role_context)
+        .expect("ChatGPT OAuth generic role decision succeeds and parses");
     let role_latency = role_start.elapsed();
     eprintln!("[a3] generic role decision: {decision:?} (latency: {role_latency:?})");
     assert_eq!(decision.action, "advance");

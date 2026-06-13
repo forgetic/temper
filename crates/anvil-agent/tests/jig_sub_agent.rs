@@ -20,8 +20,8 @@ use anvil_temper_agent::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use tongs::provider::StreamOptions;
-use tongs::tools::{create_read_tool, create_write_tool};
 use tongs::tools::ToolRegistry;
+use tongs::tools::{create_read_tool, create_write_tool};
 
 #[test]
 fn sub_agent_runs_a_tool_loop_and_completes() {
@@ -145,8 +145,8 @@ fn turn_hook_runs_before_every_model_call() {
                         "You are a sub-agent. Use the write tool to create the requested file."
                             .to_string(),
                     ),
-                    user_message:
-                        "Create NOTES.md whose first line is exactly `project notes`.".to_string(),
+                    user_message: "Create NOTES.md whose first line is exactly `project notes`."
+                        .to_string(),
                     tools,
                     max_iterations: 6,
                     provider,

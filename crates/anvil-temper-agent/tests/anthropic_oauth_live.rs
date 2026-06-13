@@ -39,7 +39,6 @@ fn anthropic_oauth_validation() {
         return;
     }
 
-
     let provider = ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, None)
         .expect("Anthropic OAuth provider builds (run `pi /login anthropic` first)");
     eprintln!("[anthropic] model id: {}", provider.model_id());
@@ -52,10 +51,8 @@ fn anthropic_oauth_validation() {
     let start = Instant::now();
     let decision: RoleDecision = {
         let prompt = role.prompt.render();
-        anvil_io_engine::block_on(async move {
-            run_decision(&provider, &prompt, &context).await
-        })
-        .expect("Anthropic OAuth generic role decision succeeds and parses")
+        anvil_io_engine::block_on(async move { run_decision(&provider, &prompt, &context).await })
+            .expect("Anthropic OAuth generic role decision succeeds and parses")
     };
     assert_eq!(decision.action, "advance");
     eprintln!(

@@ -278,6 +278,30 @@ impl ProviderConfig {
         &self.model_id
     }
 
+    /// Returns a clone of this config retargeted at a different model id, keeping
+    /// the same provider, endpoint, and credential. Used to run sub-agents on a
+    /// cheaper/faster model than the main agent (the parent's auth still applies,
+    /// since the bearer is shared across models on the same provider).
+    #[must_use]
+    pub fn with_model_id(&self, model_id: impl Into<String>) -> Self {
+        let mut clone = self.clone();
+        clone.model_id = model_id.into();
+        clone
+    }
+
+    /// The model id to run read-only `investigate` sub-agents on.
+    ///
+    /// For the Anthropic OAuth mode this is the (cheaper, overridable) sub-agent
+    /// tier — mirroring Claude Code routing its investigation sub-agents to a
+    /// smaller model. For other modes (Codex, DeepSeek) there is no separate
+    /// cheap tier wired up, so sub-agents stay on the main model.
+    pub fn subagent_model_id(&self) -> String {
+        match &self.auth {
+            AuthMode::AnthropicOAuth { .. } => anthropic_oauth::anthropic_subagent_model_from_env(),
+            _ => self.model_id.clone(),
+        }
+    }
+
     /// Non-secret provider/model/auth identity for structured logs.
     pub(crate) fn observability_identity(&self) -> ProviderIdentity<'_> {
         ProviderIdentity {
@@ -306,7 +330,10 @@ impl ProviderConfig {
     /// all other modes use the SDK defaults.
     pub(crate) fn request_headers(&self) -> HashMap<String, String> {
         match &self.auth {
-            AuthMode::AnthropicOAuth { .. } => anthropic_oauth::request_headers(),
+            // The beta-flag set depends on the model: the 1M-context beta is not
+            // granted to every model/tier (Haiku rejects it with a 400 on the
+            // standard subscription), so the headers are model-aware.
+            AuthMode::AnthropicOAuth { .. } => anthropic_oauth::request_headers(&self.model_id),
             AuthMode::ApiKey { .. } | AuthMode::ChatGptOAuth { .. } => HashMap::new(),
         }
     }
@@ -397,6 +424,12 @@ impl ProviderConfig {
                 // but the initial OAuth path deliberately sends no explicit
                 // thinking level until live validation proves the SDK's legacy
                 // thinking-body shape is compatible with this model.
+                //
+                // `max_tokens` must not exceed the *model's* output ceiling: the
+                // API rejects an over-cap request with a 400
+                // `invalid_request_error`, and since the sub-agent tier runs a
+                // smaller model (e.g. Haiku, capped at 64K vs Opus' 128K) a
+                // single hard-coded cap would break every sub-agent request.
                 (
                     ANTHROPIC_MESSAGES_API,
                     true,
@@ -407,8 +440,8 @@ impl ProviderConfig {
                         cache_read: 1.5,
                         cache_write: 18.75,
                     },
-                    1_000_000,
-                    128_000,
+                    anthropic_oauth::context_window_for(&self.model_id),
+                    anthropic_oauth::max_output_tokens_for(&self.model_id),
                 )
             }
             AuthMode::ApiKey { .. } => (

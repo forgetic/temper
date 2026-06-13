@@ -293,8 +293,8 @@ fn validate_contract_engineer_requires_diff_or_verdict() {
     let temp = std::env::temp_dir().join(format!("anvil-agent-test-{}", std::process::id()));
     std::fs::create_dir_all(&temp).expect("temp dir");
     let empty = WorkspaceResult::default();
-    let error =
-        validate_contract(Capability::CodingWorkspace, &empty, &temp, "main").expect_err("no product");
+    let error = validate_contract(Capability::CodingWorkspace, &empty, &temp, "main")
+        .expect_err("no product");
     assert!(matches!(error, CodingAgentError::NoProduct));
 
     // A verdict (needs_architect) satisfies the contract even with no diff.

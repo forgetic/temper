@@ -71,6 +71,62 @@ fn anthropic_oauth_mode_targets_anthropic_messages_route() {
 }
 
 #[test]
+fn anthropic_oauth_subagent_uses_cheaper_tier_by_default() {
+    let config = ProviderConfig::anthropic_oauth_from_env();
+    // Main agent stays on the full model; sub-agents drop to the cheaper tier.
+    assert_eq!(config.model_id(), DEFAULT_ANTHROPIC_MODEL);
+    assert_eq!(
+        config.subagent_model_id(),
+        anthropic_oauth::DEFAULT_ANTHROPIC_SUBAGENT_MODEL
+    );
+    assert_ne!(config.model_id(), config.subagent_model_id());
+
+    // The retargeted config builds a provider whose model id is the sub-tier.
+    let sub = config.with_model_id(config.subagent_model_id());
+    assert_eq!(
+        sub.model_id(),
+        anthropic_oauth::DEFAULT_ANTHROPIC_SUBAGENT_MODEL
+    );
+    assert_eq!(
+        sub.model_entry().model.id,
+        anthropic_oauth::DEFAULT_ANTHROPIC_SUBAGENT_MODEL
+    );
+    // Auth/route are preserved — only the model changed.
+    assert_eq!(sub.model_entry().model.api, ANTHROPIC_MESSAGES_API);
+    assert!(sub.build_provider().is_ok());
+}
+
+#[test]
+fn anthropic_max_tokens_respects_each_models_ceiling() {
+    // The sub-agent (Haiku) entry must not over-ask: Haiku caps at 64K output,
+    // Opus/Sonnet at 128K. An over-cap request is a hard 400 from the API.
+    assert_eq!(
+        anthropic_oauth::max_output_tokens_for("claude-haiku-4-5"),
+        64_000
+    );
+    assert_eq!(
+        anthropic_oauth::max_output_tokens_for("claude-opus-4-8"),
+        128_000
+    );
+    // Wiring check: the retargeted sub-agent config's entry carries Haiku's cap.
+    let config = ProviderConfig::anthropic_oauth_from_env();
+    let sub = config.with_model_id("claude-haiku-4-5");
+    assert_eq!(sub.model_entry().model.max_tokens, 64_000);
+    assert_eq!(config.model_entry().model.max_tokens, 128_000);
+}
+
+#[test]
+fn non_anthropic_modes_keep_one_model_for_subagents() {
+    // Codex/DeepSeek have no separate cheap tier wired up, so sub-agents stay on
+    // the main model (no accidental retargeting to a non-existent id).
+    let codex = ProviderConfig::chatgpt_oauth_from_env();
+    assert_eq!(codex.subagent_model_id(), codex.model_id());
+
+    let deepseek = ProviderConfig::new("deepseek", "deepseek-chat", DEFAULT_BASE_URL, "sk-x");
+    assert_eq!(deepseek.subagent_model_id(), deepseek.model_id());
+}
+
+#[test]
 fn base_url_override_changes_oauth_model_entries() {
     let fixture = jig_auth_fixture();
     let anthropic = ProviderConfig::anthropic_oauth(Some(fixture.clone()))

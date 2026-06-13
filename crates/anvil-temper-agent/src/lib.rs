@@ -13,10 +13,10 @@ pub mod decision;
 pub mod interaction_profile;
 mod interaction_profile_config;
 mod observability;
-pub mod usage;
 pub mod product_manager;
 pub mod prompt_overlays;
 pub mod provider;
+pub mod usage;
 pub mod workflow_role_decision;
 mod workflow_role_decision_capture;
 mod workflow_role_decision_observability;
@@ -24,8 +24,9 @@ mod workflow_role_decision_observability;
 pub use coding_agent::{
     Capability, CodingAgentError, DEFAULT_MAX_ITERATIONS, WorkspaceContext, WorkspaceGuidance,
     WorkspaceRepository, WorkspaceResult, WorkspaceResultChild, WorkspaceWorkItem,
-    run_coding_agent_native, run_coding_agent_native_with_hooks, run_coding_agent_native_with_options,
-    system_prompt as coding_agent_system_prompt, user_context as coding_agent_user_context,
+    run_coding_agent_native, run_coding_agent_native_with_hooks,
+    run_coding_agent_native_with_options, system_prompt as coding_agent_system_prompt,
+    user_context as coding_agent_user_context,
 };
 pub use decision::{DecisionError, run_decision};
 pub use interaction_profile::{

@@ -57,6 +57,6 @@ pub use machine::{EngineTime, Machine};
 pub use queue::{CqReceiver, CqSender, OneshotReceiver, OneshotSender, channel, oneshot};
 pub use runtime::{
     EngineRuntime, block_on, block_on_runtime, build_runtime, current_cx, current_handle,
-    engine_now, sleep_for, timer_now,
+    engine_now, sleep_for, timeout, timer_now,
 };
 pub use timer::arm_timer;

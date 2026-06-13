@@ -25,6 +25,9 @@ use super::oauth::AUTH_FILE_ENV;
 
 /// Env var overriding the Anthropic model id.
 pub const ANTHROPIC_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_MODEL";
+/// Env var overriding the Anthropic model id used for *sub-agents* (the
+/// read-only `investigate` fan-out). Defaults to [`DEFAULT_ANTHROPIC_SUBAGENT_MODEL`].
+pub const ANTHROPIC_SUBAGENT_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_SUBAGENT_MODEL";
 /// Env var overriding the Anthropic OAuth token endpoint (used by tests).
 const TOKEN_URL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_TOKEN_URL";
 
@@ -38,6 +41,17 @@ const TOKEN_URL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_TOKEN_URL";
 /// Override with `TEMPER_AGENTS_ANTHROPIC_MODEL` when a tier with Fable access
 /// is in use.
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
+/// Default Anthropic model for read-only `investigate` sub-agents.
+///
+/// Sub-agents do mechanical search-and-read work whose product is a focused
+/// report, not the final deliverable, so they run on a cheaper, faster model
+/// than the main agent — mirroring Claude Code, which routes its `Explore`
+/// investigation sub-agents to Haiku while keeping the orchestrator on Opus.
+/// On a large fan-out the sub-agents dominate token spend, so this is the main
+/// efficiency lever. `claude-haiku-4-5` is served on the standard subscription
+/// tier (verified live). Override with [`ANTHROPIC_SUBAGENT_MODEL_ENV`]; set it
+/// equal to the main model to disable tiering.
+pub const DEFAULT_ANTHROPIC_SUBAGENT_MODEL: &str = "claude-haiku-4-5";
 /// Identity line Anthropic's Claude **subscription OAuth** path requires as the
 /// first `system` block. Any request whose first system block is not exactly
 /// this line is rejected with a generic `429 rate_limit_error`
@@ -61,7 +75,8 @@ const REFRESH_WINDOW_MS: i64 = 5 * 60 * 1000;
 /// Safety margin subtracted from a freshly issued token's lifetime.
 const EXPIRY_SAFETY_MS: i64 = 5 * 60 * 1000;
 
-const ANTHROPIC_BETA: &str = concat!(
+/// Beta flags sent for every Anthropic OAuth model.
+const ANTHROPIC_BETA_BASE: &str = concat!(
     "claude-code-20250219,",
     "oauth-2025-04-20,",
     "interleaved-thinking-2025-05-14,",
@@ -69,10 +84,32 @@ const ANTHROPIC_BETA: &str = concat!(
     "prompt-caching-scope-2026-01-05,",
     "advisor-tool-2026-03-01,",
     "advanced-tool-use-2025-11-20,",
-    "context-1m-2025-08-07,",
     "effort-2025-11-24,",
     "extended-cache-ttl-2025-04-11"
 );
+
+/// The 1M-context beta, appended only for models/tiers that grant it. Requesting
+/// it for a model the subscription does not entitle (e.g. Haiku on the standard
+/// tier) is rejected with `400 "The long context beta is not yet available for
+/// this subscription."`, which would fail every request on that model.
+const ANTHROPIC_BETA_LONG_CONTEXT: &str = "context-1m-2025-08-07";
+
+/// Whether `model_id` may request the 1M-context beta. Conservative: only the
+/// larger models (Opus/Sonnet) that this subscription serves with long context.
+/// The Haiku family is excluded (it 400s), as is any unknown id.
+fn supports_long_context_beta(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    id.contains("opus") || id.contains("sonnet")
+}
+
+/// The `anthropic-beta` header value for `model_id`.
+fn anthropic_beta_for(model_id: &str) -> String {
+    if supports_long_context_beta(model_id) {
+        format!("{ANTHROPIC_BETA_BASE},{ANTHROPIC_BETA_LONG_CONTEXT}")
+    } else {
+        ANTHROPIC_BETA_BASE.to_string()
+    }
+}
 
 /// Resolves the configured Anthropic model id (env override or default).
 pub fn anthropic_model_from_env() -> String {
@@ -81,6 +118,43 @@ pub fn anthropic_model_from_env() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string())
+}
+
+/// The maximum `max_tokens` (output) the Anthropic API accepts for `model_id`.
+///
+/// The API returns a 400 `invalid_request_error` when `max_tokens` exceeds the
+/// model's ceiling, so this must track each model family. Opus/Sonnet 4.x serve
+/// up to 128K output; the Haiku 4.x family caps at 64K. Unknown ids fall back to
+/// the conservative 64K so a new/cheaper model never over-asks.
+pub fn max_output_tokens_for(model_id: &str) -> usize {
+    let id = model_id.to_ascii_lowercase();
+    if id.contains("haiku") {
+        64_000
+    } else if id.contains("opus") || id.contains("sonnet") {
+        128_000
+    } else {
+        64_000
+    }
+}
+
+/// The context-window size to declare for `model_id`. Models granted the
+/// 1M-context beta advertise 1M; the rest use the standard 200K window. This is
+/// a local SDK hint (used for budgeting), kept consistent with the beta flags.
+pub fn context_window_for(model_id: &str) -> usize {
+    if supports_long_context_beta(model_id) {
+        1_000_000
+    } else {
+        200_000
+    }
+}
+
+/// Resolves the Anthropic model id for sub-agents (env override or default).
+pub fn anthropic_subagent_model_from_env() -> String {
+    std::env::var(ANTHROPIC_SUBAGENT_MODEL_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_ANTHROPIC_SUBAGENT_MODEL.to_string())
 }
 
 /// Where the Anthropic OAuth credential is read from.
@@ -135,13 +209,16 @@ impl fmt::Debug for AnthropicOAuthSettings {
 }
 
 /// Claude Code-compatible headers injected per Anthropic OAuth request.
-pub fn request_headers() -> HashMap<String, String> {
+///
+/// `model_id` selects the `anthropic-beta` flag set: the 1M-context beta is sent
+/// only for models the subscription entitles (see [`anthropic_beta_for`]).
+pub fn request_headers(model_id: &str) -> HashMap<String, String> {
     HashMap::from([
         (
             "x-client-request-id".to_string(),
             Uuid::new_v4().to_string(),
         ),
-        ("anthropic-beta".to_string(), ANTHROPIC_BETA.to_string()),
+        ("anthropic-beta".to_string(), anthropic_beta_for(model_id)),
         ("anthropic-version".to_string(), "2023-06-01".to_string()),
         (
             "user-agent".to_string(),
@@ -508,7 +585,7 @@ mod tests {
 
     #[test]
     fn request_headers_match_claude_code_identity_without_tokens() {
-        let headers = request_headers();
+        let headers = request_headers(DEFAULT_ANTHROPIC_MODEL);
         assert_eq!(
             headers.get("anthropic-version").map(String::as_str),
             Some("2023-06-01")
@@ -519,6 +596,7 @@ mod tests {
             Some("claude-cli/2.1.139 (external, sdk-cli)")
         );
         let beta = headers.get("anthropic-beta").expect("beta header");
+        // Opus (default) gets the full set including the 1M-context beta.
         for flag in [
             "claude-code-20250219",
             "oauth-2025-04-20",
@@ -535,9 +613,32 @@ mod tests {
     }
 
     #[test]
+    fn haiku_headers_omit_unentitled_long_context_beta() {
+        // The standard subscription rejects the 1M-context beta for Haiku with a
+        // 400; the sub-agent tier must not send it. Base flags stay.
+        let headers = request_headers(DEFAULT_ANTHROPIC_SUBAGENT_MODEL);
+        let beta = headers.get("anthropic-beta").expect("beta header");
+        assert!(
+            !beta.contains("context-1m"),
+            "haiku must not request the long-context beta: {beta}"
+        );
+        assert!(beta.contains("claude-code-20250219"));
+        assert!(beta.contains("effort-2025-11-24"));
+        // And its declared limits match what the API serves Haiku on this tier.
+        assert_eq!(
+            max_output_tokens_for(DEFAULT_ANTHROPIC_SUBAGENT_MODEL),
+            64_000
+        );
+        assert_eq!(
+            context_window_for(DEFAULT_ANTHROPIC_SUBAGENT_MODEL),
+            200_000
+        );
+    }
+
+    #[test]
     fn request_headers_use_fresh_ids() {
-        let first = request_headers();
-        let second = request_headers();
+        let first = request_headers(DEFAULT_ANTHROPIC_MODEL);
+        let second = request_headers(DEFAULT_ANTHROPIC_MODEL);
         assert_ne!(
             first.get("x-client-request-id"),
             second.get("x-client-request-id")

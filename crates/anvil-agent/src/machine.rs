@@ -21,7 +21,9 @@
 
 use std::collections::BTreeMap;
 
-use tongs::model::{AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage};
+use tongs::model::{
+    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
+};
 use tongs::tools::{ToolEffects, ToolOutput};
 
 /// An observability event the machine emits as data (the shell renders/records
@@ -53,6 +55,10 @@ pub enum AgentEvent {
     ToolEnd { id: String, is_error: bool },
     /// Steering messages were injected at a turn boundary.
     Steered { count: usize },
+    /// A model call failed (transport/API error or stall). Emitted by the shell
+    /// for observability before the failure is folded into the loop; carries the
+    /// human-readable reason and whether a retry will be attempted.
+    ModelCallFailed { reason: String, will_retry: bool },
     /// The agent run ended (with the reason it stopped).
     AgentEnd { reason: AgentStop },
 }

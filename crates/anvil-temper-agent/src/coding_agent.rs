@@ -422,8 +422,21 @@ fn add_investigate_subagent(
     totals: &std::sync::Arc<crate::usage::UsageTotals>,
 ) -> ToolRegistry {
     // Capture what the nested sub-agent needs. The factory runs per call.
-    let provider_config = provider_config.clone();
-    let stream_options = stream_options.clone();
+    // Sub-agents run on the provider's sub-agent model tier (a cheaper/faster
+    // model than the main agent where the provider has one — e.g. Haiku under
+    // Anthropic OAuth), since their product is a focused report rather than the
+    // final deliverable and they dominate token spend on a large fan-out. This
+    // mirrors Claude Code routing its investigation sub-agents to a smaller
+    // model while the orchestrator stays on the larger one.
+    let provider_config = provider_config.with_model_id(provider_config.subagent_model_id());
+    // Reuse the parent's resolved bearer and per-request options, but rebuild the
+    // model-dependent headers for the sub-agent's model: the parent's
+    // `stream_options` carried headers computed for the *main* model (e.g. the
+    // 1M-context beta), which a smaller sub-agent model is not entitled to and
+    // would 400 on. The bearer is shared across models on the same provider, so
+    // only the headers need to change.
+    let mut stream_options = stream_options.clone();
+    stream_options.headers = provider_config.request_headers();
     let cwd = cwd.to_path_buf();
     let factory: anvil_agent::SubAgentFactory = std::sync::Arc::new(move |task: String| {
         // Build a fresh provider for the nested run (cheap; reuses the resolved
@@ -440,7 +453,12 @@ fn add_investigate_subagent(
                 create_grep_tool(&cwd),
                 create_find_tool(&cwd),
             ]),
-            max_iterations: 12,
+            // The sub-agent tier runs a smaller, less per-turn-efficient model
+            // (e.g. Haiku), which takes more, smaller steps to cover the same
+            // ground than the main model would — 12 was sized for the main model
+            // and left Haiku investigations truncated (BudgetExhausted). 24 lets
+            // a thorough single-subsystem investigation finish.
+            max_iterations: 24,
             provider,
             stream_options: stream_options.clone(),
         }

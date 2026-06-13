@@ -35,7 +35,8 @@ impl UsageTotals {
     fn add_turn(&self, scope: &str, usage: &Usage) {
         self.input.fetch_add(usage.input, Ordering::Relaxed);
         self.output.fetch_add(usage.output, Ordering::Relaxed);
-        self.cache_read.fetch_add(usage.cache_read, Ordering::Relaxed);
+        self.cache_read
+            .fetch_add(usage.cache_read, Ordering::Relaxed);
         self.cache_write
             .fetch_add(usage.cache_write, Ordering::Relaxed);
         self.turns.fetch_add(1, Ordering::Relaxed);
@@ -116,6 +117,19 @@ impl EventSink for UsageLogger {
                     StructuredEvent::new("tool_error")
                         .str("scope", &self.scope)
                         .str("id", &id)
+                        .render()
+                );
+            }
+            AgentEvent::ModelCallFailed { reason, will_retry } => {
+                eprintln!(
+                    "{}",
+                    StructuredEvent::new("model_call_failed")
+                        .str("scope", &self.scope)
+                        .bool("will_retry", will_retry)
+                        .str(
+                            "reason",
+                            crate::observability::redacted_preview(&reason, 300),
+                        )
                         .render()
                 );
             }

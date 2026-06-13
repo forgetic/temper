@@ -192,6 +192,21 @@ pub async fn sleep_for(duration: std::time::Duration) {
     skein::time::sleep(engine_now(), duration).await;
 }
 
+/// Run `future` with a `duration` deadline on the engine-timer clock, returning
+/// `Err(Elapsed)` if it does not finish in time.
+///
+/// This is the liveness guard the shell uses around model-stream awaits: skein's
+/// HTTP path has no socket read timeout, so without this a stalled provider
+/// connection would block a task — and, in a parallel sub-agent fan-out, the
+/// whole batch — indefinitely. The deadline is computed against
+/// [`engine_now`] so it fires on the same clock the runtime arms timers on.
+pub async fn timeout<F: std::future::Future>(
+    duration: std::time::Duration,
+    future: F,
+) -> Result<F::Output, skein::time::Elapsed> {
+    skein::time::timeout(engine_now(), duration, Box::pin(future)).await
+}
+
 /// The ambient capability context of the current skein task.
 ///
 /// The scheduler installs each task's `Cx` while polling it, so this is
