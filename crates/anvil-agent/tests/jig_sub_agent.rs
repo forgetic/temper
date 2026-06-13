@@ -376,7 +376,7 @@ fn sub_agent_can_be_aborted_mid_run() {
         .expect("build controllable run");
 
         // Abort from a sibling task after letting the run get going.
-        let handle = skein::runtime::Runtime::current_handle().expect("handle");
+        let handle = anvil_io_engine::current_handle().expect("handle");
         handle.spawn_with_cx(move |cx| async move {
             // Let a couple of turns happen first (virtual time).
             skein::time::sleep(

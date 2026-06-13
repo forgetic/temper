@@ -143,7 +143,7 @@ fn run_leg(
         return;
     };
 
-    // The recorder runs on its own tokio thread (jig-record is tokio-based);
+    // The recorder runs on its own thread with a jig-runtime (skein) loop;
     // the decision itself runs on anvil's skein engine runtime.
     let recorder = start_recorder(upstream_host_override).expect("start jig recorder");
     let provider = provider.with_base_url_override(recorder.base_url.clone());
@@ -189,15 +189,11 @@ fn start_recorder(upstream_host_override: Option<&'static str>) -> io::Result<Re
     let (tx, rx) = mpsc::channel();
     let (capture_tx, capture) = mpsc::channel();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime for jig recorder");
-        let outcome = runtime.block_on(async move {
-            let listener = bind().await?;
+        let outcome = jig_runtime::block_on(move |cx| async move {
+            let listener = bind(&cx).await?;
             tx.send(listener.local_addr()?)
                 .expect("send recorder address");
-            proxy_once(&listener, upstream_host_override).await
+            proxy_once(&cx, &listener, upstream_host_override).await
         });
         let _ = capture_tx.send(outcome);
     });

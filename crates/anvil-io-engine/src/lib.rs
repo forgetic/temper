@@ -56,7 +56,7 @@ pub use http_client::{HttpCall, HttpCallResult, HttpResponseData, build_http_cli
 pub use machine::{EngineTime, Machine};
 pub use queue::{CqReceiver, CqSender, OneshotReceiver, OneshotSender, channel, oneshot};
 pub use runtime::{
-    EngineRuntime, block_on, block_on_runtime, build_runtime, current_cx, engine_now, sleep_for,
-    timer_now,
+    EngineRuntime, block_on, block_on_runtime, build_runtime, current_cx, current_handle,
+    engine_now, sleep_for, timer_now,
 };
 pub use timer::arm_timer;

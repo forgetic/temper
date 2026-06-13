@@ -1,15 +1,59 @@
 //! Runtime bootstrap helpers for engine binaries and tests.
 
+use std::cell::RefCell;
 use std::future::Future;
 
 use skein::cx::Cx;
 use skein::runtime::reactor::create_reactor;
 use skein::runtime::{Runtime, RuntimeBuilder, RuntimeHandle};
 
+/// Shared, clearable slot holding the runtime handle for [`current_handle`].
+///
+/// `Mutex<Option<…>>` rather than `OnceLock` so [`EngineRuntime`]'s `Drop` can
+/// clear it: the slot is captured by the runtime's `on_thread_start` callback
+/// (stored in the runtime config), so a handle left inside would form an
+/// `Arc` cycle that keeps the runtime alive forever.
+type HandleSlot = std::sync::Arc<std::sync::Mutex<Option<RuntimeHandle>>>;
+
+thread_local! {
+    /// Ambient engine-runtime handle slot for the current thread.
+    ///
+    /// skein deliberately dropped `Runtime::current_handle()` from its public
+    /// API (consumers must thread handles explicitly); anvil's engine layer
+    /// reinstates the ambient handle *for itself only*: [`build_runtime`]
+    /// registers an `on_thread_start` callback that installs this slot on
+    /// every thread the runtime drives (workers and `block_on` callers), and
+    /// fills the slot with the handle once the runtime exists. Any code polled
+    /// on the engine (shells spawning sub-agent tasks) can then recover the
+    /// handle via [`current_handle`]. Lab-runtime tasks never pass through
+    /// these entry points, so the handle stays absent there — the lab harness
+    /// keeps its explicit Spawner seam.
+    static CURRENT_HANDLE_SLOT: RefCell<Option<HandleSlot>> = const { RefCell::new(None) };
+}
+
+/// The engine-runtime handle ambient to the current thread, if any.
+///
+/// Resolves on threads driven by a [`build_runtime`] runtime — worker threads
+/// and `block_on` callers — while that runtime is alive. Returns `None` on
+/// unrelated threads, inside lab-runtime tasks, and after the
+/// [`EngineRuntime`] has been dropped.
+#[must_use]
+pub fn current_handle() -> Option<RuntimeHandle> {
+    CURRENT_HANDLE_SLOT.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).clone())
+    })
+}
+
 /// An skein runtime configured for anvil services: I/O reactor attached
 /// and a small blocking pool for filesystem/git helpers.
 pub struct EngineRuntime {
     runtime: Runtime,
+    /// The ambient-handle slot shared with this runtime's threads (see
+    /// [`current_handle`]); cleared on drop to break the `Arc` cycle through
+    /// the runtime config.
+    handle_slot: HandleSlot,
 }
 
 impl EngineRuntime {
@@ -21,6 +65,15 @@ impl EngineRuntime {
     /// Run a future to completion on the current thread.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.runtime.block_on(future)
+    }
+}
+
+impl Drop for EngineRuntime {
+    fn drop(&mut self) {
+        self.handle_slot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
     }
 }
 
@@ -38,12 +91,27 @@ impl EngineRuntime {
 pub fn build_runtime() -> Result<EngineRuntime, String> {
     let reactor =
         create_reactor().map_err(|error| format!("creating skein reactor failed: {error}"))?;
+    let handle_slot: HandleSlot = std::sync::Arc::default();
+    let thread_slot = std::sync::Arc::clone(&handle_slot);
     let runtime = RuntimeBuilder::current_thread()
         .blocking_threads(1, 4)
         .with_reactor(reactor)
+        .on_thread_start(move || {
+            // Install the ambient-handle slot on every thread this runtime
+            // drives, so `current_handle()` resolves inside engine tasks.
+            let slot = std::sync::Arc::clone(&thread_slot);
+            CURRENT_HANDLE_SLOT.with(|cell| *cell.borrow_mut() = Some(slot));
+        })
         .build()
         .map_err(|error| format!("building skein runtime failed: {error}"))?;
-    Ok(EngineRuntime { runtime })
+    handle_slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .replace(runtime.handle());
+    Ok(EngineRuntime {
+        runtime,
+        handle_slot,
+    })
 }
 
 /// Build a runtime and run one future to completion **as a task**, so the

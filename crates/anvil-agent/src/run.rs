@@ -163,8 +163,7 @@ pub fn run_sub_agent_controllable_with_hook(
     ),
     SubAgentError,
 > {
-    let handle =
-        skein::runtime::Runtime::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
+    let handle = anvil_io_engine::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
 
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools
