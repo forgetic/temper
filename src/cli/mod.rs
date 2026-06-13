@@ -55,10 +55,10 @@ Run `temper <subcommand> --help` for subcommand usage.";
 
 /// Reports a subcommand that exists but was not compiled into this build.
 ///
-/// Only referenced by the `#[cfg(not(feature = ...))]` dispatch arms, so in a
-/// build with every feature on (the default `unified`) it is dead — that is
-/// expected, not a smell.
-#[cfg_attr(feature = "unified", allow(dead_code))]
+/// Only referenced by the `#[cfg(not(feature = ...))]` dispatch arms, so in any
+/// build where all of daemon/worker/agent are present it is dead — that is
+/// expected (the slim single-role builds are the ones that use it), not a smell.
+#[allow(dead_code)]
 fn not_compiled_in(subcommand: &str, feature: &str) -> ExitCode {
     eprintln!(
         "temper: subcommand `{subcommand}` is not available in this build \

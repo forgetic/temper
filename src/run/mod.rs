@@ -14,3 +14,9 @@
 mod transport;
 
 pub use transport::InProcessTransport;
+
+#[cfg(feature = "agent")]
+mod agent_runner;
+
+#[cfg(feature = "agent")]
+pub use agent_runner::InProcessAgentRunner;
