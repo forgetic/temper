@@ -13,8 +13,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult, Poll,
-    Register, ReleaseDisposition, RepoOutcome, ResultStatus, WorkerProtocolMessage,
-    WORKER_PROTOCOL_VERSION,
+    Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus, WorkerProtocolMessage,
+    WorkspaceManifest, WorkspaceRepo, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{
@@ -297,6 +297,45 @@ fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             workspace: None,
             action: None,
             checkout_capability: None,
+            allowed_verdicts: Vec::new(),
+        },
+    )
+}
+
+fn writable_repo(repo: &str, branch: &str) -> WorkspaceRepo {
+    let dir = repo.rsplit('/').next().unwrap_or(repo).to_string();
+    WorkspaceRepo {
+        repo: repo.to_string(),
+        dir,
+        access: RepoAccess::Writable,
+        default_branch: "main".to_string(),
+        base_branch: "main".to_string(),
+        branch_hint: Some(branch.to_string()),
+    }
+}
+
+fn coordinated_in_flight_job(
+    primary_path: &str,
+    number: ItemNumber,
+    coordination_key: &str,
+    repos: Vec<WorkspaceRepo>,
+) -> InFlightJob {
+    job_for_context(
+        primary_path,
+        number,
+        "issue",
+        JobContext {
+            role: "engineer".to_string(),
+            repo: primary_path.to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            artifact: None,
+            workspace: Some(WorkspaceManifest {
+                coordination_key: coordination_key.to_string(),
+                repos,
+            }),
+            action: None,
+            checkout_capability: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),
         },
     )
@@ -1509,6 +1548,106 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
         );
 
         assert_pull_request_count_stays(&cx, &forge, &repo, 1).await;
+    })
+}
+
+#[test]
+fn coordinated_result_opens_one_pull_request_per_writable_repo() {
+    temper_io_engine::block_on_with(move |_cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        // Primary (home of the coordinating issue) + a second writable repo.
+        let primary = create_repo(&forge, "acme", "service", "main").await;
+        let secondary = create_repo(&forge, "acme", "lib", "main").await;
+        let issue = create_ready_issue(&forge, &primary).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+
+        let coordination_key = format!("coord-for-code-{}", issue.get());
+        let branch = format!("agent/{coordination_key}");
+        let job = coordinated_in_flight_job(
+            "acme/service",
+            issue,
+            &coordination_key,
+            vec![
+                writable_repo("acme/service", &branch),
+                writable_repo("acme/lib", &branch),
+            ],
+        );
+        let result = JobResult {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: "worker-a".to_string(),
+            job_id: job.job_id.clone(),
+            status: ResultStatus::Success,
+            repos: vec![
+                RepoOutcome {
+                    repo: "acme/service".to_string(),
+                    branch: Branch {
+                        name: branch.clone(),
+                        head_sha: "aaa111".to_string(),
+                    },
+                },
+                RepoOutcome {
+                    repo: "acme/lib".to_string(),
+                    branch: Branch {
+                        name: branch.clone(),
+                        head_sha: "bbb222".to_string(),
+                    },
+                },
+            ],
+            verdict: None,
+            body: None,
+            children: Vec::new(),
+            failure: None,
+            summary: Some("coordinated cross-repo change".to_string()),
+            details: None,
+        };
+
+        applier.apply(job, result).await;
+
+        // The primary repo's PR links back to the coordinating issue with a
+        // bare same-repo ref, and carries the shared coordination key.
+        let primary_pulls = forge
+            .list_pull_requests(&primary, PullRequestQuery::default())
+            .await
+            .expect("list primary pull requests");
+        assert_eq!(primary_pulls.len(), 1, "one PR opened in the primary repo");
+        let primary_pull = &primary_pulls[0];
+        assert_eq!(primary_pull.source.branch, branch);
+        assert_eq!(primary_pull.target.branch, "main");
+        let primary_meta = parse_metadata_block(&primary_pull.body)
+            .expect("primary PR metadata parses")
+            .expect("primary PR metadata exists");
+        assert_eq!(primary_meta.parents, vec![ArtifactRef::same_repo(issue)]);
+        assert_eq!(
+            primary_meta.correlation_key.as_deref(),
+            Some(coordination_key.as_str())
+        );
+
+        // The secondary repo's PR links to the SAME coordinating issue, but
+        // repo-qualified to the primary repo — the cross-repo backref.
+        let secondary_pulls = forge
+            .list_pull_requests(&secondary, PullRequestQuery::default())
+            .await
+            .expect("list secondary pull requests");
+        assert_eq!(
+            secondary_pulls.len(),
+            1,
+            "one PR opened in the secondary repo"
+        );
+        let secondary_pull = &secondary_pulls[0];
+        assert_eq!(secondary_pull.source.branch, branch);
+        assert_eq!(secondary_pull.target.repository_id, secondary);
+        let secondary_meta = parse_metadata_block(&secondary_pull.body)
+            .expect("secondary PR metadata parses")
+            .expect("secondary PR metadata exists");
+        assert_eq!(
+            secondary_meta.parents,
+            vec![ArtifactRef::in_repo(primary.clone(), issue)]
+        );
+        assert_eq!(
+            secondary_meta.correlation_key.as_deref(),
+            Some(coordination_key.as_str())
+        );
     })
 }
 
