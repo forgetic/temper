@@ -239,6 +239,11 @@
       "target": "code"
     },
     {
+      "kind": "dependency",
+      "source": "implementation_pr",
+      "target": "implementation_pr"
+    },
+    {
       "kind": "produced_pr",
       "source": "implementation_pr",
       "target": "code"

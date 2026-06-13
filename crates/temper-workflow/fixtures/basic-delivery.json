@@ -111,6 +111,11 @@
       "kind": "produced_pr",
       "source": "implementation_pr",
       "target": "code"
+    },
+    {
+      "kind": "dependency",
+      "source": "implementation_pr",
+      "target": "implementation_pr"
     }
   ],
   "state_dimensions": [

@@ -123,7 +123,9 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.queues().len(), 13);
     assert_eq!(workflow.transitions().len(), 33);
     assert_eq!(workflow.gates().len(), 3);
-    assert_eq!(workflow.relations().len(), 5);
+    // +1: implementation_pr -> implementation_pr dependency, for coordinated
+    // serial landing (ADR 0023).
+    assert_eq!(workflow.relations().len(), 6);
     assert!(workflow
         .transitions()
         .iter()
