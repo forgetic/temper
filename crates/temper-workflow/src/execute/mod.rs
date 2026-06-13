@@ -375,6 +375,13 @@ enum Loaded {
         /// Whether the freshly loaded pull request is already merged. Lets the
         /// merge effect be at-most-once: an already-merged target is skipped.
         merged: bool,
+        /// Whether the pull request is in a terminal Forge state (merged or
+        /// closed). CI status is meaningless for a terminal PR — no CI-gated
+        /// transition can fire — so the (expensive) CI read is skipped for it
+        /// (see [`Executor::gate_signals`]). A merged/closed PR still carrying a
+        /// workflow label is pulled into bounded reconciliation, so without this
+        /// guard every historical PR's CI is re-read on every mechanical tick.
+        terminal: bool,
         /// Head commit SHA, when the backend records one. Scopes the CI signal
         /// to the pull request's head commit (see [`Executor::gate_signals`]).
         head_sha: Option<String>,
@@ -526,6 +533,10 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     .await?
                     .ok_or(ExecutionError::TargetMissing { target })?;
                 let merged = matches!(pull_request.state, PullRequestState::Merged);
+                let terminal = matches!(
+                    pull_request.state,
+                    PullRequestState::Merged | PullRequestState::Closed
+                );
                 let head_sha = pull_request.head_sha.clone();
                 let requested_reviewers = pull_request.requested_reviewers.clone();
                 let classified = classifier
@@ -534,6 +545,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                 Ok(Loaded::PullRequest {
                     id: pull_request.id,
                     merged,
+                    terminal,
                     head_sha,
                     requested_reviewers,
                     classified,

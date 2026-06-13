@@ -47,6 +47,18 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         needs: SignalNeeds,
     ) -> Result<(ClassifiedArtifact, GateSignals), ExecutionError> {
         let loaded = self.load(repo_id, target).await?;
+        // Scan-phase optimization: a terminal (merged/closed) pull request cannot
+        // fire a CI-gated transition, so its CI status is irrelevant here. Drop
+        // the CI need before reading — this is the dominant idle cost, since
+        // historical PRs keep their workflow labels and are re-listed as
+        // reconciliation candidates every mechanical tick, each triggering an
+        // expensive web-UI CI read (ADR 0019). This narrows ONLY the scanner's
+        // read; `execute`/`plan` still read CI for terminal targets so the merge
+        // effect's own stale/closed detection is unchanged.
+        let needs = match &loaded {
+            Loaded::PullRequest { terminal: true, .. } => SignalNeeds { ci: false, ..needs },
+            _ => needs,
+        };
         let signals = self
             .gate_signals_with_needs(repo_id, &loaded, needs)
             .await?;
