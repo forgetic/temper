@@ -1281,6 +1281,7 @@ fn repo_dir(repo_path: &str) -> String {
 struct WorkspaceRepoDecl {
     repo: String,
     access: RepoAccess,
+    depends_on: Vec<String>,
 }
 
 /// Parses an optional `temper:workspace` metadata block from an issue body:
@@ -1288,12 +1289,14 @@ struct WorkspaceRepoDecl {
 /// ```text
 /// <!-- temper:workspace
 /// {"repos":[{"repo":"ai/temper","access":"writable"},
+///           {"repo":"ai/smith","access":"writable","depends_on":["ai/temper"]},
 ///           {"repo":"ai/skein","access":"read_only"}]}
 /// -->
 /// ```
 ///
-/// Returns `None` when no (well-formed) block is present, in which case the job
-/// gets a degenerate single-repo manifest.
+/// `depends_on` lists other repos whose PR must land first (coordinated landing
+/// order). Returns `None` when no (well-formed) block is present, in which case
+/// the job gets a degenerate single-repo manifest.
 fn parse_workspace_decl(body: &str) -> Option<Vec<WorkspaceRepoDecl>> {
     const OPEN: &str = "<!-- temper:workspace";
     let start = body.find(OPEN)?;
@@ -1310,7 +1313,20 @@ fn parse_workspace_decl(body: &str) -> Option<Vec<WorkspaceRepoDecl>> {
             Some("read_only") => RepoAccess::ReadOnly,
             _ => RepoAccess::Writable,
         };
-        decls.push(WorkspaceRepoDecl { repo, access });
+        let depends_on = entry
+            .get("depends_on")
+            .and_then(serde_json::Value::as_array)
+            .map(|deps| {
+                deps.iter()
+                    .filter_map(|dep| dep.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        decls.push(WorkspaceRepoDecl {
+            repo,
+            access,
+            depends_on,
+        });
     }
     Some(decls)
 }
@@ -1335,12 +1351,17 @@ async fn build_workspace_manifest<F: Forge + ?Sized>(
         default_branch: primary_base.clone(),
         base_branch: primary_base,
         branch_hint: Some(branch_hint.to_string()),
+        // The primary's landing order is taken from its own declaration entry,
+        // applied below.
+        depends_on: Vec::new(),
     }];
 
     for decl in declared.into_iter().flatten() {
         // The primary is always present (and writable) regardless of how the
-        // declaration lists it; skip a redundant self-entry.
+        // declaration lists it; fold its declared landing order onto the
+        // existing primary entry rather than adding a duplicate.
         if decl.repo == primary_path {
+            repos[0].depends_on = decl.depends_on;
             continue;
         }
         let Some((owner, name)) = decl.repo.split_once('/') else {
@@ -1370,6 +1391,7 @@ async fn build_workspace_manifest<F: Forge + ?Sized>(
             default_branch: base.clone(),
             base_branch: base,
             branch_hint,
+            depends_on: decl.depends_on,
         });
     }
 

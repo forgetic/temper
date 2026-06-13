@@ -311,6 +311,7 @@ fn writable_repo(repo: &str, branch: &str) -> WorkspaceRepo {
         default_branch: "main".to_string(),
         base_branch: "main".to_string(),
         branch_hint: Some(branch.to_string()),
+        depends_on: Vec::new(),
     }
 }
 
