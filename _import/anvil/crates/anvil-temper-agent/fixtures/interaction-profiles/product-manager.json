@@ -1,0 +1,9 @@
+{
+  "profile_id": "product-manager",
+  "system_prompt": { "path": "../../src/prompts/product_manager.md" },
+  "required_context": ["repository"],
+  "allowed_proposal_kinds": [
+    { "id": "issue", "payload": "issue_draft" }
+  ],
+  "response_format": "conversation_reply_v1"
+}

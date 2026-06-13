@@ -1,0 +1,33 @@
+[package]
+name = "anvil-temper-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Temper-specific provider/auth/decision core for anvil agents."
+
+[dependencies]
+smith-agent-protocol = { path = "../../../smith/crates/smith-agent-protocol" }
+tongs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anvil-agent = { path = "../anvil-agent" }
+temper-process-protocol = { path = "../../../temper/crates/temper-process-protocol" }
+uuid.workspace = true
+
+[features]
+default = []
+test-provider-base-url-override = []
+
+[dev-dependencies]
+anvil-temper-agent = { path = ".", features = ["test-provider-base-url-override"] }
+anvil-io-engine = { path = "../anvil-io-engine" }
+jig-server = { path = "../../../jig/crates/jig-server" }
+jig-core = { path = "../../../jig/crates/jig-core" }
+jig-record = { path = "../../../jig/crates/jig-record" }
+# Test-only: the jig-record request oracle runs its recorder on a jig-runtime
+# (skein) thread.
+jig-runtime = { path = "../../../jig/crates/jig-runtime" }
+
+[lints]
+workspace = true

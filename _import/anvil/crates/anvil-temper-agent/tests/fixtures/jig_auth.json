@@ -1,0 +1,15 @@
+{
+  "anthropic": {
+    "type": "oauth",
+    "access": "jig-dummy",
+    "refresh": "jig-dummy",
+    "expires": 9999999999999
+  },
+  "openai-codex": {
+    "type": "oauth",
+    "access": "eyJhbGciOiAibm9uZSJ9.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOiB7ImNoYXRncHRfYWNjb3VudF9pZCI6ICJhY2N0X2ppZyJ9fQ.",
+    "refresh": "jig-dummy",
+    "accountId": "acct_jig",
+    "expires": 9999999999999
+  }
+}
