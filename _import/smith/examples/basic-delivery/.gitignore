@@ -1,0 +1,6 @@
+# Runtime artifacts the launch script (run.sh) creates. The tracked scaffold is
+# config/, tools/, secrets/*.example, secrets/.gitignore, this file, and README.
+/run/
+/logs/
+*.pid
+*.log

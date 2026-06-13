@@ -1,0 +1,32 @@
+#!/bin/sh
+# smith-worker-launcher — systemd ExecStart shim for the consolidated Smith
+# worker tier. The worker resolves per-role git identities directly from the
+# TEMPER_FORGEJO_{USER,TOKEN}_<ROLE> vars provisioning wrote into roles.env
+# (role_identities_from_env), so no remapping is required: this shim just
+# turns the no-secrets smith.env knobs into argv and execs smith-worker.
+set -eu
+
+set -- --daemon-url "${WORKER_DAEMON_URL:-http://127.0.0.1:8080}" \
+       --worker-id "${WORKER_ID:-smith-worker-1}" \
+       --executor coding \
+       --workspace-root "${WORKER_WORKSPACE_ROOT:-$HOME/.local/state/smith/worker}" \
+       --git-base-url "${BASE_URL:?BASE_URL not set (smith.env)}" \
+       --agent-command anvil-native \
+       --agent-arg --agent-program --agent-arg "$HOME/.local/bin/anvil-agent"
+for _capability in ${WORKER_CAPABILITIES:?WORKER_CAPABILITIES not set (smith.env)}; do
+    set -- "$@" --capability "$_capability"
+done
+for _agent_arg in ${ANVIL_AGENT_ARGS:-}; do
+    set -- "$@" --agent-arg "$_agent_arg"
+done
+if [ -n "${WORKER_MAX_CONCURRENT:-}" ]; then
+    set -- "$@" --max-concurrent "$WORKER_MAX_CONCURRENT"
+fi
+if [ -n "${WORKER_POLL_WAIT_MS:-}" ]; then
+    set -- "$@" --poll-wait-ms "$WORKER_POLL_WAIT_MS"
+fi
+if [ -n "${WORKER_HEARTBEAT_INTERVAL_MS:-}" ]; then
+    set -- "$@" --heartbeat-interval-ms "$WORKER_HEARTBEAT_INTERVAL_MS"
+fi
+
+exec "$HOME/.local/bin/smith-worker" "$@"
