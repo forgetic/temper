@@ -284,13 +284,11 @@ fn branch_side(pr_repo: &RepoCoord, branch: Option<PrBranchDto>) -> (BranchRef, 
 
 /// Resolves a repository coordinate from an embedded branch repo DTO.
 fn repo_coord_from_dto(dto: PrRepoDto) -> Option<RepoCoord> {
-    if let Some(full_name) = dto.full_name.filter(|name| !name.is_empty()) {
-        if let Some((owner, name)) = full_name.split_once('/') {
-            if !owner.is_empty() && !name.is_empty() && !name.contains('/') {
+    if let Some(full_name) = dto.full_name.filter(|name| !name.is_empty())
+        && let Some((owner, name)) = full_name.split_once('/')
+            && !owner.is_empty() && !name.is_empty() && !name.contains('/') {
                 return Some(RepoCoord::new(owner, name));
             }
-        }
-    }
     let owner = dto.owner.map(|user| user.login).filter(|o| !o.is_empty())?;
     let name = dto.name.filter(|name| !name.is_empty())?;
     Some(RepoCoord::new(owner, name))

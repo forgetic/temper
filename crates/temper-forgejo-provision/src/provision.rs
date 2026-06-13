@@ -519,11 +519,10 @@ pub fn format_secrets_env(provisioned: &Provisioned) -> String {
 }
 
 pub fn write_secrets_file(path: &Path, contents: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
-    }
     std::fs::write(path, contents)?;
     restrict_permissions(path)?;
     Ok(())

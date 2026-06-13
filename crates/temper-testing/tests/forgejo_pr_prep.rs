@@ -157,13 +157,11 @@ async fn poll_mergeable(
 ) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if let Ok(resp) = client.send("GET", pr_url, Some(token), None).await {
-            if let Ok(body) = serde_json::from_slice::<Value>(&resp.body) {
-                if body["mergeable"].as_bool() == Some(true) {
+        if let Ok(resp) = client.send("GET", pr_url, Some(token), None).await
+            && let Ok(body) = serde_json::from_slice::<Value>(&resp.body)
+                && body["mergeable"].as_bool() == Some(true) {
                     return true;
                 }
-            }
-        }
         if std::time::Instant::now() >= deadline {
             return false;
         }

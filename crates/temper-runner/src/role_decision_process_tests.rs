@@ -320,9 +320,11 @@ fi
 "#,
         vec![request_path.to_string_lossy().into_owned()],
     )
-    .with_env_allowlist(["TEMPER_RUNNER_ROLE_DECISION_ALLOWED"]);
-        std::env::set_var("TEMPER_RUNNER_ROLE_DECISION_ALLOWED", "allowed-value");
-        std::env::set_var("TEMPER_RUNNER_ROLE_DECISION_BLOCKED", "blocked-value");
+    // The config carries resolved name→value pairs; only the allowed var is
+    // forwarded. The blocked var is intentionally absent, proving the adapter
+    // forwards exactly the configured environment and reads no ambient process
+    // environment of its own.
+    .with_env([("TEMPER_RUNNER_ROLE_DECISION_ALLOWED", "allowed-value")]);
         let agent = WorkflowRoleDecisionProcessAgent::with_bound_external_tools(
             cx.clone(),
             "generic-agent-test",
@@ -375,8 +377,6 @@ fi
             captured.available_external_tools[0].provider,
             "workspace-local"
         );
-        std::env::remove_var("TEMPER_RUNNER_ROLE_DECISION_ALLOWED");
-        std::env::remove_var("TEMPER_RUNNER_ROLE_DECISION_BLOCKED");
     })
 }
 

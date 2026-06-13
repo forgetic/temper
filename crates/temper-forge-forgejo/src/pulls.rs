@@ -193,15 +193,14 @@ impl<C: HttpClient> ForgejoForge<C> {
 
         // Forgejo rejects re-requesting an already-requested reviewer. Treat the
         // call as idempotent when the desired reviewers are already present.
-        if let Some(pull) = self.fetch_pull_request(&repo, number).await? {
-            if input
+        if let Some(pull) = self.fetch_pull_request(&repo, number).await?
+            && input
                 .reviewers
                 .iter()
                 .all(|reviewer| pull.requested_reviewers.contains(reviewer))
             {
                 return Ok(pull);
             }
-        }
         Err(crate::error::map_status_error(
             "request reviewers",
             &response,

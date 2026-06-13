@@ -137,7 +137,7 @@ pub fn matches_queue_condition<Q: QueueQuery + ?Sized>(
     signals: &GateSignals,
 ) -> bool {
     let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
-    query.queue_condition().map_or(true, |condition| {
+    query.queue_condition().is_none_or(|condition| {
         gate_condition_satisfied(condition, artifact, &labels, signals)
     })
 }

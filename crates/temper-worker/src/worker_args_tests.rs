@@ -63,7 +63,13 @@ fn parses_role_decision_process_flags_and_redacts_debug() {
         ]
         .into_iter()
         .map(String::from),
-        env,
+        |key| match key {
+            FORGEJO_TOKEN_ENV => Some("secret-token".into()),
+            // The allowlisted name resolves to its value at this boundary; the
+            // config then carries the resolved pair, not the bare name.
+            "SMITH_MODEL" => Some("claude-opus".into()),
+            _ => None,
+        },
     )
     .expect("parses");
     let ParseOutcome::Run(args) = outcome else {
@@ -75,7 +81,10 @@ fn parses_role_decision_process_flags_and_redacts_debug() {
         .expect("role decision process");
     assert_eq!(process.program, PathBuf::from("/opt/smith-role-decision"));
     assert_eq!(process.args, vec!["--profile", "engineer"]);
-    assert_eq!(process.env_allowlist, vec!["SMITH_MODEL"]);
+    assert_eq!(
+        process.env,
+        vec![("SMITH_MODEL".to_string(), "claude-opus".to_string())]
+    );
     assert_eq!(process.working_dir, Some(PathBuf::from("/srv/smith")));
     assert_eq!(process.timeout, std::time::Duration::from_secs(5));
     assert!(format!("{args:?}").contains("<configured>"));
@@ -107,6 +116,10 @@ fn parses_role_decision_process_from_env() {
             ROLE_DECISION_ARGS_ENV => Some(r#"["--role","engineer"]"#.into()),
             ROLE_DECISION_ENV_ALLOWLIST_ENV => Some("SMITH_TOKEN,SMITH_MODEL".into()),
             ROLE_DECISION_TIMEOUT_ENV => Some("7".into()),
+            // Allowlisted names resolve to values at this boundary; the config
+            // carries resolved pairs, not bare names.
+            "SMITH_TOKEN" => Some("smith-secret".into()),
+            "SMITH_MODEL" => Some("claude-opus".into()),
             _ => None,
         },
     )
@@ -119,7 +132,13 @@ fn parses_role_decision_process_from_env() {
         .as_ref()
         .expect("role decision process");
     assert_eq!(process.args, vec!["--role", "engineer"]);
-    assert_eq!(process.env_allowlist, vec!["SMITH_TOKEN", "SMITH_MODEL"]);
+    assert_eq!(
+        process.env,
+        vec![
+            ("SMITH_TOKEN".to_string(), "smith-secret".to_string()),
+            ("SMITH_MODEL".to_string(), "claude-opus".to_string()),
+        ]
+    );
     assert_eq!(process.timeout, std::time::Duration::from_secs(7));
 }
 

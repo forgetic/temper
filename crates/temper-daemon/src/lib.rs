@@ -894,7 +894,6 @@ fn verdict_execution_context(
 /// coordinating issue (which may live in another repo) and the shared
 /// `coordination_key` is stamped into the metadata so the set is discoverable.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn coordinated_pr_pull_request_input(
     repo: RepositoryId,
     coordinating: temper_workflow::ArtifactRef,

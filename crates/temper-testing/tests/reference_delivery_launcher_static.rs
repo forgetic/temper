@@ -11,11 +11,10 @@ fn workspace_root() -> PathBuf {
     if let Ok(path) = std::env::current_dir() {
         candidates.push(path);
     }
-    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR") {
-        if !value.is_empty() {
+    if let Some(value) = std::env::var_os("CARGO_MANIFEST_DIR")
+        && !value.is_empty() {
             candidates.push(PathBuf::from(value));
         }
-    }
     candidates
         .into_iter()
         .find_map(|start| {

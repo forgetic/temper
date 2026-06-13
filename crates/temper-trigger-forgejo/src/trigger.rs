@@ -209,8 +209,8 @@ fn wake_sockets(args: &TriggerArgs) -> Vec<(String, std::path::PathBuf)> {
         .iter()
         .map(|socket| (socket.name.clone(), socket.path.clone()))
         .collect();
-    if let Some(dir) = &args.wake_dir {
-        if let Ok(entries) = std::fs::read_dir(dir) {
+    if let Some(dir) = &args.wake_dir
+        && let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|ext| ext.to_str()) == Some("sock") {
@@ -223,7 +223,6 @@ fn wake_sockets(args: &TriggerArgs) -> Vec<(String, std::path::PathBuf)> {
                 }
             }
         }
-    }
     sockets
 }
 
@@ -272,11 +271,9 @@ fn parse_repo(value: &Value) -> Result<RepositoryPath, TriggerError> {
     if let Some(full) = value
         .pointer("/repository/full_name")
         .and_then(Value::as_str)
-    {
-        if let Some((owner, name)) = full.split_once('/') {
+        && let Some((owner, name)) = full.split_once('/') {
             return Ok(RepositoryPath::new(owner, name));
         }
-    }
     let owner = value
         .pointer("/repository/owner/login")
         .or_else(|| value.pointer("/repository/owner/username"))
@@ -330,7 +327,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(raw: &str) -> Option<Vec<u8>> {
-    if raw.len() % 2 != 0 {
+    if !raw.len().is_multiple_of(2) {
         return None;
     }
     raw.as_bytes()

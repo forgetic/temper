@@ -124,12 +124,12 @@ impl Sim {
             || slot.lock().expect("scenario result slot").is_some(),
             max_steps,
         );
-        let value = slot
+        
+        slot
             .lock()
             .expect("scenario result slot")
             .take()
-            .expect("scenario completed");
-        value
+            .expect("scenario completed")
     }
 
     /// Drive the lab until everything parks: no runnable tasks and no pending

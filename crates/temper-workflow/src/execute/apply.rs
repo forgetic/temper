@@ -454,8 +454,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 }
             }
             // Third pass: cross-repo issue fan-out records parent dependency refs.
-            if any_cross_repo {
-                if let ArtifactSource::Issue { number } = target {
+            if any_cross_repo
+                && let ArtifactSource::Issue { number } = target {
                     let parent_issue = self
                         .forge
                         .get_issue_by_number(repo_id, number)
@@ -470,7 +470,6 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                         .await?;
                     }
                 }
-            }
         }
         Ok(())
     }

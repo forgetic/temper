@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -15,7 +16,10 @@ const STDERR_PREVIEW_LIMIT: usize = 4096;
 /// process receives only the allow-listed environment variables configured here;
 /// Forge tokens, Forge handles, workflow tools, and other ambient environment
 /// are not inherited by default.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// `Debug` redacts forwarded environment values (which may be secrets such as
+/// API keys or Forge tokens) while keeping their names visible.
+#[derive(Clone, Eq, PartialEq)]
 pub struct ProcessResponderConfig {
     /// Program to execute.
     pub program: PathBuf,
@@ -23,10 +27,30 @@ pub struct ProcessResponderConfig {
     pub args: Vec<String>,
     /// Optional working directory for the process.
     pub working_dir: Option<PathBuf>,
-    /// Names of environment variables copied from Temper's process.
-    pub env_allowlist: Vec<String>,
+    /// Environment variables forwarded to the subprocess as resolved
+    /// name→value pairs. Values are resolved once at the config/arg boundary;
+    /// this adapter never reads ambient process environment at spawn time.
+    pub env: Vec<(String, String)>,
     /// Maximum wall-clock duration for one responder turn.
     pub timeout: Duration,
+}
+
+impl fmt::Debug for ProcessResponderConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let env_redacted: Vec<(&str, &str)> = self
+            .env
+            .iter()
+            .map(|(name, _value)| (name.as_str(), "<redacted>"))
+            .collect();
+        formatter
+            .debug_struct("ProcessResponderConfig")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("working_dir", &self.working_dir)
+            .field("env", &env_redacted)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl ProcessResponderConfig {
@@ -40,7 +64,7 @@ impl ProcessResponderConfig {
             program: program.into(),
             args: Vec::new(),
             working_dir: None,
-            env_allowlist: Vec::new(),
+            env: Vec::new(),
             timeout: Self::DEFAULT_TIMEOUT,
         }
     }
@@ -61,13 +85,21 @@ impl ProcessResponderConfig {
         self
     }
 
-    /// Replaces the environment-variable allow-list.
-    pub fn with_env_allowlist<I, S>(mut self, names: I) -> Self
+    /// Replaces the forwarded environment with resolved name→value pairs.
+    ///
+    /// Values must be resolved by the caller at the config/arg boundary (where
+    /// process environment is read once); this adapter forwards them verbatim
+    /// and never reads ambient environment itself.
+    pub fn with_env<I, K, V>(mut self, pairs: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
     {
-        self.env_allowlist = names.into_iter().map(Into::into).collect();
+        self.env = pairs
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect();
         self
     }
 
@@ -127,10 +159,8 @@ impl InteractiveResponder for ProcessResponder {
         call.current_dir = self.config.working_dir.clone();
         call.stdin = Some(request_json);
         call.timeout = Some(self.config.timeout);
-        for name in &self.config.env_allowlist {
-            if let Ok(value) = std::env::var(name) {
-                call.env.insert(name.clone(), value);
-            }
+        for (name, value) in &self.config.env {
+            call.env.insert(name.clone(), value.clone());
         }
 
         let output = run_process(&self.cx, call)
@@ -176,7 +206,7 @@ fn validate_config(config: &ProcessResponderConfig) -> Result<(), InteractionErr
             message: "must be greater than zero".into(),
         });
     }
-    for name in &config.env_allowlist {
+    for (name, _value) in &config.env {
         validate_env_name(name)?;
     }
     Ok(())

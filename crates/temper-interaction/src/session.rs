@@ -64,8 +64,8 @@ impl ForgeSessionConfig {
     ) -> Result<Self, InteractionError> {
         for action in &profile.acceptance_actions {
             for effect in &action.effects {
-                if let AcceptanceEffect::CreateIssue(effect) = effect {
-                    if effect
+                if let AcceptanceEffect::CreateIssue(effect) = effect
+                    && effect
                         .labels()
                         .iter()
                         .any(|label| transcript.transcript_labels.contains(label))
@@ -75,7 +75,6 @@ impl ForgeSessionConfig {
                             message: "must differ from transcript labels".into(),
                         });
                     }
-                }
             }
         }
         Ok(Self {

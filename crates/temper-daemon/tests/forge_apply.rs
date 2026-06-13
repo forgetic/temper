@@ -787,7 +787,7 @@ async fn assign_review_job(
         temper_daemon::system_clock(),
     ));
     let daemon = Daemon::with_applier(Arc::new(handle.clone()), applier);
-    let url = spawn(&handle, &daemon).await;
+    let url = spawn(handle, &daemon).await;
     let client = temper_io_engine::http::JsonClient::new();
     let role = RoleId::new("reviewer");
 

@@ -88,7 +88,7 @@ path = "src/bin/temper-interaction.rs"
 workspace = true
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 # skein (the vendored async runtime) uses edition-2024 and let-chains; nothing
 # in temper itself needs more than 1.88.

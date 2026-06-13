@@ -267,25 +267,22 @@ impl<C: HttpClient> GitHubForge<C> {
 /// State and labels are filtered by the provider; body, author, and assignee
 /// are checked here after the provider has already narrowed the result.
 fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
-    if let Some(needle) = &query.body_contains {
-        if !needle.is_empty() && !issue.body.contains(needle) {
+    if let Some(needle) = &query.body_contains
+        && !needle.is_empty() && !issue.body.contains(needle) {
             return false;
         }
-    }
-    if let Some(author) = &query.author_id {
-        if &issue.author_id != author {
+    if let Some(author) = &query.author_id
+        && &issue.author_id != author {
             return false;
         }
-    }
-    if let Some(assignee) = &query.assignee_id {
-        if !issue
+    if let Some(assignee) = &query.assignee_id
+        && !issue
             .assignees
             .iter()
             .any(|candidate| candidate == assignee)
         {
             return false;
         }
-    }
     true
 }
 

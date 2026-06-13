@@ -351,6 +351,15 @@ impl RawRoleDecisionProcessArgs {
         } else {
             self.env_allowlist
         };
+        // Resolve the allowlisted names to values here, at the one boundary that
+        // reads process environment. The subprocess adapter forwards these
+        // resolved pairs verbatim and never touches ambient environment itself.
+        // A name with no value present (or empty) is dropped, matching the old
+        // skip-on-absent behavior.
+        let env_pairs: Vec<(String, String)> = env_allowlist
+            .into_iter()
+            .filter_map(|name| env(&name).map(|value| (name, value)))
+            .collect();
         let timeout_secs = match self
             .timeout_secs
             .or_else(|| non_empty_env(env, ROLE_DECISION_TIMEOUT_ENV))
@@ -360,7 +369,7 @@ impl RawRoleDecisionProcessArgs {
         };
         let mut config = WorkflowRoleDecisionProcessConfig::new(command)
             .with_args(args)
-            .with_env_allowlist(env_allowlist)
+            .with_env(env_pairs)
             .with_timeout(StdDuration::from_secs(timeout_secs));
         if let Some(cwd) = cwd {
             config = config.with_working_dir(cwd);

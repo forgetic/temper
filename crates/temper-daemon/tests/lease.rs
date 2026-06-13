@@ -149,7 +149,7 @@ fn lease_won_inner_applied_then_lease_released() {
             .expect("lease is present while inner apply runs");
         assert_eq!(observed_lease.worker, "daemon-1");
         assert_eq!(observed_lease.role, RoleId::new("engineer"));
-        assert!(matches!(lease_rx.try_recv(), None));
+        assert!(lease_rx.try_recv().is_none());
 
         let issue = forge
             .get_issue_by_number(&repo, issue)

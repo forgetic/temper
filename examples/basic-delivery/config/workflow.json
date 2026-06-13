@@ -111,6 +111,11 @@
       "kind": "produced_pr",
       "source": "implementation_pr",
       "target": "code"
+    },
+    {
+      "kind": "dependency",
+      "source": "implementation_pr",
+      "target": "implementation_pr"
     }
   ],
   "state_dimensions": [
@@ -289,7 +294,8 @@
         "mechanical"
       ],
       "requires_gates": [
-        "ci_gate"
+        "ci_gate",
+        "dependency_gate"
       ],
       "effects": [
         {
@@ -307,6 +313,12 @@
       "id": "ci_gate",
       "condition": {
         "kind": "ci_passed"
+      }
+    },
+    {
+      "id": "dependency_gate",
+      "condition": {
+        "kind": "dependencies_resolved"
       }
     }
   ]

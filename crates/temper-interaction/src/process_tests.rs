@@ -42,15 +42,10 @@ fi
 "#,
     )
     .expect("script writes");
-        std::env::set_var(
-            "TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_ALLOWED",
-            "allowed-value",
-        );
-        std::env::set_var(
-            "TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_BLOCKED",
-            "blocked-value",
-        );
-
+        // The config carries resolved name→value pairs; only the allowed var is
+        // forwarded. The blocked var is intentionally NOT placed on the config,
+        // proving the adapter forwards exactly the configured environment and
+        // reads no ambient process environment of its own.
         let responder = ProcessResponder::new(
             cx.clone(),
             ProcessResponderConfig::new("/bin/sh")
@@ -58,7 +53,10 @@ fi
                     script_path.to_string_lossy().into_owned(),
                     request_path.to_string_lossy().into_owned(),
                 ])
-                .with_env_allowlist(["TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_ALLOWED"])
+                .with_env([(
+                    "TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_ALLOWED",
+                    "allowed-value",
+                )])
                 .with_timeout(Duration::from_secs(2)),
         )
         .expect("config validates");
@@ -69,8 +67,6 @@ fi
             serde_json::from_str(&fs::read_to_string(&request_path).expect("request was captured"))
                 .expect("captured request parses");
         assert_eq!(captured, basic_request());
-        std::env::remove_var("TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_ALLOWED");
-        std::env::remove_var("TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_BLOCKED");
         let _ = fs::remove_file(request_path);
         let _ = fs::remove_file(script_path);
     })

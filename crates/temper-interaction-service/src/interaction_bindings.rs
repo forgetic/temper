@@ -234,7 +234,8 @@ where
                 "profile `{profile_id}` is bound but not declared in the interaction spec"
             ))
         })?;
-        let responder = responder_for(cx, &manifest.responder.id, bindings, &mut responders)?;
+        let responder =
+            responder_for(cx, &manifest.responder.id, bindings, &mut responders, &env)?;
         let human_token = require_env(&env, &binding.human_token_env)?;
         let agent_token = require_env(&env, &binding.agent_token_env)?;
         profiles.push(InteractionProfileRuntime {
@@ -258,12 +259,16 @@ where
     .map_err(Into::into)
 }
 
-fn responder_for(
+fn responder_for<E>(
     cx: &temper_io_engine::Cx,
     responder_id: &ResponderId,
     bindings: &InteractionDeploymentBindings,
     cache: &mut BTreeMap<ResponderId, Arc<dyn InteractiveResponder>>,
-) -> Result<Arc<dyn InteractiveResponder>, InteractionDeploymentError> {
+    env: &E,
+) -> Result<Arc<dyn InteractiveResponder>, InteractionDeploymentError>
+where
+    E: Fn(&str) -> Option<String>,
+{
     if let Some(responder) = cache.get(responder_id) {
         return Ok(Arc::clone(responder));
     }
@@ -279,15 +284,19 @@ fn responder_for(
                 responder_id
             ))
         })?;
-    let responder = Arc::new(ProcessResponder::new(cx.clone(), process_config(binding)?)?)
+    let responder = Arc::new(ProcessResponder::new(cx.clone(), process_config(binding, env)?)?)
         as Arc<dyn InteractiveResponder>;
     cache.insert(responder_id.clone(), Arc::clone(&responder));
     Ok(responder)
 }
 
-fn process_config(
+fn process_config<E>(
     binding: &ProcessResponderBinding,
-) -> Result<ProcessResponderConfig, InteractionDeploymentError> {
+    env: &E,
+) -> Result<ProcessResponderConfig, InteractionDeploymentError>
+where
+    E: Fn(&str) -> Option<String>,
+{
     let timeout_secs = binding
         .timeout_secs
         .unwrap_or(ProcessResponderConfig::DEFAULT_TIMEOUT.as_secs());
@@ -296,9 +305,18 @@ fn process_config(
             "responder timeout_secs must be positive",
         ));
     }
+    // Resolve the allowlisted names to values here, where process environment
+    // is read once. The responder adapter forwards these resolved pairs and
+    // never reads ambient environment at spawn time. A name with no value
+    // present is dropped, matching the prior skip-on-absent behavior.
+    let env_pairs: Vec<(String, String)> = binding
+        .env_allowlist
+        .iter()
+        .filter_map(|name| env(name).map(|value| (name.clone(), value)))
+        .collect();
     let mut config = ProcessResponderConfig::new(binding.command.clone())
         .with_args(binding.args.clone())
-        .with_env_allowlist(binding.env_allowlist.clone())
+        .with_env(env_pairs)
         .with_timeout(Duration::from_secs(timeout_secs));
     if let Some(cwd) = binding.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
         config = config.with_working_dir(cwd);

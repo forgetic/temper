@@ -470,8 +470,8 @@ where
                     .await?;
                 if let Some(pull_request) = pull_request {
                     targeted_snapshots.push(ArtifactSnapshot::from_pull_request(&pull_request));
-                    if matches!(kind, ChangeKind::PullRequest) {
-                        if let Some(metadata) = parse_metadata_block(&pull_request.body)
+                    if matches!(kind, ChangeKind::PullRequest)
+                        && let Some(metadata) = parse_metadata_block(&pull_request.body)
                             .map_err(|error| ForgeError::Backend(error.to_string()))?
                         {
                             for parent in metadata
@@ -488,7 +488,6 @@ where
                                 }
                             }
                         }
-                    }
                     classifier.classify_pull_request(&pull_request).ok()
                 } else {
                     None

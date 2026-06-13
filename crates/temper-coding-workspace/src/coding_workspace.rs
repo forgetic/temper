@@ -496,14 +496,13 @@ fn run_edit_command(
         );
     // A PR-targeted read-only checkout fetched the pull request's head; tell the
     // command the local ref so it can compute `git diff <base> <pr-head>`.
-    if request.checkout.needs_pull_request_head() {
-        if let Some(number) = pull_request_number(request) {
+    if request.checkout.needs_pull_request_head()
+        && let Some(number) = pull_request_number(request) {
             cmd.env(
                 "TEMPER_CODING_WORKSPACE_PR_HEAD_REF",
                 pull_request_local_ref(number),
             );
         }
-    }
     let output = cmd
         .output()
         .map_err(|error| format!("failed to run coding workspace command: {error}"))?;

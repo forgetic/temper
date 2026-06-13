@@ -116,13 +116,12 @@ impl InteractionService {
             .into_iter()
             .map(|runtime| (runtime.manifest.profile.id.clone(), runtime))
             .collect::<BTreeMap<_, _>>();
-        if let Some(default) = &default_profile {
-            if !profiles.contains_key(default) {
+        if let Some(default) = &default_profile
+            && !profiles.contains_key(default) {
                 return Err(InteractionServiceError::runtime(format!(
                     "default profile `{default}` is not bound"
                 )));
             }
-        }
         Ok(Self {
             base_url,
             repo_path,

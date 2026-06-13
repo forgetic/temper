@@ -211,8 +211,8 @@ fn wait_for_commit_state(
     let url = format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/commits/{sha}/status");
     let mut last = String::from("(none)");
     loop {
-        if let Ok(resp) = client.send("GET", url.as_str(), Some(token), None) {
-            if let Ok(body) = serde_json::from_slice::<Value>(&resp.body) {
+        if let Ok(resp) = client.send("GET", url.as_str(), Some(token), None)
+            && let Ok(body) = serde_json::from_slice::<Value>(&resp.body) {
                 let state = body["state"].as_str().unwrap_or("").to_string();
                 last = state.clone();
                 // `pending`/`running`/empty mean "not done yet"; keep polling.
@@ -220,7 +220,6 @@ fn wait_for_commit_state(
                     return state;
                 }
             }
-        }
         if Instant::now() >= deadline {
             return format!("timeout (last state: {last})");
         }

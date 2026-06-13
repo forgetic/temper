@@ -283,11 +283,10 @@ fn record_queue_labels(
                 push_label_id(labels, label);
             }
         }
-        if let Some(condition) = &queue.condition {
-            if let Some(label) = condition_label(workflow, condition) {
+        if let Some(condition) = &queue.condition
+            && let Some(label) = condition_label(workflow, condition) {
                 push_label_id(labels, label);
             }
-        }
     }
 }
 
@@ -320,11 +319,10 @@ fn record_gate_condition_labels(
         }) {
             continue;
         }
-        if let Some(condition) = &gate.condition {
-            if let Some(label) = condition_label(workflow, condition) {
+        if let Some(condition) = &gate.condition
+            && let Some(label) = condition_label(workflow, condition) {
                 push_label_id(labels, label);
             }
-        }
     }
 }
 

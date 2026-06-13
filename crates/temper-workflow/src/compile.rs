@@ -363,11 +363,10 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
         .collect();
 
     let mut record = |label: &LabelId, usage: LabelUsage| {
-        if let Some(spec) = specs.iter_mut().find(|spec| &spec.id == label) {
-            if !spec.usages.contains(&usage) {
+        if let Some(spec) = specs.iter_mut().find(|spec| &spec.id == label)
+            && !spec.usages.contains(&usage) {
                 spec.usages.push(usage);
             }
-        }
     };
 
     for kind in workflow.artifact_kinds() {
@@ -414,8 +413,8 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
                 );
             }
         }
-        if let Some(condition) = &queue.condition {
-            if let Some(label) = gate_condition_label(condition, workflow) {
+        if let Some(condition) = &queue.condition
+            && let Some(label) = gate_condition_label(condition, workflow) {
                 record(
                     label,
                     LabelUsage::QueueFilter {
@@ -423,7 +422,6 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
                     },
                 );
             }
-        }
     }
 
     for transition in workflow.transitions() {
@@ -440,8 +438,8 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
     }
 
     for gate in workflow.gates() {
-        if let Some(condition) = &gate.condition {
-            if let Some(label) = gate_condition_label(condition, workflow) {
+        if let Some(condition) = &gate.condition
+            && let Some(label) = gate_condition_label(condition, workflow) {
                 record(
                     label,
                     LabelUsage::GateCondition {
@@ -449,7 +447,6 @@ fn compile_labels(workflow: &ValidatedWorkflow) -> LabelManifest {
                     },
                 );
             }
-        }
         for transition_id in &gate.satisfied_by {
             let Some(transition) = workflow
                 .transitions()

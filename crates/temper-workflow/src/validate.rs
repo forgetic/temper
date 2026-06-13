@@ -544,8 +544,8 @@ fn check_queue_automation_contract(
                     transition: outcome.id.clone(),
                 });
             }
-            if let Some(primary) = primary {
-                if outcome.artifact != primary.artifact {
+            if let Some(primary) = primary
+                && outcome.artifact != primary.artifact {
                     diagnostics.push(Diagnostic::QueueAutomationOutcomeArtifactMismatch {
                         queue: queue.id.clone(),
                         verdict: verdict.clone(),
@@ -554,7 +554,6 @@ fn check_queue_automation_contract(
                         actual: outcome.artifact.clone(),
                     });
                 }
-            }
         }
     }
 }
