@@ -113,6 +113,12 @@ pub struct WorkspaceRepo {
     /// `agent/coord-for-code-42`. Absent for read-only repos.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_hint: Option<String>,
+    /// Other repos (by `owner/name` path) whose pull request must land before
+    /// this repo's — the coordinated landing order (ADR 0023). The daemon turns
+    /// each into a cross-repo dependency link between the opened PRs. Empty for
+    /// an independent repo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
 }
 
 impl WorkspaceRepo {
@@ -164,6 +170,7 @@ impl WorkspaceManifest {
                 default_branch: default_branch.into(),
                 base_branch: base_branch.into(),
                 branch_hint: Some(branch_hint.into()),
+                depends_on: Vec::new(),
             }],
         }
     }
@@ -450,6 +457,7 @@ mod tests {
                     default_branch: "main".to_string(),
                     base_branch: "main".to_string(),
                     branch_hint: Some("agent/coord-for-code-42".to_string()),
+                    depends_on: Vec::new(),
                 },
                 WorkspaceRepo {
                     repo: "ai/smith".to_string(),
@@ -458,6 +466,8 @@ mod tests {
                     default_branch: "main".to_string(),
                     base_branch: "main".to_string(),
                     branch_hint: Some("agent/coord-for-code-42".to_string()),
+                    // smith consumes temper's protocol crate → land after temper.
+                    depends_on: vec!["ai/temper".to_string()],
                 },
                 WorkspaceRepo {
                     repo: "ai/skein".to_string(),
@@ -466,6 +476,7 @@ mod tests {
                     default_branch: "main".to_string(),
                     base_branch: "main".to_string(),
                     branch_hint: None,
+                    depends_on: Vec::new(),
                 },
             ],
         }
@@ -589,6 +600,9 @@ mod tests {
         assert_eq!(value["coordination_key"], "coord-for-code-42");
         assert_eq!(value["repos"][2]["access"], "read_only");
         assert_eq!(value["repos"][2].get("branch_hint"), None);
+        // Landing order: smith lands after temper; independent repos omit it.
+        assert_eq!(value["repos"][0].get("depends_on"), None);
+        assert_eq!(value["repos"][1]["depends_on"], serde_json::json!(["ai/temper"]));
         let decoded: WorkspaceManifest =
             serde_json::from_value(value).expect("manifest parses");
         assert_eq!(decoded, manifest);
