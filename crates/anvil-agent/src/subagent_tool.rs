@@ -26,7 +26,8 @@ use tongs::error::{Error, Result};
 use tongs::model::ContentBlock;
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
-use crate::run::{SubAgent, run_sub_agent};
+use crate::run::{SubAgent, run_sub_agent, run_sub_agent_with_events};
+use crate::shell::EventSink;
 
 /// Builds the nested [`SubAgent`] to run for one invocation, given the task
 /// string the parent model supplied. Called fresh per tool call so each
@@ -41,6 +42,9 @@ pub struct SubAgentTool {
     /// JSON-schema for the tool input. Defaults to `{ task: string }`.
     parameters: serde_json::Value,
     factory: SubAgentFactory,
+    /// Observability sink forwarded to every nested run (token usage, tool
+    /// starts). `None` keeps nested runs silent.
+    events: Option<Arc<dyn EventSink>>,
 }
 
 impl SubAgentTool {
@@ -61,12 +65,20 @@ impl SubAgentTool {
             effects,
             parameters: default_task_schema(),
             factory,
+            events: None,
         }
     }
 
     /// Override the input JSON-schema (default `{ task: string }`).
     pub fn with_parameters(mut self, parameters: serde_json::Value) -> Self {
         self.parameters = parameters;
+        self
+    }
+
+    /// Forward nested runs' observability events (token usage, tool starts)
+    /// to `events`.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.events = Some(events);
         self
     }
 }
@@ -111,9 +123,11 @@ impl Tool for SubAgentTool {
             .to_string();
 
         let sub_agent = (self.factory)(task);
-        let outcome = run_sub_agent(sub_agent)
-            .await
-            .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
+        let outcome = match &self.events {
+            Some(events) => run_sub_agent_with_events(sub_agent, Arc::clone(events)).await,
+            None => run_sub_agent(sub_agent).await,
+        }
+        .map_err(|error| Error::tool(self.name.clone(), error.to_string()))?;
 
         // The sub-agent's product is the text of its final message. A
         // sub-agent that ended in an error stop reports a tool error so the

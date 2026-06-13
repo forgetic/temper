@@ -140,6 +140,14 @@ impl Executor<AgentMachine> for AgentShell {
                         events.as_ref(),
                     )
                     .await;
+                    // Per-turn token accounting, emitted as soon as the turn's
+                    // terminal message lands (both normal and error stops).
+                    if let AgentCompletion::LlmResponded(message) = &completion {
+                        events.emit(AgentEvent::TurnUsage {
+                            turn,
+                            usage: message.usage,
+                        });
+                    }
                     let _ = cq.send(completion);
                 });
             }

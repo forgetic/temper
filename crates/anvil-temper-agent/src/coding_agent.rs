@@ -375,6 +375,7 @@ fn add_investigate_subagent(
     provider_config: &ProviderConfig,
     stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
+    totals: &std::sync::Arc<crate::usage::UsageTotals>,
 ) -> ToolRegistry {
     // Capture what the nested sub-agent needs. The factory runs per call.
     let provider_config = provider_config.clone();
@@ -400,14 +401,20 @@ fn add_investigate_subagent(
             stream_options: stream_options.clone(),
         }
     });
-    base.push(Box::new(anvil_agent::SubAgentTool::new(
-        "investigate",
-        "Delegate a read-only investigation of the repository to a sub-agent. \
-         Input: { task: string }. Returns the sub-agent's findings. Safe to call \
-         several at once.",
-        tongs::tools::ToolEffects::read(),
-        factory,
-    )));
+    base.push(Box::new(
+        anvil_agent::SubAgentTool::new(
+            "investigate",
+            "Delegate a read-only investigation of the repository to a sub-agent. \
+             Input: { task: string }. Returns the sub-agent's findings. Safe to call \
+             several at once.",
+            tongs::tools::ToolEffects::read(),
+            factory,
+        )
+        .with_events(std::sync::Arc::new(crate::usage::UsageLogger::new(
+            "investigate",
+            std::sync::Arc::clone(totals),
+        ))),
+    ));
     base
 }
 
@@ -517,9 +524,17 @@ pub async fn run_coding_agent_native_with_hooks(
         ..tongs::provider::StreamOptions::default()
     };
 
+    // Token accounting: one shared totals ledger across the main run and all
+    // nested sub-agent runs; per-turn/tool lines plus an end-of-run summary
+    // go to stderr (stdout is the protocol stream).
+    let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
+    let events: std::sync::Arc<dyn anvil_agent::EventSink> = std::sync::Arc::new(
+        crate::usage::UsageLogger::new(crate::usage::MAIN_SCOPE, std::sync::Arc::clone(&totals)),
+    );
+
     let mut tools = tool_registry(capability, cwd);
     if enable_subagents {
-        tools = add_investigate_subagent(tools, provider_config, &stream_options, cwd);
+        tools = add_investigate_subagent(tools, provider_config, &stream_options, cwd, &totals);
     }
 
     let sub_agent = anvil_agent::SubAgent {
@@ -530,11 +545,14 @@ pub async fn run_coding_agent_native_with_hooks(
         provider,
         stream_options,
     };
-    let outcome = match turn_hook {
-        Some(hook) => anvil_agent::run_sub_agent_with_hook(sub_agent, hook).await,
-        None => anvil_agent::run_sub_agent(sub_agent).await,
+    let outcome = async {
+        let (_control, run) =
+            anvil_agent::run_sub_agent_controllable_with_hook(sub_agent, events, turn_hook)?;
+        run.await
     }
+    .await
     .map_err(|error| CodingAgentError::Run(error.to_string()))?;
+    totals.emit_summary();
 
     if matches!(outcome.stop, anvil_agent::AgentStop::ModelError) {
         return Err(CodingAgentError::AgentStopped(

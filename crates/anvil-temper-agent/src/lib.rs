@@ -13,6 +13,7 @@ pub mod decision;
 pub mod interaction_profile;
 mod interaction_profile_config;
 mod observability;
+pub mod usage;
 pub mod product_manager;
 pub mod prompt_overlays;
 pub mod provider;

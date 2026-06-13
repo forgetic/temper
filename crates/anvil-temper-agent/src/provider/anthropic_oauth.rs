@@ -46,7 +46,7 @@ pub const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
 const PROVIDER_KEY: &str = "anthropic";
 /// Compiled-in Anthropic OAuth refresh endpoint + public client id (matching the
 /// SDK constants for `pi /login anthropic`).
-const ANTHROPIC_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const ANTHROPIC_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 /// Refresh a token once it is within this many ms of expiry.
 const REFRESH_WINDOW_MS: i64 = 5 * 60 * 1000;

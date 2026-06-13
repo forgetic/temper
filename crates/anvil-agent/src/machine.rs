@@ -40,6 +40,13 @@ pub enum AgentEvent {
     StreamDelta(StreamDelta),
     /// The model produced an assistant message.
     AssistantMessage { content: Vec<ContentBlock> },
+    /// Per-turn token accounting from the provider's terminal stream event.
+    /// Emitted by the shell (like [`AgentEvent::StreamDelta`]) the moment the
+    /// turn's final message arrives; the machine never sees it.
+    TurnUsage {
+        turn: usize,
+        usage: tongs::model::Usage,
+    },
     /// A tool is about to run.
     ToolStart { id: String, name: String },
     /// A tool finished.
