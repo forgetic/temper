@@ -49,7 +49,7 @@ fn success_result(job_id: &str) -> JobResult {
         worker_id: "worker-a".to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: None,
+        repos: Vec::new(),
         verdict: None,
         body: None,
         children: Vec::new(),

@@ -8,7 +8,8 @@ use std::{
 use serde_json::json;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobResult, Poll,
-    Register, ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Register, ReleaseDisposition, RepoOutcome, ResultStatus, WorkerProtocolMessage,
+    WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
 
@@ -138,13 +139,13 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
     poll_with_wait(worker_id, 30_000)
 }
 
-fn job_result(worker_id: &str, job_id: &str, branch: Option<Branch>) -> JobResult {
+fn job_result(worker_id: &str, job_id: &str, repos: Vec<RepoOutcome>) -> JobResult {
     JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch,
+        repos,
         verdict: None,
         body: None,
         children: Vec::new(),
@@ -186,7 +187,7 @@ fn failure_result(
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Failure,
-        branch: None,
+        repos: Vec::new(),
         verdict: None,
         body: None,
         children: Vec::new(),
@@ -203,10 +204,13 @@ fn success_result(worker_id: &str, job_id: &str) -> JobResult {
     job_result(
         worker_id,
         job_id,
-        Some(Branch {
-            name: "agent/pr-for-code-114".to_string(),
-            head_sha: "abc123".to_string(),
-        }),
+        vec![RepoOutcome {
+            repo: "ai/temper".to_string(),
+            branch: Branch {
+                name: "agent/pr-for-code-114".to_string(),
+                head_sha: "abc123".to_string(),
+            },
+        }],
     )
 }
 
@@ -337,7 +341,14 @@ fn accepted_result_invokes_applier_with_in_flight_context() {
             name: "agent/pr-for-code-114".to_string(),
             head_sha: "abc123".to_string(),
         };
-        let posted_result = job_result("worker-a", "job-apply-1", Some(branch));
+        let posted_result = job_result(
+            "worker-a",
+            "job-apply-1",
+            vec![RepoOutcome {
+                repo: "ai/temper".to_string(),
+                branch,
+            }],
+        );
         assert_release(
             post_json(
                 &client,
@@ -357,7 +368,7 @@ fn accepted_result_invokes_applier_with_in_flight_context() {
         assert_eq!(job.job_payload, payload);
         assert_eq!(recorded_result.job_id, posted_result.job_id);
         assert_eq!(recorded_result.status, posted_result.status);
-        assert_eq!(recorded_result.branch, posted_result.branch);
+        assert_eq!(recorded_result.repos, posted_result.repos);
         assert!(rx.try_recv().is_none());
     })
 }
@@ -373,7 +384,7 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
             post_json(
                 &client,
                 &url,
-                &WorkerProtocolMessage::Result(job_result("worker-a", "phantom-job", None)),
+                &WorkerProtocolMessage::Result(job_result("worker-a", "phantom-job", Vec::new())),
             )
             .await,
             "worker-a",
@@ -393,7 +404,7 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
             post_json(
                 &client,
                 &url,
-                &WorkerProtocolMessage::Result(job_result("worker-a", "pending-job", None)),
+                &WorkerProtocolMessage::Result(job_result("worker-a", "pending-job", Vec::new())),
             )
             .await,
             "worker-a",
@@ -414,7 +425,7 @@ fn result_without_in_flight_job_does_not_invoke_applier() {
             "real-job",
         );
 
-        let real_result = job_result("worker-a", "real-job", None);
+        let real_result = job_result("worker-a", "real-job", Vec::new());
         assert_release(
             post_json(
                 &client,
@@ -640,7 +651,7 @@ fn transient_failure_drops_job_for_rescan() {
         assert_eq!(job.job_id, retry_job_id);
         assert_eq!(recorded_result.job_id, final_result.job_id);
         assert_eq!(recorded_result.status, ResultStatus::Success);
-        assert_eq!(recorded_result.branch, final_result.branch);
+        assert_eq!(recorded_result.repos, final_result.repos);
         assert!(rx.try_recv().is_none());
     })
 }

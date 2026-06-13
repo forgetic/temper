@@ -13,7 +13,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult, Poll,
-    Register, ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Register, ReleaseDisposition, RepoOutcome, ResultStatus, WorkerProtocolMessage,
+    WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{
@@ -167,16 +168,25 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
     })
 }
 
-fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &str) -> JobResult {
+fn success_result(
+    worker_id: &str,
+    job_id: &str,
+    repo: &str,
+    branch_name: &str,
+    summary: &str,
+) -> JobResult {
     JobResult {
         protocol_version: WORKER_PROTOCOL_VERSION,
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: Some(Branch {
-            name: branch_name.to_string(),
-            head_sha: "abc123".to_string(),
-        }),
+        repos: vec![RepoOutcome {
+            repo: repo.to_string(),
+            branch: Branch {
+                name: branch_name.to_string(),
+                head_sha: "abc123".to_string(),
+            },
+        }],
         verdict: None,
         body: None,
         children: Vec::new(),
@@ -197,10 +207,7 @@ fn failure_result(
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Failure,
-        branch: Some(Branch {
-            name: "agent/pr-for-code-1".to_string(),
-            head_sha: "def456".to_string(),
-        }),
+        repos: Vec::new(),
         verdict: None,
         body: None,
         children: Vec::new(),
@@ -228,7 +235,7 @@ fn success_without_branch(worker_id: &str, job_id: &str) -> JobResult {
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: None,
+        repos: Vec::new(),
         verdict: None,
         body: None,
         children: Vec::new(),
@@ -244,7 +251,7 @@ fn verdict_result(worker_id: &str, job_id: &str, verdict: &str, body: Option<&st
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: None,
+        repos: Vec::new(),
         verdict: Some(verdict.to_string()),
         body: body.map(str::to_string),
         children: Vec::new(),
@@ -286,11 +293,8 @@ fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             repo: repo_path.to_string(),
             queue: "code_ready".to_string(),
             artifact_kind: "code".to_string(),
-            repository: None,
-            base_branch: None,
-            branch_hint: None,
-            correlation_key: None,
             artifact: None,
+            workspace: None,
             action: None,
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
@@ -308,11 +312,8 @@ fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             repo: repo_path.to_string(),
             queue: "triage".to_string(),
             artifact_kind: "intake".to_string(),
-            repository: None,
-            base_branch: None,
-            branch_hint: None,
-            correlation_key: None,
             artifact: None,
+            workspace: None,
             action: Some("triage_intake".to_string()),
             checkout_capability: Some("read_only".to_string()),
             allowed_verdicts: vec![
@@ -334,11 +335,8 @@ fn review_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
             repo: repo_path.to_string(),
             queue: "pr_needs_review".to_string(),
             artifact_kind: "implementation_pr".to_string(),
-            repository: None,
-            base_branch: None,
-            branch_hint: None,
-            correlation_key: None,
             artifact: None,
+            workspace: None,
             action: Some("review_pr".to_string()),
             checkout_capability: Some("pull_request_read_only".to_string()),
             allowed_verdicts: vec![
@@ -1420,7 +1418,13 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
         let assignment = poll_assignment(&client, &url, "worker-a", issue).await;
         let summary = "implemented daemon worker success apply";
         let branch_name = format!("agent/pr-for-code-{}", issue.get());
-        let posted_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        let posted_result = success_result(
+            "worker-a",
+            &assignment.job_id,
+            &assignment.repo,
+            &branch_name,
+            summary,
+        );
         assert_release(
             post_json(&client, &url, &WorkerProtocolMessage::Result(posted_result)).await,
             "worker-a",
@@ -1472,7 +1476,13 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
             artifact: assignment.artifact.clone(),
             job_payload: assignment.job_payload.clone(),
         };
-        let replay_result = success_result("worker-a", &assignment.job_id, &branch_name, summary);
+        let replay_result = success_result(
+            "worker-a",
+            &assignment.job_id,
+            &assignment.repo,
+            &branch_name,
+            summary,
+        );
         ForgeApplier::new(forge.clone(), workflow.clone())
             .apply(replay_job, replay_result)
             .await;
@@ -1532,6 +1542,7 @@ fn peer_owned_lease_prevents_forge_apply_and_preserves_peer_metadata() {
         let result = success_result(
             "worker-a",
             &job.job_id,
+            "acme/service",
             &format!("agent/pr-for-code-{}", issue.get()),
             "done",
         );

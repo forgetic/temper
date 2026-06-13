@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use temper_daemon::{Daemon, JobRepository, RoleFeedMode};
+use temper_daemon::{Daemon, RoleFeedMode};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber,
     MergeMethod, MergePullRequest, PullRequest, PullRequestUpdateState, RepositoryId, UpdateIssue,
@@ -12,7 +12,7 @@ use temper_forge::{
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_worker_protocol::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
-    ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    RepoOutcome, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{
@@ -179,10 +179,13 @@ fn job_result(worker_id: &str, job_id: &str) -> JobResult {
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: Some(Branch {
-            name: "agent/pr-for-code-feed".to_string(),
-            head_sha: "feed123".to_string(),
-        }),
+        repos: vec![RepoOutcome {
+            repo: "acme/service".to_string(),
+            branch: Branch {
+                name: "agent/pr-for-code-feed".to_string(),
+                head_sha: "feed123".to_string(),
+            },
+        }],
         verdict: None,
         body: None,
         children: Vec::new(),
@@ -605,7 +608,14 @@ fn scanned_architect_triage_item_carries_verdict_job_enrichment() {
         assert_eq!(context.action.as_deref(), Some("triage_intake"));
         assert_eq!(context.checkout_capability.as_deref(), Some("read_only"));
         assert_eq!(context.allowed_verdicts, vec!["ready_code".to_string()]);
-        assert_eq!(context.base_branch.as_deref(), Some("main"));
+        let primary = context
+            .workspace
+            .as_ref()
+            .expect("enriched job carries a workspace manifest")
+            .primary()
+            .expect("primary repo present");
+        assert_eq!(primary.repo, "acme/service");
+        assert_eq!(primary.base_branch, "main");
         let artifact = context.artifact.expect("issue snapshot is present");
         assert_eq!(artifact.number, issue.get());
         assert_eq!(artifact.labels, vec!["untriaged".to_string()]);
@@ -686,28 +696,25 @@ fn scanned_role_work_dispatches_to_worker_and_applies_once() {
         assert_eq!(context.repo, "acme/service");
         assert_eq!(context.queue, "code_ready");
         assert_eq!(context.artifact_kind, "code");
-        assert_eq!(
-            context.repository,
-            Some(JobRepository {
-                owner: "acme".to_string(),
-                name: "service".to_string(),
-                default_branch: "main".to_string(),
-            })
-        );
-        assert_eq!(context.base_branch.as_deref(), Some("main"));
         assert_eq!(context.action.as_deref(), Some("open_pr"));
         assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
         assert!(context.allowed_verdicts.is_empty());
+        // A non-coordinated issue gets a degenerate single-repo manifest.
         let expected_branch_hint = format!("agent/pr-for-code-{}", issue.get());
-        let expected_correlation_key = format!("pr-for-code-{}", issue.get());
-        assert_eq!(
-            context.branch_hint.as_deref(),
-            Some(expected_branch_hint.as_str())
-        );
-        assert_eq!(
-            context.correlation_key.as_deref(),
-            Some(expected_correlation_key.as_str())
-        );
+        let expected_coordination_key = format!("pr-for-code-{}", issue.get());
+        let workspace = context
+            .workspace
+            .as_ref()
+            .expect("enriched job carries a workspace manifest");
+        assert_eq!(workspace.coordination_key, expected_coordination_key);
+        assert_eq!(workspace.repos.len(), 1);
+        let primary = workspace.primary().expect("primary repo present");
+        assert_eq!(primary.repo, "acme/service");
+        assert_eq!(primary.dir, "service");
+        assert!(primary.is_writable());
+        assert_eq!(primary.default_branch, "main");
+        assert_eq!(primary.base_branch, "main");
+        assert_eq!(primary.branch_hint.as_deref(), Some(expected_branch_hint.as_str()));
         let artifact = context.artifact.expect("issue snapshot is present");
         assert_eq!(artifact.number, issue.get());
         assert_eq!(artifact.title, "ready code issue");

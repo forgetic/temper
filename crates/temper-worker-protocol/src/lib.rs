@@ -190,6 +190,12 @@ pub struct JobArtifactSnapshot {
 ///
 /// It describes the single coordinating artifact (the issue/PR the job
 /// services) plus the multi-repo [`WorkspaceManifest`] to assemble.
+///
+/// `artifact` and `workspace` are *enrichment* fields: the daemon maps a
+/// scanned work item to a thin context first (no Forge access), then fills them
+/// from Forge reads before the job is ever dispatched. They are therefore
+/// `Option` on the wire DTO but **always present on a job a worker receives**;
+/// the worker treats their absence as a protocol error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobContext {
     pub role: String,
@@ -200,10 +206,12 @@ pub struct JobContext {
     pub artifact_kind: String,
 
     /// The coordinating artifact this job services.
-    pub artifact: JobArtifactSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<JobArtifactSnapshot>,
 
     /// The repositories to assemble into the job's workspace.
-    pub workspace: WorkspaceManifest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceManifest>,
 
     /// Workflow action (intent-level tool / transition id) this job services,
     /// e.g. `open_pr` or `triage_intake`.
@@ -601,14 +609,14 @@ mod tests {
             repo: "ai/temper".to_string(),
             queue: "code_ready".to_string(),
             artifact_kind: "code".to_string(),
-            artifact: JobArtifactSnapshot {
+            artifact: Some(JobArtifactSnapshot {
                 number: 42,
                 title: "Cross-repo worker protocol change".to_string(),
                 body: "Change the protocol in temper and consume it in smith.".to_string(),
                 labels: vec!["code".to_string(), "ready".to_string()],
                 state: "Open".to_string(),
-            },
-            workspace: sample_manifest(),
+            }),
+            workspace: Some(sample_manifest()),
             action: Some("open_pr".to_string()),
             checkout_capability: Some("writable".to_string()),
             allowed_verdicts: vec!["needs_architect".to_string()],
@@ -627,21 +635,21 @@ mod tests {
             repo: "ai/temper".to_string(),
             queue: "code_ready".to_string(),
             artifact_kind: "code".to_string(),
-            artifact: JobArtifactSnapshot {
+            artifact: Some(JobArtifactSnapshot {
                 number: 42,
                 title: "t".to_string(),
                 body: "b".to_string(),
                 labels: Vec::new(),
                 state: "Open".to_string(),
-            },
-            workspace: WorkspaceManifest::single(
+            }),
+            workspace: Some(WorkspaceManifest::single(
                 "ai/temper",
                 "temper",
                 "main",
                 "main",
                 "agent/pr-for-code-42",
                 "pr-for-code-42",
-            ),
+            )),
             action: None,
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
@@ -651,6 +659,36 @@ mod tests {
         assert_eq!(value.get("action"), None);
         assert_eq!(value.get("checkout_capability"), None);
         assert_eq!(value.get("allowed_verdicts"), None);
+    }
+
+    #[test]
+    fn thin_pre_enrichment_job_context_omits_artifact_and_workspace() {
+        // The daemon's pure work-item mapping has no Forge access, so it emits a
+        // thin context; enrichment fills artifact + workspace before dispatch.
+        let context = JobContext {
+            role: "engineer".to_string(),
+            repo: "ai/temper".to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            artifact: None,
+            workspace: None,
+            action: None,
+            checkout_capability: None,
+            allowed_verdicts: Vec::new(),
+        };
+
+        let value = serde_json::to_value(&context).expect("job context serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "role": "engineer",
+                "repo": "ai/temper",
+                "queue": "code_ready",
+                "artifact_kind": "code"
+            })
+        );
+        let decoded: JobContext = serde_json::from_value(value).expect("thin context parses");
+        assert_eq!(decoded, context);
     }
 
     #[test]
@@ -676,7 +714,7 @@ mod tests {
         .expect("unknown job context fields must be accepted");
 
         assert_eq!(context.role, "engineer");
-        assert_eq!(context.workspace.repos.len(), 1);
+        assert_eq!(context.workspace.expect("workspace present").repos.len(), 1);
     }
 
     #[test]

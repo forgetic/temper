@@ -15,7 +15,7 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Assign, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
-    ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    RepoOutcome, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 use temper_workflow::{
     parse_metadata_block, ArtifactKindId, ArtifactRef, CompiledWorkflow, LeasePolicy,
@@ -178,10 +178,13 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: Some(Branch {
-            name: branch_name.to_string(),
-            head_sha: "abc123".to_string(),
-        }),
+        repos: vec![RepoOutcome {
+            repo: "acme/service".to_string(),
+            branch: Branch {
+                name: branch_name.to_string(),
+                head_sha: "abc123".to_string(),
+            },
+        }],
         verdict: None,
         body: None,
         children: Vec::new(),
