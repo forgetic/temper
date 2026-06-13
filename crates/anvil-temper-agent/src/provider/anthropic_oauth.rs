@@ -29,7 +29,9 @@ pub const ANTHROPIC_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_MODEL";
 const TOKEN_URL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_TOKEN_URL";
 
 /// Default Anthropic model targeted by the OAuth mode (overridable).
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
+/// Matches the Claude Code CLI's current default so anvil runs are directly
+/// comparable with claude-code on the same subscription.
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-fable-5";
 /// Identity line Anthropic's Claude **subscription OAuth** path requires as the
 /// first `system` block. Any request whose first system block is not exactly
 /// this line is rejected with a generic `429 rate_limit_error`
