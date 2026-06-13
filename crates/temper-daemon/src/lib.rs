@@ -46,6 +46,7 @@ mod webhook;
 pub use config::{parse, DaemonRunConfig, ParseOutcome, USAGE};
 pub use mechanical::{
     run_mechanical_backstop_tick, spawn_mechanical_backstop, MechanicalBackstopConfig,
+    MechanicalScope, MechanicalTrigger,
 };
 pub use temper_runner::{RepositorySet, RepositoryTarget};
 pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, RepoOutcome};
@@ -1749,6 +1750,29 @@ trait WakeScanner: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 }
 
+/// Type-erased mechanical accelerator: run a hinted mechanical pass for the
+/// repositories named by a webhook delivery. Lets the webhook path drive the
+/// generic [`MechanicalTrigger<F>`] without the daemon being generic over `F`.
+pub trait HintedMechanical: Send + Sync {
+    /// Run a mechanical pass covering only the hinted repositories.
+    fn run_hinted(
+        &self,
+        hints: Vec<temper_forge::ChangeHint>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+}
+
+impl<F: Forge + Send + Sync + 'static> HintedMechanical for MechanicalTrigger<F> {
+    fn run_hinted(
+        &self,
+        hints: Vec<temper_forge::ChangeHint>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let trigger = self.clone();
+        Box::pin(async move {
+            trigger.run_hinted(hints).await;
+        })
+    }
+}
+
 /// `<io-event-completion>`s observed by the daemon machine.
 enum DaemonCompletion {
     /// One inbound HTTP request (worker protocol or webhook).
@@ -2394,6 +2418,24 @@ impl Daemon {
         config: Arc<WebhookConfig>,
         clock: WallClock,
     ) -> Self {
+        self.with_webhook_and_mechanical(forge, workflow, compiled, config, clock, None)
+    }
+
+    /// Like [`Self::with_webhook`], but also drives a mechanical accelerator: each
+    /// verified delivery runs the role-work wake scan **and** an immediate
+    /// mechanical pass for the hinted repository. This is what lets the mechanical
+    /// backstop cadence be slow (idle quiet) without losing reaction latency —
+    /// the webhook is the edge-trigger (ADR 0009). Pass `None` to keep the
+    /// wake-scan-only behavior.
+    pub fn with_webhook_and_mechanical<F: Forge + Send + Sync + 'static>(
+        self,
+        forge: Arc<F>,
+        workflow: Arc<ValidatedWorkflow>,
+        compiled: Arc<CompiledWorkflow>,
+        config: Arc<WebhookConfig>,
+        clock: WallClock,
+        mechanical: Option<Arc<dyn HintedMechanical>>,
+    ) -> Self {
         struct ForgeWakeScanner<F: Forge + Send + Sync + 'static> {
             daemon: Daemon,
             forge: Arc<F>,
@@ -2401,6 +2443,7 @@ impl Daemon {
             compiled: Arc<CompiledWorkflow>,
             config: Arc<WebhookConfig>,
             clock: WallClock,
+            mechanical: Option<Arc<dyn HintedMechanical>>,
         }
 
         impl<F: Forge + Send + Sync + 'static> WakeScanner for ForgeWakeScanner<F> {
@@ -2413,6 +2456,7 @@ impl Daemon {
                 let workflow = Arc::clone(&self.workflow);
                 let compiled = Arc::clone(&self.compiled);
                 let config = Arc::clone(&self.config);
+                let mechanical = self.mechanical.clone();
                 let now = (self.clock)();
                 Box::pin(async move {
                     run_wake_scan(
@@ -2425,6 +2469,13 @@ impl Daemon {
                         &hint,
                     )
                     .await;
+                    // Accelerate the mechanical loop for the hinted repo: a push
+                    // / CI / review event should drive reconciliation now, not
+                    // wait for the slow backstop cadence. Coalesced inside the
+                    // trigger, so a burst collapses to one pass.
+                    if let Some(mechanical) = mechanical {
+                        mechanical.run_hinted(vec![hint]).await;
+                    }
                 })
             }
         }
@@ -2436,6 +2487,7 @@ impl Daemon {
             compiled,
             config: Arc::clone(&config),
             clock,
+            mechanical,
         });
         *self.scanner_slot.lock().expect("scanner slot") = Some(scanner);
         let _ = self.cq.send(DaemonCompletion::ConfigureWebhook {

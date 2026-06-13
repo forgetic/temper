@@ -93,6 +93,11 @@ async fn run_async(
         temper_daemon::system_clock(),
     );
 
+    // The mechanical accelerator shared with the webhook path, if the mechanical
+    // backstop is enabled. A webhook delivery runs an immediate hinted mechanical
+    // pass through this, so the backstop cadence itself can stay slow (idle
+    // quiet) without losing reaction latency (ADR 0009).
+    let mut mechanical_trigger: Option<Arc<dyn temper_daemon::HintedMechanical>> = None;
     if let Some(cadence) = config.mechanical_cadence {
         ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
         let mechanical_config = MechanicalBackstopConfig {
@@ -100,13 +105,14 @@ async fn run_async(
             cadence,
             lease_policy: LeasePolicy::new(lease_ttl),
         };
-        spawn_mechanical_backstop(
+        let trigger = spawn_mechanical_backstop(
             &spawner,
             forge.clone(),
             workflow.clone(),
             mechanical_config,
             temper_daemon::system_clock(),
         );
+        mechanical_trigger = Some(Arc::new(trigger));
     }
 
     let daemon = if let Some(path) = config.webhook_secret_file.as_ref() {
@@ -120,12 +126,13 @@ async fn run_async(
             secret: secret.trim().to_string(),
             targets: wake_targets,
         });
-        daemon.with_webhook(
+        daemon.with_webhook_and_mechanical(
             forge,
             workflow,
             compiled,
             webhook_config,
             temper_daemon::system_clock(),
+            mechanical_trigger,
         )
     } else {
         daemon
