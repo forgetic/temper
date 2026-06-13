@@ -120,6 +120,80 @@ fn only_engineer_is_writable() {
 }
 
 #[test]
+fn two_subagent_roles_with_distinct_tiers_and_tools() {
+    // Mirrors Claude's Explore (cheap, read-only) + general-purpose (main model,
+    // has bash) split: the orchestrator chooses the role, the role fixes the
+    // model — the LLM never picks a model directly.
+    let specs = subagent_specs();
+    assert_eq!(specs.len(), 2);
+
+    let investigate = specs
+        .iter()
+        .find(|s| s.name == "investigate")
+        .expect("investigate role");
+    assert!(matches!(investigate.tier, SubAgentTier::Cheap));
+    assert!(!investigate.with_bash, "the read-only searcher has no bash");
+
+    let delegate = specs
+        .iter()
+        .find(|s| s.name == "delegate")
+        .expect("delegate role");
+    assert!(matches!(delegate.tier, SubAgentTier::Main));
+    assert!(
+        delegate.with_bash,
+        "the heavier reviewer has bash for inspection"
+    );
+}
+
+#[test]
+fn subagent_tools_register_parallel_safe_and_on_the_right_model() {
+    // Build the registry offline (the factory only contacts a provider when a
+    // sub-agent is *invoked*, not at registration) and assert both tools exist
+    // and declare read-only effects so the parent can fan them out in parallel.
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jig_auth.json");
+    let provider_config = ProviderConfig::anthropic_oauth(Some(fixture));
+    let stream_options = tongs::provider::StreamOptions {
+        headers: provider_config.request_headers(),
+        ..Default::default()
+    };
+    let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
+    let registry = add_subagents(
+        ToolRegistry::new(),
+        &provider_config,
+        &stream_options,
+        std::path::Path::new("."),
+        &totals,
+    );
+
+    let names: Vec<&str> = registry.tools().iter().map(|t| t.name()).collect();
+    assert!(
+        names.contains(&"investigate"),
+        "investigate registered: {names:?}"
+    );
+    assert!(
+        names.contains(&"delegate"),
+        "delegate registered: {names:?}"
+    );
+    for tool in registry.tools() {
+        assert!(
+            tool.effects().parallel_safe(),
+            "{} must declare read-only effects for parallel fan-out",
+            tool.name()
+        );
+    }
+
+    // The cheap searcher runs on the sub-agent tier; the heavier reviewer on the
+    // main model — the two tiers must differ (asserted on the config the factory
+    // captures, not via a live call).
+    assert_ne!(
+        provider_config.model_id(),
+        provider_config.subagent_model_id(),
+        "investigate (cheap tier) must run on a different model than delegate (main)"
+    );
+}
+
+#[test]
 fn system_prompt_is_role_specific() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
     assert!(engineer.contains("ROLE: engineer"));

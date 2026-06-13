@@ -383,54 +383,148 @@ fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::to
     tools
 }
 
-/// Guidance appended to the role prompt when the `investigate` sub-agent tool
-/// is registered: tells the model when delegating beats searching inline and
-/// that several investigations can run concurrently.
+/// Guidance appended to the role prompt when the sub-agent tools are
+/// registered: tells the model which sub-agent to delegate to, that several run
+/// concurrently, and how to write a self-contained task. Mirrors Claude Code,
+/// which offers a cheap read-only `Explore` sub-agent and a heavier
+/// `general-purpose` one and lets the orchestrator pick by *type* — the type
+/// then transitively selects the model (here: `investigate` → sub-agent tier,
+/// `delegate` → main model).
 const SUBAGENT_GUIDANCE: &str = "\nSUB-AGENTS:\n\
-    - The `investigate` tool delegates a read-only repository investigation to \
-    a sub-agent that searches and reads files for you, returning a focused \
-    report. Use it when answering a question would mean sweeping many files or \
-    directories (architecture mapping, finding all usages/conventions, \
-    auditing a module) — you get the conclusion without filling your own \
-    context with file dumps.\n\
-    - Investigations run concurrently: when you have several independent \
-    questions, emit several `investigate` calls in ONE response instead of \
-    asking one at a time.\n\
-    - Give each sub-agent a self-contained task description: what to find, \
-    where to look first, and what the report must answer. Sub-agents cannot \
-    see your conversation.\n\
+    - You have two sub-agent tools. Both read and search the repository and \
+    return a focused report; neither can edit the working tree, and several of \
+    either can run concurrently (emit several calls in ONE response when the \
+    questions are independent).\n\
+    - `investigate`: a fast, cheap read-only searcher (read/ls/grep/find). Use \
+    it for the common case — sweeping many files or directories to answer a \
+    question (architecture mapping, finding all usages/conventions, locating \
+    code). You get the conclusion without filling your own context with file \
+    dumps.\n\
+    - `delegate`: a heavier reviewer that also has `bash` (for read-only \
+    inspection like `git diff`/`git log`/running a check) and runs on the full \
+    model. Use it for self-contained analysis that needs judgement, not just \
+    search — auditing a module for bugs, reviewing a diff, assessing a design.\n\
+    - Give each sub-agent a self-contained task: what to find, where to look \
+    first, and what the report must answer. Sub-agents cannot see your \
+    conversation.\n\
     - For a single-fact lookup (one known file or symbol), use read/grep \
     directly instead of a sub-agent.\n";
 
-/// Read-only system prompt for the `investigate` sub-agent.
+/// System prompt for the read-only `investigate` sub-agent (the cheap-tier
+/// searcher; Claude's `Explore` analog).
 const INVESTIGATE_SUBAGENT_PROMPT: &str = "You are an investigation sub-agent. \
     Read the repository with the provided read-only tools and answer the task \
     concisely. Make NO edits. Your final message is your report back to the \
     calling agent.";
 
-/// Adds an `investigate` sub-agent tool to a coding tool registry.
+/// System prompt for the `delegate` sub-agent (the heavier main-model reviewer;
+/// Claude's `general-purpose` analog). It has bash for read-only inspection.
+const DELEGATE_SUBAGENT_PROMPT: &str = "You are a delegated analysis sub-agent. \
+    Investigate the repository with the provided tools to carry out the task — \
+    you may run read-only shell commands (e.g. `git diff`, `git log`, `grep`, a \
+    test or lint command) via `bash`, but make NO edits to the working tree and \
+    run nothing destructive. Be evidence-based and cite file:line. Your final \
+    message is your report back to the calling agent.";
+
+/// Which model tier a sub-agent role runs on.
+enum SubAgentTier {
+    /// The provider's cheaper sub-agent model (e.g. Haiku) — for the read-only
+    /// searcher whose product is a focused report, not the final deliverable.
+    Cheap,
+    /// The same model as the orchestrator — for heavier analysis/review.
+    Main,
+}
+
+/// Static description of a sub-agent role: the orchestrator picks a role by
+/// calling its tool, and the role fixes the model, tools, prompt, and budget.
+struct SubAgentSpec {
+    /// Tool name the orchestrator calls.
+    name: &'static str,
+    /// Tool description shown to the orchestrator model.
+    description: &'static str,
+    /// The sub-agent's own system prompt.
+    prompt: &'static str,
+    /// Which model tier it runs on.
+    tier: SubAgentTier,
+    /// Whether it gets a `bash` tool (read-only inspection) in addition to the
+    /// read/ls/grep/find set.
+    with_bash: bool,
+    /// Iteration budget. A cheap-tier model takes more, smaller steps.
+    max_iterations: usize,
+}
+
+/// The sub-agent roles offered to the coding agent, mirroring Claude Code's
+/// `Explore` (cheap, read-only) + `general-purpose` (main model, heavier) split.
+/// The orchestrator chooses a role by calling its tool; the role determines the
+/// model — the LLM does not pick a model directly, exactly as in Claude Code.
+fn subagent_specs() -> &'static [SubAgentSpec] {
+    &[
+        SubAgentSpec {
+            name: "investigate",
+            description: "Delegate a read-only investigation of the repository to a fast, cheap \
+                 sub-agent that searches and reads files. Input: { task: string }. Returns \
+                 the sub-agent's findings. Safe to call several at once.",
+            prompt: INVESTIGATE_SUBAGENT_PROMPT,
+            tier: SubAgentTier::Cheap,
+            // Smaller model, more steps per investigation.
+            max_iterations: 24,
+            with_bash: false,
+        },
+        SubAgentSpec {
+            name: "delegate",
+            description: "Delegate a self-contained analysis or review to a sub-agent that reads \
+                 and searches the repo and may run read-only shell commands (git diff/log, \
+                 grep, a test/lint). Runs on the full model — use for work needing judgement \
+                 (audit a module, review a diff, assess a design), not plain search. Input: \
+                 { task: string }. Returns the sub-agent's report. Safe to call several at once.",
+            prompt: DELEGATE_SUBAGENT_PROMPT,
+            tier: SubAgentTier::Main,
+            max_iterations: 16,
+            with_bash: true,
+        },
+    ]
+}
+
+/// Adds the sub-agent tools (see [`subagent_specs`]) to a coding tool registry.
 ///
-/// The tool delegates a read-only investigation to a nested sub-agent scoped to
-/// the same checkout `cwd`, talking to the same provider. It declares read-only
-/// effects, so the parent agent can fan out several investigations in parallel
-/// and they cannot mutate the engineer's working tree.
-fn add_investigate_subagent(
+/// Each tool delegates to a nested sub-agent scoped to the same checkout `cwd`
+/// and talking to the same provider. They declare read-only effects, so the
+/// parent agent can fan several out in parallel and they cannot mutate the
+/// working tree (the read-only ones cannot at all; the bash-capable `delegate`
+/// is prompt-constrained to read-only inspection, matching Claude's parallel
+/// `general-purpose` reviewers).
+fn add_subagents(
     mut base: ToolRegistry,
     provider_config: &ProviderConfig,
     stream_options: &tongs::provider::StreamOptions,
     cwd: &Path,
     totals: &std::sync::Arc<crate::usage::UsageTotals>,
 ) -> ToolRegistry {
-    // Capture what the nested sub-agent needs. The factory runs per call.
-    // Sub-agents run on the provider's sub-agent model tier (a cheaper/faster
-    // model than the main agent where the provider has one — e.g. Haiku under
-    // Anthropic OAuth), since their product is a focused report rather than the
-    // final deliverable and they dominate token spend on a large fan-out. This
-    // mirrors Claude Code routing its investigation sub-agents to a smaller
-    // model while the orchestrator stays on the larger one.
-    let provider_config = provider_config.with_model_id(provider_config.subagent_model_id());
+    for spec in subagent_specs() {
+        base = add_one_subagent(base, spec, provider_config, stream_options, cwd, totals);
+    }
+    base
+}
+
+/// Wires a single sub-agent role into the registry.
+fn add_one_subagent(
+    mut base: ToolRegistry,
+    spec: &'static SubAgentSpec,
+    provider_config: &ProviderConfig,
+    stream_options: &tongs::provider::StreamOptions,
+    cwd: &Path,
+    totals: &std::sync::Arc<crate::usage::UsageTotals>,
+) -> ToolRegistry {
+    // The role's model tier. The cheap tier (e.g. Haiku) is for the read-only
+    // searcher whose product is a focused report and which dominates token spend
+    // on a large fan-out; the main tier is for heavier analysis. This mirrors
+    // Claude routing `Explore` to Haiku and `general-purpose` to the main model.
+    let provider_config = match spec.tier {
+        SubAgentTier::Cheap => provider_config.with_model_id(provider_config.subagent_model_id()),
+        SubAgentTier::Main => provider_config.clone(),
+    };
     // Reuse the parent's resolved bearer and per-request options, but rebuild the
-    // model-dependent headers for the sub-agent's model: the parent's
+    // model-dependent headers for this role's model: the parent's
     // `stream_options` carried headers computed for the *main* model (e.g. the
     // 1M-context beta), which a smaller sub-agent model is not entitled to and
     // would 400 on. The bearer is shared across models on the same provider, so
@@ -438,42 +532,47 @@ fn add_investigate_subagent(
     let mut stream_options = stream_options.clone();
     stream_options.headers = provider_config.request_headers();
     let cwd = cwd.to_path_buf();
+    let prompt = spec.prompt;
+    let with_bash = spec.with_bash;
+    let max_iterations = spec.max_iterations;
     let factory: anvil_agent::SubAgentFactory = std::sync::Arc::new(move |task: String| {
         // Build a fresh provider for the nested run (cheap; reuses the resolved
         // bearer in stream_options).
         let provider = provider_config
             .build_provider()
             .expect("sub-agent provider builds (parent already built one)");
+        let mut tools = vec![
+            create_read_tool(&cwd),
+            create_ls_tool(&cwd),
+            create_grep_tool(&cwd),
+            create_find_tool(&cwd),
+        ];
+        if with_bash {
+            tools.push(create_bash_tool(&cwd));
+        }
         anvil_agent::SubAgent {
-            system_prompt: Some(INVESTIGATE_SUBAGENT_PROMPT.to_string()),
+            system_prompt: Some(prompt.to_string()),
             user_message: task,
-            tools: ToolRegistry::from_tools(vec![
-                create_read_tool(&cwd),
-                create_ls_tool(&cwd),
-                create_grep_tool(&cwd),
-                create_find_tool(&cwd),
-            ]),
-            // The sub-agent tier runs a smaller, less per-turn-efficient model
-            // (e.g. Haiku), which takes more, smaller steps to cover the same
-            // ground than the main model would — 12 was sized for the main model
-            // and left Haiku investigations truncated (BudgetExhausted). 24 lets
-            // a thorough single-subsystem investigation finish.
-            max_iterations: 24,
+            tools: ToolRegistry::from_tools(tools),
+            max_iterations,
             provider,
             stream_options: stream_options.clone(),
         }
     });
     base.push(Box::new(
+        // Both roles declare read-only effects so the parent can fan them out in
+        // parallel. The bash-capable `delegate` is prompt-constrained to
+        // read-only inspection (no edits/destructive commands), matching Claude's
+        // parallel `general-purpose` reviewers; this is a deliberate trust
+        // decision, not an effect-system guarantee.
         anvil_agent::SubAgentTool::new(
-            "investigate",
-            "Delegate a read-only investigation of the repository to a sub-agent. \
-             Input: { task: string }. Returns the sub-agent's findings. Safe to call \
-             several at once.",
+            spec.name,
+            spec.description,
             tongs::tools::ToolEffects::read(),
             factory,
         )
         .with_events(std::sync::Arc::new(crate::usage::UsageLogger::new(
-            "investigate",
+            spec.name,
             std::sync::Arc::clone(totals),
         ))),
     ));
@@ -599,7 +698,7 @@ pub async fn run_coding_agent_native_with_hooks(
 
     let mut tools = tool_registry(capability, cwd);
     if enable_subagents {
-        tools = add_investigate_subagent(tools, provider_config, &stream_options, cwd, &totals);
+        tools = add_subagents(tools, provider_config, &stream_options, cwd, &totals);
     }
 
     let sub_agent = anvil_agent::SubAgent {
