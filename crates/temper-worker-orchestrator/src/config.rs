@@ -108,7 +108,7 @@ pub enum AgentSurface {
 /// out-of-process `anvil-agent` binary parses for itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnvilNativeAgentSurface {
-    /// The agent program the worker spawns. Defaults to [`ANVIL_AGENT_PROGRAM`]
+    /// The agent program the worker spawns. Defaults to [`TEMPER_AGENT_PROGRAM`]
     /// (`anvil-agent`, resolved on `PATH`); override with an absolute path via
     /// `--agent-program` when it is not on `PATH`.
     pub agent_program: String,
@@ -172,7 +172,7 @@ pub enum AgentAuthChoice {
 /// The program name that selects the anvil-native out-of-process agent surface.
 const ANVIL_NATIVE_PROGRAM: &str = "anvil-native";
 /// The agent binary the anvil-native surface spawns by default.
-pub const ANVIL_AGENT_PROGRAM: &str = "anvil-agent";
+pub const TEMPER_AGENT_PROGRAM: &str = "temper-agent";
 
 pub const USAGE: &str = "smith-worker --daemon-url <url> --worker-id <id> --capability <owner/name>:<role> [--capability ...] [--max-concurrent <n>] [--poll-wait-ms <n>] [--heartbeat-interval-ms <n>] [--executor <stub|coding>] [--workspace-root <path>] [--git-base-url <url>] [--agent-command <anvil-native|program>] [--agent-arg <arg> ...]\n  --agent-command anvil-native spawns the out-of-process anvil-agent; its --agent-arg values (--agent-program, --auth, --auth-file, --codex-model, --config-dir, --max-iterations, --enable-subagents) become the agent's flags. Any other --agent-command is spawned verbatim over the same protocol.";
 
@@ -411,7 +411,7 @@ fn agent_surface(program: &str, args: Vec<String>) -> Result<AgentSurface, Strin
 /// Parses the anvil-native agent flags from the `--agent-arg` values — the
 /// flags the `anvil-agent` binary parses for itself.
 fn parse_anvil_native_agent_surface(args: Vec<String>) -> Result<AnvilNativeAgentSurface, String> {
-    let mut agent_program = ANVIL_AGENT_PROGRAM.to_string();
+    let mut agent_program = TEMPER_AGENT_PROGRAM.to_string();
     let mut auth = AgentAuthChoice::ChatGptOAuth;
     let mut codex_model = None;
     let mut auth_file = None;
@@ -686,7 +686,7 @@ mod tests {
                 workspace_root: PathBuf::from("/var/lib/smith/workspaces"),
                 git_base_url: "https://forgejo.example".to_string(),
                 agent: AgentSurface::AnvilNative(AnvilNativeAgentSurface {
-                    agent_program: "anvil-agent".to_string(),
+                    agent_program: "temper-agent".to_string(),
                     auth: AgentAuthChoice::AnthropicOAuth,
                     codex_model: None,
                     auth_file: Some(PathBuf::from("/tmp/auth.json")),
@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(
             surface.agent,
             AgentSurface::AnvilNative(AnvilNativeAgentSurface {
-                agent_program: "anvil-agent".to_string(),
+                agent_program: "temper-agent".to_string(),
                 auth: AgentAuthChoice::ChatGptOAuth,
                 codex_model: None,
                 auth_file: None,

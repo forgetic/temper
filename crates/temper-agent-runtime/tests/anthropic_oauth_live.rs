@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use anvil_temper_agent::{AuthChoice, ProviderConfig, run_decision};
+use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 use serde::Deserialize;
 
 #[path = "support/workflow_role_fixture.rs"]
@@ -51,7 +51,7 @@ fn anthropic_oauth_validation() {
     let start = Instant::now();
     let decision: RoleDecision = {
         let prompt = role.prompt.render();
-        anvil_io_engine::block_on(async move { run_decision(&provider, &prompt, &context).await })
+        temper_agent_io_engine::block_on(async move { run_decision(&provider, &prompt, &context).await })
             .expect("Anthropic OAuth generic role decision succeeds and parses")
     };
     assert_eq!(decision.action, "advance");

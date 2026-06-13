@@ -4,16 +4,16 @@
 //! prompt, an initial user message, a tool set (optionally workspace-scoped),
 //! an iteration budget, and the provider/stream options. [`run_sub_agent`]
 //! builds the pure [`AgentMachine`], the imperative [`AgentShell`], and a
-//! completion queue, drives them with [`anvil_io_engine::drive`], and returns
+//! completion queue, drives them with [`temper_agent_io_engine::drive`], and returns
 //! the settled [`AgentOutcome`].
 //!
 //! Must run inside an engine task (the drive loop reads the runtime clock and
-//! the shell spawns I/O), so callers wrap it in [`anvil_io_engine::block_on`]
+//! the shell spawns I/O), so callers wrap it in [`temper_agent_io_engine::block_on`]
 //! or call it from another engine task.
 
 use std::sync::Arc;
 
-use anvil_io_engine::{CqSender, channel, drive, oneshot};
+use temper_agent_io_engine::{CqSender, channel, drive, oneshot};
 use tongs::model::{Message, UserContent, UserMessage};
 use tongs::provider::{Provider, StreamOptions, ToolDef};
 use tongs::tools::ToolRegistry;
@@ -163,7 +163,7 @@ pub fn run_sub_agent_controllable_with_hook(
     ),
     SubAgentError,
 > {
-    let handle = anvil_io_engine::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
+    let handle = temper_agent_io_engine::current_handle().ok_or(SubAgentError::RuntimeUnavailable)?;
 
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools

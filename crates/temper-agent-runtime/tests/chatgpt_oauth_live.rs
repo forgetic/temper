@@ -23,7 +23,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anvil_temper_agent::{AuthChoice, ProviderConfig, default_auth_path, run_decision};
+use temper_agent_runtime::{AuthChoice, ProviderConfig, default_auth_path, run_decision};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -51,11 +51,11 @@ fn block_on_decision<D: serde::de::DeserializeOwned + Send + 'static>(
     provider: &ProviderConfig,
     system_prompt: &str,
     user_context: &str,
-) -> Result<D, anvil_temper_agent::DecisionError> {
+) -> Result<D, temper_agent_runtime::DecisionError> {
     let provider = provider.clone();
     let system_prompt = system_prompt.to_string();
     let user_context = user_context.to_string();
-    anvil_io_engine::block_on(async move {
+    temper_agent_io_engine::block_on(async move {
         run_decision(&provider, &system_prompt, &user_context).await
     })
 }

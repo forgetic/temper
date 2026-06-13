@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
-use smith_agent_protocol::{
+use temper_agent_protocol::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult, WorkspaceWorkItem,
 };
 use temper_worker_protocol::{
-    Assign, Branch, FailureClass, JobArtifactSnapshot, JobChild, JobRepository,
+    Assign, Branch, FailureClass, JobArtifactSnapshot, JobChild, RepoOutcome,
 };
 
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink};
@@ -251,10 +251,15 @@ async fn execute<R: AgentRunner>(
             };
 
             JobOutcome::Success {
-                branch: Branch {
-                    name: branch_hint,
-                    head_sha,
-                },
+                // The coding executor checks out and writes a single (primary)
+                // repo today, so it produces exactly one per-repo outcome.
+                repos: vec![RepoOutcome {
+                    repo: repo.clone(),
+                    branch: Branch {
+                        name: branch_hint,
+                        head_sha,
+                    },
+                }],
                 summary: result
                     .summary
                     .or_else(|| Some(format!("implemented {correlation_key}"))),
@@ -440,6 +445,18 @@ fn redact_secret(text: String, secret: &str) -> String {
     } else {
         text.replace(secret, "<redacted>")
     }
+}
+
+/// The repository descriptor the daemon enriches into a coding job payload.
+///
+/// Private to the worker's enriched-payload wire shape. (The cross-process
+/// worker protocol carries the full repo set in `WorkspaceManifest`; this is the
+/// single primary-repo descriptor the coding executor consumes today.)
+#[derive(Debug, Deserialize)]
+struct JobRepository {
+    owner: String,
+    name: String,
+    default_branch: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,10 +1,10 @@
 [package]
-name = "smith-agent-protocol"
+name = "temper-agent-protocol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Versioned, serde-only process protocol between smith-worker and an out-of-process coding agent: workspace context in, step-progress stream + result out. Smith owns the contract; agents implement it."
+description = "Versioned, serde-only process protocol between the temper worker and an out-of-process coding agent: workspace context in, step-progress stream + result out. Temper owns the contract; agents implement it."
 
 [dependencies]
 serde.workspace = true

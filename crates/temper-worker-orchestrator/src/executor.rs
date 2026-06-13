@@ -1,12 +1,15 @@
 use temper_worker_protocol::{
-    Assign, Branch, Failure, FailureClass, JobChild, JobResult, ResultStatus,
+    Assign, Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum JobOutcome {
     Success {
-        branch: Branch,
+        /// Per-repo head products — one per writable repo that produced a diff.
+        /// The daemon opens one pull request per entry. A coding job that wrote
+        /// to a single repo produces exactly one outcome.
+        repos: Vec<RepoOutcome>,
         summary: Option<String>,
     },
     Verdict {
@@ -62,10 +65,13 @@ impl JobExecutor for StubExecutor {
         async move {
             match mode {
                 StubMode::Success => JobOutcome::Success {
-                    branch: Branch {
-                        name: format!("smith-worker/stub/{}", assign.job_id),
-                        head_sha: "0000000000000000000000000000000000000000".to_string(),
-                    },
+                    repos: vec![RepoOutcome {
+                        repo: assign.repo.clone(),
+                        branch: Branch {
+                            name: format!("temper-worker/stub/{}", assign.job_id),
+                            head_sha: "0000000000000000000000000000000000000000".to_string(),
+                        },
+                    }],
                     summary: Some("stub executor completed without doing IO".to_string()),
                 },
                 StubMode::Failure { class, message } => JobOutcome::Failure { class, message },
@@ -75,54 +81,45 @@ impl JobExecutor for StubExecutor {
 }
 
 pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResult {
+    let base = JobResult {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: worker_id.to_string(),
+        job_id: job_id.to_string(),
+        status: ResultStatus::Success,
+        repos: Vec::new(),
+        verdict: None,
+        body: None,
+        children: Vec::new(),
+        failure: None,
+        summary: None,
+        details: None,
+    };
     match outcome {
-        JobOutcome::Success { branch, summary } => job_result_from_value(serde_json::json!({
-            "protocol_version": WORKER_PROTOCOL_VERSION,
-            "worker_id": worker_id,
-            "job_id": job_id,
-            "status": ResultStatus::Success,
-            "branch": branch,
-            "failure": null,
-            "summary": summary,
-            "details": null,
-            "verdict": null,
-            "body": null,
-        })),
+        JobOutcome::Success { repos, summary } => JobResult {
+            status: ResultStatus::Success,
+            repos,
+            summary,
+            ..base
+        },
         JobOutcome::Verdict {
             verdict,
             body,
             summary,
             children,
-        } => job_result_from_value(serde_json::json!({
-            "protocol_version": WORKER_PROTOCOL_VERSION,
-            "worker_id": worker_id,
-            "job_id": job_id,
-            "status": ResultStatus::Success,
-            "branch": null,
-            "failure": null,
-            "summary": summary,
-            "details": null,
-            "verdict": verdict,
-            "body": body,
-            "children": children,
-        })),
-        JobOutcome::Failure { class, message } => job_result_from_value(serde_json::json!({
-            "protocol_version": WORKER_PROTOCOL_VERSION,
-            "worker_id": worker_id,
-            "job_id": job_id,
-            "status": ResultStatus::Failure,
-            "branch": null,
-            "failure": Failure { class, message },
-            "summary": null,
-            "details": null,
-            "verdict": null,
-            "body": null,
-        })),
+        } => JobResult {
+            status: ResultStatus::Success,
+            verdict: Some(verdict),
+            body,
+            children,
+            summary,
+            ..base
+        },
+        JobOutcome::Failure { class, message } => JobResult {
+            status: ResultStatus::Failure,
+            failure: Some(Failure { class, message }),
+            ..base
+        },
     }
-}
-
-fn job_result_from_value(value: serde_json::Value) -> JobResult {
-    serde_json::from_value(value).expect("smith-worker constructs valid worker-protocol JobResult")
 }
 
 #[cfg(test)]
@@ -161,11 +158,14 @@ mod tests {
             Some("stub executor completed without doing IO")
         );
         assert_eq!(
-            result.branch,
-            Some(Branch {
-                name: "smith-worker/stub/job-123".to_string(),
-                head_sha: "0000000000000000000000000000000000000000".to_string(),
-            })
+            result.repos,
+            vec![RepoOutcome {
+                repo: "ai/temper".to_string(),
+                branch: Branch {
+                    name: "temper-worker/stub/job-123".to_string(),
+                    head_sha: "0000000000000000000000000000000000000000".to_string(),
+                },
+            }]
         );
     }
 
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(result.worker_id, "worker-3");
         assert_eq!(result.job_id, "job-789");
         assert_eq!(result.status, ResultStatus::Success);
-        assert_eq!(result.branch, None);
+        assert!(result.repos.is_empty());
         assert_eq!(result.failure, None);
         assert_eq!(result.summary.as_deref(), Some("triaged"));
         assert!(result.children.is_empty());
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(result.worker_id, "worker-2");
         assert_eq!(result.job_id, "job-456");
         assert_eq!(result.status, ResultStatus::Failure);
-        assert_eq!(result.branch, None);
+        assert!(result.repos.is_empty());
         assert_eq!(result.summary, None);
         assert_eq!(
             result.failure,

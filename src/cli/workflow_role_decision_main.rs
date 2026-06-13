@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use anvil_temper_agent::{
+use temper_agent_runtime::{
     AuthChoice, ProviderConfig, WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV,
     WorkflowRoleDecisionRequest, WorkflowRoleDecisionResponder,
 };
@@ -48,7 +48,7 @@ fn run() -> Result<(), String> {
     let responder = WorkflowRoleDecisionResponder::new(provider);
     // The decision path drives anvil's native agent loop, which must run
     // inside a skein engine task (runtime clock + I/O spawning).
-    let reply = anvil_io_engine::block_on(async move { responder.respond(&request).await })
+    let reply = temper_agent_io_engine::block_on(async move { responder.respond(&request).await })
         .map_err(|error| error.to_string())?;
 
     let stdout = io::stdout();

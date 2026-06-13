@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use smith_agent_protocol::{WorkspaceContext, WorkspaceResultChild};
-use smith_worker::{
+use temper_agent_protocol::{WorkspaceContext, WorkspaceResultChild};
+use temper_worker_orchestrator::{
     AgentRunError, AgentRunner, CodingExecutor, CodingExecutorConfig, JobExecutor, JobOutcome,
     ProgressSink, RoleGitIdentity, WorkspaceResult,
 };
@@ -1142,7 +1142,15 @@ fn seed_origin(origin: &Path, temp: &Path) -> String {
 
 fn expect_success(outcome: JobOutcome) -> (String, String, Option<String>) {
     match outcome {
-        JobOutcome::Success { branch, summary } => (branch.name, branch.head_sha, summary),
+        JobOutcome::Success { repos, summary } => {
+            assert_eq!(
+                repos.len(),
+                1,
+                "coding executor produces exactly one per-repo outcome"
+            );
+            let branch = repos.into_iter().next().expect("one repo outcome").branch;
+            (branch.name, branch.head_sha, summary)
+        }
         JobOutcome::Verdict {
             verdict,
             body,
@@ -1165,8 +1173,8 @@ fn expect_verdict(outcome: JobOutcome) -> (String, Option<String>, Option<String
             summary,
             children,
         } => (verdict, body, summary, children),
-        JobOutcome::Success { branch, summary } => {
-            panic!("expected verdict, got success {branch:?} {summary:?}")
+        JobOutcome::Success { repos, summary } => {
+            panic!("expected verdict, got success {repos:?} {summary:?}")
         }
         JobOutcome::Failure { class, message } => {
             panic!("expected verdict, got {class:?}: {message}")
@@ -1180,8 +1188,8 @@ fn expect_failure_class(outcome: JobOutcome, expected: FailureClass) -> String {
             assert_eq!(class, expected, "unexpected failure message: {message}");
             message
         }
-        JobOutcome::Success { branch, summary } => {
-            panic!("expected {expected:?} failure, got success {branch:?} {summary:?}")
+        JobOutcome::Success { repos, summary } => {
+            panic!("expected {expected:?} failure, got success {repos:?} {summary:?}")
         }
         JobOutcome::Verdict {
             verdict,

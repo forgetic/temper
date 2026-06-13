@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anvil_agent::{AgentEvent, EventSink};
+use temper_agent_core::{AgentEvent, EventSink};
 use tongs::model::Usage;
 
 use crate::observability::StructuredEvent;

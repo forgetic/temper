@@ -11,8 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anvil_agent::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
-use anvil_temper_agent::ProviderConfig;
+use temper_agent_core::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
+use temper_agent_runtime::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use tongs::provider::StreamOptions;
@@ -65,7 +65,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
     // scoped to the checkout, talking to sub_fake.
     let sub_base_url = sub_fake.base_url();
     let checkout_path = checkout.path().to_path_buf();
-    let factory: anvil_agent::SubAgentFactory = Arc::new(move |task: String| {
+    let factory: temper_agent_core::SubAgentFactory = Arc::new(move |task: String| {
         let provider = ProviderConfig::new(
             "jig-openai-compatible",
             "jig-sub",
@@ -107,7 +107,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
     .build_provider()
     .expect("build parent provider");
 
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         run_sub_agent(SubAgent {
             system_prompt: Some("You are an orchestrator. Use the investigate tool.".into()),
             user_message: "What is the answer? Use the investigate sub-agent.".into(),
@@ -216,7 +216,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
 
     let sub_base_url = sub_fake.base_url();
     let checkout_path = checkout.path().to_path_buf();
-    let factory: anvil_agent::SubAgentFactory = Arc::new(move |task: String| {
+    let factory: temper_agent_core::SubAgentFactory = Arc::new(move |task: String| {
         let provider = ProviderConfig::new(
             "jig-openai-compatible",
             "jig-sub",
@@ -256,7 +256,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
     .build_provider()
     .expect("build parent provider");
 
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         run_sub_agent(SubAgent {
             system_prompt: Some("Orchestrator.".into()),
             user_message: "Investigate A and B.".into(),

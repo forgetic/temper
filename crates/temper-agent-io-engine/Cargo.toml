@@ -1,10 +1,10 @@
 [package]
-name = "anvil-io-engine"
+name = "temper-agent-io-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Sans-IO completion engine for anvil: pure Machine cores driven by a skein imperative shell."
+description = "Sans-IO completion engine for the temper agent: pure Machine cores driven by a skein imperative shell. (Formerly anvil-io-engine; an independent copy of the sans-IO driver, deliberately separate from temper-io-engine.)"
 
 [dependencies]
 skein.workspace = true

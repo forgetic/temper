@@ -29,7 +29,7 @@ fn current_handle_and_spawn_work_inside_a_lab_task() {
                 cx_resolved_in.fetch_add(1, Ordering::SeqCst);
             }
             // The shell needs the runtime handle (for spawning).
-            if anvil_io_engine::current_handle().is_some() {
+            if temper_agent_io_engine::current_handle().is_some() {
                 handle_resolved_in.fetch_add(1, Ordering::SeqCst);
             }
         })

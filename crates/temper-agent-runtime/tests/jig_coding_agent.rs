@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anvil_temper_agent::{
+use temper_agent_runtime::{
     ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
     run_coding_agent_native,
 };
@@ -12,7 +12,7 @@ use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 
 /// A jig-backed engineer turn driven by the native sans-IO agent loop
-/// (`run_coding_agent_native` → `anvil_agent::run_sub_agent`) on the skein
+/// (`run_coding_agent_native` → `temper_agent_core::run_sub_agent`) on the skein
 /// runtime. This is the path the worker takes in production; it must produce
 /// a real product diff + result.
 #[test]
@@ -32,7 +32,7 @@ fn jig_coding_agent_native_tool_loop_creates_product_diff() {
 
     let context = workspace_context();
     let cwd = checkout.path().to_path_buf();
-    let result = anvil_io_engine::block_on(async move {
+    let result = temper_agent_io_engine::block_on(async move {
         run_coding_agent_native(&provider, &context, &cwd, 6, None).await
     })
     .expect("native jig-backed coding agent succeeds");

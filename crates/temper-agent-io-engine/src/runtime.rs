@@ -122,7 +122,7 @@ pub fn build_runtime() -> Result<EngineRuntime, String> {
 /// ```text
 /// #[test]
 /// fn my_async_test() {
-///     anvil_io_engine::block_on(async { ... });
+///     temper_agent_io_engine::block_on(async { ... });
 /// }
 /// ```
 ///

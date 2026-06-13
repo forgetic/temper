@@ -24,6 +24,14 @@ members = [
     "crates/temper-reference-delivery-validator",
     "crates/temper-worker",
     "crates/temper-sim",
+    # Merged from smith (the orchestration worker):
+    "crates/temper-agent-protocol",
+    "crates/temper-worker-io-engine",
+    "crates/temper-worker-orchestrator",
+    # Merged from anvil (the coding/decision agent):
+    "crates/temper-agent-core",
+    "crates/temper-agent-io-engine",
+    "crates/temper-agent-runtime",
 ]
 resolver = "2"
 
@@ -88,6 +96,7 @@ path = "src/bin/temper-interaction.rs"
 workspace = true
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 # skein (the vendored async runtime) uses edition-2024 and let-chains; nothing
@@ -99,13 +108,26 @@ rust-version = "1.88"
 # asupersync 0.2.4 — the last plain-MIT upstream release; 0.2.5+ carry an
 # OpenAI/Anthropic license rider and 0.3.3+ require nightly). Lives in its own
 # repo at ../skein and is shared across projects (temper, smith, …).
-skein = { path = "../skein/crates/skein" }
+#
+# TLS features are enabled because the merged agent crates (formerly anvil)
+# reach LLM providers over HTTPS. skein is needed by every role and so cannot be
+# an optional/feature-gated dependency; cargo unifies features across the graph,
+# so worker/daemon-only builds also link skein's TLS code. This is an accepted
+# tradeoff — TLS is small relative to the agent's LLM/HTTP stack, which slim
+# builds still exclude (it enters only via the `agent` feature crates).
+skein = { path = "../skein/crates/skein", features = ["tls", "tls-native-roots"] }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# Merged-in agent stack (formerly anvil) and worker (formerly smith).
+tongs = { path = "../tongs/crates/tongs" }
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", default-features = false }
+futures = "0.3"
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

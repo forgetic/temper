@@ -31,11 +31,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use anvil_temper_agent::{
+use temper_agent_runtime::{
     AuthChoice, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
     run_coding_agent_native_with_hooks,
 };
-use smith_agent_protocol::{
+use temper_agent_protocol::{
     CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
     WorkspaceResult,
 };
@@ -122,7 +122,7 @@ fn run() -> Result<(), String> {
         )
     });
 
-    let result = anvil_io_engine::block_on({
+    let result = temper_agent_io_engine::block_on({
         let context = context.clone();
         let checkpointer = checkpointer.clone();
         let cwd = cwd.clone();
@@ -135,7 +135,7 @@ fn run() -> Result<(), String> {
                 options.config_dir.as_deref(),
                 options.enable_subagents,
                 resume_note.as_deref(),
-                checkpointer.map(|hook| hook as Arc<dyn anvil_agent::TurnHook>),
+                checkpointer.map(|hook| hook as Arc<dyn temper_agent_core::TurnHook>),
             )
             .await
         }
@@ -313,8 +313,8 @@ impl Checkpointer {
         if self.git(&["diff", "--cached", "--quiet"]).is_ok() {
             return Ok(None);
         }
-        let user = self.user.as_deref().unwrap_or("anvil-agent");
-        let email = self.email.as_deref().unwrap_or("anvil-agent@localhost");
+        let user = self.user.as_deref().unwrap_or("temper-agent");
+        let email = self.email.as_deref().unwrap_or("temper-agent@localhost");
         self.git(&[
             "-c",
             &format!("user.name={user}"),
@@ -363,7 +363,7 @@ impl Checkpointer {
 }
 
 #[async_trait::async_trait]
-impl anvil_agent::TurnHook for Checkpointer {
+impl temper_agent_core::TurnHook for Checkpointer {
     async fn before_model_call(&self, turn: usize) {
         // Turn 0 is the first model call: nothing has run yet.
         if turn == 0 {

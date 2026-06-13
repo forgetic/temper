@@ -44,9 +44,9 @@ use axum::{
     routing::post,
 };
 use serde_json::json;
-use smith_agent_protocol::{StepProgress, StepState};
-use smith_worker::config::CapabilitySpec;
-use smith_worker::{
+use temper_agent_protocol::{StepProgress, StepState};
+use temper_worker_orchestrator::config::CapabilitySpec;
+use temper_worker_orchestrator::{
     CodingExecutor, CodingExecutorConfig, ExecutorSelection, OutOfProcessRunner, ProgressSink,
     RoleGitIdentity, WorkerConfig, run_worker,
 };
@@ -113,7 +113,12 @@ async fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
         "result: {:?}",
         observed.result
     );
-    let branch = observed.result.branch.expect("success carries a branch");
+    assert_eq!(
+        observed.result.repos.len(),
+        1,
+        "coding job produces one per-repo outcome"
+    );
+    let branch = &observed.result.repos[0].branch;
     assert_eq!(branch.name, "agent/pr-for-code-7");
     assert_eq!(branch.head_sha.len(), 40, "head sha looks like a real sha");
 
@@ -216,7 +221,7 @@ async fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
 // ---------------------------------------------------------------------------
 
 fn fake_agent_bin() -> String {
-    env!("CARGO_BIN_EXE_smith-fake-agent").to_string()
+    env!("CARGO_BIN_EXE_temper-fake-agent").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -256,10 +261,12 @@ fn role_identities() -> BTreeMap<String, RoleGitIdentity> {
 
 fn spawn_worker_thread<E>(config: WorkerConfig, executor: Arc<E>)
 where
-    E: smith_worker::JobExecutor + Send + Sync + 'static,
+    E: temper_worker_orchestrator::JobExecutor + Send + Sync + 'static,
 {
     std::thread::spawn(move || {
-        let _ = smith_io_engine::block_on(async move { run_worker(config, executor).await });
+        let _ = temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+            run_worker(handle, config, executor).await
+        });
     });
 }
 

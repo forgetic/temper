@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use anvil_temper_agent::{AuthChoice, ProductManagerResponder, ProviderConfig};
+use temper_agent_runtime::{AuthChoice, ProductManagerResponder, ProviderConfig};
 use temper_process_protocol::ConversationRequest;
 
 #[cfg(feature = "test-provider-base-url-override")]
@@ -46,7 +46,7 @@ fn run() -> Result<(), String> {
     let responder = ProductManagerResponder::new(provider);
     // The decision path drives anvil's native agent loop, which must run
     // inside a skein engine task (runtime clock + I/O spawning).
-    let reply = anvil_io_engine::block_on(async move { responder.respond(&request).await })
+    let reply = temper_agent_io_engine::block_on(async move { responder.respond(&request).await })
         .map_err(|error| error.to_string())?;
 
     let stdout = io::stdout();

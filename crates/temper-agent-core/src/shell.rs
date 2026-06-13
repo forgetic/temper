@@ -1,6 +1,6 @@
 //! The agent loop's imperative shell.
 //!
-//! [`AgentShell`] implements [`anvil_io_engine::Executor`] for
+//! [`AgentShell`] implements [`temper_agent_io_engine::Executor`] for
 //! [`AgentMachine`](crate::machine::AgentMachine): it performs the two I/O
 //! seams the loop has — streaming a model response and executing a tool — by
 //! reusing tongs [`Provider`]s and [`Tool`]s, and feeds every result back into
@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use anvil_io_engine::{CqSender, Executor};
+use temper_agent_io_engine::{CqSender, Executor};
 use futures::StreamExt;
 use tongs::model::{AssistantMessage, Message, StopReason, StreamEvent};
 use tongs::provider::{Context, Provider, StreamOptions, ToolDef};
@@ -75,7 +75,7 @@ pub struct AgentShell {
     /// Zero-based count of model calls dispatched, for the hook's `turn`.
     turns_started: std::sync::atomic::AtomicUsize,
     /// Resolved once, when the machine emits `Finished`.
-    outcome: std::sync::Mutex<Option<anvil_io_engine::OneshotSender<AgentOutcome>>>,
+    outcome: std::sync::Mutex<Option<temper_agent_io_engine::OneshotSender<AgentOutcome>>>,
 }
 
 impl AgentShell {
@@ -89,7 +89,7 @@ impl AgentShell {
         tool_defs: Arc<Vec<ToolDef>>,
         stream_options: Arc<StreamOptions>,
         events: Arc<dyn EventSink>,
-        outcome: anvil_io_engine::OneshotSender<AgentOutcome>,
+        outcome: temper_agent_io_engine::OneshotSender<AgentOutcome>,
     ) -> Self {
         Self {
             handle,
@@ -242,7 +242,7 @@ async fn stream_to_completion(
                 if will_retry {
                     let backoff = (STREAM_RETRY_BACKOFF * (1u32 << attempt.min(5)))
                         .min(STREAM_RETRY_BACKOFF_MAX);
-                    anvil_io_engine::sleep_for(backoff).await;
+                    temper_agent_io_engine::sleep_for(backoff).await;
                     attempt += 1;
                     continue;
                 }
@@ -290,7 +290,7 @@ async fn stream_one_attempt(
     // can advance) — forever. We bound each await so a stall fails the attempt
     // (retryably) instead of deadlocking. The window only trips on *no event at
     // all* for the interval, never on a slow-but-alive stream.
-    let mut stream = match anvil_io_engine::timeout(
+    let mut stream = match temper_agent_io_engine::timeout(
         STREAM_CONNECT_TIMEOUT,
         provider.stream(context, stream_options),
     )
@@ -316,7 +316,7 @@ async fn stream_one_attempt(
     };
 
     loop {
-        let event = match anvil_io_engine::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
+        let event = match temper_agent_io_engine::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
             Ok(Some(event)) => event,
             Ok(None) => {
                 return StreamAttempt::Failed {

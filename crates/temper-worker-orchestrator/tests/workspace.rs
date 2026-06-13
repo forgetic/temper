@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use smith_worker::{RoleGitIdentity, Workspace, WorkspaceConfig};
+use temper_worker_orchestrator::{RoleGitIdentity, Workspace, WorkspaceConfig};
 use tempfile::tempdir;
 
 #[tokio::test]

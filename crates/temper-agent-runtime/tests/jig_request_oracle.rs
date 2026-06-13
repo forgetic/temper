@@ -3,7 +3,7 @@
 //! This integration test is `#[ignore]`d and every leg is separately
 //! environment-gated, so the default developer/CI test path compiles it but does
 //! not make network calls or require credentials. When opted in, it captures the
-//! actual request emitted by `anvil_temper_agent::run_decision` through
+//! actual request emitted by `temper_agent_runtime::run_decision` through
 //! `tongs` with `jig-record`, including anvil's Anthropic OAuth Claude
 //! Code identity workaround, then compares the captured request body with jig's
 //! authoritative `fixtures/<dialect>/single-text/request.template.json` using
@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use anvil_temper_agent::{AuthChoice, ProviderConfig, run_decision};
+use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 use jig_core::conform::grammar::{GrammarFinding, grammar_findings};
 use jig_record::{bind, proxy_once};
 use serde::Deserialize;
@@ -156,7 +156,7 @@ fn run_leg(
     let decision: RoleDecision = {
         let provider = provider.clone();
         let prompt = role.prompt.render();
-        anvil_io_engine::block_on(async move { run_decision(&provider, &prompt, &context).await })
+        temper_agent_io_engine::block_on(async move { run_decision(&provider, &prompt, &context).await })
             .expect("anvil decision succeeds through recorder and real upstream")
     };
     assert_eq!(decision.action, "advance");

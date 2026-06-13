@@ -8,7 +8,7 @@ use axum::{
     routing::post,
 };
 use serde_json::json;
-use smith_worker::{CapabilitySpec, ExecutorSelection, StubExecutor, WorkerConfig, run_worker};
+use temper_worker_orchestrator::{CapabilitySpec, ExecutorSelection, StubExecutor, WorkerConfig, run_worker};
 use temper_worker_protocol::{
     Artifact, Assign, ErrorCode, FailureClass, JobResult, ProtocolError, Register, Release,
     ReleaseDisposition, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
@@ -206,10 +206,12 @@ fn worker_config() -> WorkerConfig {
 /// forever, and the test returns once the daemon has observed the result.
 fn spawn_worker_thread<E>(config: WorkerConfig, executor: std::sync::Arc<E>)
 where
-    E: smith_worker::JobExecutor + Send + Sync + 'static,
+    E: temper_worker_orchestrator::JobExecutor + Send + Sync + 'static,
 {
     std::thread::spawn(move || {
-        let _ = smith_io_engine::block_on(async move { run_worker(config, executor).await });
+        let _ = temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+            run_worker(handle, config, executor).await
+        });
     });
 }
 
@@ -234,7 +236,7 @@ async fn success_stub_registers_polls_runs_and_posts_result() {
 
     assert_eq!(observed.result.job_id, "job-123");
     assert_eq!(observed.result.status, ResultStatus::Success);
-    assert!(observed.result.branch.is_some());
+    assert_eq!(observed.result.repos.len(), 1);
     assert_eq!(observed.result.failure, None);
 }
 
@@ -255,7 +257,7 @@ async fn failure_stub_registers_polls_runs_and_posts_failure_result() {
 
     assert_eq!(observed.result.job_id, "job-123");
     assert_eq!(observed.result.status, ResultStatus::Failure);
-    assert_eq!(observed.result.branch, None);
+    assert!(observed.result.repos.is_empty());
     let failure = observed.result.failure.expect("failure details present");
     assert_eq!(failure.class, FailureClass::Permanent);
     assert_eq!(failure.message, "configured failure");

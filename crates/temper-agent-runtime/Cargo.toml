@@ -1,18 +1,18 @@
 [package]
-name = "anvil-temper-agent"
+name = "temper-agent-runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Temper-specific provider/auth/decision core for anvil agents."
+description = "Temper-specific provider/auth/decision core for the temper agent. (Formerly anvil-temper-agent.)"
 
 [dependencies]
-smith-agent-protocol = { path = "../../../smith/crates/smith-agent-protocol" }
+temper-agent-protocol = { path = "../temper-agent-protocol" }
 tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-anvil-agent = { path = "../anvil-agent" }
-temper-process-protocol = { path = "../../../temper/crates/temper-process-protocol" }
+temper-agent-core = { path = "../temper-agent-core" }
+temper-process-protocol = { path = "../temper-process-protocol" }
 uuid.workspace = true
 
 [features]
@@ -20,8 +20,8 @@ default = []
 test-provider-base-url-override = []
 
 [dev-dependencies]
-anvil-temper-agent = { path = ".", features = ["test-provider-base-url-override"] }
-anvil-io-engine = { path = "../anvil-io-engine" }
+temper-agent-runtime = { path = ".", features = ["test-provider-base-url-override"] }
+temper-agent-io-engine = { path = "../temper-agent-io-engine" }
 jig-server = { path = "../../../jig/crates/jig-server" }
 jig-core = { path = "../../../jig/crates/jig-core" }
 jig-record = { path = "../../../jig/crates/jig-record" }

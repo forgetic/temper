@@ -8,7 +8,7 @@
 //! tongs providers and tools for the actual model streaming and tool
 //! execution.
 //!
-//! This is the same sans-IO discipline as [`anvil_io_engine`] and the worker:
+//! This is the same sans-IO discipline as [`temper_agent_io_engine`] and the worker:
 //! the loop is deterministic and replayable, so it is unit-testable with
 //! synthetic completions and drivable under the skein lab for
 //! simulation/fuzz testing. It is designed for observability (events are

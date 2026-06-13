@@ -46,15 +46,16 @@ pub fn build_runtime() -> Result<EngineRuntime, String> {
     Ok(EngineRuntime { runtime })
 }
 
-/// Build a runtime and run one future to completion **as a task**, so the
-/// body has an ambient [`Cx`] (timers, HTTP calls, and process deadlines all
-/// need one). This is the standard `main()` entry for Smith engine binaries
-/// and the test-harness replacement for `#[tokio::test]` bodies:
+/// Build a runtime and run one future to completion **as a task**. The body
+/// receives no capabilities — code that needs the task's [`Cx`] (timers,
+/// process deadlines) or the runtime's [`RuntimeHandle`] (the spawn
+/// capability) must use [`block_on_with`]. This is the standard entry for
+/// bodies that only call APIs taking their capabilities explicitly:
 ///
 /// ```text
 /// #[test]
 /// fn my_async_test() {
-///     smith_io_engine::block_on(async { ... });
+///     temper_worker_io_engine::block_on(async { ... });
 /// }
 /// ```
 ///
@@ -64,8 +65,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let runtime = build_runtime().expect("build skein runtime");
-    block_on_runtime(&runtime, future)
+    block_on_with(move |_cx, _handle| future)
 }
 
 /// [`block_on`] on an already-built runtime.
@@ -74,9 +74,39 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
+    block_on_runtime_with(runtime, move |_cx, _handle| future)
+}
+
+/// Build a runtime and run one future to completion as a task, handing the
+/// body its capabilities **explicitly**: the root task's [`Cx`] (the clock
+/// capability) and the runtime's [`RuntimeHandle`] (the spawn capability).
+/// There is no ambient way to recover either — this signature is the only
+/// source (skein removed `Runtime::current_handle`).
+///
+/// ```text
+/// temper_worker_io_engine::block_on_with(|cx, handle| async move { ... });
+/// ```
+pub fn block_on_with<F, Fut>(f: F) -> Fut::Output
+where
+    F: FnOnce(Cx, RuntimeHandle) -> Fut + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    let runtime = build_runtime().expect("build skein runtime");
+    block_on_runtime_with(&runtime, f)
+}
+
+/// [`block_on_with`] on an already-built runtime.
+pub fn block_on_runtime_with<F, Fut>(runtime: &EngineRuntime, f: F) -> Fut::Output
+where
+    F: FnOnce(Cx, RuntimeHandle) -> Fut + Send + 'static,
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
     let (result_tx, result_rx) = crate::queue::oneshot();
-    runtime.handle().spawn_with_cx(move |_cx| async move {
-        let mut future = Box::pin(future);
+    let handle = runtime.handle();
+    runtime.handle().spawn_with_cx(move |cx| async move {
+        let mut future = Box::pin(f(cx, handle));
         let outcome = std::future::poll_fn(move |task_cx| {
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 future.as_mut().poll(task_cx)

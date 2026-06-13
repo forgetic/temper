@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anvil_temper_agent::{ProviderConfig, run_decision};
+use temper_agent_runtime::{ProviderConfig, run_decision};
 use jig_core::{Reply, Script};
 use jig_server::FakeLlm;
 use serde::Deserialize;
@@ -60,7 +60,7 @@ fn run_fixture_decision(provider: &ProviderConfig) -> RoleDecision {
     );
     let context = role_context(&role);
     let provider = provider.clone();
-    anvil_io_engine::block_on(async move {
+    temper_agent_io_engine::block_on(async move {
         run_decision::<RoleDecision>(&provider, &role.prompt.render(), &context).await
     })
     .expect("jig-backed workflow-role decision succeeds and parses")

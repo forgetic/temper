@@ -1,10 +1,10 @@
 [package]
-name = "smith-io-engine"
+name = "temper-worker-io-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Sans-IO completion engine for Smith: pure Machine cores driven by an skein imperative shell."
+description = "Sans-IO completion engine for the temper worker: pure Machine cores driven by a skein imperative shell. (Formerly smith-io-engine; an independent copy of the sans-IO driver, deliberately separate from temper-io-engine.)"
 
 [dependencies]
 skein.workspace = true

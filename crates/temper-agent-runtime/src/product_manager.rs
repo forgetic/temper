@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn product_manager_responder_rejects_other_profiles_without_provider_call() {
-        anvil_io_engine::block_on(async {
+        temper_agent_io_engine::block_on(async {
             rejects_other_profiles_without_provider_call_inner().await;
         });
     }

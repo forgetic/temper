@@ -1,23 +1,23 @@
 [package]
-name = "anvil-agent"
+name = "temper-agent-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Sans-IO LLM agent loop for anvil: a pure AgentMachine driven by a skein shell that reuses tongs providers and tools."
+description = "Sans-IO LLM agent loop for the temper agent: a pure AgentMachine driven by a skein shell that reuses tongs providers and tools. (Formerly anvil-agent.)"
 
 [dependencies]
-async-trait = "0.1"
+async-trait.workspace = true
 skein.workspace = true
-futures = "0.3"
+futures.workspace = true
 tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-anvil-io-engine = { path = "../anvil-io-engine" }
+temper-agent-io-engine = { path = "../temper-agent-io-engine" }
 
 [dev-dependencies]
-anvil-io-engine = { path = "../anvil-io-engine" }
-anvil-temper-agent = { path = "../anvil-temper-agent", features = ["test-provider-base-url-override"] }
+temper-agent-io-engine = { path = "../temper-agent-io-engine" }
+temper-agent-runtime = { path = "../temper-agent-runtime", features = ["test-provider-base-url-override"] }
 jig-server = { path = "../../../jig/crates/jig-server" }
 jig-core = { path = "../../../jig/crates/jig-core" }
 

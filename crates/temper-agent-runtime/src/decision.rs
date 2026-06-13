@@ -1,6 +1,6 @@
 //! Running a one-shot LLM decision on anvil's native agent loop.
 //!
-//! [`run_decision`] runs one bounded [`anvil_agent::SubAgent`] turn with the
+//! [`run_decision`] runs one bounded [`temper_agent_core::SubAgent`] turn with the
 //! role system prompt and the work-item context as the user message, collects
 //! the assistant's text, and parses it into a structured decision `D`. No
 //! tools are registered: the agent must answer in one turn with a single JSON
@@ -9,7 +9,7 @@
 //!
 //! Must be awaited inside a skein engine task (the sub-agent's drive loop
 //! reads the runtime clock and its shell spawns I/O) — see
-//! `anvil_io_engine::block_on`.
+//! `temper_agent_io_engine::block_on`.
 
 use serde::de::DeserializeOwned;
 use tongs::model::ContentBlock;
@@ -95,7 +95,7 @@ pub async fn run_decision<D: DeserializeOwned>(
 
     // No tools: the registry is empty, so the model cannot reach bash/file
     // tools — the workflow mutation path stays exclusively in the adapter.
-    let outcome = anvil_agent::run_sub_agent(anvil_agent::SubAgent {
+    let outcome = temper_agent_core::run_sub_agent(temper_agent_core::SubAgent {
         system_prompt: Some(effective_system),
         user_message: effective_user,
         tools: tongs::tools::ToolRegistry::from_tools(Vec::new()),
@@ -105,7 +105,7 @@ pub async fn run_decision<D: DeserializeOwned>(
     })
     .await
     .map_err(|error| DecisionError::Run(error.to_string()))?;
-    if matches!(outcome.stop, anvil_agent::AgentStop::ModelError) {
+    if matches!(outcome.stop, temper_agent_core::AgentStop::ModelError) {
         return Err(DecisionError::Run(
             outcome
                 .final_message

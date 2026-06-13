@@ -1,6 +1,6 @@
 #[cfg(feature = "test-provider-base-url-override")]
 mod feature_enabled {
-    use anvil_temper_agent::{AuthChoice, ProviderConfig};
+    use temper_agent_runtime::{AuthChoice, ProviderConfig};
     use jig_core::{Reply, Script};
     use jig_server::FakeLlm;
 

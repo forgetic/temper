@@ -24,7 +24,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use smith_agent_protocol::{CONTEXT_ENV, RESULT_ENV, StepProgress, WorkspaceContext};
+use temper_agent_protocol::{CONTEXT_ENV, RESULT_ENV, StepProgress, WorkspaceContext};
 
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
@@ -32,7 +32,7 @@ use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink, WorkspaceRes
 #[derive(Clone, Debug)]
 pub struct OutOfProcessRunner {
     /// Program followed by fixed arguments, e.g.
-    /// `["anvil-agent", "--auth", "chatgpt-oauth"]`.
+    /// `["temper-agent", "--auth", "chatgpt-oauth"]`.
     command: Vec<String>,
 }
 
@@ -72,7 +72,7 @@ impl AgentRunner for OutOfProcessRunner {
         // child later dies — the crash-recovery guarantee. We drain and relay
         // after the child returns; relay latency does not affect recovery (the
         // agent already pushed + emitted before any crash).
-        let (sender, mut receiver) = smith_io_engine::channel::<StepProgress>();
+        let (sender, mut receiver) = temper_worker_io_engine::channel::<StepProgress>();
 
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
@@ -143,7 +143,7 @@ fn run_child(
     cwd: &Path,
     context_path: &Path,
     result_path: &Path,
-    sender: &smith_io_engine::CqSender<StepProgress>,
+    sender: &temper_worker_io_engine::CqSender<StepProgress>,
 ) -> Result<ChildOutcome, AgentRunError> {
     let mut child = Command::new(program)
         .args(args)
@@ -223,13 +223,13 @@ mod tests {
         let cwd = std::env::temp_dir();
         let sink = crate::agent_runner::NullProgressSink;
         let outcome =
-            smith_io_engine::block_on(async move { runner.run(&context, &cwd, &sink).await });
+            temper_worker_io_engine::block_on(async move { runner.run(&context, &cwd, &sink).await });
         let error = outcome.expect_err("empty command must fail");
         assert_eq!(error.class, temper_worker_protocol::FailureClass::Permanent);
     }
 
     fn test_context() -> WorkspaceContext {
-        use smith_agent_protocol::{WorkspaceRepository, WorkspaceWorkItem};
+        use temper_agent_protocol::{WorkspaceRepository, WorkspaceWorkItem};
         WorkspaceContext {
             repository: WorkspaceRepository {
                 id: "acme/svc".to_string(),

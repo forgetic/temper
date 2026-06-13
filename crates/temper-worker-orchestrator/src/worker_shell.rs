@@ -1,6 +1,6 @@
 //! The worker's imperative shell.
 //!
-//! [`WorkerShell`] implements [`smith_io_engine::Executor`] for
+//! [`WorkerShell`] implements [`temper_worker_io_engine::Executor`] for
 //! [`WorkerMachine`](crate::worker_machine::WorkerMachine): it performs the I/O
 //! each [`WorkerRequest`] asks for — POST worker-protocol messages to the daemon
 //! over the skein HTTP client, run dispatched jobs through the
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use skein::http::h1::http_client::HttpClient;
 use skein::runtime::RuntimeHandle;
-use smith_io_engine::{
+use temper_worker_io_engine::{
     CqSender, HttpCall, HttpResponseData, arm_timer, build_http_client, http_call,
 };
 use temper_worker_protocol::WorkerProtocolMessage;
@@ -75,7 +75,7 @@ impl<E: JobExecutor + Send + Sync + 'static> WorkerShell<E> {
     }
 }
 
-impl<E: JobExecutor + Send + Sync + 'static> smith_io_engine::Executor<WorkerMachine>
+impl<E: JobExecutor + Send + Sync + 'static> temper_worker_io_engine::Executor<WorkerMachine>
     for WorkerShell<E>
 {
     fn execute(&self, request: WorkerRequest) {

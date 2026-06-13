@@ -1,35 +1,34 @@
 [package]
-name = "smith-worker"
+name = "temper-worker-orchestrator"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Smith worker process: long-polls a Temper daemon and runs role/coding jobs. Speaks only the worker/daemon wire protocol; never calls the Forge API."
+description = "Temper worker process: long-polls a Temper daemon and runs role/coding jobs. Speaks only the worker/daemon wire protocol; never calls the Forge API. (Formerly smith-worker.)"
 
 [dependencies]
 skein.workspace = true
-smith-agent-protocol = { path = "../smith-agent-protocol" }
-smith-io-engine = { path = "../smith-io-engine" }
-temper-worker-protocol = { path = "../../../temper/crates/temper-worker-protocol" }
+temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-worker-io-engine = { path = "../temper-worker-io-engine" }
+temper-worker-protocol = { path = "../temper-worker-protocol" }
 serde.workspace = true
 serde_json.workspace = true
-tempfile = "3"
-thiserror = "2"
+tempfile.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 
 [dev-dependencies]
 axum = "0.8"
-smith-agent-protocol = { path = "../smith-agent-protocol" }
-smith-io-engine = { path = "../smith-io-engine" }
+temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-worker-io-engine = { path = "../temper-worker-io-engine" }
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net", "process"] }
 
-# A deterministic, hermetic agent that speaks the smith-agent-protocol: writes
+# A deterministic, hermetic agent that speaks the temper-agent-protocol: writes
 # a product file, emits step-progress, writes a result. Lets the worker e2e drive
 # the real out-of-process boundary without a cross-repo binary path or an LLM, via
-# CARGO_BIN_EXE_smith-fake-agent. (The real `anvil-agent` ⇄ jig integration is
-# tested in the anvil repo.)
+# CARGO_BIN_EXE_temper-fake-agent.
 [[bin]]
-name = "smith-fake-agent"
+name = "temper-fake-agent"
 path = "tests/support/smith_fake_agent.rs"
 test = false
 

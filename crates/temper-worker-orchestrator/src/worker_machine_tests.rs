@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use serde_json::json;
-use smith_io_engine::{EngineTime, Machine, drive_sync};
+use temper_worker_io_engine::{EngineTime, Machine, drive_sync};
 use temper_worker_protocol::{
     Artifact, Assign, ErrorCode, ProtocolError, ResultStatus, WORKER_PROTOCOL_VERSION,
     WorkerProtocolMessage,
@@ -63,7 +63,7 @@ struct Recorder {
     requests: RefCell<Vec<WorkerRequest>>,
 }
 
-impl smith_io_engine::Executor<WorkerMachine> for Recorder {
+impl temper_worker_io_engine::Executor<WorkerMachine> for Recorder {
     fn execute(&self, request: WorkerRequest) {
         self.requests.borrow_mut().push(request);
     }

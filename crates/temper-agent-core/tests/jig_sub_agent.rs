@@ -1,6 +1,6 @@
 //! Jig-backed end-to-end test for the native sans-IO sub-agent loop.
 //!
-//! Drives a real [`anvil_agent::run_sub_agent`] (pure `AgentMachine` + asupersync
+//! Drives a real [`temper_agent_core::run_sub_agent`] (pure `AgentMachine` + asupersync
 //! `AgentShell` + pi-SDK provider + pi-SDK tools) against a local scripted
 //! `jig_server::FakeLlm`, entirely in-process on the asupersync runtime. The
 //! fake instructs the agent to call the `write` tool to create a file, then to
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anvil_agent::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
-use anvil_temper_agent::ProviderConfig;
+use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
+use temper_agent_runtime::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use tongs::provider::StreamOptions;
@@ -45,7 +45,7 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
         create_write_tool(checkout.path()),
     ]);
 
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         run_sub_agent(SubAgent {
             system_prompt: Some(
                 "You are a sub-agent. Use the write tool to create the requested file.".to_string(),
@@ -136,7 +136,7 @@ fn turn_hook_runs_before_every_model_call() {
         turns: std::sync::Mutex::new(Vec::new()),
     });
 
-    let outcome = anvil_io_engine::block_on({
+    let outcome = temper_agent_io_engine::block_on({
         let hook = Arc::clone(&hook);
         async move {
             run_sub_agent_with_hook(
@@ -207,7 +207,7 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         run_sub_agent(SubAgent {
             system_prompt: None,
             user_message: "read forever".to_string(),
@@ -228,7 +228,7 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
 
 #[test]
 fn sub_agent_forwards_live_events_to_the_sink() {
-    use anvil_agent::{AgentEvent, EventSink, StreamDelta, run_sub_agent_with_events};
+    use temper_agent_core::{AgentEvent, EventSink, StreamDelta, run_sub_agent_with_events};
     use std::sync::Mutex;
 
     // A sink that records every event it sees.
@@ -263,7 +263,7 @@ fn sub_agent_forwards_live_events_to_the_sink() {
 
     let recorder = Arc::new(Recorder::default());
     let recorder_for_run = Arc::clone(&recorder);
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         run_sub_agent_with_events(
             SubAgent {
                 system_prompt: Some("Use the write tool.".to_string()),
@@ -326,7 +326,7 @@ fn sub_agent_forwards_live_events_to_the_sink() {
 
 #[test]
 fn sub_agent_can_be_aborted_mid_run() {
-    use anvil_agent::{NullEventSink, run_sub_agent_controllable};
+    use temper_agent_core::{NullEventSink, run_sub_agent_controllable};
 
     // A fake that loops forever (always asks for another tool call), so the run
     // only ends when aborted.
@@ -356,7 +356,7 @@ fn sub_agent_can_be_aborted_mid_run() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         // A high iteration budget so the run would otherwise spin for a long
         // time; abort is what ends it.
         let (control, run) = run_sub_agent_controllable(
@@ -376,11 +376,11 @@ fn sub_agent_can_be_aborted_mid_run() {
         .expect("build controllable run");
 
         // Abort from a sibling task after letting the run get going.
-        let handle = anvil_io_engine::current_handle().expect("handle");
+        let handle = temper_agent_io_engine::current_handle().expect("handle");
         handle.spawn_with_cx(move |cx| async move {
             // Let a couple of turns happen first (virtual time).
             skein::time::sleep(
-                anvil_io_engine::timer_now(&cx),
+                temper_agent_io_engine::timer_now(&cx),
                 std::time::Duration::from_millis(50),
             )
             .await;
@@ -405,7 +405,7 @@ fn sub_agent_can_be_aborted_mid_run() {
 
 #[test]
 fn sub_agent_steering_reaches_the_model() {
-    use anvil_agent::{NullEventSink, run_sub_agent_controllable};
+    use temper_agent_core::{NullEventSink, run_sub_agent_controllable};
     use std::sync::Mutex;
 
     // The fake records the user-message texts it has seen so we can prove the
@@ -456,7 +456,7 @@ fn sub_agent_steering_reaches_the_model() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = anvil_io_engine::block_on(async move {
+    let outcome = temper_agent_io_engine::block_on(async move {
         let (control, run) = run_sub_agent_controllable(
             SubAgent {
                 system_prompt: None,

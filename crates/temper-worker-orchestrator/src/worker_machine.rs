@@ -10,13 +10,13 @@
 //!
 //! Because it is pure, the whole worker control flow — the poll/dispatch/result
 //! interleavings the tokio `select!` loop used to hide — is unit-testable with
-//! [`smith_io_engine::drive_sync`]: feed a completion sequence and assert on the
+//! [`temper_worker_io_engine::drive_sync`]: feed a completion sequence and assert on the
 //! emitted requests, with no runtime and no races. That is also what makes it a
 //! target for skein-lab simulation later.
 
 use std::collections::BTreeSet;
 
-use smith_io_engine::{EngineTime, Machine};
+use temper_worker_io_engine::{EngineTime, Machine};
 use temper_worker_protocol::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
 
 pub use crate::config::WorkerParams;
@@ -133,7 +133,7 @@ impl WorkerMachine {
                 // on the next poll.
                 if self.free_capacity == 0 || self.in_flight.contains(&assign.job_id) {
                     requests.push(WorkerRequest::Log(format!(
-                        "smith-worker: refusing assignment job_id={} (free_capacity={}, already_in_flight={})",
+                        "temper-worker: refusing assignment job_id={} (free_capacity={}, already_in_flight={})",
                         assign.job_id,
                         self.free_capacity,
                         self.in_flight.contains(&assign.job_id)
@@ -159,19 +159,19 @@ impl WorkerMachine {
             }
             Ok(Some(other)) => {
                 requests.push(WorkerRequest::Log(format!(
-                    "smith-worker: unexpected poll reply from daemon: {other:?}"
+                    "temper-worker: unexpected poll reply from daemon: {other:?}"
                 )));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
             Ok(None) => {
                 requests.push(WorkerRequest::Log(
-                    "smith-worker: empty poll reply from daemon".to_string(),
+                    "temper-worker: empty poll reply from daemon".to_string(),
                 ));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
             Err(error) => {
                 requests.push(WorkerRequest::Log(format!(
-                    "smith-worker: poll failed: {error}"
+                    "temper-worker: poll failed: {error}"
                 )));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
@@ -211,7 +211,7 @@ impl Machine for WorkerMachine {
             WorkerCompletion::Registered(Err(error)) => {
                 // Registration is required before work; back off and retry.
                 vec![
-                    WorkerRequest::Log(format!("smith-worker: register failed: {error}")),
+                    WorkerRequest::Log(format!("temper-worker: register failed: {error}")),
                     WorkerRequest::ArmPollTimer(self.params.poll_backoff),
                 ]
             }
@@ -246,7 +246,7 @@ impl Machine for WorkerMachine {
             WorkerCompletion::ResultDelivered { job_id, outcome } => match outcome {
                 Ok(()) => Vec::new(),
                 Err(error) => vec![WorkerRequest::Log(format!(
-                    "smith-worker: result delivery failed for job {job_id}: {error}"
+                    "temper-worker: result delivery failed for job {job_id}: {error}"
                 ))],
             },
             WorkerCompletion::HeartbeatTimer => {
@@ -269,7 +269,7 @@ impl Machine for WorkerMachine {
             }
             WorkerCompletion::HeartbeatDelivered(Err(error)) => {
                 vec![WorkerRequest::Log(format!(
-                    "smith-worker: heartbeat failed: {error}"
+                    "temper-worker: heartbeat failed: {error}"
                 ))]
             }
             WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),

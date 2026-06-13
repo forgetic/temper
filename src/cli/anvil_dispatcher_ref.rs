@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anvil_temper_agent::{AuthChoice, ProviderConfig};
+use temper_agent_runtime::{AuthChoice, ProviderConfig};
 
 fn main() {
     match run() {

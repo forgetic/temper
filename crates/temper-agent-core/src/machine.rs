@@ -7,7 +7,7 @@
 //! done by the shell ([`crate::shell`]), which reuses tongs providers and
 //! tools and feeds results back as [`AgentCompletion`]s.
 //!
-//! This mirrors the [`anvil_io_engine::Machine`] discipline used by the worker:
+//! This mirrors the [`temper_agent_io_engine::Machine`] discipline used by the worker:
 //! `(state, completion) -> [request]`, deterministic and replayable, so the
 //! whole loop — tool orchestration, max-iteration cutoff, stop-reason handling,
 //! steering at turn boundaries — is unit-testable with synthetic completions and
@@ -405,17 +405,17 @@ impl AgentMachine {
     }
 }
 
-impl anvil_io_engine::Machine for AgentMachine {
+impl temper_agent_io_engine::Machine for AgentMachine {
     type Completion = AgentCompletion;
     type Request = AgentRequest;
 
-    fn on_start(&mut self, _now: anvil_io_engine::EngineTime) -> Vec<AgentRequest> {
+    fn on_start(&mut self, _now: temper_agent_io_engine::EngineTime) -> Vec<AgentRequest> {
         self.begin_turn()
     }
 
     fn on_completion(
         &mut self,
-        _now: anvil_io_engine::EngineTime,
+        _now: temper_agent_io_engine::EngineTime,
         completion: AgentCompletion,
     ) -> Vec<AgentRequest> {
         match completion {

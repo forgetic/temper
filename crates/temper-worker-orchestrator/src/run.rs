@@ -3,13 +3,15 @@
 //! [`run_worker`] is the worker's entry point. It constructs the pure
 //! [`WorkerMachine`](crate::worker_machine::WorkerMachine), the imperative
 //! [`WorkerShell`](crate::worker_shell::WorkerShell), and a completion queue,
-//! then hands them to [`smith_io_engine::drive`]. It must run inside an engine
+//! then hands them to [`temper_worker_io_engine::drive`]. It must run inside an engine
 //! task (the drive loop reads the runtime clock and the shell spawns I/O), so
-//! callers wrap it in [`smith_io_engine::block_on`].
+//! callers wrap it in [`temper_worker_io_engine::block_on_with`] and pass the
+//! [`RuntimeHandle`] it yields.
 
 use std::sync::Arc;
 
-use smith_io_engine::{channel, drive};
+use skein::runtime::RuntimeHandle;
+use temper_worker_io_engine::{channel, drive};
 
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
@@ -21,17 +23,20 @@ use crate::worker_shell::WorkerShell;
 /// report/heartbeat forever, driven by the completion queue. Returns only if
 /// the machine stops or every completion sender is dropped (no I/O can complete
 /// again) — in normal operation it runs until the process is signalled.
-pub async fn run_worker<E>(config: WorkerConfig, executor: Arc<E>) -> Result<(), WorkerError>
+///
+/// `handle` is the runtime's spawn capability, passed explicitly from the
+/// `block_on_with` entry (no ambient handle lookup — skein removed
+/// `Runtime::current_handle`).
+pub async fn run_worker<E>(
+    handle: RuntimeHandle,
+    config: WorkerConfig,
+    executor: Arc<E>,
+) -> Result<(), WorkerError>
 where
     E: JobExecutor + Send + Sync + 'static,
 {
     let params = WorkerParams::from_config(&config);
     let (cq_tx, cq_rx) = channel();
-
-    // The runtime handle for spawning shell I/O. Available because run_worker is
-    // awaited inside an engine task (block_on).
-    let handle =
-        skein::runtime::Runtime::current_handle().ok_or(WorkerError::RuntimeUnavailable)?;
 
     let shell = WorkerShell::new(
         handle,

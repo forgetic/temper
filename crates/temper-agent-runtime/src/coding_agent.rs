@@ -71,7 +71,7 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // `deny_unknown_fields`).
 // ---------------------------------------------------------------------------
 
-pub use smith_agent_protocol::{
+pub use temper_agent_protocol::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
     WorkspaceResultChild, WorkspaceWorkItem,
 };
@@ -535,7 +535,7 @@ fn add_one_subagent(
     let prompt = spec.prompt;
     let with_bash = spec.with_bash;
     let max_iterations = spec.max_iterations;
-    let factory: anvil_agent::SubAgentFactory = std::sync::Arc::new(move |task: String| {
+    let factory: temper_agent_core::SubAgentFactory = std::sync::Arc::new(move |task: String| {
         // Build a fresh provider for the nested run (cheap; reuses the resolved
         // bearer in stream_options).
         let provider = provider_config
@@ -550,7 +550,7 @@ fn add_one_subagent(
         if with_bash {
             tools.push(create_bash_tool(&cwd));
         }
-        anvil_agent::SubAgent {
+        temper_agent_core::SubAgent {
             system_prompt: Some(prompt.to_string()),
             user_message: task,
             tools: ToolRegistry::from_tools(tools),
@@ -565,7 +565,7 @@ fn add_one_subagent(
         // read-only inspection (no edits/destructive commands), matching Claude's
         // parallel `general-purpose` reviewers; this is a deliberate trust
         // decision, not an effect-system guarantee.
-        anvil_agent::SubAgentTool::new(
+        temper_agent_core::SubAgentTool::new(
             spec.name,
             spec.description,
             tongs::tools::ToolEffects::read(),
@@ -584,11 +584,11 @@ fn add_one_subagent(
 // ---------------------------------------------------------------------------
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
-/// sans-IO agent loop ([`anvil_agent::run_sub_agent`]).
+/// sans-IO agent loop ([`temper_agent_core::run_sub_agent`]).
 ///
 /// Builds the role prompt + overlays, the role's tongs tools scoped to `cwd`,
 /// and per-request stream options; runs the deterministic
-/// [`anvil_agent::AgentMachine`] driven by a skein shell; parses the model's
+/// [`temper_agent_core::AgentMachine`] driven by a skein shell; parses the model's
 /// final JSON into a [`WorkspaceResult`]; and validates the role contract (an
 /// engineer head path must leave a product diff or route a verdict).
 ///
@@ -647,7 +647,7 @@ pub async fn run_coding_agent_native_with_options(
 
 /// [`run_coding_agent_native_with_options`] with the phase-6b hooks: an
 /// optional resume note appended to the user turn (a re-dispatched agent
-/// continuing a checkpointed branch) and an optional [`anvil_agent::TurnHook`]
+/// continuing a checkpointed branch) and an optional [`temper_agent_core::TurnHook`]
 /// awaited before each model call (the workspace checkpointer).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_coding_agent_native_with_hooks(
@@ -658,7 +658,7 @@ pub async fn run_coding_agent_native_with_hooks(
     config_dir: Option<&Path>,
     enable_subagents: bool,
     resume_note: Option<&str>,
-    turn_hook: Option<std::sync::Arc<dyn anvil_agent::TurnHook>>,
+    turn_hook: Option<std::sync::Arc<dyn temper_agent_core::TurnHook>>,
 ) -> Result<WorkspaceResult, CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
@@ -692,7 +692,7 @@ pub async fn run_coding_agent_native_with_hooks(
     // nested sub-agent runs; per-turn/tool lines plus an end-of-run summary
     // go to stderr (stdout is the protocol stream).
     let totals = std::sync::Arc::new(crate::usage::UsageTotals::default());
-    let events: std::sync::Arc<dyn anvil_agent::EventSink> = std::sync::Arc::new(
+    let events: std::sync::Arc<dyn temper_agent_core::EventSink> = std::sync::Arc::new(
         crate::usage::UsageLogger::new(crate::usage::MAIN_SCOPE, std::sync::Arc::clone(&totals)),
     );
 
@@ -701,7 +701,7 @@ pub async fn run_coding_agent_native_with_hooks(
         tools = add_subagents(tools, provider_config, &stream_options, cwd, &totals);
     }
 
-    let sub_agent = anvil_agent::SubAgent {
+    let sub_agent = temper_agent_core::SubAgent {
         system_prompt: Some(turns.system),
         user_message: turns.user,
         tools,
@@ -712,14 +712,14 @@ pub async fn run_coding_agent_native_with_hooks(
     let model_id = provider_config.model_id().to_string();
     let outcome = async {
         let (_control, run) =
-            anvil_agent::run_sub_agent_controllable_with_hook(sub_agent, events, turn_hook)?;
+            temper_agent_core::run_sub_agent_controllable_with_hook(sub_agent, events, turn_hook)?;
         run.await
     }
     .await
     .map_err(|error| classify_run_error(&model_id, error.to_string()))?;
     totals.emit_summary();
 
-    if matches!(outcome.stop, anvil_agent::AgentStop::ModelError) {
+    if matches!(outcome.stop, temper_agent_core::AgentStop::ModelError) {
         let reason = outcome
             .final_message
             .error_message
