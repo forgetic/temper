@@ -20,3 +20,9 @@ mod agent_runner;
 
 #[cfg(feature = "agent")]
 pub use agent_runner::InProcessAgentRunner;
+
+#[cfg(feature = "agent")]
+mod all_in_one;
+
+#[cfg(feature = "agent")]
+pub use all_in_one::{AllInOneConfig, run_all_in_one};

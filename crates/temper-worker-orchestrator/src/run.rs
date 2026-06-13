@@ -17,12 +17,14 @@ use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
 use crate::executor::JobExecutor;
 use crate::worker_machine::WorkerMachine;
+use crate::transport::{HttpTransport, Transport};
 use crate::worker_shell::WorkerShell;
 
-/// Run the worker to (effective) completion: register, then poll/dispatch/
-/// report/heartbeat forever, driven by the completion queue. Returns only if
-/// the machine stops or every completion sender is dropped (no I/O can complete
-/// again) — in normal operation it runs until the process is signalled.
+/// Run the worker to (effective) completion over the **HTTP** transport (the
+/// split deployment): register, then poll/dispatch/report/heartbeat forever,
+/// driven by the completion queue. Returns only if the machine stops or every
+/// completion sender is dropped — in normal operation it runs until the process
+/// is signalled.
 ///
 /// `handle` is the runtime's spawn capability, passed explicitly from the
 /// `block_on_with` entry (no ambient handle lookup — skein removed
@@ -35,16 +37,29 @@ pub async fn run_worker<E>(
 where
     E: JobExecutor + Send + Sync + 'static,
 {
+    let transport = Arc::new(HttpTransport::new(&config.daemon_url));
+    run_worker_with_transport(handle, config, executor, transport).await
+}
+
+/// [`run_worker`] over an arbitrary [`Transport`] — the seam the unified
+/// single-process mode uses to point the worker at a co-resident daemon over an
+/// in-memory channel instead of HTTP. The protocol and the whole machine/shell
+/// loop are identical; only the carrier differs.
+pub async fn run_worker_with_transport<E, T>(
+    handle: RuntimeHandle,
+    config: WorkerConfig,
+    executor: Arc<E>,
+    transport: Arc<T>,
+) -> Result<(), WorkerError>
+where
+    E: JobExecutor + Send + Sync + 'static,
+    T: Transport,
+{
     let params = WorkerParams::from_config(&config);
     let (cq_tx, cq_rx) = channel();
 
-    let shell = WorkerShell::new(
-        handle,
-        cq_tx,
-        &config.daemon_url,
-        config.worker_id.clone(),
-        executor,
-    );
+    let shell =
+        WorkerShell::with_transport(handle, cq_tx, transport, config.worker_id.clone(), executor);
     let machine = WorkerMachine::new(params);
 
     // drive() owns the loop; it returns when the machine stops or the queue

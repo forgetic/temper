@@ -31,6 +31,10 @@ pub mod product_manager_responder;
 #[cfg(feature = "agent")]
 pub mod workflow_role_decision;
 
+// The all-in-one `temper run` needs all three planes on one loop.
+#[cfg(all(feature = "daemon", feature = "worker", feature = "agent"))]
+pub mod run;
+
 /// Exit code for a usage error (no/unknown subcommand, or a subcommand whose
 /// feature was not compiled in). Matches `EX_USAGE` from `sysexits.h`.
 pub const EX_USAGE: u8 = 64;
@@ -79,7 +83,16 @@ where
     I: Iterator<Item = String>,
 {
     match subcommand {
-        "run" => run_all_in_one(args),
+        #[cfg(all(feature = "daemon", feature = "worker", feature = "agent"))]
+        "run" => run::main(args),
+        #[cfg(not(all(feature = "daemon", feature = "worker", feature = "agent")))]
+        "run" => {
+            eprintln!(
+                "temper: `run` (all-in-one) needs the daemon, worker, and agent \
+                 planes; rebuild with `--features unified`"
+            );
+            ExitCode::from(EX_USAGE)
+        }
 
         #[cfg(feature = "daemon")]
         "daemon" => daemon::main(args),
@@ -135,18 +148,4 @@ where
             ExitCode::from(EX_USAGE)
         }
     }
-}
-
-/// The all-in-one solo-dev mode (`temper run`). Wired in Phase B; for now it
-/// reports that it is not yet available rather than silently doing nothing.
-fn run_all_in_one<I>(_args: I) -> ExitCode
-where
-    I: Iterator<Item = String>,
-{
-    eprintln!(
-        "temper run: the single-process all-in-one mode is not wired up yet \
-         (Phase B). Use `temper daemon`, `temper worker`, and `temper agent` \
-         as separate processes for now."
-    );
-    ExitCode::from(EX_USAGE)
 }

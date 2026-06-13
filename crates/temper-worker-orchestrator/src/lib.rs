@@ -26,7 +26,7 @@ pub use executor::{JobExecutor, JobOutcome, StubExecutor, job_result};
 pub use observability::{assigned_job_line, registered_worker_line, result_sent_line};
 pub use out_of_process_runner::OutOfProcessRunner;
 pub use progress_relay::{DaemonRelayProgressSink, progress_message};
-pub use run::run_worker;
+pub use run::{run_worker, run_worker_with_transport};
 pub use transport::{HttpTransport, Transport};
 pub use worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 pub use workspace::{
