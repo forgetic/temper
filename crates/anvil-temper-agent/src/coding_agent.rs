@@ -275,6 +275,20 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
     }
 
     prompt.push_str(
+        "\nEFFICIENCY:\n\
+         - Batch independent tool calls into a single response: read-only tools \
+         (read, ls, grep, find, investigate) run in parallel when emitted \
+         together, which is much faster than one call per turn.\n\
+         - Write each new file completely in one `write` call instead of many \
+         incremental edits.\n\
+         - Verify with one focused command (e.g. run the test suite once after \
+         the implementation is in place) rather than re-checking after every \
+         small step; do not re-run checks when nothing has changed.\n\
+         - Do not re-read files you just wrote, and do not use bash for things \
+         a dedicated tool already does.\n",
+    );
+
+    prompt.push_str(
         "\nWhen you have finished using tools, your FINAL message must be a single \
          JSON object (and nothing else) describing the result, with these \
          optional fields: `verdict` (string), `summary` (string), `body` \
@@ -357,6 +371,25 @@ fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::to
     }
     tools
 }
+
+/// Guidance appended to the role prompt when the `investigate` sub-agent tool
+/// is registered: tells the model when delegating beats searching inline and
+/// that several investigations can run concurrently.
+const SUBAGENT_GUIDANCE: &str = "\nSUB-AGENTS:\n\
+    - The `investigate` tool delegates a read-only repository investigation to \
+    a sub-agent that searches and reads files for you, returning a focused \
+    report. Use it when answering a question would mean sweeping many files or \
+    directories (architecture mapping, finding all usages/conventions, \
+    auditing a module) — you get the conclusion without filling your own \
+    context with file dumps.\n\
+    - Investigations run concurrently: when you have several independent \
+    questions, emit several `investigate` calls in ONE response instead of \
+    asking one at a time.\n\
+    - Give each sub-agent a self-contained task description: what to find, \
+    where to look first, and what the report must answer. Sub-agents cannot \
+    see your conversation.\n\
+    - For a single-fact lookup (one known file or symbol), use read/grep \
+    directly instead of a sub-agent.\n";
 
 /// Read-only system prompt for the `investigate` sub-agent.
 const INVESTIGATE_SUBAGENT_PROMPT: &str = "You are an investigation sub-agent. \
@@ -502,7 +535,10 @@ pub async fn run_coding_agent_native_with_hooks(
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
 
-    let role_prompt = system_prompt(capability, &context.allowed_verdicts);
+    let mut role_prompt = system_prompt(capability, &context.allowed_verdicts);
+    if enable_subagents {
+        role_prompt.push_str(SUBAGENT_GUIDANCE);
+    }
     let mut user = user_context(context);
     if let Some(note) = resume_note {
         user.push_str("\n\n## Resume\n");
