@@ -1895,6 +1895,7 @@ dependencies = [
  "temper-trigger-forgejo",
  "temper-worker-io-engine",
  "temper-worker-orchestrator",
+ "temper-worker-protocol",
  "temper-workflow",
 ]
 

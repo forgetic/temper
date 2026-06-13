@@ -66,6 +66,7 @@ daemon = [
 worker = [
     "dep:temper-worker-orchestrator",
     "dep:temper-worker-io-engine",
+    "dep:temper-worker-protocol",
     "dep:temper-agent-protocol",
 ]
 # The agent pulls tongs + jig + the LLM/HTTP stack. Worker/daemon-only builds
@@ -110,6 +111,7 @@ temper-workflow = { path = "crates/temper-workflow", optional = true }
 # worker
 temper-worker-orchestrator = { path = "crates/temper-worker-orchestrator", optional = true }
 temper-worker-io-engine = { path = "crates/temper-worker-io-engine", optional = true }
+temper-worker-protocol = { path = "crates/temper-worker-protocol", optional = true }
 # agent (heavy: tongs + jig + LLM/HTTP enter only here)
 temper-agent-runtime = { path = "crates/temper-agent-runtime", optional = true }
 temper-agent-core = { path = "crates/temper-agent-core", optional = true }

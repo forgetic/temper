@@ -11,3 +11,9 @@
 //! daemon-only build never links the agent's LLM/HTTP stack.
 
 pub mod cli;
+
+/// The unified single-process mode (`temper run`): daemon + worker + agent on
+/// one event loop. Available only when both the daemon and worker planes are
+/// compiled in (the `unified` profile).
+#[cfg(all(feature = "daemon", feature = "worker"))]
+pub mod run;

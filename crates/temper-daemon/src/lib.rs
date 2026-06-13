@@ -2199,6 +2199,35 @@ fn is_poll_timeout(message: &WorkerProtocolMessage) -> bool {
     )
 }
 
+/// Decode the daemon's in-process HTTP response into the worker-protocol reply,
+/// matching `crate::transport::Transport`'s contract: `Ok(None)` for 204/empty,
+/// `Ok(Some(message))` for a 200 JSON body, `Err` otherwise. (Mirrors the
+/// HTTP transport's `decode_reply` so the in-process and HTTP carriers agree.)
+fn decode_in_process_reply(
+    response: HttpResponseData,
+) -> Result<Option<WorkerProtocolMessage>, String> {
+    match response.status {
+        204 => Ok(None),
+        200 => {
+            if response.body.is_empty() {
+                return Ok(None);
+            }
+            serde_json::from_slice::<WorkerProtocolMessage>(&response.body)
+                .map(Some)
+                .map_err(|error| {
+                    let body = String::from_utf8_lossy(&response.body);
+                    format!(
+                        "daemon in-process reply was not valid worker protocol JSON: {error}; body: {body}"
+                    )
+                })
+        }
+        status => {
+            let body = String::from_utf8_lossy(&response.body);
+            Err(format!("daemon in-process reply HTTP {status}: {body}"))
+        }
+    }
+}
+
 fn assignment_log_line(assign: &Assign, worker_id: &str) -> String {
     format!(
         "temper-daemon: assigned job_id={} role={} repo={} worker={}",
@@ -2510,6 +2539,43 @@ impl Daemon {
             artifact,
             job_payload,
         });
+    }
+
+    /// Deliver one worker-protocol message **in-process** and await the daemon's
+    /// reply — the same path the HTTP listener drives, minus TCP and the h1 byte
+    /// round-trip.
+    ///
+    /// This is the carrier the unified single-process worker uses: it hands the
+    /// daemon machine the exact `DaemonCompletion::Http` it processes for an
+    /// inbound `POST /v1/message`, carrying an `HttpResponder` backed by a
+    /// oneshot we await. The machine runs `core.handle(...)` inside its serial
+    /// transition and answers the oneshot — so the in-process worker gets the
+    /// identical reply (and long-poll) semantics as an HTTP worker, with no
+    /// lock on `DaemonCore` (the daemon loop is its sole owner) and no socket.
+    ///
+    /// The reply contract matches `crate::transport::Transport`:
+    /// `Ok(None)` for 204/empty, `Ok(Some(_))` for a message, `Err` for a
+    /// non-success status, malformed JSON, or a dropped responder.
+    pub async fn deliver_protocol_message(
+        &self,
+        message: WorkerProtocolMessage,
+    ) -> Result<Option<WorkerProtocolMessage>, String> {
+        let (reply_tx, reply_rx) = temper_io_engine::oneshot::<HttpResponseData>();
+        let request = HttpRequestData {
+            method: "POST".to_string(),
+            uri: "/v1/message".to_string(),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: serde_json::to_vec(&message)
+                .map_err(|error| format!("serialize worker-protocol message: {error}"))?,
+        };
+        let _ = self.cq.send(DaemonCompletion::Http {
+            request,
+            responder: HttpResponder::from_oneshot(reply_tx),
+        });
+        match reply_rx.recv().await {
+            Some(response) => decode_in_process_reply(response),
+            None => Err("daemon dropped the in-process responder".to_string()),
+        }
     }
 
     /// Map a scanned `WorkItem` to a job and enqueue it.
