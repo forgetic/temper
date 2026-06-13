@@ -59,6 +59,10 @@ temper-workflow = { path = "crates/temper-workflow" }
 serde_json = { workspace = true }
 temper-forgejo-ops = { path = "crates/temper-forgejo-ops" }
 temper-testing = { path = "crates/temper-testing" }
+# `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
+# through the daemon's apply_progress against an in-memory forge.
+temper-forge-memory = { path = "crates/temper-forge-memory" }
+temper-worker-protocol = { path = "crates/temper-worker-protocol" }
 
 [[bin]]
 name = "temper-daemon"
