@@ -140,8 +140,30 @@ impl<C: HttpClient> ForgejoForge<C> {
                     .to_string(),
             ));
         };
+
+        // Idle-read gate (ADR 0019 cost mitigation): when this target's CI was
+        // last read as terminal at the same head SHA, reuse it and skip the
+        // expensive login+scrape. A non-terminal or changed-SHA read misses and
+        // falls through to the live read below. The raw (pre status-filter) jobs
+        // are what is cached, so the query's status filter/sort still applies.
+        let cache_key = crate::ci_cache::CiReadKey::from_target(repo_id, target);
+        if let Some(key) = cache_key.as_ref() {
+            if let Some(cached) = self.ci_read_cache().get_terminal(key) {
+                let mut jobs = cached;
+                if let Some(status) = query.status {
+                    jobs.retain(|job| job.status == status);
+                }
+                sort_jobs(&mut jobs, query);
+                return Ok(jobs);
+            }
+        }
+
         log_web_ui_ci_read(repo, target, "read_ci_jobs_via_web_ui");
-        let mut jobs = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
+        let raw = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
+        if let Some(key) = cache_key {
+            self.ci_read_cache().store(key, raw.clone());
+        }
+        let mut jobs = raw;
         if let Some(status) = query.status {
             jobs.retain(|job| job.status == status);
         }

@@ -35,6 +35,16 @@ use temper_forge::{CiJob, CiJobStatus, ForgeError, ForgeResult, PullRequestId, R
 /// Maximum redirects followed for a single web-UI request.
 const MAX_REDIRECTS: usize = 8;
 
+/// Most-recent runs scraped per read. The Actions page lists runs newest-first,
+/// and a CI read only ever cares about the target's current head — the latest
+/// run on its branch, plus (for the fail→pass case) the immediately preceding
+/// run on the same branch. Older runs belong to long-settled commits and pushing
+/// a new commit replaces, not appends to, the relevant runs. Without this bound
+/// the per-read cost grows with the repo's entire CI history (the idle-tick
+/// storm: live-view POSTs for runs 29, 30, 31, …). Generous enough to cover
+/// several concurrent open PRs' newest runs.
+const MAX_RUNS_SCRAPED: usize = 20;
+
 /// Cookies the Forgejo session login establishes, in name-sorted order.
 #[derive(Clone, Debug, Default)]
 struct CookieJar {
@@ -328,7 +338,14 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
 ) -> ForgeResult<Vec<CiJob>> {
     let mut client = WebUiClient::new(forge, credentials);
     client.login().await?;
-    let run_ids = client.discover_run_ids(repo).await?;
+    let mut run_ids = client.discover_run_ids(repo).await?;
+
+    // Bound the scrape to the most-recent runs (newest-first page order). This
+    // caps the per-read cost at a constant instead of growing with CI history,
+    // while still covering the target's latest run and its fail→pass predecessor.
+    if run_ids.len() > MAX_RUNS_SCRAPED {
+        run_ids.truncate(MAX_RUNS_SCRAPED);
+    }
 
     let mut jobs = Vec::new();
     for run in run_ids {

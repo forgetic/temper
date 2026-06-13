@@ -11,6 +11,7 @@
 //! provider DTO scaffolding.
 
 mod ci;
+mod ci_cache;
 mod ci_match;
 mod ci_time;
 mod ci_ui;
@@ -65,6 +66,10 @@ pub struct ForgejoForge<C = EngineHttpClient> {
     config: ForgejoConfig,
     client: C,
     versions: Arc<VersionCache>,
+    /// Memo of terminal web-UI CI reads, so an idle mechanical tick skips the
+    /// expensive login+scrape for a pull request whose head SHA has not changed
+    /// since its CI settled (ADR 0019 cost mitigation). Shared across clones.
+    ci_reads: Arc<ci_cache::CiReadCache>,
 }
 
 impl ForgejoForge<EngineHttpClient> {
@@ -89,6 +94,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             config,
             client,
             versions: Arc::new(VersionCache::default()),
+            ci_reads: Arc::new(ci_cache::CiReadCache::default()),
         }
     }
 
@@ -99,6 +105,11 @@ impl<C: HttpClient> ForgejoForge<C> {
     /// [`client::build_request`], so it issues them through this seam directly.
     pub(crate) fn http_client(&self) -> &C {
         &self.client
+    }
+
+    /// The web-UI CI read memo (ADR 0019 cost mitigation); see [`ci_cache`].
+    pub(crate) fn ci_read_cache(&self) -> &ci_cache::CiReadCache {
+        &self.ci_reads
     }
 
     /// Sends a prepared Forgejo API request and returns the raw response.
