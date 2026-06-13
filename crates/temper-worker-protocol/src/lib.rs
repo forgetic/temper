@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Serialization-only DTOs for the Temper Worker/Daemon Wire Protocol v2.
+//! Serialization-only DTOs for the Temper Worker/Daemon Wire Protocol v1.
 //!
 //! This crate intentionally has no Temper runtime dependencies. It provides the
 //! stable JSON shapes that workers and daemons can share without coupling Smith
 //! or other worker implementations to Temper runner, workflow, backend, daemon,
 //! deployment, or Forge crates.
 //!
-//! # v2: multi-repo co-development jobs (ADR 0023)
+//! # Multi-repo co-development jobs (ADR 0023)
+//!
+//! The protocol is still `v1` (pre-1.0 alpha): we revise it in place rather than
+//! bumping the version, even for wire-incompatible changes.
 //!
 //! A coding job's checkout target is a [`WorkspaceManifest`] — an ordered set of
 //! repositories laid out as siblings so their inter-repo path dependencies
@@ -19,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const WORKER_PROTOCOL_VERSION: u32 = 2;
+pub const WORKER_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -546,7 +549,7 @@ mod tests {
     #[test]
     fn unknown_fields_are_ignored() {
         let msg: WorkerProtocolMessage = serde_json::from_str(
-            r#"{"type":"poll","protocol_version":2,"worker_id":"w1","free_capacity":2,"future_field":"ignored"}"#,
+            r#"{"type":"poll","protocol_version":1,"worker_id":"w1","free_capacity":2,"future_field":"ignored"}"#,
         )
         .expect("unknown fields must be accepted");
 

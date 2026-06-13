@@ -1,5 +1,5 @@
 {
-  "protocol_version": 2,
+  "protocol_version": 1,
   "type": "release",
   "worker_id": "worker-1",
   "job_id": "job-123",

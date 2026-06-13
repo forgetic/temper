@@ -1,6 +1,6 @@
 {
   "type": "progress",
-  "protocol_version": 2,
+  "protocol_version": 1,
   "worker_id": "smith-worker-1",
   "correlation_key": "coord-for-code-42",
   "step": 2,

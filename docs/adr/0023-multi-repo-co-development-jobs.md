@@ -48,7 +48,9 @@ cross-cutting change is authored and validated as a unit.
 This is a **clean-slate, breaking** change to the worker/daemon wire protocol
 and the worker↔agent protocol. We are pre-deployment; there is no
 back-compatibility obligation, and we explicitly reject shoehorning multi-repo
-semantics into the single-repo fields. `WORKER_PROTOCOL_VERSION` bumps to `2`.
+semantics into the single-repo fields. The protocol stays `v1`
+(`WORKER_PROTOCOL_VERSION` unchanged): while we are pre-1.0 alpha we revise the
+wire shapes in place rather than bumping the version number.
 
 ### A. The workspace manifest (job input)
 
