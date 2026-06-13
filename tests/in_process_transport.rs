@@ -12,8 +12,8 @@ use std::sync::Arc;
 use temper_daemon::Daemon;
 use temper_worker_orchestrator::Transport;
 use temper_worker_protocol::{
-    Artifact, Capability, Capacity, Poll, Register, WorkerProtocolMessage,
-    WORKER_PROTOCOL_VERSION,
+    Artifact, Branch, Capability, Capacity, JobResult, Poll, Register, RepoOutcome, ResultStatus,
+    WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
 };
 
 use temper::run::InProcessTransport;
@@ -78,13 +78,45 @@ fn in_process_transport_registers_polls_and_assigns() {
             .send(cx.clone(), poll("w1"))
             .await
             .expect("poll succeeds in-process");
-        match reply {
+        let job_id = match reply {
             Some(WorkerProtocolMessage::Assign(assign)) => {
                 assert_eq!(assign.job_id, "job-1");
                 assert_eq!(assign.role, "engineer");
                 assert_eq!(assign.repo, "acme/service");
+                assign.job_id
             }
             other => panic!("expected an Assign reply, got {other:?}"),
-        }
+        };
+
+        // Deliver the job result in-process — the full register→poll→assign→
+        // result lifecycle over the in-memory carrier, no socket.
+        let result = transport
+            .send(
+                cx.clone(),
+                WorkerProtocolMessage::Result(JobResult {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    worker_id: "w1".to_string(),
+                    job_id: job_id.clone(),
+                    status: ResultStatus::Success,
+                    repos: vec![RepoOutcome {
+                        repo: "acme/service".to_string(),
+                        branch: Branch {
+                            name: format!("agent/{job_id}"),
+                            head_sha: "feedc0de".to_string(),
+                        },
+                    }],
+                    verdict: None,
+                    body: None,
+                    children: Vec::new(),
+                    failure: None,
+                    summary: Some("done".to_string()),
+                    details: None,
+                }),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "result delivery should succeed in-process: {result:?}"
+        );
     });
 }

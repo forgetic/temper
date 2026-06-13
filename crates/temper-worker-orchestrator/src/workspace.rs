@@ -169,7 +169,12 @@ impl Workspace {
             .await?;
         } else {
             if let Some(parent) = self.path.parent() {
-                std::fs::create_dir_all(parent)?;
+                // Offload the mkdir to the blocking pool: in unified mode the
+                // worker shares the single-threaded loop with the daemon and
+                // agent, so even a fast filesystem syscall must not run inline
+                // (a slow/networked FS would stall every other task).
+                let parent = parent.to_path_buf();
+                skein::runtime::spawn_blocking(move || std::fs::create_dir_all(&parent)).await?;
             }
 
             self.run_git(
