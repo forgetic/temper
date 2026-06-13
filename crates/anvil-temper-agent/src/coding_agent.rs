@@ -123,6 +123,12 @@ pub enum CodingAgentError {
     Run(String),
     /// The agent stopped with an error stop reason.
     AgentStopped(String),
+    /// The provider reported the requested model is unavailable (e.g. a model
+    /// alias was suspended, or the subscription tier does not grant it). Kept
+    /// distinct from a generic abnormal stop so the failure names the model and
+    /// any provider-suggested fallback, and an operator can fix it by setting
+    /// `TEMPER_AGENTS_ANTHROPIC_MODEL` (or `--codex-model`).
+    ModelUnavailable { model: String, detail: String },
     /// The model's reply was not the expected JSON result object.
     Parse { snippet: String, error: String },
     /// A writable (engineer) run finished without leaving a product diff and
@@ -145,6 +151,11 @@ impl std::fmt::Display for CodingAgentError {
             CodingAgentError::AgentStopped(reason) => {
                 write!(formatter, "agent stopped abnormally: {reason}")
             }
+            CodingAgentError::ModelUnavailable { model, detail } => write!(
+                formatter,
+                "model `{model}` is unavailable: {detail}. Set TEMPER_AGENTS_ANTHROPIC_MODEL \
+                 (Anthropic) or --codex-model (Codex) to a model the credential grants."
+            ),
             CodingAgentError::Parse { snippet, error } => {
                 write!(
                     formatter,
@@ -581,23 +592,23 @@ pub async fn run_coding_agent_native_with_hooks(
         provider,
         stream_options,
     };
+    let model_id = provider_config.model_id().to_string();
     let outcome = async {
         let (_control, run) =
             anvil_agent::run_sub_agent_controllable_with_hook(sub_agent, events, turn_hook)?;
         run.await
     }
     .await
-    .map_err(|error| CodingAgentError::Run(error.to_string()))?;
+    .map_err(|error| classify_run_error(&model_id, error.to_string()))?;
     totals.emit_summary();
 
     if matches!(outcome.stop, anvil_agent::AgentStop::ModelError) {
-        return Err(CodingAgentError::AgentStopped(
-            outcome
-                .final_message
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "provider reported an error stop".to_string()),
-        ));
+        let reason = outcome
+            .final_message
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "provider reported an error stop".to_string());
+        return Err(classify_run_error(&model_id, reason));
     }
 
     let text = collect_text(&outcome.final_message.content);
@@ -605,6 +616,33 @@ pub async fn run_coding_agent_native_with_hooks(
     validate_verdict_vocabulary(&result, &context.allowed_verdicts)?;
     validate_contract(capability, &result, cwd, &context.base_branch)?;
     Ok(result)
+}
+
+/// Classifies a run/stop error message, promoting a model-availability
+/// rejection to [`CodingAgentError::ModelUnavailable`] (which names the model
+/// and points at the override env vars) and leaving everything else as a
+/// generic abnormal stop.
+///
+/// Providers phrase this differently — Anthropic returns `404` with
+/// `"<Model> is not available"` / `"Please use Opus 4.8"`; OpenAI returns
+/// `"model ... does not exist or you do not have access"`. We match on these
+/// stable fragments rather than a status code because the message reaches us
+/// as flattened text.
+fn classify_run_error(model: &str, message: String) -> CodingAgentError {
+    let lower = message.to_ascii_lowercase();
+    let unavailable = lower.contains("is not available")
+        || lower.contains("does not exist")
+        || lower.contains("do not have access")
+        || lower.contains("model_not_found")
+        || (lower.contains("model") && lower.contains("unavailable"));
+    if unavailable {
+        CodingAgentError::ModelUnavailable {
+            model: model.to_string(),
+            detail: message,
+        }
+    } else {
+        CodingAgentError::AgentStopped(message)
+    }
 }
 
 /// Concatenates the assistant message's text blocks (ignoring thinking/tool

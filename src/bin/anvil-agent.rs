@@ -189,8 +189,19 @@ fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), Strin
 /// Renders a coding-agent error for stderr. The worker re-derives the
 /// transient/permanent class from the process exit (non-zero ⇒ transient) plus
 /// a missing result file (⇒ permanent); the message here is for humans.
+///
+/// A model-unavailability rejection (a suspended model alias, or a tier that
+/// does not grant the configured model) is flagged with an explicit
+/// `model-unavailable:` prefix so it stands out in logs as a configuration
+/// problem the `Display` text already explains how to fix — not a transient
+/// network blip to be retried blindly.
 fn describe_agent_error(error: &CodingAgentError) -> String {
-    format!("coding agent failed: {error}")
+    match error {
+        CodingAgentError::ModelUnavailable { .. } => {
+            format!("model-unavailable: {error}")
+        }
+        _ => format!("coding agent failed: {error}"),
+    }
 }
 
 /// A prior run's pushed checkpoints, recovered from the prepared branch.
