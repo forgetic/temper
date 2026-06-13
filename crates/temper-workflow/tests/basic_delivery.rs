@@ -330,15 +330,23 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    // The landing gate is CI-only: `ci_gate` checks `ci_passed`, and `land_pr`
-    // requires only that gate. There is no review gate in basic-delivery.
+    // basic-delivery landing requires CI plus the coordinated-landing dependency
+    // gate, and crucially NO review gate. `ci_gate` checks `ci_passed`;
+    // `dependency_gate` checks `dependencies_resolved` (vacuously true for a PR
+    // with no dependency links, so single-repo landing is unaffected).
     let ci_gate = workflow
         .gates()
         .iter()
         .find(|gate| gate.id.as_str() == "ci_gate")
         .expect("ci_gate is declared");
     assert_eq!(ci_gate.condition.as_ref(), Some(&GateCondition::CiPassed));
-    assert_eq!(workflow.gates().len(), 1, "the only gate is the CI gate");
+    assert!(
+        workflow
+            .gates()
+            .iter()
+            .all(|gate| gate.id.as_str() != "review_gate"),
+        "basic-delivery has no review gate"
+    );
 
     let land_pr = workflow
         .transitions()
@@ -347,8 +355,8 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
         .expect("land_pr transition is declared");
     assert_eq!(
         land_pr.requires_gates,
-        vec![GateId::new("ci_gate")],
-        "landing requires the CI gate only — no review gate"
+        vec![GateId::new("ci_gate"), GateId::new("dependency_gate")],
+        "landing requires CI + dependency gates — but no review gate"
     );
 
     // The `landing` queue is mechanically serviced once CI passes.

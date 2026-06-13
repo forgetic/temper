@@ -233,9 +233,19 @@ impl<F: Forge> ForgeApplier<F> {
         let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
         let summary = result.summary.unwrap_or_default();
 
-        // One PR per writable repo that produced a diff. Each targets its own
-        // repository on the shared coordination branch.
-        for outcome in &result.repos {
+        // Open one PR per writable repo that produced a diff, in coordinated
+        // landing order: a repo's PR is created after the PRs it depends on, so
+        // their numbers are known and can be wired as cross-repo dependency
+        // links (ADR 0023, acyclic). The `dependency_gate` then holds each PR
+        // closed until its prerequisites merge.
+        let depends_on = manifest_depends_on(&context);
+        let order = coordinated_landing_order(&result.repos, &depends_on);
+        // repo path -> (forge id, opened PR number) for wiring dependents.
+        let mut opened: std::collections::BTreeMap<String, (RepositoryId, ItemNumber)> =
+            std::collections::BTreeMap::new();
+
+        for index in order {
+            let outcome = &result.repos[index];
             if outcome.branch.name.trim().is_empty() {
                 eprintln!(
                     "temper-daemon: forge applier ignored blank branch in repo outcome for job_id={} repo={} outcome_repo={}",
@@ -254,6 +264,28 @@ impl<F: Forge> ForgeApplier<F> {
             } else {
                 temper_workflow::ArtifactRef::in_repo(primary_repository.id.clone(), number)
             };
+
+            // Cross-repo dependency links to the prerequisite PRs (opened earlier
+            // in topological order). A prerequisite that produced no diff opened
+            // no PR — there is nothing to wait on, so drop it.
+            let mut dependencies = Vec::new();
+            if let Some(prerequisites) = depends_on.get(&outcome.repo) {
+                for prerequisite in prerequisites {
+                    match opened.get(prerequisite) {
+                        Some((prereq_id, prereq_number)) => {
+                            dependencies.push(temper_workflow::ArtifactRef::in_repo(
+                                prereq_id.clone(),
+                                *prereq_number,
+                            ));
+                        }
+                        None => eprintln!(
+                            "temper-daemon: coordinated landing prerequisite {prerequisite} for {} opened no pull request (no diff); not gating on it",
+                            outcome.repo
+                        ),
+                    }
+                }
+            }
+
             let input = coordinated_pr_pull_request_input(
                 target_repository.id.clone(),
                 coordinating,
@@ -264,9 +296,10 @@ impl<F: Forge> ForgeApplier<F> {
                 &summary,
                 create_labels.clone(),
                 &coordination_key,
+                dependencies,
             );
 
-            if let Err(error) = Executor::new(self.workflow.as_ref(), self.forge.as_ref())
+            match Executor::new(self.workflow.as_ref(), self.forge.as_ref())
                 .ensure_pull_request_with_lookup(
                     &target_repository.id,
                     &coordination_key,
@@ -275,10 +308,16 @@ impl<F: Forge> ForgeApplier<F> {
                 )
                 .await
             {
-                eprintln!(
+                Ok(ensured) => {
+                    opened.insert(
+                        outcome.repo.clone(),
+                        (target_repository.id.clone(), ensured.artifact().number),
+                    );
+                }
+                Err(error) => eprintln!(
                     "temper-daemon: forge applier ensure_pull_request failed for job_id={} repo={} issue={} target_repo={} coordination_key={}: {error}",
                     job.job_id, job.repo, number, outcome.repo, coordination_key
-                );
+                ),
             }
         }
     }
@@ -854,6 +893,7 @@ fn verdict_execution_context(
 /// coordinating issue (which may live in another repo) and the shared
 /// `coordination_key` is stamped into the metadata so the set is discoverable.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn coordinated_pr_pull_request_input(
     repo: RepositoryId,
     coordinating: temper_workflow::ArtifactRef,
@@ -864,16 +904,27 @@ fn coordinated_pr_pull_request_input(
     summary: &str,
     labels: Vec<String>,
     coordination_key: &str,
+    dependencies: Vec<temper_workflow::ArtifactRef>,
 ) -> CreatePullRequest {
+    let gated = !dependencies.is_empty();
     let metadata = temper_workflow::WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
         parents: vec![coordinating],
+        // Cross-repo dependency links encoding the coordinated landing order:
+        // this PR's `dependency_gate` stays closed until each target PR merges
+        // (ADR 0023, acyclic).
+        dependencies,
         correlation_key: Some(coordination_key.to_string()),
         ..temper_workflow::WorkflowMetadata::default()
     };
     let summary = summary.trim();
+    let landing_note = if gated {
+        "\n\nThis PR lands after its prerequisite PR(s) in the set merge."
+    } else {
+        ""
+    };
     let body = format!(
-        "Coordinated implementation for issue #{coordinating_number} (set `{coordination_key}`).\n\nSummary: {}\n\n{}",
+        "Coordinated implementation for issue #{coordinating_number} (set `{coordination_key}`).{landing_note}\n\nSummary: {}\n\n{}",
         if summary.is_empty() {
             "(none)"
         } else {
@@ -1264,6 +1315,66 @@ fn default_base_branch(repository: &Repository) -> String {
     } else {
         repository.default_branch.clone()
     }
+}
+
+/// The coordinated-landing order map: repo path -> the repo paths whose PRs must
+/// land first. Built from the job's manifest (`WorkspaceRepo.depends_on`).
+fn manifest_depends_on(
+    context: &JobContext,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    context
+        .workspace
+        .as_ref()
+        .map(|workspace| {
+            workspace
+                .repos
+                .iter()
+                .filter(|repo| !repo.depends_on.is_empty())
+                .map(|repo| (repo.repo.clone(), repo.depends_on.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Orders the repo outcomes so a repo comes after every repo it depends on
+/// (topological / Kahn order over the outcomes that actually opened a PR).
+/// Dependencies on repos absent from `outcomes` (produced no diff) are ignored.
+/// Coordinated landing is acyclic; a cycle (not expected) degrades to manifest
+/// order so every PR still opens.
+fn coordinated_landing_order(
+    outcomes: &[RepoOutcome],
+    depends_on: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Vec<usize> {
+    use std::collections::BTreeSet;
+    let present: BTreeSet<&str> = outcomes.iter().map(|outcome| outcome.repo.as_str()).collect();
+    let mut done: BTreeSet<String> = BTreeSet::new();
+    let mut order = Vec::with_capacity(outcomes.len());
+    while order.len() < outcomes.len() {
+        let mut progressed = false;
+        for (index, outcome) in outcomes.iter().enumerate() {
+            if done.contains(&outcome.repo) {
+                continue;
+            }
+            let ready = depends_on.get(&outcome.repo).is_none_or(|deps| {
+                deps.iter()
+                    .all(|dep| !present.contains(dep.as_str()) || done.contains(dep))
+            });
+            if ready {
+                order.push(index);
+                done.insert(outcome.repo.clone());
+                progressed = true;
+            }
+        }
+        if !progressed {
+            for (index, outcome) in outcomes.iter().enumerate() {
+                if done.insert(outcome.repo.clone()) {
+                    order.push(index);
+                }
+            }
+            break;
+        }
+    }
+    order
 }
 
 /// The workspace directory a repo is checked out into: its `name` segment, so

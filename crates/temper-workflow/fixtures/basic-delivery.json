@@ -289,7 +289,8 @@
         "mechanical"
       ],
       "requires_gates": [
-        "ci_gate"
+        "ci_gate",
+        "dependency_gate"
       ],
       "effects": [
         {
@@ -307,6 +308,12 @@
       "id": "ci_gate",
       "condition": {
         "kind": "ci_passed"
+      }
+    },
+    {
+      "id": "dependency_gate",
+      "condition": {
+        "kind": "dependencies_resolved"
       }
     }
   ]
