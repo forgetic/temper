@@ -21,3 +21,4 @@ Current ADRs:
 - [ADR 0019: Read Forgejo CI status through the password-authenticated web UI](0019-forgejo-ci-read-via-web-ui.md)
 - [ADR 0021: Use repo-qualified artifact references for workflow links](0021-repo-qualified-artifact-references.md)
 - [ADR 0022: Generalize role work into a sandboxed workspace with verdict routing](0022-workspace-executor-and-verdict-routing.md)
+- [ADR 0023: Multi-repo co-development jobs](0023-multi-repo-co-development-jobs.md)

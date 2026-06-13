@@ -64,11 +64,13 @@ impl DaemonCore {
         let job_id = job_id.into();
         let role = role.into();
         let repo = repo.into();
+        let repos = manifest_repos(&job_payload, &repo);
 
         self.coordinator.enqueue(WorkItem {
             job_id: job_id.clone(),
             role,
             repo,
+            repos,
         });
         self.job_context.insert(job_id, (artifact, job_payload));
     }
@@ -110,12 +112,9 @@ impl DaemonCore {
     /// it rather than `job_id`). `None` when no assigned job matches.
     pub fn in_flight_job_by_correlation_key(&self, correlation_key: &str) -> Option<InFlightJob> {
         self.job_context.iter().find_map(|(job_id, (_, payload))| {
-            (payload
-                .get("correlation_key")
-                .and_then(serde_json::Value::as_str)
-                == Some(correlation_key))
-            .then(|| self.in_flight_job(job_id))
-            .flatten()
+            (payload_coordination_key(payload) == Some(correlation_key))
+                .then(|| self.in_flight_job(job_id))
+                .flatten()
         })
     }
 
@@ -210,6 +209,39 @@ impl DaemonCore {
     }
 }
 
+/// Every repository the assigned worker must be capable of: the manifest's
+/// `workspace.repos[*].repo` (ADR 0023), falling back to just the primary repo
+/// when the payload carries no manifest. Non-empty by construction.
+fn manifest_repos(job_payload: &serde_json::Value, primary: &str) -> Vec<String> {
+    let repos = job_payload
+        .get("workspace")
+        .and_then(|workspace| workspace.get("repos"))
+        .and_then(serde_json::Value::as_array)
+        .map(|repos| {
+            repos
+                .iter()
+                .filter_map(|repo| repo.get("repo").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if repos.is_empty() {
+        vec![primary.to_string()]
+    } else {
+        repos
+    }
+}
+
+/// The job's coordination key (`workspace.coordination_key`), the one
+/// cross-plane identifier step-progress is keyed by.
+fn payload_coordination_key(job_payload: &serde_json::Value) -> Option<&str> {
+    job_payload
+        .get("workspace")
+        .and_then(|workspace| workspace.get("coordination_key"))
+        .and_then(serde_json::Value::as_str)
+}
+
 fn protocol_version(msg: &WorkerProtocolMessage) -> u32 {
     match msg {
         WorkerProtocolMessage::Register(msg) => msg.protocol_version,
@@ -286,7 +318,7 @@ mod tests {
             worker_id: worker_id.to_string(),
             job_id: job_id.to_string(),
             status: ResultStatus::Success,
-            branch: None,
+            repos: Vec::new(),
             verdict: None,
             body: None,
             children: Vec::new(),
@@ -304,6 +336,83 @@ mod tests {
             }
             other => panic!("expected protocol error, got {other:?}"),
         }
+    }
+
+    fn register_multi(
+        worker_id: &str,
+        role: &str,
+        repos: &[&str],
+        max_concurrent_jobs: u32,
+    ) -> Register {
+        Register {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: worker_id.to_string(),
+            capabilities: repos
+                .iter()
+                .map(|repo| Capability {
+                    role: role.to_string(),
+                    repo: (*repo).to_string(),
+                })
+                .collect(),
+            capacity: Capacity {
+                max_concurrent_jobs,
+            },
+            labels: None,
+        }
+    }
+
+    fn coordinated_payload(coordination_key: &str, repos: &[&str]) -> serde_json::Value {
+        let repos = repos
+            .iter()
+            .map(|repo| {
+                json!({
+                    "repo": repo,
+                    "dir": repo.split('/').next_back().unwrap(),
+                    "access": "writable",
+                    "default_branch": "main",
+                    "base_branch": "main",
+                    "branch_hint": format!("agent/{coordination_key}"),
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({ "workspace": { "coordination_key": coordination_key, "repos": repos } })
+    }
+
+    #[test]
+    fn coordinated_job_dispatches_only_to_an_all_repo_capable_worker() {
+        let mut core = DaemonCore::new();
+        let payload = coordinated_payload("coord-1", &["ai/temper", "ai/smith", "ai/skein"]);
+        core.enqueue_job("job-coord", "engineer", "ai/temper", artifact(), payload);
+
+        // Capable of two of the three manifest repos: no assignment.
+        core.coordinator_mut()
+            .register(&register_multi("partial", "engineer", &["ai/temper", "ai/smith"], 1));
+        assert_error(
+            core.handle(poll("partial")),
+            ErrorCode::PollTimeout,
+            "no work available",
+        );
+
+        // Capable of all three: gets the assign, primary repo on the envelope.
+        core.coordinator_mut().register(&register_multi(
+            "full",
+            "engineer",
+            &["ai/temper", "ai/smith", "ai/skein"],
+            1,
+        ));
+        match core.handle(poll("full")) {
+            Some(WorkerProtocolMessage::Assign(assign)) => {
+                assert_eq!(assign.job_id, "job-coord");
+                assert_eq!(assign.repo, "ai/temper");
+            }
+            other => panic!("expected assign, got {other:?}"),
+        }
+
+        // The in-flight job resolves by its workspace coordination key.
+        let resolved = core
+            .in_flight_job_by_correlation_key("coord-1")
+            .expect("coordination key resolves to the in-flight job");
+        assert_eq!(resolved.job_id, "job-coord");
     }
 
     #[test]

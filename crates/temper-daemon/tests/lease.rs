@@ -6,7 +6,9 @@ use serde_json::json;
 use temper_daemon::{LeaseApplier, ResultApplier};
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
-use temper_worker_protocol::{Artifact, Branch, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION};
+use temper_worker_protocol::{
+    Artifact, Branch, JobResult, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
+};
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{parse_metadata_block, ArtifactSource, LeaseManager, LeasePolicy, RoleId};
 
@@ -92,10 +94,13 @@ fn job_result(job_id: &str) -> JobResult {
         worker_id: "worker-a".to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: Some(Branch {
-            name: "agent/pr-for-code-118".to_string(),
-            head_sha: "abc123".to_string(),
-        }),
+        repos: vec![RepoOutcome {
+            repo: "acme/service".to_string(),
+            branch: Branch {
+                name: "agent/pr-for-code-118".to_string(),
+                head_sha: "abc123".to_string(),
+            },
+        }],
         verdict: None,
         body: None,
         children: Vec::new(),

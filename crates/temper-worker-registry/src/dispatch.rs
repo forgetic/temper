@@ -12,7 +12,30 @@ use crate::{RegistryError, WorkerRegistry};
 pub struct WorkItem {
     pub job_id: String,
     pub role: String,
+    /// Primary repository (home of the coordinating artifact) — carried on the
+    /// resulting [`Assignment`] and the `Assign` envelope.
     pub repo: String,
+    /// Every repository the assigned worker must be capable of: the primary
+    /// plus any additional manifest repos of a coordinated job (ADR 0023).
+    /// Always non-empty and includes `repo`.
+    pub repos: Vec<String>,
+}
+
+impl WorkItem {
+    /// A single-repo work item — the degenerate one-repo manifest.
+    pub fn single(
+        job_id: impl Into<String>,
+        role: impl Into<String>,
+        repo: impl Into<String>,
+    ) -> Self {
+        let repo = repo.into();
+        Self {
+            job_id: job_id.into(),
+            role: role.into(),
+            repos: vec![repo.clone()],
+            repo,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +86,7 @@ impl DispatchCoordinator {
     pub fn dispatch_next(&mut self) -> Option<Assignment> {
         let (index, worker_id) = self.pending.iter().enumerate().find_map(|(index, item)| {
             self.registry
-                .assign_candidate(&item.role, &item.repo)
+                .assign_candidate_all(&item.role, &item.repos)
                 .map(|worker_id| (index, worker_id))
         })?;
 
@@ -102,7 +125,7 @@ impl DispatchCoordinator {
         let index = self
             .pending
             .iter()
-            .position(|item| self.registry.can_handle(worker_id, &item.role, &item.repo))?;
+            .position(|item| self.registry.can_handle_all(worker_id, &item.role, &item.repos))?;
 
         let item = self
             .pending
@@ -202,10 +225,38 @@ mod tests {
     }
 
     fn work(job_id: &str, role: &str, repo: &str) -> WorkItem {
+        WorkItem::single(job_id, role, repo)
+    }
+
+    fn register_multi(
+        worker_id: &str,
+        role: &str,
+        repos: &[&str],
+        max_concurrent_jobs: u32,
+    ) -> Register {
+        Register {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: worker_id.to_string(),
+            capabilities: repos
+                .iter()
+                .map(|repo| Capability {
+                    role: role.to_string(),
+                    repo: (*repo).to_string(),
+                })
+                .collect(),
+            capacity: Capacity {
+                max_concurrent_jobs,
+            },
+            labels: None,
+        }
+    }
+
+    fn coordinated(job_id: &str, role: &str, repos: &[&str]) -> WorkItem {
         WorkItem {
             job_id: job_id.to_string(),
             role: role.to_string(),
-            repo: repo.to_string(),
+            repo: repos[0].to_string(),
+            repos: repos.iter().map(|repo| (*repo).to_string()).collect(),
         }
     }
 
@@ -244,6 +295,41 @@ mod tests {
                 repo: "ai/temper".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn coordinated_job_only_dispatches_to_a_worker_capable_of_all_repos() {
+        let mut coordinator = DispatchCoordinator::new();
+        // Capable of the primary + smith, but NOT skein.
+        coordinator.register(&register_multi(
+            "worker-partial",
+            "engineer",
+            &["ai/temper", "ai/smith"],
+            2,
+        ));
+        coordinator.enqueue(coordinated(
+            "job-coord",
+            "engineer",
+            &["ai/temper", "ai/smith", "ai/skein"],
+        ));
+
+        // No worker covers all three repos: the job stays pending.
+        assert_eq!(coordinator.dispatch_for_worker("worker-partial"), None);
+        assert_eq!(coordinator.dispatch_next(), None);
+        assert_eq!(coordinator.pending_len(), 1);
+
+        // A worker capable of every manifest repo picks it up; the assignment
+        // carries the primary repo.
+        coordinator.register(&register_multi(
+            "worker-full",
+            "engineer",
+            &["ai/temper", "ai/smith", "ai/skein"],
+            2,
+        ));
+        let assignment = coordinator.dispatch_for_worker("worker-full").unwrap();
+        assert_eq!(assignment.job_id, "job-coord");
+        assert_eq!(assignment.worker_id, "worker-full");
+        assert_eq!(assignment.repo, "ai/temper");
     }
 
     #[test]

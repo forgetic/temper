@@ -20,8 +20,8 @@ use temper_runner::{
     ScanError, WorkItem,
 };
 use temper_worker_protocol::{
-    Artifact, Assign, ErrorCode, FailureClass, JobChild, JobProgress, JobResult, Poll,
-    ResultStatus, WorkerProtocolMessage,
+    Artifact, Assign, ErrorCode, FailureClass, JobChild, JobProgress, JobResult, Poll, RepoAccess,
+    ResultStatus, WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
 };
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
@@ -48,7 +48,7 @@ pub use mechanical::{
     run_mechanical_backstop_tick, spawn_mechanical_backstop, MechanicalBackstopConfig,
 };
 pub use temper_runner::{RepositorySet, RepositoryTarget};
-pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, JobRepository};
+pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, RepoOutcome};
 pub use webhook::*;
 
 pub const DEFAULT_MAX_POLL_WAIT_MS: u64 = 30_000;
@@ -195,23 +195,17 @@ impl<F: Forge> ForgeApplier<F> {
             return;
         }
 
-        let Some(branch) = result.branch else {
+        if result.repos.is_empty() {
             eprintln!(
-                "temper-daemon: forge applier ignored success result without branch for job_id={} repo={} artifact.kind={} artifact.item={}",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item
-            );
-            return;
-        };
-        if branch.name.trim().is_empty() {
-            eprintln!(
-                "temper-daemon: forge applier ignored success result with blank branch for job_id={} repo={} artifact.kind={} artifact.item={}",
+                "temper-daemon: forge applier ignored success result with no repo outcomes for job_id={} repo={} artifact.kind={} artifact.item={}",
                 job.job_id, job.repo, job.artifact.kind, job.artifact.item
             );
             return;
         }
-        let branch_name = branch.name;
 
-        let Some((repository, issue)) = self.resolve_issue(&job).await else {
+        // The coordinating issue lives in the primary repo; every PR in the set
+        // links back to it with a repo-qualified ref (ADR 0023).
+        let Some((primary_repository, issue)) = self.resolve_issue(&job).await else {
             return;
         };
         let number = issue.number;
@@ -226,40 +220,100 @@ impl<F: Forge> ForgeApplier<F> {
                 return;
             }
         };
-        let source_kind = ArtifactKindId::new(context.artifact_kind);
+        let source_kind = ArtifactKindId::new(context.artifact_kind.clone());
+        // The coordination key keys every PR in the set; fall back to the
+        // single-issue correlation key when the payload carries no manifest.
+        let coordination_key = context
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.coordination_key.clone())
+            .unwrap_or_else(|| pr_correlation_key(&source_kind, number));
 
-        let base_branch = if repository.default_branch.trim().is_empty() {
-            "main".to_string()
-        } else {
-            repository.default_branch.clone()
-        };
         let lookup_labels = implementation_pr_labels(self.workflow.as_ref());
         let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
         let summary = result.summary.unwrap_or_default();
-        let input = implementation_pr_pull_request_input(
-            repository.id.clone(),
-            number,
-            &issue.title,
-            branch_name,
-            base_branch,
-            &summary,
-            create_labels,
-        );
-        let correlation_key = pr_correlation_key(&source_kind, number);
 
-        if let Err(error) = Executor::new(self.workflow.as_ref(), self.forge.as_ref())
-            .ensure_pull_request_with_lookup(
-                &repository.id,
-                &correlation_key,
-                &lookup_labels,
-                input,
-            )
+        // One PR per writable repo that produced a diff. Each targets its own
+        // repository on the shared coordination branch.
+        for outcome in &result.repos {
+            if outcome.branch.name.trim().is_empty() {
+                eprintln!(
+                    "temper-daemon: forge applier ignored blank branch in repo outcome for job_id={} repo={} outcome_repo={}",
+                    job.job_id, job.repo, outcome.repo
+                );
+                continue;
+            }
+            let Some(target_repository) = self.resolve_repo_path(&job, &outcome.repo).await else {
+                continue;
+            };
+            let base_branch = default_base_branch(&target_repository);
+            // A PR in the primary repo links to the coordinating issue with a
+            // bare same-repo ref; cross-repo PRs use a repo-qualified one.
+            let coordinating = if target_repository.id == primary_repository.id {
+                temper_workflow::ArtifactRef::same_repo(number)
+            } else {
+                temper_workflow::ArtifactRef::in_repo(primary_repository.id.clone(), number)
+            };
+            let input = coordinated_pr_pull_request_input(
+                target_repository.id.clone(),
+                coordinating,
+                number,
+                &issue.title,
+                outcome.branch.name.clone(),
+                base_branch,
+                &summary,
+                create_labels.clone(),
+                &coordination_key,
+            );
+
+            if let Err(error) = Executor::new(self.workflow.as_ref(), self.forge.as_ref())
+                .ensure_pull_request_with_lookup(
+                    &target_repository.id,
+                    &coordination_key,
+                    &lookup_labels,
+                    input,
+                )
+                .await
+            {
+                eprintln!(
+                    "temper-daemon: forge applier ensure_pull_request failed for job_id={} repo={} issue={} target_repo={} coordination_key={}: {error}",
+                    job.job_id, job.repo, number, outcome.repo, coordination_key
+                );
+            }
+        }
+    }
+
+    /// Resolves an `owner/name` repo path (a [`RepoOutcome::repo`]) to its Forge
+    /// [`Repository`]. Logs and returns `None` on a malformed path or lookup
+    /// miss.
+    async fn resolve_repo_path(&self, job: &InFlightJob, path: &str) -> Option<Repository> {
+        let Some((owner, name)) = path.split_once('/') else {
+            eprintln!(
+                "temper-daemon: forge applier ignored malformed repo outcome path for job_id={} outcome_repo={path}",
+                job.job_id
+            );
+            return None;
+        };
+        match self
+            .forge
+            .get_repository_by_path(&RepositoryPath::new(owner, name))
             .await
         {
-            eprintln!(
-                "temper-daemon: forge applier ensure_pull_request failed for job_id={} repo={} issue={} correlation_key={}: {error}",
-                job.job_id, job.repo, number, correlation_key
-            );
+            Ok(Some(repository)) => Some(repository),
+            Ok(None) => {
+                eprintln!(
+                    "temper-daemon: forge applier repo outcome repository not found for job_id={} outcome_repo={path}",
+                    job.job_id
+                );
+                None
+            }
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier repo outcome lookup failed for job_id={} outcome_repo={path}: {error}",
+                    job.job_id
+                );
+                None
+            }
         }
     }
 
@@ -795,23 +849,31 @@ fn verdict_execution_context(
     context
 }
 
-fn implementation_pr_pull_request_input(
+/// Projects one writable repo's head into a member of a *coordinated* pull
+/// request set (ADR 0023): the parent link is a repo-qualified ref to the
+/// coordinating issue (which may live in another repo) and the shared
+/// `coordination_key` is stamped into the metadata so the set is discoverable.
+#[allow(clippy::too_many_arguments)]
+fn coordinated_pr_pull_request_input(
     repo: RepositoryId,
-    code_number: ItemNumber,
+    coordinating: temper_workflow::ArtifactRef,
+    coordinating_number: ItemNumber,
     issue_title: &str,
     head_branch: String,
     base_branch: String,
     summary: &str,
     labels: Vec<String>,
+    coordination_key: &str,
 ) -> CreatePullRequest {
     let metadata = temper_workflow::WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
-        parents: vec![temper_workflow::ArtifactRef::same_repo(code_number)],
+        parents: vec![coordinating],
+        correlation_key: Some(coordination_key.to_string()),
         ..temper_workflow::WorkflowMetadata::default()
     };
     let summary = summary.trim();
     let body = format!(
-        "Workspace-produced implementation for issue #{code_number}.\n\nSummary: {}\n\n{}",
+        "Coordinated implementation for issue #{coordinating_number} (set `{coordination_key}`).\n\nSummary: {}\n\n{}",
         if summary.is_empty() {
             "(none)"
         } else {
@@ -820,7 +882,7 @@ fn implementation_pr_pull_request_input(
         temper_workflow::render_metadata_block(&metadata)
     );
     CreatePullRequest {
-        title: format!("Implement #{code_number}: {issue_title}"),
+        title: format!("Implement #{coordinating_number}: {issue_title}"),
         body,
         source: BranchRef {
             repository_id: repo.clone(),
@@ -1106,11 +1168,8 @@ pub fn job_from_work_item(repo: &str, item: &WorkItem) -> WorkItemJob {
         repo: repo.to_string(),
         queue: queue.clone(),
         artifact_kind: item.kind.as_str().to_string(),
-        repository: None,
-        base_branch: None,
-        branch_hint: None,
-        correlation_key: None,
         artifact: None,
+        workspace: None,
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
@@ -1145,26 +1204,35 @@ async fn enrich_work_item_job<F: Forge + ?Sized>(
         .await?
         .ok_or_else(|| ScanError::Forge(ForgeError::NotFound(format!("repository {repo}"))))?;
 
-    let base_branch = default_base_branch(&repository);
     let number = target_number(item.target);
     let Some(artifact) = terminal_checked_snapshot(forge, repo, item.target).await? else {
         return Ok(EnrichOutcome::SkipTerminalArtifact);
     };
+
+    // Assemble the job's workspace manifest: the primary (writable) repo, plus
+    // any additional repos the coordinating issue declares in a `temper:workspace`
+    // metadata block (ADR 0023). Absent that block, the manifest is a single
+    // writable primary — the degenerate single-repo job.
+    let coordination_key = pr_correlation_key(&item.kind, number);
+    let branch_hint = pr_branch_hint(&item.kind, number);
+    let declared = parse_workspace_decl(&artifact.body);
+    let workspace = build_workspace_manifest(
+        forge,
+        &repository,
+        &job.repo,
+        &coordination_key,
+        &branch_hint,
+        declared,
+    )
+    .await?;
 
     let mut context = JobContext {
         role: job.role.clone(),
         repo: job.repo.clone(),
         queue: item.queue.as_str().to_string(),
         artifact_kind: item.kind.as_str().to_string(),
-        repository: Some(JobRepository {
-            owner: repository.owner,
-            name: repository.name,
-            default_branch: repository.default_branch,
-        }),
-        base_branch: Some(base_branch),
-        branch_hint: Some(pr_branch_hint(&item.kind, number)),
-        correlation_key: Some(pr_correlation_key(&item.kind, number)),
         artifact: Some(artifact),
+        workspace: Some(workspace),
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
@@ -1196,6 +1264,119 @@ fn default_base_branch(repository: &Repository) -> String {
     } else {
         repository.default_branch.clone()
     }
+}
+
+/// The workspace directory a repo is checked out into: its `name` segment, so
+/// the flat sibling layout matches the inter-repo path dependencies (ADR 0023).
+fn repo_dir(repo_path: &str) -> String {
+    repo_path
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(repo_path)
+        .to_string()
+}
+
+/// One repo of a `temper:workspace` declaration on a coordinating issue.
+struct WorkspaceRepoDecl {
+    repo: String,
+    access: RepoAccess,
+}
+
+/// Parses an optional `temper:workspace` metadata block from an issue body:
+///
+/// ```text
+/// <!-- temper:workspace
+/// {"repos":[{"repo":"ai/temper","access":"writable"},
+///           {"repo":"ai/skein","access":"read_only"}]}
+/// -->
+/// ```
+///
+/// Returns `None` when no (well-formed) block is present, in which case the job
+/// gets a degenerate single-repo manifest.
+fn parse_workspace_decl(body: &str) -> Option<Vec<WorkspaceRepoDecl>> {
+    const OPEN: &str = "<!-- temper:workspace";
+    let start = body.find(OPEN)?;
+    let rest = &body[start + OPEN.len()..];
+    let end = rest.find("-->")?;
+    let json = rest[..end].trim();
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let repos = value.get("repos")?.as_array()?;
+
+    let mut decls = Vec::new();
+    for entry in repos {
+        let repo = entry.get("repo")?.as_str()?.to_string();
+        let access = match entry.get("access").and_then(serde_json::Value::as_str) {
+            Some("read_only") => RepoAccess::ReadOnly,
+            _ => RepoAccess::Writable,
+        };
+        decls.push(WorkspaceRepoDecl { repo, access });
+    }
+    Some(decls)
+}
+
+/// Builds the [`WorkspaceManifest`] for a coding job: the primary writable repo
+/// first, then each additional declared repo (resolving its default branch from
+/// the Forge). All writable repos share the one coordination branch; read-only
+/// repos carry no branch hint and are never pushed (ADR 0023).
+async fn build_workspace_manifest<F: Forge + ?Sized>(
+    forge: &F,
+    primary: &Repository,
+    primary_path: &str,
+    coordination_key: &str,
+    branch_hint: &str,
+    declared: Option<Vec<WorkspaceRepoDecl>>,
+) -> Result<WorkspaceManifest, ScanError> {
+    let primary_base = default_base_branch(primary);
+    let mut repos = vec![WorkspaceRepo {
+        repo: primary_path.to_string(),
+        dir: repo_dir(primary_path),
+        access: RepoAccess::Writable,
+        default_branch: primary_base.clone(),
+        base_branch: primary_base,
+        branch_hint: Some(branch_hint.to_string()),
+    }];
+
+    for decl in declared.into_iter().flatten() {
+        // The primary is always present (and writable) regardless of how the
+        // declaration lists it; skip a redundant self-entry.
+        if decl.repo == primary_path {
+            continue;
+        }
+        let Some((owner, name)) = decl.repo.split_once('/') else {
+            return Err(ScanError::Forge(ForgeError::NotFound(format!(
+                "malformed workspace repo path {}",
+                decl.repo
+            ))));
+        };
+        let repository = forge
+            .get_repository_by_path(&RepositoryPath::new(owner, name))
+            .await?
+            .ok_or_else(|| {
+                ScanError::Forge(ForgeError::NotFound(format!(
+                    "workspace repository {}",
+                    decl.repo
+                )))
+            })?;
+        let base = default_base_branch(&repository);
+        let branch_hint = match decl.access {
+            RepoAccess::Writable => Some(branch_hint.to_string()),
+            RepoAccess::ReadOnly => None,
+        };
+        repos.push(WorkspaceRepo {
+            repo: decl.repo,
+            dir: repo_dir(&repository.name),
+            access: decl.access,
+            default_branch: base.clone(),
+            base_branch: base,
+            branch_hint,
+        });
+    }
+
+    Ok(WorkspaceManifest {
+        coordination_key: coordination_key.to_string(),
+        repos,
+    })
 }
 
 fn target_number(target: ArtifactSource) -> ItemNumber {
@@ -1266,11 +1447,15 @@ async fn implementation_pull_request_exists_for_correlation<F: Forge + ?Sized>(
     workflow: &ValidatedWorkflow,
     context: &JobContext,
 ) -> Result<bool, ScanError> {
-    let Some(correlation_key) = context.correlation_key.as_deref() else {
+    let Some(coordination_key) = context
+        .workspace
+        .as_ref()
+        .map(|workspace| workspace.coordination_key.as_str())
+    else {
         return Ok(false);
     };
     let labels = implementation_pr_labels(workflow);
-    let pull_request = find_pull_request_by_correlation(forge, repo, correlation_key, &labels)
+    let pull_request = find_pull_request_by_correlation(forge, repo, coordination_key, &labels)
         .await
         .map_err(ScanError::Execution)?;
     // A merged implementation PR permanently covers its correlation key. If the
@@ -2388,7 +2573,7 @@ mod tests {
             worker_id: "worker-a".to_string(),
             job_id: "job-1".to_string(),
             status,
-            branch: None,
+            repos: Vec::new(),
             verdict: None,
             body: None,
             children: Vec::new(),
@@ -2665,11 +2850,8 @@ mod tests {
                 repo: "ai/temper".to_string(),
                 queue: "code_ready".to_string(),
                 artifact_kind: "code".to_string(),
-                repository: None,
-                base_branch: None,
-                branch_hint: None,
-                correlation_key: None,
                 artifact: None,
+                workspace: None,
                 action: None,
                 checkout_capability: None,
                 allowed_verdicts: Vec::new(),
@@ -2827,22 +3009,26 @@ mod tests {
 
             let context: JobContext =
                 serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
-            assert_eq!(context.base_branch.as_deref(), Some("main"));
+            // A non-coordinated PR job gets a degenerate single-repo manifest:
+            // one writable primary on the coordination branch.
+            let workspace = context
+                .workspace
+                .as_ref()
+                .expect("enriched job carries a workspace manifest");
             assert_eq!(
-                context.repository,
-                Some(JobRepository {
-                    owner: "ai".to_string(),
-                    name: "temper".to_string(),
-                    default_branch: "main".to_string(),
-                })
+                workspace.coordination_key,
+                format!("pr-for-code-{}", pull_request.number.get())
             );
+            assert_eq!(workspace.repos.len(), 1);
+            let primary = workspace.primary().expect("primary repo present");
+            assert_eq!(primary.repo, "ai/temper");
+            assert_eq!(primary.dir, "temper");
+            assert!(primary.is_writable());
+            assert_eq!(primary.default_branch, "main");
+            assert_eq!(primary.base_branch, "main");
             assert_eq!(
-                context.branch_hint.as_deref(),
+                primary.branch_hint.as_deref(),
                 Some(format!("agent/pr-for-code-{}", pull_request.number.get()).as_str())
-            );
-            assert_eq!(
-                context.correlation_key.as_deref(),
-                Some(format!("pr-for-code-{}", pull_request.number.get()).as_str())
             );
             let artifact = context.artifact.expect("pull request snapshot is present");
             assert_eq!(artifact.number, pull_request.number.get());

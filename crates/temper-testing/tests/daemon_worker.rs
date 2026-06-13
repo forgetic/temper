@@ -21,7 +21,7 @@ use temper_daemon::{Daemon, InFlightJob, ResultApplier};
 use temper_testing::daemon_worker::{CI_PASS_MARKER, GIT_TOKEN_ENV, GIT_USER_ENV};
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_worker_protocol::{
-    Artifact, JobArtifactSnapshot, JobContext, JobRepository, JobResult, ResultStatus,
+    Artifact, JobArtifactSnapshot, JobContext, JobResult, ResultStatus, WorkspaceManifest,
 };
 
 const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -84,14 +84,14 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
             repo: "acme/service".to_string(),
             queue: "code_ready".to_string(),
             artifact_kind: "code".to_string(),
-            repository: Some(JobRepository {
-                owner: "acme".to_string(),
-                name: "service".to_string(),
-                default_branch: "main".to_string(),
-            }),
-            base_branch: Some("main".to_string()),
-            branch_hint: Some("agent/pr-for-code-7".to_string()),
-            correlation_key: Some("pr-for-code-7".to_string()),
+            workspace: Some(WorkspaceManifest::single(
+                "acme/service",
+                "service",
+                "main",
+                "main",
+                "agent/pr-for-code-7",
+                "pr-for-code-7",
+            )),
             artifact: Some(JobArtifactSnapshot {
                 number: 7,
                 title: "Implement the thing".to_string(),
@@ -142,9 +142,13 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
             "worker log:\n{}",
             worker.logs()
         );
-        let branch = result
-            .branch
-            .expect("success result carries the pushed branch");
+        assert_eq!(
+            result.repos.len(),
+            1,
+            "single-repo job produces one repo outcome"
+        );
+        let branch = result.repos[0].branch.clone();
+        assert_eq!(result.repos[0].repo, "acme/service");
         assert_eq!(branch.name, "agent/pr-for-code-7");
 
         // The branch really exists in the origin at the reported head.

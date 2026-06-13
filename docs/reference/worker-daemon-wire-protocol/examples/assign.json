@@ -2,34 +2,54 @@
   "protocol_version": 1,
   "type": "assign",
   "job_id": "job-123",
-  "role": "architect",
+  "role": "engineer",
   "repo": "ai/temper",
   "artifact": {
-    "item": 89,
+    "item": 42,
     "kind": "issue"
   },
   "job_payload": {
-    "role": "architect",
+    "role": "engineer",
     "repo": "ai/temper",
-    "queue": "triage",
-    "artifact_kind": "intake",
-    "repository": {
-      "owner": "ai",
-      "name": "temper",
-      "default_branch": "main"
-    },
-    "base_branch": "main",
-    "branch_hint": "agent/pr-for-intake-89",
-    "correlation_key": "pr-for-intake-89",
+    "queue": "code_ready",
+    "artifact_kind": "code",
     "artifact": {
-      "number": 89,
-      "title": "Clarify daemon worker protocol",
-      "body": "Please make the examples worker-compatible.",
-      "labels": ["untriaged"],
+      "number": 42,
+      "title": "Cross-repo worker protocol change",
+      "body": "Change the worker protocol in temper and consume it in smith.",
+      "labels": ["code", "ready", "coordinated"],
       "state": "Open"
     },
-    "action": "triage_intake",
-    "checkout_capability": "read_only",
-    "allowed_verdicts": ["ready_code"]
+    "workspace": {
+      "coordination_key": "coord-for-code-42",
+      "repos": [
+        {
+          "repo": "ai/temper",
+          "dir": "temper",
+          "access": "writable",
+          "default_branch": "main",
+          "base_branch": "main",
+          "branch_hint": "agent/coord-for-code-42"
+        },
+        {
+          "repo": "ai/smith",
+          "dir": "smith",
+          "access": "writable",
+          "default_branch": "main",
+          "base_branch": "main",
+          "branch_hint": "agent/coord-for-code-42"
+        },
+        {
+          "repo": "ai/skein",
+          "dir": "skein",
+          "access": "read_only",
+          "default_branch": "main",
+          "base_branch": "main"
+        }
+      ]
+    },
+    "action": "open_pr",
+    "checkout_capability": "writable",
+    "allowed_verdicts": []
   }
 }

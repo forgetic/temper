@@ -4,8 +4,21 @@
   "worker_id": "worker-1",
   "job_id": "job-123",
   "status": "success",
-  "branch": {
-    "name": "agent/pr-for-code-89",
-    "head_sha": "0123456789abcdef0123456789abcdef01234567"
-  }
+  "repos": [
+    {
+      "repo": "ai/temper",
+      "branch": {
+        "name": "agent/coord-for-code-42",
+        "head_sha": "0123456789abcdef0123456789abcdef01234567"
+      }
+    },
+    {
+      "repo": "ai/smith",
+      "branch": {
+        "name": "agent/coord-for-code-42",
+        "head_sha": "89abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  ],
+  "summary": "implemented coord-for-code-42 across temper and smith"
 }

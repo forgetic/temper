@@ -70,7 +70,7 @@ fn result(worker_id: &str, job_id: &str) -> WorkerProtocolMessage {
         worker_id: worker_id.to_string(),
         job_id: job_id.to_string(),
         status: ResultStatus::Success,
-        branch: None,
+        repos: Vec::new(),
         verdict: None,
         body: None,
         children: Vec::new(),

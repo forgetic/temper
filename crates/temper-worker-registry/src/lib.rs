@@ -57,9 +57,16 @@ impl WorkerRegistry {
     }
 
     pub fn assign_candidate(&self, role: &str, repo: &str) -> Option<String> {
+        self.assign_candidate_all(role, &[repo.to_string()])
+    }
+
+    /// Like [`assign_candidate`](Self::assign_candidate) but for a coordinated
+    /// multi-repo job: the chosen worker must hold `(role, repo)` for **every**
+    /// repository in `repos` (ADR 0023). `repos` is expected to be non-empty.
+    pub fn assign_candidate_all(&self, role: &str, repos: &[String]) -> Option<String> {
         self.workers
             .iter()
-            .filter(|(_, entry)| entry.healthy && entry.can_handle(role, repo))
+            .filter(|(_, entry)| entry.healthy && entry.can_handle_all(role, repos))
             .filter_map(|(worker_id, entry)| {
                 let free_capacity = entry.free_capacity();
                 (free_capacity > 0).then_some((worker_id, free_capacity))
@@ -75,9 +82,16 @@ impl WorkerRegistry {
     /// True iff `worker_id` is registered, healthy, and its capabilities cover
     /// `(role, repo)`. Does not consider capacity.
     pub fn can_handle(&self, worker_id: &str, role: &str, repo: &str) -> bool {
+        self.can_handle_all(worker_id, role, &[repo.to_string()])
+    }
+
+    /// True iff `worker_id` is registered, healthy, and its capabilities cover
+    /// `(role, repo)` for **every** repository in `repos` (ADR 0023). Does not
+    /// consider capacity.
+    pub fn can_handle_all(&self, worker_id: &str, role: &str, repos: &[String]) -> bool {
         self.workers
             .get(worker_id)
-            .is_some_and(|entry| entry.healthy && entry.can_handle(role, repo))
+            .is_some_and(|entry| entry.healthy && entry.can_handle_all(role, repos))
     }
 
     pub fn record_assignment(
@@ -150,6 +164,14 @@ impl WorkerEntry {
             .any(|capability| capability.role == role && capability.repo == repo)
     }
 
+    /// Covers `(role, repo)` for every repo in `repos`. A coordinated job's
+    /// worker must be capable of all manifest repos, writable and read-only
+    /// alike (ADR 0023). Empty `repos` is vacuously true; callers guarantee at
+    /// least the primary repo is present.
+    fn can_handle_all(&self, role: &str, repos: &[String]) -> bool {
+        repos.iter().all(|repo| self.can_handle(role, repo))
+    }
+
     fn free_capacity(&self) -> u32 {
         self.max_concurrent_jobs
             .saturating_sub(self.in_flight.len().try_into().unwrap_or(u32::MAX))
@@ -202,6 +224,61 @@ mod tests {
 
         assert!(!registry.can_handle("worker-a", "architect", "ai/temper"));
         assert!(!registry.can_handle("worker-a", "engineer", "ai/smith"));
+    }
+
+    fn register_multi(
+        worker_id: &str,
+        role: &str,
+        repos: &[&str],
+        max_concurrent_jobs: u32,
+    ) -> Register {
+        Register {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            worker_id: worker_id.to_string(),
+            capabilities: repos
+                .iter()
+                .map(|repo| Capability {
+                    role: role.to_string(),
+                    repo: (*repo).to_string(),
+                })
+                .collect(),
+            capacity: Capacity {
+                max_concurrent_jobs,
+            },
+            labels: None,
+        }
+    }
+
+    #[test]
+    fn assign_candidate_all_requires_every_repo_in_the_manifest() {
+        let repos = vec![
+            "ai/temper".to_string(),
+            "ai/smith".to_string(),
+            "ai/skein".to_string(),
+        ];
+
+        let mut partial = WorkerRegistry::new();
+        partial.register(&register_multi(
+            "worker-a",
+            "engineer",
+            &["ai/temper", "ai/smith"],
+            1,
+        ));
+        assert_eq!(partial.assign_candidate_all("engineer", &repos), None);
+        assert!(!partial.can_handle_all("worker-a", "engineer", &repos));
+
+        let mut full = WorkerRegistry::new();
+        full.register(&register_multi(
+            "worker-a",
+            "engineer",
+            &["ai/temper", "ai/smith", "ai/skein"],
+            1,
+        ));
+        assert_eq!(
+            full.assign_candidate_all("engineer", &repos),
+            Some("worker-a".to_string())
+        );
+        assert!(full.can_handle_all("worker-a", "engineer", &repos));
     }
 
     #[test]
