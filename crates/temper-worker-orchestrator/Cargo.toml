@@ -15,7 +15,11 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
+# NOTE: no tokio here. Production code runs on the skein runtime and uses no
+# tokio APIs (only #[tokio::test] in unit tests, which gets tokio from
+# dev-dependencies below). Keeping tokio out of [dependencies] means non-test
+# builds of this crate — and everything downstream — do not pull tokio's
+# runtime in via this path.
 
 [dev-dependencies]
 axum = "0.8"
