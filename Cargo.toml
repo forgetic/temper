@@ -196,23 +196,3 @@ tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-
-# Fast local iteration is the default. Production/release profiles can be tuned
-# later when we have deployable artifacts. Cargo uses all available logical CPU
-# cores by default; keep `.cargo/config.toml` free of a fixed `build.jobs` value.
-[profile.dev]
-opt-level = 0
-debug = 0
-incremental = true
-codegen-units = 256
-lto = false
-
-[profile.dev.package."*"]
-debug = 0
-
-[profile.test]
-opt-level = 0
-debug = 0
-incremental = true
-codegen-units = 256
-lto = false
