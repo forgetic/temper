@@ -5,8 +5,9 @@ use std::process::Command;
 use temper_worker_orchestrator::{RoleGitIdentity, Workspace, WorkspaceConfig};
 use tempfile::tempdir;
 
-#[tokio::test]
-async fn workspace_prepares_commits_pushes_and_reuses_local_git_checkout() {
+#[test]
+fn workspace_prepares_commits_pushes_and_reuses_local_git_checkout() {
+    temper_worker_io_engine::block_on(async {
     let temp = tempdir().expect("create temp dir");
     let origin = temp.path().join("origin.git");
     git(["init", "--bare", path_str(&origin)]);
@@ -107,10 +108,12 @@ async fn workspace_prepares_commits_pushes_and_reuses_local_git_checkout() {
         sentinel.exists(),
         "prepare must not recreate or wipe checkout"
     );
+    });
 }
 
-#[tokio::test]
-async fn prepare_pull_request_head_checks_out_the_pull_ref() {
+#[test]
+fn prepare_pull_request_head_checks_out_the_pull_ref() {
+    temper_worker_io_engine::block_on(async {
     let temp = tempdir().expect("create temp dir");
     let origin = temp.path().join("origin.git");
     git(["init", "--bare", path_str(&origin)]);
@@ -164,6 +167,7 @@ async fn prepare_pull_request_head_checks_out_the_pull_ref() {
         workspace.head_sha().await.expect("workspace head sha"),
         pull_request_head_sha
     );
+    });
 }
 
 fn seed_origin(origin: &Path, temp: &Path) -> String {

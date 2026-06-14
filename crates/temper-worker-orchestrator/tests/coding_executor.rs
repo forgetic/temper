@@ -27,8 +27,9 @@ use temper_worker_orchestrator::{
 use temper_worker_protocol::{Artifact, Assign, FailureClass, JobChild, WORKER_PROTOCOL_VERSION};
 use tempfile::TempDir;
 
-#[tokio::test]
-async fn success_path_commits_pushes_and_reports_branch() {
+#[test]
+fn success_path_commits_pushes_and_reports_branch() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let agent = AgentBehavior::Success.runner();
     let executor = fixture.executor(agent.clone(), true);
@@ -93,10 +94,12 @@ async fn success_path_commits_pushes_and_reports_branch() {
         ]),
         "agent diff"
     );
+    });
 }
 
-#[tokio::test]
-async fn context_shape_matches_temper_coding_agent_contract() {
+#[test]
+fn context_shape_matches_temper_coding_agent_contract() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let agent = AgentBehavior::Success.runner();
     let executor = fixture.executor(agent.clone(), true);
@@ -122,10 +125,12 @@ async fn context_shape_matches_temper_coding_agent_contract() {
             artifact_type: "issue",
         },
     );
+    });
 }
 
-#[tokio::test]
-async fn context_shape_passes_through_read_only_capability_and_verdicts() {
+#[test]
+fn context_shape_passes_through_read_only_capability_and_verdicts() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let agent = AgentBehavior::ReadOnlyVerdict.runner();
     let executor = fixture.executor(agent.clone(), true);
@@ -154,10 +159,12 @@ async fn context_shape_passes_through_read_only_capability_and_verdicts() {
             artifact_type: "issue",
         },
     );
+    });
 }
 
-#[tokio::test]
-async fn review_context_shape_carries_pull_request_target() {
+#[test]
+fn review_context_shape_carries_pull_request_target() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let agent = AgentBehavior::ReviewApprove.runner();
     let executor = fixture.executor(agent.clone(), true);
@@ -183,6 +190,7 @@ async fn review_context_shape_carries_pull_request_target() {
             artifact_type: "pull_request",
         },
     );
+    });
 }
 
 struct ExpectedWorkspaceContext<'a> {
@@ -239,8 +247,9 @@ fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorksp
     assert_eq!(inner["artifact"]["state"], "Open");
 }
 
-#[tokio::test]
-async fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
+#[test]
+fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::Success.runner(), true);
 
@@ -274,10 +283,12 @@ async fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
         ]),
         head_sha
     );
+    });
 }
 
-#[tokio::test]
-async fn malformed_payload_maps_to_protocol_failure() {
+#[test]
+fn malformed_payload_maps_to_protocol_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
@@ -289,10 +300,12 @@ async fn malformed_payload_maps_to_protocol_failure() {
         .await;
 
     expect_failure_class(outcome, FailureClass::Protocol);
+    });
 }
 
-#[tokio::test]
-async fn missing_enriched_artifact_maps_to_protocol_failure() {
+#[test]
+fn missing_enriched_artifact_maps_to_protocol_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
     let mut context = job_context("agent/pr-for-code-7", "pr-for-code-7");
@@ -310,10 +323,12 @@ async fn missing_enriched_artifact_maps_to_protocol_failure() {
         message.contains("artifact"),
         "message should name missing field: {message}"
     );
+    });
 }
 
-#[tokio::test]
-async fn missing_role_identity_maps_to_permanent_failure() {
+#[test]
+fn missing_role_identity_maps_to_permanent_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::NoDiff.runner(), false);
 
@@ -326,10 +341,12 @@ async fn missing_role_identity_maps_to_permanent_failure() {
         message.contains("worker has no git identity for role engineer"),
         "unexpected message: {message}"
     );
+    });
 }
 
-#[tokio::test]
-async fn transient_agent_error_maps_to_transient_failure() {
+#[test]
+fn transient_agent_error_maps_to_transient_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::TransientError.runner(), true);
 
@@ -342,10 +359,12 @@ async fn transient_agent_error_maps_to_transient_failure() {
         message.contains("provider transport reset"),
         "transient error message missing: {message}"
     );
+    });
 }
 
-#[tokio::test]
-async fn zero_diff_maps_to_permanent_failure() {
+#[test]
+fn zero_diff_maps_to_permanent_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
@@ -358,10 +377,12 @@ async fn zero_diff_maps_to_permanent_failure() {
         message.contains("agent produced no diff"),
         "unexpected message: {message}"
     );
+    });
 }
 
-#[tokio::test]
-async fn verdict_result_maps_to_permanent_failure() {
+#[test]
+fn verdict_result_maps_to_permanent_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::Verdict.runner(), true);
 
@@ -374,10 +395,12 @@ async fn verdict_result_maps_to_permanent_failure() {
         message.contains("needs_design"),
         "message should name the unsupported verdict: {message}"
     );
+    });
 }
 
-#[tokio::test]
-async fn read_only_job_returns_verdict_and_body() {
+#[test]
+fn read_only_job_returns_verdict_and_body() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
 
@@ -395,10 +418,12 @@ async fn read_only_job_returns_verdict_and_body() {
     assert_eq!(summary.as_deref(), Some("did triage"));
     assert!(children.is_empty());
     assert_no_origin_branch(&fixture, "agent/triage-7");
+    });
 }
 
-#[tokio::test]
-async fn read_only_job_with_diff_still_returns_verdict_without_push() {
+#[test]
+fn read_only_job_with_diff_still_returns_verdict_without_push() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::ReadOnlyVerdictWithDiff.runner(), true);
 
@@ -417,10 +442,12 @@ async fn read_only_job_with_diff_still_returns_verdict_without_push() {
     assert!(children.is_empty());
     assert_no_origin_branch(&fixture, "agent/triage-with-diff-7");
     assert_workspace_clean(&fixture, "architect");
+    });
 }
 
-#[tokio::test]
-async fn read_only_breakdown_verdict_passes_children_through() {
+#[test]
+fn read_only_breakdown_verdict_passes_children_through() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::ReadOnlyBreakdownVerdict.runner(), true);
     let mut context = read_only_job_context("agent/breakdown-7", "breakdown-7");
@@ -457,10 +484,12 @@ async fn read_only_breakdown_verdict_passes_children_through() {
         ]
     );
     assert_no_origin_branch(&fixture, "agent/breakdown-7");
+    });
 }
 
-#[tokio::test]
-async fn read_only_job_without_verdict_is_permanent() {
+#[test]
+fn read_only_job_without_verdict_is_permanent() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
@@ -477,10 +506,12 @@ async fn read_only_job_without_verdict_is_permanent() {
         "unexpected message: {message}"
     );
     assert_no_origin_branch(&fixture, "agent/triage-no-verdict-7");
+    });
 }
 
-#[tokio::test]
-async fn read_only_job_with_undeclared_verdict_is_permanent() {
+#[test]
+fn read_only_job_with_undeclared_verdict_is_permanent() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::UndeclaredVerdict.runner(), true);
 
@@ -501,10 +532,12 @@ async fn read_only_job_with_undeclared_verdict_is_permanent() {
         "message should name the allowed vocabulary: {message}"
     );
     assert_no_origin_branch(&fixture, "agent/triage-undeclared-7");
+    });
 }
 
-#[tokio::test]
-async fn review_job_returns_approve_verdict() {
+#[test]
+fn review_job_returns_approve_verdict() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let agent = AgentBehavior::ReviewApprove.runner();
     let executor = fixture.executor(agent.clone(), true);
@@ -524,10 +557,12 @@ async fn review_job_returns_approve_verdict() {
     assert_eq!(agent.observed_head_sha(), fixture.pull_request_head_sha);
     assert_no_origin_branch(&fixture, "agent/review-7");
     assert_no_extra_origin_head_branches(&fixture, &["main"]);
+    });
 }
 
-#[tokio::test]
-async fn review_job_changes_verdict_passes_review_body_through() {
+#[test]
+fn review_job_changes_verdict_passes_review_body_through() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::ReviewChanges.runner(), true);
 
@@ -548,10 +583,12 @@ async fn review_job_changes_verdict_passes_review_body_through() {
     assert_no_origin_branch(&fixture, "agent/review-changes-7");
     assert_no_extra_origin_head_branches(&fixture, &["main"]);
     assert_workspace_clean(&fixture, "reviewer");
+    });
 }
 
-#[tokio::test]
-async fn review_job_missing_verdict_is_permanent_failure() {
+#[test]
+fn review_job_missing_verdict_is_permanent_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::ReviewMissingVerdict.runner(), true);
 
@@ -570,10 +607,12 @@ async fn review_job_missing_verdict_is_permanent_failure() {
     );
     assert_no_origin_branch(&fixture, "agent/review-missing-verdict-7");
     assert_no_extra_origin_head_branches(&fixture, &["main"]);
+    });
 }
 
-#[tokio::test]
-async fn review_job_undeclared_verdict_is_permanent_failure() {
+#[test]
+fn review_job_undeclared_verdict_is_permanent_failure() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::ReviewUndeclaredVerdict.runner(), true);
 
@@ -596,10 +635,12 @@ async fn review_job_undeclared_verdict_is_permanent_failure() {
     );
     assert_no_origin_branch(&fixture, "agent/review-undeclared-7");
     assert_no_extra_origin_head_branches(&fixture, &["main"]);
+    });
 }
 
-#[tokio::test]
-async fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
+#[test]
+fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::WritableVerdict.runner(), true);
 
@@ -622,6 +663,7 @@ async fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
     assert!(children.is_empty());
     assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
     assert_workspace_clean(&fixture, "engineer");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1339,8 +1381,9 @@ fn assert_is_sha(value: &str) {
 /// Phase 6b: an agent that checkpoint-commits and pushes its whole product
 /// leaves a clean tree; the executor must still report success with the
 /// checkpointed head rather than failing with "agent produced no diff".
-#[tokio::test]
-async fn checkpoint_committed_work_with_clean_tree_succeeds() {
+#[test]
+fn checkpoint_committed_work_with_clean_tree_succeeds() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let executor = fixture.executor(AgentBehavior::CheckpointCommits.runner(), true);
 
@@ -1371,12 +1414,14 @@ async fn checkpoint_committed_work_with_clean_tree_succeeds() {
         ]),
         "checkpoint(step 2): push checkpoint"
     );
+    });
 }
 
 /// Phase 6b: a re-dispatch for the same branch resumes from the pushed remote
 /// branch (the prior dispatch's checkpoints) instead of resetting to base.
-#[tokio::test]
-async fn redispatch_resumes_from_pushed_work_branch() {
+#[test]
+fn redispatch_resumes_from_pushed_work_branch() {
+    temper_worker_io_engine::block_on(async {
     let fixture = Fixture::new();
     let first = AgentBehavior::CheckpointCommits.runner();
     let executor = fixture.executor(first, true);
@@ -1400,4 +1445,5 @@ async fn redispatch_resumes_from_pushed_work_branch() {
         first_head,
         "prepare must resume from the pushed work branch"
     );
+    });
 }

@@ -143,8 +143,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn success_stub_maps_to_success_result_with_branch() {
+    #[test]
+    fn success_stub_maps_to_success_result_with_branch() {
+        temper_worker_io_engine::block_on(async {
         let outcome = StubExecutor::success().execute(assign("job-123")).await;
         let result = job_result("worker-1", "job-123", outcome);
 
@@ -167,6 +168,7 @@ mod tests {
                 },
             }]
         );
+        });
     }
 
     #[test]
@@ -257,8 +259,9 @@ mod tests {
         assert!(serialized["children"][1].get("target_repo").is_none());
     }
 
-    #[tokio::test]
-    async fn failure_stub_maps_to_failure_result_without_branch() {
+    #[test]
+    fn failure_stub_maps_to_failure_result_without_branch() {
+        temper_worker_io_engine::block_on(async {
         let outcome = StubExecutor::failure(FailureClass::Permanent, "configured failure")
             .execute(assign("job-456"))
             .await;
@@ -277,5 +280,6 @@ mod tests {
                 message: "configured failure".to_string(),
             })
         );
+        });
     }
 }
