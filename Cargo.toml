@@ -202,7 +202,6 @@ thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
 tongs = { path = "../tongs/crates/tongs" }
 uuid = { version = "1", features = ["v4"] }
-tokio = { version = "1", default-features = false }
 futures = "0.3"
 tempfile = "3"
 
