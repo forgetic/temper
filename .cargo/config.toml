@@ -4,9 +4,19 @@
 # cores. Agents should not add a fixed job count unless a task explicitly needs
 # reproducible resource limits.
 
+# Note on caching (kache): `clippy`/`check` invoke rustc in metadata-only mode
+# (`--emit=metadata`), which produces a zero-byte leaf `.rmeta`. kache refuses
+# to cache zero-byte artifacts, so every check-only target recompiles on every
+# run regardless of cache state — there is no warm-cache speedup for them. The
+# `--no-run` test build, by contrast, emits real executables that cache fully.
+# So CI builds tests first (cached) and keeps the uncacheable lint surface small
+# by linting lib+bin targets only (`dev-clippy`), not `--all-targets`. The
+# `dev-clippy-all` alias keeps the full-surface lint available for local use.
+
 [alias]
 dev-check = "check --workspace --all-targets"
-dev-clippy = "clippy --workspace --all-targets"
+dev-clippy = "clippy --workspace --lib --bins"
+dev-clippy-all = "clippy --workspace --all-targets"
 dev-test-quick = "test --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"
 dev-test-full = "nextest run --workspace --run-ignored all"

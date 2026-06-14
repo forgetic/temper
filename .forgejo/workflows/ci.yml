@@ -11,7 +11,11 @@ on:
 
 # Builds are cached transparently by the kache daemon (rustc-wrapper in
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
-# builds for everything except final binaries.
+# builds for everything that emits real artifacts (rlibs, test executables, the
+# final binary). Check-only passes (clippy/`cargo check`) emit zero-byte
+# `.rmeta` leaves that kache cannot cache and so recompile every run — the step
+# ordering below (build the cacheable test executables first, lint a minimal
+# surface afterwards) is chosen to keep that uncacheable work small.
 #
 # temper depends on sibling repos by relative path — ../skein, ../tongs, ../jig
 # (workspace deps) and ../../../bench, ../../../jig (crate deps), all of which
@@ -49,7 +53,7 @@ jobs:
             rm -rf "$repo"
             git clone --depth 1 "${{ github.server_url }}/ai/$repo.git" "$repo"
           done
-      - name: Lint
+      - name: Format
         run: |
           set -eu
           # Format temper's own workspace members only — NOT `cargo fmt --all`,
@@ -61,15 +65,26 @@ jobs:
           # follow-up.)
           cargo fmt $(cargo metadata --no-deps --format-version 1 \
             | python3 -c "import json,sys; print(' '.join('-p '+p['name'] for p in json.load(sys.stdin)['packages']))")
-          cargo dev-clippy
-      - name: Check
-        run: |
-          set -eu
-          cargo dev-check
+      # Build the test executables first: they emit real artifacts that kache
+      # caches in full, so on a clean checkout with a warm cache this is the
+      # cheap step. Lint runs afterwards. There is deliberately no separate
+      # `cargo check` step — clippy already type-checks, so a check pass would
+      # only duplicate clippy's (uncacheable, metadata-only) work.
       - name: Build
         run: |
           set -eu
           cargo dev-test-build
+      - name: Lint
+        # `dev-clippy` lints lib+bin targets only. clippy runs rustc in
+        # metadata-only mode and produces zero-byte `.rmeta` leaves that kache
+        # cannot cache, so every linted target recompiles every run; keeping the
+        # surface to lib+bins (not `--all-targets`) avoids ~135 uncacheable
+        # test-target checks. Test code is compiled (and thus type-checked) by
+        # the Build step above; run `cargo dev-clippy-all` locally for lint
+        # coverage of test code.
+        run: |
+          set -eu
+          cargo dev-clippy
       - name: Test
         # The ignored daemon e2e scenarios boot a real Forgejo + CI runner and
         # wait for convergence (PR opened, CI red→green, mechanical merge). On a
