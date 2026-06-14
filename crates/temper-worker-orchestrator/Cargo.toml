@@ -15,17 +15,19 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-# NOTE: no tokio here. Production code runs on the skein runtime and uses no
-# tokio APIs (only #[tokio::test] in unit tests, which gets tokio from
-# dev-dependencies below). Keeping tokio out of [dependencies] means non-test
-# builds of this crate — and everything downstream — do not pull tokio's
-# runtime in via this path.
+# NOTE: no tokio, anywhere. Production code and tests both run on the skein
+# runtime; the transport e2e tests drive the real daemon through its in-process
+# carrier rather than a tokio/axum fake. Keeping tokio out of the graph means
+# non-test builds of this crate — and everything downstream — never pull it in.
 
 [dev-dependencies]
-axum = "0.8"
 temper-agent-protocol = { path = "../temper-agent-protocol" }
+# Transport e2e tests drive the real daemon through its in-process carrier on the
+# skein runtime (no fake daemon, no tokio/axum): the daemon now lives in this
+# workspace, so tests run the real thing and tap the worker's posted result.
+temper-daemon = { path = "../temper-daemon" }
+temper-io-engine = { path = "../temper-io-engine" }
 temper-worker-io-engine = { path = "../temper-worker-io-engine" }
-tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net", "process"] }
 
 # A deterministic, hermetic agent that speaks the temper-agent-protocol: writes
 # a product file, emits step-progress, writes a result. Lets the worker e2e drive

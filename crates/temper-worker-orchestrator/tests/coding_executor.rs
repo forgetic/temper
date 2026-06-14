@@ -30,166 +30,166 @@ use tempfile::TempDir;
 #[test]
 fn success_path_commits_pushes_and_reports_branch() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let agent = AgentBehavior::Success.runner();
-    let executor = fixture.executor(agent.clone(), true);
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
 
-    let outcome = executor
-        .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-        .await;
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
 
-    let (branch_name, head_sha, summary) = expect_success(outcome);
-    assert_eq!(branch_name, "agent/pr-for-code-7");
-    assert_is_sha(&head_sha);
-    assert_eq!(summary.as_deref(), Some("did the work"));
+        let (branch_name, head_sha, summary) = expect_success(outcome);
+        assert_eq!(branch_name, "agent/pr-for-code-7");
+        assert_is_sha(&head_sha);
+        assert_eq!(summary.as_deref(), Some("did the work"));
 
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "rev-parse",
-            "refs/heads/agent/pr-for-code-7",
-        ]),
-        head_sha
-    );
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "log",
-            "-1",
-            "--format=%s",
-            "refs/heads/agent/pr-for-code-7",
-        ]),
-        "Implement pr-for-code-7"
-    );
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "log",
-            "-1",
-            "--format=%b",
-            "refs/heads/agent/pr-for-code-7",
-        ]),
-        "Closes #7"
-    );
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "log",
-            "-1",
-            "--format=%an <%ae>|%cn <%ce>",
-            "refs/heads/agent/pr-for-code-7",
-        ]),
-        "Smith Engineer <smith-engineer@example.test>|Smith Engineer <smith-engineer@example.test>"
-    );
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "show",
-            "refs/heads/agent/pr-for-code-7:agent-output.txt",
-        ]),
-        "agent diff"
-    );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                "refs/heads/agent/pr-for-code-7",
+            ]),
+            head_sha
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "log",
+                "-1",
+                "--format=%s",
+                "refs/heads/agent/pr-for-code-7",
+            ]),
+            "Implement pr-for-code-7"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "log",
+                "-1",
+                "--format=%b",
+                "refs/heads/agent/pr-for-code-7",
+            ]),
+            "Closes #7"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "log",
+                "-1",
+                "--format=%an <%ae>|%cn <%ce>",
+                "refs/heads/agent/pr-for-code-7",
+            ]),
+            "Smith Engineer <smith-engineer@example.test>|Smith Engineer <smith-engineer@example.test>"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "show",
+                "refs/heads/agent/pr-for-code-7:agent-output.txt",
+            ]),
+            "agent diff"
+        );
     });
 }
 
 #[test]
 fn context_shape_matches_temper_coding_agent_contract() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let agent = AgentBehavior::Success.runner();
-    let executor = fixture.executor(agent.clone(), true);
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::Success.runner();
+        let executor = fixture.executor(agent.clone(), true);
 
-    expect_success(
-        executor
-            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-            .await,
-    );
+        expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+                .await,
+        );
 
-    let context = agent.captured_context();
-    assert_workspace_context(
-        &context,
-        ExpectedWorkspaceContext {
-            role: "engineer",
-            queue: "code_ready",
-            kind: "code",
-            checkout: "writable",
-            allowed_verdicts: &[],
-            branch_hint: "agent/pr-for-code-7",
-            correlation_key: "pr-for-code-7",
-            target: "Issue { number: ItemNumber(7) }",
-            artifact_type: "issue",
-        },
-    );
+        let context = agent.captured_context();
+        assert_workspace_context(
+            &context,
+            ExpectedWorkspaceContext {
+                role: "engineer",
+                queue: "code_ready",
+                kind: "code",
+                checkout: "writable",
+                allowed_verdicts: &[],
+                branch_hint: "agent/pr-for-code-7",
+                correlation_key: "pr-for-code-7",
+                target: "Issue { number: ItemNumber(7) }",
+                artifact_type: "issue",
+            },
+        );
     });
 }
 
 #[test]
 fn context_shape_passes_through_read_only_capability_and_verdicts() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let agent = AgentBehavior::ReadOnlyVerdict.runner();
-    let executor = fixture.executor(agent.clone(), true);
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::ReadOnlyVerdict.runner();
+        let executor = fixture.executor(agent.clone(), true);
 
-    expect_verdict(
-        executor
-            .execute(assign_with_context(
-                "triage-7",
-                read_only_job_context("agent/triage-7", "triage-7"),
-            ))
-            .await,
-    );
+        expect_verdict(
+            executor
+                .execute(assign_with_context(
+                    "triage-7",
+                    read_only_job_context("agent/triage-7", "triage-7"),
+                ))
+                .await,
+        );
 
-    let context = agent.captured_context();
-    assert_workspace_context(
-        &context,
-        ExpectedWorkspaceContext {
-            role: "architect",
-            queue: "design_review",
-            kind: "triage",
-            checkout: "read_only",
-            allowed_verdicts: &["ready_code", "needs_design"],
-            branch_hint: "agent/triage-7",
-            correlation_key: "triage-7",
-            target: "Issue { number: ItemNumber(7) }",
-            artifact_type: "issue",
-        },
-    );
+        let context = agent.captured_context();
+        assert_workspace_context(
+            &context,
+            ExpectedWorkspaceContext {
+                role: "architect",
+                queue: "design_review",
+                kind: "triage",
+                checkout: "read_only",
+                allowed_verdicts: &["ready_code", "needs_design"],
+                branch_hint: "agent/triage-7",
+                correlation_key: "triage-7",
+                target: "Issue { number: ItemNumber(7) }",
+                artifact_type: "issue",
+            },
+        );
     });
 }
 
 #[test]
 fn review_context_shape_carries_pull_request_target() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let agent = AgentBehavior::ReviewApprove.runner();
-    let executor = fixture.executor(agent.clone(), true);
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::ReviewApprove.runner();
+        let executor = fixture.executor(agent.clone(), true);
 
-    expect_verdict(
-        executor
-            .execute(pr_assign("agent/review-7", "review-7", pr_job_context))
-            .await,
-    );
+        expect_verdict(
+            executor
+                .execute(pr_assign("agent/review-7", "review-7", pr_job_context))
+                .await,
+        );
 
-    let context = agent.captured_context();
-    assert_workspace_context(
-        &context,
-        ExpectedWorkspaceContext {
-            role: "reviewer",
-            queue: "pr_needs_review",
-            kind: "implementation_pr",
-            checkout: "pull_request_read_only",
-            allowed_verdicts: &["approve", "changes", "escalate"],
-            branch_hint: "agent/review-7",
-            correlation_key: "review-7",
-            target: "PullRequest { number: ItemNumber(7) }",
-            artifact_type: "pull_request",
-        },
-    );
+        let context = agent.captured_context();
+        assert_workspace_context(
+            &context,
+            ExpectedWorkspaceContext {
+                role: "reviewer",
+                queue: "pr_needs_review",
+                kind: "implementation_pr",
+                checkout: "pull_request_read_only",
+                allowed_verdicts: &["approve", "changes", "escalate"],
+                branch_hint: "agent/review-7",
+                correlation_key: "review-7",
+                target: "PullRequest { number: ItemNumber(7) }",
+                artifact_type: "pull_request",
+            },
+        );
     });
 }
 
@@ -250,419 +250,421 @@ fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorksp
 #[test]
 fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::Success.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::Success.runner(), true);
 
-    expect_success(
-        executor
-            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-            .await,
-    );
-    let workspace_path = fixture.workspace_root.join("engineer/service");
-    assert!(workspace_path.exists());
-    let sentinel = workspace_path.join(".git/smith-sentinel");
-    fs::write(&sentinel, "keep object cache").expect("write sentinel");
+        expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+                .await,
+        );
+        let workspace_path = fixture.workspace_root.join("engineer/service");
+        assert!(workspace_path.exists());
+        let sentinel = workspace_path.join(".git/smith-sentinel");
+        fs::write(&sentinel, "keep object cache").expect("write sentinel");
 
-    let (branch_name, head_sha, _) = expect_success(
-        executor
-            .execute(assign("agent/pr-for-code-8", "pr-for-code-8"))
-            .await,
-    );
+        let (branch_name, head_sha, _) = expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-8", "pr-for-code-8"))
+                .await,
+        );
 
-    assert_eq!(branch_name, "agent/pr-for-code-8");
-    assert!(
-        sentinel.exists(),
-        "prepare must reuse the existing checkout"
-    );
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "rev-parse",
-            "refs/heads/agent/pr-for-code-8",
-        ]),
-        head_sha
-    );
+        assert_eq!(branch_name, "agent/pr-for-code-8");
+        assert!(
+            sentinel.exists(),
+            "prepare must reuse the existing checkout"
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                "refs/heads/agent/pr-for-code-8",
+            ]),
+            head_sha
+        );
     });
 }
 
 #[test]
 fn malformed_payload_maps_to_protocol_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
-    let outcome = executor
-        .execute(Assign {
-            job_payload: json!({"nope": true}),
-            ..assign("agent/pr-for-code-7", "pr-for-code-7")
-        })
-        .await;
+        let outcome = executor
+            .execute(Assign {
+                job_payload: json!({"nope": true}),
+                ..assign("agent/pr-for-code-7", "pr-for-code-7")
+            })
+            .await;
 
-    expect_failure_class(outcome, FailureClass::Protocol);
+        expect_failure_class(outcome, FailureClass::Protocol);
     });
 }
 
 #[test]
 fn missing_enriched_artifact_maps_to_protocol_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
-    let mut context = job_context("agent/pr-for-code-7", "pr-for-code-7");
-    context.artifact = None;
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+        let mut context = job_context("agent/pr-for-code-7", "pr-for-code-7");
+        context.artifact = None;
 
-    let outcome = executor
-        .execute(Assign {
-            job_payload: context.to_payload(),
-            ..assign("agent/pr-for-code-7", "pr-for-code-7")
-        })
-        .await;
+        let outcome = executor
+            .execute(Assign {
+                job_payload: context.to_payload(),
+                ..assign("agent/pr-for-code-7", "pr-for-code-7")
+            })
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Protocol);
-    assert!(
-        message.contains("artifact"),
-        "message should name missing field: {message}"
-    );
+        let message = expect_failure_class(outcome, FailureClass::Protocol);
+        assert!(
+            message.contains("artifact"),
+            "message should name missing field: {message}"
+        );
     });
 }
 
 #[test]
 fn missing_role_identity_maps_to_permanent_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::NoDiff.runner(), false);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), false);
 
-    let outcome = executor
-        .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-        .await;
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("worker has no git identity for role engineer"),
-        "unexpected message: {message}"
-    );
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("worker has no git identity for role engineer"),
+            "unexpected message: {message}"
+        );
     });
 }
 
 #[test]
 fn transient_agent_error_maps_to_transient_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::TransientError.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::TransientError.runner(), true);
 
-    let outcome = executor
-        .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-        .await;
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Transient);
-    assert!(
-        message.contains("provider transport reset"),
-        "transient error message missing: {message}"
-    );
+        let message = expect_failure_class(outcome, FailureClass::Transient);
+        assert!(
+            message.contains("provider transport reset"),
+            "transient error message missing: {message}"
+        );
     });
 }
 
 #[test]
 fn zero_diff_maps_to_permanent_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
-    let outcome = executor
-        .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-        .await;
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("agent produced no diff"),
-        "unexpected message: {message}"
-    );
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("agent produced no diff"),
+            "unexpected message: {message}"
+        );
     });
 }
 
 #[test]
 fn verdict_result_maps_to_permanent_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::Verdict.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::Verdict.runner(), true);
 
-    let outcome = executor
-        .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-        .await;
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("needs_design"),
-        "message should name the unsupported verdict: {message}"
-    );
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("needs_design"),
+            "message should name the unsupported verdict: {message}"
+        );
     });
 }
 
 #[test]
 fn read_only_job_returns_verdict_and_body() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
 
-    let (verdict, body, summary, children) = expect_verdict(
-        executor
-            .execute(assign_with_context(
-                "triage-7",
-                read_only_job_context("agent/triage-7", "triage-7"),
-            ))
-            .await,
-    );
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(assign_with_context(
+                    "triage-7",
+                    read_only_job_context("agent/triage-7", "triage-7"),
+                ))
+                .await,
+        );
 
-    assert_eq!(verdict, "ready_code");
-    assert_eq!(body.as_deref(), Some("rewritten"));
-    assert_eq!(summary.as_deref(), Some("did triage"));
-    assert!(children.is_empty());
-    assert_no_origin_branch(&fixture, "agent/triage-7");
+        assert_eq!(verdict, "ready_code");
+        assert_eq!(body.as_deref(), Some("rewritten"));
+        assert_eq!(summary.as_deref(), Some("did triage"));
+        assert!(children.is_empty());
+        assert_no_origin_branch(&fixture, "agent/triage-7");
     });
 }
 
 #[test]
 fn read_only_job_with_diff_still_returns_verdict_without_push() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::ReadOnlyVerdictWithDiff.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReadOnlyVerdictWithDiff.runner(), true);
 
-    let (verdict, body, summary, children) = expect_verdict(
-        executor
-            .execute(assign_with_context(
-                "triage-with-diff-7",
-                read_only_job_context("agent/triage-with-diff-7", "triage-with-diff-7"),
-            ))
-            .await,
-    );
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(assign_with_context(
+                    "triage-with-diff-7",
+                    read_only_job_context("agent/triage-with-diff-7", "triage-with-diff-7"),
+                ))
+                .await,
+        );
 
-    assert_eq!(verdict, "ready_code");
-    assert_eq!(body.as_deref(), Some("rewritten"));
-    assert_eq!(summary.as_deref(), Some("did triage"));
-    assert!(children.is_empty());
-    assert_no_origin_branch(&fixture, "agent/triage-with-diff-7");
-    assert_workspace_clean(&fixture, "architect");
+        assert_eq!(verdict, "ready_code");
+        assert_eq!(body.as_deref(), Some("rewritten"));
+        assert_eq!(summary.as_deref(), Some("did triage"));
+        assert!(children.is_empty());
+        assert_no_origin_branch(&fixture, "agent/triage-with-diff-7");
+        assert_workspace_clean(&fixture, "architect");
     });
 }
 
 #[test]
 fn read_only_breakdown_verdict_passes_children_through() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::ReadOnlyBreakdownVerdict.runner(), true);
-    let mut context = read_only_job_context("agent/breakdown-7", "breakdown-7");
-    context.allowed_verdicts = vec!["needs_breakdown".to_string()];
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReadOnlyBreakdownVerdict.runner(), true);
+        let mut context = read_only_job_context("agent/breakdown-7", "breakdown-7");
+        context.allowed_verdicts = vec!["needs_breakdown".to_string()];
 
-    let (verdict, body, summary, children) = expect_verdict(
-        executor
-            .execute(assign_with_context("breakdown-7", context))
-            .await,
-    );
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(assign_with_context("breakdown-7", context))
+                .await,
+        );
 
-    assert_eq!(verdict, "needs_breakdown");
-    assert_eq!(body, None);
-    assert_eq!(summary.as_deref(), Some("planned breakdown"));
-    assert_eq!(
-        children,
-        vec![
-            JobChild {
-                slug: "api-schema".to_string(),
-                title: "Define the API schema".to_string(),
-                body: "Write the shared API schema.".to_string(),
-                labels: vec!["code".to_string(), "ready".to_string()],
-                depends_on: Vec::new(),
-                target_repo: None,
-            },
-            JobChild {
-                slug: "web-client".to_string(),
-                title: "Implement the web client".to_string(),
-                body: "Build the web client against the API schema.".to_string(),
-                labels: Vec::new(),
-                depends_on: vec!["api-schema".to_string()],
-                target_repo: Some("acme/other".to_string()),
-            },
-        ]
-    );
-    assert_no_origin_branch(&fixture, "agent/breakdown-7");
+        assert_eq!(verdict, "needs_breakdown");
+        assert_eq!(body, None);
+        assert_eq!(summary.as_deref(), Some("planned breakdown"));
+        assert_eq!(
+            children,
+            vec![
+                JobChild {
+                    slug: "api-schema".to_string(),
+                    title: "Define the API schema".to_string(),
+                    body: "Write the shared API schema.".to_string(),
+                    labels: vec!["code".to_string(), "ready".to_string()],
+                    depends_on: Vec::new(),
+                    target_repo: None,
+                },
+                JobChild {
+                    slug: "web-client".to_string(),
+                    title: "Implement the web client".to_string(),
+                    body: "Build the web client against the API schema.".to_string(),
+                    labels: Vec::new(),
+                    depends_on: vec!["api-schema".to_string()],
+                    target_repo: Some("acme/other".to_string()),
+                },
+            ]
+        );
+        assert_no_origin_branch(&fixture, "agent/breakdown-7");
     });
 }
 
 #[test]
 fn read_only_job_without_verdict_is_permanent() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
-    let outcome = executor
-        .execute(assign_with_context(
-            "triage-no-verdict-7",
-            read_only_job_context("agent/triage-no-verdict-7", "triage-no-verdict-7"),
-        ))
-        .await;
+        let outcome = executor
+            .execute(assign_with_context(
+                "triage-no-verdict-7",
+                read_only_job_context("agent/triage-no-verdict-7", "triage-no-verdict-7"),
+            ))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("read-only job returned no verdict"),
-        "unexpected message: {message}"
-    );
-    assert_no_origin_branch(&fixture, "agent/triage-no-verdict-7");
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("read-only job returned no verdict"),
+            "unexpected message: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/triage-no-verdict-7");
     });
 }
 
 #[test]
 fn read_only_job_with_undeclared_verdict_is_permanent() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::UndeclaredVerdict.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::UndeclaredVerdict.runner(), true);
 
-    let outcome = executor
-        .execute(assign_with_context(
-            "triage-undeclared-7",
-            read_only_job_context("agent/triage-undeclared-7", "triage-undeclared-7"),
-        ))
-        .await;
+        let outcome = executor
+            .execute(assign_with_context(
+                "triage-undeclared-7",
+                read_only_job_context("agent/triage-undeclared-7", "triage-undeclared-7"),
+            ))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("needs_breakdown"),
-        "message should name the emitted verdict: {message}"
-    );
-    assert!(
-        message.contains("ready_code") && message.contains("needs_design"),
-        "message should name the allowed vocabulary: {message}"
-    );
-    assert_no_origin_branch(&fixture, "agent/triage-undeclared-7");
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("needs_breakdown"),
+            "message should name the emitted verdict: {message}"
+        );
+        assert!(
+            message.contains("ready_code") && message.contains("needs_design"),
+            "message should name the allowed vocabulary: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/triage-undeclared-7");
     });
 }
 
 #[test]
 fn review_job_returns_approve_verdict() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let agent = AgentBehavior::ReviewApprove.runner();
-    let executor = fixture.executor(agent.clone(), true);
+        let fixture = Fixture::new();
+        let agent = AgentBehavior::ReviewApprove.runner();
+        let executor = fixture.executor(agent.clone(), true);
 
-    let (verdict, body, summary, children) = expect_verdict(
-        executor
-            .execute(pr_assign("agent/review-7", "review-7", pr_job_context))
-            .await,
-    );
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(pr_assign("agent/review-7", "review-7", pr_job_context))
+                .await,
+        );
 
-    assert_eq!(verdict, "approve");
-    assert_eq!(body, None);
-    assert_eq!(summary.as_deref(), Some("looks good"));
-    assert!(children.is_empty());
-    // The runner ran in the prepared PR-head checkout: it observed the PR head
-    // sha, confirming the executor checked out `refs/pull/7/head`.
-    assert_eq!(agent.observed_head_sha(), fixture.pull_request_head_sha);
-    assert_no_origin_branch(&fixture, "agent/review-7");
-    assert_no_extra_origin_head_branches(&fixture, &["main"]);
+        assert_eq!(verdict, "approve");
+        assert_eq!(body, None);
+        assert_eq!(summary.as_deref(), Some("looks good"));
+        assert!(children.is_empty());
+        // The runner ran in the prepared PR-head checkout: it observed the PR head
+        // sha, confirming the executor checked out `refs/pull/7/head`.
+        assert_eq!(agent.observed_head_sha(), fixture.pull_request_head_sha);
+        assert_no_origin_branch(&fixture, "agent/review-7");
+        assert_no_extra_origin_head_branches(&fixture, &["main"]);
     });
 }
 
 #[test]
 fn review_job_changes_verdict_passes_review_body_through() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::ReviewChanges.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReviewChanges.runner(), true);
 
-    let (verdict, body, summary, children) = expect_verdict(
-        executor
-            .execute(pr_assign(
-                "agent/review-changes-7",
-                "review-changes-7",
-                pr_job_context,
-            ))
-            .await,
-    );
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(pr_assign(
+                    "agent/review-changes-7",
+                    "review-changes-7",
+                    pr_job_context,
+                ))
+                .await,
+        );
 
-    assert_eq!(verdict, "changes");
-    assert_eq!(body.as_deref(), Some("please add error handling"));
-    assert_eq!(summary.as_deref(), Some("needs error handling"));
-    assert!(children.is_empty());
-    assert_no_origin_branch(&fixture, "agent/review-changes-7");
-    assert_no_extra_origin_head_branches(&fixture, &["main"]);
-    assert_workspace_clean(&fixture, "reviewer");
+        assert_eq!(verdict, "changes");
+        assert_eq!(body.as_deref(), Some("please add error handling"));
+        assert_eq!(summary.as_deref(), Some("needs error handling"));
+        assert!(children.is_empty());
+        assert_no_origin_branch(&fixture, "agent/review-changes-7");
+        assert_no_extra_origin_head_branches(&fixture, &["main"]);
+        assert_workspace_clean(&fixture, "reviewer");
     });
 }
 
 #[test]
 fn review_job_missing_verdict_is_permanent_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::ReviewMissingVerdict.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReviewMissingVerdict.runner(), true);
 
-    let outcome = executor
-        .execute(pr_assign(
-            "agent/review-missing-verdict-7",
-            "review-missing-verdict-7",
-            pr_job_context,
-        ))
-        .await;
+        let outcome = executor
+            .execute(pr_assign(
+                "agent/review-missing-verdict-7",
+                "review-missing-verdict-7",
+                pr_job_context,
+            ))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("read-only job returned no verdict"),
-        "unexpected message: {message}"
-    );
-    assert_no_origin_branch(&fixture, "agent/review-missing-verdict-7");
-    assert_no_extra_origin_head_branches(&fixture, &["main"]);
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("read-only job returned no verdict"),
+            "unexpected message: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/review-missing-verdict-7");
+        assert_no_extra_origin_head_branches(&fixture, &["main"]);
     });
 }
 
 #[test]
 fn review_job_undeclared_verdict_is_permanent_failure() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::ReviewUndeclaredVerdict.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::ReviewUndeclaredVerdict.runner(), true);
 
-    let outcome = executor
-        .execute(pr_assign(
-            "agent/review-undeclared-7",
-            "review-undeclared-7",
-            pr_job_context,
-        ))
-        .await;
+        let outcome = executor
+            .execute(pr_assign(
+                "agent/review-undeclared-7",
+                "review-undeclared-7",
+                pr_job_context,
+            ))
+            .await;
 
-    let message = expect_failure_class(outcome, FailureClass::Permanent);
-    assert!(
-        message.contains("merge_now"),
-        "message should name the emitted verdict: {message}"
-    );
-    assert!(
-        message.contains("approve") && message.contains("changes") && message.contains("escalate"),
-        "message should name the allowed vocabulary: {message}"
-    );
-    assert_no_origin_branch(&fixture, "agent/review-undeclared-7");
-    assert_no_extra_origin_head_branches(&fixture, &["main"]);
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("merge_now"),
+            "message should name the emitted verdict: {message}"
+        );
+        assert!(
+            message.contains("approve")
+                && message.contains("changes")
+                && message.contains("escalate"),
+            "message should name the allowed vocabulary: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/review-undeclared-7");
+        assert_no_extra_origin_head_branches(&fixture, &["main"]);
     });
 }
 
 #[test]
 fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::WritableVerdict.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::WritableVerdict.runner(), true);
 
-    let (verdict, body, summary, children) = expect_verdict(
-        executor
-            .execute(assign_with_context(
-                "pr-for-code-7",
-                writable_job_context_with_allowed_verdicts(
-                    "agent/pr-for-code-7",
+        let (verdict, body, summary, children) = expect_verdict(
+            executor
+                .execute(assign_with_context(
                     "pr-for-code-7",
-                    &["needs_architect"],
-                ),
-            ))
-            .await,
-    );
+                    writable_job_context_with_allowed_verdicts(
+                        "agent/pr-for-code-7",
+                        "pr-for-code-7",
+                        &["needs_architect"],
+                    ),
+                ))
+                .await,
+        );
 
-    assert_eq!(verdict, "needs_architect");
-    assert_eq!(body.as_deref(), Some("blocked"));
-    assert_eq!(summary.as_deref(), Some("cannot proceed"));
-    assert!(children.is_empty());
-    assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
-    assert_workspace_clean(&fixture, "engineer");
+        assert_eq!(verdict, "needs_architect");
+        assert_eq!(body.as_deref(), Some("blocked"));
+        assert_eq!(summary.as_deref(), Some("cannot proceed"));
+        assert!(children.is_empty());
+        assert_no_origin_branch(&fixture, "agent/pr-for-code-7");
+        assert_workspace_clean(&fixture, "engineer");
     });
 }
 
@@ -1384,36 +1386,36 @@ fn assert_is_sha(value: &str) {
 #[test]
 fn checkpoint_committed_work_with_clean_tree_succeeds() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let executor = fixture.executor(AgentBehavior::CheckpointCommits.runner(), true);
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::CheckpointCommits.runner(), true);
 
-    let outcome = executor
-        .execute(assign("agent/pr-for-code-11", "pr-for-code-11"))
-        .await;
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-11", "pr-for-code-11"))
+            .await;
 
-    let (branch_name, head_sha, summary) = expect_success(outcome);
-    assert_eq!(branch_name, "agent/pr-for-code-11");
-    assert_eq!(summary.as_deref(), Some("checkpointed the work"));
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "rev-parse",
-            "refs/heads/agent/pr-for-code-11",
-        ]),
-        head_sha
-    );
-    assert_eq!(
-        git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "log",
-            "-1",
-            "--format=%s",
-            "refs/heads/agent/pr-for-code-11",
-        ]),
-        "checkpoint(step 2): push checkpoint"
-    );
+        let (branch_name, head_sha, summary) = expect_success(outcome);
+        assert_eq!(branch_name, "agent/pr-for-code-11");
+        assert_eq!(summary.as_deref(), Some("checkpointed the work"));
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "rev-parse",
+                "refs/heads/agent/pr-for-code-11",
+            ]),
+            head_sha
+        );
+        assert_eq!(
+            git_output([
+                "-C",
+                path_str(&fixture.origin),
+                "log",
+                "-1",
+                "--format=%s",
+                "refs/heads/agent/pr-for-code-11",
+            ]),
+            "checkpoint(step 2): push checkpoint"
+        );
     });
 }
 
@@ -1422,28 +1424,28 @@ fn checkpoint_committed_work_with_clean_tree_succeeds() {
 #[test]
 fn redispatch_resumes_from_pushed_work_branch() {
     temper_worker_io_engine::block_on(async {
-    let fixture = Fixture::new();
-    let first = AgentBehavior::CheckpointCommits.runner();
-    let executor = fixture.executor(first, true);
-    let (_, first_head, _) = expect_success(
-        executor
-            .execute(assign("agent/pr-for-code-12", "pr-for-code-12"))
-            .await,
-    );
+        let fixture = Fixture::new();
+        let first = AgentBehavior::CheckpointCommits.runner();
+        let executor = fixture.executor(first, true);
+        let (_, first_head, _) = expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-12", "pr-for-code-12"))
+                .await,
+        );
 
-    // Second dispatch, same branch: the runner must observe the prior
-    // checkpoint as HEAD, not a fresh base checkout.
-    let second = AgentBehavior::Success.runner();
-    let executor = fixture.executor(second.clone(), true);
-    expect_success(
-        executor
-            .execute(assign("agent/pr-for-code-12", "pr-for-code-12"))
-            .await,
-    );
-    assert_eq!(
-        second.observed_head_sha(),
-        first_head,
-        "prepare must resume from the pushed work branch"
-    );
+        // Second dispatch, same branch: the runner must observe the prior
+        // checkpoint as HEAD, not a fresh base checkout.
+        let second = AgentBehavior::Success.runner();
+        let executor = fixture.executor(second.clone(), true);
+        expect_success(
+            executor
+                .execute(assign("agent/pr-for-code-12", "pr-for-code-12"))
+                .await,
+        );
+        assert_eq!(
+            second.observed_head_sha(),
+            first_head,
+            "prepare must resume from the pushed work branch"
+        );
     });
 }

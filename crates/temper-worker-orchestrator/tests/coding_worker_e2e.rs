@@ -7,9 +7,9 @@
 //! tested in the `anvil` repo against jig.
 //!
 //! Topology, all in one process:
-//! - a **fake daemon** (tokio axum) speaks the worker/daemon wire protocol:
-//!   accepts register, assigns one real coding job (a full `WireJobContext`
-//!   payload), then accepts the result;
+//! - the **real daemon**, reached through its in-process carrier, speaks the
+//!   worker/daemon wire protocol: accepts register, assigns one real coding job
+//!   (a full `WireJobContext` payload), then accepts the result;
 //! - a **real `smith-worker`** runs on its own skein runtime thread with an
 //!   [`OutOfProcessRunner`] pointed at the `smith-fake-agent` binary;
 //! - a **recording [`ProgressSink`]** captures every step-progress marker the
@@ -36,26 +36,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::post,
-};
 use serde_json::json;
 use temper_agent_protocol::{StepProgress, StepState};
 use temper_worker_orchestrator::config::CapabilitySpec;
 use temper_worker_orchestrator::{
-    CodingExecutor, CodingExecutorConfig, ExecutorSelection, OutOfProcessRunner, ProgressSink,
-    RoleGitIdentity, WorkerConfig, run_worker,
+    CodingExecutor, CodingExecutorConfig, ExecutorSelection, JobExecutor, OutOfProcessRunner,
+    ProgressSink, RoleGitIdentity, WorkerConfig, run_worker_with_transport,
 };
-use temper_worker_protocol::{
-    Artifact, Assign, ProtocolError, Release, ReleaseDisposition, ResultStatus,
-    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
-};
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
+use temper_worker_protocol::{Artifact, Assign, ResultStatus, WORKER_PROTOCOL_VERSION};
+
+#[path = "support/real_daemon.rs"]
+mod real_daemon;
+use real_daemon::DaemonHarness;
 
 /// Records every step-progress marker the worker relays, so the test can assert
 /// the agent→worker→sink path fired.
@@ -76,15 +68,9 @@ impl RecordingProgressSink {
     }
 }
 
-#[tokio::test]
-async fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
+#[test]
+fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
     let fixture = GitFixture::new();
-
-    let (daemon_url, observed) = spawn_fake_daemon(coding_assign(&fixture)).await;
-    let config = WorkerConfig {
-        daemon_url,
-        ..worker_config()
-    };
 
     // The out-of-process runner spawns the deterministic fake agent binary,
     // which writes GREETING.md and emits two step-progress markers.
@@ -99,26 +85,16 @@ async fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
         CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
     );
 
-    spawn_worker_thread(config, executor);
-
-    let observed = tokio::time::timeout(std::time::Duration::from_secs(30), observed)
-        .await
-        .expect("daemon observes a result within the timeout")
-        .expect("daemon sends the observed run");
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
 
     // The worker reported Success with a branch.
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
     assert_eq!(
-        observed.result.status,
-        ResultStatus::Success,
-        "result: {:?}",
-        observed.result
-    );
-    assert_eq!(
-        observed.result.repos.len(),
+        result.repos.len(),
         1,
         "coding job produces one per-repo outcome"
     );
-    let branch = &observed.result.repos[0].branch;
+    let branch = &result.repos[0].branch;
     assert_eq!(branch.name, "agent/pr-for-code-7");
     assert_eq!(branch.head_sha.len(), 40, "head sha looks like a real sha");
 
@@ -161,15 +137,9 @@ async fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
 /// two-repo workspace, the agent edits both, and the worker pushes a branch to
 /// *each* repo — reporting one `RepoOutcome` per repo for the daemon to turn
 /// into one PR each.
-#[tokio::test]
-async fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
+#[test]
+fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
     let fixture = GitFixture::new();
-
-    let (daemon_url, observed) = spawn_fake_daemon(coordinated_assign(&fixture)).await;
-    let config = WorkerConfig {
-        daemon_url,
-        ..multi_repo_worker_config()
-    };
 
     let runner = Arc::new(OutOfProcessRunner::new(vec![fake_agent_bin()]));
     let executor_config = CodingExecutorConfig {
@@ -182,23 +152,16 @@ async fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo(
         CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
     );
 
-    spawn_worker_thread(config, executor);
-
-    let observed = tokio::time::timeout(std::time::Duration::from_secs(30), observed)
-        .await
-        .expect("daemon observes a result within the timeout")
-        .expect("daemon sends the observed run");
-
-    assert_eq!(
-        observed.result.status,
-        ResultStatus::Success,
-        "result: {:?}",
-        observed.result
+    let result = run_until_result(
+        coordinated_assign(&fixture),
+        multi_repo_worker_config(),
+        executor,
     );
 
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+
     // Two writable repos that each produced a diff → one outcome per repo.
-    let mut reported: Vec<String> = observed
-        .result
+    let mut reported: Vec<String> = result
         .repos
         .iter()
         .map(|outcome| outcome.repo.clone())
@@ -208,7 +171,7 @@ async fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo(
         reported,
         vec!["acme/lib".to_string(), "acme/service".to_string()],
         "coordinated job reports one outcome per writable repo: {:?}",
-        observed.result.repos
+        result.repos
     );
 
     // Each repo's shared coordination branch landed with the agent's product
@@ -220,8 +183,7 @@ async fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo(
             greeting, "hello from the fake agent",
             "{repo} branch carries the agent's product file"
         );
-        let outcome = observed
-            .result
+        let outcome = result
             .repos
             .iter()
             .find(|outcome| outcome.repo == repo)
@@ -245,15 +207,9 @@ async fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo(
     );
 }
 
-#[tokio::test]
-async fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
+#[test]
+fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
     let fixture = GitFixture::new();
-
-    let (daemon_url, observed) = spawn_fake_daemon(coding_assign(&fixture)).await;
-    let config = WorkerConfig {
-        daemon_url,
-        ..worker_config()
-    };
 
     // The fake agent emits progress, then exits non-zero before writing a result
     // — a crash mid-task. (A future slice has the agent push its partial work
@@ -275,21 +231,11 @@ async fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
         CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
     );
 
-    spawn_worker_thread(config, executor);
-
-    let observed = tokio::time::timeout(std::time::Duration::from_secs(30), observed)
-        .await
-        .expect("daemon observes a result within the timeout")
-        .expect("daemon sends the observed run");
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
 
     // The worker reported a transient failure (the crash is re-dispatchable).
-    assert_eq!(
-        observed.result.status,
-        ResultStatus::Failure,
-        "result: {:?}",
-        observed.result
-    );
-    let failure = observed.result.failure.expect("failure carries detail");
+    assert_eq!(result.status, ResultStatus::Failure, "result: {result:?}");
+    let failure = result.failure.expect("failure carries detail");
     assert_eq!(
         failure.class,
         temper_worker_protocol::FailureClass::Transient
@@ -347,145 +293,29 @@ fn role_identities() -> BTreeMap<String, RoleGitIdentity> {
     m
 }
 
-fn spawn_worker_thread<E>(config: WorkerConfig, executor: Arc<E>)
-where
-    E: temper_worker_orchestrator::JobExecutor + Send + Sync + 'static,
-{
-    std::thread::spawn(move || {
-        let _ = temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
-            run_worker(handle, config, executor).await
-        });
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Fake daemon: assign one coding job, accept the result.
-// ---------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct AppState {
-    requests: mpsc::Sender<DaemonRequest>,
-}
-
-struct DaemonRequest {
-    message: WorkerProtocolMessage,
-    reply: oneshot::Sender<DaemonReply>,
-}
-
-enum DaemonReply {
-    NoContent,
-    Message(Box<WorkerProtocolMessage>),
-}
-
-struct ObservedRun {
-    result: temper_worker_protocol::JobResult,
-}
-
-async fn message_handler(
-    State(state): State<AppState>,
-    Json(message): Json<WorkerProtocolMessage>,
-) -> Response {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    if state
-        .requests
-        .send(DaemonRequest {
-            message,
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "fake daemon stopped").into_response();
-    }
-    match reply_rx.await {
-        Ok(DaemonReply::NoContent) => StatusCode::NO_CONTENT.into_response(),
-        Ok(DaemonReply::Message(reply)) => Json(*reply).into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "fake daemon dropped reply",
-        )
-            .into_response(),
-    }
-}
-
-async fn spawn_fake_daemon(assign: Assign) -> (String, oneshot::Receiver<ObservedRun>) {
-    let (request_tx, request_rx) = mpsc::channel(16);
-    let (observed_tx, observed_rx) = oneshot::channel();
-    tokio::spawn(fake_daemon_controller(request_rx, observed_tx, assign));
-
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fake daemon");
-    let addr = listener.local_addr().expect("fake daemon addr");
-    let app = Router::new()
-        .route("/v1/message", post(message_handler))
-        .with_state(AppState {
-            requests: request_tx,
-        });
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    (format!("http://{addr}"), observed_rx)
-}
-
-async fn fake_daemon_controller(
-    mut requests: mpsc::Receiver<DaemonRequest>,
-    observed: oneshot::Sender<ObservedRun>,
+/// Run one coding job end-to-end against the **real** daemon: enqueue `assign`,
+/// run a real worker (with the given `executor`) on the same runtime through the
+/// daemon's in-process carrier, and return the result the daemon applied. The
+/// worker is spawned detached; the call returns once the result is applied.
+fn run_until_result<E>(
     assign: Assign,
-) {
-    let mut assigned = false;
-    let mut observed = Some(observed);
-    while let Some(request) = requests.recv().await {
-        match request.message {
-            WorkerProtocolMessage::Register(_) => {
-                let _ = request.reply.send(DaemonReply::NoContent);
-            }
-            WorkerProtocolMessage::Poll(_) if !assigned => {
-                assigned = true;
-                let _ = request.reply.send(DaemonReply::Message(Box::new(
-                    WorkerProtocolMessage::Assign(assign.clone()),
-                )));
-            }
-            WorkerProtocolMessage::Poll(_) | WorkerProtocolMessage::Heartbeat(_) => {
-                let _ = request
-                    .reply
-                    .send(DaemonReply::Message(Box::new(poll_timeout())));
-            }
-            WorkerProtocolMessage::Result(result) => {
-                let release = WorkerProtocolMessage::Release(Release {
-                    protocol_version: WORKER_PROTOCOL_VERSION,
-                    worker_id: result.worker_id.clone(),
-                    job_id: result.job_id.clone(),
-                    disposition: ReleaseDisposition::Accepted,
-                    message: None,
-                });
-                let _ = request.reply.send(DaemonReply::Message(Box::new(release)));
-                if let Some(observed) = observed.take() {
-                    let _ = observed.send(ObservedRun { result });
-                }
-            }
-            other => {
-                let _ = request.reply.send(DaemonReply::Message(Box::new(
-                    WorkerProtocolMessage::Error(ProtocolError {
-                        protocol_version: WORKER_PROTOCOL_VERSION,
-                        code: temper_worker_protocol::ErrorCode::MalformedMessage,
-                        message: format!("unexpected: {other:?}"),
-                        retry_after_ms: None,
-                        job_id: None,
-                    }),
-                )));
-            }
-        }
-    }
-}
+    config: WorkerConfig,
+    executor: Arc<E>,
+) -> temper_worker_protocol::JobResult
+where
+    E: JobExecutor + Send + Sync + 'static,
+{
+    temper_io_engine::block_on_with(move |_cx, handle| async move {
+        let mut harness = DaemonHarness::start(&handle);
+        harness.enqueue(&assign).await;
 
-fn poll_timeout() -> WorkerProtocolMessage {
-    WorkerProtocolMessage::Error(ProtocolError {
-        protocol_version: WORKER_PROTOCOL_VERSION,
-        code: temper_worker_protocol::ErrorCode::PollTimeout,
-        message: "no work".to_string(),
-        retry_after_ms: None,
-        job_id: None,
+        let transport = harness.transport();
+        let worker_handle = handle.clone();
+        handle.spawn(async move {
+            let _ = run_worker_with_transport(worker_handle, config, executor, transport).await;
+        });
+
+        harness.await_result().await
     })
 }
 
