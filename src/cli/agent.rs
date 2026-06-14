@@ -32,13 +32,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use temper_agent_protocol::{
-    CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
-    WorkspaceResult,
-};
 use temper_agent::{
     AuthChoice, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
     run_coding_agent_native_with_hooks,
+};
+use temper_agent_protocol::{
+    CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
+    WorkspaceResult,
 };
 
 pub fn main<I>(args: I) -> ExitCode

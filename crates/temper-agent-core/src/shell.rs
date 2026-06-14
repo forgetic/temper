@@ -316,8 +316,7 @@ async fn stream_one_attempt(
     };
 
     loop {
-        let event = match temper_agent_io::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await
-        {
+        let event = match temper_agent_io::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
             Ok(Some(event)) => event,
             Ok(None) => {
                 return StreamAttempt::Failed {
