@@ -21,13 +21,11 @@ on:
 #      their own zero-byte `.rmeta` leaves, which kache cannot cache, but that
 #      leaf cost is small.
 #
-# temper depends on sibling repos by relative path — ../skein, ../tongs, ../jig
-# (workspace deps) and ../../../bench, ../../../jig (crate deps), all of which
-# resolve to siblings of the temper checkout. CI reproduces that layout by
-# checking temper out into a `temper/` subdir of the job workspace and cloning
-# skein, tongs, jig, and bench next to it. The siblings also depend on each
-# other by the same flat-sibling paths (jig→skein, tongs→skein/jig), which
-# resolves because every repo is a flat sibling here too.
+# temper depends on its sibling repos (skein, tongs, jig, bench) as git
+# dependencies pinned by rev, so Cargo fetches them itself. No sibling
+# checkout, subdirectory, or working-directory trick is needed — and because a
+# git package id is path-independent (git+url#rev), the cache key no longer
+# depends on the checkout location, so CI shares the warm cache with local dev.
 jobs:
   validate:
     runs-on: host
@@ -36,39 +34,13 @@ jobs:
       # the ignored e2e tests) outside the workspace so the per-run clean
       # checkout does not throw it away.
       BENCH_FORGEJO_CACHE_DIR: ${{ env.HOME }}/.cache/bench-forgejo
-    defaults:
-      run:
-        working-directory: temper
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: temper
-      # Sibling path dependencies. A second actions/checkout cannot fetch these:
-      # the job token is scoped to ai/temper, so the action's repo lookup 404s
-      # for ai/skein etc. The repos are public, so a plain anonymous clone of
-      # each default branch does the job — the same pattern jig's CI uses, and
-      # the fix for the earlier attempt that tried actions/checkout per sibling.
-      - name: Checkout sibling path dependencies
-        working-directory: .
-        run: |
-          set -eu
-          for repo in skein tongs jig bench; do
-            rm -rf "$repo"
-            git clone --depth 1 "${{ github.server_url }}/ai/$repo.git" "$repo"
-          done
       - name: Format
         run: |
           set -eu
-          # Format temper's own workspace members only — NOT `cargo fmt --all`,
-          # which would descend into the sibling path-dep checkouts next door
-          # (skein / tongs / jig / bench) and try to police code temper's CI
-          # does not own. Members are derived at runtime so the list never
-          # drifts. (Matches the prior in-place formatting pass; the tree is not
-          # yet rustfmt-clean workspace-wide, so enforcing --check is a separate
-          # follow-up.)
-          cargo fmt $(cargo metadata --no-deps --format-version 1 \
-            | python3 -c "import json,sys; print(' '.join('-p '+p['name'] for p in json.load(sys.stdin)['packages']))")
+          cargo fmt --all
       # Build the test executables first: they emit real artifacts that kache
       # caches in full, so on a clean checkout with a warm cache this is the
       # cheap step. Lint runs afterwards. There is deliberately no separate

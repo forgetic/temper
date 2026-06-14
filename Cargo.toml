@@ -128,8 +128,8 @@ temper-forge = { path = "crates/temper-forge" }
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-workflow = { path = "crates/temper-workflow" }
 temper-io-engine = { path = "crates/temper-io-engine" }
-jig-core = { path = "../jig/crates/jig-core" }
-jig-server = { path = "../jig/crates/jig-server" }
+jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
+jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 # `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
 # through the daemon's apply_progress against an in-memory forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }
@@ -188,7 +188,7 @@ rust-version = "1.88"
 # different keys every CI run, defeating the build cache. Enabling it
 # unconditionally costs only a small static root bundle and keeps skein's
 # resolved feature set identical across every build, so the cache is shared.
-skein = { path = "../skein/crates/skein", features = [
+skein = { git = "http://127.0.0.1:3000/ai/skein.git", rev = "d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853", features = [
     "tls",
     "tls-native-roots",
     "tls-webpki-roots",
@@ -200,7 +200,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
-tongs = { path = "../tongs/crates/tongs" }
+tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "de509a589cfe01970d406e0430237be9e206ab0d" }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 tempfile = "3"
