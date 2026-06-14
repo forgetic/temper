@@ -1950,7 +1950,6 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io-engine",
  "temper-agent-protocol",
- "temper-agent-runtime",
  "temper-process-protocol",
  "tongs",
  "uuid",

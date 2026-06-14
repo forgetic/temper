@@ -17,7 +17,7 @@ temper-agent-io-engine = { path = "../temper-agent-io-engine" }
 
 [dev-dependencies]
 temper-agent-io-engine = { path = "../temper-agent-io-engine" }
-temper-agent-runtime = { path = "../temper-agent-runtime", features = ["test-provider-base-url-override"] }
+temper-agent-runtime = { path = "../temper-agent-runtime" }
 jig-server = { path = "../../../jig/crates/jig-server" }
 jig-core = { path = "../../../jig/crates/jig-core" }
 

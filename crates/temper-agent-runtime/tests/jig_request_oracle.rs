@@ -13,15 +13,15 @@
 //! # DeepSeek/OpenAI-compatible API-key leg
 //! TEMPER_DEEPSEEK_REQUEST_ORACLE=1 \
 //! TEMPER_DEEPSEEK_API_KEY=... \
-//!   cargo test -p anvil-temper-agent --test jig_request_oracle --features test-provider-base-url-override -- --ignored --nocapture
+//!   cargo test -p anvil-temper-agent --test jig_request_oracle -- --ignored --nocapture
 //!
 //! # Anthropic OAuth leg (requires `pi /login anthropic` first)
 //! TEMPER_ANTHROPIC_OAUTH=1 \
-//!   cargo test -p anvil-temper-agent --test jig_request_oracle --features test-provider-base-url-override -- --ignored --nocapture
+//!   cargo test -p anvil-temper-agent --test jig_request_oracle -- --ignored --nocapture
 //!
 //! # ChatGPT/Codex OAuth leg (requires `pi /login openai-codex` first)
 //! TEMPER_CHATGPT_OAUTH=1 \
-//!   cargo test -p anvil-temper-agent --test jig_request_oracle --features test-provider-base-url-override -- --ignored --nocapture
+//!   cargo test -p anvil-temper-agent --test jig_request_oracle -- --ignored --nocapture
 //! ```
 
 use std::io;

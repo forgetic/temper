@@ -17,12 +17,7 @@ temper-agent-core = { path = "../temper-agent-core" }
 temper-process-protocol = { path = "../temper-process-protocol" }
 uuid.workspace = true
 
-[features]
-default = []
-test-provider-base-url-override = []
-
 [dev-dependencies]
-temper-agent-runtime = { path = ".", features = ["test-provider-base-url-override"] }
 temper-agent-io-engine = { path = "../temper-agent-io-engine" }
 jig-server = { path = "../../../jig/crates/jig-server" }
 jig-core = { path = "../../../jig/crates/jig-core" }

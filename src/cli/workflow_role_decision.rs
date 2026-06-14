@@ -6,17 +6,6 @@ use temper_agent_runtime::{
     WorkflowRoleDecisionRequest, WorkflowRoleDecisionResponder,
 };
 
-#[cfg(feature = "test-provider-base-url-override")]
-const TEST_PROVIDER_BASE_URL_ENV: &str = "ANVIL_TEST_PROVIDER_BASE_URL";
-
-#[cfg(feature = "test-provider-base-url-override")]
-fn apply_test_provider_base_url_override(provider: ProviderConfig) -> ProviderConfig {
-    match std::env::var(TEST_PROVIDER_BASE_URL_ENV) {
-        Ok(base_url) if !base_url.trim().is_empty() => provider.with_base_url_override(base_url),
-        _ => provider,
-    }
-}
-
 pub fn main<I>(args: I) -> std::process::ExitCode
 where
     I: Iterator<Item = String>,
@@ -45,9 +34,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
         .map_err(|error| format!("invalid WorkflowRoleDecisionRequest JSON: {error}"))?;
 
     let provider = ProviderConfig::from_auth(options.auth, options.codex_model, options.auth_file)
-        .map_err(|error| error.to_string())?;
-    #[cfg(feature = "test-provider-base-url-override")]
-    let provider = apply_test_provider_base_url_override(provider);
+        .map_err(|error| error.to_string())?
+        .apply_base_url_override_from_env();
     let responder = WorkflowRoleDecisionResponder::new(provider);
     // The decision path drives anvil's native agent loop, which must run
     // inside a skein engine task (runtime clock + I/O spawning).
@@ -159,11 +147,10 @@ mod tests {
         assert!(error.contains("unsupported auth"));
     }
 
-    #[cfg(feature = "test-provider-base-url-override")]
     #[test]
-    fn test_provider_base_url_override_honors_non_empty_value() {
+    fn provider_base_url_override_honors_non_empty_value() {
         let provider = ProviderConfig::new("test", "model", "http://original", "key")
             .with_base_url_override("http://127.0.0.1:4200");
-        assert_eq!(provider.base_url_for_test(), "http://127.0.0.1:4200");
+        assert_eq!(provider.base_url(), "http://127.0.0.1:4200");
     }
 }

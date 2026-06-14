@@ -45,7 +45,7 @@ rust-version.workspace = true
 
 [features]
 # The default is the everything-binary: one `temper` that does daemon + worker
-# + agent + operator tools (the solo-dev UX). Factory deployments can strip to a
+# + agent + operator tools. Custom distributed deployments can strip to a
 # single role with `--no-default-features --features <role>`.
 default = ["unified"]
 
@@ -83,12 +83,6 @@ agent = [
 
 # Profile feature: the unified everything-binary.
 unified = ["daemon", "worker", "agent"]
-
-# Test hook surfaced from the agent runtime (provider base-url override for
-# hermetic responder tests).
-test-provider-base-url-override = [
-    "temper-agent-runtime/test-provider-base-url-override",
-]
 
 [dependencies]
 # Always present (shared, cheap): the runtime.

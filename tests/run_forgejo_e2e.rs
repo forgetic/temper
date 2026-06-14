@@ -14,12 +14,11 @@
 //! which `daemon_forgejo_e2e` already covers. This test's job is the new
 //! single-process path — agent → diff → PR — end to end.
 //!
-//! Requires the `test-provider-base-url-override` feature (so `temper run` can
-//! point the agent at the fake LLM). Run with:
-//!   cargo test --features test-provider-base-url-override \
-//!     --test run_forgejo_e2e -- --ignored
+//! Sets `ANVIL_TEST_PROVIDER_BASE_URL` so `temper run` points the agent at the
+//! fake LLM. Run with:
+//!   cargo test --test run_forgejo_e2e -- --ignored
 
-#![cfg(all(unix, feature = "test-provider-base-url-override"))]
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
