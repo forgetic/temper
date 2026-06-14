@@ -34,19 +34,7 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Lint
-        # `dev-clippy` lints `--all-targets`, matching the Build step's feature
-        # resolution so clippy reuses the lib artifacts just cached by Build
-        # rather than recompiling skein + its tree under a divergent feature set.
-        # clippy's own leaf targets emit zero-byte `.rmeta` that kache can't
-        # cache and always recompile, but that is cheap; the expensive shared lib
-        # compiles hit the cache. (There is no separate `cargo check` step —
-        # clippy already type-checks.)
         run: cargo dev-clippy
-      # Build the test executables first: they emit real artifacts that kache
-      # caches in full, so on a clean checkout with a warm cache this is the
-      # cheap step. Lint runs afterwards. There is deliberately no separate
-      # `cargo check` step — clippy already type-checks, so a check pass would
-      # only duplicate clippy's (uncacheable, metadata-only) work.
       - name: Build
         run:  cargo dev-test-build
       - name: Test
@@ -57,5 +45,5 @@ jobs:
         # cycle completes. Give it generous headroom here (local warm runs are
         # unaffected — they keep the 300s default).
         env:
-          TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "120"
+          TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "600"
         run: cargo dev-test-full

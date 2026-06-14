@@ -22,7 +22,7 @@ dev-check = "check --workspace --all-targets"
 dev-clippy = "clippy --workspace --all-targets"
 dev-test-quick = "test --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"
-dev-test-full = "nextest run --workspace --run-ignored all"
+dev-test-full = "nextest run --workspace --run-ignored all --no-fail-fast"
 dev-doc = "doc --workspace --no-deps"
 
 # Editing a sibling repo (skein, jig, tongs, bench) alongside temper.
