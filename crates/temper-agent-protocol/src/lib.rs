@@ -57,14 +57,17 @@ pub const RESULT_ENV: &str = "TEMPER_CODING_WORKSPACE_RESULT";
 /// contract; the agent re-exports it. Serde shape is unchanged.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceContext {
-    pub repository: WorkspaceRepository,
+    /// The repositories assembled into this workspace, laid out as siblings
+    /// under the agent's working directory (ADR 0023). The first is the primary
+    /// — home of the coordinating artifact. For a plain single-repo job this is
+    /// a one-element list.
+    pub repos: Vec<WorkspaceRepository>,
     pub work_item: WorkspaceWorkItem,
-    pub base_branch: String,
-    pub branch_hint: String,
-    /// Per-job correlation id. Minted in the orchestration world, carried here,
-    /// and stamped by the agent onto every [`StepProgress`] and onto everything
-    /// it emits to the out-of-band control/observability plane. This is the
-    /// single deliberate bridge between the two planes.
+    /// Per-job correlation id (the coordination key). Minted in the
+    /// orchestration world, carried here, and stamped by the agent onto every
+    /// [`StepProgress`] and onto everything it emits to the out-of-band
+    /// control/observability plane. This is the single deliberate bridge
+    /// between the two planes.
     pub correlation_key: String,
     /// Checkout mode token: `writable`, `read_only`, or `pull_request_read_only`.
     #[serde(default)]
@@ -77,12 +80,36 @@ pub struct WorkspaceContext {
     pub guidance: WorkspaceGuidance,
 }
 
+impl WorkspaceContext {
+    /// The primary repository (home of the coordinating artifact).
+    pub fn primary(&self) -> Option<&WorkspaceRepository> {
+        self.repos.first()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceRepository {
     pub id: String,
     pub owner: String,
     pub name: String,
     pub default_branch: String,
+    /// Directory under the workspace root this repo is checked out into, chosen
+    /// so inter-repo path dependencies resolve (e.g. `temper`, `smith`, `skein`
+    /// as flat siblings).
+    pub dir: String,
+    /// `writable` (the agent may edit it; a diff opens a PR) or `read_only`
+    /// (present only so the build resolves; never pushed).
+    pub access: String,
+    pub base_branch: String,
+    /// Work branch a writable repo's diff is pushed to. Absent for read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_hint: Option<String>,
+}
+
+impl WorkspaceRepository {
+    pub fn is_writable(&self) -> bool {
+        self.access == "writable"
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -251,15 +278,39 @@ mod tests {
     #[test]
     fn workspace_context_correlation_key_is_required_and_round_trips() {
         let json = r#"{
-            "repository": {"id":"1","owner":"acme","name":"svc","default_branch":"main"},
+            "repos": [{"id":"1","owner":"acme","name":"svc","default_branch":"main",
+                       "dir":"svc","access":"writable","base_branch":"main",
+                       "branch_hint":"smith/engineer/issue-7"}],
             "work_item": {"role":"engineer","queue":"code","kind":"issue","target":"Issue { number: 7 }","context":"{}"},
-            "base_branch": "main",
-            "branch_hint": "smith/engineer/issue-7",
             "correlation_key": "pr-for-code-7"
         }"#;
         let context: WorkspaceContext = serde_json::from_str(json).expect("parse");
         assert_eq!(context.correlation_key, "pr-for-code-7");
         assert_eq!(context.allowed_verdicts, Vec::<String>::new());
         assert_eq!(context.checkout, None);
+        let primary = context.primary().expect("primary repo present");
+        assert_eq!(primary.dir, "svc");
+        assert!(primary.is_writable());
+        assert_eq!(primary.base_branch, "main");
+    }
+
+    #[test]
+    fn workspace_context_carries_multiple_repos_with_access() {
+        let json = r#"{
+            "repos": [
+                {"id":"1","owner":"ai","name":"temper","default_branch":"main",
+                 "dir":"temper","access":"writable","base_branch":"main",
+                 "branch_hint":"agent/coord-for-code-42"},
+                {"id":"2","owner":"ai","name":"skein","default_branch":"main",
+                 "dir":"skein","access":"read_only","base_branch":"main"}
+            ],
+            "work_item": {"role":"engineer","queue":"code","kind":"issue","target":"Issue { number: 42 }","context":"{}"},
+            "correlation_key": "coord-for-code-42"
+        }"#;
+        let context: WorkspaceContext = serde_json::from_str(json).expect("parse");
+        assert_eq!(context.repos.len(), 2);
+        assert!(context.repos[0].is_writable());
+        assert!(!context.repos[1].is_writable());
+        assert_eq!(context.repos[1].branch_hint, None);
     }
 }

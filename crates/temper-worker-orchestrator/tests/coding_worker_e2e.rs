@@ -80,7 +80,7 @@ impl RecordingProgressSink {
 async fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
     let fixture = GitFixture::new();
 
-    let (daemon_url, observed) = spawn_fake_daemon(&fixture).await;
+    let (daemon_url, observed) = spawn_fake_daemon(coding_assign(&fixture)).await;
     let config = WorkerConfig {
         daemon_url,
         ..worker_config()
@@ -157,11 +157,99 @@ async fn worker_runs_a_real_coding_job_through_the_out_of_process_agent() {
     assert_eq!(markers[1].state, StepState::Done);
 }
 
+/// The headline ADR 0023 demonstration: one engineer assignment assembles a
+/// two-repo workspace, the agent edits both, and the worker pushes a branch to
+/// *each* repo — reporting one `RepoOutcome` per repo for the daemon to turn
+/// into one PR each.
+#[tokio::test]
+async fn worker_runs_a_coordinated_multi_repo_job_and_pushes_each_writable_repo() {
+    let fixture = GitFixture::new();
+
+    let (daemon_url, observed) = spawn_fake_daemon(coordinated_assign(&fixture)).await;
+    let config = WorkerConfig {
+        daemon_url,
+        ..multi_repo_worker_config()
+    };
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![fake_agent_bin()]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let sink = RecordingProgressSink::default();
+    let executor = Arc::new(
+        CodingExecutor::new(executor_config, runner).with_progress_sink(Arc::new(sink.clone())),
+    );
+
+    spawn_worker_thread(config, executor);
+
+    let observed = tokio::time::timeout(std::time::Duration::from_secs(30), observed)
+        .await
+        .expect("daemon observes a result within the timeout")
+        .expect("daemon sends the observed run");
+
+    assert_eq!(
+        observed.result.status,
+        ResultStatus::Success,
+        "result: {:?}",
+        observed.result
+    );
+
+    // Two writable repos that each produced a diff → one outcome per repo.
+    let mut reported: Vec<String> = observed
+        .result
+        .repos
+        .iter()
+        .map(|outcome| outcome.repo.clone())
+        .collect();
+    reported.sort();
+    assert_eq!(
+        reported,
+        vec!["acme/lib".to_string(), "acme/service".to_string()],
+        "coordinated job reports one outcome per writable repo: {:?}",
+        observed.result.repos
+    );
+
+    // Each repo's shared coordination branch landed with the agent's product
+    // file at exactly the reported head sha.
+    let branch = "agent/coord-for-code-7";
+    for repo in ["acme/service", "acme/lib"] {
+        let greeting = fixture.show_of(repo, &format!("refs/heads/{branch}:GREETING.md"));
+        assert_eq!(
+            greeting, "hello from the fake agent",
+            "{repo} branch carries the agent's product file"
+        );
+        let outcome = observed
+            .result
+            .repos
+            .iter()
+            .find(|outcome| outcome.repo == repo)
+            .expect("an outcome for each repo");
+        assert_eq!(
+            fixture.rev_of(repo, &format!("refs/heads/{branch}")),
+            outcome.branch.head_sha,
+            "the reported sha for {repo} is what was pushed"
+        );
+    }
+
+    // Only the primary repo's commit closes the coordinating issue (cross-repo
+    // close-on-merge does not exist); the secondary omits the trailer.
+    assert_eq!(
+        fixture.log_format_of("acme/service", &format!("refs/heads/{branch}"), "%b"),
+        "Closes #7"
+    );
+    assert_eq!(
+        fixture.log_format_of("acme/lib", &format!("refs/heads/{branch}"), "%b"),
+        ""
+    );
+}
+
 #[tokio::test]
 async fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
     let fixture = GitFixture::new();
 
-    let (daemon_url, observed) = spawn_fake_daemon(&fixture).await;
+    let (daemon_url, observed) = spawn_fake_daemon(coding_assign(&fixture)).await;
     let config = WorkerConfig {
         daemon_url,
         ..worker_config()
@@ -320,10 +408,9 @@ async fn message_handler(
     }
 }
 
-async fn spawn_fake_daemon(fixture: &GitFixture) -> (String, oneshot::Receiver<ObservedRun>) {
+async fn spawn_fake_daemon(assign: Assign) -> (String, oneshot::Receiver<ObservedRun>) {
     let (request_tx, request_rx) = mpsc::channel(16);
     let (observed_tx, observed_rx) = oneshot::channel();
-    let assign = coding_assign(fixture);
     tokio::spawn(fake_daemon_controller(request_rx, observed_tx, assign));
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -445,13 +532,82 @@ fn coding_assign(_fixture: &GitFixture) -> Assign {
     }
 }
 
+/// A coordinated multi-repo coding-job Assign: a two-repo writable workspace
+/// manifest (ADR 0023), both on the shared `coord-for-code-7` branch.
+fn coordinated_assign(_fixture: &GitFixture) -> Assign {
+    let job_context = json!({
+        "role": "engineer",
+        "repo": "acme/service",
+        "queue": "code_ready",
+        "artifact_kind": "code",
+        "artifact": {
+            "number": 7,
+            "title": "Cross-repo greeting",
+            "body": "Add GREETING.md to both repos.",
+            "labels": ["code", "ready", "coordinated"],
+            "state": "Open"
+        },
+        "workspace": {
+            "coordination_key": "coord-for-code-7",
+            "repos": [
+                {
+                    "repo": "acme/service",
+                    "dir": "service",
+                    "access": "writable",
+                    "default_branch": "main",
+                    "base_branch": "main",
+                    "branch_hint": "agent/coord-for-code-7"
+                },
+                {
+                    "repo": "acme/lib",
+                    "dir": "lib",
+                    "access": "writable",
+                    "default_branch": "main",
+                    "base_branch": "main",
+                    "branch_hint": "agent/coord-for-code-7"
+                }
+            ]
+        },
+        "action": "open_pr",
+        "checkout_capability": "writable",
+        "allowed_verdicts": []
+    });
+    Assign {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        job_id: "acme/service/issue-7/engineer/coord-for-code-7".to_string(),
+        role: "engineer".to_string(),
+        repo: "acme/service".to_string(),
+        artifact: Artifact {
+            item: json!(7),
+            kind: "issue".to_string(),
+        },
+        job_payload: job_context,
+    }
+}
+
+fn multi_repo_worker_config() -> WorkerConfig {
+    WorkerConfig {
+        capabilities: vec![
+            CapabilitySpec {
+                repo: "acme/service".to_string(),
+                role: "engineer".to_string(),
+            },
+            CapabilitySpec {
+                repo: "acme/lib".to_string(),
+                role: "engineer".to_string(),
+            },
+        ],
+        ..worker_config()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Git fixture (bare origin seeded with main, file:// remotes).
 // ---------------------------------------------------------------------------
 
 struct GitFixture {
     temp: tempfile::TempDir,
-    origin: PathBuf,
+    git_root: PathBuf,
     workspace_root: PathBuf,
 }
 
@@ -460,13 +616,16 @@ impl GitFixture {
         let temp = tempfile::tempdir().expect("temp dir");
         let git_root = temp.path().join("git");
         fs::create_dir_all(git_root.join("acme")).expect("git root");
-        let origin = git_root.join("acme/service.git");
-        git(["init", "--bare", path_str(&origin)]);
-        seed_origin(&origin, temp.path());
+        // Two seeded bare origins so a coordinated job can push a branch to each.
+        for repo in ["acme/service", "acme/lib"] {
+            let origin = git_root.join(format!("{repo}.git"));
+            git(["init", "--bare", path_str(&origin)]);
+            seed_origin(&origin, &temp.path().join(format!("seed-{}", repo.replace('/', "-"))));
+        }
         let workspace_root = temp.path().join("workspaces");
         Self {
             temp,
-            origin,
+            git_root,
             workspace_root,
         }
     }
@@ -475,18 +634,34 @@ impl GitFixture {
         format!("file://{}/git", path_str(self.temp.path()))
     }
 
+    fn origin_of(&self, repo: &str) -> PathBuf {
+        self.git_root.join(format!("{repo}.git"))
+    }
+
     fn origin_rev(&self, refname: &str) -> String {
-        git_output(["-C", path_str(&self.origin), "rev-parse", refname])
+        self.rev_of("acme/service", refname)
+    }
+
+    fn rev_of(&self, repo: &str, refname: &str) -> String {
+        git_output(["-C", path_str(&self.origin_of(repo)), "rev-parse", refname])
     }
 
     fn origin_show(&self, spec: &str) -> String {
-        git_output(["-C", path_str(&self.origin), "show", spec])
+        self.show_of("acme/service", spec)
+    }
+
+    fn show_of(&self, repo: &str, spec: &str) -> String {
+        git_output(["-C", path_str(&self.origin_of(repo)), "show", spec])
     }
 
     fn origin_log_format(&self, refname: &str, fmt: &str) -> String {
+        self.log_format_of("acme/service", refname, fmt)
+    }
+
+    fn log_format_of(&self, repo: &str, refname: &str, fmt: &str) -> String {
         git_output([
             "-C",
-            path_str(&self.origin),
+            path_str(&self.origin_of(repo)),
             "log",
             "-1",
             &format!("--format={fmt}"),

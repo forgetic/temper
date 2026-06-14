@@ -62,8 +62,45 @@ impl Workspace {
         })
     }
 
+    /// Construct a workspace at an explicit checkout path (one sibling repo of a
+    /// coordinated multi-repo workspace, ADR 0023), rather than the persistent
+    /// per-(repo, role) layout `Workspace::new` derives.
+    pub fn at(
+        path: PathBuf,
+        base_branch: String,
+        identity: RoleGitIdentity,
+        remote_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            path,
+            base_branch,
+            remote_url: remote_url.into(),
+            identity,
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Prepare a read-only sibling: clone-or-reuse, fetch the base branch, and
+    /// check it out without creating a work branch. Such a repo is present only
+    /// so the combined build resolves; it is never committed or pushed.
+    pub async fn prepare_read_only(&self) -> Result<(), WorkspaceError> {
+        self.prepare_base_checkout().await?;
+        let start_point = format!("origin/{}", self.base_branch);
+        self.run_workspace_git(
+            false,
+            format!("git checkout -B {} {start_point}", self.base_branch),
+            vec![
+                OsString::from("checkout"),
+                OsString::from("-B"),
+                OsString::from(self.base_branch.clone()),
+                OsString::from(start_point),
+            ],
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn prepare(&self, work_branch: &str) -> Result<(), WorkspaceError> {

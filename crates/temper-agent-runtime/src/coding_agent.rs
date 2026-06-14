@@ -316,17 +316,34 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
 /// Builds the user-turn context describing the concrete work item.
 pub fn user_context(context: &WorkspaceContext) -> String {
     let mut text = String::new();
-    text.push_str(&format!(
-        "Repository: {}/{} (default branch: {})\n",
-        context.repository.owner, context.repository.name, context.repository.default_branch
-    ));
+    if context.repos.len() > 1 {
+        text.push_str(
+            "This is a COORDINATED multi-repo workspace. Your working directory is \
+             the workspace root, and each repository below is checked out into its \
+             own sibling subdirectory (the `dir:` path). Edit files inside the \
+             writable repos' directories; the read-only repos are present only so \
+             the combined build resolves — do not modify them. The repos are laid \
+             out as siblings so their inter-repo path dependencies resolve.\n\n\
+             Repositories:\n",
+        );
+    } else {
+        text.push_str("Repository:\n");
+    }
+    for repo in &context.repos {
+        let branch = repo
+            .branch_hint
+            .as_deref()
+            .unwrap_or("(read-only — never pushed)");
+        text.push_str(&format!(
+            "- {}/{} (dir: {}/, access: {}, default branch: {}, base branch: {}, work branch: {})\n",
+            repo.owner, repo.name, repo.dir, repo.access, repo.default_branch, repo.base_branch, branch
+        ));
+    }
     text.push_str(&format!(
         "Role: {}  Queue: {}  Kind: {}\n",
         context.work_item.role, context.work_item.queue, context.work_item.kind
     ));
     text.push_str(&format!("Target: {}\n", context.work_item.target));
-    text.push_str(&format!("Base branch: {}\n", context.base_branch));
-    text.push_str(&format!("Branch hint: {}\n", context.branch_hint));
     text.push_str(&format!("Correlation key: {}\n", context.correlation_key));
     if let Some(checkout) = &context.checkout {
         text.push_str(&format!("Checkout mode: {checkout}\n"));
@@ -355,6 +372,83 @@ pub fn user_context(context: &WorkspaceContext) -> String {
 // ---------------------------------------------------------------------------
 // Tool registry.
 // ---------------------------------------------------------------------------
+
+/// Orchestration callback the `checkpoint` tool invokes: commit + push the
+/// current work as a coherent, labeled checkpoint, returning the pushed head sha
+/// (`None` when nothing changed). Implemented by the worker/agent host (which
+/// owns the git credentials); the model only *decides when* to checkpoint by
+/// calling the tool, keeping the push token out of the model's hands.
+#[async_trait::async_trait]
+pub trait CheckpointHook: Send + Sync {
+    async fn checkpoint(&self, label: &str) -> Result<Option<String>, String>;
+}
+
+/// The model-facing `checkpoint` tool: at a coherent sub-milestone the agent
+/// calls it to have the host commit + push its work so far. The push happens in
+/// orchestration (via [`CheckpointHook`]), not in the model.
+struct CheckpointTool {
+    hook: std::sync::Arc<dyn CheckpointHook>,
+}
+
+#[async_trait::async_trait]
+impl tongs::tools::Tool for CheckpointTool {
+    fn name(&self) -> &str {
+        "checkpoint"
+    }
+
+    fn description(&self) -> &str {
+        "Commit and push your work so far as a coherent checkpoint. Call this \
+         after completing a meaningful sub-milestone (e.g. a failing test added, \
+         a function implemented, a bug fixed) — NOT after every edit. The host \
+         performs the commit and push for you; you only choose when. Pass a \
+         short imperative `label` describing what you just finished."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Short imperative summary of the sub-milestone just completed, e.g. 'add failing test for parser'"
+                }
+            },
+            "required": ["label"]
+        })
+    }
+
+    fn effects(&self) -> tongs::tools::ToolEffects {
+        // It commits and pushes: process (git) + network.
+        tongs::tools::ToolEffects {
+            reads: false,
+            writes: false,
+            network: true,
+            process: true,
+        }
+    }
+
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        input: serde_json::Value,
+        _on_update: Option<Box<dyn Fn(tongs::tools::ToolUpdate) + Send + Sync>>,
+    ) -> tongs::Result<tongs::tools::ToolOutput> {
+        let label = input
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("checkpoint")
+            .to_string();
+        match self.hook.checkpoint(&label).await {
+            Ok(Some(sha)) => Ok(tongs::tools::ToolOutput::text(format!(
+                "Checkpointed: committed and pushed \"{label}\" at {sha}."
+            ))),
+            Ok(None) => Ok(tongs::tools::ToolOutput::text(
+                "Nothing to checkpoint: no changes since the last checkpoint.",
+            )),
+            Err(error) => Err(tongs::Error::Tool(format!("checkpoint failed: {error}"))),
+        }
+    }
+}
 
 /// Builds the tool registry for a capability, scoped to `cwd`.
 ///
@@ -390,6 +484,16 @@ fn coding_tools_vec(capability: Capability, cwd: &Path) -> Vec<Box<dyn tongs::to
 /// `general-purpose` one and lets the orchestrator pick by *type* — the type
 /// then transitively selects the model (here: `investigate` → sub-agent tier,
 /// `delegate` → main model).
+const CHECKPOINT_GUIDANCE: &str = "\nCHECKPOINTS:\n\
+    - You have a `checkpoint` tool. Call it when you finish a coherent \
+    sub-milestone (a failing test added, a function implemented, a bug fixed) — \
+    NOT after every edit, and not for trivial intermediate states. The host \
+    commits and pushes your work for you (you must not run git yourself); pass a \
+    short imperative `label` for what you just finished.\n\
+    - Checkpointing makes your progress durable: if the run is interrupted, work \
+    you have checkpointed is recovered and you resume from it. Aim for a few \
+    meaningful checkpoints over a task rather than many tiny ones or none.\n";
+
 const SUBAGENT_GUIDANCE: &str = "\nSUB-AGENTS:\n\
     - You have two sub-agent tools. Both read and search the repository and \
     return a focused report; neither can edit the working tree, and several of \
@@ -657,14 +761,16 @@ pub async fn run_coding_agent_native_with_options(
         enable_subagents,
         None,
         None,
+        None,
     )
     .await
 }
 
 /// [`run_coding_agent_native_with_options`] with the phase-6b hooks: an
 /// optional resume note appended to the user turn (a re-dispatched agent
-/// continuing a checkpointed branch) and an optional [`temper_agent_core::TurnHook`]
-/// awaited before each model call (the workspace checkpointer).
+/// continuing a checkpointed branch), an optional [`temper_agent_core::TurnHook`]
+/// awaited before each model call (the safety-backstop checkpointer), and an
+/// optional [`CheckpointHook`] backing the model-driven `checkpoint` tool.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_coding_agent_native_with_hooks(
     handle: skein::runtime::RuntimeHandle,
@@ -676,6 +782,7 @@ pub async fn run_coding_agent_native_with_hooks(
     enable_subagents: bool,
     resume_note: Option<&str>,
     turn_hook: Option<std::sync::Arc<dyn temper_agent_core::TurnHook>>,
+    checkpoint_hook: Option<std::sync::Arc<dyn CheckpointHook>>,
 ) -> Result<WorkspaceResult, CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
@@ -683,6 +790,9 @@ pub async fn run_coding_agent_native_with_hooks(
     let mut role_prompt = system_prompt(capability, &context.allowed_verdicts);
     if enable_subagents {
         role_prompt.push_str(SUBAGENT_GUIDANCE);
+    }
+    if checkpoint_hook.is_some() {
+        role_prompt.push_str(CHECKPOINT_GUIDANCE);
     }
     let mut user = user_context(context);
     if let Some(note) = resume_note {
@@ -724,6 +834,9 @@ pub async fn run_coding_agent_native_with_hooks(
             &totals,
         );
     }
+    if let Some(hook) = &checkpoint_hook {
+        tools.push(Box::new(CheckpointTool { hook: hook.clone() }));
+    }
 
     let sub_agent = temper_agent_core::SubAgent {
         system_prompt: Some(turns.system),
@@ -759,7 +872,7 @@ pub async fn run_coding_agent_native_with_hooks(
     let text = collect_text(&outcome.final_message.content);
     let result = parse_result(&text)?;
     validate_verdict_vocabulary(&result, &context.allowed_verdicts)?;
-    validate_contract(capability, &result, cwd, &context.base_branch)?;
+    validate_contract(capability, &result, cwd, context)?;
     Ok(result)
 }
 
@@ -862,7 +975,7 @@ fn validate_contract(
     capability: Capability,
     result: &WorkspaceResult,
     cwd: &Path,
-    base_branch: &str,
+    context: &WorkspaceContext,
 ) -> Result<(), CodingAgentError> {
     let has_verdict = result
         .verdict
@@ -875,10 +988,19 @@ fn validate_contract(
             if has_verdict {
                 return Ok(());
             }
-            // A checkpointing run (phase 6b) may have committed and pushed
-            // its whole product, leaving a clean tree: commits beyond the
-            // base branch count as a product too.
-            if working_tree_has_changes(cwd) || commits_ahead_of_base(cwd, base_branch) {
+            // The cwd is the workspace root; a writable repo's product lives in
+            // its own sibling dir. The run produced a product if ANY writable
+            // repo has working-tree changes or commits beyond its base branch (a
+            // checkpointing run may have committed/pushed, leaving a clean tree).
+            let produced = context
+                .repos
+                .iter()
+                .filter(|repo| repo.is_writable())
+                .any(|repo| {
+                    let dir = cwd.join(&repo.dir);
+                    working_tree_has_changes(&dir) || commits_ahead_of_base(&dir, &repo.base_branch)
+                });
+            if produced {
                 Ok(())
             } else {
                 Err(CodingAgentError::NoProduct)
