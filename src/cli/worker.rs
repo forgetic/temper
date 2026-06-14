@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: MPL-2.0
+
+//! `temper worker` — the orchestration worker: long-polls the daemon and runs
+//! role/coding jobs. Links **no** agent/LLM code; every coding job runs
+//! out-of-process behind the temper-agent-protocol (the worker spawns the
+//! `temper-agent` program, or any operator-provided coder).
+
+use std::process::ExitCode;
+use std::sync::Arc;
+
+use temper_worker_orchestrator::{
+    AgentSurface, CodingExecutor, CodingExecutorConfig, ExecutorSelection, OutOfProcessRunner,
+    ParseOutcome, StubExecutor, USAGE, WorkerConfig, role_identities_from_env, run_worker,
+};
+
+pub fn main<I>(args: I) -> ExitCode
+where
+    I: Iterator<Item = String>,
+{
+    match temper_worker_orchestrator::config::parse(args) {
+        Ok(ParseOutcome::Help) => {
+            println!("usage: {USAGE}");
+            ExitCode::SUCCESS
+        }
+        Ok(ParseOutcome::Run(config)) => match run(config) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("temper-worker: {error}");
+                ExitCode::from(2)
+            }
+        },
+        Err(error) => {
+            eprintln!("temper-worker: {error}\nusage: {USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Builds the selected executor and runs the worker on the skein runtime.
+///
+/// The worker links **no** agent/LLM code: every coding job runs out-of-process
+/// behind the temper-agent-protocol. The worker spawns the agent program (the
+/// `temper-agent` binary by default, or any operator-provided coder), relaying
+/// its step-progress checkpoints. Credentials are the agent process's concern —
+/// it preflights its own provider login at job start.
+fn run(config: WorkerConfig) -> Result<(), String> {
+    match config.executor.clone() {
+        ExecutorSelection::Stub => {
+            let executor = Arc::new(StubExecutor::success());
+            temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+                run_worker(handle, config, executor)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+        }
+        ExecutorSelection::Coding(surface) => {
+            let role_identities = {
+                let roles = config
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.role.clone());
+                role_identities_from_env(roles, std::env::vars())?
+            };
+            let executor_config = CodingExecutorConfig {
+                workspace_root: surface.workspace_root,
+                git_base_url: surface.git_base_url,
+                role_identities,
+            };
+
+            // Both surfaces resolve to a command the out-of-process runner spawns:
+            // the temper-agent surface assembles `temper-agent` + auth/iteration
+            // flags; an external command is passed through verbatim.
+            let command = match surface.agent {
+                AgentSurface::AnvilNative(agent) => agent.into_command(),
+                AgentSurface::ExternalCommand(command) => command,
+            };
+            let runner = Arc::new(OutOfProcessRunner::new(command));
+            temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+                // Relay agent step-progress checkpoints to the daemon (which
+                // applies them to the forge idempotently); transport trouble is
+                // logged and dropped, never failing the turn. Built inside the
+                // engine task so it holds the runtime handle explicitly.
+                let progress_sink =
+                    Arc::new(temper_worker_orchestrator::DaemonRelayProgressSink::new(
+                        handle.clone(),
+                        &config.daemon_url,
+                        config.worker_id.clone(),
+                    ));
+                let executor = Arc::new(
+                    CodingExecutor::new(executor_config, runner).with_progress_sink(progress_sink),
+                );
+                run_worker(handle, config, executor)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+        }
+    }
+}

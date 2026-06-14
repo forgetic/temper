@@ -1,0 +1,314 @@
+{
+  "name": "basic-delivery",
+  "intake_author": { "kind": "site_admin" },
+  "roles": [
+    {
+      "id": "architect",
+      "charter": "Triage one unlabeled intake issue into a crisp, ready-to-implement code spec. Intake is filed deliberately thin — the filer states only the overall intent — so triage is real design work: expand that intent into a complete, unambiguous spec an engineer can execute without further questions. There is no design or breakdown branch: the only outcome is a ready code issue.",
+      "prompt": {
+        "guidance": "Use triage_intake to triage untriaged intake. The seeded intake is intentionally short: it declares intent only, with no acceptance criteria, no setting/interface name, and no implementation plan. Your job is to DESIGN, not to relabel. Use the triage workspace to read the issue and the repository, then return the single declared verdict ready_code with a fully REWRITTEN body that is complete and ready for the engineer to implement. The rewrite must define the concrete behavior, name the user-facing interface (e.g. the setting/flag), specify the default behavior, point at the file(s) to touch, and list explicit acceptance criteria. The engine applies that body via the triage_intake_to_code set_body effect and marks the issue code + ready."
+      },
+      "external_tools": [
+        {
+          "id": "triage_workspace",
+          "description": "Read the intentionally-thin intake issue (intent only) plus the repository, then author a fully rewritten body that turns that intent into a complete, implementable code spec, and return the ready_code verdict that routes the triage. The rewrite is the architect's product: it must be detailed enough that the engineer can implement it with no further design.",
+          "required": false,
+          "constraints": [
+            "Only read the work-item context and repository; never mutate Forge state.",
+            "Do not merely restate the filer's intent: the returned body must add the concrete design the thin intake omits (named interface, behavior, defaults, files to touch, acceptance criteria).",
+            "Return the single declared verdict; the engine applies the routed transition's effects."
+          ],
+          "guidance": "Use this from triage_intake. Inspect the repository so the spec references real files and conventions. Return ready_code with the authored body. If it is not bound, choose no_action for intake triage."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "triage"
+      ]
+    },
+    {
+      "id": "engineer",
+      "charter": "Claim ready code issues, implement them, open PRs, and address failed CI gates before landing.",
+      "prompt": {
+        "guidance": "Use open_pr for ready code: the coding workspace must produce a real product diff and the engine opens a PR from the head it produces. Use address_ci_failure for PRs whose CI failed before landing."
+      },
+      "external_tools": [
+        {
+          "id": "coding_workspace",
+          "description": "Prepare a checked-out repository workspace, make or delegate code edits, commit a PR head branch, and report changed files plus a short summary.",
+          "required": false,
+          "constraints": [
+            "Only touch the checked-out repository workspace.",
+            "Do not create bookkeeping-only diffs such as .temper-pr-prep or .temper-ci changes."
+          ],
+          "guidance": "Use this before open_pr for ready code issues. If it is not bound, choose no_action for code implementation work."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "code_ready",
+        "pr_ci_failed"
+      ]
+    },
+    {
+      "id": "mechanical",
+      "charter": "Automation authority used by the mechanical worker to stamp raw intake untriaged and to land CI-green PRs; do not bind this role to an LLM or role-decision process.",
+      "prompt": {
+        "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
+      },
+      "concurrency": 1,
+      "queues": []
+    }
+  ],
+  "labels": [
+    {
+      "id": "untriaged",
+      "description": "intake issue awaiting triage by the architect"
+    },
+    {
+      "id": "code",
+      "description": "identifies a code issue"
+    },
+    {
+      "id": "ready",
+      "description": "work item is ready for the next workflow step"
+    },
+    {
+      "id": "in-progress",
+      "description": "work item is currently being advanced"
+    },
+    {
+      "id": "implementation",
+      "description": "identifies an implementation pull request"
+    },
+    {
+      "id": "landed",
+      "description": "merged PR"
+    }
+  ],
+  "artifact_kinds": [
+    {
+      "id": "intake",
+      "target": "issue",
+      "identifying_labels": []
+    },
+    {
+      "id": "code",
+      "target": "issue",
+      "identifying_labels": [
+        "code"
+      ]
+    },
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": [
+        "implementation"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "kind": "produced_pr",
+      "source": "implementation_pr",
+      "target": "code"
+    }
+  ],
+  "state_dimensions": [
+    {
+      "id": "work_lifecycle",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "ready",
+          "label": "ready",
+          "artifacts": [
+            "code"
+          ]
+        },
+        {
+          "id": "in_progress",
+          "label": "in-progress",
+          "artifacts": [
+            "code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "post_merge",
+      "exclusive": false,
+      "states": [
+        {
+          "id": "landed",
+          "label": "landed"
+        }
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "id": "raw_intake",
+      "artifact": "intake",
+      "automation": {
+        "actor": "mechanical",
+        "transition": "mark_untriaged"
+      }
+    },
+    {
+      "id": "triage",
+      "artifact": "intake",
+      "labels": [
+        "untriaged"
+      ]
+    },
+    {
+      "id": "code_ready",
+      "artifact": "code",
+      "labels": [
+        "ready"
+      ]
+    },
+    {
+      "id": "pr_ci_failed",
+      "artifact": "implementation_pr",
+      "condition": {
+        "kind": "ci_failed"
+      }
+    },
+    {
+      "id": "landing",
+      "artifact": "implementation_pr",
+      "labels": [
+        "implementation"
+      ],
+      "condition": {
+        "kind": "ci_passed"
+      },
+      "automation": {
+        "actor": "mechanical",
+        "transition": "land_pr"
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "id": "mark_untriaged",
+      "artifact": "intake",
+      "roles": [
+        "mechanical"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "untriaged"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "outcomes": {
+        "ready_code": "triage_intake_to_code"
+      },
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake_to_code",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "set_body",
+          "correlation_key": "triage-intake-code"
+        },
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "code"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        }
+      ]
+    },
+    {
+      "id": "open_pr",
+      "artifact": "code",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "ready"
+        },
+        {
+          "kind": "add_label",
+          "label": "in-progress"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "engineer"
+        },
+        {
+          "kind": "create_pull_request"
+        }
+      ]
+    },
+    {
+      "id": "address_ci_failure",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "create_comment",
+          "body": "CI failed before landing. Engineer: push a fix to the PR head; Temper will retry landing once fresh CI passes."
+        }
+      ]
+    },
+    {
+      "id": "land_pr",
+      "artifact": "implementation_pr",
+      "roles": [
+        "mechanical"
+      ],
+      "requires_gates": [
+        "ci_gate"
+      ],
+      "effects": [
+        {
+          "kind": "merge_pull_request"
+        },
+        {
+          "kind": "add_label",
+          "label": "landed"
+        }
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "ci_gate",
+      "condition": {
+        "kind": "ci_passed"
+      }
+    }
+  ]
+}

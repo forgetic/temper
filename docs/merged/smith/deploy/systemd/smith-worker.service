@@ -1,0 +1,27 @@
+[Unit]
+# Smith consolidated worker tier.
+#
+# Repo-tracked TEMPLATE. The install script (deploy/install.sh) copies this into
+# ~/.config/systemd/user/ verbatim — live operator knobs stay in smith.env and
+# per-role git credentials stay in secrets/roles.env.
+#
+# smith-worker registers its configured (repo, role) capabilities with the Temper
+# daemon, long-polls for work, runs the coding agent in persistent per-(repo,
+# role) workspaces under WORKER_WORKSPACE_ROOT, pushes branches as the role over
+# git, and returns structured results. It never calls the Forgejo API; the daemon
+# tier is the sole Forge API writer.
+Description=Smith consolidated worker tier
+Documentation=https://git.ekanayaka.io/ai/smith/src/branch/main/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/smith/smith.env
+EnvironmentFile=%h/.config/smith/secrets/roles.env
+ExecStart=%h/.local/bin/smith-worker-launcher
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,36 @@
+[package]
+name = "temper-worker-orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Temper worker process: long-polls a Temper daemon and runs role/coding jobs. Speaks only the worker/daemon wire protocol; never calls the Forge API. (Formerly smith-worker.)"
+
+[dependencies]
+skein.workspace = true
+temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-worker-io-engine = { path = "../temper-worker-io-engine" }
+temper-worker-protocol = { path = "../temper-worker-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
+
+[dev-dependencies]
+axum = "0.8"
+temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-worker-io-engine = { path = "../temper-worker-io-engine" }
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "net", "process"] }
+
+# A deterministic, hermetic agent that speaks the temper-agent-protocol: writes
+# a product file, emits step-progress, writes a result. Lets the worker e2e drive
+# the real out-of-process boundary without a cross-repo binary path or an LLM, via
+# CARGO_BIN_EXE_temper-fake-agent.
+[[bin]]
+name = "temper-fake-agent"
+path = "tests/support/smith_fake_agent.rs"
+test = false
+
+[lints]
+workspace = true

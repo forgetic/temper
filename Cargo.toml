@@ -24,6 +24,14 @@ members = [
     "crates/temper-reference-delivery-validator",
     "crates/temper-worker",
     "crates/temper-sim",
+    # Merged from smith (the orchestration worker):
+    "crates/temper-agent-protocol",
+    "crates/temper-worker-io-engine",
+    "crates/temper-worker-orchestrator",
+    # Merged from anvil (the coding/decision agent):
+    "crates/temper-agent-core",
+    "crates/temper-agent-io-engine",
+    "crates/temper-agent-runtime",
 ]
 resolver = "2"
 
@@ -36,58 +44,126 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-default = []
+# The default is the everything-binary: one `temper` that does daemon + worker
+# + agent + operator tools (the solo-dev UX). Factory deployments can strip to a
+# single role with `--no-default-features --features <role>`.
+default = ["unified"]
+
+# Capability features — each gates the crates and subcommands for one role.
+daemon = [
+    "dep:temper-daemon",
+    "dep:temper-forge",
+    "dep:temper-forge-forgejo",
+    "dep:temper-forgejo-provision",
+    "dep:temper-interaction-service",
+    "dep:temper-reference-delivery",
+    "dep:temper-reference-delivery-validator",
+    "dep:temper-trigger-forgejo",
+    "dep:temper-io-engine",
+    "dep:temper-workflow",
+    "dep:chrono",
+]
+worker = [
+    "dep:temper-worker-orchestrator",
+    "dep:temper-worker-io-engine",
+    "dep:temper-worker-protocol",
+    "dep:temper-agent-protocol",
+]
+# The agent pulls tongs + jig + the LLM/HTTP stack. Worker/daemon-only builds
+# omit this feature and never compile it.
+agent = [
+    "dep:temper-agent-runtime",
+    "dep:temper-agent-core",
+    "dep:temper-agent-io-engine",
+    "dep:temper-agent-protocol",
+    "dep:temper-process-protocol",
+    "dep:async-trait",
+    "dep:serde_json",
+]
+
+# Profile feature: the unified everything-binary.
+unified = ["daemon", "worker", "agent"]
+
+# Test hook surfaced from the agent runtime (provider base-url override for
+# hermetic responder tests).
+test-provider-base-url-override = [
+    "temper-agent-runtime/test-provider-base-url-override",
+]
 
 [dependencies]
+# Always present (shared, cheap): the runtime.
 skein = { workspace = true }
-chrono = { workspace = true }
-temper-daemon = { path = "crates/temper-daemon" }
-temper-forge = { path = "crates/temper-forge" }
-temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
-temper-forgejo-provision = { path = "crates/temper-forgejo-provision" }
-temper-interaction-service = { path = "crates/temper-interaction-service" }
-temper-reference-delivery = { path = "crates/temper-reference-delivery" }
-temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator" }
-temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo" }
-temper-worker = { path = "crates/temper-worker" }
-temper-io-engine = { path = "crates/temper-io-engine" }
-temper-workflow = { path = "crates/temper-workflow" }
+
+# Gated, optional — pulled in by the capability features above.
+async-trait = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+temper-daemon = { path = "crates/temper-daemon", optional = true }
+temper-forge = { path = "crates/temper-forge", optional = true }
+temper-forge-forgejo = { path = "crates/temper-forge-forgejo", optional = true }
+temper-forgejo-provision = { path = "crates/temper-forgejo-provision", optional = true }
+temper-interaction-service = { path = "crates/temper-interaction-service", optional = true }
+temper-reference-delivery = { path = "crates/temper-reference-delivery", optional = true }
+temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator", optional = true }
+temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo", optional = true }
+temper-io-engine = { path = "crates/temper-io-engine", optional = true }
+temper-workflow = { path = "crates/temper-workflow", optional = true }
+# worker
+temper-worker-orchestrator = { path = "crates/temper-worker-orchestrator", optional = true }
+temper-worker-io-engine = { path = "crates/temper-worker-io-engine", optional = true }
+temper-worker-protocol = { path = "crates/temper-worker-protocol", optional = true }
+# agent (heavy: tongs + jig + LLM/HTTP enter only here)
+temper-agent-runtime = { path = "crates/temper-agent-runtime", optional = true }
+temper-agent-core = { path = "crates/temper-agent-core", optional = true }
+temper-agent-io-engine = { path = "crates/temper-agent-io-engine", optional = true }
+# shared protocol DTOs (worker↔agent and role-decision)
+temper-agent-protocol = { path = "crates/temper-agent-protocol", optional = true }
+temper-process-protocol = { path = "crates/temper-process-protocol", optional = true }
 
 [dev-dependencies]
 # Daemon-topology e2e (`tests/daemon_forgejo_e2e.rs`): real Forgejo fixture,
 # webhook registration, and PR/CI assertions against the spawned daemon binary.
+# The default (`unified`) feature set compiles the daemon stack these need.
 serde_json = { workspace = true }
 temper-forgejo-ops = { path = "crates/temper-forgejo-ops" }
 temper-testing = { path = "crates/temper-testing" }
+# `temper run` e2e (`tests/run_forgejo_e2e.rs`): real bench Forgejo fixture +
+# jig fake LLM, driving one in-process `temper run`. Needs the forge API for PR
+# assertions and jig for the canned engineer-agent replies.
+temper-forge = { path = "crates/temper-forge" }
+temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
+temper-workflow = { path = "crates/temper-workflow" }
+temper-io-engine = { path = "crates/temper-io-engine" }
+jig-core = { path = "../jig/crates/jig-core" }
+jig-server = { path = "../jig/crates/jig-server" }
 
+# Unified everything-binary: `temper run` + `temper daemon|worker|agent|...`.
+[[bin]]
+name = "temper"
+path = "src/bin/temper.rs"
+required-features = ["unified"]
+
+# Role split binaries — each compiles only its role's code.
 [[bin]]
 name = "temper-daemon"
 path = "src/bin/temper-daemon.rs"
+required-features = ["daemon"]
 
 [[bin]]
 name = "temper-worker"
 path = "src/bin/temper-worker.rs"
+required-features = ["worker"]
 
 [[bin]]
-name = "temper-provision-forgejo"
-path = "src/bin/temper-provision-forgejo.rs"
-
-[[bin]]
-name = "temper-trigger-forgejo"
-path = "src/bin/temper-trigger-forgejo.rs"
-
-[[bin]]
-name = "temper-validate-reference-delivery"
-path = "src/bin/temper-validate-reference-delivery.rs"
-
-[[bin]]
-name = "temper-interaction"
-path = "src/bin/temper-interaction.rs"
+name = "temper-agent"
+path = "src/bin/temper-agent.rs"
+required-features = ["agent"]
 
 [lints]
 workspace = true
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 # skein (the vendored async runtime) uses edition-2024 and let-chains; nothing
@@ -99,13 +175,26 @@ rust-version = "1.88"
 # asupersync 0.2.4 — the last plain-MIT upstream release; 0.2.5+ carry an
 # OpenAI/Anthropic license rider and 0.3.3+ require nightly). Lives in its own
 # repo at ../skein and is shared across projects (temper, smith, …).
-skein = { path = "../skein/crates/skein" }
+#
+# TLS features are enabled because the merged agent crates (formerly anvil)
+# reach LLM providers over HTTPS. skein is needed by every role and so cannot be
+# an optional/feature-gated dependency; cargo unifies features across the graph,
+# so worker/daemon-only builds also link skein's TLS code. This is an accepted
+# tradeoff — TLS is small relative to the agent's LLM/HTTP stack, which slim
+# builds still exclude (it enters only via the `agent` feature crates).
+skein = { path = "../skein/crates/skein", features = ["tls", "tls-native-roots"] }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# Merged-in agent stack (formerly anvil) and worker (formerly smith).
+tongs = { path = "../tongs/crates/tongs" }
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", default-features = false }
+futures = "0.3"
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

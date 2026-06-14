@@ -58,7 +58,18 @@ fn scan_dir(dir: &Path, hits: &mut Vec<String>) {
 fn should_skip(path: &Path) -> bool {
     path.components().any(|component| {
         let name = component.as_os_str().to_string_lossy();
-        name == "fixtures" || name == "tests" || name == "target" || name.contains("test")
+        name == "fixtures"
+            || name == "tests"
+            || name == "target"
+            || name.contains("test")
+            // The agent implementation crates (formerly the standalone `anvil`
+            // repo) legitimately *implement* concrete responders such as the
+            // product-manager. This guard protects the provider-neutral
+            // interaction *framework* from hardcoding a concrete profile; the
+            // agent layer is exactly where a concrete profile belongs.
+            || name == "temper-agent-core"
+            || name == "temper-agent-runtime"
+            || name == "temper-agent-io-engine"
     })
 }
 

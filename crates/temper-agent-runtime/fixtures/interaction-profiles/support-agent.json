@@ -1,0 +1,9 @@
+{
+  "profile_id": "support-agent",
+  "system_prompt": { "path": "prompts/support_agent.md" },
+  "required_context": ["repository"],
+  "allowed_proposal_kinds": [
+    { "id": "support-escalation", "payload": "custom_json" }
+  ],
+  "response_format": "conversation_reply_v1"
+}
