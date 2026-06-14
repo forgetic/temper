@@ -33,13 +33,6 @@ jobs:
         uses: actions/checkout@v4
       - name: Format
         run: cargo fmt --all -- --check
-      # Build the test executables first: they emit real artifacts that kache
-      # caches in full, so on a clean checkout with a warm cache this is the
-      # cheap step. Lint runs afterwards. There is deliberately no separate
-      # `cargo check` step — clippy already type-checks, so a check pass would
-      # only duplicate clippy's (uncacheable, metadata-only) work.
-      - name: Build
-        run:  cargo dev-test-build
       - name: Lint
         # `dev-clippy` lints `--all-targets`, matching the Build step's feature
         # resolution so clippy reuses the lib artifacts just cached by Build
@@ -49,6 +42,13 @@ jobs:
         # compiles hit the cache. (There is no separate `cargo check` step —
         # clippy already type-checks.)
         run: cargo dev-clippy
+      # Build the test executables first: they emit real artifacts that kache
+      # caches in full, so on a clean checkout with a warm cache this is the
+      # cheap step. Lint runs afterwards. There is deliberately no separate
+      # `cargo check` step — clippy already type-checks, so a check pass would
+      # only duplicate clippy's (uncacheable, metadata-only) work.
+      - name: Build
+        run:  cargo dev-test-build
       - name: Test
         # The ignored daemon e2e scenarios boot a real Forgejo + CI runner and
         # wait for convergence (PR opened, CI red→green, mechanical merge). On a
