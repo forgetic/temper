@@ -11,7 +11,7 @@ async-trait.workspace = true
 chrono.workspace = true
 temper-forge = { path = "../temper-forge" }
 skein.workspace = true
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

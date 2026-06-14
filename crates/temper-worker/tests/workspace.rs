@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 #[test]
 fn workspace_prepares_commits_pushes_and_reuses_local_git_checkout() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let temp = tempdir().expect("create temp dir");
         let origin = temp.path().join("origin.git");
         git(["init", "--bare", path_str(&origin)]);
@@ -115,7 +115,7 @@ fn workspace_prepares_commits_pushes_and_reuses_local_git_checkout() {
 
 #[test]
 fn prepare_pull_request_head_checks_out_the_pull_ref() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let temp = tempdir().expect("create temp dir");
         let origin = temp.path().join("origin.git");
         git(["init", "--bare", path_str(&origin)]);

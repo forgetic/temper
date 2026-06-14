@@ -1,9 +1,9 @@
-//! io_uring-style completion engine: the imperative shell that drives anvil's
+//! io_uring-style completion engine: the imperative shell that drives Smith's
 //! pure logic layers.
 //!
 //! # Architecture
 //!
-//! Every anvil engine service is split into two halves:
+//! Every Smith engine service is split into two halves:
 //!
 //! - a **functional core** — a deterministic state machine implementing
 //!   [`Machine`]: `(state, completion) -> (new state, [requests])`. No sockets,
@@ -38,11 +38,11 @@
 //! recorded schedule under a virtual clock and explore interleavings with
 //! chaos injection — the long-term simulation/fuzz-testing goal.
 //!
-//! This crate deliberately depends on nothing from temper: it is anvil's own
+//! This crate deliberately depends on nothing from temper: it is Smith's own
 //! copy of the sans-IO driver pattern, kept minimal (no HTTP-server / process /
-//! cadence modules — the agent is an HTTP *client* that runs in-process agent
-//! loops). Some duplication with `temper-io-engine` is accepted in exchange
-//! for an independent dependency surface.
+//! cadence modules — Smith's worker is an HTTP *client* that spawns in-process
+//! agent jobs). Some duplication with `temper-engine-io` is accepted in
+//! exchange for an independent dependency surface.
 
 pub mod engine;
 pub mod http_client;
@@ -57,6 +57,6 @@ pub use machine::{EngineTime, Machine};
 pub use queue::{CqReceiver, CqSender, OneshotReceiver, OneshotSender, channel, oneshot};
 pub use runtime::{
     EngineRuntime, block_on, block_on_runtime, block_on_runtime_with, block_on_with, build_runtime,
-    current_cx, engine_now, sleep_for, timeout, timer_now,
+    current_cx, engine_now, sleep_for, timer_now,
 };
 pub use timer::arm_timer;

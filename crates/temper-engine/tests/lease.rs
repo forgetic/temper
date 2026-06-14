@@ -13,11 +13,11 @@ use temper_worker_registry::InFlightJob;
 use temper_workflow::{ArtifactSource, LeaseManager, LeasePolicy, RoleId, parse_metadata_block};
 
 struct RecordingApplier {
-    tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
+    tx: temper_engine_io::CqSender<(InFlightJob, JobResult)>,
     forge: Option<Arc<MemoryForge>>,
     repo: Option<RepositoryId>,
     issue: Option<ItemNumber>,
-    lease_tx: Option<temper_io_engine::CqSender<Option<temper_workflow::Lease>>>,
+    lease_tx: Option<temper_engine_io::CqSender<Option<temper_workflow::Lease>>>,
 }
 
 #[async_trait::async_trait]
@@ -112,12 +112,12 @@ fn job_result(job_id: &str) -> JobResult {
 
 #[test]
 fn lease_won_inner_applied_then_lease_released() {
-    temper_io_engine::block_on_with(move |_cx, _handle| async move {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge).await;
         let issue = create_ready_issue(&forge, &repo).await;
-        let (tx, mut rx) = temper_io_engine::channel();
-        let (lease_tx, mut lease_rx) = temper_io_engine::channel();
+        let (tx, mut rx) = temper_engine_io::channel();
+        let (lease_tx, mut lease_rx) = temper_engine_io::channel();
         let inner = Arc::new(RecordingApplier {
             tx,
             forge: Some(forge.clone()),
@@ -168,7 +168,7 @@ fn lease_won_inner_applied_then_lease_released() {
 
 #[test]
 fn peer_owned_lease_noops_and_preserves_peer_lease() {
-    temper_io_engine::block_on_with(move |_cx, _handle| async move {
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge).await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -185,7 +185,7 @@ fn peer_owned_lease_noops_and_preserves_peer_lease() {
             .await
             .expect("peer lease is acquired");
 
-        let (tx, mut rx) = temper_io_engine::channel();
+        let (tx, mut rx) = temper_engine_io::channel();
         let inner = Arc::new(RecordingApplier {
             tx,
             forge: None,

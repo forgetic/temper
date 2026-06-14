@@ -164,7 +164,7 @@ impl EngineHttpClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
-            client: temper_io_engine::http::build_http_client(),
+            client: temper_engine_io::http::build_http_client(),
         }
     }
 }
@@ -175,16 +175,16 @@ impl HttpClient for EngineHttpClient {
         let mut url = format!("{}{}", self.base_url, request.path);
         if !request.query.is_empty() {
             url.push('?');
-            url.push_str(&temper_io_engine::http::encode_query(&request.query));
+            url.push_str(&temper_engine_io::http::encode_query(&request.query));
         }
 
-        let call = temper_io_engine::http::HttpCall {
+        let call = temper_engine_io::http::HttpCall {
             method: request.method.as_str().to_string(),
             url,
             headers: request.headers,
             body: request.body.map(String::into_bytes).unwrap_or_default(),
         };
-        let response = temper_io_engine::http::http_call(&self.client, call)
+        let response = temper_engine_io::http::http_call(&self.client, call)
             .await
             .map_err(HttpError::Transport)?;
         Ok(HttpResponse {

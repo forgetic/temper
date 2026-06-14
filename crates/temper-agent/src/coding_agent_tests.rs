@@ -197,7 +197,7 @@ fn subagent_tools_register_parallel_safe_and_on_the_right_model() {
     // tier assertion below.
     let registry = {
         let provider_config = provider_config.clone();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        temper_agent_io::block_on_with(move |_cx, handle| async move {
             add_subagents(
                 handle,
                 ToolRegistry::new(),

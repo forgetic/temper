@@ -108,7 +108,7 @@ pub fn start_cached_provisioned_repositories(
 }
 
 pub(super) async fn provision_repositories(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     admin_token: &str,
     repo_names: &[String],
@@ -197,12 +197,12 @@ fn reference_delivery_state_description(repo_names: &[String]) -> serde_json::Va
 /// for fixture provisioning (no deadlines or timers inside).
 fn block_on_fixture<F, Fut>(f: F) -> Fut::Output
 where
-    F: FnOnce(temper_io_engine::Cx) -> Fut + Send + 'static,
+    F: FnOnce(temper_engine_io::Cx) -> Fut + Send + 'static,
     Fut: std::future::Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
-    let runtime = temper_io_engine::build_runtime().expect("engine runtime builds");
-    temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| f(cx))
+    let runtime = temper_engine_io::build_runtime().expect("engine runtime builds");
+    temper_engine_io::runtime::block_on_runtime_with(&runtime, move |cx, _handle| f(cx))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

@@ -57,7 +57,7 @@ pub fn build_runtime() -> Result<EngineRuntime, String> {
 /// ```text
 /// #[test]
 /// fn my_async_test() {
-///     temper_io_engine::block_on(async { ... });
+///     temper_engine_io::block_on(async { ... });
 /// }
 /// ```
 ///
@@ -88,7 +88,7 @@ where
 /// recover either — this signature is the only source.
 ///
 /// ```text
-/// temper_io_engine::block_on_with(|cx, handle| async move { ... });
+/// temper_engine_io::block_on_with(|cx, handle| async move { ... });
 /// ```
 pub fn block_on_with<F, Fut>(f: F) -> Fut::Output
 where

@@ -1297,23 +1297,23 @@ dependencies = [
  "skein",
  "temper-agent",
  "temper-agent-core",
- "temper-agent-io-engine",
+ "temper-agent-io",
  "temper-agent-protocol",
  "temper-engine",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
  "temper-forgejo-ops",
  "temper-forgejo-provision",
  "temper-interaction-service",
- "temper-io-engine",
  "temper-process-protocol",
  "temper-reference-delivery",
  "temper-reference-delivery-validator",
  "temper-testing",
  "temper-trigger-forgejo",
  "temper-worker",
- "temper-worker-io-engine",
+ "temper-worker-io",
  "temper-worker-protocol",
  "temper-workflow",
 ]
@@ -1331,7 +1331,7 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-agent-core",
- "temper-agent-io-engine",
+ "temper-agent-io",
  "temper-agent-protocol",
  "temper-process-protocol",
  "tongs",
@@ -1350,12 +1350,12 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-agent",
- "temper-agent-io-engine",
+ "temper-agent-io",
  "tongs",
 ]
 
 [[package]]
-name = "temper-agent-io-engine"
+name = "temper-agent-io"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -1382,13 +1382,22 @@ dependencies = [
  "serde_json",
  "sha2",
  "skein",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-memory",
- "temper-io-engine",
  "temper-runner",
  "temper-worker-protocol",
  "temper-worker-registry",
  "temper-workflow",
+]
+
+[[package]]
+name = "temper-engine-io"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "skein",
 ]
 
 [[package]]
@@ -1425,8 +1434,8 @@ dependencies = [
  "serde",
  "serde_json",
  "skein",
+ "temper-engine-io",
  "temper-forge",
- "temper-io-engine",
  "temper-workflow",
  "thiserror",
 ]
@@ -1440,8 +1449,8 @@ dependencies = [
  "serde",
  "serde_json",
  "skein",
+ "temper-engine-io",
  "temper-forge",
- "temper-io-engine",
  "thiserror",
 ]
 
@@ -1461,7 +1470,7 @@ dependencies = [
  "base64",
  "serde_json",
  "skein",
- "temper-io-engine",
+ "temper-engine-io",
 ]
 
 [[package]]
@@ -1471,10 +1480,10 @@ dependencies = [
  "base64",
  "serde_json",
  "skein",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forgejo-ops",
- "temper-io-engine",
  "temper-reference-delivery",
  "temper-runner",
  "temper-testing",
@@ -1489,9 +1498,9 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-memory",
- "temper-io-engine",
  "temper-process-protocol",
  "thiserror",
 ]
@@ -1503,20 +1512,11 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_json",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
  "temper-interaction",
- "temper-io-engine",
-]
-
-[[package]]
-name = "temper-io-engine"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "skein",
 ]
 
 [[package]]
@@ -1543,10 +1543,10 @@ dependencies = [
 name = "temper-reference-delivery-validator"
 version = "0.1.0"
 dependencies = [
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
- "temper-io-engine",
  "temper-workflow",
 ]
 
@@ -1558,10 +1558,10 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
- "temper-io-engine",
  "temper-process-protocol",
  "temper-testing",
  "temper-workflow",
@@ -1576,9 +1576,9 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-engine",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-memory",
- "temper-io-engine",
  "temper-worker-protocol",
  "temper-workflow",
 ]
@@ -1596,12 +1596,12 @@ dependencies = [
  "sha2",
  "skein",
  "temper-engine",
+ "temper-engine-io",
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-forgejo",
  "temper-forge-memory",
  "temper-forgejo-ops",
- "temper-io-engine",
  "temper-reference-delivery",
  "temper-runner",
  "temper-trigger-forgejo",
@@ -1629,8 +1629,8 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "skein",
+ "temper-engine-io",
  "temper-forge",
- "temper-io-engine",
  "temper-runner",
 ]
 
@@ -1643,15 +1643,15 @@ dependencies = [
  "skein",
  "temper-agent-protocol",
  "temper-engine",
- "temper-io-engine",
- "temper-worker-io-engine",
+ "temper-engine-io",
+ "temper-worker-io",
  "temper-worker-protocol",
  "tempfile",
  "thiserror",
 ]
 
 [[package]]
-name = "temper-worker-io-engine"
+name = "temper-worker-io"
 version = "0.1.0"
 dependencies = [
  "serde",

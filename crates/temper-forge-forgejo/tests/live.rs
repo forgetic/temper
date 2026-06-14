@@ -20,7 +20,7 @@ use temper_forge::{
     PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
-use temper_io_engine::http::{HttpCall, HttpResponseData, http_call};
+use temper_engine_io::http::{HttpCall, HttpResponseData, http_call};
 
 const ADMIN_USER: &str = "liveadmin";
 const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";
@@ -52,7 +52,7 @@ struct LiveWorld {
 #[test]
 #[ignore = "boots local Forgejo + host-mode forgejo-runner; run with --ignored"]
 fn live_smoke_suite_against_throwaway_forgejo() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         let world = boot_world().await;
 
         let user = world
@@ -120,7 +120,7 @@ async fn boot_world() -> LiveWorld {
             let admin_token = bootstrap_admin(server).expect("admin token bootstraps");
             // One-shot bootstrap on this blocking thread: build a fresh engine
             // runtime, perform the provisioning calls, tear it down.
-            temper_io_engine::block_on(async move {
+            temper_engine_io::block_on(async move {
                 create_initialized_repo(&base, &admin_token).await;
                 Ok::<LiveMetadata, String>(LiveMetadata { admin_token })
             })
@@ -189,7 +189,7 @@ fn bootstrap_admin(server: &ForgejoServer) -> Result<String, ServerError> {
 
 /// Send one authorized JSON request through the engine HTTP client.
 async fn api_json(method: &str, url: String, token: &str, body: &Value) -> HttpResponseData {
-    let client = temper_io_engine::http::build_http_client();
+    let client = temper_engine_io::http::build_http_client();
     http_call(
         &client,
         HttpCall {
@@ -298,7 +298,7 @@ async fn create_and_close_issue(world: &LiveWorld) {
     assert_eq!(closed.state, IssueState::Closed);
 }
 
-async fn wait_for_ci_success(cx: &temper_io_engine::Cx, world: &LiveWorld) {
+async fn wait_for_ci_success(cx: &temper_engine_io::Cx, world: &LiveWorld) {
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         let observation = match world
@@ -320,6 +320,6 @@ async fn wait_for_ci_success(cx: &temper_io_engine::Cx, world: &LiveWorld) {
         if Instant::now() >= deadline {
             panic!("CI success was not observed within 180s; last observation: {observation}");
         }
-        temper_io_engine::runtime::sleep_for(cx, Duration::from_secs(2)).await;
+        temper_engine_io::runtime::sleep_for(cx, Duration::from_secs(2)).await;
     }
 }

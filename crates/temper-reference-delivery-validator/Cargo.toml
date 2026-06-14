@@ -10,7 +10,7 @@ description = "Operator-facing reference-delivery Forge-state validator."
 temper-forge = { path = "../temper-forge" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-workflow = { path = "../temper-workflow" }
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }

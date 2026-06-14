@@ -68,7 +68,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
         worker_id,
     } = config;
 
-    let spawner: Arc<dyn temper_io_engine::Spawner> = Arc::new(handle.clone());
+    let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle.clone());
 
     // --- Forge + workflow + repositories (shared daemon setup) ---
     let forge_config =

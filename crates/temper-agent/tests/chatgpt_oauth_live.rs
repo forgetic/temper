@@ -55,7 +55,7 @@ fn block_on_decision<D: serde::de::DeserializeOwned + Send + 'static>(
     let provider = provider.clone();
     let system_prompt = system_prompt.to_string();
     let user_context = user_context.to_string();
-    temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_decision(handle, &provider, &system_prompt, &user_context).await
     })
 }

@@ -6,8 +6,13 @@ use skein::cx::Cx;
 use skein::runtime::reactor::create_reactor;
 use skein::runtime::{Runtime, RuntimeBuilder, RuntimeHandle};
 
-/// An skein runtime configured for Smith services: I/O reactor attached
+/// An skein runtime configured for the temper agent: I/O reactor attached
 /// and a small blocking pool for filesystem/git helpers.
+///
+/// There is no ambient handle: skein dropped `Runtime::current_handle()` and
+/// the agent no longer reinstates a thread-local for it. Code that spawns
+/// sub-agent tasks receives a [`RuntimeHandle`] explicitly (from
+/// [`block_on_with`] or [`EngineRuntime::handle`]).
 pub struct EngineRuntime {
     runtime: Runtime,
 }
@@ -47,15 +52,15 @@ pub fn build_runtime() -> Result<EngineRuntime, String> {
 }
 
 /// Build a runtime and run one future to completion **as a task**. The body
-/// receives no capabilities — code that needs the task's [`Cx`] (timers,
-/// process deadlines) or the runtime's [`RuntimeHandle`] (the spawn
-/// capability) must use [`block_on_with`]. This is the standard entry for
-/// bodies that only call APIs taking their capabilities explicitly:
+/// receives no capabilities — code that needs the task's [`Cx`] or the runtime's
+/// [`RuntimeHandle`] (the spawn capability for sub-agent tasks) must use
+/// [`block_on_with`]. Standard entry for bodies that take their capabilities
+/// explicitly:
 ///
 /// ```text
 /// #[test]
 /// fn my_async_test() {
-///     temper_worker_io_engine::block_on(async { ... });
+///     temper_agent_io::block_on(async { ... });
 /// }
 /// ```
 ///
@@ -77,14 +82,15 @@ where
     block_on_runtime_with(runtime, move |_cx, _handle| future)
 }
 
-/// Build a runtime and run one future to completion as a task, handing the
-/// body its capabilities **explicitly**: the root task's [`Cx`] (the clock
-/// capability) and the runtime's [`RuntimeHandle`] (the spawn capability).
-/// There is no ambient way to recover either — this signature is the only
-/// source (skein removed `Runtime::current_handle`).
+/// Build a runtime and run one future to completion as a task, handing the body
+/// its capabilities **explicitly**: the task's [`Cx`] (clock) and the runtime's
+/// [`RuntimeHandle`] (spawn capability). There is no ambient way to recover
+/// either — this signature is the only source (skein removed
+/// `Runtime::current_handle`, and the agent no longer reinstates a thread-local
+/// for it).
 ///
 /// ```text
-/// temper_worker_io_engine::block_on_with(|cx, handle| async move { ... });
+/// temper_agent_io::block_on_with(|cx, handle| async move { ... });
 /// ```
 pub fn block_on_with<F, Fut>(f: F) -> Fut::Output
 where
@@ -152,6 +158,21 @@ pub fn engine_now() -> skein::types::Time {
 /// (Machines never sleep — they request timers.)
 pub async fn sleep_for(duration: std::time::Duration) {
     skein::time::sleep(engine_now(), duration).await;
+}
+
+/// Run `future` with a `duration` deadline on the engine-timer clock, returning
+/// `Err(Elapsed)` if it does not finish in time.
+///
+/// This is the liveness guard the shell uses around model-stream awaits: skein's
+/// HTTP path has no socket read timeout, so without this a stalled provider
+/// connection would block a task — and, in a parallel sub-agent fan-out, the
+/// whole batch — indefinitely. The deadline is computed against
+/// [`engine_now`] so it fires on the same clock the runtime arms timers on.
+pub async fn timeout<F: std::future::Future>(
+    duration: std::time::Duration,
+    future: F,
+) -> Result<F::Output, skein::time::Elapsed> {
+    skein::time::timeout(engine_now(), duration, Box::pin(future)).await
 }
 
 /// The ambient capability context of the current skein task.

@@ -143,7 +143,7 @@ where
         let run_context = context.clone();
         let run_checkpointer = checkpointer.clone();
         let run_cwd = cwd.clone();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        temper_agent_io::block_on_with(move |_cx, handle| async move {
             // The same Checkpointer is both the mechanical backstop (TurnHook)
             // and the model-driven checkpoint tool (CheckpointHook).
             let turn_hook = run_checkpointer

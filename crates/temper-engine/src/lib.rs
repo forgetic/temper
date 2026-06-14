@@ -28,8 +28,8 @@ use temper_worker_registry::DaemonCore;
 use temper_worker_registry::daemon_core::QueuedJob;
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
-use temper_io_engine::http::{HttpRequestData, HttpResponder, HttpResponseData};
-use temper_io_engine::{
+use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
+use temper_engine_io::{
     CqSender, EngineTime, Executor as EngineExecutor, Machine, Spawner, arm_timer, channel, drive,
 };
 pub use temper_worker_registry::InFlightJob;
@@ -1850,7 +1850,7 @@ enum DaemonCompletion {
     ConfigureWebhook { config: WebhookConfig },
     #[cfg(test)]
     QueuedJobs {
-        reply: temper_io_engine::OneshotSender<Vec<QueuedJob>>,
+        reply: temper_engine_io::OneshotSender<Vec<QueuedJob>>,
     },
 }
 
@@ -1879,7 +1879,7 @@ enum DaemonRequest {
     Log(String),
     #[cfg(test)]
     QueuedJobsReply(
-        temper_io_engine::OneshotSender<Vec<QueuedJob>>,
+        temper_engine_io::OneshotSender<Vec<QueuedJob>>,
         Vec<QueuedJob>,
     ),
 }
@@ -2609,7 +2609,7 @@ impl Daemon {
         &self,
         message: WorkerProtocolMessage,
     ) -> Result<Option<WorkerProtocolMessage>, String> {
-        let (reply_tx, reply_rx) = temper_io_engine::oneshot::<HttpResponseData>();
+        let (reply_tx, reply_rx) = temper_engine_io::oneshot::<HttpResponseData>();
         let request = HttpRequestData {
             method: "POST".to_string(),
             uri: "/v1/message".to_string(),
@@ -2698,7 +2698,7 @@ impl Daemon {
 
     #[cfg(test)]
     async fn queued_jobs(&self) -> Vec<WorkItemJob> {
-        let (reply, rx) = temper_io_engine::oneshot();
+        let (reply, rx) = temper_engine_io::oneshot();
         if self
             .cq
             .send(DaemonCompletion::QueuedJobs { reply })
@@ -2774,7 +2774,7 @@ pub fn spawn_poll_backstop<F: Forge + Send + Sync + 'static>(
     clock: WallClock,
 ) {
     let cadence = config.cadence;
-    temper_io_engine::spawn_cadence_loop(spawner, cadence, move || {
+    temper_engine_io::spawn_cadence_loop(spawner, cadence, move || {
         let daemon = daemon.clone();
         let forge = Arc::clone(&forge);
         let workflow = Arc::clone(&workflow);
@@ -2816,8 +2816,8 @@ pub async fn serve(
     handle: &skein::runtime::RuntimeHandle,
     daemon: &Daemon,
     bind: SocketAddr,
-) -> std::io::Result<temper_io_engine::http::EngineHttpServer> {
-    let server = temper_io_engine::http::serve_http(
+) -> std::io::Result<temper_engine_io::http::EngineHttpServer> {
+    let server = temper_engine_io::http::serve_http(
         handle,
         bind,
         daemon.cq.clone(),
@@ -2831,8 +2831,8 @@ pub async fn serve(
 /// The daemon's h1 request handler — the same request→completion conversion
 /// [`serve`] installs on the TCP listener, exposed so in-memory simulation
 /// gateways can serve connections against the daemon's queue.
-pub fn h1_handler(daemon: &Daemon) -> temper_io_engine::http::H1CompletionHandler {
-    temper_io_engine::http::h1_completion_handler(daemon.cq.clone(), |request, responder| {
+pub fn h1_handler(daemon: &Daemon) -> temper_engine_io::http::H1CompletionHandler {
+    temper_engine_io::http::h1_completion_handler(daemon.cq.clone(), |request, responder| {
         DaemonCompletion::Http { request, responder }
     })
 }
@@ -2965,7 +2965,7 @@ mod tests {
 
     #[test]
     fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
-        temper_io_engine::block_on(async move {
+        temper_engine_io::block_on(async move {
             let forge = MemoryForge::new();
             let repo = forge
                 .create_repository(CreateRepository {
@@ -3185,7 +3185,7 @@ mod tests {
 
     #[test]
     fn enqueue_work_item_stores_mapped_job() {
-        temper_io_engine::block_on_with(move |_cx, handle| async move {
+        temper_engine_io::block_on_with(move |_cx, handle| async move {
             let daemon = Daemon::new(Arc::new(handle));
             let item = work_item(ArtifactSource::Issue {
                 number: ItemNumber::new(103),
@@ -3200,7 +3200,7 @@ mod tests {
 
     #[test]
     fn enrich_work_item_job_skips_closed_issue() {
-        temper_io_engine::block_on(async move {
+        temper_engine_io::block_on(async move {
             let forge = MemoryForge::new();
             let repo = forge
                 .create_repository(CreateRepository {
@@ -3256,7 +3256,7 @@ mod tests {
 
     #[test]
     fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
-        temper_io_engine::block_on(async move {
+        temper_engine_io::block_on(async move {
             let forge = MemoryForge::new();
             let repo = forge
                 .create_repository(CreateRepository {
@@ -3343,7 +3343,7 @@ mod tests {
 
     #[test]
     fn enrich_work_item_job_skips_closed_pull_request() {
-        temper_io_engine::block_on(async move {
+        temper_engine_io::block_on(async move {
             let forge = MemoryForge::new();
             let repo = forge
                 .create_repository(CreateRepository {

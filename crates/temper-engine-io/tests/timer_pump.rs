@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 #[test]
 fn bare_sleep_fires_on_idle_runtime() {
     let started = Instant::now();
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
-        temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(300)).await;
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(300)).await;
     });
     let elapsed = started.elapsed();
     assert!(

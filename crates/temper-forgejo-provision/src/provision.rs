@@ -208,7 +208,7 @@ pub type Result<T> = std::result::Result<T, ProvisionError>;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_world(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     admin_token: &str,
     owner: &str,
@@ -531,7 +531,7 @@ pub fn write_secrets_file(path: &Path, contents: &str) -> std::io::Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_and_seed(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     admin_token: &str,
     owner: &str,

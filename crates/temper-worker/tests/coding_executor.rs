@@ -29,7 +29,7 @@ use tempfile::TempDir;
 
 #[test]
 fn success_path_commits_pushes_and_reports_branch() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let agent = AgentBehavior::Success.runner();
         let executor = fixture.executor(agent.clone(), true);
@@ -99,7 +99,7 @@ fn success_path_commits_pushes_and_reports_branch() {
 
 #[test]
 fn context_shape_matches_temper_coding_agent_contract() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let agent = AgentBehavior::Success.runner();
         let executor = fixture.executor(agent.clone(), true);
@@ -130,7 +130,7 @@ fn context_shape_matches_temper_coding_agent_contract() {
 
 #[test]
 fn context_shape_passes_through_read_only_capability_and_verdicts() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let agent = AgentBehavior::ReadOnlyVerdict.runner();
         let executor = fixture.executor(agent.clone(), true);
@@ -164,7 +164,7 @@ fn context_shape_passes_through_read_only_capability_and_verdicts() {
 
 #[test]
 fn review_context_shape_carries_pull_request_target() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let agent = AgentBehavior::ReviewApprove.runner();
         let executor = fixture.executor(agent.clone(), true);
@@ -249,7 +249,7 @@ fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorksp
 
 #[test]
 fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::Success.runner(), true);
 
@@ -288,7 +288,7 @@ fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
 
 #[test]
 fn malformed_payload_maps_to_protocol_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
@@ -305,7 +305,7 @@ fn malformed_payload_maps_to_protocol_failure() {
 
 #[test]
 fn missing_enriched_artifact_maps_to_protocol_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
         let mut context = job_context("agent/pr-for-code-7", "pr-for-code-7");
@@ -328,7 +328,7 @@ fn missing_enriched_artifact_maps_to_protocol_failure() {
 
 #[test]
 fn missing_role_identity_maps_to_permanent_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::NoDiff.runner(), false);
 
@@ -346,7 +346,7 @@ fn missing_role_identity_maps_to_permanent_failure() {
 
 #[test]
 fn transient_agent_error_maps_to_transient_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::TransientError.runner(), true);
 
@@ -364,7 +364,7 @@ fn transient_agent_error_maps_to_transient_failure() {
 
 #[test]
 fn zero_diff_maps_to_permanent_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
@@ -382,7 +382,7 @@ fn zero_diff_maps_to_permanent_failure() {
 
 #[test]
 fn verdict_result_maps_to_permanent_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::Verdict.runner(), true);
 
@@ -400,7 +400,7 @@ fn verdict_result_maps_to_permanent_failure() {
 
 #[test]
 fn read_only_job_returns_verdict_and_body() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::ReadOnlyVerdict.runner(), true);
 
@@ -423,7 +423,7 @@ fn read_only_job_returns_verdict_and_body() {
 
 #[test]
 fn read_only_job_with_diff_still_returns_verdict_without_push() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::ReadOnlyVerdictWithDiff.runner(), true);
 
@@ -447,7 +447,7 @@ fn read_only_job_with_diff_still_returns_verdict_without_push() {
 
 #[test]
 fn read_only_breakdown_verdict_passes_children_through() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::ReadOnlyBreakdownVerdict.runner(), true);
         let mut context = read_only_job_context("agent/breakdown-7", "breakdown-7");
@@ -489,7 +489,7 @@ fn read_only_breakdown_verdict_passes_children_through() {
 
 #[test]
 fn read_only_job_without_verdict_is_permanent() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
 
@@ -511,7 +511,7 @@ fn read_only_job_without_verdict_is_permanent() {
 
 #[test]
 fn read_only_job_with_undeclared_verdict_is_permanent() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::UndeclaredVerdict.runner(), true);
 
@@ -537,7 +537,7 @@ fn read_only_job_with_undeclared_verdict_is_permanent() {
 
 #[test]
 fn review_job_returns_approve_verdict() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let agent = AgentBehavior::ReviewApprove.runner();
         let executor = fixture.executor(agent.clone(), true);
@@ -562,7 +562,7 @@ fn review_job_returns_approve_verdict() {
 
 #[test]
 fn review_job_changes_verdict_passes_review_body_through() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::ReviewChanges.runner(), true);
 
@@ -588,7 +588,7 @@ fn review_job_changes_verdict_passes_review_body_through() {
 
 #[test]
 fn review_job_missing_verdict_is_permanent_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::ReviewMissingVerdict.runner(), true);
 
@@ -612,7 +612,7 @@ fn review_job_missing_verdict_is_permanent_failure() {
 
 #[test]
 fn review_job_undeclared_verdict_is_permanent_failure() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::ReviewUndeclaredVerdict.runner(), true);
 
@@ -642,7 +642,7 @@ fn review_job_undeclared_verdict_is_permanent_failure() {
 
 #[test]
 fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::WritableVerdict.runner(), true);
 
@@ -1385,7 +1385,7 @@ fn assert_is_sha(value: &str) {
 /// checkpointed head rather than failing with "agent produced no diff".
 #[test]
 fn checkpoint_committed_work_with_clean_tree_succeeds() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let executor = fixture.executor(AgentBehavior::CheckpointCommits.runner(), true);
 
@@ -1423,7 +1423,7 @@ fn checkpoint_committed_work_with_clean_tree_succeeds() {
 /// branch (the prior dispatch's checkpoints) instead of resetting to base.
 #[test]
 fn redispatch_resumes_from_pushed_work_branch() {
-    temper_worker_io_engine::block_on(async {
+    temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let first = AgentBehavior::CheckpointCommits.runner();
         let executor = fixture.executor(first, true);

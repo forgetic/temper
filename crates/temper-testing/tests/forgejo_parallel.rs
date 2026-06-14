@@ -130,7 +130,7 @@ fn cached_reference_delivery_state_is_safe_for_parallel_callers() {
 }
 
 fn read_exact_repo(info: &ProvisionedInfo, token: &str) -> Result<(), String> {
-    let client = temper_io_engine::http::BlockingJsonClient::new();
+    let client = temper_engine_io::http::BlockingJsonClient::new();
     let url = format!(
         "{}/api/v1/repos/{}/{}",
         info.base_url, info.owner, info.name
@@ -237,7 +237,7 @@ where
 
 fn assert_server_teardown(base_url: &str, data_dir: &Path) -> Result<(), String> {
     let version_url = format!("{base_url}/api/v1/version");
-    let client = temper_io_engine::http::BlockingJsonClient::new();
+    let client = temper_engine_io::http::BlockingJsonClient::new();
     for _ in 0..25 {
         let port_is_down = client
             .send("GET", version_url.as_str(), None, None)

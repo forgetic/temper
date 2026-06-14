@@ -9,7 +9,7 @@
 //!
 //! Must be awaited inside a skein engine task (the sub-agent's drive loop
 //! reads the runtime clock and its shell spawns I/O) — see
-//! `temper_agent_io_engine::block_on`.
+//! `temper_agent_io::block_on`.
 
 use serde::de::DeserializeOwned;
 use tongs::model::ContentBlock;

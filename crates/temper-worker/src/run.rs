@@ -3,15 +3,15 @@
 //! [`run_worker`] is the worker's entry point. It constructs the pure
 //! [`WorkerMachine`](crate::worker_machine::WorkerMachine), the imperative
 //! [`WorkerShell`](crate::worker_shell::WorkerShell), and a completion queue,
-//! then hands them to [`temper_worker_io_engine::drive`]. It must run inside an engine
+//! then hands them to [`temper_worker_io::drive`]. It must run inside an engine
 //! task (the drive loop reads the runtime clock and the shell spawns I/O), so
-//! callers wrap it in [`temper_worker_io_engine::block_on_with`] and pass the
+//! callers wrap it in [`temper_worker_io::block_on_with`] and pass the
 //! [`RuntimeHandle`] it yields.
 
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
-use temper_worker_io_engine::{channel, drive};
+use temper_worker_io::{channel, drive};
 
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};

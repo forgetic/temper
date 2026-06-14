@@ -13,7 +13,7 @@ temper-forgejo-ops = { path = "../temper-forgejo-ops" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-runner = { path = "../temper-runner" }
 temper-workflow = { path = "../temper-workflow" }
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
 skein.workspace = true

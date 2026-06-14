@@ -27,7 +27,7 @@ use temper_testing::runner_config;
 #[test]
 #[ignore = "boots a real Forgejo + host-mode runner; run with --ignored"]
 fn list_ci_jobs_reads_failure_through_web_ui() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
         // polling; boot it on a blocking thread so that nested runtime lives and dies
         // off-reactor (matching the Phase 2 provisioning test).
@@ -89,7 +89,7 @@ fn list_ci_jobs_reads_failure_through_web_ui() {
             if Instant::now() >= deadline {
                 break None;
             }
-            temper_io_engine::runtime::sleep_for(&cx, Duration::from_secs(3)).await;
+            temper_engine_io::runtime::sleep_for(&cx, Duration::from_secs(3)).await;
         };
 
         let job = failing.unwrap_or_else(|| {

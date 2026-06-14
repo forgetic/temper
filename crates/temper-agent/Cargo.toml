@@ -18,7 +18,7 @@ temper-process-protocol = { path = "../temper-process-protocol" }
 uuid.workspace = true
 
 [dev-dependencies]
-temper-agent-io-engine = { path = "../temper-agent-io-engine" }
+temper-agent-io = { path = "../temper-agent-io" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 jig-record = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }

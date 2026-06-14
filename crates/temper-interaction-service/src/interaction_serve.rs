@@ -15,8 +15,8 @@ pub fn run_serve(args: &InteractionServeArgs) -> Result<(), InteractionDeploymen
         args.allow_non_loopback,
         |key| std::env::var(key).ok(),
     )?;
-    let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
-    let service = temper_io_engine::runtime::block_on_runtime_with(
+    let runtime = temper_engine_io::build_runtime().map_err(InteractionDeploymentError::Config)?;
+    let service = temper_engine_io::runtime::block_on_runtime_with(
         &runtime,
         move |cx, _handle| async move {
             build_service(&cx, &spec, &bindings, |key| std::env::var(key).ok())

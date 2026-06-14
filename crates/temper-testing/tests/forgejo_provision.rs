@@ -29,7 +29,7 @@ use temper_testing::{runner_config, workflow};
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn provisions_identity_repo_labels_and_workflow() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness
         // polling; building/dropping that client inside the async test context trips
         // Tokio's "cannot drop a runtime in an async context" guard. Boot it on a
@@ -110,7 +110,7 @@ fn provisions_identity_repo_labels_and_workflow() {
         );
 
         // 5. The CI workflow file is committed and Actions are enabled.
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let (contents_status, _) = client
             .send_expect_json(
                 "GET",

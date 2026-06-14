@@ -28,7 +28,7 @@ fn basic_request() -> ConversationRequest {
 
 #[test]
 fn process_responder_sends_request_reads_reply_and_filters_environment() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         let request_path = temp_path("request.json");
         let script_path = temp_path("responder.sh");
         fs::write(
@@ -74,7 +74,7 @@ fi
 
 #[test]
 fn process_responder_reports_timeout_exit_malformed_json_and_duplicate_ids() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         let timeout = ProcessResponder::new(
             cx.clone(),
             ProcessResponderConfig::new("/bin/sh")

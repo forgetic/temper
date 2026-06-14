@@ -9,13 +9,13 @@ use temper_worker_registry::InFlightJob;
 
 struct RecordingApplier {
     name: &'static str,
-    tx: temper_io_engine::CqSender<(&'static str, String, String)>,
+    tx: temper_engine_io::CqSender<(&'static str, String, String)>,
 }
 
 impl RecordingApplier {
     fn new(
         name: &'static str,
-        tx: temper_io_engine::CqSender<(&'static str, String, String)>,
+        tx: temper_engine_io::CqSender<(&'static str, String, String)>,
     ) -> Self {
         Self { name, tx }
     }
@@ -61,8 +61,8 @@ fn success_result(job_id: &str) -> JobResult {
 
 #[test]
 fn role_routing_applier_dispatches_known_role_to_registered_applier() {
-    temper_io_engine::block_on_with(move |_cx, _handle| async move {
-        let (tx, mut rx) = temper_io_engine::channel();
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let (tx, mut rx) = temper_engine_io::channel();
         let routing =
             RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
                 .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));
@@ -86,8 +86,8 @@ fn role_routing_applier_dispatches_known_role_to_registered_applier() {
 
 #[test]
 fn role_routing_applier_dispatches_unknown_role_to_default_applier() {
-    temper_io_engine::block_on_with(move |_cx, _handle| async move {
-        let (tx, mut rx) = temper_io_engine::channel();
+    temper_engine_io::block_on_with(move |_cx, _handle| async move {
+        let (tx, mut rx) = temper_engine_io::channel();
         let routing =
             RoleRoutingApplier::new(Arc::new(RecordingApplier::new("default", tx.clone())))
                 .with_route("engineer", Arc::new(RecordingApplier::new("engineer", tx)));

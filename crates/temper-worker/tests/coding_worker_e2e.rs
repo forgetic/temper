@@ -305,7 +305,7 @@ fn run_until_result<E>(
 where
     E: JobExecutor + Send + Sync + 'static,
 {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let mut harness = DaemonHarness::start(&handle);
         harness.enqueue(&assign).await;
 

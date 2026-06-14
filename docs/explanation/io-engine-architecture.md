@@ -1,6 +1,6 @@
 # The I/O engine: functional core, imperative shell
 
-Temper's services run on `temper-io-engine`, an io_uring-style completion
+Temper's services run on `temper-engine-io`, an io_uring-style completion
 engine layered over the [asupersync](https://crates.io/crates/asupersync)
 runtime. The design splits every service into two halves:
 
@@ -36,7 +36,7 @@ never calls back into the machine, so the core stays single-owner and
 deterministic — replaying a recorded completion sequence into a fresh machine
 reproduces the exact same requests, with no runtime involved. That is also how
 machines are unit-tested (see `crates/temper-daemon/tests/transport.rs` for
-the service-level tests and `crates/temper-io-engine/tests/engine_loop.rs` for
+the service-level tests and `crates/temper-engine-io/tests/engine_loop.rs` for
 the reference pattern).
 
 ## Where the pattern shows up

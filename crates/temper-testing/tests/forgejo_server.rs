@@ -36,7 +36,7 @@ fn server_boots_serves_version_and_tears_down() {
     // Independently confirm the API answers, and capture the port so we can
     // assert the process is gone after drop.
     let version_url = format!("{base}/api/v1/version");
-    let client = temper_io_engine::http::BlockingJsonClient::new();
+    let client = temper_engine_io::http::BlockingJsonClient::new();
     let body = client
         .send("GET", version_url.as_str(), None, None)
         .map(|response| String::from_utf8_lossy(&response.body).into_owned())

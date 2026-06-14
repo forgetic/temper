@@ -35,7 +35,7 @@ fn run(config: temper_worker::WorkerConfig) -> Result<(), String> {
     match config.executor.clone() {
         ExecutorSelection::Stub => {
             let executor = Arc::new(StubExecutor::success());
-            temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+            temper_worker_io::block_on_with(move |_cx, handle| async move {
                 run_worker(handle, config, executor)
                     .await
                     .map_err(|error| error.to_string())
@@ -63,7 +63,7 @@ fn run(config: temper_worker::WorkerConfig) -> Result<(), String> {
                 AgentSurface::ExternalCommand(command) => command,
             };
             let runner = Arc::new(OutOfProcessRunner::new(command));
-            temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+            temper_worker_io::block_on_with(move |_cx, handle| async move {
                 // Relay agent step-progress checkpoints to the daemon (which
                 // applies them to the forge idempotently); transport trouble is
                 // logged and dropped, never failing the turn. Built inside the

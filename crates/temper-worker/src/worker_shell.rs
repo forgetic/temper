@@ -1,6 +1,6 @@
 //! The worker's imperative shell.
 //!
-//! [`WorkerShell`] implements [`temper_worker_io_engine::Executor`] for
+//! [`WorkerShell`] implements [`temper_worker_io::Executor`] for
 //! [`WorkerMachine`](crate::worker_machine::WorkerMachine): it performs the I/O
 //! each [`WorkerRequest`] asks for — deliver worker-protocol messages to the
 //! daemon over a [`Transport`](crate::transport::Transport), run dispatched jobs
@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
-use temper_worker_io_engine::{CqSender, arm_timer};
+use temper_worker_io::{CqSender, arm_timer};
 use temper_worker_protocol::WorkerProtocolMessage;
 
 use crate::executor::{JobExecutor, job_result};
@@ -90,7 +90,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport> WorkerShell<E, T> {
 }
 
 impl<E: JobExecutor + Send + Sync + 'static, T: Transport>
-    temper_worker_io_engine::Executor<WorkerMachine> for WorkerShell<E, T>
+    temper_worker_io::Executor<WorkerMachine> for WorkerShell<E, T>
 {
     fn execute(&self, request: WorkerRequest) {
         match request {

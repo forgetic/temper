@@ -6,10 +6,10 @@
 
 use std::time::Duration;
 
-use temper_io_engine::http::{
+use temper_engine_io::http::{
     HttpCall, HttpRequestData, HttpResponder, HttpResponseData, serve_http,
 };
-use temper_io_engine::{CqSender, EngineTime, Executor, Machine, arm_timer, channel, drive};
+use temper_engine_io::{CqSender, EngineTime, Executor, Machine, arm_timer, channel, drive};
 
 /// Completions the demo service can observe.
 enum Completion {
@@ -93,7 +93,7 @@ fn machine_is_pure_and_deterministic() {
         [Request::StartTimer { token: 1, .. }]
     ));
 
-    let (probe_tx, _probe_rx) = temper_io_engine::oneshot();
+    let (probe_tx, _probe_rx) = temper_engine_io::oneshot();
     let requests = machine.on_completion(
         t,
         Completion::HttpInbound(
@@ -143,9 +143,9 @@ impl Executor<PingMachine> for PingExecutor {
 
 #[test]
 fn engine_serves_http_with_timers() {
-    let runtime = temper_io_engine::build_runtime().expect("runtime");
+    let runtime = temper_engine_io::build_runtime().expect("runtime");
     let handle = runtime.handle();
-    let (done_tx, done_rx) = temper_io_engine::oneshot::<(u16, Vec<u8>)>();
+    let (done_tx, done_rx) = temper_engine_io::oneshot::<(u16, Vec<u8>)>();
 
     // All async work runs inside a spawned task so it has an ambient Cx; the
     // main future only waits for the result.
@@ -173,13 +173,13 @@ fn engine_serves_http_with_timers() {
 
         // Give a few timer ticks a chance to land, then call the service.
         skein::time::sleep(
-            temper_io_engine::runtime::timer_now(&cx),
+            temper_engine_io::runtime::timer_now(&cx),
             Duration::from_millis(50),
         )
         .await;
 
-        let client = temper_io_engine::http::build_http_client();
-        let response = temper_io_engine::http::http_call(
+        let client = temper_engine_io::http::build_http_client();
+        let response = temper_engine_io::http::http_call(
             &client,
             HttpCall {
                 method: "POST".into(),
