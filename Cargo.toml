@@ -180,7 +180,19 @@ rust-version = "1.88"
 # so worker/daemon-only builds also link skein's TLS code. This is an accepted
 # tradeoff — TLS is small relative to the agent's LLM/HTTP stack, which slim
 # builds still exclude (it enters only via the `agent` feature crates).
-skein = { path = "../skein/crates/skein", features = ["tls", "tls-native-roots"] }
+# `tls-webpki-roots` is enabled here even though no temper crate needs the
+# webpki root bundle directly: a dev-dependency (jig-record, via
+# temper-agent-runtime) enables it, so test-scoped builds resolve skein with it
+# while non-test builds resolve it without. That feature split forced skein —
+# and its entire ~20-crate reverse-dependency tree — to recompile under two
+# different keys every CI run, defeating the build cache. Enabling it
+# unconditionally costs only a small static root bundle and keeps skein's
+# resolved feature set identical across every build, so the cache is shared.
+skein = { path = "../skein/crates/skein", features = [
+    "tls",
+    "tls-native-roots",
+    "tls-webpki-roots",
+] }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
