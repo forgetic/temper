@@ -1,0 +1,95 @@
+# depgraph-rules.toml
+#
+# Architectural dependency-graph rules for the temper workspace, enforced in CI
+# with `cargo depgraph-check check` (https://github.com/1898andCo/cargo-depgraph-check).
+#
+# The pipeline is a three-tier stack:   engine  →  worker  →  agent
+# Each tier may depend on its own internal crates plus the *leaf protocol crate*
+# at its boundary — never on the implementation crates of another tier.
+#
+#   temper-worker-protocol    engine <-> worker boundary (daemon exposes; worker consumes)
+#   temper-agent-protocol     worker <-> agent  boundary (worker exposes; agent consumes)
+#   temper-process-protocol   role-decision / external-responder contract (leaf, no deps)
+#
+# Each value below is the COMPLETE allowlist of internal deps for that crate;
+# any internal dependency not listed is a violation. Dev-dependencies are NOT
+# checked (`check_dev_deps = false`), which is what lets e2e/integration tests
+# cross tiers freely (e.g. the worker's tests drive the daemon + a fake agent).
+
+[rules]
+
+# ===========================================================================
+# ENGINE / CORE layer — the foundation that everything builds on. Must not
+# depend on any worker- or agent-implementation crate; only on other engine
+# crates and the leaf protocol crates the engine owns.
+# ===========================================================================
+temper-io-engine = []
+temper-forge = []
+temper-process-protocol = []
+temper-worker-protocol = []
+temper-worker-registry = ["temper-worker-protocol"]
+temper-forge-filesystem = ["temper-forge"]
+temper-forge-memory = ["temper-forge"]
+temper-forge-forgejo = ["temper-forge", "temper-io-engine"]
+temper-forge-github = ["temper-forge", "temper-io-engine"]
+temper-forgejo-ops = ["temper-io-engine"]
+temper-workflow = ["temper-forge"]
+temper-interaction = ["temper-forge", "temper-io-engine", "temper-process-protocol"]
+temper-runner = ["temper-forge", "temper-io-engine", "temper-process-protocol", "temper-workflow"]
+temper-coding-workspace = ["temper-forge", "temper-forgejo-ops", "temper-runner", "temper-workflow"]
+temper-wake = ["temper-io-engine", "temper-runner"]
+temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
+temper-reference-delivery-validator = ["temper-forge", "temper-forge-forgejo", "temper-io-engine", "temper-workflow"]
+temper-interaction-service = ["temper-forge", "temper-forge-forgejo", "temper-interaction", "temper-io-engine"]
+temper-trigger-forgejo = ["temper-forge", "temper-runner", "temper-wake"]
+temper-forgejo-provision = ["temper-forge", "temper-forge-forgejo", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-workflow"]
+# Legacy in-process "production worker" wiring — engine-side; it calls the Forge
+# directly via the runner. Distinct from the out-of-process temper-worker-orchestrator.
+temper-worker = ["temper-coding-workspace", "temper-forge", "temper-forge-forgejo", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-wake", "temper-workflow"]
+# The engine itself: serves the worker/daemon wire protocol. Touches only engine
+# crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
+temper-daemon = ["temper-forge", "temper-io-engine", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]
+
+# ===========================================================================
+# WORKER layer (formerly smith). Long-polls the daemon and speaks ONLY the
+# worker/daemon wire protocol upstream; owns the agent protocol downstream.
+# Never depends on an engine- or agent-implementation crate (rule 2).
+# ===========================================================================
+temper-worker-io-engine = []
+temper-worker-orchestrator = ["temper-worker-protocol", "temper-worker-io-engine", "temper-agent-protocol"]
+
+# ===========================================================================
+# AGENT layer (formerly anvil). Consumes the worker-exposed agent protocol.
+# Never depends on a worker- or engine-implementation crate (rule 3).
+# ===========================================================================
+temper-agent-io-engine = []
+temper-agent-protocol = []
+temper-agent-core = ["temper-agent-io-engine"]
+# NOTE / DIVERGENCE from rule 3: besides temper-agent-protocol (the protocol the
+# worker exposes), the agent also depends on temper-process-protocol — the
+# engine-owned role-decision contract it implements as an external responder.
+# Both are leaf serde contracts with zero internal deps, so no implementation
+# leaks across tiers; but it IS a second upstream protocol. Drop it from this
+# list if you want CI to force the agent down to exactly one protocol crate.
+temper-agent-runtime = ["temper-agent-core", "temper-agent-protocol", "temper-process-protocol"]
+
+# ===========================================================================
+# COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get
+# broad allowlists rather than tier rules.
+# ===========================================================================
+# The unified `temper` binary wires daemon + worker + agent together.
+temper = ["temper-agent-core", "temper-agent-io-engine", "temper-agent-protocol", "temper-agent-runtime", "temper-daemon", "temper-forge", "temper-forge-forgejo", "temper-forgejo-provision", "temper-interaction-service", "temper-io-engine", "temper-process-protocol", "temper-reference-delivery", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-worker-io-engine", "temper-worker-orchestrator", "temper-worker-protocol", "temper-workflow"]
+# Deterministic sim harness: runs the real daemon under skein's lab runtime.
+temper-sim = ["temper-daemon", "temper-io-engine", "temper-worker-protocol"]
+# Shared non-production test machinery (engine-side).
+temper-testing = ["temper-coding-workspace", "temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
+
+[options]
+# Every workspace member must be listed above (a new, unlisted crate fails CI).
+strict = true
+# Do NOT check dev-dependencies — this is the e2e/integration-test exception:
+# test code may cross tiers freely (worker tests use daemon code, and vice versa).
+check_dev_deps = false
+# A config entry naming a crate that no longer exists fails CI (keeps this file
+# honest as crates are added/removed/renamed).
+unmatched_config_entries = "error"
