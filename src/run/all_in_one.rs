@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
-use temper_agent_runtime::ProviderConfig;
-use temper_daemon::{
+use temper_agent::ProviderConfig;
+use temper_engine::{
     Daemon, DaemonRunConfig, ForgeApplier, HintedMechanical, LeaseApplier,
     MechanicalBackstopConfig, PollBackstopConfig, RepositorySet, RepositoryTarget, ResultApplier,
     RoleFeedMode, RoleFeedTarget, RoleRoutingApplier, WebhookConfig, config::role_tokens_from_env,
@@ -25,7 +25,7 @@ use temper_daemon::{
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_worker_orchestrator::{
+use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
     role_identities_from_env, run_worker_with_transport,
 };
@@ -122,7 +122,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
             targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Normal),
             cadence: daemon_config.poll_cadence,
         },
-        temper_daemon::system_clock(),
+        temper_engine::system_clock(),
     );
 
     // The mechanical backstop runs the workflow's automation transitions (stamp
@@ -146,7 +146,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
                 cadence,
                 lease_policy: LeasePolicy::new(lease_ttl),
             },
-            temper_daemon::system_clock(),
+            temper_engine::system_clock(),
         );
         mechanical_trigger = Some(Arc::new(trigger));
     }
@@ -236,7 +236,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
             workflow,
             compiled,
             webhook_config,
-            temper_daemon::system_clock(),
+            temper_engine::system_clock(),
             mechanical_trigger,
         )
     } else {
@@ -248,7 +248,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
     // route) can reach this process. Always served, even without a webhook secret,
     // matching the split daemon; the "serving on" line is the readiness signal
     // operators (and the example launchers) wait for.
-    let server = temper_daemon::serve(&handle, &daemon, daemon_config.bind)
+    let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
     eprintln!("temper-daemon: serving on {}", server.local_addr());
@@ -290,9 +290,9 @@ impl InProcessProgressSink {
     }
 }
 
-impl temper_worker_orchestrator::ProgressSink for InProcessProgressSink {
+impl temper_worker::ProgressSink for InProcessProgressSink {
     fn report(&self, progress: temper_agent_protocol::StepProgress) {
-        let message = temper_worker_orchestrator::progress_message(&self.worker_id, &progress);
+        let message = temper_worker::progress_message(&self.worker_id, &progress);
         let daemon = self.daemon.clone();
         // Fire-and-forget on a detached task: the daemon applies progress
         // idempotently; a failure here is observability loss, not a turn failure.
@@ -357,7 +357,7 @@ fn applier_chain(
         LeasePolicy::new(lease_ttl),
         daemon_id,
         Arc::new(ForgeApplier::new(forge, workflow)),
-        temper_daemon::system_clock(),
+        temper_engine::system_clock(),
     ))
 }
 

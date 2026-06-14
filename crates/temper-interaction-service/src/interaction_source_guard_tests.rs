@@ -69,7 +69,7 @@ fn should_skip(path: &Path) -> bool {
             // interaction *framework* from hardcoding a concrete profile; the
             // agent layer is exactly where a concrete profile belongs.
             || name == "temper-agent-core"
-            || name == "temper-agent-runtime"
+            || name == "temper-agent"
             || name == "temper-agent-io-engine"
     })
 }

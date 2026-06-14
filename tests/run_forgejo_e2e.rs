@@ -147,7 +147,7 @@ fn temper_run_opens_an_engineer_pr_via_fake_llm() {
 
 /// The fake engineer agent: first turn writes the product file via the `write`
 /// tool, second turn returns the result JSON. Mirrors the
-/// `temper-agent-runtime` jig coding-agent fixture.
+/// `temper-agent` jig coding-agent fixture.
 fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
     // The agent's cwd is the workspace root; the single repo is checked out in
     // its sibling dir (the repo's last path segment, ADR 0023). Write the product

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent_core::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
-use temper_agent_runtime::ProviderConfig;
+use temper_agent::ProviderConfig;
 use tongs::provider::StreamOptions;
 use tongs::tools::create_read_tool;
 use tongs::tools::{ToolEffects, ToolRegistry};

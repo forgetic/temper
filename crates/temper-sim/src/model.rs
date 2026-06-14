@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use temper_daemon::{InFlightJob, ResultApplier};
+use temper_engine::{InFlightJob, ResultApplier};
 use temper_io_engine::Spawner;
 use temper_worker_protocol::JobResult;
 

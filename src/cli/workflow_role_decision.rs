@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use temper_agent_runtime::{
+use temper_agent::{
     AuthChoice, ProviderConfig, WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV,
     WorkflowRoleDecisionRequest, WorkflowRoleDecisionResponder,
 };

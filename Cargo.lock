@@ -1295,11 +1295,11 @@ dependencies = [
  "jig-server",
  "serde_json",
  "skein",
+ "temper-agent",
  "temper-agent-core",
  "temper-agent-io-engine",
  "temper-agent-protocol",
- "temper-agent-runtime",
- "temper-daemon",
+ "temper-engine",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
@@ -1312,10 +1312,30 @@ dependencies = [
  "temper-reference-delivery-validator",
  "temper-testing",
  "temper-trigger-forgejo",
+ "temper-worker",
  "temper-worker-io-engine",
- "temper-worker-orchestrator",
  "temper-worker-protocol",
  "temper-workflow",
+]
+
+[[package]]
+name = "temper-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jig-core",
+ "jig-record",
+ "jig-runtime",
+ "jig-server",
+ "serde",
+ "serde_json",
+ "skein",
+ "temper-agent-core",
+ "temper-agent-io-engine",
+ "temper-agent-protocol",
+ "temper-process-protocol",
+ "tongs",
+ "uuid",
 ]
 
 [[package]]
@@ -1329,8 +1349,8 @@ dependencies = [
  "serde",
  "serde_json",
  "skein",
+ "temper-agent",
  "temper-agent-io-engine",
- "temper-agent-runtime",
  "tongs",
 ]
 
@@ -1352,27 +1372,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-agent-runtime"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "jig-core",
- "jig-record",
- "jig-runtime",
- "jig-server",
- "serde",
- "serde_json",
- "skein",
- "temper-agent-core",
- "temper-agent-io-engine",
- "temper-agent-protocol",
- "temper-process-protocol",
- "tongs",
- "uuid",
-]
-
-[[package]]
-name = "temper-daemon"
+name = "temper-engine"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -1575,7 +1575,7 @@ dependencies = [
  "chrono",
  "serde_json",
  "skein",
- "temper-daemon",
+ "temper-engine",
  "temper-forge",
  "temper-forge-memory",
  "temper-io-engine",
@@ -1595,7 +1595,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "skein",
- "temper-daemon",
+ "temper-engine",
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-forgejo",
@@ -1635,28 +1635,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-worker-io-engine"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "skein",
-]
-
-[[package]]
-name = "temper-worker-orchestrator"
+name = "temper-worker"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
  "skein",
  "temper-agent-protocol",
- "temper-daemon",
+ "temper-engine",
  "temper-io-engine",
  "temper-worker-io-engine",
  "temper-worker-protocol",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "temper-worker-io-engine"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "skein",
 ]
 
 [[package]]

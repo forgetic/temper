@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 use skein::lab::LabConfig;
 use skein::lab::chaos::ChaosConfig;
-use temper_daemon::Daemon;
+use temper_engine::Daemon;
 use temper_worker_protocol::Artifact;
 
 use crate::model::{ModelApplier, ModelState, SimModel};

@@ -44,7 +44,7 @@ temper-trigger-forgejo = ["temper-forge", "temper-runner", "temper-wake"]
 temper-forgejo-provision = ["temper-forge", "temper-forge-forgejo", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
-temper-daemon = ["temper-forge", "temper-io-engine", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]
+temper-engine = ["temper-forge", "temper-io-engine", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]
 
 # ===========================================================================
 # WORKER layer (formerly smith). Long-polls the daemon and speaks ONLY the
@@ -52,7 +52,7 @@ temper-daemon = ["temper-forge", "temper-io-engine", "temper-runner", "temper-wo
 # Never depends on an engine- or agent-implementation crate (rule 2).
 # ===========================================================================
 temper-worker-io-engine = []
-temper-worker-orchestrator = ["temper-worker-protocol", "temper-worker-io-engine", "temper-agent-protocol"]
+temper-worker = ["temper-worker-protocol", "temper-worker-io-engine", "temper-agent-protocol"]
 
 # ===========================================================================
 # AGENT layer (formerly anvil). Consumes the worker-exposed agent protocol.
@@ -67,16 +67,16 @@ temper-agent-core = ["temper-agent-io-engine"]
 # Both are leaf serde contracts with zero internal deps, so no implementation
 # leaks across tiers; but it IS a second upstream protocol. Drop it from this
 # list if you want CI to force the agent down to exactly one protocol crate.
-temper-agent-runtime = ["temper-agent-core", "temper-agent-protocol", "temper-process-protocol"]
+temper-agent = ["temper-agent-core", "temper-agent-protocol", "temper-process-protocol"]
 
 # ===========================================================================
 # COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get
 # broad allowlists rather than tier rules.
 # ===========================================================================
 # The unified `temper` binary wires daemon + worker + agent together.
-temper = ["temper-agent-core", "temper-agent-io-engine", "temper-agent-protocol", "temper-agent-runtime", "temper-daemon", "temper-forge", "temper-forge-forgejo", "temper-forgejo-provision", "temper-interaction-service", "temper-io-engine", "temper-process-protocol", "temper-reference-delivery", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-worker-io-engine", "temper-worker-orchestrator", "temper-worker-protocol", "temper-workflow"]
+temper = ["temper-agent-core", "temper-agent-io-engine", "temper-agent-protocol", "temper-agent", "temper-engine", "temper-forge", "temper-forge-forgejo", "temper-forgejo-provision", "temper-interaction-service", "temper-io-engine", "temper-process-protocol", "temper-reference-delivery", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-worker-io-engine", "temper-worker", "temper-worker-protocol", "temper-workflow"]
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
-temper-sim = ["temper-daemon", "temper-io-engine", "temper-worker-protocol"]
+temper-sim = ["temper-engine", "temper-io-engine", "temper-worker-protocol"]
 # Shared non-production test machinery (engine-side).
 temper-testing = ["temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
 

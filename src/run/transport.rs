@@ -7,8 +7,8 @@
 use std::future::Future;
 
 use skein::cx::Cx;
-use temper_daemon::Daemon;
-use temper_worker_orchestrator::Transport;
+use temper_engine::Daemon;
+use temper_worker::Transport;
 use temper_worker_protocol::WorkerProtocolMessage;
 
 /// In-process worker→daemon transport. Wraps a clone of the same [`Daemon`] the

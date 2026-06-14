@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use temper_agent_runtime::{AuthChoice, ProductManagerResponder, ProviderConfig};
+use temper_agent::{AuthChoice, ProductManagerResponder, ProviderConfig};
 use temper_process_protocol::ConversationRequest;
 
 pub fn main<I>(args: I) -> std::process::ExitCode

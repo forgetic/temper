@@ -36,7 +36,7 @@ use temper_agent_protocol::{
     CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
     WorkspaceResult,
 };
-use temper_agent_runtime::{
+use temper_agent::{
     AuthChoice, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
     run_coding_agent_native_with_hooks,
 };
@@ -565,7 +565,7 @@ impl temper_agent_core::TurnHook for Checkpointer {
 }
 
 #[async_trait::async_trait]
-impl temper_agent_runtime::CheckpointHook for Checkpointer {
+impl temper_agent::CheckpointHook for Checkpointer {
     async fn checkpoint(&self, label: &str) -> Result<Option<String>, String> {
         self.do_checkpoint(Some(label)).await
     }

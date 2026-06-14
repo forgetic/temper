@@ -1,0 +1,28 @@
+[package]
+name = "temper-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Standalone async daemon serving the Worker/Daemon wire protocol over DaemonCore."
+
+[dependencies]
+async-trait = { workspace = true }
+skein = { workspace = true }
+chrono = { workspace = true }
+hmac = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+temper-forge = { path = "../temper-forge" }
+temper-io-engine = { path = "../temper-io-engine" }
+temper-runner = { path = "../temper-runner" }
+temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-worker-registry = { path = "../temper-worker-registry" }
+temper-workflow = { path = "../temper-workflow" }
+
+[dev-dependencies]
+temper-forge-memory = { path = "../temper-forge-memory" }
+
+[lints]
+workspace = true

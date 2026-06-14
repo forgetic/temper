@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
-use temper_agent_runtime::ProviderConfig;
+use temper_agent::ProviderConfig;
 use tongs::provider::StreamOptions;
 use tongs::tools::ToolRegistry;
 use tongs::tools::{create_read_tool, create_write_tool};
