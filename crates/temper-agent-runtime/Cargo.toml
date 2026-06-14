@@ -19,12 +19,12 @@ uuid.workspace = true
 
 [dev-dependencies]
 temper-agent-io-engine = { path = "../temper-agent-io-engine" }
-jig-server = { path = "../../../jig/crates/jig-server" }
-jig-core = { path = "../../../jig/crates/jig-core" }
-jig-record = { path = "../../../jig/crates/jig-record" }
+jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
+jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
+jig-record = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 # Test-only: the jig-record request oracle runs its recorder on a jig-runtime
 # (skein) thread.
-jig-runtime = { path = "../../../jig/crates/jig-runtime" }
+jig-runtime = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 
 [lints]
 workspace = true
