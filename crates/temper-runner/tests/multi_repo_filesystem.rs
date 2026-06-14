@@ -7,11 +7,12 @@
 use async_trait::async_trait;
 use chrono::Duration;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{
-    CreateIssue, Forge, IssueState, ItemNumber, RepositoryId, RepositoryPath, UpdateIssue,
+    ChangeSource, ChangeSourceEvent, CreateIssue, Forge, IssueState, ItemNumber, RepositoryId,
+    RepositoryPath, UpdateIssue,
 };
 use temper_forge_filesystem::FilesystemForge;
 use temper_runner::{
@@ -21,9 +22,9 @@ use temper_runner::{
 };
 use temper_testing::{block_on, runner_config, ts, user, workflow};
 use temper_workflow::{
-    parse_metadata_block, ArtifactKindId, ArtifactSource, CommandId, CommandJournal, CommandRecord,
-    CommandState, ExecutionContext, InMemoryJournal, LeaseManager, LeasePolicy, QueueId, RoleId,
-    TransitionId, WorkflowEffect,
+    ArtifactKindId, ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState,
+    ExecutionContext, InMemoryJournal, LeaseManager, LeasePolicy, QueueId, RoleId, TransitionId,
+    WorkflowEffect, parse_metadata_block,
 };
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
@@ -95,6 +96,48 @@ impl Agent<FilesystemForge> for ClaimReady {
             return Ok(true);
         }
         Ok(false)
+    }
+}
+
+/// A [`ChangeSource`] that fires a one-shot signal the first time the wake loop
+/// blocks on it — i.e. the moment the worker has completed its initial scan and
+/// parked waiting for a hint. Lets a test deliver a state change *after* that
+/// point deterministically, instead of racing a fixed sleep against the scan.
+struct ParkSignalSource<S> {
+    inner: S,
+    parked: Option<std::sync::mpsc::SyncSender<()>>,
+}
+
+impl<S> ParkSignalSource<S> {
+    fn new(inner: S) -> (Self, std::sync::mpsc::Receiver<()>) {
+        // Bounded(1) so the send never blocks: the loop must not stall waiting
+        // for the test to observe the signal.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        (
+            Self {
+                inner,
+                parked: Some(tx),
+            },
+            rx,
+        )
+    }
+
+    fn signal_parked(&mut self) {
+        // Only the first wait counts; later waits are ordinary hint reads.
+        if let Some(tx) = self.parked.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+impl<S: ChangeSource> ChangeSource for ParkSignalSource<S> {
+    fn recv_timeout(&mut self, timeout: StdDuration) -> ChangeSourceEvent {
+        self.signal_parked();
+        self.inner.recv_timeout(timeout)
+    }
+
+    fn try_recv(&mut self) -> ChangeSourceEvent {
+        self.inner.try_recv()
     }
 }
 
@@ -415,9 +458,11 @@ fn fresh_mechanical_wrapper_recovers_one_repo_without_mutating_another() {
         issue_labels(&observer, &repo_b.id, untouched_b),
         vec!["code".to_string(), "ready".to_string()]
     );
-    assert!(block_on(journal_b.list())
-        .expect("journal lists")
-        .is_empty());
+    assert!(
+        block_on(journal_b.list())
+            .expect("journal lists")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -442,7 +487,12 @@ fn filesystem_hint_from_one_repo_wakes_shared_multi_repo_worker() {
     let compiled = workflow.compile();
     let role = RoleId::new("engineer");
     let worker_forge = root.forge().as_user(user("engineer", "engineer"));
-    let mut hints = worker_forge.subscribe_hints();
+    // Wrap the hint source so we learn exactly when the worker has finished its
+    // initial scan and parked waiting for a hint. Adding repo B's `ready` label
+    // before that point would let the initial scan claim it, so `ticks` would be
+    // 1 (no hint-triggered scan) — the flake this test used to exhibit under CI
+    // load when a fixed 50ms sleep lost the race against a slow initial scan.
+    let (mut hints, parked) = ParkSignalSource::new(worker_forge.subscribe_hints());
     let claimed = Arc::new(AtomicBool::new(false));
     let worker = MultiRepoRoleWorker::new(
         &workflow,
@@ -468,7 +518,12 @@ fn filesystem_hint_from_one_repo_wakes_shared_multi_repo_worker() {
             ))
         });
 
-        std::thread::sleep(StdDuration::from_millis(50));
+        // Block until the worker has completed its initial (no-op) scan and is
+        // parked on the hint source. Only then make repo B ready, guaranteeing
+        // the claim happens on the hint-triggered scan, not the initial one.
+        parked
+            .recv()
+            .expect("worker parks on the hint source after its initial scan");
         block_on(producer.update_issue(
             &issue_b.id,
             UpdateIssue {
