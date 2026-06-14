@@ -24,3 +24,33 @@ dev-test-quick = "test --workspace --all-targets"
 dev-test-build = "test --workspace --all-targets --no-run"
 dev-test-full = "nextest run --workspace --run-ignored all"
 dev-doc = "doc --workspace --no-deps"
+
+# Editing a sibling repo (skein, jig, tongs, bench) alongside temper.
+#
+# The siblings are git dependencies pinned by rev so the build-cache key is
+# checkout-location-independent (a path dependency bakes the absolute checkout
+# path into Cargo's -Cmetadata, which diverges between local and CI and misses
+# the warm cache wholesale). To pick up uncommitted local sibling changes,
+# redirect the git source to your local checkout with a [patch] override.
+#
+# Cargo honours [patch] from this config file (Cargo 1.11+), so you do NOT need
+# to touch Cargo.toml. Uncomment the lines for the sibling you are editing,
+# adjusting the paths to your checkout layout (defaults assume flat siblings
+# under ../). DO NOT COMMIT an active patch — it would point CI at paths that
+# do not exist there. (Each git key must match the dependency URL in Cargo.toml
+# exactly, including the http://127.0.0.1:3000 host.)
+#
+# [patch."http://127.0.0.1:3000/ai/skein.git"]
+# skein = { path = "../skein/crates/skein" }
+#
+# [patch."http://127.0.0.1:3000/ai/jig.git"]
+# jig-core = { path = "../jig/crates/jig-core" }
+# jig-server = { path = "../jig/crates/jig-server" }
+# jig-record = { path = "../jig/crates/jig-record" }
+# jig-runtime = { path = "../jig/crates/jig-runtime" }
+#
+# [patch."http://127.0.0.1:3000/ai/tongs.git"]
+# tongs = { path = "../tongs/crates/tongs" }
+#
+# [patch."http://127.0.0.1:3000/ai/bench.git"]
+# bench-forgejo = { path = "../bench/crates/bench-forgejo" }
