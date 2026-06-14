@@ -40,13 +40,18 @@ fn main() {
 
     let verdict = std::env::var("SMITH_FAKE_AGENT_VERDICT").ok();
 
-    // Writable head path: leave a product diff for the worker to commit/push.
+    // Writable head path: leave a product diff in each writable repo's sibling
+    // dir for the worker to commit/push (the cwd is the workspace root; ADR
+    // 0023). A single-repo job has exactly one writable repo.
     if verdict.is_none() {
         let file = std::env::var("SMITH_FAKE_AGENT_FILE").unwrap_or_else(|_| "GREETING.md".into());
         let content = std::env::var("SMITH_FAKE_AGENT_CONTENT")
             .unwrap_or_else(|_| "hello from the fake agent\n".into());
         let cwd = std::env::current_dir().expect("cwd");
-        std::fs::write(cwd.join(&file), content).expect("write product file");
+        for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+            let repo_dir = cwd.join(&repo.dir);
+            std::fs::write(repo_dir.join(&file), content.as_bytes()).expect("write product file");
+        }
     }
 
     emit(&StepProgress {

@@ -148,6 +148,10 @@ fn temper_run_opens_an_engineer_pr_via_fake_llm() {
 /// tool, second turn returns the result JSON. Mirrors the
 /// `temper-agent-runtime` jig coding-agent fixture.
 fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
+    // The agent's cwd is the workspace root; the single repo is checked out in
+    // its sibling dir (the repo's last path segment, ADR 0023). Write the product
+    // into that subdir so the worker sees a diff in the repo and pushes it.
+    let product_path = format!("{REPO_NAME}/DELIVERY.md");
     FakeLlm::start(Script::rule(move |view| {
         if view.prior_tool_results == 0 {
             Reply {
@@ -155,7 +159,7 @@ fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
                     id: "call_write".to_string(),
                     name: "write".to_string(),
                     args: serde_json::json!({
-                        "path": "DELIVERY.md",
+                        "path": product_path.clone(),
                         "content": "delivered by temper run\n"
                     }),
                 }],

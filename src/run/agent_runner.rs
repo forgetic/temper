@@ -91,6 +91,9 @@ impl AgentRunner for InProcessAgentRunner {
                 config_dir.as_deref(),
                 enable_subagents,
                 None,
+                // turn_hook: per-turn checkpointing in-process is issue #166.
+                None,
+                // checkpoint_hook: ditto (the model-driven checkpoint tool).
                 None,
             )
             .await

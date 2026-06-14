@@ -28,11 +28,12 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use temper_agent_runtime::{
-    AuthChoice, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
+    AuthChoice, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
     run_coding_agent_native_with_hooks,
 };
 use temper_agent_protocol::{
@@ -135,6 +136,12 @@ where
         let run_checkpointer = checkpointer.clone();
         let run_cwd = cwd.clone();
         temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+            // The same Checkpointer is both the mechanical backstop (TurnHook)
+            // and the model-driven checkpoint tool (CheckpointHook).
+            let turn_hook = run_checkpointer
+                .clone()
+                .map(|hook| hook as Arc<dyn temper_agent_core::TurnHook>);
+            let checkpoint_hook = run_checkpointer.map(|hook| hook as Arc<dyn CheckpointHook>);
             run_coding_agent_native_with_hooks(
                 handle,
                 &provider,
@@ -144,7 +151,8 @@ where
                 options.config_dir.as_deref(),
                 options.enable_subagents,
                 resume_note.as_deref(),
-                run_checkpointer.map(|hook| hook as Arc<dyn temper_agent_core::TurnHook>),
+                turn_hook,
+                checkpoint_hook,
             )
             .await
         })
@@ -235,10 +243,27 @@ struct ResumeState {
 /// opportunistic crash-recovery point, never a reason to fail the run. The
 /// marker is emitted only after the push succeeds (it never claims more than
 /// the branch holds).
-struct Checkpointer {
-    cwd: PathBuf,
+/// One writable repo a checkpoint commits + pushes: its sibling dir under the
+/// workspace root, the work branch to push, and the base branch to diff against
+/// (ADR 0023 — a single-repo job is just one of these).
+#[derive(Clone)]
+struct CheckpointRepo {
+    dir: String,
     branch: String,
     base_branch: String,
+}
+
+/// How close to the deadline (lease expiry) the backstop fires.
+const CHECKPOINT_DEADLINE_MARGIN: Duration = Duration::from_secs(60);
+/// Fallback backstop cadence when no deadline is supplied, so crash-recovery is
+/// still bounded.
+const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(300);
+
+struct Checkpointer {
+    cwd: PathBuf,
+    /// The writable repos to checkpoint, in manifest order (the first is the
+    /// primary — home of the coordinating artifact).
+    repos: Vec<CheckpointRepo>,
     correlation_key: String,
     /// Per-role git identity + push token from the worker-provided env
     /// (`TEMPER_FORGEJO_{USER,EMAIL,TOKEN}_<ROLE>`); absent values degrade
@@ -246,6 +271,15 @@ struct Checkpointer {
     user: Option<String>,
     email: Option<String>,
     token: Option<String>,
+    /// Wall-clock job deadline (lease expiry) from `TEMPER_AGENT_DEADLINE` (unix
+    /// seconds), if the host supplied one. The backstop fires within
+    /// [`CHECKPOINT_DEADLINE_MARGIN`] of it.
+    deadline: Option<SystemTime>,
+    /// Fallback backstop cadence used when there is no deadline (or between
+    /// deadline checks).
+    interval: Duration,
+    /// When the last successful checkpoint pushed — drives the interval backstop.
+    last_checkpoint: Mutex<Instant>,
     /// The next step index to hand out (1 = the Started marker).
     step: AtomicU32,
 }
@@ -259,14 +293,38 @@ impl Checkpointer {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         };
+        let repos = context
+            .repos
+            .iter()
+            .filter(|repo| repo.is_writable())
+            .map(|repo| CheckpointRepo {
+                dir: repo.dir.clone(),
+                branch: repo.branch_hint.clone().unwrap_or_default(),
+                base_branch: repo.base_branch.clone(),
+            })
+            .collect();
+        // The host (worker/daemon, which owns the lease) may pass the job
+        // deadline as a unix timestamp; absent it, the backstop falls back to a
+        // fixed interval.
+        let deadline = std::env::var("TEMPER_AGENT_DEADLINE")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
+        let interval = std::env::var("TEMPER_AGENT_CHECKPOINT_INTERVAL_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL);
         Self {
             cwd: cwd.to_path_buf(),
-            branch: context.branch_hint.clone(),
-            base_branch: context.base_branch.clone(),
+            repos,
             correlation_key: context.correlation_key.clone(),
             user: env("TEMPER_FORGEJO_USER"),
             email: env("TEMPER_FORGEJO_EMAIL"),
             token: env("TEMPER_FORGEJO_TOKEN"),
+            deadline,
+            interval,
+            last_checkpoint: Mutex::new(Instant::now()),
             step: AtomicU32::new(2),
         }
     }
@@ -283,76 +341,120 @@ impl Checkpointer {
         self.step.load(Ordering::SeqCst)
     }
 
-    /// Inspects the prepared branch for checkpoints a previous run pushed.
+    /// Inspects each writable repo's prepared branch for checkpoints a previous
+    /// run pushed, aggregating across repos. Resume is keyed off the whole
+    /// workspace: any repo with checkpoint commits means the run is resuming.
     fn detect_resume(&self) -> Option<ResumeState> {
-        let range = format!("origin/{}..HEAD", self.base_branch);
-        let count: u32 = self
-            .git(&["rev-list", "--count", &range])
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?;
-        if count == 0 {
+        let mut total_commits = 0u32;
+        let mut last_step = 0u32;
+        let mut head_sha = None;
+        let mut logs = Vec::new();
+        for repo in &self.repos {
+            let range = format!("origin/{}..HEAD", repo.base_branch);
+            let Some(count) = self
+                .git_in(&repo.dir, &["rev-list", "--count", &range])
+                .ok()
+                .and_then(|out| out.trim().parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if count == 0 {
+                continue;
+            }
+            let log = self
+                .git_in(&repo.dir, &["log", "--reverse", "--format=%s", &range])
+                .ok()
+                .map(|out| out.trim().to_string())
+                .unwrap_or_default();
+            let repo_last_step = log
+                .lines()
+                .filter_map(parse_checkpoint_step)
+                .max()
+                .unwrap_or(count + 1);
+            total_commits += count;
+            last_step = last_step.max(repo_last_step);
+            if head_sha.is_none() {
+                head_sha = self
+                    .git_in(&repo.dir, &["rev-parse", "HEAD"])
+                    .ok()
+                    .map(|out| out.trim().to_string());
+            }
+            if !log.is_empty() {
+                logs.push(format!("{}:\n{log}", repo.dir));
+            }
+        }
+        if total_commits == 0 {
             return None;
         }
-        let log = self
-            .git(&["log", "--reverse", "--format=%s", &range])
-            .ok()?
-            .trim()
-            .to_string();
-        let head_sha = self.git(&["rev-parse", "HEAD"]).ok()?.trim().to_string();
-        let last_step = log
-            .lines()
-            .filter_map(parse_checkpoint_step)
-            .max()
-            .unwrap_or(count + 1);
         Some(ResumeState {
-            commits: count,
+            commits: total_commits,
             last_step,
-            head_sha,
-            log,
+            head_sha: head_sha.unwrap_or_default(),
+            log: logs.join("\n"),
         })
     }
 
-    /// One commit+push checkpoint; returns the pushed sha, or `None` when the
-    /// tree was clean.
-    fn checkpoint_sync(&self, step: u32, turn: usize) -> Result<Option<String>, String> {
-        self.git(&["add", "-A"])?;
-        // Exit 0 = nothing staged.
-        if self.git(&["diff", "--cached", "--quiet"]).is_ok() {
-            return Ok(None);
+    /// One commit+push checkpoint across every writable repo; returns the first
+    /// pushed sha (the primary's), or `None` when no repo had staged changes.
+    /// `label` is the model's milestone summary (a backstop checkpoint passes
+    /// `None`).
+    fn checkpoint_sync(&self, step: u32, label: Option<&str>) -> Result<Option<String>, String> {
+        let summary = label.unwrap_or("work in progress");
+        let mut pushed = None;
+        for repo in &self.repos {
+            self.git_in(&repo.dir, &["add", "-A"])?;
+            // Exit 0 = nothing staged in this repo.
+            if self
+                .git_in(&repo.dir, &["diff", "--cached", "--quiet"])
+                .is_ok()
+            {
+                continue;
+            }
+            let user = self.user.as_deref().unwrap_or("temper-agent");
+            let email = self.email.as_deref().unwrap_or("temper-agent@localhost");
+            self.git_in(
+                &repo.dir,
+                &[
+                    "-c",
+                    &format!("user.name={user}"),
+                    "-c",
+                    &format!("user.email={email}"),
+                    "commit",
+                    "-m",
+                    &format!("checkpoint(step {step}): {summary}"),
+                ],
+            )?;
+            let push_ref = format!("HEAD:refs/heads/{}", repo.branch);
+            match self.token.as_deref() {
+                Some(token) => self.git_in(
+                    &repo.dir,
+                    &[
+                        "-c",
+                        &format!("http.extraheader=AUTHORIZATION: token {token}"),
+                        "push",
+                        "origin",
+                        &push_ref,
+                    ],
+                )?,
+                None => self.git_in(&repo.dir, &["push", "origin", &push_ref])?,
+            };
+            let sha = self
+                .git_in(&repo.dir, &["rev-parse", "HEAD"])?
+                .trim()
+                .to_string();
+            if pushed.is_none() {
+                pushed = Some(sha);
+            }
         }
-        let user = self.user.as_deref().unwrap_or("temper-agent");
-        let email = self.email.as_deref().unwrap_or("temper-agent@localhost");
-        self.git(&[
-            "-c",
-            &format!("user.name={user}"),
-            "-c",
-            &format!("user.email={email}"),
-            "commit",
-            "-m",
-            &format!("checkpoint(step {step}): work in progress (turn {turn})"),
-        ])?;
-        let push_ref = format!("HEAD:refs/heads/{}", self.branch);
-        match self.token.as_deref() {
-            Some(token) => self.git(&[
-                "-c",
-                &format!("http.extraheader=AUTHORIZATION: token {token}"),
-                "push",
-                "origin",
-                &push_ref,
-            ])?,
-            None => self.git(&["push", "origin", &push_ref])?,
-        };
-        Ok(Some(self.git(&["rev-parse", "HEAD"])?.trim().to_string()))
+        Ok(pushed)
     }
 
-    /// Runs git in the checkout, returning stdout. Errors carry the command
-    /// and stderr with the push token redacted.
-    fn git(&self, args: &[&str]) -> Result<String, String> {
+    /// Runs git in a repo's checkout dir (under the workspace root), returning
+    /// stdout. Errors carry the command and stderr with the push token redacted.
+    fn git_in(&self, dir: &str, args: &[&str]) -> Result<String, String> {
         let output = std::process::Command::new("git")
             .args(args)
-            .current_dir(&self.cwd)
+            .current_dir(self.cwd.join(dir))
             .output()
             .map_err(|error| format!("spawn git: {error}"))?;
         if !output.status.success() {
@@ -371,57 +473,122 @@ impl Checkpointer {
     }
 }
 
-#[async_trait::async_trait]
-impl temper_agent_core::TurnHook for Checkpointer {
-    async fn before_model_call(&self, turn: usize) {
-        // Turn 0 is the first model call: nothing has run yet.
-        if turn == 0 {
-            return;
-        }
+impl Checkpointer {
+    /// One commit+push checkpoint (off the loop thread), emitting the marker and
+    /// resetting the backstop timer; returns the pushed sha (`None` if nothing
+    /// changed). Shared by the model-driven `checkpoint` tool ([`CheckpointHook`])
+    /// and the mechanical backstop.
+    async fn do_checkpoint(&self, label: Option<&str>) -> Result<Option<String>, String> {
         let step = self.step.fetch_add(1, Ordering::SeqCst);
-        let this = CheckpointJob {
+        let job = CheckpointJob {
             cwd: self.cwd.clone(),
-            branch: self.branch.clone(),
-            base_branch: self.base_branch.clone(),
+            repos: self.repos.clone(),
             correlation_key: self.correlation_key.clone(),
             user: self.user.clone(),
             email: self.email.clone(),
             token: self.token.clone(),
         };
-        let outcome =
-            skein::runtime::spawn_blocking(move || this.into_checkpointer().checkpoint_sync(step, turn))
-                .await;
+        let label_owned = label.map(str::to_string);
+        let outcome = skein::runtime::spawn_blocking(move || {
+            job.into_checkpointer()
+                .checkpoint_sync(step, label_owned.as_deref())
+        })
+        .await;
         match outcome {
-            Ok(Some(sha)) => emit(&StepProgress {
-                correlation_key: self.correlation_key.clone(),
-                step,
-                status: format!("push checkpoint (turn {turn})"),
-                state: StepState::Done,
-                pushed_sha: Some(sha),
-                note: None,
-            }),
+            Ok(Some(sha)) => {
+                if let Ok(mut last) = self.last_checkpoint.lock() {
+                    *last = Instant::now();
+                }
+                emit(&StepProgress {
+                    correlation_key: self.correlation_key.clone(),
+                    step,
+                    status: label.unwrap_or("push checkpoint").to_string(),
+                    state: StepState::Done,
+                    pushed_sha: Some(sha.clone()),
+                    note: None,
+                });
+                Ok(Some(sha))
+            }
             Ok(None) => {
                 // Clean tree: hand the unused step index back when possible
                 // (best effort — a concurrent bump just leaves a gap).
-                let _ = self.step.compare_exchange(
-                    step + 1,
-                    step,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                let _ =
+                    self.step
+                        .compare_exchange(step + 1, step, Ordering::SeqCst, Ordering::SeqCst);
+                Ok(None)
             }
-            Err(error) => {
-                eprintln!("temper-agent: checkpoint skipped: {error}");
-            }
+            Err(error) => Err(error),
         }
     }
+
+    /// Whether the mechanical safety-net checkpoint is due: the job deadline
+    /// (lease expiry) is within the margin, or the checkpoint interval has
+    /// elapsed since the last push.
+    fn backstop_due(&self) -> bool {
+        let since_last = self
+            .last_checkpoint
+            .lock()
+            .map(|last| last.elapsed())
+            .unwrap_or(Duration::ZERO);
+        backstop_decision(
+            SystemTime::now(),
+            self.deadline,
+            CHECKPOINT_DEADLINE_MARGIN,
+            since_last,
+            self.interval,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl temper_agent_core::TurnHook for Checkpointer {
+    async fn before_model_call(&self, turn: usize) {
+        // Turn 0 is the first model call: nothing has run yet. Otherwise this is
+        // only a SAFETY NET — the model drives normal checkpoints via the
+        // `checkpoint` tool, so we push here only when the deadline is near or
+        // the interval has elapsed, not every turn.
+        if turn == 0 || !self.backstop_due() {
+            return;
+        }
+        if let Err(error) = self.do_checkpoint(None).await {
+            eprintln!("temper-agent: backstop checkpoint skipped: {error}");
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl temper_agent_runtime::CheckpointHook for Checkpointer {
+    async fn checkpoint(&self, label: &str) -> Result<Option<String>, String> {
+        self.do_checkpoint(Some(label)).await
+    }
+}
+
+/// Pure backstop decision: checkpoint when the deadline is within `margin`
+/// (or already passed), or when `interval` has elapsed since the last push.
+fn backstop_decision(
+    now: SystemTime,
+    deadline: Option<SystemTime>,
+    margin: Duration,
+    since_last: Duration,
+    interval: Duration,
+) -> bool {
+    if let Some(deadline) = deadline {
+        match deadline.duration_since(now) {
+            Ok(remaining) => {
+                if remaining <= margin {
+                    return true;
+                }
+            }
+            Err(_) => return true,
+        }
+    }
+    since_last >= interval
 }
 
 /// The owned snapshot a blocking checkpoint runs from.
 struct CheckpointJob {
     cwd: PathBuf,
-    branch: String,
-    base_branch: String,
+    repos: Vec<CheckpointRepo>,
     correlation_key: String,
     user: Option<String>,
     email: Option<String>,
@@ -430,14 +597,18 @@ struct CheckpointJob {
 
 impl CheckpointJob {
     fn into_checkpointer(self) -> Checkpointer {
+        // This snapshot only runs `checkpoint_sync` off-thread; the
+        // backstop/timing fields are unused here.
         Checkpointer {
             cwd: self.cwd,
-            branch: self.branch,
-            base_branch: self.base_branch,
+            repos: self.repos,
             correlation_key: self.correlation_key,
             user: self.user,
             email: self.email,
             token: self.token,
+            deadline: None,
+            interval: DEFAULT_CHECKPOINT_INTERVAL,
+            last_checkpoint: Mutex::new(Instant::now()),
             step: AtomicU32::new(0),
         }
     }
@@ -517,7 +688,58 @@ fn parse_auth(value: &str) -> Result<AuthChoice, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_checkpoint_step;
+    use super::{backstop_decision, parse_checkpoint_step};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn backstop_fires_near_deadline_or_after_interval() {
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let margin = Duration::from_secs(60);
+        let interval = Duration::from_secs(300);
+        let recent = Duration::from_secs(10);
+
+        // Deadline comfortably ahead and interval not elapsed: not due (the
+        // model drives normal checkpoints).
+        assert!(!backstop_decision(
+            now,
+            Some(now + Duration::from_secs(600)),
+            margin,
+            recent,
+            interval
+        ));
+        // Deadline within the margin: due.
+        assert!(backstop_decision(
+            now,
+            Some(now + Duration::from_secs(30)),
+            margin,
+            recent,
+            interval
+        ));
+        // Deadline already passed: due.
+        assert!(backstop_decision(
+            now,
+            Some(now - Duration::from_secs(5)),
+            margin,
+            Duration::ZERO,
+            interval
+        ));
+        // No deadline, interval elapsed: due (bounded crash-recovery fallback).
+        assert!(backstop_decision(
+            now,
+            None,
+            margin,
+            Duration::from_secs(301),
+            interval
+        ));
+        // No deadline, interval not elapsed: not due.
+        assert!(!backstop_decision(
+            now,
+            None,
+            margin,
+            Duration::from_secs(120),
+            interval
+        ));
+    }
 
     #[test]
     fn parses_checkpoint_subjects() {

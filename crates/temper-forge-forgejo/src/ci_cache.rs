@@ -111,19 +111,41 @@ impl CiReadCache {
     /// see the same key is "known but not settled" without a separate structure;
     /// [`Self::get_terminal`] still forces a re-read until it settles.
     pub(crate) fn store(&self, key: CiReadKey, jobs: Vec<CiJob>) {
-        let terminal = is_terminal(&jobs);
+        let terminal = is_terminal(&jobs, &key.head_sha);
         let mut reads = self.reads.lock().expect("ci read cache mutex poisoned");
         reads.insert(key, CachedCiRead { jobs, terminal });
     }
 }
 
-/// A read is terminal when it has at least one job and every job has completed.
+/// A read is terminal (safe to reuse for `head_sha`) when it has at least one
+/// completed job **for that head SHA** and every job has completed.
 ///
-/// An empty read is **not** terminal: "no runs yet" is a transient pre-CI state
+/// Requiring a job at the key's own head SHA — not merely "all jobs completed" —
+/// closes a fail→pass race: the web-UI read matches a PR's runs by head **branch**
+/// (so the prior commit's terminal run is returned too), and right after a new
+/// push the *new* head's run may not be registered yet. A read at the new head
+/// SHA that contains only the prior commit's completed (failing) run would
+/// otherwise be frozen as that head's terminal verdict, so the daemon would never
+/// observe the new run go green. Treating such a read as non-terminal forces a
+/// re-read until the head's own run appears.
+///
+/// An empty read is also non-terminal: "no runs yet" is a transient pre-CI state
 /// (the runner has not picked the push up), so it must be re-read rather than
 /// frozen as "done with nothing".
-fn is_terminal(jobs: &[CiJob]) -> bool {
-    !jobs.is_empty() && jobs.iter().all(|job| job.status == CiJobStatus::Completed)
+fn is_terminal(jobs: &[CiJob], head_sha: &str) -> bool {
+    !jobs.is_empty()
+        && jobs.iter().all(|job| job.status == CiJobStatus::Completed)
+        && jobs.iter().any(|job| sha_matches(&job.commit_sha, head_sha))
+}
+
+/// Whether a job's commit SHA identifies the target head SHA, tolerating the
+/// short-vs-full SHA mismatch between the web-UI scrape (short) and the resolved
+/// head (full): a match is a non-empty common prefix of one within the other.
+fn sha_matches(job_sha: &str, head_sha: &str) -> bool {
+    if job_sha.is_empty() || head_sha.is_empty() {
+        return false;
+    }
+    head_sha.starts_with(job_sha) || job_sha.starts_with(head_sha)
 }
 
 #[cfg(test)]
@@ -132,11 +154,15 @@ mod tests {
     use temper_forge::{CiJobConclusion, CiJobId, RepositoryId};
 
     fn job(status: CiJobStatus, conclusion: Option<CiJobConclusion>) -> CiJob {
+        job_at("sha-a", status, conclusion)
+    }
+
+    fn job_at(commit_sha: &str, status: CiJobStatus, conclusion: Option<CiJobConclusion>) -> CiJob {
         CiJob {
             id: CiJobId::new("forgejo:acme/widgets:actions:1:0:1"),
             repo_id: RepositoryId::new("forgejo:acme/widgets"),
             pull_request_id: None,
-            commit_sha: "abc1234".to_string(),
+            commit_sha: commit_sha.to_string(),
             name: "build".to_string(),
             status,
             conclusion,
@@ -214,6 +240,72 @@ mod tests {
         assert!(
             cache.get_terminal(&key("sha-a")).is_none(),
             "if any job is still running the read is not terminal"
+        );
+    }
+
+    #[test]
+    fn completed_read_without_a_job_for_this_head_is_not_terminal() {
+        // The fail→pass race: a read at the *new* head SHA returns only the prior
+        // commit's completed (failing) run, because the branch match surfaces it
+        // before the new head's own run is registered. That must NOT be frozen as
+        // the new head's terminal verdict, or the daemon never sees CI go green.
+        let cache = CiReadCache::default();
+        cache.store(
+            key("new-head"),
+            vec![job_at(
+                "old-head",
+                CiJobStatus::Completed,
+                Some(CiJobConclusion::Failure),
+            )],
+        );
+        assert!(
+            cache.get_terminal(&key("new-head")).is_none(),
+            "a completed read with no job for this head SHA must be re-read, not frozen"
+        );
+    }
+
+    #[test]
+    fn fail_then_pass_for_this_head_is_terminal() {
+        // Once the new head's own run appears (alongside the prior commit's), the
+        // read carries a job for this head SHA and is safely terminal/reusable.
+        let cache = CiReadCache::default();
+        cache.store(
+            key("new-head"),
+            vec![
+                job_at(
+                    "old-head",
+                    CiJobStatus::Completed,
+                    Some(CiJobConclusion::Failure),
+                ),
+                job_at(
+                    "new-head",
+                    CiJobStatus::Completed,
+                    Some(CiJobConclusion::Success),
+                ),
+            ],
+        );
+        assert!(
+            cache.get_terminal(&key("new-head")).is_some(),
+            "a read containing this head SHA's completed run is terminal"
+        );
+    }
+
+    #[test]
+    fn short_sha_job_matches_full_head_sha() {
+        // The web-UI scrape yields short SHAs; the resolved head is full. A read
+        // whose job carries the short prefix of the full head SHA is terminal.
+        let cache = CiReadCache::default();
+        cache.store(
+            key("abc1234def5678"),
+            vec![job_at(
+                "abc1234",
+                CiJobStatus::Completed,
+                Some(CiJobConclusion::Success),
+            )],
+        );
+        assert!(
+            cache.get_terminal(&key("abc1234def5678")).is_some(),
+            "a short job SHA that prefixes the full head SHA matches"
         );
     }
 }

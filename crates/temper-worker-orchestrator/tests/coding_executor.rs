@@ -198,16 +198,19 @@ struct ExpectedWorkspaceContext<'a> {
 }
 
 fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorkspaceContext<'_>) {
-    assert_eq!(context.repository.id, "acme/service");
-    assert_eq!(context.repository.owner, "acme");
-    assert_eq!(context.repository.name, "service");
-    assert_eq!(context.repository.default_branch, "main");
+    let primary = context.primary().expect("primary repo present");
+    assert_eq!(primary.id, "acme/service");
+    assert_eq!(primary.owner, "acme");
+    assert_eq!(primary.name, "service");
+    assert_eq!(primary.default_branch, "main");
+    assert_eq!(primary.dir, "service");
+    assert!(primary.is_writable());
     assert_eq!(context.work_item.role, expected.role);
     assert_eq!(context.work_item.queue, expected.queue);
     assert_eq!(context.work_item.kind, expected.kind);
     assert_eq!(context.work_item.target, expected.target);
-    assert_eq!(context.base_branch, "main");
-    assert_eq!(context.branch_hint, expected.branch_hint);
+    assert_eq!(primary.base_branch, "main");
+    assert_eq!(primary.branch_hint.as_deref(), Some(expected.branch_hint));
     assert_eq!(context.correlation_key, expected.correlation_key);
     assert_eq!(context.checkout.as_deref(), Some(expected.checkout));
     assert_eq!(
@@ -246,7 +249,7 @@ async fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
             .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
             .await,
     );
-    let workspace_path = fixture.workspace_root.join("acme__service/engineer");
+    let workspace_path = fixture.workspace_root.join("engineer/service");
     assert!(workspace_path.exists());
     let sentinel = workspace_path.join(".git/smith-sentinel");
     fs::write(&sentinel, "keep object cache").expect("write sentinel");
@@ -714,12 +717,19 @@ impl AgentRunner for FakeAgentRunner {
         _progress: &dyn ProgressSink,
     ) -> Result<WorkspaceResult, AgentRunError> {
         *self.captured.lock().expect("capture lock") = Some(context.clone());
+        // The agent's cwd is the workspace root; it edits inside each repo's
+        // sibling dir. This fake operates on the primary repo (ADR 0023).
+        let primary_dir = context
+            .primary()
+            .map(|repo| repo.dir.clone())
+            .unwrap_or_default();
+        let repo_cwd = cwd.join(&primary_dir);
         *self.observed_head_sha.lock().expect("head lock") =
-            Some(git_output(["-C", path_str(cwd), "rev-parse", "HEAD"]));
+            Some(git_output(["-C", path_str(&repo_cwd), "rev-parse", "HEAD"]));
 
         match self.behavior {
             AgentBehavior::Success => {
-                Self::write_diff(cwd);
+                Self::write_diff(&repo_cwd);
                 Ok(WorkspaceResult {
                     summary: Some("did the work".to_string()),
                     ..WorkspaceResult::default()
@@ -733,12 +743,15 @@ impl AgentRunner for FakeAgentRunner {
                 ..WorkspaceResult::default()
             }),
             AgentBehavior::CheckpointCommits => {
-                Self::write_diff(cwd);
-                let work_branch = context.branch_hint.clone();
-                git_output(["-C", path_str(cwd), "add", "-A"]);
+                Self::write_diff(&repo_cwd);
+                let work_branch = context
+                    .primary()
+                    .and_then(|repo| repo.branch_hint.clone())
+                    .expect("primary repo carries a branch hint");
+                git_output(["-C", path_str(&repo_cwd), "add", "-A"]);
                 git_output([
                     "-C",
-                    path_str(cwd),
+                    path_str(&repo_cwd),
                     "-c",
                     "user.name=Agent Checkpoint",
                     "-c",
@@ -749,7 +762,7 @@ impl AgentRunner for FakeAgentRunner {
                 ]);
                 git_output([
                     "-C",
-                    path_str(cwd),
+                    path_str(&repo_cwd),
                     "push",
                     "origin",
                     &format!("HEAD:refs/heads/{work_branch}"),
@@ -771,7 +784,7 @@ impl AgentRunner for FakeAgentRunner {
                 ..WorkspaceResult::default()
             }),
             AgentBehavior::ReadOnlyVerdictWithDiff => {
-                Self::write_diff(cwd);
+                Self::write_diff(&repo_cwd);
                 Ok(WorkspaceResult {
                     verdict: Some("ready_code".to_string()),
                     body: Some("rewritten".to_string()),
@@ -1267,7 +1280,7 @@ fn assert_workspace_clean(fixture: &Fixture, role: &str) {
     assert_eq!(
         git_output([
             "-C",
-            path_str(&fixture.workspace_root.join("acme__service").join(role)),
+            path_str(&fixture.workspace_root.join(role).join("service")),
             "status",
             "--porcelain=v1",
             "--untracked-files=all",

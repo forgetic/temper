@@ -231,12 +231,16 @@ mod tests {
     fn test_context() -> WorkspaceContext {
         use temper_agent_protocol::{WorkspaceRepository, WorkspaceWorkItem};
         WorkspaceContext {
-            repository: WorkspaceRepository {
+            repos: vec![WorkspaceRepository {
                 id: "acme/svc".to_string(),
                 owner: "acme".to_string(),
                 name: "svc".to_string(),
                 default_branch: "main".to_string(),
-            },
+                dir: "svc".to_string(),
+                access: "writable".to_string(),
+                base_branch: "main".to_string(),
+                branch_hint: Some("smith/engineer/issue-7".to_string()),
+            }],
             work_item: WorkspaceWorkItem {
                 role: "engineer".to_string(),
                 queue: "code".to_string(),
@@ -244,8 +248,6 @@ mod tests {
                 target: "Issue { number: ItemNumber(7) }".to_string(),
                 context: "{}".to_string(),
             },
-            base_branch: "main".to_string(),
-            branch_hint: "smith/engineer/issue-7".to_string(),
             correlation_key: "pr-for-code-7".to_string(),
             checkout: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),

@@ -9,12 +9,18 @@ use crate::prompt_overlays::PromptOverlays;
 use std::path::PathBuf;
 
 const CONTEXT_FIXTURE: &str = r#"{
-  "repository": {
-    "id": "repo-1",
-    "owner": "acme",
-    "name": "service",
-    "default_branch": "main"
-  },
+  "repos": [
+    {
+      "id": "repo-1",
+      "owner": "acme",
+      "name": "service",
+      "default_branch": "main",
+      "dir": "service",
+      "access": "writable",
+      "base_branch": "main",
+      "branch_hint": "agent/pr-for-code-7"
+    }
+  ],
   "work_item": {
     "role": "engineer",
     "queue": "code_ready",
@@ -22,8 +28,6 @@ const CONTEXT_FIXTURE: &str = r#"{
     "target": "Issue { number: ItemNumber(7) }",
     "context": "{\"artifact\":{\"title\":\"Implement docs\"}}"
   },
-  "base_branch": "main",
-  "branch_hint": "agent/pr-for-code-7",
   "correlation_key": "pr-for-code-7",
   "checkout": "writable",
   "allowed_verdicts": ["needs_architect"],
@@ -38,13 +42,44 @@ fn parsed_fixture() -> WorkspaceContext {
     serde_json::from_str(CONTEXT_FIXTURE).expect("context fixture parses")
 }
 
+/// A one-writable-repo context whose repo is checked out at `dir` under the
+/// workspace root, for `validate_contract` tests.
+fn context_with_writable_dir(dir: &str) -> WorkspaceContext {
+    WorkspaceContext {
+        repos: vec![WorkspaceRepository {
+            id: "r".to_string(),
+            owner: "o".to_string(),
+            name: "n".to_string(),
+            default_branch: "main".to_string(),
+            dir: dir.to_string(),
+            access: "writable".to_string(),
+            base_branch: "main".to_string(),
+            branch_hint: Some("agent/x".to_string()),
+        }],
+        work_item: WorkspaceWorkItem {
+            role: "engineer".to_string(),
+            queue: "code_ready".to_string(),
+            kind: "code".to_string(),
+            target: "Issue { number: ItemNumber(1) }".to_string(),
+            context: "{}".to_string(),
+        },
+        correlation_key: "x".to_string(),
+        checkout: Some("writable".to_string()),
+        allowed_verdicts: Vec::new(),
+        guidance: WorkspaceGuidance::default(),
+    }
+}
+
 #[test]
 fn parses_full_context_fixture() {
     let context = parsed_fixture();
-    assert_eq!(context.repository.id, "repo-1");
-    assert_eq!(context.repository.owner, "acme");
-    assert_eq!(context.repository.name, "service");
-    assert_eq!(context.repository.default_branch, "main");
+    let primary = context.primary().expect("primary repo present");
+    assert_eq!(primary.id, "repo-1");
+    assert_eq!(primary.owner, "acme");
+    assert_eq!(primary.name, "service");
+    assert_eq!(primary.default_branch, "main");
+    assert_eq!(primary.dir, "service");
+    assert!(primary.is_writable());
     assert_eq!(context.work_item.role, "engineer");
     assert_eq!(context.work_item.queue, "code_ready");
     assert_eq!(context.work_item.kind, "code");
@@ -53,8 +88,8 @@ fn parses_full_context_fixture() {
         context.work_item.context,
         r#"{"artifact":{"title":"Implement docs"}}"#
     );
-    assert_eq!(context.base_branch, "main");
-    assert_eq!(context.branch_hint, "agent/pr-for-code-7");
+    assert_eq!(primary.base_branch, "main");
+    assert_eq!(primary.branch_hint.as_deref(), Some("agent/pr-for-code-7"));
     assert_eq!(context.correlation_key, "pr-for-code-7");
     assert_eq!(context.checkout.as_deref(), Some("writable"));
     assert_eq!(
@@ -78,10 +113,8 @@ fn parses_full_context_fixture() {
 #[test]
 fn parses_context_without_optional_guidance_and_checkout() {
     let minimal = r#"{
-      "repository": { "id": "r", "owner": "o", "name": "n", "default_branch": "main" },
+      "repos": [{ "id": "r", "owner": "o", "name": "n", "default_branch": "main", "dir": "n", "access": "writable", "base_branch": "main", "branch_hint": "agent/x" }],
       "work_item": { "role": "architect", "queue": "triage", "kind": "code", "target": "Issue { number: ItemNumber(1) }", "context": "{}" },
-      "base_branch": "main",
-      "branch_hint": "agent/x",
       "correlation_key": "x",
       "guidance": {}
     }"#;
@@ -281,11 +314,13 @@ fn system_prompt_engineer_keeps_head_path_under_constraint() {
 fn user_context_includes_work_item_and_guidance() {
     let context = parsed_fixture();
     let rendered = user_context(&context);
-    assert!(rendered.contains("Repository: acme/service"));
+    assert!(rendered.contains("acme/service"));
+    assert!(rendered.contains("dir: service/"));
+    assert!(rendered.contains("access: writable"));
     assert!(rendered.contains("Role: engineer"));
     assert!(rendered.contains("Target: Issue { number: ItemNumber(7) }"));
-    assert!(rendered.contains("Base branch: main"));
-    assert!(rendered.contains("Branch hint: agent/pr-for-code-7"));
+    assert!(rendered.contains("base branch: main"));
+    assert!(rendered.contains("work branch: agent/pr-for-code-7"));
     assert!(rendered.contains("Correlation key: pr-for-code-7"));
     assert!(rendered.contains("Checkout mode: writable"));
     assert!(rendered.contains("Make a real product change."));
@@ -377,7 +412,10 @@ fn validate_contract_engineer_requires_diff_or_verdict() {
     let temp = std::env::temp_dir().join(format!("anvil-agent-test-{}", std::process::id()));
     std::fs::create_dir_all(&temp).expect("temp dir");
     let empty = WorkspaceResult::default();
-    let error = validate_contract(Capability::CodingWorkspace, &empty, &temp, "main")
+    // The writable repo's dir resolves to the non-git temp dir, so there is no
+    // product.
+    let context = context_with_writable_dir("");
+    let error = validate_contract(Capability::CodingWorkspace, &empty, &temp, &context)
         .expect_err("no product");
     assert!(matches!(error, CodingAgentError::NoProduct));
 
@@ -386,7 +424,7 @@ fn validate_contract_engineer_requires_diff_or_verdict() {
         verdict: Some("needs_architect".to_string()),
         ..WorkspaceResult::default()
     };
-    validate_contract(Capability::CodingWorkspace, &with_verdict, &temp, "main")
+    validate_contract(Capability::CodingWorkspace, &with_verdict, &temp, &context)
         .expect("verdict satisfies engineer contract");
     let _ = std::fs::remove_dir_all(&temp);
 }
@@ -394,16 +432,17 @@ fn validate_contract_engineer_requires_diff_or_verdict() {
 #[test]
 fn validate_contract_readonly_requires_verdict() {
     let cwd = std::env::temp_dir();
+    let context = context_with_writable_dir("");
     let no_verdict = WorkspaceResult {
         summary: Some("looked around".to_string()),
         ..WorkspaceResult::default()
     };
     assert!(matches!(
-        validate_contract(Capability::TriageWorkspace, &no_verdict, &cwd, "main"),
+        validate_contract(Capability::TriageWorkspace, &no_verdict, &cwd, &context),
         Err(CodingAgentError::AgentStopped(_))
     ));
     assert!(matches!(
-        validate_contract(Capability::ReviewWorkspace, &no_verdict, &cwd, "main"),
+        validate_contract(Capability::ReviewWorkspace, &no_verdict, &cwd, &context),
         Err(CodingAgentError::AgentStopped(_))
     ));
 
@@ -411,7 +450,7 @@ fn validate_contract_readonly_requires_verdict() {
         verdict: Some("approve".to_string()),
         ..WorkspaceResult::default()
     };
-    validate_contract(Capability::ReviewWorkspace, &approved, &cwd, "main")
+    validate_contract(Capability::ReviewWorkspace, &approved, &cwd, &context)
         .expect("verdict satisfies reviewer contract");
 }
 
