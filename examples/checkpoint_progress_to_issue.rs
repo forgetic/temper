@@ -30,11 +30,9 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(Noop));
     let mut context = Context::from_waker(&waker);
     let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => panic!("in-memory forge futures should not park"),
-        }
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("in-memory forge futures should not park"),
     }
 }
 
