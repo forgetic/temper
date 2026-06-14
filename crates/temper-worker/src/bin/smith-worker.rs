@@ -1,37 +1,25 @@
-// SPDX-License-Identifier: MPL-2.0
-
-//! `temper worker` — the orchestration worker: long-polls the daemon and runs
-//! role/coding jobs. Links **no** agent/LLM code; every coding job runs
-//! out-of-process behind the temper-agent-protocol (the worker spawns the
-//! `temper-agent` program, or any operator-provided coder).
-
-use std::process::ExitCode;
 use std::sync::Arc;
 
 use temper_worker::{
     AgentSurface, CodingExecutor, CodingExecutorConfig, ExecutorSelection, OutOfProcessRunner,
-    ParseOutcome, StubExecutor, USAGE, WorkerConfig, role_identities_from_env, run_worker,
+    ParseOutcome, StubExecutor, USAGE, role_identities_from_env, run_worker,
 };
 
-pub fn main<I>(args: I) -> ExitCode
-where
-    I: Iterator<Item = String>,
-{
-    match temper_worker::config::parse(args) {
+fn main() {
+    let outcome = temper_worker::config::parse(std::env::args().skip(1));
+    match outcome {
         Ok(ParseOutcome::Help) => {
             println!("usage: {USAGE}");
-            ExitCode::SUCCESS
         }
-        Ok(ParseOutcome::Run(config)) => match run(config) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
+        Ok(ParseOutcome::Run(config)) => {
+            if let Err(error) = run(config) {
                 eprintln!("temper-worker: {error}");
-                ExitCode::from(2)
+                std::process::exit(2);
             }
-        },
+        }
         Err(error) => {
             eprintln!("temper-worker: {error}\nusage: {USAGE}");
-            ExitCode::from(2)
+            std::process::exit(2);
         }
     }
 }
@@ -39,11 +27,11 @@ where
 /// Builds the selected executor and runs the worker on the skein runtime.
 ///
 /// The worker links **no** agent/LLM code: every coding job runs out-of-process
-/// behind the temper-agent-protocol. The worker spawns the agent program (the
-/// `temper-agent` binary by default, or any operator-provided coder), relaying
-/// its step-progress checkpoints. Credentials are the agent process's concern —
-/// it preflights its own provider login at job start.
-fn run(config: WorkerConfig) -> Result<(), String> {
+/// behind the `smith-agent-protocol`. The worker spawns the agent program
+/// (the `anvil-agent` binary by default, or any operator-provided coder),
+/// relaying its step-progress checkpoints. Credentials are the agent process's
+/// concern — it preflights its own provider login at job start.
+fn run(config: temper_worker::WorkerConfig) -> Result<(), String> {
     match config.executor.clone() {
         ExecutorSelection::Stub => {
             let executor = Arc::new(StubExecutor::success());
@@ -68,8 +56,8 @@ fn run(config: WorkerConfig) -> Result<(), String> {
             };
 
             // Both surfaces resolve to a command the out-of-process runner spawns:
-            // the temper-agent surface assembles `temper-agent` + auth/iteration
-            // flags; an external command is passed through verbatim.
+            // the temper-agent surface assembles `temper-agent` + auth/iteration flags;
+            // an external command is passed through verbatim.
             let command = match surface.agent {
                 AgentSurface::AnvilNative(agent) => agent.into_command(),
                 AgentSurface::ExternalCommand(command) => command,

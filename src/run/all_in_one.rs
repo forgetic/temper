@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use skein::runtime::RuntimeHandle;
-use temper_agent_runtime::ProviderConfig;
-use temper_daemon::{
+use temper_agent::ProviderConfig;
+use temper_engine::{
     Daemon, DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig,
     PollBackstopConfig, RepositorySet, RepositoryTarget, ResultApplier, RoleFeedMode,
     RoleFeedTarget, RoleRoutingApplier, config::role_tokens_from_env, spawn_mechanical_backstop,
@@ -25,7 +25,7 @@ use temper_daemon::{
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_worker_orchestrator::{
+use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
     role_identities_from_env, run_worker_with_transport,
 };
@@ -122,7 +122,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
             targets: role_feed_targets(&repo_ids, &daemon_config.roles),
             cadence: daemon_config.poll_cadence,
         },
-        temper_daemon::system_clock(),
+        temper_engine::system_clock(),
     );
 
     // The mechanical backstop runs the workflow's automation transitions (stamp
@@ -140,7 +140,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
                 cadence,
                 lease_policy: LeasePolicy::new(lease_ttl),
             },
-            temper_daemon::system_clock(),
+            temper_engine::system_clock(),
         );
     }
 
@@ -242,9 +242,9 @@ impl InProcessProgressSink {
     }
 }
 
-impl temper_worker_orchestrator::ProgressSink for InProcessProgressSink {
+impl temper_worker::ProgressSink for InProcessProgressSink {
     fn report(&self, progress: temper_agent_protocol::StepProgress) {
-        let message = temper_worker_orchestrator::progress_message(&self.worker_id, &progress);
+        let message = temper_worker::progress_message(&self.worker_id, &progress);
         let daemon = self.daemon.clone();
         // Fire-and-forget on a detached task: the daemon applies progress
         // idempotently; a failure here is observability loss, not a turn failure.
@@ -309,7 +309,7 @@ fn applier_chain(
         LeasePolicy::new(lease_ttl),
         daemon_id,
         Arc::new(ForgeApplier::new(forge, workflow)),
-        temper_daemon::system_clock(),
+        temper_engine::system_clock(),
     ))
 }
 

@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use temper_daemon::{
+use temper_engine::{
     Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget, spawn_poll_backstop,
 };
 use temper_forge::{CreateIssue, CreateRepository, Forge, RepositoryId, UserId};

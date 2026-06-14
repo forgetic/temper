@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use temper_daemon::Daemon;
-use temper_worker_orchestrator::Transport;
+use temper_engine::Daemon;
+use temper_worker::Transport;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, JobResult, Poll, Register, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,

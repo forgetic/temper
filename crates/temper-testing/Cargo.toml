@@ -54,7 +54,7 @@ temper-io-engine = { path = "../temper-io-engine" }
 [dev-dependencies]
 # The hermetic daemon-worker contract test boots an in-process daemon transport
 # and serves it on an ephemeral local port.
-temper-daemon = { path = "../temper-daemon" }
+temper-engine = { path = "../temper-engine" }
 
 [lints]
 workspace = true

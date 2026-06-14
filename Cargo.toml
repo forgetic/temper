@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/temper-daemon",
+    "crates/temper-engine",
     "crates/temper-workflow",
     "crates/temper-forge",
     "crates/temper-process-protocol",
@@ -25,11 +25,11 @@ members = [
     # Merged from smith (the orchestration worker):
     "crates/temper-agent-protocol",
     "crates/temper-worker-io-engine",
-    "crates/temper-worker-orchestrator",
+    "crates/temper-worker",
     # Merged from anvil (the coding/decision agent):
     "crates/temper-agent-core",
     "crates/temper-agent-io-engine",
-    "crates/temper-agent-runtime",
+    "crates/temper-agent",
 ]
 resolver = "2"
 
@@ -49,7 +49,7 @@ default = ["unified"]
 
 # Capability features — each gates the crates and subcommands for one role.
 daemon = [
-    "dep:temper-daemon",
+    "dep:temper-engine",
     "dep:temper-forge",
     "dep:temper-forge-forgejo",
     "dep:temper-forgejo-provision",
@@ -62,7 +62,7 @@ daemon = [
     "dep:chrono",
 ]
 worker = [
-    "dep:temper-worker-orchestrator",
+    "dep:temper-worker",
     "dep:temper-worker-io-engine",
     "dep:temper-worker-protocol",
     "dep:temper-agent-protocol",
@@ -70,7 +70,7 @@ worker = [
 # The agent pulls tongs + jig + the LLM/HTTP stack. Worker/daemon-only builds
 # omit this feature and never compile it.
 agent = [
-    "dep:temper-agent-runtime",
+    "dep:temper-agent",
     "dep:temper-agent-core",
     "dep:temper-agent-io-engine",
     "dep:temper-agent-protocol",
@@ -90,7 +90,7 @@ skein = { workspace = true }
 async-trait = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-temper-daemon = { path = "crates/temper-daemon", optional = true }
+temper-engine = { path = "crates/temper-engine", optional = true }
 temper-forge = { path = "crates/temper-forge", optional = true }
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo", optional = true }
 temper-forgejo-provision = { path = "crates/temper-forgejo-provision", optional = true }
@@ -101,11 +101,11 @@ temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo", optional = tr
 temper-io-engine = { path = "crates/temper-io-engine", optional = true }
 temper-workflow = { path = "crates/temper-workflow", optional = true }
 # worker
-temper-worker-orchestrator = { path = "crates/temper-worker-orchestrator", optional = true }
+temper-worker = { path = "crates/temper-worker", optional = true }
 temper-worker-io-engine = { path = "crates/temper-worker-io-engine", optional = true }
 temper-worker-protocol = { path = "crates/temper-worker-protocol", optional = true }
 # agent (heavy: tongs + jig + LLM/HTTP enter only here)
-temper-agent-runtime = { path = "crates/temper-agent-runtime", optional = true }
+temper-agent = { path = "crates/temper-agent", optional = true }
 temper-agent-core = { path = "crates/temper-agent-core", optional = true }
 temper-agent-io-engine = { path = "crates/temper-agent-io-engine", optional = true }
 # shared protocol DTOs (worker↔agent and role-decision)
@@ -180,7 +180,7 @@ rust-version = "1.88"
 # builds still exclude (it enters only via the `agent` feature crates).
 # `tls-webpki-roots` is enabled here even though no temper crate needs the
 # webpki root bundle directly: a dev-dependency (jig-record, via
-# temper-agent-runtime) enables it, so test-scoped builds resolve skein with it
+# temper-agent) enables it, so test-scoped builds resolve skein with it
 # while non-test builds resolve it without. That feature split forced skein —
 # and its entire ~20-crate reverse-dependency tree — to recompile under two
 # different keys every CI run, defeating the build cache. Enabling it
