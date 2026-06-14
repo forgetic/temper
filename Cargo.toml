@@ -136,6 +136,10 @@ temper-workflow = { path = "crates/temper-workflow" }
 temper-io-engine = { path = "crates/temper-io-engine" }
 jig-core = { path = "../jig/crates/jig-core" }
 jig-server = { path = "../jig/crates/jig-server" }
+# `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
+# through the daemon's apply_progress against an in-memory forge.
+temper-forge-memory = { path = "crates/temper-forge-memory" }
+temper-worker-protocol = { path = "crates/temper-worker-protocol" }
 
 # Unified everything-binary: `temper run` + `temper daemon|worker|agent|...`.
 [[bin]]
