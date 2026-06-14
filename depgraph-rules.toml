@@ -36,16 +36,12 @@ temper-forgejo-ops = ["temper-io-engine"]
 temper-workflow = ["temper-forge"]
 temper-interaction = ["temper-forge", "temper-io-engine", "temper-process-protocol"]
 temper-runner = ["temper-forge", "temper-io-engine", "temper-process-protocol", "temper-workflow"]
-temper-coding-workspace = ["temper-forge", "temper-forgejo-ops", "temper-runner", "temper-workflow"]
 temper-wake = ["temper-io-engine", "temper-runner"]
 temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
 temper-reference-delivery-validator = ["temper-forge", "temper-forge-forgejo", "temper-io-engine", "temper-workflow"]
 temper-interaction-service = ["temper-forge", "temper-forge-forgejo", "temper-interaction", "temper-io-engine"]
 temper-trigger-forgejo = ["temper-forge", "temper-runner", "temper-wake"]
 temper-forgejo-provision = ["temper-forge", "temper-forge-forgejo", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-workflow"]
-# Legacy in-process "production worker" wiring — engine-side; it calls the Forge
-# directly via the runner. Distinct from the out-of-process temper-worker-orchestrator.
-temper-worker = ["temper-coding-workspace", "temper-forge", "temper-forge-forgejo", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-wake", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
 temper-daemon = ["temper-forge", "temper-io-engine", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]
@@ -82,7 +78,7 @@ temper = ["temper-agent-core", "temper-agent-io-engine", "temper-agent-protocol"
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-daemon", "temper-io-engine", "temper-worker-protocol"]
 # Shared non-production test machinery (engine-side).
-temper-testing = ["temper-coding-workspace", "temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
+temper-testing = ["temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-forgejo-ops", "temper-io-engine", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
 
 [options]
 # Every workspace member must be listed above (a new, unlisted crate fails CI).

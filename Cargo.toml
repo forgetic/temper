@@ -17,12 +17,10 @@ members = [
     "crates/temper-reference-delivery",
     "crates/temper-wake",
     "crates/temper-forgejo-ops",
-    "crates/temper-coding-workspace",
     "crates/temper-interaction-service",
     "crates/temper-trigger-forgejo",
     "crates/temper-forgejo-provision",
     "crates/temper-reference-delivery-validator",
-    "crates/temper-worker",
     "crates/temper-sim",
     # Merged from smith (the orchestration worker):
     "crates/temper-agent-protocol",
