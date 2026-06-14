@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn product_manager_reads_temper_process_request_fixture() {
         let fixture = include_str!(
-            "../../../../temper/crates/temper-process-protocol/fixtures/interactive-responder-request.json"
+            "../../temper-process-protocol/fixtures/interactive-responder-request.json"
         );
         let request: ConversationRequest = serde_json::from_str(fixture).expect("fixture parses");
         let mapped = ProductManagerRequest::from_conversation_request(&request).unwrap();
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn product_manager_reads_temper_process_reply_fixture_and_issue_payload_contract() {
         let fixture = include_str!(
-            "../../../../temper/crates/temper-process-protocol/fixtures/interactive-responder-reply.json"
+            "../../temper-process-protocol/fixtures/interactive-responder-reply.json"
         );
         let reply: ConversationReply = serde_json::from_str(fixture).expect("fixture parses");
         reply.validate().expect("fixture reply validates");

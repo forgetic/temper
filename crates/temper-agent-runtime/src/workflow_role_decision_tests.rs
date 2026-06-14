@@ -7,7 +7,7 @@ use temper_process_protocol::{
 
 fn fixture_request() -> WorkflowRoleDecisionRequest {
     serde_json::from_str(include_str!(
-        "../../../../temper/crates/temper-process-protocol/fixtures/workflow-role-decision-request.json"
+        "../../temper-process-protocol/fixtures/workflow-role-decision-request.json"
     ))
     .expect("Temper workflow-role decision fixture parses")
 }
