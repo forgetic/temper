@@ -217,7 +217,7 @@ impl<F: Forge + Send + Sync + 'static> MechanicalTrigger<F> {
 /// Tick errors are logged by [`run_mechanical_backstop_tick`] and skipped so a
 /// transient backend failure does not stop the daemon-owned backstop.
 pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + 'static>(
-    spawner: &std::sync::Arc<dyn temper_io_engine::Spawner>,
+    spawner: &std::sync::Arc<dyn temper_engine_io::Spawner>,
     forge: std::sync::Arc<F>,
     workflow: std::sync::Arc<ValidatedWorkflow>,
     config: MechanicalBackstopConfig,
@@ -226,7 +226,7 @@ pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + 'static>(
     let cadence = config.cadence;
     let trigger = MechanicalTrigger::new(forge, workflow, config, clock);
     let loop_trigger = trigger.clone();
-    temper_io_engine::spawn_cadence_loop(spawner, cadence, move || {
+    temper_engine_io::spawn_cadence_loop(spawner, cadence, move || {
         let trigger = loop_trigger.clone();
         async move {
             trigger.run(MechanicalScope::All).await;

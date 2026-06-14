@@ -294,7 +294,7 @@ fn admin_forge(server: &ForgejoServer, provisioned: &Provisioned) -> ForgejoForg
 /// Borrow-friendly block_on (no `'static` bound), matching the daemon e2e
 /// harness: builds a throwaway engine runtime and drives one future on it.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    temper_io_engine::build_runtime()
+    temper_engine_io::build_runtime()
         .expect("engine runtime builds")
         .block_on(future)
 }

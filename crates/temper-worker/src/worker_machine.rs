@@ -10,13 +10,13 @@
 //!
 //! Because it is pure, the whole worker control flow — the poll/dispatch/result
 //! interleavings the tokio `select!` loop used to hide — is unit-testable with
-//! [`temper_worker_io_engine::drive_sync`]: feed a completion sequence and assert on the
+//! [`temper_worker_io::drive_sync`]: feed a completion sequence and assert on the
 //! emitted requests, with no runtime and no races. That is also what makes it a
 //! target for skein-lab simulation later.
 
 use std::collections::BTreeSet;
 
-use temper_worker_io_engine::{EngineTime, Machine};
+use temper_worker_io::{EngineTime, Machine};
 use temper_worker_protocol::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
 
 pub use crate::config::WorkerParams;

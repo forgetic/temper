@@ -45,7 +45,7 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
 
 #[test]
 fn in_process_transport_registers_polls_and_assigns() {
-    temper_io_engine::block_on_with(|cx, handle| async move {
+    temper_engine_io::block_on_with(|cx, handle| async move {
         let daemon = Daemon::new(Arc::new(handle.clone()));
         let transport = InProcessTransport::new(daemon.clone());
 

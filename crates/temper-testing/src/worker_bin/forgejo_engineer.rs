@@ -42,7 +42,7 @@ use crate::worker_bin::args::CiSentinelKind;
 pub(crate) struct ForgejoEngineer {
     /// Clock capability of the engine task the agent runs under; REST
     /// request deadlines compute against it.
-    cx: temper_io_engine::Cx,
+    cx: temper_engine_io::Cx,
     base_url: String,
     /// The engineer's own role token (authorized to write the repo). Never logged.
     token: String,
@@ -51,7 +51,7 @@ pub(crate) struct ForgejoEngineer {
 
 impl ForgejoEngineer {
     pub(crate) fn new(
-        cx: temper_io_engine::Cx,
+        cx: temper_engine_io::Cx,
         base_url: String,
         token: String,
         sentinel: CiSentinelKind,
@@ -203,7 +203,7 @@ pub(crate) struct ForgejoBasicEngineer {
 
 impl ForgejoBasicEngineer {
     pub(crate) fn new(
-        cx: temper_io_engine::Cx,
+        cx: temper_engine_io::Cx,
         base_url: String,
         token: String,
         sentinel: CiSentinelKind,

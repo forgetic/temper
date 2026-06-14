@@ -49,13 +49,13 @@ const ENGINEER_ROLE: &str = "engineer";
 pub(super) fn run(args: &WorkerArgs, forgejo: &ForgejoArgs) -> Result<RunReport, RunError> {
     let args = args.clone();
     let forgejo = forgejo.clone();
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         run_async(&cx, &args, &forgejo).await
     })
 }
 
 async fn run_async(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     args: &WorkerArgs,
     forgejo: &ForgejoArgs,
 ) -> Result<RunReport, RunError> {
@@ -185,7 +185,7 @@ fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
 /// regardless of `role_id` so the registry is consistent; the worker then selects
 /// the one agent it runs.
 fn registry_with_forgejo_engineer(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     forgejo: &ForgejoArgs,
     behavior: RoleBehavior,
 ) -> temper_runner::AgentRegistry<dyn Forge> {

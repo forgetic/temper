@@ -109,7 +109,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         worker_id: extras.worker_id,
     };
 
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         run_all_in_one(handle, config).await
     })
 }

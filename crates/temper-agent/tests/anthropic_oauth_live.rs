@@ -51,7 +51,7 @@ fn anthropic_oauth_validation() {
     let start = Instant::now();
     let decision: RoleDecision = {
         let prompt = role.prompt.render();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        temper_agent_io::block_on_with(move |_cx, handle| async move {
             run_decision(handle, &provider, &prompt, &context).await
         })
         .expect("Anthropic OAuth generic role decision succeeds and parses")

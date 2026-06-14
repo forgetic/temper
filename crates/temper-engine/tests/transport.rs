@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde_json::json;
-use temper_io_engine::http::{HttpResponseData, JsonClient};
+use temper_engine_io::http::{HttpResponseData, JsonClient};
 use temper_worker_protocol::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register,
     ReleaseDisposition, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
@@ -118,7 +118,7 @@ fn assert_error(msg: WorkerProtocolMessage, code: ErrorCode) {
 
 #[test]
 fn register_then_poll_returns_assignment_when_matching_work_exists() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (daemon, url) = spawn(&handle).await;
         let client = JsonClient::new();
         assert_eq!(
@@ -158,7 +158,7 @@ fn register_then_poll_returns_assignment_when_matching_work_exists() {
 
 #[test]
 fn poll_with_no_work_blocks_then_returns_poll_timeout() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (_, url) = spawn(&handle).await;
         let client = JsonClient::new();
         assert_eq!(
@@ -188,7 +188,7 @@ fn poll_with_no_work_blocks_then_returns_poll_timeout() {
 
 #[test]
 fn poll_matches_worker_capability_only() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (daemon, url) = spawn(&handle).await;
         let client = JsonClient::new();
         daemon
@@ -219,7 +219,7 @@ fn poll_matches_worker_capability_only() {
 
 #[test]
 fn enqueue_mid_poll_wakes_and_assigns_promptly() {
-    temper_io_engine::block_on_with(move |cx, handle| async move {
+    temper_engine_io::block_on_with(move |cx, handle| async move {
         let (daemon, url) = spawn(&handle).await;
         let client = JsonClient::new();
         let _ = post(
@@ -238,7 +238,7 @@ fn enqueue_mid_poll_wakes_and_assigns_promptly() {
             (reply, started.elapsed())
         });
 
-        temper_io_engine::runtime::sleep_for(&cx, Duration::from_millis(200)).await;
+        temper_engine_io::runtime::sleep_for(&cx, Duration::from_millis(200)).await;
         daemon
             .enqueue_job(
                 "job-1",
@@ -260,7 +260,7 @@ fn enqueue_mid_poll_wakes_and_assigns_promptly() {
 
 #[test]
 fn saturated_worker_blocks_then_returns_poll_timeout() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (daemon, url) = spawn(&handle).await;
         let client = JsonClient::new();
         let _ = post(
@@ -293,7 +293,7 @@ fn saturated_worker_blocks_then_returns_poll_timeout() {
 }
 #[test]
 fn result_release_frees_capacity() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (daemon, url) = spawn(&handle).await;
         let client = JsonClient::new();
         let _ = post(
@@ -327,7 +327,7 @@ fn result_release_frees_capacity() {
 
 #[test]
 fn heartbeat_semantics() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (_, url) = spawn(&handle).await;
         let client = JsonClient::new();
         let _ = post(
@@ -349,7 +349,7 @@ fn heartbeat_semantics() {
 
 #[test]
 fn protocol_version_mismatch() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (_, url) = spawn(&handle).await;
         let client = JsonClient::new();
         let mut msg = register("worker-a", "engineer", "ai/temper", 1);
@@ -365,12 +365,12 @@ fn protocol_version_mismatch() {
 
 #[test]
 fn malformed_request_body() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let (_, url) = spawn(&handle).await;
-        let client = temper_io_engine::http::build_http_client();
-        let response = temper_io_engine::http::http_call(
+        let client = temper_engine_io::http::build_http_client();
+        let response = temper_engine_io::http::http_call(
             &client,
-            temper_io_engine::http::HttpCall {
+            temper_engine_io::http::HttpCall {
                 method: "POST".into(),
                 url,
                 headers: Vec::new(),

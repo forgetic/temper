@@ -7,7 +7,7 @@ members = [
     "crates/temper-worker-protocol",
     "crates/temper-worker-registry",
     "crates/temper-interaction",
-    "crates/temper-io-engine",
+    "crates/temper-engine-io",
     "crates/temper-forge-filesystem",
     "crates/temper-forge-memory",
     "crates/temper-forge-forgejo",
@@ -24,11 +24,11 @@ members = [
     "crates/temper-sim",
     # Merged from smith (the orchestration worker):
     "crates/temper-agent-protocol",
-    "crates/temper-worker-io-engine",
+    "crates/temper-worker-io",
     "crates/temper-worker",
     # Merged from anvil (the coding/decision agent):
     "crates/temper-agent-core",
-    "crates/temper-agent-io-engine",
+    "crates/temper-agent-io",
     "crates/temper-agent",
 ]
 resolver = "2"
@@ -57,13 +57,13 @@ daemon = [
     "dep:temper-reference-delivery",
     "dep:temper-reference-delivery-validator",
     "dep:temper-trigger-forgejo",
-    "dep:temper-io-engine",
+    "dep:temper-engine-io",
     "dep:temper-workflow",
     "dep:chrono",
 ]
 worker = [
     "dep:temper-worker",
-    "dep:temper-worker-io-engine",
+    "dep:temper-worker-io",
     "dep:temper-worker-protocol",
     "dep:temper-agent-protocol",
 ]
@@ -72,7 +72,7 @@ worker = [
 agent = [
     "dep:temper-agent",
     "dep:temper-agent-core",
-    "dep:temper-agent-io-engine",
+    "dep:temper-agent-io",
     "dep:temper-agent-protocol",
     "dep:temper-process-protocol",
     "dep:async-trait",
@@ -98,16 +98,16 @@ temper-interaction-service = { path = "crates/temper-interaction-service", optio
 temper-reference-delivery = { path = "crates/temper-reference-delivery", optional = true }
 temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator", optional = true }
 temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo", optional = true }
-temper-io-engine = { path = "crates/temper-io-engine", optional = true }
+temper-engine-io = { path = "crates/temper-engine-io", optional = true }
 temper-workflow = { path = "crates/temper-workflow", optional = true }
 # worker
 temper-worker = { path = "crates/temper-worker", optional = true }
-temper-worker-io-engine = { path = "crates/temper-worker-io-engine", optional = true }
+temper-worker-io = { path = "crates/temper-worker-io", optional = true }
 temper-worker-protocol = { path = "crates/temper-worker-protocol", optional = true }
 # agent (heavy: tongs + jig + LLM/HTTP enter only here)
 temper-agent = { path = "crates/temper-agent", optional = true }
 temper-agent-core = { path = "crates/temper-agent-core", optional = true }
-temper-agent-io-engine = { path = "crates/temper-agent-io-engine", optional = true }
+temper-agent-io = { path = "crates/temper-agent-io", optional = true }
 # shared protocol DTOs (worker↔agent and role-decision)
 temper-agent-protocol = { path = "crates/temper-agent-protocol", optional = true }
 temper-process-protocol = { path = "crates/temper-process-protocol", optional = true }
@@ -125,7 +125,7 @@ temper-testing = { path = "crates/temper-testing" }
 temper-forge = { path = "crates/temper-forge" }
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-workflow = { path = "crates/temper-workflow" }
-temper-io-engine = { path = "crates/temper-io-engine" }
+temper-engine-io = { path = "crates/temper-engine-io" }
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 # `examples/checkpoint_progress_to_issue`: replays agent step-progress markers

@@ -32,7 +32,7 @@ fn jig_coding_agent_native_tool_loop_creates_product_diff() {
 
     let context = workspace_context();
     let cwd = checkout.path().to_path_buf();
-    let result = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_coding_agent_native(handle, &provider, &context, &cwd, 6, None).await
     })
     .expect("native jig-backed coding agent succeeds");
@@ -224,7 +224,7 @@ fn jig_coding_agent_native_edits_two_sibling_repos_in_one_workspace() {
 
     let context = multi_repo_context();
     let cwd = workspace.path().to_path_buf();
-    let result = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_coding_agent_native(handle, &provider, &context, &cwd, 6, None).await
     })
     .expect("native multi-repo coding agent succeeds");
@@ -369,7 +369,7 @@ fn agent_invokes_the_checkpoint_tool_at_a_milestone() {
     let context = workspace_context();
     let cwd = checkout.path().to_path_buf();
     let hook = recorder.clone();
-    let result = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_coding_agent_native_with_hooks(
             handle,
             &provider,

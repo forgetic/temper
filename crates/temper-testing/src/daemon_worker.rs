@@ -227,11 +227,11 @@ fn parse_capability(raw: &str) -> Result<Capability, String> {
 /// re-poll. Transport errors are logged and retried (the e2e driver bounds the
 /// run with the stop-file and its own convergence timeout).
 pub async fn run(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     config: &DaemonWorkerConfig,
     identity: &GitIdentity,
 ) -> Result<(), String> {
-    let client = temper_io_engine::http::JsonClient::new();
+    let client = temper_engine_io::http::JsonClient::new();
     let endpoint = format!("{}/v1/message", config.daemon_url.trim_end_matches('/'));
 
     let register = WorkerProtocolMessage::Register(Register {
@@ -267,7 +267,7 @@ pub async fn run(
             Ok(response) => response,
             Err(error) => {
                 eprintln!("temper-testing-daemon-worker: poll failed: {error}");
-                temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(200)).await;
+                temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(200)).await;
                 continue;
             }
         };
@@ -318,7 +318,7 @@ pub async fn run(
 }
 
 async fn send(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     endpoint: &str,
     message: &WorkerProtocolMessage,
 ) -> Result<Option<WorkerProtocolMessage>, String> {
@@ -365,7 +365,7 @@ impl JobError {
 }
 
 async fn execute_job(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     config: &DaemonWorkerConfig,
     identity: &GitIdentity,
     assign: &Assign,
@@ -404,7 +404,7 @@ async fn execute_job(
 }
 
 async fn run_job(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     config: &DaemonWorkerConfig,
     identity: &GitIdentity,
     assign: &Assign,
@@ -528,7 +528,7 @@ async fn run_job(
 /// the production smith-worker workspace shape (auth via `http.extraheader`,
 /// token redacted from errors).
 struct Workspace<'a> {
-    cx: &'a temper_io_engine::Cx,
+    cx: &'a temper_engine_io::Cx,
     path: PathBuf,
     remote_url: String,
     identity: &'a GitIdentity,

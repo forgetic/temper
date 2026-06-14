@@ -44,7 +44,7 @@ fn run(config: DaemonRunConfig) -> Result<(), String> {
     // The daemon runs entirely as engine tasks: the HTTP listener, the pure
     // daemon machine's engine loop, backstop cadence machines, appliers, and
     // wake scans are all completion-driven I/O on the skein runtime.
-    temper_io_engine::block_on_with(
+    temper_engine_io::block_on_with(
         move |_cx, handle| async move { run_async(handle, config).await },
     )
 }
@@ -53,7 +53,7 @@ async fn run_async(
     handle: skein::runtime::RuntimeHandle,
     config: DaemonRunConfig,
 ) -> Result<(), String> {
-    let spawner: Arc<dyn temper_io_engine::Spawner> = Arc::new(handle.clone());
+    let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle.clone());
     let forge_config =
         ForgejoConfig::from_env().map_err(|error| format!("Forgejo config: {error}"))?;
     let forge_base_url = forge_config.base_url.clone();

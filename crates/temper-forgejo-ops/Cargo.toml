@@ -10,7 +10,7 @@ description = "Low-level Forgejo REST helpers outside the portable Forge trait."
 base64 = "0.22"
 skein.workspace = true
 serde_json.workspace = true
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 
 [lints]
 workspace = true

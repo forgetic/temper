@@ -198,7 +198,7 @@ where
 }
 
 pub fn run(args: &ValidatorArgs) -> Result<String, RunError> {
-    let runtime = temper_io_engine::build_runtime().map_err(RunError::Runtime)?;
+    let runtime = temper_engine_io::build_runtime().map_err(RunError::Runtime)?;
     let forge = ForgejoForge::new(ForgejoConfig::new(
         args.base_url.clone(),
         args.token.clone(),

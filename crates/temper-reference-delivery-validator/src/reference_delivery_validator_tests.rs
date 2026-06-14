@@ -31,7 +31,7 @@ fn parse_requires_token_from_env_and_redacts_debug() {
 
 #[test]
 fn zero_dependency_blocked_parent_reports_original_incident_shape() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();
         let source = create_repo(&forge, "acme", "service").await;
         let parent = create_issue(
@@ -76,7 +76,7 @@ fn zero_dependency_blocked_parent_reports_original_incident_shape() {
 
 #[test]
 fn parent_with_child_backrefs_and_correlation_passes() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();
         let source = create_repo(&forge, "acme", "service").await;
         let target = create_repo(&forge, "acme", "service-canary").await;

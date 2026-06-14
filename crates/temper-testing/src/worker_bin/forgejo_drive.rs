@@ -296,7 +296,7 @@ fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<Ch
 /// runtime. Authenticated wake hints interrupt the wait; known repo hints narrow
 /// the immediate multi-repo role tick, while polls and audits scan configured repos.
 pub(super) async fn drive_async<W: ForgejoDriveWorker>(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     args: &WorkerArgs,
     worker: &W,
 ) -> Result<RunReport, RunError> {
@@ -642,7 +642,7 @@ mod tests {
             std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
         });
         let worker_for_drive = std::sync::Arc::clone(&worker);
-        let report = temper_io_engine::block_on_with(move |cx, _handle| async move {
+        let report = temper_engine_io::block_on_with(move |cx, _handle| async move {
             drive_async(&cx, &args, &*worker_for_drive).await
         })
         .expect("drive succeeds");

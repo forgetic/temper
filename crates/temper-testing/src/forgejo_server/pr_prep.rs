@@ -62,7 +62,7 @@ const CONFLICT_RESOLUTION_DIR: &str = "docs/temper-conflict-resolution";
 /// This is the Forgejo-only seam; see the module docs for why it is not on the
 /// `Forge` trait.
 pub async fn prepare_pull_request_head(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     token: &str,
     owner: &str,
@@ -126,7 +126,7 @@ pub async fn prepare_pull_request_head(
 /// marker-bearing commit already happened on the first success), so the worker
 /// may re-run it every tick without erroring.
 pub async fn commit_ci_sentinel(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     token: &str,
     owner: &str,
@@ -169,7 +169,7 @@ pub async fn commit_ci_sentinel(
 /// only requeues landing. The commit message includes the CI pass marker so the
 /// real Forgejo fixture's latest head can pass after the new run completes.
 pub async fn commit_conflict_resolution_update(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     token: &str,
     owner: &str,

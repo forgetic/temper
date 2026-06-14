@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use temper_agent_core::{AgentCompletion, AgentMachine, AgentRequest};
-use temper_agent_io_engine::{EngineTime, Machine};
+use temper_agent_io::{EngineTime, Machine};
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, TextContent, ToolCall, Usage, UserContent,
     UserMessage,

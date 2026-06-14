@@ -72,7 +72,7 @@ impl AgentRunner for OutOfProcessRunner {
         // child later dies — the crash-recovery guarantee. We drain and relay
         // after the child returns; relay latency does not affect recovery (the
         // agent already pushed + emitted before any crash).
-        let (sender, mut receiver) = temper_worker_io_engine::channel::<StepProgress>();
+        let (sender, mut receiver) = temper_worker_io::channel::<StepProgress>();
 
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
@@ -143,7 +143,7 @@ fn run_child(
     cwd: &Path,
     context_path: &Path,
     result_path: &Path,
-    sender: &temper_worker_io_engine::CqSender<StepProgress>,
+    sender: &temper_worker_io::CqSender<StepProgress>,
 ) -> Result<ChildOutcome, AgentRunError> {
     let mut child = Command::new(program)
         .args(args)
@@ -223,7 +223,7 @@ mod tests {
         let cwd = std::env::temp_dir();
         let sink = crate::agent_runner::NullProgressSink;
         let outcome =
-            temper_worker_io_engine::block_on(
+            temper_worker_io::block_on(
                 async move { runner.run(&context, &cwd, &sink).await },
             );
         let error = outcome.expect_err("empty command must fail");

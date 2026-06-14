@@ -9,7 +9,7 @@ description = "Host-local authenticated wake socket bus for Temper runtimes."
 [dependencies]
 serde_json.workspace = true
 skein.workspace = true
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 temper-runner = { path = "../temper-runner" }
 
 [dev-dependencies]

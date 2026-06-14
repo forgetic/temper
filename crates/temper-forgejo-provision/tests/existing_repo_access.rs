@@ -44,12 +44,12 @@ async fn start_server_with_admin() -> (ForgejoServer, String) {
     .await
 }
 
-fn http() -> temper_io_engine::http::JsonClient {
-    temper_io_engine::http::JsonClient::new()
+fn http() -> temper_engine_io::http::JsonClient {
+    temper_engine_io::http::JsonClient::new()
 }
 
 async fn create_org(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -67,7 +67,7 @@ async fn create_org(
 }
 
 async fn create_repo_with_sentinel(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -114,7 +114,7 @@ async fn create_repo_with_sentinel(
 
 /// Reads a file's decoded contents from the repo, or `None` if absent.
 async fn file_contents(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -145,7 +145,7 @@ async fn file_contents(
 
 /// The number of commits on `main`. Used to prove `--existing-repo` adds none.
 async fn commit_count(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -170,7 +170,7 @@ async fn commit_count(
 /// The collaborator permission Forgejo reports for `login` on the repo, or
 /// `None` if `login` is not a collaborator.
 async fn collaborator_permission(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -199,7 +199,7 @@ async fn collaborator_permission(
 
 /// Whether `login` is a member of the org Owners team.
 async fn is_owners_member(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -236,7 +236,7 @@ async fn is_owners_member(
 }
 
 async fn label_names(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -259,7 +259,7 @@ async fn label_names(
 }
 
 async fn has_actions(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     base: &str,
     admin: &str,
     owner: &str,
@@ -280,7 +280,7 @@ async fn has_actions(
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         let (server, admin) = start_server_with_admin().await;
         let base = server.base_url().to_string();
         let name = "smith";
@@ -380,7 +380,7 @@ fn existing_repo_repo_collaborator_leaves_content_and_grants_repo_scope() {
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_errors_when_repo_absent() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         let (server, admin) = start_server_with_admin().await;
         let base = server.base_url().to_string();
         let client = http();
@@ -419,7 +419,7 @@ fn existing_repo_errors_when_repo_absent() {
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn existing_repo_with_webhook_registers_hook_without_touching_ci() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         // Exercises the full `provision_and_seed` path with `--existing-repo` and a
         // webhook, mirroring the intended Smith caller (`--seed-intake no`).
         let (server, admin) = start_server_with_admin().await;

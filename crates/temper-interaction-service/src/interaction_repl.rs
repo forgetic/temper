@@ -16,15 +16,15 @@ use crate::interaction_commands::{
 use crate::interaction_service::InteractionService;
 
 pub fn run_repl(args: &InteractionReplArgs) -> Result<(), InteractionDeploymentError> {
-    let runtime = temper_io_engine::build_runtime().map_err(InteractionDeploymentError::Config)?;
+    let runtime = temper_engine_io::build_runtime().map_err(InteractionDeploymentError::Config)?;
     let args = args.clone();
-    temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
+    temper_engine_io::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
         run_repl_async(&cx, &args).await
     })
 }
 
 async fn run_repl_async(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     args: &InteractionReplArgs,
 ) -> Result<(), InteractionDeploymentError> {
     let spec = load_compiled_spec(&args.spec_path)?;

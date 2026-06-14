@@ -1,5 +1,5 @@
 [package]
-name = "temper-io-engine"
+name = "temper-engine-io"
 version = "0.1.0"
 publish = false
 edition.workspace = true

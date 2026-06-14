@@ -39,7 +39,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let responder = WorkflowRoleDecisionResponder::new(provider);
     // The decision path drives anvil's native agent loop, which must run
     // inside a skein engine task (runtime clock + I/O spawning).
-    let reply = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let reply = temper_agent_io::block_on_with(move |_cx, handle| async move {
         responder.respond(handle, &request).await
     })
     .map_err(|error| error.to_string())?;

@@ -198,7 +198,7 @@ impl From<std::io::Error> for RunError {
 /// bindings and the default branch come from [`runner_config`], so role logins
 /// stay derived from config and are never hardcoded.
 pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
-    let runtime = temper_io_engine::build_runtime().map_err(RunError::Runtime)?;
+    let runtime = temper_engine_io::build_runtime().map_err(RunError::Runtime)?;
 
     let config = runner_config();
     let (provisioned, issue) = {
@@ -208,7 +208,7 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
         let name = args.name.clone();
         let role_bindings = config.role_bindings.clone();
         let default_branch = config.repository.default_branch.clone();
-        temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
+        temper_engine_io::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
             let provisioned = provision_world(
                 &cx,
                 &base_url,

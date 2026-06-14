@@ -156,7 +156,7 @@ fn run_leg(
     let decision: RoleDecision = {
         let provider = provider.clone();
         let prompt = role.prompt.render();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+        temper_agent_io::block_on_with(move |_cx, handle| async move {
             run_decision(handle, &provider, &prompt, &context).await
         })
         .expect("anvil decision succeeds through recorder and real upstream")

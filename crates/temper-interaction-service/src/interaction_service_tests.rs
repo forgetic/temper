@@ -126,7 +126,7 @@ async fn create_conversation(app: &InteractionHttpApp, profile_id: &str) -> Stri
 
 #[test]
 fn generic_http_routes_work_for_two_profiles() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let app = fake_app(None).await;
         let intake = create_conversation(&app, "intake-agent").await;
         let support = create_conversation(&app, "support-agent").await;
@@ -203,7 +203,7 @@ fn generic_http_routes_work_for_two_profiles() {
 
 #[test]
 fn generic_http_auth_protects_routes_when_configured() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let app = fake_app(Some("service-secret")).await;
         let unauthenticated = app
             .handle_http_request(HttpRequest::new("GET", "/health", Vec::new()))

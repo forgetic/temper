@@ -98,7 +98,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
     .build_provider()
     .expect("build parent provider");
 
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         // The investigate tool is read-only ⇒ parallel-safe (a parent could fan
         // out several at once). Built inside the engine task so it holds the
         // runtime handle explicitly for its nested runs.
@@ -253,7 +253,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
     .build_provider()
     .expect("build parent provider");
 
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         let investigate = SubAgentTool::new(
             handle.clone(),
             "investigate",

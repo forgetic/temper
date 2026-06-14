@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use skein::cx::Cx;
 use skein::http::h1::http_client::HttpClient;
-use temper_worker_io_engine::{HttpCall, HttpResponseData, build_http_client, http_call};
+use temper_worker_io::{HttpCall, HttpResponseData, build_http_client, http_call};
 use temper_worker_protocol::WorkerProtocolMessage;
 
 /// Delivers worker→daemon protocol messages and yields the daemon's replies.

@@ -70,7 +70,7 @@ fn should_skip(path: &Path) -> bool {
             // agent layer is exactly where a concrete profile belongs.
             || name == "temper-agent-core"
             || name == "temper-agent"
-            || name == "temper-agent-io-engine"
+            || name == "temper-agent-io"
     })
 }
 

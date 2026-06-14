@@ -112,25 +112,25 @@ fn webhook_body(issue: ItemNumber) -> Vec<u8> {
 }
 
 async fn post_webhook(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     url: &str,
     secret: &str,
     body: Vec<u8>,
-) -> temper_io_engine::http::HttpResponseData {
+) -> temper_engine_io::http::HttpResponseData {
     let signature = webhook_signature(secret, &body);
     post_webhook_with_signature(client, url, &format!("sha256={signature}"), body).await
 }
 
 async fn post_webhook_with_signature(
-    _client: &temper_io_engine::http::JsonClient,
+    _client: &temper_engine_io::http::JsonClient,
     url: &str,
     signature: &str,
     body: Vec<u8>,
-) -> temper_io_engine::http::HttpResponseData {
-    let pooled = temper_io_engine::http::build_http_client();
-    temper_io_engine::http::http_call(
+) -> temper_engine_io::http::HttpResponseData {
+    let pooled = temper_engine_io::http::build_http_client();
+    temper_engine_io::http::http_call(
         &pooled,
-        temper_io_engine::http::HttpCall {
+        temper_engine_io::http::HttpCall {
             method: "POST".into(),
             url: url.to_string(),
             headers: vec![
@@ -195,10 +195,10 @@ fn success_result(worker_id: &str, job_id: &str, branch_name: &str, summary: &st
 }
 
 async fn post(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
-) -> temper_io_engine::http::HttpResponseData {
+) -> temper_engine_io::http::HttpResponseData {
     client
         .send(
             "POST",
@@ -211,7 +211,7 @@ async fn post(
 }
 
 async fn post_json(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
 ) -> WorkerProtocolMessage {
@@ -256,7 +256,7 @@ fn assert_release(msg: WorkerProtocolMessage, worker_id: &str, job_id: &str) {
     }
 }
 
-async fn register_engineer(client: &temper_io_engine::http::JsonClient, message_url: &str) {
+async fn register_engineer(client: &temper_engine_io::http::JsonClient, message_url: &str) {
     assert_eq!(
         post(
             client,
@@ -270,7 +270,7 @@ async fn register_engineer(client: &temper_io_engine::http::JsonClient, message_
 }
 
 async fn wait_for_pull_request_count(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     forge: &MemoryForge,
     repo: &RepositoryId,
     expected: usize,
@@ -289,13 +289,13 @@ async fn wait_for_pull_request_count(
             "timed out waiting for {expected} pull request(s), saw {}",
             pulls.len()
         );
-        temper_io_engine::runtime::sleep_for(cx, Duration::from_millis(10)).await;
+        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
     }
 }
 
 #[test]
 fn posted_webhook_wakes_target_then_worker_is_assigned() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "main").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -312,7 +312,7 @@ fn posted_webhook_wakes_target_then_worker_is_assigned() {
             Arc::clone(&config),
         )
         .await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let body = webhook_body(issue);
 
         assert_eq!(
@@ -332,7 +332,7 @@ fn posted_webhook_wakes_target_then_worker_is_assigned() {
 
 #[test]
 fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "main").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -349,7 +349,7 @@ fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() 
             Arc::clone(&config),
         )
         .await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let body = webhook_body(issue);
 
         assert_eq!(
@@ -368,7 +368,7 @@ fn posted_webhook_with_invalid_signature_is_unauthorized_and_enqueues_nothing() 
 
 #[test]
 fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "main").await;
         create_ready_issue(&forge, &repo).await;
@@ -385,7 +385,7 @@ fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
             Arc::clone(&config),
         )
         .await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let body = b"{not valid JSON".to_vec();
 
         assert_eq!(
@@ -404,7 +404,7 @@ fn posted_webhook_with_malformed_payload_is_bad_request_and_enqueues_nothing() {
 
 #[test]
 fn posted_webhook_drives_success_apply_to_pull_request() {
-    temper_io_engine::block_on_with(move |cx, handle| async move {
+    temper_engine_io::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = create_repo(&forge, "acme", "service", "stable").await;
         let issue = create_ready_issue(&forge, &repo).await;
@@ -430,7 +430,7 @@ fn posted_webhook_drives_success_apply_to_pull_request() {
             Arc::clone(&config),
         )
         .await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let body = webhook_body(issue);
 
         assert_eq!(

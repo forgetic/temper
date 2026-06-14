@@ -157,7 +157,7 @@ fn fixture_preflights_for_both_oauth_modes() {
 
 #[test]
 fn fixture_resolves_bearers_offline_for_both_oauth_modes() {
-    temper_agent_io_engine::block_on(async {
+    temper_agent_io::block_on(async {
         fixture_resolves_bearers_offline_for_both_oauth_modes_inner().await;
     });
 }

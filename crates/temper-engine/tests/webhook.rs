@@ -96,10 +96,10 @@ fn poll(worker_id: &str) -> WorkerProtocolMessage {
 }
 
 async fn post(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
-) -> temper_io_engine::http::HttpResponseData {
+) -> temper_engine_io::http::HttpResponseData {
     client
         .send(
             "POST",
@@ -112,7 +112,7 @@ async fn post(
 }
 
 async fn post_json(
-    client: &temper_io_engine::http::JsonClient,
+    client: &temper_engine_io::http::JsonClient,
     url: &str,
     msg: &WorkerProtocolMessage,
 ) -> WorkerProtocolMessage {
@@ -168,14 +168,14 @@ fn webhook_config(repo: RepositoryId) -> WebhookConfig {
 
 #[test]
 fn verified_webhook_wakes_matching_target_then_dispatches() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = create_repo(&forge, "acme", "service").await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
         let (daemon, url) = spawn(&handle).await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let config = webhook_config(repo.clone());
         let body = serde_json::to_vec(&json!({
             "repository": { "full_name": "acme/service" },
@@ -215,14 +215,14 @@ fn verified_webhook_wakes_matching_target_then_dispatches() {
 
 #[test]
 fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let repo = create_repo(&forge, "acme", "service").await;
         let issue = create_issue(&forge, &repo, &["code", "ready"]).await;
         let workflow = workflow();
         let compiled = workflow.compile();
         let (daemon, url) = spawn(&handle).await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let config = webhook_config(repo);
         let body = serde_json::to_vec(&json!({
             "repository": { "full_name": "acme/service" },
@@ -264,7 +264,7 @@ fn webhook_with_invalid_signature_is_rejected_and_enqueues_nothing() {
 
 #[test]
 fn webhook_for_unconfigured_repo_enqueues_nothing() {
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         let forge = MemoryForge::new();
         let configured_repo = create_repo(&forge, "acme", "service").await;
         let other_repo = create_repo(&forge, "acme", "other").await;
@@ -273,7 +273,7 @@ fn webhook_for_unconfigured_repo_enqueues_nothing() {
         let workflow = workflow();
         let compiled = workflow.compile();
         let (daemon, url) = spawn(&handle).await;
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let config = webhook_config(configured_repo);
         let body = serde_json::to_vec(&json!({
             "repository": { "full_name": "acme/other" },

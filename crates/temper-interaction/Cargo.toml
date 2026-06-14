@@ -14,7 +14,7 @@ serde_json.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-process-protocol = { path = "../temper-process-protocol" }
 thiserror.workspace = true
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }

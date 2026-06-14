@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use temper_io_engine::process::{ProcessCall, ProcessCallError, run_process};
+use temper_engine_io::process::{ProcessCall, ProcessCallError, run_process};
 
 use temper_forge::Forge;
 use temper_workflow::{RoleManifest, ToolManifest};
@@ -196,7 +196,7 @@ impl Error for WorkflowRoleDecisionProcessError {
 pub struct WorkflowRoleDecisionProcessAgent {
     /// Clock/deadline capability of the engine task this agent runs under,
     /// injected at construction — process timeouts are computed against it.
-    cx: temper_io_engine::Cx,
+    cx: temper_engine_io::Cx,
     workflow_id: String,
     manifest: RoleManifest,
     bound_external_tools: Vec<BoundExternalTool>,
@@ -207,7 +207,7 @@ pub struct WorkflowRoleDecisionProcessAgent {
 impl WorkflowRoleDecisionProcessAgent {
     /// Builds a process-backed agent with no bound external-tool metadata.
     pub fn new(
-        cx: temper_io_engine::Cx,
+        cx: temper_engine_io::Cx,
         workflow_id: impl Into<String>,
         manifest: RoleManifest,
         config: WorkflowRoleDecisionProcessConfig,
@@ -217,7 +217,7 @@ impl WorkflowRoleDecisionProcessAgent {
 
     /// Builds a process-backed agent with runner-bound external-tool metadata.
     pub fn with_bound_external_tools(
-        cx: temper_io_engine::Cx,
+        cx: temper_engine_io::Cx,
         workflow_id: impl Into<String>,
         manifest: RoleManifest,
         config: WorkflowRoleDecisionProcessConfig,
@@ -235,7 +235,7 @@ impl WorkflowRoleDecisionProcessAgent {
 
     /// Builds a process-backed agent with metadata plus executable providers.
     pub fn with_bound_external_tools_and_executors(
-        cx: temper_io_engine::Cx,
+        cx: temper_engine_io::Cx,
         workflow_id: impl Into<String>,
         manifest: RoleManifest,
         config: WorkflowRoleDecisionProcessConfig,

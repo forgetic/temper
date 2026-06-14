@@ -10,7 +10,7 @@
 
 use base64::Engine;
 use serde_json::{Value, json};
-use temper_io_engine::http::{HttpCall, http_call};
+use temper_engine_io::http::{HttpCall, http_call};
 
 /// The shared password assigned to demo role users.
 pub const ROLE_PASSWORD: &str = "R0le-Phase2-e2e!";
@@ -122,7 +122,7 @@ impl Client {
         };
 
         let result = match skein::time::timeout(
-            temper_io_engine::runtime::timer_now(&self.cx),
+            temper_engine_io::runtime::timer_now(&self.cx),
             REQUEST_TIMEOUT,
             Box::pin(http_call(&self.inner, call)),
         )
@@ -148,7 +148,7 @@ impl Client {
 pub fn http_client(cx: skein::cx::Cx) -> Result<Client> {
     Ok(Client {
         cx,
-        inner: temper_io_engine::http::build_http_client(),
+        inner: temper_engine_io::http::build_http_client(),
     })
 }
 

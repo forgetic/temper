@@ -33,7 +33,7 @@ use temper_workflow::RoleId;
 #[test]
 #[ignore = "boots a real Forgejo server; run with --ignored"]
 fn prep_makes_head_real_and_pr_is_mergeable() {
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
         // The cached Forgejo fixture uses a *blocking* reqwest client for readiness;
         // boot it off-reactor so its nested blocking runtime lives and dies off the async
         // test thread (same pattern as the Phase 2 provisioning test).
@@ -88,7 +88,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
         .expect("pr-prep creates head branch + commit");
 
         // The head branch now exists as a real ref.
-        let client = temper_io_engine::http::JsonClient::new();
+        let client = temper_engine_io::http::JsonClient::new();
         let (branch_status, _) = client
             .send_expect_json(
                 "GET",
@@ -150,8 +150,8 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
 /// passes. Forgejo runs the merge-conflict check in the background after the PR
 /// is created, so the field is briefly `false`/null before settling.
 async fn poll_mergeable(
-    cx: &temper_io_engine::Cx,
-    client: &temper_io_engine::http::JsonClient,
+    cx: &temper_engine_io::Cx,
+    client: &temper_engine_io::http::JsonClient,
     pr_url: &str,
     token: &str,
 ) -> bool {
@@ -166,6 +166,6 @@ async fn poll_mergeable(
         if std::time::Instant::now() >= deadline {
             return false;
         }
-        temper_io_engine::runtime::sleep_for(cx, std::time::Duration::from_millis(500)).await;
+        temper_engine_io::runtime::sleep_for(cx, std::time::Duration::from_millis(500)).await;
     }
 }

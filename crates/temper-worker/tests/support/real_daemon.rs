@@ -24,7 +24,7 @@ use temper_worker_protocol::{Assign, JobResult, WorkerProtocolMessage};
 /// in-process carrier, and taps the `Result` the worker posts onto `result_tx`.
 pub struct InProcessTransport {
     daemon: Arc<Daemon>,
-    result_tx: temper_io_engine::CqSender<JobResult>,
+    result_tx: temper_engine_io::CqSender<JobResult>,
 }
 
 impl Transport for InProcessTransport {
@@ -48,15 +48,15 @@ impl Transport for InProcessTransport {
 /// A real daemon plus a channel that receives the result the worker posts.
 pub struct DaemonHarness {
     pub daemon: Arc<Daemon>,
-    result_tx: temper_io_engine::CqSender<JobResult>,
-    result_rx: temper_io_engine::CqReceiver<JobResult>,
+    result_tx: temper_engine_io::CqSender<JobResult>,
+    result_rx: temper_engine_io::CqReceiver<JobResult>,
 }
 
 impl DaemonHarness {
     /// Build a real daemon on the given runtime handle.
     pub fn start(handle: &skein::runtime::RuntimeHandle) -> Self {
         let daemon = Arc::new(Daemon::new(Arc::new(handle.clone())));
-        let (result_tx, result_rx) = temper_io_engine::channel();
+        let (result_tx, result_rx) = temper_engine_io::channel();
         Self {
             daemon,
             result_tx,

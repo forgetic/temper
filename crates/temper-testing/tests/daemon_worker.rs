@@ -28,7 +28,7 @@ const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Applier seam that records every applied (job, result) pair for the test.
 struct RecordingApplier {
-    tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
+    tx: temper_engine_io::CqSender<(InFlightJob, JobResult)>,
 }
 
 #[async_trait::async_trait]
@@ -60,7 +60,7 @@ impl Drop for WorkerGuard {
 
 #[test]
 fn daemon_worker_pushes_branch_and_daemon_sees_success() {
-    temper_io_engine::block_on_with(move |cx, handle| async move {
+    temper_engine_io::block_on_with(move |cx, handle| async move {
         let workspace = RunWorkspace::new("temper-daemon-worker-hermetic");
 
         // A seeded bare origin reachable over file:// (no credentials needed).
@@ -70,7 +70,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
         seed_origin(&origin, workspace.path());
 
         // In-process daemon transport with a recording applier seam.
-        let (tx, mut rx) = temper_io_engine::channel();
+        let (tx, mut rx) = temper_engine_io::channel();
         let daemon =
             Daemon::with_applier(Arc::new(handle.clone()), Arc::new(RecordingApplier { tx }));
         let server = temper_engine::serve(
@@ -125,7 +125,7 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
         let mut worker = spawn_worker(workspace.path(), addr, &stop_file, &log);
 
         let (job, result) = skein::time::timeout(
-        temper_io_engine::runtime::timer_now(&cx),
+        temper_engine_io::runtime::timer_now(&cx),
         RESULT_TIMEOUT,
         Box::pin(rx.recv()),
     )

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use temper_engine::{Daemon, InFlightJob, ResultApplier};
-use temper_io_engine::{CqSender, channel};
+use temper_engine_io::{CqSender, channel};
 use temper_sim::{Sim, SimProtocolClient};
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, RepoOutcome,

@@ -457,14 +457,14 @@ mod tests {
     // to cross-check anvil's profile/proposal assumptions against temper's
     // compiled interaction manifest. It was removed when anvil dropped its
     // dependency on `temper-interaction`: that crate is no longer serde-only
-    // (it pulls `temper-forge` + `temper-io-engine`), and anvil depends on
+    // (it pulls `temper-forge` + `temper-engine-io`), and anvil depends on
     // temper only through the pure serde DTO crates. anvil's own
     // ConversationRequest/Reply parsing stays covered by the
     // `temper-process-protocol` fixture tests above.
 
     #[test]
     fn product_manager_responder_rejects_other_profiles_without_provider_call() {
-        temper_agent_io_engine::block_on_with(|_cx, handle| async move {
+        temper_agent_io::block_on_with(|_cx, handle| async move {
             rejects_other_profiles_without_provider_call_inner(handle).await;
         });
     }
