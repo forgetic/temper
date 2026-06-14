@@ -1,6 +1,6 @@
+use crate::FilesystemForge;
 use crate::lists::{sort_issues_by_number, sort_pull_requests_by_number};
 use crate::metadata::next_timestamp;
-use crate::FilesystemForge;
 use temper_forge::{
     ForgeError, ForgeResult, Issue, IssueId, ItemNumber, PullRequest, PullRequestId, RepositoryId,
 };

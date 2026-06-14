@@ -16,8 +16,8 @@ use temper_worker_io_engine::{channel, drive};
 use crate::client::WorkerError;
 use crate::config::{WorkerConfig, WorkerParams};
 use crate::executor::JobExecutor;
-use crate::worker_machine::WorkerMachine;
 use crate::transport::{HttpTransport, Transport};
+use crate::worker_machine::WorkerMachine;
 use crate::worker_shell::WorkerShell;
 
 /// Run the worker to (effective) completion over the **HTTP** transport (the

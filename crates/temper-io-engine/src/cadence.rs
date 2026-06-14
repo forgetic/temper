@@ -11,9 +11,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::engine::{drive, Executor};
+use crate::engine::{Executor, drive};
 use crate::machine::{EngineTime, Machine};
-use crate::queue::{channel, CqSender};
+use crate::queue::{CqSender, channel};
 use crate::spawn::Spawner;
 use crate::timer::arm_timer;
 

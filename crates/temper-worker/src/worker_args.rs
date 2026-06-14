@@ -226,7 +226,7 @@ impl RawArgs {
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
-                    )))
+                    )));
                 }
             }
         }
@@ -242,12 +242,12 @@ impl RawArgs {
             Some(other) => {
                 return Err(ArgsError::new(format!(
                     "unknown --backend '{other}'; expected forgejo"
-                )))
+                )));
             }
             None => {
                 return Err(ArgsError::new(format!(
                     "missing required --backend forgejo\nusage: {USAGE}"
-                )))
+                )));
             }
         }
         let kind = self.parse_kind()?;

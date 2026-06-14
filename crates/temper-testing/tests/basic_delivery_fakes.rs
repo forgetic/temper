@@ -15,7 +15,7 @@ use std::sync::Arc;
 use temper_forge::{Forge, IssueState, PullRequestState, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{Progress, RoleWorker, Worker};
-use temper_workflow::{parse_metadata_block, RoleId};
+use temper_workflow::{RoleId, parse_metadata_block};
 
 use temper_testing::agents::{BasicArchitect, BasicEngineer};
 use temper_testing::{
@@ -162,10 +162,12 @@ fn basic_engineer_opens_implementation_pr_via_open_pr() {
     let metadata = parse_metadata_block(&pr.body)
         .expect("PR metadata parses")
         .expect("PR metadata exists");
-    assert!(metadata
-        .parents
-        .iter()
-        .any(|parent| parent.is_same_repo() && parent.number == code));
+    assert!(
+        metadata
+            .parents
+            .iter()
+            .any(|parent| parent.is_same_repo() && parent.number == code)
+    );
 }
 
 #[test]

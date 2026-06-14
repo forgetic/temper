@@ -10,8 +10,8 @@
 //! matching the reference backends' contract (see ADR 0008).
 
 use crate::ids::{
-    format_comment_id, format_issue_id, format_label_id, format_pull_request_id,
-    format_repository_id, format_review_id, format_user_id, RepoCoord,
+    RepoCoord, format_comment_id, format_issue_id, format_label_id, format_pull_request_id,
+    format_repository_id, format_review_id, format_user_id,
 };
 use crate::types::{
     CommentDto, IssueDto, LabelDto, PrBranchDto, PrRepoDto, PullRequestDto, RepositoryDto,
@@ -291,9 +291,12 @@ fn branch_side(pr_repo: &RepoCoord, branch: Option<PrBranchDto>) -> (BranchRef, 
 fn repo_coord_from_dto(dto: PrRepoDto) -> Option<RepoCoord> {
     if let Some(full_name) = dto.full_name.filter(|name| !name.is_empty())
         && let Some((owner, name)) = full_name.split_once('/')
-            && !owner.is_empty() && !name.is_empty() && !name.contains('/') {
-                return Some(RepoCoord::new(owner, name));
-            }
+        && !owner.is_empty()
+        && !name.is_empty()
+        && !name.contains('/')
+    {
+        return Some(RepoCoord::new(owner, name));
+    }
     let owner = dto.owner.map(|user| user.login).filter(|o| !o.is_empty())?;
     let name = dto.name.filter(|name| !name.is_empty())?;
     Some(RepoCoord::new(owner, name))

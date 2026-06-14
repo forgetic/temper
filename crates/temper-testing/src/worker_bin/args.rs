@@ -337,4 +337,4 @@ impl std::error::Error for ArgsError {}
 // The parsing logic lives in the sibling `args_parse` module (split out to keep
 // each file within the line budget); re-export its surface so callers continue
 // to use `args::{parse, parse_with_env, ParseOutcome, USAGE}`.
-pub use super::args_parse::{parse, parse_with_env, ParseOutcome, USAGE};
+pub use super::args_parse::{ParseOutcome, USAGE, parse, parse_with_env};

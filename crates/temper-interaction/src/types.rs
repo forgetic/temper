@@ -5,8 +5,8 @@
 //! contract without pulling in Temper's Forge-backed interaction runtime.
 
 pub use temper_process_protocol::interaction::{
-    is_valid_deterministic_slug, is_valid_proposal_slug, validate_deterministic_slug,
-    validate_proposal_slug, ConversationId, ConversationProfileId, ConversationReply,
-    ConversationRequest, ConversationTurn, ConversationTurnId, Participant, ParticipantKind,
-    ProposalId, ProposalKind, DETERMINISTIC_SLUG_RULE,
+    ConversationId, ConversationProfileId, ConversationReply, ConversationRequest,
+    ConversationTurn, ConversationTurnId, DETERMINISTIC_SLUG_RULE, Participant, ParticipantKind,
+    ProposalId, ProposalKind, is_valid_deterministic_slug, is_valid_proposal_slug,
+    validate_deterministic_slug, validate_proposal_slug,
 };

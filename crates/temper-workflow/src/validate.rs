@@ -5,11 +5,11 @@
 //! duplicate ids and undeclared references; later phases will add semantic
 //! checks (contradictory effects, unsatisfiable gates, tool-authority limits).
 
+use crate::ValidationErrors;
 use crate::diagnostics::{Diagnostic, ReferenceSite, SymbolKind};
 use crate::spec::{RawEffect, RawGateCondition, RawIntakeAuthor, RawTransition, RawWorkflowSpec};
 use crate::validate_build::build_validated;
 use crate::validated::ValidatedWorkflow;
-use crate::ValidationErrors;
 use std::collections::{HashMap, HashSet};
 
 /// Validates a raw workflow spec, collecting all diagnostics.
@@ -545,15 +545,16 @@ fn check_queue_automation_contract(
                 });
             }
             if let Some(primary) = primary
-                && outcome.artifact != primary.artifact {
-                    diagnostics.push(Diagnostic::QueueAutomationOutcomeArtifactMismatch {
-                        queue: queue.id.clone(),
-                        verdict: verdict.clone(),
-                        transition: outcome.id.clone(),
-                        expected: primary.artifact.clone(),
-                        actual: outcome.artifact.clone(),
-                    });
-                }
+                && outcome.artifact != primary.artifact
+            {
+                diagnostics.push(Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+                    queue: queue.id.clone(),
+                    verdict: verdict.clone(),
+                    transition: outcome.id.clone(),
+                    expected: primary.artifact.clone(),
+                    actual: outcome.artifact.clone(),
+                });
+            }
         }
     }
 }

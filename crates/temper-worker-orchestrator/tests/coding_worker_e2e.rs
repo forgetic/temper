@@ -620,7 +620,10 @@ impl GitFixture {
         for repo in ["acme/service", "acme/lib"] {
             let origin = git_root.join(format!("{repo}.git"));
             git(["init", "--bare", path_str(&origin)]);
-            seed_origin(&origin, &temp.path().join(format!("seed-{}", repo.replace('/', "-"))));
+            seed_origin(
+                &origin,
+                &temp.path().join(format!("seed-{}", repo.replace('/', "-"))),
+            );
         }
         let workspace_root = temp.path().join("workspaces");
         Self {

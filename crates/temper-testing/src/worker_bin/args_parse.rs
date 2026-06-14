@@ -8,8 +8,8 @@
 
 use super::args::{
     AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
-    ClockKind, ForgejoArgs, ProfileKind, ReviewerKind, RoleBehavior, WorkerArgs, WorkerKind,
-    FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, WORKFLOW_FILE_ENV,
+    ClockKind, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, ForgejoArgs,
+    ProfileKind, ReviewerKind, RoleBehavior, WORKFLOW_FILE_ENV, WorkerArgs, WorkerKind,
 };
 use chrono::Duration;
 use std::collections::BTreeSet;
@@ -163,7 +163,7 @@ impl RawArgs {
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
-                    )))
+                    )));
                 }
             }
         }

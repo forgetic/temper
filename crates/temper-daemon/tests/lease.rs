@@ -10,7 +10,7 @@ use temper_worker_protocol::{
     Artifact, Branch, JobResult, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;
-use temper_workflow::{parse_metadata_block, ArtifactSource, LeaseManager, LeasePolicy, RoleId};
+use temper_workflow::{ArtifactSource, LeaseManager, LeasePolicy, RoleId, parse_metadata_block};
 
 struct RecordingApplier {
     tx: temper_io_engine::CqSender<(InFlightJob, JobResult)>,
@@ -156,11 +156,13 @@ fn lease_won_inner_applied_then_lease_released() {
             .await
             .expect("issue reload succeeds")
             .expect("issue exists after apply");
-        assert!(parse_metadata_block(&issue.body)
-            .expect("issue metadata parses")
-            .unwrap_or_default()
-            .lease
-            .is_none());
+        assert!(
+            parse_metadata_block(&issue.body)
+                .expect("issue metadata parses")
+                .unwrap_or_default()
+                .lease
+                .is_none()
+        );
     })
 }
 

@@ -31,7 +31,9 @@ use jig_server::FakeLlm;
 use temper_forge::{ItemNumber, PullRequest, PullRequestQuery, UserId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_runtime::RunWorkspace;
-use temper_testing::forgejo_server::{ForgejoServer, Provisioned, start_cached_provisioned_repositories};
+use temper_testing::forgejo_server::{
+    ForgejoServer, Provisioned, start_cached_provisioned_repositories,
+};
 
 const ENGINEER: &str = "engineer";
 const REPO_NAME: &str = "temper-run-e2e";
@@ -253,10 +255,19 @@ fn spawn_temper_run(
         .env("FORGEJO_USERNAME", &engineer.user)
         .env("FORGEJO_PASSWORD", &engineer.password)
         // Per-role Forge API token routing.
-        .env(format!("TEMPER_FORGEJO_TOKEN_{engineer_upper}"), &engineer.token)
+        .env(
+            format!("TEMPER_FORGEJO_TOKEN_{engineer_upper}"),
+            &engineer.token,
+        )
         // Per-role git identity the agent pushes with.
-        .env(format!("TEMPER_FORGEJO_USER_{engineer_upper}"), &engineer.user)
-        .env(format!("TEMPER_FORGEJO_EMAIL_{engineer_upper}"), &engineer.email)
+        .env(
+            format!("TEMPER_FORGEJO_USER_{engineer_upper}"),
+            &engineer.user,
+        )
+        .env(
+            format!("TEMPER_FORGEJO_EMAIL_{engineer_upper}"),
+            &engineer.email,
+        )
         // Agent LLM: dummy DeepSeek key (preflight is a no-op for ApiKey mode)
         // redirected to the local fake LLM.
         .env("TEMPER_DEEPSEEK_API_KEY", "sk-jig-test")

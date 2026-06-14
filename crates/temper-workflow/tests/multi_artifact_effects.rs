@@ -11,12 +11,12 @@ mod support;
 
 use std::collections::BTreeMap;
 
-use support::{block_on, create_issue, issue_labels, new_repo, TestRoot};
+use support::{TestRoot, block_on, create_issue, issue_labels, new_repo};
 use temper_forge::{CreateRepository, Forge, Issue, IssueQuery, ItemNumber, RepositoryId};
 use temper_workflow::{
-    global_child_correlation_key, parse_metadata_block, ArtifactRef, ArtifactSource,
-    CreateIssuesChild, Effect, ExecutionContext, ExecutionError, RawEffect, RawWorkflowSpec,
-    RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
+    ArtifactRef, ArtifactSource, CreateIssuesChild, Effect, ExecutionContext, ExecutionError,
+    RawEffect, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    WorkflowMetadata, global_child_correlation_key, parse_metadata_block,
 };
 
 const CREATE_ISSUES_WORKFLOW: &str = r#"{
@@ -454,8 +454,10 @@ fn create_issues_unknown_target_repo_error_names_the_repo() {
     let repo = new_repo(&forge);
     let epic = create_issue(&forge, &repo, &["intake"], "raw human epic");
     let missing_repo = RepositoryId::new("repo-does-not-exist");
-    let children = vec![CreateIssuesChild::new("elsewhere", "Elsewhere", "body")
-        .with_target_repo(missing_repo.clone())];
+    let children = vec![
+        CreateIssuesChild::new("elsewhere", "Elsewhere", "body")
+            .with_target_repo(missing_repo.clone()),
+    ];
     let context = ExecutionContext::new().with_create_issues_at(transition(), 0, children);
     let executor = workflow.executor_with_context(&forge, context);
 
@@ -544,8 +546,10 @@ fn create_issues_with_an_unknown_dependency_fails_before_mutation() {
     let workflow = validate(CREATE_ISSUES_WORKFLOW);
     let repo = new_repo(&forge);
     let epic = create_issue(&forge, &repo, &["intake"], "raw human epic");
-    let children = vec![CreateIssuesChild::new("only", "Lonely child", "body")
-        .with_dependencies(["missing-sibling"])];
+    let children = vec![
+        CreateIssuesChild::new("only", "Lonely child", "body")
+            .with_dependencies(["missing-sibling"]),
+    ];
     let context = ExecutionContext::new().with_create_issues_at(transition(), 0, children);
     let executor = workflow.executor_with_context(&forge, context);
 

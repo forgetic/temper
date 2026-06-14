@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
-use temper_agent_runtime::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
+use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
+use temper_agent_runtime::ProviderConfig;
 use tongs::provider::StreamOptions;
 use tongs::tools::ToolRegistry;
 use tongs::tools::{create_read_tool, create_write_tool};
@@ -46,20 +46,24 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
     ]);
 
     let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
-        run_sub_agent(handle, SubAgent {
-            system_prompt: Some(
-                "You are a sub-agent. Use the write tool to create the requested file.".to_string(),
-            ),
-            user_message: "Create NOTES.md whose first line is exactly `project notes`."
-                .to_string(),
-            tools,
-            max_iterations: 6,
-            provider,
-            stream_options: StreamOptions {
-                api_key: Some("sk-jig-test".to_string()),
-                ..StreamOptions::default()
+        run_sub_agent(
+            handle,
+            SubAgent {
+                system_prompt: Some(
+                    "You are a sub-agent. Use the write tool to create the requested file."
+                        .to_string(),
+                ),
+                user_message: "Create NOTES.md whose first line is exactly `project notes`."
+                    .to_string(),
+                tools,
+                max_iterations: 6,
+                provider,
+                stream_options: StreamOptions {
+                    api_key: Some("sk-jig-test".to_string()),
+                    ..StreamOptions::default()
+                },
             },
-        })
+        )
         .await
     })
     .expect("sub-agent runs");
@@ -210,17 +214,20 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
     let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
-        run_sub_agent(handle, SubAgent {
-            system_prompt: None,
-            user_message: "read forever".to_string(),
-            tools,
-            max_iterations: 3,
-            provider,
-            stream_options: StreamOptions {
-                api_key: Some("sk-jig-test".to_string()),
-                ..StreamOptions::default()
+        run_sub_agent(
+            handle,
+            SubAgent {
+                system_prompt: None,
+                user_message: "read forever".to_string(),
+                tools,
+                max_iterations: 3,
+                provider,
+                stream_options: StreamOptions {
+                    api_key: Some("sk-jig-test".to_string()),
+                    ..StreamOptions::default()
+                },
             },
-        })
+        )
         .await
     })
     .expect("sub-agent runs");
@@ -230,8 +237,8 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
 
 #[test]
 fn sub_agent_forwards_live_events_to_the_sink() {
-    use temper_agent_core::{AgentEvent, EventSink, StreamDelta, run_sub_agent_with_events};
     use std::sync::Mutex;
+    use temper_agent_core::{AgentEvent, EventSink, StreamDelta, run_sub_agent_with_events};
 
     // A sink that records every event it sees.
     #[derive(Default)]
@@ -408,8 +415,8 @@ fn sub_agent_can_be_aborted_mid_run() {
 
 #[test]
 fn sub_agent_steering_reaches_the_model() {
-    use temper_agent_core::{NullEventSink, run_sub_agent_controllable};
     use std::sync::Mutex;
+    use temper_agent_core::{NullEventSink, run_sub_agent_controllable};
 
     // The fake records the user-message texts it has seen so we can prove the
     // steered message reached the model's context. It keeps asking for a tool on

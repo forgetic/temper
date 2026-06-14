@@ -6,7 +6,7 @@
 
 mod support;
 
-use support::{block_on, forge, issue_id, pull_id, MockHttpClient};
+use support::{MockHttpClient, block_on, forge, issue_id, pull_id};
 use temper_forge::{ForgeError, IssueId, ItemNumber, PullRequestId};
 
 #[test]

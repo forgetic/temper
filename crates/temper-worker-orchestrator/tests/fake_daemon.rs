@@ -8,7 +8,9 @@ use axum::{
     routing::post,
 };
 use serde_json::json;
-use temper_worker_orchestrator::{CapabilitySpec, ExecutorSelection, StubExecutor, WorkerConfig, run_worker};
+use temper_worker_orchestrator::{
+    CapabilitySpec, ExecutorSelection, StubExecutor, WorkerConfig, run_worker,
+};
 use temper_worker_protocol::{
     Artifact, Assign, ErrorCode, FailureClass, JobResult, ProtocolError, Register, Release,
     ReleaseDisposition, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,

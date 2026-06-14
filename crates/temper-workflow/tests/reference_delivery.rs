@@ -5,10 +5,10 @@ use temper_forge::{
     BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState, ReviewDecision,
 };
 use temper_workflow::{
-    compile, render_metadata_block, ArtifactKindId, ArtifactRef, CiStatus, ClassifiedArtifact,
-    ClassifiedRelation, Classifier, DependencyStatus, GateCondition, GateId, GateSignals,
-    IntakeAuthor, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus,
-    RoleId, TransitionId, ValidatedWorkflow, VerdictId, WorkflowEffect, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, CiStatus, ClassifiedArtifact, ClassifiedRelation, Classifier,
+    DependencyStatus, GateCondition, GateId, GateSignals, IntakeAuthor, LabelId, PlanDiagnostic,
+    QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId, ValidatedWorkflow,
+    VerdictId, WorkflowEffect, WorkflowMetadata, compile, render_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/reference-delivery.json");
@@ -126,25 +126,33 @@ fn reference_fixture_validates_with_expected_shape() {
     // +1: implementation_pr -> implementation_pr dependency, for coordinated
     // serial landing (ADR 0023).
     assert_eq!(workflow.relations().len(), 6);
-    assert!(workflow
-        .transitions()
-        .iter()
-        .all(|transition| !transition.id.as_str().starts_with("record_ci_")));
-    assert!(!workflow
-        .labels()
-        .iter()
-        .any(|label| label.as_str() == "merge-ready"
-            || label.as_str() == "needs-merge"
-            || label.as_str().starts_with("ci-")
-            || label.as_str().starts_with("review-")));
-    assert!(workflow
-        .labels()
-        .iter()
-        .any(|label| label.as_str() == "landing"));
-    assert!(workflow
-        .labels()
-        .iter()
-        .any(|label| label.as_str() == "merge-conflict"));
+    assert!(
+        workflow
+            .transitions()
+            .iter()
+            .all(|transition| !transition.id.as_str().starts_with("record_ci_"))
+    );
+    assert!(
+        !workflow
+            .labels()
+            .iter()
+            .any(|label| label.as_str() == "merge-ready"
+                || label.as_str() == "needs-merge"
+                || label.as_str().starts_with("ci-")
+                || label.as_str().starts_with("review-"))
+    );
+    assert!(
+        workflow
+            .labels()
+            .iter()
+            .any(|label| label.as_str() == "landing")
+    );
+    assert!(
+        workflow
+            .labels()
+            .iter()
+            .any(|label| label.as_str() == "merge-conflict")
+    );
 
     let mechanical = workflow
         .roles()
@@ -212,12 +220,16 @@ fn reference_fixture_validates_with_expected_shape() {
         .iter()
         .find(|queue| queue.id.as_str() == "needs_architect")
         .expect("needs_architect queue is declared");
-    assert!(architect_queue
-        .artifacts
-        .contains(&ArtifactKindId::new("code")));
-    assert!(architect_queue
-        .artifacts
-        .contains(&ArtifactKindId::new("implementation_pr")));
+    assert!(
+        architect_queue
+            .artifacts
+            .contains(&ArtifactKindId::new("code"))
+    );
+    assert!(
+        architect_queue
+            .artifacts
+            .contains(&ArtifactKindId::new("implementation_pr"))
+    );
 
     // `intake` is the default (catch-all) issue kind: it declares no identifying
     // labels, so raw human intake (an issue with no labels) is admitted as a
@@ -253,9 +265,11 @@ fn reference_fixture_validates_with_expected_shape() {
         .find(|queue| queue.id.as_str() == "raw_intake")
         .expect("raw_intake mechanical queue is declared");
     assert!(raw_intake.labels.is_empty());
-    assert!(raw_intake
-        .artifacts
-        .contains(&ArtifactKindId::new("intake")));
+    assert!(
+        raw_intake
+            .artifacts
+            .contains(&ArtifactKindId::new("intake"))
+    );
     let raw_intake_automation = raw_intake
         .automation
         .as_ref()
@@ -285,23 +299,31 @@ fn reference_fixture_compiles_every_role() {
     );
 
     assert!(compiled.labels().get(&LabelId::new("ci-passed")).is_none());
-    assert!(compiled
-        .labels()
-        .get(&LabelId::new("review-approved"))
-        .is_none());
-    assert!(compiled
-        .labels()
-        .get(&LabelId::new("merge-ready"))
-        .is_none());
-    assert!(compiled
-        .labels()
-        .get(&LabelId::new("needs-merge"))
-        .is_none());
+    assert!(
+        compiled
+            .labels()
+            .get(&LabelId::new("review-approved"))
+            .is_none()
+    );
+    assert!(
+        compiled
+            .labels()
+            .get(&LabelId::new("merge-ready"))
+            .is_none()
+    );
+    assert!(
+        compiled
+            .labels()
+            .get(&LabelId::new("needs-merge"))
+            .is_none()
+    );
     assert!(compiled.labels().get(&LabelId::new("landing")).is_some());
-    assert!(compiled
-        .labels()
-        .get(&LabelId::new("merge-conflict"))
-        .is_some());
+    assert!(
+        compiled
+            .labels()
+            .get(&LabelId::new("merge-conflict"))
+            .is_some()
+    );
 
     let owner_alignment = compiled
         .queues()
@@ -311,14 +333,18 @@ fn reference_fixture_compiles_every_role() {
     assert_eq!(owner_alignment.min_depth, Some(5));
     assert_eq!(owner_alignment.max_age, Some(Duration::days(7)));
 
-    assert!(compiled
-        .labels()
-        .get(&LabelId::new("testing-passed"))
-        .is_none());
-    assert!(compiled
-        .labels()
-        .get(&LabelId::new("testing-failed"))
-        .is_none());
+    assert!(
+        compiled
+            .labels()
+            .get(&LabelId::new("testing-passed"))
+            .is_none()
+    );
+    assert!(
+        compiled
+            .labels()
+            .get(&LabelId::new("testing-failed"))
+            .is_none()
+    );
 
     let ci_failed = compiled
         .queues()
@@ -375,9 +401,11 @@ fn intake_triage_is_a_normal_queue_match() {
     let planner = workflow.planner();
     let intake = classify_issue(&workflow, 1, &["untriaged"]);
 
-    assert!(planner
-        .matching_queues(&intake)
-        .contains(&temper_workflow::QueueId::new("design_triage")));
+    assert!(
+        planner
+            .matching_queues(&intake)
+            .contains(&temper_workflow::QueueId::new("design_triage"))
+    );
 
     let plan = planner
         .plan_transition(
@@ -546,9 +574,11 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
     let planner = workflow.planner();
     let blocked = classify_blocked_code(&workflow, 50, &[51]);
 
-    assert!(planner
-        .dependency_unblocks(&blocked, &DependencyStatus::default())
-        .is_empty());
+    assert!(
+        planner
+            .dependency_unblocks(&blocked, &DependencyStatus::default())
+            .is_empty()
+    );
     let gated = planner
         .plan_transition(
             &TransitionId::new("mark_code_ready"),
@@ -556,12 +586,14 @@ fn dependency_gate_unblocks_only_when_prerequisites_land() {
             &blocked,
         )
         .expect_err("mark_code_ready is gated until dependencies land");
-    assert!(gated
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("mark_code_ready"),
-            gate: GateId::new("dependency_gate"),
-        }));
+    assert!(
+        gated
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("mark_code_ready"),
+                gate: GateId::new("dependency_gate"),
+            })
+    );
 
     let landed = DependencyStatus::landed([ItemNumber::new(51)]);
     let unblocks = planner.dependency_unblocks(&blocked, &landed);
@@ -618,12 +650,14 @@ fn mechanical_landing_requires_review_and_native_ci() {
             &review,
         )
         .expect_err("a merge cannot plan until the CI signal reports passed");
-    assert!(blocked
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("land_pr"),
-            gate: GateId::new("ci_gate"),
-        }));
+    assert!(
+        blocked
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("land_pr"),
+                gate: GateId::new("ci_gate"),
+            })
+    );
 
     let ci_only = GateSignals::new().with_ci(CiStatus::passed());
     let blocked = planner
@@ -634,12 +668,14 @@ fn mechanical_landing_requires_review_and_native_ci() {
             &ci_only,
         )
         .expect_err("a PR with landing and green CI still needs native approval");
-    assert!(blocked
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("land_pr"),
-            gate: GateId::new("review_gate"),
-        }));
+    assert!(
+        blocked
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("land_pr"),
+                gate: GateId::new("review_gate"),
+            })
+    );
 
     let signals = GateSignals::new()
         .with_ci(CiStatus::passed())
@@ -669,9 +705,11 @@ fn fresh_implementation_pr_matches_reviewer_queue() {
     let planner = workflow.planner();
     let fresh_pr = classify_pr(&workflow, 19, &["implementation", "needs-reviewer"]);
 
-    assert!(planner
-        .matching_queues(&fresh_pr)
-        .contains(&QueueId::new("pr_needs_review")));
+    assert!(
+        planner
+            .matching_queues(&fresh_pr)
+            .contains(&QueueId::new("pr_needs_review"))
+    );
 }
 
 #[test]
@@ -681,15 +719,19 @@ fn failed_gates_route_back_to_engineer_queues() {
 
     let changes = classify_pr(&workflow, 20, &["implementation"]);
     let review_signal = GateSignals::new().with_review(ReviewStatus::new(false, true));
-    assert!(planner
-        .matching_queues_with(&changes, &review_signal)
-        .contains(&QueueId::new("pr_changes_requested")));
+    assert!(
+        planner
+            .matching_queues_with(&changes, &review_signal)
+            .contains(&QueueId::new("pr_changes_requested"))
+    );
 
     let ci_signal = GateSignals::new().with_ci(CiStatus::failed());
     let failed = classify_pr(&workflow, 21, &["implementation"]);
-    assert!(planner
-        .matching_queues_with(&failed, &ci_signal)
-        .contains(&QueueId::new("pr_ci_failed")));
+    assert!(
+        planner
+            .matching_queues_with(&failed, &ci_signal)
+            .contains(&QueueId::new("pr_ci_failed"))
+    );
 
     let landing_failed = classify_pr(&workflow, 22, &["implementation", "landing"]);
     let return_for_review = planner
@@ -711,9 +753,11 @@ fn failed_gates_route_back_to_engineer_queues() {
     );
 
     let conflicted = classify_pr(&workflow, 23, &["implementation", "merge-conflict"]);
-    assert!(planner
-        .matching_queues(&conflicted)
-        .contains(&QueueId::new("pr_merge_conflict")));
+    assert!(
+        planner
+            .matching_queues(&conflicted)
+            .contains(&QueueId::new("pr_merge_conflict"))
+    );
     let requeue = planner
         .plan_transition(
             &TransitionId::new("resolve_merge_conflict"),
@@ -745,12 +789,16 @@ fn attention_queues_route_architect_owner_and_human_work() {
 
     let architect_issue = classify_issue(&workflow, 30, &["code", "needs-architect"]);
     let architect_pr = classify_pr(&workflow, 31, &["implementation", "needs-architect"]);
-    assert!(planner
-        .matching_queues(&architect_issue)
-        .contains(&needs_architect));
-    assert!(planner
-        .matching_queues(&architect_pr)
-        .contains(&needs_architect));
+    assert!(
+        planner
+            .matching_queues(&architect_issue)
+            .contains(&needs_architect)
+    );
+    assert!(
+        planner
+            .matching_queues(&architect_pr)
+            .contains(&needs_architect)
+    );
 
     let design = classify_issue(&workflow, 32, &["design", "draft"]);
     let request_owner = TransitionId::new("request_owner_input");
@@ -763,9 +811,11 @@ fn attention_queues_route_architect_owner_and_human_work() {
     );
 
     let owner_design = classify_issue(&workflow, 33, &["design", "needs-owner"]);
-    assert!(planner
-        .matching_queues(&owner_design)
-        .contains(&needs_owner_queue));
+    assert!(
+        planner
+            .matching_queues(&owner_design)
+            .contains(&needs_owner_queue)
+    );
     let request_human = TransitionId::new("request_human_input");
     let handoff = planner
         .plan_transition(&request_human, &owner, &owner_design)
@@ -779,9 +829,11 @@ fn attention_queues_route_architect_owner_and_human_work() {
     );
 
     let human_design = classify_issue(&workflow, 34, &["design", "needs-human"]);
-    assert!(planner
-        .matching_queues(&human_design)
-        .contains(&needs_human_queue));
+    assert!(
+        planner
+            .matching_queues(&human_design)
+            .contains(&needs_human_queue)
+    );
     let clear_human = TransitionId::new("clear_human_flag");
     let clear = planner
         .plan_transition(&clear_human, &human, &human_design)
@@ -834,9 +886,11 @@ fn raw_human_intake_classifies_as_the_default_kind() {
     // Once stamped, the same default-kind issue flows into architect triage.
     let stamped = classify_issue(&workflow, 1, &["untriaged"]);
     assert_eq!(stamped.kind, ArtifactKindId::new("intake"));
-    assert!(planner
-        .matching_queues(&stamped)
-        .contains(&QueueId::new("design_triage")));
+    assert!(
+        planner
+            .matching_queues(&stamped)
+            .contains(&QueueId::new("design_triage"))
+    );
 }
 
 #[test]

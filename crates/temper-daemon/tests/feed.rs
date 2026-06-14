@@ -12,11 +12,11 @@ use temper_forge::{
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_worker_protocol::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
-    RepoOutcome, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{
-    render_metadata_block, RawWorkflowSpec, RoleId, ValidatedWorkflow, WorkflowMetadata,
+    RawWorkflowSpec, RoleId, ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
@@ -591,9 +591,11 @@ fn scanned_architect_triage_item_carries_verdict_job_enrichment() {
                 assert_eq!(assign.role, "architect");
                 assert_eq!(assign.artifact.kind, "issue");
                 assert_eq!(assign.artifact.item, json!(issue.get()));
-                assert!(assign
-                    .job_id
-                    .contains(&format!("/issue-{}/architect/triage", issue.get())));
+                assert!(
+                    assign
+                        .job_id
+                        .contains(&format!("/issue-{}/architect/triage", issue.get()))
+                );
                 assign
             }
             other => panic!("expected assign, got {other:?}"),
@@ -682,9 +684,11 @@ fn scanned_role_work_dispatches_to_worker_and_applies_once() {
                 assert_eq!(assign.role, "engineer");
                 assert_eq!(assign.artifact.kind, "issue");
                 assert_eq!(assign.artifact.item, json!(issue.get()));
-                assert!(assign
-                    .job_id
-                    .contains(&format!("/issue-{}/engineer/", issue.get())));
+                assert!(
+                    assign
+                        .job_id
+                        .contains(&format!("/issue-{}/engineer/", issue.get()))
+                );
                 assign
             }
             other => panic!("expected assign, got {other:?}"),
@@ -714,7 +718,10 @@ fn scanned_role_work_dispatches_to_worker_and_applies_once() {
         assert!(primary.is_writable());
         assert_eq!(primary.default_branch, "main");
         assert_eq!(primary.base_branch, "main");
-        assert_eq!(primary.branch_hint.as_deref(), Some(expected_branch_hint.as_str()));
+        assert_eq!(
+            primary.branch_hint.as_deref(),
+            Some(expected_branch_hint.as_str())
+        );
         let artifact = context.artifact.expect("issue snapshot is present");
         assert_eq!(artifact.number, issue.get());
         assert_eq!(artifact.title, "ready code issue");

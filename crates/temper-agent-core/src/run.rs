@@ -178,7 +178,6 @@ pub fn run_sub_agent_controllable_with_hook(
     ),
     SubAgentError,
 > {
-
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools
         .tools()

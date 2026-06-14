@@ -187,7 +187,10 @@ impl fmt::Display for InteractionSpecDiagnostic {
         match self {
             Self::DuplicateId { kind, profile, id } => {
                 if let Some(profile) = profile {
-                    write!(formatter, "duplicate {kind} id `{id}` in profile `{profile}`")
+                    write!(
+                        formatter,
+                        "duplicate {kind} id `{id}` in profile `{profile}`"
+                    )
                 } else {
                     write!(formatter, "duplicate {kind} id `{id}`")
                 }
@@ -211,7 +214,10 @@ impl fmt::Display for InteractionSpecDiagnostic {
                 write!(formatter, "{site} references undeclared {expected} `{id}`")
             }
             Self::EmptyTranscriptLabels { profile } => {
-                write!(formatter, "profile `{profile}` transcript labels must not be empty")
+                write!(
+                    formatter,
+                    "profile `{profile}` transcript labels must not be empty"
+                )
             }
             Self::EmptyTranscriptLabel { profile } => write!(
                 formatter,

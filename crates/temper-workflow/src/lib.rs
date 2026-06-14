@@ -109,14 +109,14 @@ pub use classify::{
     ClassifiedRelation, Classifier,
 };
 pub use compile::{
-    compile, CompiledWorkflow, ExternalToolManifest, LabelManifest, LabelSpec, LabelUsage,
-    PromptManifest, PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest,
+    CompiledWorkflow, ExternalToolManifest, LabelManifest, LabelSpec, LabelUsage, PromptManifest,
+    PromptSection, QueueManifest, RoleManifest, ToolManifest, TransitionManifest, compile,
 };
 pub use context::{CreateIssuesChild, ExecutionContext};
 pub use diagnostics::{Diagnostic, ReferenceSite, Severity, SymbolKind, ValidationErrors};
 pub use execute::{
-    find_pull_request_by_correlation, CorrelationLookupPlan, EnsureOutcome, ExecutionError,
-    ExecutionReport, Executor,
+    CorrelationLookupPlan, EnsureOutcome, ExecutionError, ExecutionReport, Executor,
+    find_pull_request_by_correlation,
 };
 pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
@@ -129,19 +129,20 @@ pub use lease::{
     LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy, PreparedAcquire,
 };
 pub use metadata::{
+    Lease, METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata,
     global_child_correlation_key, parse_metadata_block, render_metadata_block,
-    replace_metadata_block, Lease, MetadataError, WorkflowMetadata, METADATA_BEGIN, METADATA_END,
+    replace_metadata_block,
 };
 pub use plan::{
-    matches_queue, matches_queue_cheap, matches_queue_condition, queue_active, CiState, CiStatus,
-    DependencyReadFailure, DependencyStatus, GateSignals, MechanicalPlan, PlanDiagnostic,
-    PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus, SignalNeeds,
-    TransitionPlan, WorkflowEffect,
+    CiState, CiStatus, DependencyReadFailure, DependencyStatus, GateSignals, MechanicalPlan,
+    PlanDiagnostic, PlanError, Planner, Postcondition, QueueMember, QueueQuery, ReviewStatus,
+    SignalNeeds, TransitionPlan, WorkflowEffect, matches_queue, matches_queue_cheap,
+    matches_queue_condition, queue_active,
 };
 pub use reconcile::{
-    reconciliation_candidate_query_plan, ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError,
-    ReconcileFinding, ReconcileReport, Reconciler, ReconciliationCandidateQueryPlan,
-    ReconciliationMode, RecoveryAction, RecoveryPolicy,
+    ArtifactSnapshot, DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport,
+    Reconciler, ReconciliationCandidateQueryPlan, ReconciliationMode, RecoveryAction,
+    RecoveryPolicy, reconciliation_candidate_query_plan,
 };
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;

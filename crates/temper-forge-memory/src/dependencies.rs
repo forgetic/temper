@@ -1,6 +1,6 @@
+use crate::Inner;
 use crate::lists::{sort_issues_by_number, sort_pull_requests_by_number};
 use crate::state::State;
-use crate::Inner;
 use temper_forge::{
     ForgeError, ForgeResult, Issue, IssueId, ItemNumber, PullRequest, PullRequestId, RepositoryId,
 };

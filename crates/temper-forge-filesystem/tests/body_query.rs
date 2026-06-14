@@ -1,6 +1,6 @@
 mod support;
 
-use support::{block_on, issue_with, pull_request_with, repository, TestRoot};
+use support::{TestRoot, block_on, issue_with, pull_request_with, repository};
 use temper_forge::{
     Forge, IssueQuery, IssueState, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, UpdateIssue, UpdatePullRequest,

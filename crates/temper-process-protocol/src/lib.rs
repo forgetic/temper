@@ -9,16 +9,16 @@ pub mod interaction;
 pub mod workflow_role;
 
 pub use interaction::{
-    is_valid_deterministic_slug, is_valid_proposal_slug, validate_deterministic_slug,
-    validate_proposal_ids, validate_proposal_slug, validate_proposals, ConversationId,
-    ConversationProfileId, ConversationReply, ConversationRequest, ConversationTurn,
-    ConversationTurnId, InteractionProtocolError, IssueProposal, Participant, ParticipantKind,
-    Proposal, ProposalId, ProposalKind, ProposalPayloadValidator, DETERMINISTIC_SLUG_RULE,
+    ConversationId, ConversationProfileId, ConversationReply, ConversationRequest,
+    ConversationTurn, ConversationTurnId, DETERMINISTIC_SLUG_RULE, InteractionProtocolError,
+    IssueProposal, Participant, ParticipantKind, Proposal, ProposalId, ProposalKind,
+    ProposalPayloadValidator, is_valid_deterministic_slug, is_valid_proposal_slug,
+    validate_deterministic_slug, validate_proposal_ids, validate_proposal_slug, validate_proposals,
 };
 pub use workflow_role::{
-    AuthorizedWorkflowAction, BoundExternalTool, WorkflowEffect, WorkflowExternalToolManifest,
+    AuthorizedWorkflowAction, BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION,
+    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION, WorkflowEffect, WorkflowExternalToolManifest,
     WorkflowPromptManifest, WorkflowPromptSection, WorkflowReviewDecision,
     WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
     WorkflowRoleManifest, WorkflowRolePromptExtension, WorkflowToolManifest,
-    WORKFLOW_ROLE_DECISION_NO_ACTION, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
 };

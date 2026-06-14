@@ -12,9 +12,9 @@ use temper_forge::{
 use temper_forge_filesystem::FilesystemForge;
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
-    render_metadata_block, Applier, ArtifactKindId, ArtifactRef, ArtifactSource,
-    DefaultRecoveryPolicy, InMemoryJournal, LeaseManager, LeasePolicy, ReconcileFinding,
-    RecoveryAction, TransitionId, WorkflowEffect, WorkflowMetadata,
+    Applier, ArtifactKindId, ArtifactRef, ArtifactSource, DefaultRecoveryPolicy, InMemoryJournal,
+    LeaseManager, LeasePolicy, ReconcileFinding, RecoveryAction, TransitionId, WorkflowEffect,
+    WorkflowMetadata, render_metadata_block,
 };
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);

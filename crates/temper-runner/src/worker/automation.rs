@@ -1,10 +1,10 @@
-use super::{saturating_u64, Progress, WorkerError};
-use crate::observability::{
-    execution_error_diagnostic_classes, execution_error_failure_class, StructuredEvent,
-};
-use crate::scan::{scan_automated_queues, AutomatedWorkItem};
-use crate::workspace_automation::{execute_workspace_automation, WorkspaceAutomationOutcome};
+use super::{Progress, WorkerError, saturating_u64};
 use crate::ExternalToolExecutors;
+use crate::observability::{
+    StructuredEvent, execution_error_diagnostic_classes, execution_error_failure_class,
+};
+use crate::scan::{AutomatedWorkItem, scan_automated_queues};
+use crate::workspace_automation::{WorkspaceAutomationOutcome, execute_workspace_automation};
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_workflow::{

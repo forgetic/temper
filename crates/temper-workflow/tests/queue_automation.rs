@@ -174,15 +174,17 @@ fn unknown_automation_actor_is_diagnosed() {
     automation_mut(&mut spec).actor = "ghost".to_string();
 
     let errors = spec.validate().expect_err("unknown actor fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Role,
-            id: "ghost".to_string(),
-            site: ReferenceSite::QueueAutomationActor {
-                queue: "landing".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Role,
+                id: "ghost".to_string(),
+                site: ReferenceSite::QueueAutomationActor {
+                    queue: "landing".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -191,15 +193,17 @@ fn unknown_automation_transition_is_diagnosed() {
     automation_mut(&mut spec).transition = "missing".to_string();
 
     let errors = spec.validate().expect_err("unknown transition fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Transition,
-            id: "missing".to_string(),
-            site: ReferenceSite::QueueAutomationTransition {
-                queue: "landing".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Transition,
+                id: "missing".to_string(),
+                site: ReferenceSite::QueueAutomationTransition {
+                    queue: "landing".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -208,13 +212,15 @@ fn unauthorized_automation_transition_is_diagnosed() {
     spec.transitions[0].roles.clear();
 
     let errors = spec.validate().expect_err("unauthorized transition fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationUnauthorized {
-            queue: "landing".to_string(),
-            actor: "mechanical".to_string(),
-            transition: "land_pr".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationUnauthorized {
+                queue: "landing".to_string(),
+                actor: "mechanical".to_string(),
+                transition: "land_pr".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -225,14 +231,16 @@ fn automation_transition_artifact_mismatch_is_diagnosed() {
     spec.transitions[0].artifact = "work_item".to_string();
 
     let errors = spec.validate().expect_err("artifact mismatch fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationArtifactMismatch {
-            queue: "landing".to_string(),
-            transition: "land_pr".to_string(),
-            artifact: "work_item".to_string(),
-            queue_artifacts: vec!["implementation_pr".to_string()],
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationArtifactMismatch {
+                queue: "landing".to_string(),
+                transition: "land_pr".to_string(),
+                artifact: "work_item".to_string(),
+                queue_artifacts: vec!["implementation_pr".to_string()],
+            })
+    );
 }
 
 /// Declares an external tool with `tool_id` on the actor role of the helper
@@ -253,13 +261,15 @@ fn automation_executor_undeclared_on_actor_is_diagnosed() {
     automation_mut(&mut spec).executor = Some("coding_workspace".to_string());
 
     let errors = spec.validate().expect_err("undeclared executor fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationExecutorUndeclared {
-            queue: "landing".to_string(),
-            actor: "mechanical".to_string(),
-            executor: "coding_workspace".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationExecutorUndeclared {
+                queue: "landing".to_string(),
+                actor: "mechanical".to_string(),
+                executor: "coding_workspace".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -289,23 +299,27 @@ fn invalid_conflict_fallback_is_diagnosed() {
     spec.transitions[1].roles.clear();
 
     let errors = spec.validate().expect_err("invalid fallback fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationOutcomeUnauthorized {
-            queue: "landing".to_string(),
-            verdict: "merge_conflict".to_string(),
-            actor: "mechanical".to_string(),
-            transition: "route_merge_conflict".to_string(),
-        }));
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationOutcomeArtifactMismatch {
-            queue: "landing".to_string(),
-            verdict: "merge_conflict".to_string(),
-            transition: "route_merge_conflict".to_string(),
-            expected: "implementation_pr".to_string(),
-            actual: "work_item".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationOutcomeUnauthorized {
+                queue: "landing".to_string(),
+                verdict: "merge_conflict".to_string(),
+                actor: "mechanical".to_string(),
+                transition: "route_merge_conflict".to_string(),
+            })
+    );
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+                queue: "landing".to_string(),
+                verdict: "merge_conflict".to_string(),
+                transition: "route_merge_conflict".to_string(),
+                expected: "implementation_pr".to_string(),
+                actual: "work_item".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -314,16 +328,18 @@ fn unknown_conflict_fallback_is_diagnosed() {
     automation_mut(&mut spec).on_merge_conflict = Some("missing_fallback".to_string());
 
     let errors = spec.validate().expect_err("unknown fallback fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Transition,
-            id: "missing_fallback".to_string(),
-            site: ReferenceSite::QueueAutomationOutcome {
-                queue: "landing".to_string(),
-                verdict: "merge_conflict".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Transition,
+                id: "missing_fallback".to_string(),
+                site: ReferenceSite::QueueAutomationOutcome {
+                    queue: "landing".to_string(),
+                    verdict: "merge_conflict".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -386,14 +402,16 @@ fn unauthorized_general_outcome_is_diagnosed() {
     spec.transitions[1].roles.clear();
 
     let errors = spec.validate().expect_err("unauthorized outcome fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationOutcomeUnauthorized {
-            queue: "landing".to_string(),
-            verdict: "rejected".to_string(),
-            actor: "mechanical".to_string(),
-            transition: "route_merge_conflict".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationOutcomeUnauthorized {
+                queue: "landing".to_string(),
+                verdict: "rejected".to_string(),
+                actor: "mechanical".to_string(),
+                transition: "route_merge_conflict".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -410,15 +428,17 @@ fn general_outcome_artifact_mismatch_is_diagnosed() {
     let errors = spec
         .validate()
         .expect_err("outcome artifact mismatch fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::QueueAutomationOutcomeArtifactMismatch {
-            queue: "landing".to_string(),
-            verdict: "rejected".to_string(),
-            transition: "route_merge_conflict".to_string(),
-            expected: "implementation_pr".to_string(),
-            actual: "work_item".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueAutomationOutcomeArtifactMismatch {
+                queue: "landing".to_string(),
+                verdict: "rejected".to_string(),
+                transition: "route_merge_conflict".to_string(),
+                expected: "implementation_pr".to_string(),
+                actual: "work_item".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -452,16 +472,18 @@ fn unknown_transition_outcome_is_diagnosed() {
     let errors = spec
         .validate()
         .expect_err("unknown transition outcome fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Transition,
-            id: "missing_outcome".to_string(),
-            site: ReferenceSite::TransitionOutcome {
-                transition: "land_pr".to_string(),
-                verdict: "escalate".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Transition,
+                id: "missing_outcome".to_string(),
+                site: ReferenceSite::TransitionOutcome {
+                    transition: "land_pr".to_string(),
+                    verdict: "escalate".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -477,15 +499,17 @@ fn transition_outcome_artifact_mismatch_is_diagnosed() {
     let errors = spec
         .validate()
         .expect_err("transition outcome artifact mismatch fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::TransitionOutcomeArtifactMismatch {
-            transition: "land_pr".to_string(),
-            verdict: "escalate".to_string(),
-            outcome_transition: "route_merge_conflict".to_string(),
-            expected: "implementation_pr".to_string(),
-            actual: "work_item".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::TransitionOutcomeArtifactMismatch {
+                transition: "land_pr".to_string(),
+                verdict: "escalate".to_string(),
+                outcome_transition: "route_merge_conflict".to_string(),
+                expected: "implementation_pr".to_string(),
+                actual: "work_item".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -502,11 +526,13 @@ fn unauthorized_transition_outcome_is_diagnosed() {
     let errors = spec
         .validate()
         .expect_err("unauthorized transition outcome fails");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::TransitionOutcomeUnauthorized {
-            transition: "land_pr".to_string(),
-            verdict: "escalate".to_string(),
-            outcome_transition: "route_merge_conflict".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::TransitionOutcomeUnauthorized {
+                transition: "land_pr".to_string(),
+                verdict: "escalate".to_string(),
+                outcome_transition: "route_merge_conflict".to_string(),
+            })
+    );
 }

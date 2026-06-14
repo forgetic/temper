@@ -46,9 +46,9 @@ pub mod timer;
 pub use skein::cx::Cx;
 
 pub use cadence::spawn_cadence_loop;
-pub use engine::{drive, Executor};
+pub use engine::{Executor, drive};
 pub use machine::{EngineTime, Machine};
-pub use queue::{channel, oneshot, CqReceiver, CqSender, OneshotReceiver, OneshotSender};
-pub use runtime::{block_on, block_on_with, build_runtime, EngineRuntime};
+pub use queue::{CqReceiver, CqSender, OneshotReceiver, OneshotSender, channel, oneshot};
+pub use runtime::{EngineRuntime, block_on, block_on_with, build_runtime};
 pub use spawn::{SpawnFactory, Spawner};
 pub use timer::arm_timer;

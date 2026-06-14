@@ -4,8 +4,8 @@
 //! tests and development. It is not authoritative state; workers still re-read
 //! the store after every wake and the poll loop remains the correctness backstop.
 
-use crate::errors::backend_error;
 use crate::FilesystemForge;
+use crate::errors::backend_error;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;

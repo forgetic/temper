@@ -1,6 +1,6 @@
 mod support;
 
-use support::{block_on, create_pr, new_repo, seed_ci, workflow, TestRoot};
+use support::{TestRoot, block_on, create_pr, new_repo, seed_ci, workflow};
 use temper_forge::{
     CiJobConclusion, CreatePullRequestReview, Forge, PullRequestState, RequestReviewers,
     ReviewDecision, UserId,

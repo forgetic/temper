@@ -223,7 +223,9 @@ mod tests {
         let cwd = std::env::temp_dir();
         let sink = crate::agent_runner::NullProgressSink;
         let outcome =
-            temper_worker_io_engine::block_on(async move { runner.run(&context, &cwd, &sink).await });
+            temper_worker_io_engine::block_on(
+                async move { runner.run(&context, &cwd, &sink).await },
+            );
         let error = outcome.expect_err("empty command must fail");
         assert_eq!(error.class, temper_worker_protocol::FailureClass::Permanent);
     }

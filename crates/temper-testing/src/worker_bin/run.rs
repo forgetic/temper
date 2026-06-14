@@ -42,15 +42,15 @@ use temper_runner::{
 use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, RoleId, ValidatedWorkflow};
 
 use crate::agents::{
-    basic_fake_registry, fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
-    RequestChangesThenApproveReviewer,
+    ClosingArchitect, FakeArchitect, FakeReviewer, RequestChangesThenApproveReviewer,
+    basic_fake_registry, fake_registry_with,
 };
 use crate::worker_bin::args::{
     ArchitectKind, Backend, CiPolicyKind, ClockKind, ProfileKind, ReviewerKind, RoleBehavior,
     WorkerArgs, WorkerKind,
 };
 use crate::worker_bin::multi_ci::MultiRepoCiWorker;
-use crate::{block_on, resolve_workflow, runner_config_for_workflow, WorkflowLoadError};
+use crate::{WorkflowLoadError, block_on, resolve_workflow, runner_config_for_workflow};
 use temper_runner::AgentRegistry;
 
 /// Errors that abort a worker invocation with a non-zero exit.
@@ -455,13 +455,15 @@ impl StopSignal {
 
     pub(super) fn should_stop(&self) -> bool {
         if let Some(path) = &self.stop_file
-            && sentinel_exists(path) {
-                return true;
-            }
+            && sentinel_exists(path)
+        {
+            return true;
+        }
         if let Some(deadline) = self.deadline
-            && Instant::now() >= deadline {
-                return true;
-            }
+            && Instant::now() >= deadline
+        {
+            return true;
+        }
         false
     }
 }

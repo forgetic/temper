@@ -3,19 +3,19 @@
 //! Worker simulants: in-sim tasks speaking the real worker protocol over the
 //! production h1 byte path, with seeded misbehavior profiles.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
 use skein::cx::Cx;
 use temper_worker_protocol::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, RepoOutcome, ResultStatus,
-    WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
-use crate::model::SimModel;
 use crate::SimProtocolClient;
+use crate::model::SimModel;
 
 /// How a simulated worker behaves.
 #[derive(Clone, Debug)]
@@ -167,9 +167,10 @@ pub async fn run_worker(
                 for _ in 0..submissions {
                     if let Ok(reply) = client.try_send(&result).await
                         && let Some(WorkerProtocolMessage::Release(release)) = reply
-                            && release.job_id == assign.job_id {
-                                model.record_release(&assign.job_id);
-                            }
+                        && release.job_id == assign.job_id
+                    {
+                        model.record_release(&assign.job_id);
+                    }
                 }
             }
             Ok(Some(WorkerProtocolMessage::Error(error)))

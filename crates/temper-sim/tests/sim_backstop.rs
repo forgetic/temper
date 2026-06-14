@@ -12,13 +12,13 @@
 use std::sync::Arc;
 
 use temper_daemon::{
-    spawn_poll_backstop, Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget,
+    Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget, spawn_poll_backstop,
 };
 use temper_forge::{CreateIssue, CreateRepository, Forge, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_sim::{Sim, SimProtocolClient};
 use temper_worker_protocol::{
-    Capability, Capacity, ErrorCode, Poll, Register, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};
 

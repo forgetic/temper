@@ -6,7 +6,7 @@ use temper_workflow::{
     WorkflowEffect,
 };
 
-use super::{redacted_preview, StructuredEvent, WorkItemIdentity};
+use super::{StructuredEvent, WorkItemIdentity, redacted_preview};
 
 const PREVIEW_LIMIT: usize = 240;
 

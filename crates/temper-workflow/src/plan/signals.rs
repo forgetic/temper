@@ -15,7 +15,7 @@
 //!
 //! [`Planner`]: super::Planner
 
-use super::{queue::QueueQuery, DependencyStatus};
+use super::{DependencyStatus, queue::QueueQuery};
 use crate::ids::TransitionId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use std::collections::HashMap;
@@ -169,11 +169,7 @@ impl CiStatus {
 
     /// Builds a status directly from a pass verdict.
     pub fn with_passed(passed: bool) -> Self {
-        if passed {
-            Self::passed()
-        } else {
-            Self::new()
-        }
+        if passed { Self::passed() } else { Self::new() }
     }
 
     /// Builds a status directly from an aggregate CI state.

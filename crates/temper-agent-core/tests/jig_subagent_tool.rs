@@ -11,10 +11,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use temper_agent_core::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
-use temper_agent_runtime::ProviderConfig;
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
+use temper_agent_core::{AgentStop, SubAgent, SubAgentTool, run_sub_agent};
+use temper_agent_runtime::ProviderConfig;
 use tongs::provider::StreamOptions;
 use tongs::tools::create_read_tool;
 use tongs::tools::{ToolEffects, ToolRegistry};
@@ -109,17 +109,20 @@ fn parent_agent_delegates_to_a_sub_agent() {
             ToolEffects::read(),
             factory,
         );
-        run_sub_agent(handle, SubAgent {
-            system_prompt: Some("You are an orchestrator. Use the investigate tool.".into()),
-            user_message: "What is the answer? Use the investigate sub-agent.".into(),
-            tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
-            max_iterations: 4,
-            provider: parent_provider,
-            stream_options: StreamOptions {
-                api_key: Some("sk-jig-test".to_string()),
-                ..StreamOptions::default()
+        run_sub_agent(
+            handle,
+            SubAgent {
+                system_prompt: Some("You are an orchestrator. Use the investigate tool.".into()),
+                user_message: "What is the answer? Use the investigate sub-agent.".into(),
+                tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
+                max_iterations: 4,
+                provider: parent_provider,
+                stream_options: StreamOptions {
+                    api_key: Some("sk-jig-test".to_string()),
+                    ..StreamOptions::default()
+                },
             },
-        })
+        )
         .await
     })
     .expect("parent agent runs");
@@ -258,17 +261,20 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
             ToolEffects::read(),
             factory,
         );
-        run_sub_agent(handle, SubAgent {
-            system_prompt: Some("Orchestrator.".into()),
-            user_message: "Investigate A and B.".into(),
-            tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
-            max_iterations: 4,
-            provider: parent_provider,
-            stream_options: StreamOptions {
-                api_key: Some("sk-jig-test".to_string()),
-                ..StreamOptions::default()
+        run_sub_agent(
+            handle,
+            SubAgent {
+                system_prompt: Some("Orchestrator.".into()),
+                user_message: "Investigate A and B.".into(),
+                tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
+                max_iterations: 4,
+                provider: parent_provider,
+                stream_options: StreamOptions {
+                    api_key: Some("sk-jig-test".to_string()),
+                    ..StreamOptions::default()
+                },
             },
-        })
+        )
         .await
     })
     .expect("parent runs");

@@ -16,16 +16,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use skein::http::h1::http_client::{
-    ClientError, HttpClient, HttpClientConfig, RedirectPolicy,
-};
+use skein::http::h1::http_client::{ClientError, HttpClient, HttpClientConfig, RedirectPolicy};
 use skein::http::h1::{
     Http1Listener, Http1ListenerConfig, Method, Request as H1Request, Response as H1Response,
 };
 use skein::runtime::RuntimeHandle;
 use skein::server::shutdown::ShutdownSignal;
 
-use crate::queue::{oneshot, CqSender, OneshotSender};
+use crate::queue::{CqSender, OneshotSender, oneshot};
 use crate::spawn::Spawner;
 
 /// One parsed inbound HTTP request, as data.

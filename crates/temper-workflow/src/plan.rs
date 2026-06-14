@@ -41,8 +41,8 @@ use std::fmt;
 
 pub use dependency::{DependencyReadFailure, DependencyStatus, MechanicalPlan};
 pub use queue::{
-    matches_queue, matches_queue_cheap, matches_queue_condition, matches_queue_with, queue_active,
-    QueueMember, QueueQuery,
+    QueueMember, QueueQuery, matches_queue, matches_queue_cheap, matches_queue_condition,
+    matches_queue_with, queue_active,
 };
 pub use signals::{CiState, CiStatus, GateSignals, ReviewStatus, SignalNeeds};
 pub use types::{Postcondition, TransitionPlan, WorkflowEffect};

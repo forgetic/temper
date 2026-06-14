@@ -10,7 +10,7 @@
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Barrier};
+use std::sync::{Arc, Barrier, mpsc};
 use std::time::Duration;
 use temper_testing::forgejo_server::start_cached_provisioned_server;
 

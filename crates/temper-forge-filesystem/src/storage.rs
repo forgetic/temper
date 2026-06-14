@@ -1,17 +1,17 @@
+use crate::FilesystemForge;
 use crate::errors::backend_error;
 use crate::lists::{
     sort_comments, sort_issues_by_number, sort_labels, sort_pull_requests_by_number, sort_reviews,
 };
-use crate::metadata::{default_metadata, Metadata};
+use crate::metadata::{Metadata, default_metadata};
 use crate::record_ids::is_record_id;
 use crate::validation::{
     validate_stored_issue_comments, validate_stored_issues, validate_stored_labels,
     validate_stored_pull_request_comments, validate_stored_pull_request_reviews,
     validate_stored_pull_requests,
 };
-use crate::FilesystemForge;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

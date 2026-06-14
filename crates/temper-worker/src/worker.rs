@@ -8,16 +8,16 @@ use crate::worker_args::{ForgejoArgs, WorkerArgs, WorkerKind};
 use crate::worker_external_tools::configure_external_tool_executors;
 use crate::worker_role_agent::build_role_agent;
 use crate::worker_stop::StopSignal;
-use crate::worker_tick::{production_tick_id, TickReason};
+use crate::worker_tick::{TickReason, production_tick_id};
 use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_reference_delivery::{repo_input, resolve_workflow, runner_config_for};
 use temper_runner::{
-    render_worker_capability_event, IdlePollBackoff, MultiRepoMechanicalWorker,
-    MultiRepoRoleWorker, Progress, RepositoryJournal, RepositorySet, RepositoryTarget, RunReport,
-    Worker, WorkerCapabilitySummary, WorkerError, WorkerRunReport,
+    IdlePollBackoff, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress, RepositoryJournal,
+    RepositorySet, RepositoryTarget, RunReport, Worker, WorkerCapabilitySummary, WorkerError,
+    WorkerRunReport, render_worker_capability_event,
 };
-use temper_wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
+use temper_wake::{WakeConfig, WakeListener, WakeWaitOutcome, wait_for_wake_or_poll};
 use temper_workflow::{CommandJournal, InMemoryJournal, LeasePolicy, RoleId};
 
 #[derive(Debug)]
@@ -61,9 +61,7 @@ impl From<ForgeError> for RunError {
 /// requests against the engine runtime.
 pub fn run(args: &WorkerArgs) -> Result<RunReport, RunError> {
     let args = args.clone();
-    temper_io_engine::block_on_with(move |cx, _handle| async move {
-        run_async(&cx, &args).await
-    })
+    temper_io_engine::block_on_with(move |cx, _handle| async move { run_async(&cx, &args).await })
 }
 
 async fn run_async(cx: &temper_io_engine::Cx, args: &WorkerArgs) -> Result<RunReport, RunError> {

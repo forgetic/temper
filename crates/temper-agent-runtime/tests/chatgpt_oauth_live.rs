@@ -23,9 +23,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use temper_agent_runtime::{AuthChoice, ProviderConfig, default_auth_path, run_decision};
 use serde::Deserialize;
 use serde_json::Value;
+use temper_agent_runtime::{AuthChoice, ProviderConfig, default_auth_path, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use temper_io_engine::process::{run_process, ProcessCall, ProcessCallError};
+use temper_io_engine::process::{ProcessCall, ProcessCallError, run_process};
 
 use temper_forge::Forge;
 use temper_workflow::{RoleManifest, ToolManifest};
@@ -18,10 +18,10 @@ use temper_workflow::{RoleManifest, ToolManifest};
 use crate::role_decision::workflow_role_manifest_from_runtime;
 use crate::role_process_tools::{build_work_item_context, run_process_action};
 use crate::{
-    redacted_lossy_preview, render_role_decision_reply_event, render_role_decision_request_event,
     Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleDecisionReplyEvent,
     RoleDecisionRequestEvent, RoleTools, WorkItem, WorkflowRoleDecisionProtocolError,
-    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
+    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, redacted_lossy_preview,
+    render_role_decision_reply_event, render_role_decision_request_event,
 };
 
 const STDERR_PREVIEW_LIMIT: usize = 4096;

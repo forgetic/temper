@@ -86,9 +86,11 @@ fn required_unbound_external_tool_fails_preflight_with_clear_error() {
             tool: tool_id("coding_workspace"),
         }
     );
-    assert!(error
-        .to_string()
-        .contains("role `banana` requires external tool `coding_workspace`"));
+    assert!(
+        error
+            .to_string()
+            .contains("role `banana` requires external tool `coding_workspace`")
+    );
 }
 
 #[test]

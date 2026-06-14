@@ -4,13 +4,13 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 use temper_daemon::{
-    handle_webhook, webhook_signature, Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig,
-    WebhookError,
+    Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig, WebhookError, handle_webhook,
+    webhook_signature,
 };
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
-    Capability, Capacity, ErrorCode, Poll, Register, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};
 
@@ -145,9 +145,11 @@ fn assert_scanned_issue_assignment(msg: WorkerProtocolMessage, issue: ItemNumber
             assert_eq!(assign.role, "engineer");
             assert_eq!(assign.artifact.kind, "issue");
             assert_eq!(assign.artifact.item, json!(issue.get()));
-            assert!(assign
-                .job_id
-                .contains(&format!("/issue-{}/engineer/", issue.get())));
+            assert!(
+                assign
+                    .job_id
+                    .contains(&format!("/issue-{}/engineer/", issue.get()))
+            );
         }
         other => panic!("expected assign, got {other:?}"),
     }

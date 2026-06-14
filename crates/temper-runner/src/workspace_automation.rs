@@ -317,8 +317,8 @@ mod tests {
     use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery};
     use temper_forge_memory::MemoryForge;
     use temper_workflow::{
-        parse_metadata_block, ArtifactKindId, ArtifactRef, CreateIssuesChild, ExternalToolId,
-        QueueId, RawWorkflowSpec, RoleId,
+        ArtifactKindId, ArtifactRef, CreateIssuesChild, ExternalToolId, QueueId, RawWorkflowSpec,
+        RoleId, parse_metadata_block,
     };
 
     use crate::{
@@ -488,9 +488,11 @@ mod tests {
             let ui_meta = parse_metadata_block(&created[1].body)
                 .expect("metadata parses")
                 .expect("metadata exists");
-            assert!(ui_meta
-                .dependencies
-                .contains(&ArtifactRef::same_repo(api_number)));
+            assert!(
+                ui_meta
+                    .dependencies
+                    .contains(&ArtifactRef::same_repo(api_number))
+            );
 
             let parent = forge
                 .get_issue_by_number(&repo, epic)

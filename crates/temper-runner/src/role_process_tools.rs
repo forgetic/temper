@@ -13,12 +13,12 @@ use crate::workspace_request::{
     workspace_pull_request_input,
 };
 use crate::{
-    execution_error_diagnostic_classes, execution_error_failure_class,
-    postcondition_outcome_for_error, render_action_dispatch_event,
-    render_transition_execution_event, ActionDispatchEvent, AgentError, BoundExternalTool,
-    CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceOutput, CodingWorkspaceRepository,
-    CodingWorkspaceRequest, CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools,
-    TransitionExecutionEvent, WorkItem, WorkItemIdentity, WorkspaceCheckout,
+    ActionDispatchEvent, AgentError, BoundExternalTool, CodingWorkspace, CodingWorkspaceGuidance,
+    CodingWorkspaceOutput, CodingWorkspaceRepository, CodingWorkspaceRequest,
+    CodingWorkspaceWorkItem, ExternalToolExecutors, RoleTools, TransitionExecutionEvent, WorkItem,
+    WorkItemIdentity, WorkspaceCheckout, execution_error_diagnostic_classes,
+    execution_error_failure_class, postcondition_outcome_for_error, render_action_dispatch_event,
+    render_transition_execution_event,
 };
 
 pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
@@ -273,23 +273,23 @@ async fn run_workspace_action<F: Forge + ?Sized>(
     // deterministic content key so a retry resolves the same children rather
     // than duplicating them.
     if !output.children.is_empty()
-        && let Some(effect_index) = tools.create_issues_effect_index(&routed) {
-            let content_key =
-                workspace_content_key(&item.kind, &routed, target_number(item.target));
-            return run_or_ignore_stale_with(
-                tools
-                    .run_with_create_issues_at(
-                        item.target,
-                        &routed,
-                        effect_index,
-                        content_key,
-                        output.children,
-                    )
-                    .await,
-                identity,
-                &routed,
-            );
-        }
+        && let Some(effect_index) = tools.create_issues_effect_index(&routed)
+    {
+        let content_key = workspace_content_key(&item.kind, &routed, target_number(item.target));
+        return run_or_ignore_stale_with(
+            tools
+                .run_with_create_issues_at(
+                    item.target,
+                    &routed,
+                    effect_index,
+                    content_key,
+                    output.children,
+                )
+                .await,
+            identity,
+            &routed,
+        );
+    }
 
     if output.body.is_some() || output.review_body.is_some() {
         let content_key = workspace_content_key(&item.kind, &routed, target_number(item.target));
@@ -442,7 +442,9 @@ async fn run_or_ignore_stale<'a, F: Forge + ?Sized + 'a>(
     target: ArtifactSource,
     transition: &'a TransitionId,
     identity: &'a WorkItemIdentity,
-) -> Result<bool, AgentError> { run_or_ignore_stale_with(tools.run(target, transition).await, identity, transition) }
+) -> Result<bool, AgentError> {
+    run_or_ignore_stale_with(tools.run(target, transition).await, identity, transition)
+}
 
 /// Maps an already-computed transition execution result to the runner's
 /// stale/success/failure logging contract, mirroring [`run_or_ignore_stale`]

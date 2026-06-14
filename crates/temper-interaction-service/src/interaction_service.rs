@@ -6,7 +6,7 @@ use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use temper_forge::{Forge, Issue, ItemNumber, RepositoryPath};
 use temper_interaction::{
     AcceptanceActionId, AcceptedProposalTarget, CompiledProfileManifest, ConversationEventLog,
@@ -15,11 +15,11 @@ use temper_interaction::{
     ForgeSessionOpenOptions, InteractionError, InteractiveResponder, ProposalId,
 };
 
-use crate::interaction_api::{parse_json, ApiError, CreateConversationRequest, SendTurnRequest};
 pub use crate::interaction_api::{
     AcceptProposalResponse, ConversationEventsResponse, ConversationResponse, ProposalsResponse,
     TranscriptResponse, TurnResponse,
 };
+use crate::interaction_api::{ApiError, CreateConversationRequest, SendTurnRequest, parse_json};
 pub(crate) use crate::interaction_http::{HttpRequest, HttpResponse};
 
 const STREAMING_EVENTS_ENABLED: bool = false;
@@ -117,11 +117,12 @@ impl InteractionService {
             .map(|runtime| (runtime.manifest.profile.id.clone(), runtime))
             .collect::<BTreeMap<_, _>>();
         if let Some(default) = &default_profile
-            && !profiles.contains_key(default) {
-                return Err(InteractionServiceError::runtime(format!(
-                    "default profile `{default}` is not bound"
-                )));
-            }
+            && !profiles.contains_key(default)
+        {
+            return Err(InteractionServiceError::runtime(format!(
+                "default profile `{default}` is not bound"
+            )));
+        }
         Ok(Self {
             base_url,
             repo_path,

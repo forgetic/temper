@@ -373,9 +373,11 @@ fn labels_comments_and_prs_do_not_leak_between_repos() {
             .len(),
         1
     );
-    assert!(block_on(forge.list_issue_comments(&issue_b.id))
-        .unwrap()
-        .is_empty());
+    assert!(
+        block_on(forge.list_issue_comments(&issue_b.id))
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         block_on(forge.list_pull_requests(&repo_a.id, PullRequestQuery::default()))
             .unwrap()

@@ -3,7 +3,7 @@
 //! shared item helpers in [`crate::items`].
 
 use crate::ids::{
-    format_review_id, format_user_id, parse_pull_request_id, parse_repository_id, RepoCoord,
+    RepoCoord, format_review_id, format_user_id, parse_pull_request_id, parse_repository_id,
 };
 use crate::map::{map_pull_request, map_review, merge_method_token, review_event_token};
 use crate::types::{MergeResultDto, PullRequestDto, ReviewDto};
@@ -233,9 +233,9 @@ impl<C: HttpClient> GitHubForge<C> {
                 .reviewers
                 .iter()
                 .all(|reviewer| pull.requested_reviewers.contains(reviewer))
-            {
-                return Ok(pull);
-            }
+        {
+            return Ok(pull);
+        }
         Err(crate::error::map_status_error(
             "request reviewers",
             &response,
@@ -459,9 +459,10 @@ fn pull_request_state_param(state: Option<PullRequestState>) -> &'static str {
 
 fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
     if let Some(state) = query.state
-        && pull.state != state {
-            return false;
-        }
+        && pull.state != state
+    {
+        return false;
+    }
     if !query
         .labels
         .iter()
@@ -470,17 +471,21 @@ fn pull_matches_query(pull: &PullRequest, query: &PullRequestQuery) -> bool {
         return false;
     }
     if let Some(needle) = &query.body_contains
-        && !needle.is_empty() && !pull.body.contains(needle) {
-            return false;
-        }
+        && !needle.is_empty()
+        && !pull.body.contains(needle)
+    {
+        return false;
+    }
     if let Some(author) = &query.author_id
-        && &pull.author_id != author {
-            return false;
-        }
+        && &pull.author_id != author
+    {
+        return false;
+    }
     if let Some(assignee) = &query.assignee_id
-        && !pull.assignees.iter().any(|candidate| candidate == assignee) {
-            return false;
-        }
+        && !pull.assignees.iter().any(|candidate| candidate == assignee)
+    {
+        return false;
+    }
     true
 }
 

@@ -10,7 +10,7 @@
 //! mirrors [`crate::pulls::ForgejoForge::update_pull_request`]. See
 //! `docs/reference/forgejo-backend.md`.
 
-use crate::ids::{parse_issue_id, parse_repository_id, RepoCoord};
+use crate::ids::{RepoCoord, parse_issue_id, parse_repository_id};
 use crate::map::map_issue;
 use crate::pulls::response_validator;
 use crate::types::IssueDto;
@@ -277,21 +277,24 @@ impl<C: HttpClient> ForgejoForge<C> {
 /// are checked here after the provider has already narrowed the result.
 fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
     if let Some(needle) = &query.body_contains
-        && !needle.is_empty() && !issue.body.contains(needle) {
-            return false;
-        }
+        && !needle.is_empty()
+        && !issue.body.contains(needle)
+    {
+        return false;
+    }
     if let Some(author) = &query.author_id
-        && &issue.author_id != author {
-            return false;
-        }
+        && &issue.author_id != author
+    {
+        return false;
+    }
     if let Some(assignee) = &query.assignee_id
         && !issue
             .assignees
             .iter()
             .any(|candidate| candidate == assignee)
-        {
-            return false;
-        }
+    {
+        return false;
+    }
     true
 }
 

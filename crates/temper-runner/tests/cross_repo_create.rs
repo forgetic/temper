@@ -15,8 +15,8 @@ use temper_forge_memory::MemoryForge;
 use temper_runner::RoleTools;
 use temper_testing::{block_on, workflow};
 use temper_workflow::{
-    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactRef,
-    EnsureOutcome, ExecutionContext, RoleId, WorkflowMetadata,
+    ArtifactRef, EnsureOutcome, ExecutionContext, RoleId, WorkflowMetadata,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block,
 };
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
@@ -416,7 +416,9 @@ fn assert_single_correlated_child<F: Forge + ?Sized>(
     let metadata = parse_metadata_block(&matching[0].body)
         .expect("metadata parses")
         .expect("metadata exists");
-    assert!(metadata
-        .parents
-        .contains(&ArtifactRef::in_repo(source_repo.clone(), parent)));
+    assert!(
+        metadata
+            .parents
+            .contains(&ArtifactRef::in_repo(source_repo.clone(), parent))
+    );
 }

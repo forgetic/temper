@@ -100,7 +100,7 @@ pub enum ReconciliationMode {
 mod candidate;
 mod finding;
 
-pub use candidate::{reconciliation_candidate_query_plan, ReconciliationCandidateQueryPlan};
+pub use candidate::{ReconciliationCandidateQueryPlan, reconciliation_candidate_query_plan};
 pub use finding::{
     DefaultRecoveryPolicy, ReconcileError, ReconcileFinding, ReconcileReport, RecoveryAction,
     RecoveryPolicy,

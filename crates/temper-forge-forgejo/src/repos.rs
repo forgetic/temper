@@ -5,7 +5,7 @@
 //! implementation is assembled once every phase's methods exist. Pure DTO→model
 //! conversions live in [`crate::map`]. See `docs/reference/forgejo-backend.md`.
 
-use crate::ids::{parse_repository_id, user_login, RepoCoord};
+use crate::ids::{RepoCoord, parse_repository_id, user_login};
 use crate::map::{map_label, map_repository, map_user};
 use crate::types::{LabelDto, RepositoryDto, UserDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};

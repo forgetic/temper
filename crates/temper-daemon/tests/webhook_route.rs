@@ -5,8 +5,8 @@ use std::{sync::Arc, time::Duration};
 use serde_json::json;
 use std::time::Instant;
 use temper_daemon::{
-    webhook_signature, Daemon, ForgeApplier, LeaseApplier, RoleFeedMode, RoleFeedTarget,
-    WebhookConfig,
+    Daemon, ForgeApplier, LeaseApplier, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    webhook_signature,
 };
 use temper_forge::{
     CreateIssue, CreateRepository, Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
@@ -15,11 +15,11 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Assign, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
-    RepoOutcome, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_workflow::{
-    parse_metadata_block, ArtifactKindId, ArtifactRef, CompiledWorkflow, LeasePolicy,
-    RawWorkflowSpec, RoleId, ValidatedWorkflow,
+    ArtifactKindId, ArtifactRef, CompiledWorkflow, LeasePolicy, RawWorkflowSpec, RoleId,
+    ValidatedWorkflow, parse_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
@@ -234,9 +234,11 @@ fn assert_scanned_issue_assignment(msg: WorkerProtocolMessage, issue: ItemNumber
             assert_eq!(assign.role, "engineer");
             assert_eq!(assign.artifact.kind, "issue");
             assert_eq!(assign.artifact.item, json!(issue.get()));
-            assert!(assign
-                .job_id
-                .contains(&format!("/issue-{}/engineer/", issue.get())));
+            assert!(
+                assign
+                    .job_id
+                    .contains(&format!("/issue-{}/engineer/", issue.get()))
+            );
             assign
         }
         other => panic!("expected assign, got {other:?}"),

@@ -11,17 +11,17 @@ mod support;
 use chrono::Duration;
 use support::crash::{CrashForge, Fault, ForgeOp};
 use support::{
-    block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state, seed_ci,
-    submit_review, ts, workflow, TestRoot,
+    TestRoot, block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state,
+    seed_ci, submit_review, ts, workflow,
 };
 use temper_forge::{
     BranchRef, CiJobConclusion, CreateIssue, CreatePullRequest, Forge, IssueQuery,
     PullRequestQuery, PullRequestState, RepositoryId, ReviewDecision, UserId,
 };
 use temper_workflow::{
-    parse_metadata_block, ArtifactSource, DefaultRecoveryPolicy, ExecutionContext, ExecutionError,
-    Executor, InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy,
-    RawWorkflowSpec, ReconcileFinding, RecoveryAction, RoleId, TransitionId,
+    ArtifactSource, DefaultRecoveryPolicy, ExecutionContext, ExecutionError, Executor,
+    InMemoryJournal, LeaseConflict, LeaseError, LeaseManager, LeasePolicy, RawWorkflowSpec,
+    ReconcileFinding, RecoveryAction, RoleId, TransitionId, parse_metadata_block,
 };
 
 /// A workflow whose merge gate requires native CI and review.
@@ -524,9 +524,11 @@ fn expired_in_progress_work_becomes_visible_for_recovery() {
         finding,
         ReconcileFinding::ExpiredLease { target: found, .. } if *found == target
     )));
-    assert!(recovered
-        .actions
-        .contains(&RecoveryAction::RequeueLease { target }));
+    assert!(
+        recovered
+            .actions
+            .contains(&RecoveryAction::RequeueLease { target })
+    );
 }
 
 // Safety property 6: impossible label combinations are detected, not silently
@@ -566,8 +568,10 @@ fn impossible_label_combinations_are_detected_not_silently_ignored() {
         finding,
         ReconcileFinding::ImpossibleState { dimension, .. } if dimension.as_str() == "code_lifecycle"
     )));
-    assert!(report
-        .actions
-        .iter()
-        .any(|action| matches!(action, RecoveryAction::Escalate { .. })));
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|action| matches!(action, RecoveryAction::Escalate { .. }))
+    );
 }

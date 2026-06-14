@@ -248,11 +248,12 @@ impl<'a, F: Forge + ?Sized, J: CommandJournal> Applier<'a, F, J> {
         };
         let id = unblock_command_id(target, transition.as_ref());
         if let Some(existing) = self.journal.get(&id).await?
-            && existing.state.is_terminal() {
-                // A prior pass already completed this unblock; its labels are
-                // durable, so there is nothing to redo.
-                return Ok(());
-            }
+            && existing.state.is_terminal()
+        {
+            // A prior pass already completed this unblock; its labels are
+            // durable, so there is nothing to redo.
+            return Ok(());
+        }
         self.journal
             .append(CommandRecord {
                 id: id.clone(),

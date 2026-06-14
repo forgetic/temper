@@ -80,15 +80,21 @@ fn binds_every_declared_workspace_id_with_its_checkout_capability() {
     let architect = RoleId::new("architect");
     let engineer = RoleId::new("engineer");
     let reviewer = RoleId::new("reviewer");
-    assert!(executors
-        .workspace_for(&architect, &tool("triage_workspace"))
-        .is_some());
-    assert!(executors
-        .workspace_for(&engineer, &tool("coding_workspace"))
-        .is_some());
-    assert!(executors
-        .workspace_for(&reviewer, &tool("review_workspace"))
-        .is_some());
+    assert!(
+        executors
+            .workspace_for(&architect, &tool("triage_workspace"))
+            .is_some()
+    );
+    assert!(
+        executors
+            .workspace_for(&engineer, &tool("coding_workspace"))
+            .is_some()
+    );
+    assert!(
+        executors
+            .workspace_for(&reviewer, &tool("review_workspace"))
+            .is_some()
+    );
 
     // The runner metadata binding matches the executable bindings: exactly the
     // three declared ids, each under its role.
@@ -180,9 +186,11 @@ fn non_workspace_external_tools_are_not_bound() {
             .expect("binding succeeds");
 
     let engineer = RoleId::new("engineer");
-    assert!(executors
-        .workspace_for(&engineer, &tool("coding_workspace"))
-        .is_some());
+    assert!(
+        executors
+            .workspace_for(&engineer, &tool("coding_workspace"))
+            .is_some()
+    );
     assert!(
         executors
             .workspace_for(&engineer, &tool("project_notes"))
@@ -218,9 +226,11 @@ fn no_binding_when_no_role_declares_a_workspace() {
             .expect("binding succeeds even with nothing to bind");
 
     let engineer = RoleId::new("engineer");
-    assert!(executors
-        .workspace_for(&engineer, &tool("project_notes"))
-        .is_none());
+    assert!(
+        executors
+            .workspace_for(&engineer, &tool("project_notes"))
+            .is_none()
+    );
     assert!(!config.has_external_tool_binding(&engineer, &tool("project_notes")));
 }
 
@@ -247,8 +257,10 @@ fn no_binding_when_workspace_env_is_absent() {
         .expect("absent env is valid");
 
     let engineer = RoleId::new("engineer");
-    assert!(executors
-        .workspace_for(&engineer, &tool("coding_workspace"))
-        .is_none());
+    assert!(
+        executors
+            .workspace_for(&engineer, &tool("coding_workspace"))
+            .is_none()
+    );
     assert!(!config.has_external_tool_binding(&engineer, &tool("coding_workspace")));
 }

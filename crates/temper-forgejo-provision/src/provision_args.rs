@@ -186,7 +186,7 @@ where
             other => {
                 return Err(ArgsError::new(format!(
                     "unrecognized argument '{other}'\nusage: {USAGE}"
-                )))
+                )));
             }
         }
     }

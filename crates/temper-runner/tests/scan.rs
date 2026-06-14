@@ -14,7 +14,7 @@ use temper_forge::{
     UserId,
 };
 use temper_forge_memory::MemoryForge;
-use temper_runner::{scan, scan_automated_queues, scan_role, AutomatedWorkItem, WorkItem};
+use temper_runner::{AutomatedWorkItem, WorkItem, scan, scan_automated_queues, scan_role};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
@@ -379,15 +379,17 @@ fn failing_pr_ci_yields_engineer_work_but_passing_ci_does_not() {
         CiJobConclusion::Success,
     );
 
-    assert!(block_on(scan(
-        &passing_forge,
-        &passing_repo,
-        &workflow,
-        &compiled,
-        now,
-    ))
-    .expect("scan succeeds")
-    .is_empty());
+    assert!(
+        block_on(scan(
+            &passing_forge,
+            &passing_repo,
+            &workflow,
+            &compiled,
+            now,
+        ))
+        .expect("scan succeeds")
+        .is_empty()
+    );
 }
 
 #[test]
@@ -456,14 +458,18 @@ fn role_scan_without_ci_gated_queue_does_not_list_ci_jobs() {
 
     assert!(items.is_empty());
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
-    assert!(counting
-        .issue_queries()
-        .iter()
-        .all(|query| query.details == ItemListDetails::summary()));
-    assert!(counting
-        .pull_request_queries()
-        .iter()
-        .all(|query| query.details == ItemListDetails::summary()));
+    assert!(
+        counting
+            .issue_queries()
+            .iter()
+            .all(|query| query.details == ItemListDetails::summary())
+    );
+    assert!(
+        counting
+            .pull_request_queries()
+            .iter()
+            .all(|query| query.details == ItemListDetails::summary())
+    );
 }
 
 #[test]
@@ -513,15 +519,17 @@ fn merged_landing_pr_with_passing_ci_is_not_an_automated_work_item() {
     let compiled = workflow.compile();
     let counting = CountingForge::new(forge.clone());
 
-    assert!(block_on(scan_automated_queues(
-        &counting,
-        &repo,
-        &workflow,
-        &compiled,
-        ts("2026-05-29T00:00:00Z"),
-    ))
-    .expect("scan succeeds")
-    .is_empty());
+    assert!(
+        block_on(scan_automated_queues(
+            &counting,
+            &repo,
+            &workflow,
+            &compiled,
+            ts("2026-05-29T00:00:00Z"),
+        ))
+        .expect("scan succeeds")
+        .is_empty()
+    );
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
 }
 
@@ -586,10 +594,12 @@ fn dependency_gated_queue_fetches_dependency_state() {
         }]
     );
     assert!(counting.count(CountedForgeOp::GetIssueByNumber) >= 2);
-    assert!(counting
-        .issue_queries()
-        .iter()
-        .all(|query| query.details == ItemListDetails::summary()));
+    assert!(
+        counting
+            .issue_queries()
+            .iter()
+            .all(|query| query.details == ItemListDetails::summary())
+    );
     assert_eq!(counting.count(CountedForgeOp::ListCiJobs), 0);
     assert_eq!(counting.count(CountedForgeOp::ListPullRequestReviews), 0);
 }

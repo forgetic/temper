@@ -12,7 +12,7 @@ mod support;
 
 use std::sync::{Arc, Barrier};
 use std::thread;
-use support::{block_on, issue, pull_request, repository, TestRoot};
+use support::{TestRoot, block_on, issue, pull_request, repository};
 use temper_forge::{Forge, ForgeError, IssueQuery, ItemNumber, UpdateIssue, Version};
 
 const WORKERS: usize = 8;

@@ -7,14 +7,14 @@
 mod support;
 
 use chrono::{DateTime, Utc};
-use support::{block_on, forge, repo_id, MockHttpClient, OWNER, REPO};
+use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, ItemNumber, PullRequestState, UserId,
 };
 use temper_forge_forgejo::{HttpMethod, HttpRequest};
 use temper_workflow::{
-    render_metadata_block, DefaultRecoveryPolicy, EnsureOutcome, InMemoryJournal, RawWorkflowSpec,
-    ValidatedWorkflow, WorkflowMetadata,
+    DefaultRecoveryPolicy, EnsureOutcome, InMemoryJournal, RawWorkflowSpec, ValidatedWorkflow,
+    WorkflowMetadata, render_metadata_block,
 };
 
 const HOT_PATH_WORKFLOW: &str = r#"
@@ -188,9 +188,11 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
     assert_eq!(report.snapshot_count, 2);
     let requests = client.recorded();
     assert_no_all_history_lists(&requests);
-    assert!(!requests
-        .iter()
-        .any(|request| request.path.ends_with("/dependencies")));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path.ends_with("/dependencies"))
+    );
 
     let list_requests: Vec<&HttpRequest> = requests
         .iter()
@@ -202,12 +204,16 @@ fn bounded_reconciliation_uses_state_label_summary_forgejo_queries() {
         assert_eq!(query_value(request, "state"), Some("open"));
         assert!(query_value(request, "labels").is_some());
     }
-    assert!(requests
-        .iter()
-        .all(|request| request.path != pull_list_path()));
-    assert!(!requests
-        .iter()
-        .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/2")));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path != pull_list_path())
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/2"))
+    );
 }
 
 #[test]
@@ -297,12 +303,16 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
         .filter(|request| request.path == issue_list_path() && has_query(request, "type", "issues"))
         .collect();
     assert_eq!(issue_lists.len(), 2);
-    assert!(issue_lists
-        .iter()
-        .any(|request| has_query(request, "state", "open")));
-    assert!(issue_lists
-        .iter()
-        .any(|request| has_query(request, "state", "closed")));
+    assert!(
+        issue_lists
+            .iter()
+            .any(|request| has_query(request, "state", "open"))
+    );
+    assert!(
+        issue_lists
+            .iter()
+            .any(|request| has_query(request, "state", "closed"))
+    );
     for request in issue_lists {
         assert!(has_query(request, "labels", "code"));
         // Forgejo 7.0.x has no reliable exact body search. The backend keeps
@@ -329,10 +339,14 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
         assert!(query_value(request, "q").is_none());
         assert!(query_value(request, "body").is_none());
     }
-    assert!(!requests
-        .iter()
-        .any(|request| { request.path == pull_list_path() && has_query(request, "state", "all") }));
-    assert!(!requests
-        .iter()
-        .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/7")));
+    assert!(
+        !requests.iter().any(|request| {
+            request.path == pull_list_path() && has_query(request, "state", "all")
+        })
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path == format!("/api/v1/repos/{OWNER}/{REPO}/pulls/7"))
+    );
 }

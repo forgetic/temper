@@ -13,8 +13,8 @@ use temper_forge::{
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
-    parse_metadata_block, ArtifactSource, ExecutionContext, ExecutionError, Executor,
-    PlanDiagnostic, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    ArtifactSource, ExecutionContext, ExecutionError, Executor, PlanDiagnostic, RawWorkflowSpec,
+    RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect, parse_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/ci-delivery.json");

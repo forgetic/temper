@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Duration;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{
@@ -13,9 +13,9 @@ use temper_forge::{
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{
-    run_scenario, Agent, AgentError, AgentRegistry, BoxError, FixpointDriver, InProcessStage,
-    ManualClock, MechanicalWorker, PollLoop, Progress, RoleTools, RoleWorker, RunnerConfig,
-    Scenario, WakeTarget, WakeablePollLoop, WorkItem, Worker,
+    Agent, AgentError, AgentRegistry, BoxError, FixpointDriver, InProcessStage, ManualClock,
+    MechanicalWorker, PollLoop, Progress, RoleTools, RoleWorker, RunnerConfig, Scenario,
+    WakeTarget, WakeablePollLoop, WorkItem, Worker, run_scenario,
 };
 use temper_workflow::{
     ArtifactKindId, InMemoryJournal, LeasePolicy, QueueId, RawWorkflowSpec, RoleId, TransitionId,
@@ -162,11 +162,12 @@ impl Worker for CountingWorker {
     ) -> Result<Progress, temper_runner::WorkerError> {
         let previous = self.ticks.fetch_add(1, Ordering::SeqCst);
         if previous == 0
-            && let Some(sender) = &self.send_on_first_tick {
-                for _ in 0..3 {
-                    sender.send(test_hint()).expect("hint receiver is alive");
-                }
+            && let Some(sender) = &self.send_on_first_tick
+        {
+            for _ in 0..3 {
+                sender.send(test_hint()).expect("hint receiver is alive");
             }
+        }
         Ok(Progress::unchanged())
     }
 

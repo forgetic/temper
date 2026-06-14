@@ -39,9 +39,30 @@ impl Rng {
 /// A pool of tokens biased toward HTTP-significant bytes, so random inputs land
 /// near real framing far more often than uniform noise would.
 const TOKENS: &[&[u8]] = &[
-    b"GET", b"POST", b" ", b"/", b"HTTP/1.1", b"HTTP/1.0", b"\r\n", b"\r", b"\n",
-    b"Host: x", b"Content-Length: ", b"Transfer-Encoding: chunked", b":", b";",
-    b"chunked", b"0", b"5", b"+5", b"hello", b"\r\n\r\n", b"a", b"\t", b"%", b"==",
+    b"GET",
+    b"POST",
+    b" ",
+    b"/",
+    b"HTTP/1.1",
+    b"HTTP/1.0",
+    b"\r\n",
+    b"\r",
+    b"\n",
+    b"Host: x",
+    b"Content-Length: ",
+    b"Transfer-Encoding: chunked",
+    b":",
+    b";",
+    b"chunked",
+    b"0",
+    b"5",
+    b"+5",
+    b"hello",
+    b"\r\n\r\n",
+    b"a",
+    b"\t",
+    b"%",
+    b"==",
 ];
 
 /// Build a random request-ish byte string from the token pool plus noise.
@@ -64,7 +85,10 @@ fn decode_whole(raw: &[u8]) -> Result<bool, String> {
     let mut codec = Http1Codec::new();
     let mut buf = BytesMut::new();
     buf.extend_from_slice(raw);
-    codec.decode(&mut buf).map(|o| o.is_some()).map_err(|e| e.to_string())
+    codec
+        .decode(&mut buf)
+        .map(|o| o.is_some())
+        .map_err(|e| e.to_string())
 }
 
 /// Decode `raw` delivered one byte at a time, re-decoding after each push.

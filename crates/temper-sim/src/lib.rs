@@ -31,8 +31,8 @@ use skein::http::h1::{
 };
 use skein::lab::{LabConfig, LabRunReport, LabRuntime, LabSpawner};
 use skein::net::tcp::virtual_tcp::VirtualTcpStream;
-use temper_io_engine::http::H1CompletionHandler;
 use temper_io_engine::Spawner;
+use temper_io_engine::http::H1CompletionHandler;
 use temper_worker_protocol::WorkerProtocolMessage;
 
 /// One deterministic simulation world.
@@ -124,9 +124,8 @@ impl Sim {
             || slot.lock().expect("scenario result slot").is_some(),
             max_steps,
         );
-        
-        slot
-            .lock()
+
+        slot.lock()
             .expect("scenario result slot")
             .take()
             .expect("scenario completed")

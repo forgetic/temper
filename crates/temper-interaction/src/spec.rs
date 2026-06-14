@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::transcript::DEFAULT_RECENT_TURN_LIMIT;
-use crate::validate::{validate, InteractionSpecValidationErrors};
+use crate::validate::{InteractionSpecValidationErrors, validate};
 use crate::validated::ValidatedInteractionSpec;
 
 /// Raw interaction specification as loaded from user-authored configuration.

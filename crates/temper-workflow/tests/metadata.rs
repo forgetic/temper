@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{
-    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactKindId,
-    ArtifactRef, Lease, MetadataError, RoleId, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, Lease, MetadataError, RoleId, WorkflowMetadata,
+    global_child_correlation_key, parse_metadata_block, render_metadata_block,
 };
 
 fn ts(value: &str) -> DateTime<Utc> {

@@ -1,8 +1,8 @@
 use super::{ExecutionError, Executor, Loaded};
+use crate::ClassifiedArtifact;
 use crate::classify::ArtifactSource;
 use crate::dependency_state;
 use crate::plan::{CiStatus, GateSignals, ReviewStatus, SignalNeeds};
-use crate::ClassifiedArtifact;
 use temper_forge::{CiJobQuery, Forge, PullRequestReviewStatus, RepositoryId};
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {

@@ -5,7 +5,7 @@
 mod support;
 
 use support::{
-    block_on, body_json, forge, forge_with_web_ui, pull_id, repo_id, MockHttpClient, OWNER, REPO,
+    MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with_web_ui, pull_id, repo_id,
 };
 use temper_forge::{
     BranchRef, CreateComment, CreatePullRequest, ItemListDetails, ItemNumber, ItemSort,
@@ -51,16 +51,22 @@ fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
     let request = client.last_request().unwrap();
     assert_eq!(request.method, HttpMethod::Get);
     assert_eq!(request.path, format!("/api/v1/repos/{OWNER}/{REPO}/pulls"));
-    assert!(request
-        .query
-        .contains(&("state".to_string(), "open".to_string())));
-    assert!(!request
-        .query
-        .contains(&("state".to_string(), "all".to_string())));
-    assert!(!client
-        .recorded()
-        .iter()
-        .any(|request| request.path.contains("/user/login")));
+    assert!(
+        request
+            .query
+            .contains(&("state".to_string(), "open".to_string()))
+    );
+    assert!(
+        !request
+            .query
+            .contains(&("state".to_string(), "all".to_string()))
+    );
+    assert!(
+        !client
+            .recorded()
+            .iter()
+            .any(|request| request.path.contains("/user/login"))
+    );
 }
 
 #[test]
@@ -113,9 +119,11 @@ fn list_pull_requests_maps_merged_state_to_closed_query() {
     let _ = block_on(forge.list_pull_requests(&repo_id(), query)).unwrap();
 
     let request = client.last_request().unwrap();
-    assert!(request
-        .query
-        .contains(&("state".to_string(), "closed".to_string())));
+    assert!(
+        request
+            .query
+            .contains(&("state".to_string(), "closed".to_string()))
+    );
 }
 
 #[test]
@@ -221,9 +229,11 @@ fn get_pull_request_missing_is_none() {
     let client = MockHttpClient::new();
     client.push_response(404, r#"{"message":"not found"}"#);
     let forge = forge(client);
-    assert!(block_on(forge.get_pull_request(&pull_id(99)))
-        .unwrap()
-        .is_none());
+    assert!(
+        block_on(forge.get_pull_request(&pull_id(99)))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

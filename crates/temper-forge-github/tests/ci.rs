@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{block_on, forge, pull_id, repo_id, MockHttpClient};
+use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
 use temper_forge::{CiJobId, CiJobQuery, CiJobStatus, ItemNumber};
 
 fn runs_envelope(run_id: u64, head_sha: &str) -> String {
@@ -98,10 +98,12 @@ fn list_ci_jobs_by_commit_narrows_runs_with_head_sha() {
 
     let recorded = client.recorded();
     assert_eq!(recorded[0].path, "/repos/acme/widgets/actions/runs");
-    assert!(recorded[0]
-        .query
-        .iter()
-        .any(|(key, value)| key == "head_sha" && value == "abc123"));
+    assert!(
+        recorded[0]
+            .query
+            .iter()
+            .any(|(key, value)| key == "head_sha" && value == "abc123")
+    );
     assert_eq!(recorded[1].path, "/repos/acme/widgets/actions/runs/12/jobs");
 }
 
@@ -127,10 +129,12 @@ fn list_ci_jobs_by_pull_request_resolves_head_sha_first() {
 
     let recorded = client.recorded();
     assert_eq!(recorded[0].path, "/repos/acme/widgets/pulls/5");
-    assert!(recorded[1]
-        .query
-        .iter()
-        .any(|(key, value)| key == "head_sha" && value == "abc123"));
+    assert!(
+        recorded[1]
+            .query
+            .iter()
+            .any(|(key, value)| key == "head_sha" && value == "abc123")
+    );
 }
 
 #[test]
@@ -247,10 +251,12 @@ fn list_ci_jobs_uses_explicit_commit_over_pull_head() {
     .unwrap();
 
     let recorded = client.recorded();
-    assert!(recorded[1]
-        .query
-        .iter()
-        .any(|(key, value)| key == "head_sha" && value == "explicit"));
+    assert!(
+        recorded[1]
+            .query
+            .iter()
+            .any(|(key, value)| key == "head_sha" && value == "explicit")
+    );
     // The pull request is still resolved (number check) but its head SHA does
     // not override the explicit commit.
     let _ = ItemNumber::new(5);

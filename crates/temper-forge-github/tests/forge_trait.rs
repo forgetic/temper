@@ -3,7 +3,7 @@
 mod support;
 
 use std::sync::Arc;
-use support::{block_on, forge, issue_id, repo_id, MockHttpClient};
+use support::{MockHttpClient, block_on, forge, issue_id, repo_id};
 use temper_forge::{Forge, ForgeError, ItemNumber, UserId};
 
 fn as_dyn(forge: temper_forge_github::GitHubForge<MockHttpClient>) -> Arc<dyn Forge> {

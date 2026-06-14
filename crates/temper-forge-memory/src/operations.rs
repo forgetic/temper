@@ -34,8 +34,8 @@ use temper_forge::{
     User, UserId, Version,
 };
 
-use crate::reviews::{list_reviews, request_reviewers, submit_review};
 use crate::MemoryForge;
+use crate::reviews::{list_reviews, request_reviewers, submit_review};
 
 #[async_trait]
 impl Forge for MemoryForge {

@@ -9,7 +9,7 @@
 mod support;
 
 use serde_json::json;
-use support::{block_on, forge, forge_with_web_ui, pull_id, repo_id, MockHttpClient};
+use support::{MockHttpClient, block_on, forge, forge_with_web_ui, pull_id, repo_id};
 use temper_forge::{CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus};
 use temper_forge_forgejo::{HttpMethod, HttpResponse};
 
@@ -148,16 +148,19 @@ fn falls_back_to_web_ui_when_rest_returns_404() {
         .unwrap_or_default();
     assert!(cookie.contains("i_like_gitea=session-abc"));
     assert!(cookie.contains("_csrf=csrf-token"));
-    assert!(live
-        .headers
-        .iter()
-        .any(|(k, v)| k.eq_ignore_ascii_case("x-csrf-token") && v == "csrf-token"));
+    assert!(
+        live.headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("x-csrf-token") && v == "csrf-token")
+    );
     // The web-UI path never sends the API prefix or the token header.
     assert!(!live.path.starts_with("/api/v1"));
-    assert!(!live
-        .headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+    assert!(
+        !live
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+    );
 }
 
 #[test]
@@ -233,10 +236,12 @@ fn rest_first_keeps_actions_path_when_available() {
     assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:10:0:1");
     // Exactly three REST calls (PR detail, runs, tasks); no /user/login.
     assert_eq!(client.call_count(), 3);
-    assert!(!client
-        .recorded()
-        .iter()
-        .any(|r| r.path.contains("/user/login")));
+    assert!(
+        !client
+            .recorded()
+            .iter()
+            .any(|r| r.path.contains("/user/login"))
+    );
 }
 
 #[test]

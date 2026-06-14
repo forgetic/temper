@@ -239,7 +239,7 @@ pub trait Forge: Send + Sync {
 
     /// Removes a dependency link from an issue to another repository item number.
     async fn remove_issue_dependency(&self, id: &IssueId, target: ItemNumber)
-        -> ForgeResult<Issue>;
+    -> ForgeResult<Issue>;
 
     /// Lists comments on an issue.
     async fn list_issue_comments(&self, id: &IssueId) -> ForgeResult<Vec<Comment>>;

@@ -2,15 +2,15 @@
 
 mod support;
 
-use support::{block_on, create_pr, new_repo, ts, workflow, TestRoot};
+use support::{TestRoot, block_on, create_pr, new_repo, ts, workflow};
 use temper_forge::{
     Forge, IssueQuery, IssueState, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery,
     PullRequestState, RepositoryId,
 };
 use temper_workflow::{
-    reconciliation_candidate_query_plan, ArtifactSource, CommandId, CommandJournal, CommandRecord,
-    CommandState, DefaultRecoveryPolicy, InMemoryJournal, Postcondition, ReconcileFinding, RoleId,
-    TransitionId, WorkflowEffect,
+    ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
+    InMemoryJournal, Postcondition, ReconcileFinding, RoleId, TransitionId, WorkflowEffect,
+    reconciliation_candidate_query_plan,
 };
 
 fn has_issue_query(queries: &[IssueQuery], state: IssueState, label: &str) -> bool {

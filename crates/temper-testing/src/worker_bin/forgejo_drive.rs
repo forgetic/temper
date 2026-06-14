@@ -7,7 +7,7 @@ use temper_runner::{
     IdlePollBackoff, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
     RepositorySet, RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
 };
-use temper_wake::{wait_for_wake_or_poll, WakeConfig, WakeListener, WakeWaitOutcome};
+use temper_wake::{WakeConfig, WakeListener, WakeWaitOutcome, wait_for_wake_or_poll};
 use temper_workflow::{CommandJournal, RecoveryPolicy};
 
 use crate::worker_bin::args::WorkerArgs;
@@ -547,8 +547,8 @@ mod tests {
     use async_trait::async_trait;
     use chrono::{DateTime, Duration, Utc};
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
     use temper_forge::{ChangeKind, RepositoryPath};
     use temper_wake::send_wake_with_hint;
@@ -642,11 +642,10 @@ mod tests {
             std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
         });
         let worker_for_drive = std::sync::Arc::clone(&worker);
-        let report =
-            temper_io_engine::block_on_with(move |cx, _handle| async move {
-                drive_async(&cx, &args, &*worker_for_drive).await
-            })
-            .expect("drive succeeds");
+        let report = temper_io_engine::block_on_with(move |cx, _handle| async move {
+            drive_async(&cx, &args, &*worker_for_drive).await
+        })
+        .expect("drive succeeds");
         stopper.join().expect("stopper joins");
 
         assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);

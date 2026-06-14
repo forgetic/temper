@@ -32,13 +32,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use temper_agent_runtime::{
-    AuthChoice, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
-    run_coding_agent_native_with_hooks,
-};
 use temper_agent_protocol::{
     CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
     WorkspaceResult,
+};
+use temper_agent_runtime::{
+    AuthChoice, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, ProviderConfig,
+    run_coding_agent_native_with_hooks,
 };
 
 pub fn main<I>(args: I) -> ExitCode
@@ -108,15 +108,23 @@ where
         .map(|capability| capability == "writable")
         .unwrap_or(true);
     let checkpointer = writable.then(|| Arc::new(Checkpointer::new(&cwd, &context)));
-    let resume = checkpointer.as_deref().and_then(Checkpointer::detect_resume);
+    let resume = checkpointer
+        .as_deref()
+        .and_then(Checkpointer::detect_resume);
     if let Some(resume) = &resume {
         emit(&StepProgress {
             correlation_key: context.correlation_key.clone(),
             step: resume.last_step + 1,
-            status: format!("resume {} run from pushed checkpoints", context.work_item.role),
+            status: format!(
+                "resume {} run from pushed checkpoints",
+                context.work_item.role
+            ),
             state: StepState::Started,
             pushed_sha: Some(resume.head_sha.clone()),
-            note: Some(format!("{} checkpoint commit(s) on the branch", resume.commits)),
+            note: Some(format!(
+                "{} checkpoint commit(s) on the branch",
+                resume.commits
+            )),
         });
     }
     if let Some(checkpointer) = &checkpointer {

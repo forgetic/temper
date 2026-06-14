@@ -274,28 +274,32 @@ pub(crate) fn compare_repository_path(left: &Repository, right: &Repository) -> 
 
 pub(crate) fn ci_job_matches_query(ci_job: &CiJob, query: &CiJobQuery) -> bool {
     if let Some(pull_request_id) = &query.pull_request_id
-        && ci_job.pull_request_id.as_ref() != Some(pull_request_id) {
-            return false;
-        }
+        && ci_job.pull_request_id.as_ref() != Some(pull_request_id)
+    {
+        return false;
+    }
 
     if let Some(commit_sha) = &query.commit_sha
-        && &ci_job.commit_sha != commit_sha {
-            return false;
-        }
+        && &ci_job.commit_sha != commit_sha
+    {
+        return false;
+    }
 
     if let Some(status) = query.status
-        && ci_job.status != status {
-            return false;
-        }
+        && ci_job.status != status
+    {
+        return false;
+    }
 
     true
 }
 
 pub(crate) fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
     if let Some(state) = query.state
-        && issue.state != state {
-            return false;
-        }
+        && issue.state != state
+    {
+        return false;
+    }
 
     if !query
         .labels
@@ -306,23 +310,26 @@ pub(crate) fn issue_matches_query(issue: &Issue, query: &IssueQuery) -> bool {
     }
 
     if let Some(needle) = &query.body_contains
-        && !needle.is_empty() && !issue.body.contains(needle) {
-            return false;
-        }
+        && !needle.is_empty()
+        && !issue.body.contains(needle)
+    {
+        return false;
+    }
 
     if let Some(author_id) = &query.author_id
-        && &issue.author_id != author_id {
-            return false;
-        }
+        && &issue.author_id != author_id
+    {
+        return false;
+    }
 
     if let Some(assignee_id) = &query.assignee_id
         && !issue
             .assignees
             .iter()
             .any(|assignee| assignee == assignee_id)
-        {
-            return false;
-        }
+    {
+        return false;
+    }
 
     true
 }
@@ -332,9 +339,10 @@ pub(crate) fn pull_request_matches_query(
     query: &PullRequestQuery,
 ) -> bool {
     if let Some(state) = query.state
-        && pull_request.state != state {
-            return false;
-        }
+        && pull_request.state != state
+    {
+        return false;
+    }
 
     if !query
         .labels
@@ -345,23 +353,26 @@ pub(crate) fn pull_request_matches_query(
     }
 
     if let Some(needle) = &query.body_contains
-        && !needle.is_empty() && !pull_request.body.contains(needle) {
-            return false;
-        }
+        && !needle.is_empty()
+        && !pull_request.body.contains(needle)
+    {
+        return false;
+    }
 
     if let Some(author_id) = &query.author_id
-        && &pull_request.author_id != author_id {
-            return false;
-        }
+        && &pull_request.author_id != author_id
+    {
+        return false;
+    }
 
     if let Some(assignee_id) = &query.assignee_id
         && !pull_request
             .assignees
             .iter()
             .any(|assignee| assignee == assignee_id)
-        {
-            return false;
-        }
+    {
+        return false;
+    }
 
     true
 }

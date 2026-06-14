@@ -6,7 +6,7 @@
 
 mod support;
 
-use support::{block_on, create_issue, new_repo, ts, workflow, TestRoot};
+use support::{TestRoot, block_on, create_issue, new_repo, ts, workflow};
 use temper_workflow::{
     ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, ExecutionError,
     Executor, InMemoryJournal, RoleId, TransitionId, WorkflowEffect,

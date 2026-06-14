@@ -1,6 +1,6 @@
-use temper_agent_runtime::{AuthChoice, ProviderConfig};
 use jig_core::{Reply, Script};
 use jig_server::FakeLlm;
+use temper_agent_runtime::{AuthChoice, ProviderConfig};
 
 fn jig_auth_fixture() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jig_auth.json")

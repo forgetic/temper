@@ -1,6 +1,6 @@
 mod support;
 
-use support::{block_on, pull_request, repository, timestamp, write_ci_jobs, TestRoot};
+use support::{TestRoot, block_on, pull_request, repository, timestamp, write_ci_jobs};
 use temper_forge::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus, Forge,
     ForgeError, PullRequestId, RepositoryId, SortDirection,

@@ -8,11 +8,11 @@
 mod support;
 
 use chrono::Duration;
-use support::{block_on, create_issue, issue_body, new_repo, ts, TestRoot};
+use support::{TestRoot, block_on, create_issue, issue_body, new_repo, ts};
 use temper_forge::ItemNumber;
 use temper_workflow::{
-    parse_metadata_block, ArtifactSource, Lease, LeaseConflict, LeaseError, LeaseManager,
-    LeasePlanner, LeasePolicy, RoleId,
+    ArtifactSource, Lease, LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy,
+    RoleId, parse_metadata_block,
 };
 
 fn policy() -> LeasePolicy {

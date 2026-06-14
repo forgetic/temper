@@ -1,7 +1,7 @@
 use super::*;
 use temper_forge::{CreateIssue, CreateRepository, Forge, IssueState, UpdateIssue};
 use temper_forge_memory::MemoryForge;
-use temper_workflow::{render_metadata_block, ArtifactKindId};
+use temper_workflow::{ArtifactKindId, render_metadata_block};
 
 #[test]
 fn parse_requires_token_from_env_and_redacts_debug() {
@@ -62,10 +62,15 @@ fn zero_dependency_blocked_parent_reports_original_incident_shape() {
         assert!(!report.is_ok());
         let rendered = report.render();
         assert!(rendered.contains("blocked parent acme/service#1 has zero dependencies"));
-        assert!(rendered
-            .contains("cross-repo parent acme/service#1 expected 2 child dependencies, found 0"));
-        assert!(rendered
-            .contains("architect blocked the parent but no fan-out side effects were recorded"));
+        assert!(
+            rendered.contains(
+                "cross-repo parent acme/service#1 expected 2 child dependencies, found 0"
+            )
+        );
+        assert!(
+            rendered
+                .contains("architect blocked the parent but no fan-out side effects were recorded")
+        );
     })
 }
 
@@ -140,10 +145,12 @@ fn parent_with_child_backrefs_and_correlation_passes() {
         .expect("validation reads state");
 
         assert!(report.is_ok(), "{}", report.render());
-        assert!(report
-            .lines()
-            .iter()
-            .any(|line| line.contains("expected 2 child dependencies, found 2")));
+        assert!(
+            report
+                .lines()
+                .iter()
+                .any(|line| line.contains("expected 2 child dependencies, found 2"))
+        );
     })
 }
 

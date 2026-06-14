@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use temper_io_engine::process::{run_process, ProcessCall, ProcessCallError};
+use temper_io_engine::process::{ProcessCall, ProcessCallError, run_process};
 
 use crate::{ConversationReply, ConversationRequest, InteractionError, InteractiveResponder};
 

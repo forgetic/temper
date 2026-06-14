@@ -96,14 +96,17 @@ pub async fn run_decision<D: DeserializeOwned>(
 
     // No tools: the registry is empty, so the model cannot reach bash/file
     // tools — the workflow mutation path stays exclusively in the adapter.
-    let outcome = temper_agent_core::run_sub_agent(handle, temper_agent_core::SubAgent {
-        system_prompt: Some(effective_system),
-        user_message: effective_user,
-        tools: tongs::tools::ToolRegistry::from_tools(Vec::new()),
-        max_iterations: MAX_TOOL_ITERATIONS,
-        provider,
-        stream_options,
-    })
+    let outcome = temper_agent_core::run_sub_agent(
+        handle,
+        temper_agent_core::SubAgent {
+            system_prompt: Some(effective_system),
+            user_message: effective_user,
+            tools: tongs::tools::ToolRegistry::from_tools(Vec::new()),
+            max_iterations: MAX_TOOL_ITERATIONS,
+            provider,
+            stream_options,
+        },
+    )
     .await
     .map_err(|error| DecisionError::Run(error.to_string()))?;
     if matches!(outcome.stop, temper_agent_core::AgentStop::ModelError) {

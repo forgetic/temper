@@ -29,11 +29,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 use jig_core::conform::grammar::{GrammarFinding, grammar_findings};
 use jig_record::{bind, proxy_once};
 use serde::Deserialize;
 use serde_json::Value;
+use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;
@@ -156,8 +156,10 @@ fn run_leg(
     let decision: RoleDecision = {
         let provider = provider.clone();
         let prompt = role.prompt.render();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move { run_decision(handle, &provider, &prompt, &context).await })
-            .expect("anvil decision succeeds through recorder and real upstream")
+        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+            run_decision(handle, &provider, &prompt, &context).await
+        })
+        .expect("anvil decision succeeds through recorder and real upstream")
     };
     assert_eq!(decision.action, "advance");
 

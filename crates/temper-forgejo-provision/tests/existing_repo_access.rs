@@ -22,10 +22,10 @@
 
 use serde_json::Value;
 use temper_forgejo_provision::provision::{
-    provision_and_seed, provision_world, AccessScope, ProvisionOptions, BOT_USER,
+    AccessScope, BOT_USER, ProvisionOptions, provision_and_seed, provision_world,
 };
-use temper_testing::forgejo_server::provision::bootstrap_admin;
 use temper_testing::forgejo_server::ForgejoServer;
+use temper_testing::forgejo_server::provision::bootstrap_admin;
 use temper_testing::{runner_config, workflow};
 
 const OWNER: &str = "ai";

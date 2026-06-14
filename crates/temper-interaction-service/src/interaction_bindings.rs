@@ -234,8 +234,7 @@ where
                 "profile `{profile_id}` is bound but not declared in the interaction spec"
             ))
         })?;
-        let responder =
-            responder_for(cx, &manifest.responder.id, bindings, &mut responders, &env)?;
+        let responder = responder_for(cx, &manifest.responder.id, bindings, &mut responders, &env)?;
         let human_token = require_env(&env, &binding.human_token_env)?;
         let agent_token = require_env(&env, &binding.agent_token_env)?;
         profiles.push(InteractionProfileRuntime {
@@ -284,8 +283,10 @@ where
                 responder_id
             ))
         })?;
-    let responder = Arc::new(ProcessResponder::new(cx.clone(), process_config(binding, env)?)?)
-        as Arc<dyn InteractiveResponder>;
+    let responder = Arc::new(ProcessResponder::new(
+        cx.clone(),
+        process_config(binding, env)?,
+    )?) as Arc<dyn InteractiveResponder>;
     cache.insert(responder_id.clone(), Arc::clone(&responder));
     Ok(responder)
 }

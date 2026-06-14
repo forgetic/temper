@@ -10,8 +10,8 @@
 
 use temper_forge::{BranchRef, CreatePullRequest, ItemNumber, RepositoryId};
 use temper_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, TransitionId,
-    WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, ArtifactSource, TransitionId, WorkflowMetadata,
+    render_metadata_block,
 };
 
 use crate::CodingWorkspaceOutput;

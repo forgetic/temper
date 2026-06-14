@@ -22,8 +22,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
 use temper_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, InMemoryJournal,
-    LeasePolicy, RawWorkflowSpec, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, InMemoryJournal, LeasePolicy, RawWorkflowSpec, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block,
 };
 
 /// CI- and dependency-gated landing, no review (the basic-delivery shape, ADR
@@ -219,8 +219,13 @@ fn dependent_pr_lands_only_after_its_cross_repo_prerequisite_merges() {
     let journal_dependent = InMemoryJournal::new();
     // One worker per repo, sharing the same Forge (so cross-repo dependency
     // targets resolve).
-    let worker_prereq =
-        MechanicalWorker::new(&workflow, &forge, &repo_prereq, &journal_prereq, lease_policy());
+    let worker_prereq = MechanicalWorker::new(
+        &workflow,
+        &forge,
+        &repo_prereq,
+        &journal_prereq,
+        lease_policy(),
+    );
     let worker_dependent = MechanicalWorker::new(
         &workflow,
         &forge,

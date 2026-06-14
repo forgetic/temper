@@ -7,7 +7,7 @@ use serde_json::json;
 use temper_io_engine::http::{HttpResponseData, JsonClient};
 use temper_worker_protocol::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register,
-    ReleaseDisposition, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    ReleaseDisposition, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
 async fn spawn(handle: &skein::runtime::RuntimeHandle) -> (temper_daemon::Daemon, String) {

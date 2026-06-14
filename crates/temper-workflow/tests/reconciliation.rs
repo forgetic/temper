@@ -8,15 +8,14 @@
 mod support;
 
 use support::{
-    add_issue_dependency, block_on, close_issue, create_issue, new_repo, ts, workflow, TestRoot,
+    TestRoot, add_issue_dependency, block_on, close_issue, create_issue, new_repo, ts, workflow,
 };
 use temper_forge::{CreateRepository, Forge, ItemNumber};
 use temper_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource,
-    CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
-    DependencyStatus, InMemoryJournal, Lease, Postcondition, ReconcileFinding, RecoveryAction,
-    RecoveryPolicy, RoleId, StateDimensionId, StateId, TransitionId, WorkflowEffect,
-    WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource, CommandId, CommandJournal,
+    CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus, InMemoryJournal, Lease,
+    Postcondition, ReconcileFinding, RecoveryAction, RecoveryPolicy, RoleId, StateDimensionId,
+    StateId, TransitionId, WorkflowEffect, WorkflowMetadata, render_metadata_block,
 };
 
 fn issue_source(number: u64) -> ArtifactSource {

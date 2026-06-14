@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::{block_on, issue, pull_request, repository, TestRoot};
+use support::{TestRoot, block_on, issue, pull_request, repository};
 use temper_forge::{Forge, ForgeError, UpdateIssue, UpdatePullRequest, Version};
 
 #[test]

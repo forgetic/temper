@@ -18,7 +18,7 @@
 //! Provisioning here is raw HTTP via an admin token created with the server CLI;
 //! full role/identity provisioning is Phase 2.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use temper_testing::forgejo_server::{ForgejoRunner, ForgejoServer, ForgejoState};
 
@@ -212,14 +212,15 @@ fn wait_for_commit_state(
     let mut last = String::from("(none)");
     loop {
         if let Ok(resp) = client.send("GET", url.as_str(), Some(token), None)
-            && let Ok(body) = serde_json::from_slice::<Value>(&resp.body) {
-                let state = body["state"].as_str().unwrap_or("").to_string();
-                last = state.clone();
-                // `pending`/`running`/empty mean "not done yet"; keep polling.
-                if matches!(state.as_str(), "success" | "failure" | "error") {
-                    return state;
-                }
+            && let Ok(body) = serde_json::from_slice::<Value>(&resp.body)
+        {
+            let state = body["state"].as_str().unwrap_or("").to_string();
+            last = state.clone();
+            // `pending`/`running`/empty mean "not done yet"; keep polling.
+            if matches!(state.as_str(), "success" | "failure" | "error") {
+                return state;
             }
+        }
         if Instant::now() >= deadline {
             return format!("timeout (last state: {last})");
         }

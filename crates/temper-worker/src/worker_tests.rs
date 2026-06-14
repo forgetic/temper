@@ -7,7 +7,7 @@ use temper_coding_workspace::pr_diff_guard::GuardRole;
 use temper_forge::{ChangeKind, CreateIssue, CreateRepository, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
-use temper_wake::{send_wake, send_wake_with_hint, wait_for_wake_or_poll, WakeWaitOutcome};
+use temper_wake::{WakeWaitOutcome, send_wake, send_wake_with_hint, wait_for_wake_or_poll};
 
 fn temp_path(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -60,11 +60,13 @@ fn dogfood_reference_engineer_declares_coding_workspace() {
         tool.id.as_str() == temper_runner::CODING_WORKSPACE_TOOL_ID
             && tool.description.contains("checked-out repository")
     }));
-    assert!(engineer
-        .prompt_extension
-        .guidance
-        .as_deref()
-        .is_some_and(|guidance| guidance.contains("real product diff")));
+    assert!(
+        engineer
+            .prompt_extension
+            .guidance
+            .as_deref()
+            .is_some_and(|guidance| guidance.contains("real product diff"))
+    );
     assert!(engineer.prompt.render().contains("coding_workspace"));
 }
 

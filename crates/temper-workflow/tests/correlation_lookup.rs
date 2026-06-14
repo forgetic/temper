@@ -3,15 +3,15 @@
 mod support;
 
 use support::crash::{CrashForge, ForgeOp};
-use support::{block_on, create_issue, new_repo, workflow, TestRoot};
+use support::{TestRoot, block_on, create_issue, new_repo, workflow};
 use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, Forge, IssueQuery, IssueState, ItemListDetails,
     MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue,
     UserId,
 };
 use temper_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactRef, EnsureOutcome, Executor,
-    WorkflowMetadata,
+    ArtifactRef, EnsureOutcome, Executor, WorkflowMetadata, parse_metadata_block,
+    render_metadata_block,
 };
 
 fn code_issue_input() -> CreateIssue {
@@ -242,14 +242,16 @@ fn ensure_issue_with_parent_repairs_child_found_through_targeted_query() {
     assert_eq!(crash.count(ForgeOp::CreateIssue), 0);
     assert_eq!(crash.count(ForgeOp::UpdateIssue), 1);
     assert_eq!(crash.count(ForgeOp::ListIssuesDefault), 0);
-    assert!(crash
-        .issue_queries()
-        .iter()
-        .all(|query| query.details == ItemListDetails::summary()
-            && query.body_contains.as_deref()
-                == Some("\"correlation_key\": \"child-code-issue-42\"")
-            && query.state.is_some()
-            && query.labels == vec!["code".to_string(), "ready".to_string()]));
+    assert!(
+        crash
+            .issue_queries()
+            .iter()
+            .all(|query| query.details == ItemListDetails::summary()
+                && query.body_contains.as_deref()
+                    == Some("\"correlation_key\": \"child-code-issue-42\"")
+                && query.state.is_some()
+                && query.labels == vec!["code".to_string(), "ready".to_string()])
+    );
 
     let repaired = block_on(forge.get_issue_by_number(&repo, existing.number))
         .expect("lookup succeeds")

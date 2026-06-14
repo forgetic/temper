@@ -9,11 +9,11 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 
 use crate::{
-    is_valid_proposal_slug, parse_transcript_session_key, render_acceptance_marker,
-    render_transcript_marker, ConversationId, ConversationProfileId, ConversationReply,
-    ConversationRequest, ConversationTurn, ForgeInteractionSession, ForgeSessionConfig,
-    ForgeSessionOpenOptions, InteractionError, InteractionProtocolError, InteractiveResponder,
-    IssueProposal, Participant, Proposal, ProposalId, ProposalKind, RawInteractionSpec,
+    ConversationId, ConversationProfileId, ConversationReply, ConversationRequest,
+    ConversationTurn, ForgeInteractionSession, ForgeSessionConfig, ForgeSessionOpenOptions,
+    InteractionError, InteractionProtocolError, InteractiveResponder, IssueProposal, Participant,
+    Proposal, ProposalId, ProposalKind, RawInteractionSpec, is_valid_proposal_slug,
+    parse_transcript_session_key, render_acceptance_marker, render_transcript_marker,
 };
 
 const TRANSCRIPT_LABEL: &str = "product";
@@ -105,10 +105,12 @@ impl InteractiveResponder for FakeResponder {
     ) -> Result<ConversationReply, InteractionError> {
         assert_eq!(request.profile_id.as_str(), "product-manager");
         assert_eq!(request.context["repository"], "ai/temper");
-        assert!(request.context["transcript_url"]
-            .as_str()
-            .unwrap()
-            .ends_with("/ai/temper/issues/1"));
+        assert!(
+            request.context["transcript_url"]
+                .as_str()
+                .unwrap()
+                .ends_with("/ai/temper/issues/1")
+        );
         assert_eq!(request.turns.last().unwrap().body, "I want a chat MVP.");
         Ok(ConversationReply {
             message: "Let's file a small MVP.".into(),

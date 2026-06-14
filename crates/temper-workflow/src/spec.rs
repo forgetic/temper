@@ -9,11 +9,11 @@
 //! compiler and runtime APIs can require an already-validated workflow rather
 //! than re-checking an arbitrary document.
 
+use crate::ValidationErrors;
 use crate::artifact::ArtifactTarget;
 use crate::relation::RelationKind;
 use crate::validate::validate;
 use crate::validated::ValidatedWorkflow;
-use crate::ValidationErrors;
 use serde::{Deserialize, Deserializer, Serialize};
 use temper_forge::ReviewDecision;
 

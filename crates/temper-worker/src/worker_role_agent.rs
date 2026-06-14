@@ -45,7 +45,13 @@ pub(crate) fn build_role_agent(
         )
         .map_err(|error| error.to_string())?,
     ) as Arc<dyn Agent<dyn Forge>>;
-    Ok(guard_agent_if_needed(cx, args, compiled, role_manifest, agent))
+    Ok(guard_agent_if_needed(
+        cx,
+        args,
+        compiled,
+        role_manifest,
+        agent,
+    ))
 }
 
 fn guard_agent_if_needed(
@@ -61,8 +67,8 @@ fn guard_agent_if_needed(
     let Some(guard_role) = guard_role_for_manifest(compiled, role) else {
         return agent;
     };
-    let client = temper_forgejo_ops::forgejo_rest::http_client(cx.clone())
-        .expect("REST client builds");
+    let client =
+        temper_forgejo_ops::forgejo_rest::http_client(cx.clone()).expect("REST client builds");
     Arc::new(PullRequestDiffGuard::new(
         client,
         agent,

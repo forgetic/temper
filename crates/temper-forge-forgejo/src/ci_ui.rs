@@ -25,7 +25,7 @@ use crate::ci_ui_parse::{
     store_cookies,
 };
 use crate::config::WebUiCredentials;
-use crate::ids::{format_ci_job_id, CiJobCoord, RepoCoord};
+use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id};
 use crate::{ForgejoForge, HttpClient, HttpMethod, HttpRequest, HttpResponse};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;

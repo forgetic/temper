@@ -8,7 +8,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, issue_id, pull_id, MockHttpClient, OWNER, REPO};
+use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, issue_id, pull_id};
 use temper_forge::{ForgeError, ItemNumber};
 use temper_forge_forgejo::HttpMethod;
 
@@ -97,10 +97,12 @@ fn add_dependency_is_idempotent_when_already_present() {
     assert_eq!(issue.dependencies, vec![ItemNumber::new(2)]);
     // No target check and no POST: the source fetch and its dependency read only.
     assert_eq!(client.call_count(), 2);
-    assert!(client
-        .recorded()
-        .iter()
-        .all(|request| request.method == HttpMethod::Get));
+    assert!(
+        client
+            .recorded()
+            .iter()
+            .all(|request| request.method == HttpMethod::Get)
+    );
 }
 
 #[test]
@@ -141,10 +143,12 @@ fn remove_missing_link_is_noop() {
     assert_eq!(issue.dependencies, vec![ItemNumber::new(3)]);
     // The source fetch and its dependency read only; no DELETE.
     assert_eq!(client.call_count(), 2);
-    assert!(client
-        .recorded()
-        .iter()
-        .all(|request| request.method == HttpMethod::Get));
+    assert!(
+        client
+            .recorded()
+            .iter()
+            .all(|request| request.method == HttpMethod::Get)
+    );
 }
 
 #[test]

@@ -15,8 +15,8 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_runner::{MechanicalWorker, Progress, Worker};
 use temper_workflow::{
-    parse_metadata_block, render_metadata_block, InMemoryJournal, Lease, LeasePolicy,
-    RawWorkflowSpec, RoleId, WorkflowMetadata,
+    InMemoryJournal, Lease, LeasePolicy, RawWorkflowSpec, RoleId, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
@@ -293,19 +293,25 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
     );
     assert!(counted.count(CountedForgeOp::ListIssues) > 0);
     assert!(counted.count(CountedForgeOp::ListPullRequests) > 0);
-    assert!(!counted
-        .issue_queries()
-        .iter()
-        .any(|query| query == &IssueQuery::default()));
-    assert!(!counted
-        .pull_request_queries()
-        .iter()
-        .any(|query| query == &PullRequestQuery::default()));
+    assert!(
+        !counted
+            .issue_queries()
+            .iter()
+            .any(|query| query == &IssueQuery::default())
+    );
+    assert!(
+        !counted
+            .pull_request_queries()
+            .iter()
+            .any(|query| query == &PullRequestQuery::default())
+    );
     assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
-    assert!(counted
-        .pull_request_queries()
-        .iter()
-        .all(is_bounded_pull_request_query));
+    assert!(
+        counted
+            .pull_request_queries()
+            .iter()
+            .all(is_bounded_pull_request_query)
+    );
     // The only open-all issue listing is the default-kind `raw_intake`
     // automation queue's single state-bounded scan; everything else is
     // label-bounded and no closed history is listed open-ended.
@@ -319,10 +325,12 @@ fn normal_mechanical_tick_avoids_default_all_history_lists() {
         1,
         "exactly one default-kind open-all issue listing per mechanical tick"
     );
-    assert!(open_all_issue_queries
-        .iter()
-        .all(|query| query.state == Some(IssueState::Open)
-            && query.details == ItemListDetails::summary()));
+    assert!(
+        open_all_issue_queries
+            .iter()
+            .all(|query| query.state == Some(IssueState::Open)
+                && query.details == ItemListDetails::summary())
+    );
 }
 
 #[test]
@@ -342,15 +350,19 @@ fn normal_mechanical_tick_skips_terminal_implementation_only_pr_history() {
         block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("tick succeeds"),
         Progress::unchanged()
     );
-    assert!(counted
-        .pull_request_queries()
-        .iter()
-        .any(|query| query.state == Some(PullRequestState::Open)
-            && has_single_label(&query.labels, "implementation")));
-    assert!(!counted
-        .pull_request_queries()
-        .iter()
-        .any(is_terminal_implementation_query));
+    assert!(
+        counted
+            .pull_request_queries()
+            .iter()
+            .any(|query| query.state == Some(PullRequestState::Open)
+                && has_single_label(&query.labels, "implementation"))
+    );
+    assert!(
+        !counted
+            .pull_request_queries()
+            .iter()
+            .any(is_terminal_implementation_query)
+    );
     assert_eq!(counted.count(CountedForgeOp::GetPullRequestByNumber), 0);
 }
 
@@ -373,11 +385,13 @@ fn deep_audit_tick_finds_unlabelled_expired_lease() {
         block_on(worker.tick(ts("2026-05-29T00:20:00Z"))).expect("bounded tick succeeds"),
         Progress::unchanged()
     );
-    assert!(parse_metadata_block(&issue_body(&forge, &repo, issue))
-        .expect("metadata parses")
-        .expect("metadata present")
-        .lease
-        .is_some());
+    assert!(
+        parse_metadata_block(&issue_body(&forge, &repo, issue))
+            .expect("metadata parses")
+            .expect("metadata present")
+            .lease
+            .is_some()
+    );
 
     assert_eq!(
         block_on(worker.tick_deep_audit(ts("2026-05-29T00:21:00Z"))).expect("deep audit succeeds"),
@@ -386,19 +400,25 @@ fn deep_audit_tick_finds_unlabelled_expired_lease() {
             actions: 1,
         }
     );
-    assert!(counted
-        .issue_queries()
-        .iter()
-        .any(|query| query == &IssueQuery::default()));
-    assert!(counted
-        .pull_request_queries()
-        .iter()
-        .any(|query| query == &PullRequestQuery::default()));
-    assert!(parse_metadata_block(&issue_body(&forge, &repo, issue))
-        .expect("metadata parses")
-        .expect("metadata present")
-        .lease
-        .is_none());
+    assert!(
+        counted
+            .issue_queries()
+            .iter()
+            .any(|query| query == &IssueQuery::default())
+    );
+    assert!(
+        counted
+            .pull_request_queries()
+            .iter()
+            .any(|query| query == &PullRequestQuery::default())
+    );
+    assert!(
+        parse_metadata_block(&issue_body(&forge, &repo, issue))
+            .expect("metadata parses")
+            .expect("metadata present")
+            .lease
+            .is_none()
+    );
 }
 
 #[test]

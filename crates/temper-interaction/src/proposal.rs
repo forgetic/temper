@@ -1,7 +1,7 @@
 use temper_forge::{CreateIssue, Forge, Issue, IssueQuery, Repository};
 
 pub use temper_process_protocol::interaction::{
-    validate_proposal_ids, validate_proposals, IssueProposal, Proposal,
+    IssueProposal, Proposal, validate_proposal_ids, validate_proposals,
 };
 
 use crate::acceptance::IssueAcceptanceOutcome;

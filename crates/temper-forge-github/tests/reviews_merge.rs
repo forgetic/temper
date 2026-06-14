@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, pull_id, MockHttpClient};
+use support::{MockHttpClient, block_on, body_json, forge, pull_id};
 use temper_forge::{
     CreatePullRequestReview, ForgeError, MergeMethod, MergePullRequest, ReviewDecision, UserId,
 };

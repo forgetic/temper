@@ -3,9 +3,9 @@
 use chrono::{DateTime, Utc};
 use temper_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use temper_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget,
-    ClassificationDiagnostic, ClassifiedRelation, Classifier, LabelId, RawWorkflowSpec,
-    RelationKind, StateDimensionId, StateId, ValidatedWorkflow, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget, ClassificationDiagnostic,
+    ClassifiedRelation, Classifier, LabelId, RawWorkflowSpec, RelationKind, StateDimensionId,
+    StateId, ValidatedWorkflow, WorkflowMetadata, render_metadata_block,
 };
 
 fn ts() -> DateTime<Utc> {
@@ -181,13 +181,15 @@ fn state_limited_to_another_artifact_kind_is_diagnosed() {
         .classify_issue(&issue(1, &["epic", "ready"], ""))
         .expect_err("ready is only legal for code in this fixture");
 
-    assert!(error
-        .diagnostics()
-        .contains(&ClassificationDiagnostic::StateNotAllowedForArtifact {
-            artifact: ArtifactKindId::new("epic"),
-            dimension: StateDimensionId::new("code_lifecycle"),
-            state: StateId::new("ready"),
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&ClassificationDiagnostic::StateNotAllowedForArtifact {
+                artifact: ArtifactKindId::new("epic"),
+                dimension: StateDimensionId::new("code_lifecycle"),
+                state: StateId::new("ready"),
+            })
+    );
 }
 
 #[test]
@@ -199,11 +201,13 @@ fn unmatched_issue_is_unclassified() {
         .classify_issue(&issue(1, &["ready"], ""))
         .expect_err("no identifying label must fail");
 
-    assert!(error
-        .diagnostics()
-        .contains(&ClassificationDiagnostic::Unclassified {
-            target: ArtifactTarget::Issue,
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&ClassificationDiagnostic::Unclassified {
+                target: ArtifactTarget::Issue,
+            })
+    );
 }
 
 #[test]
@@ -217,9 +221,11 @@ fn missing_metadata_block_still_classifies_by_labels() {
 
     assert_eq!(artifact.kind, ArtifactKindId::new("code"));
     assert!(artifact.metadata.is_empty());
-    assert!(!artifact
-        .states
-        .contains_key(&StateDimensionId::new("code_lifecycle")));
+    assert!(
+        !artifact
+            .states
+            .contains_key(&StateDimensionId::new("code_lifecycle"))
+    );
 }
 
 #[test]
@@ -232,10 +238,12 @@ fn malformed_metadata_is_reported_deterministically() {
         .classify_issue(&issue(1, &["code"], body))
         .expect_err("malformed metadata must fail");
 
-    assert!(error
-        .diagnostics()
-        .iter()
-        .any(|d| matches!(d, ClassificationDiagnostic::MalformedMetadata { .. })));
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|d| matches!(d, ClassificationDiagnostic::MalformedMetadata { .. }))
+    );
 }
 
 #[test]
@@ -252,12 +260,14 @@ fn metadata_kind_drift_reports_missing_identifying_label() {
         .classify_issue(&issue(1, &["ready"], &body))
         .expect_err("label drift must fail");
 
-    assert!(error
-        .diagnostics()
-        .contains(&ClassificationDiagnostic::MissingIdentifyingLabel {
-            kind: ArtifactKindId::new("code"),
-            label: LabelId::new("code"),
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&ClassificationDiagnostic::MissingIdentifyingLabel {
+                kind: ArtifactKindId::new("code"),
+                label: LabelId::new("code"),
+            })
+    );
 }
 
 #[test]
@@ -464,9 +474,11 @@ fn default_kind_does_not_admit_a_foreign_target() {
         .classify_pull_request(&pull_request(1, &[], ""))
         .expect_err("no default pull-request kind is declared");
 
-    assert!(error
-        .diagnostics()
-        .contains(&ClassificationDiagnostic::Unclassified {
-            target: ArtifactTarget::PullRequest,
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&ClassificationDiagnostic::Unclassified {
+                target: ArtifactTarget::PullRequest,
+            })
+    );
 }

@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, repo_id, MockHttpClient};
+use support::{MockHttpClient, block_on, body_json, forge, repo_id};
 use temper_forge::{
     CreateRepository, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort,
     RepositorySortField, SortDirection, UpsertLabel, UserId,
@@ -46,10 +46,12 @@ fn current_user_hits_user_endpoint_with_github_headers() {
         .map(|(_, value)| value.clone())
         .unwrap();
     assert_eq!(authorization, "Bearer test-token");
-    assert!(request
-        .headers
-        .iter()
-        .any(|(name, value)| name == "Accept" && value == "application/vnd.github+json"));
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Accept" && value == "application/vnd.github+json")
+    );
     assert!(request.headers.iter().any(|(name, _)| name == "User-Agent"));
 }
 
@@ -88,10 +90,12 @@ fn list_repositories_sorts_deterministically() {
 
     let request = client.last_request().unwrap();
     assert_eq!(request.path, "/user/repos");
-    assert!(request
-        .query
-        .iter()
-        .any(|(key, value)| key == "per_page" && value == "50"));
+    assert!(
+        request
+            .query
+            .iter()
+            .any(|(key, value)| key == "per_page" && value == "50")
+    );
 }
 
 #[test]

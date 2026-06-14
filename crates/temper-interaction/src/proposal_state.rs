@@ -61,9 +61,10 @@ pub fn latest_proposals_from_turns(
     let mut latest = Vec::new();
     for turn in turns {
         if turn.participant.kind == ParticipantKind::Agent
-            && let Some(proposals) = parse_proposal_snapshot_marker(marker_namespace, &turn.body)? {
-                latest = proposals;
-            }
+            && let Some(proposals) = parse_proposal_snapshot_marker(marker_namespace, &turn.body)?
+        {
+            latest = proposals;
+        }
     }
     Ok(latest)
 }
