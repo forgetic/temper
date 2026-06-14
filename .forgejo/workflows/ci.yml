@@ -60,15 +60,7 @@ jobs:
       - name: Format
         run: |
           set -eu
-          # Format temper's own workspace members only — NOT `cargo fmt --all`,
-          # which would descend into the sibling path-dep checkouts next door
-          # (skein / tongs / jig / bench) and try to police code temper's CI
-          # does not own. Members are derived at runtime so the list never
-          # drifts. (Matches the prior in-place formatting pass; the tree is not
-          # yet rustfmt-clean workspace-wide, so enforcing --check is a separate
-          # follow-up.)
-          cargo fmt $(cargo metadata --no-deps --format-version 1 \
-            | python3 -c "import json,sys; print(' '.join('-p '+p['name'] for p in json.load(sys.stdin)['packages']))")
+          cargo fmt --all
       # Build the test executables first: they emit real artifacts that kache
       # caches in full, so on a clean checkout with a warm cache this is the
       # cheap step. Lint runs afterwards. There is deliberately no separate
