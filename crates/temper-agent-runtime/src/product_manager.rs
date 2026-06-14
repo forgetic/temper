@@ -419,9 +419,8 @@ mod tests {
 
     #[test]
     fn product_manager_reads_temper_process_reply_fixture_and_issue_payload_contract() {
-        let fixture = include_str!(
-            "../../temper-process-protocol/fixtures/interactive-responder-reply.json"
-        );
+        let fixture =
+            include_str!("../../temper-process-protocol/fixtures/interactive-responder-reply.json");
         let reply: ConversationReply = serde_json::from_str(fixture).expect("fixture parses");
         reply.validate().expect("fixture reply validates");
 
