@@ -36,7 +36,18 @@ use temper_testing::forgejo_server::{ForgejoServer, Provisioned, start_cached_pr
 
 const ENGINEER: &str = "engineer";
 const REPO_NAME: &str = "temper-run-e2e";
-const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
+const DEFAULT_CONVERGENCE_SECS: u64 = 180;
+
+/// Convergence budget, overridable via `TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS`
+/// (the same knob the daemon e2e honors). CI sets it higher because a cold
+/// machine spends ~2min provisioning the Forgejo fixture before any work runs.
+fn convergence_timeout() -> Duration {
+    std::env::var("TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_CONVERGENCE_SECS))
+}
 // A delivery workflow with NO ci_gate on landing: the engineer agent opens a PR
 // and there is no Actions dependency, so the test converges on PR-open without a
 // runner. (Reuses the shapes of the canonical basic-delivery workflow.)
@@ -97,7 +108,8 @@ fn temper_run_opens_an_engineer_pr_via_fake_llm() {
 
     // --- Converge: an engineer-authored implementation PR for this issue ---
     let forge = admin_forge(&server, &provisioned);
-    let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
+    let timeout = convergence_timeout();
+    let deadline = Instant::now() + timeout;
     let result = loop {
         if let Some(status) = run.child.try_wait().expect("run try_wait") {
             panic!(
@@ -111,7 +123,7 @@ fn temper_run_opens_an_engineer_pr_via_fake_llm() {
                 std::thread::sleep(Duration::from_secs(1));
             }
             Err(error) => panic!(
-                "`temper run` did not open an engineer PR within {CONVERGENCE_TIMEOUT:?}: {error}\n--- temper run log ---\n{}",
+                "`temper run` did not open an engineer PR within {timeout:?}: {error}\n--- temper run log ---\n{}",
                 run.log_tail()
             ),
         }

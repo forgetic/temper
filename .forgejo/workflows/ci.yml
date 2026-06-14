@@ -71,6 +71,14 @@ jobs:
           set -eu
           cargo dev-test-build
       - name: Test
+        # The ignored daemon e2e scenarios boot a real Forgejo + CI runner and
+        # wait for convergence (PR opened, CI red→green, mechanical merge). On a
+        # cold CI machine the fixture provisioning alone can take ~2min, eating
+        # the default 300s budget before the inner CI build + merge-on-green
+        # cycle completes. Give it generous headroom here (local warm runs are
+        # unaffected — they keep the 300s default).
+        env:
+          TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "900"
         run: |
           set -eu
           cargo dev-test-full
