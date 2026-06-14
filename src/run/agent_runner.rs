@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use skein::runtime::RuntimeHandle;
-use temper_agent_protocol::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
 use temper_agent::{CodingAgentError, ProviderConfig, run_coding_agent_native_with_hooks};
+use temper_agent_protocol::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
 use temper_worker::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.

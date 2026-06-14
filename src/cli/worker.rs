@@ -80,12 +80,11 @@ fn run(config: WorkerConfig) -> Result<(), String> {
                 // applies them to the forge idempotently); transport trouble is
                 // logged and dropped, never failing the turn. Built inside the
                 // engine task so it holds the runtime handle explicitly.
-                let progress_sink =
-                    Arc::new(temper_worker::DaemonRelayProgressSink::new(
-                        handle.clone(),
-                        &config.daemon_url,
-                        config.worker_id.clone(),
-                    ));
+                let progress_sink = Arc::new(temper_worker::DaemonRelayProgressSink::new(
+                    handle.clone(),
+                    &config.daemon_url,
+                    config.worker_id.clone(),
+                ));
                 let executor = Arc::new(
                     CodingExecutor::new(executor_config, runner).with_progress_sink(progress_sink),
                 );

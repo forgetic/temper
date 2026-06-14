@@ -89,8 +89,8 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport> WorkerShell<E, T> {
     }
 }
 
-impl<E: JobExecutor + Send + Sync + 'static, T: Transport>
-    temper_worker_io::Executor<WorkerMachine> for WorkerShell<E, T>
+impl<E: JobExecutor + Send + Sync + 'static, T: Transport> temper_worker_io::Executor<WorkerMachine>
+    for WorkerShell<E, T>
 {
     fn execute(&self, request: WorkerRequest) {
         match request {

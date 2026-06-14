@@ -26,10 +26,10 @@
 use std::collections::BTreeSet;
 
 use serde_json::json;
-use temper_worker_io::{EngineTime, Machine};
 use temper_worker::config::{CapabilitySpec, WorkerParams};
 use temper_worker::executor::{JobOutcome, job_result};
 use temper_worker::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
+use temper_worker_io::{EngineTime, Machine};
 use temper_worker_protocol::{
     Artifact, Assign, ErrorCode, FailureClass, ProtocolError, ResultStatus,
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
