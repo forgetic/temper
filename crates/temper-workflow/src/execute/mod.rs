@@ -90,7 +90,7 @@ mod ensure;
 mod merge;
 mod signals;
 
-pub use ensure::{find_pull_request_by_correlation, CorrelationLookupPlan};
+pub use ensure::{CorrelationLookupPlan, find_pull_request_by_correlation};
 
 use crate::classify::{ArtifactSource, ClassificationError, ClassifiedArtifact, Classifier};
 use crate::context::ExecutionContext;
@@ -265,7 +265,10 @@ impl std::fmt::Display for ExecutionError {
                 )
             }
             ExecutionError::UnresolvedReviewer { role } => {
-                write!(formatter, "no Forge user is bound for reviewer role `{role}`")
+                write!(
+                    formatter,
+                    "no Forge user is bound for reviewer role `{role}`"
+                )
             }
             ExecutionError::MissingCorrelationKey { effect } => {
                 write!(formatter, "effect {effect:?} has no correlation key")

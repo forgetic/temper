@@ -8,13 +8,13 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_runner::{Agent, CiSink, Progress, RoleTools, RoleWorker, WorkItem, Worker};
 use temper_workflow::{
-    parse_metadata_block, render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource,
-    QueueId, RoleId, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, ArtifactSource, QueueId, RoleId, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block,
 };
 
 use temper_testing::agents::{
-    ClosingArchitect, FakeArchitect, FakeEngineer, FakeHuman, FakeOwner, FakeReviewer,
-    ARCHITECT_PLAN_BEGIN,
+    ARCHITECT_PLAN_BEGIN, ClosingArchitect, FakeArchitect, FakeEngineer, FakeHuman, FakeOwner,
+    FakeReviewer,
 };
 use temper_testing::ci::MemoryCiSink;
 use temper_testing::{
@@ -148,12 +148,16 @@ fn architect_fake_fans_out_cross_repo_children_idempotently() {
 
     let source_child = assert_child(&forge, &source_repo, "service child", &source_repo, parent);
     let target_child = assert_child(&forge, &target_repo, "canary child", &source_repo, parent);
-    assert!(parent_metadata
-        .dependencies
-        .contains(&ArtifactRef::in_repo(source_repo.clone(), source_child)));
-    assert!(parent_metadata
-        .dependencies
-        .contains(&ArtifactRef::in_repo(target_repo.clone(), target_child)));
+    assert!(
+        parent_metadata
+            .dependencies
+            .contains(&ArtifactRef::in_repo(source_repo.clone(), source_child))
+    );
+    assert!(
+        parent_metadata
+            .dependencies
+            .contains(&ArtifactRef::in_repo(target_repo.clone(), target_child))
+    );
 
     assert_eq!(
         tick(&worker),
@@ -196,9 +200,11 @@ fn architect_fake_same_repo_without_plan_matches_plain_triage() {
         .expect("lookup succeeds")
         .expect("issue exists");
     assert_eq!(labels(issue.labels), vec!["code", "ready"]);
-    assert!(parse_metadata_block(&issue.body)
-        .expect("metadata parses")
-        .is_none());
+    assert!(
+        parse_metadata_block(&issue.body)
+            .expect("metadata parses")
+            .is_none()
+    );
     assert_eq!(issue_count(&forge, &repo), 1);
 }
 
@@ -445,9 +451,11 @@ fn assert_child(
     let metadata = parse_metadata_block(&issue.body)
         .expect("child metadata parses")
         .expect("child metadata exists");
-    assert!(metadata
-        .parents
-        .contains(&ArtifactRef::in_repo(parent_repo.clone(), parent)));
+    assert!(
+        metadata
+            .parents
+            .contains(&ArtifactRef::in_repo(parent_repo.clone(), parent))
+    );
     assert!(metadata.correlation_key.is_some());
     issue.number
 }

@@ -178,7 +178,7 @@ impl RawReplArgs {
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
-                    )))
+                    )));
                 }
             }
         }
@@ -232,7 +232,7 @@ impl RawServeArgs {
                 other => {
                     return Err(ArgsError::new(format!(
                         "unrecognized argument '{other}'\nusage: {USAGE}"
-                    )))
+                    )));
                 }
             }
         }

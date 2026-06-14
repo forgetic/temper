@@ -2,9 +2,9 @@
 
 use crate::interaction_args::InteractionServeArgs;
 use crate::interaction_bindings::{
-    build_service, load_bindings, load_compiled_spec, service_options, InteractionDeploymentError,
+    InteractionDeploymentError, build_service, load_bindings, load_compiled_spec, service_options,
 };
-use crate::interaction_service::{run_http, InteractionHttpApp};
+use crate::interaction_service::{InteractionHttpApp, run_http};
 
 pub fn run_serve(args: &InteractionServeArgs) -> Result<(), InteractionDeploymentError> {
     let spec = load_compiled_spec(&args.spec_path)?;

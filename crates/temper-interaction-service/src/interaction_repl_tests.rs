@@ -3,8 +3,8 @@ use temper_interaction::{
 };
 
 use crate::interaction_commands::{
-    parse_repl_command, render_command_help, render_proposals, resolve_proposal_selector,
-    BuiltinReplCommand, ParsedReplCommand,
+    BuiltinReplCommand, ParsedReplCommand, parse_repl_command, render_command_help,
+    render_proposals, resolve_proposal_selector,
 };
 
 const PRODUCT_SPEC: &str =

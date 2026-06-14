@@ -20,9 +20,9 @@
 
 use temper_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use temper_workflow::{
-    compile, ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier, GateCondition, GateId,
-    GateSignals, IntakeAuthor, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, ReviewStatus,
-    RoleId, TransitionId, ValidatedWorkflow, VerdictId, WorkflowEffect,
+    ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier, GateCondition, GateId, GateSignals,
+    IntakeAuthor, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, ReviewStatus, RoleId,
+    TransitionId, ValidatedWorkflow, VerdictId, WorkflowEffect, compile,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/basic-delivery.json");
@@ -212,9 +212,11 @@ fn raw_intake_is_stamped_untriaged_then_flows_to_architect_triage() {
     // queue.
     let stamped = classify_issue(&workflow, 1, &["untriaged"]);
     assert_eq!(stamped.kind, ArtifactKindId::new("intake"));
-    assert!(planner
-        .matching_queues(&stamped)
-        .contains(&QueueId::new("triage")));
+    assert!(
+        planner
+            .matching_queues(&stamped)
+            .contains(&QueueId::new("triage"))
+    );
 }
 
 #[test]
@@ -285,9 +287,11 @@ fn engineer_claims_ready_code_and_opens_a_pr() {
     let ready_code = classify_issue(&workflow, 42, &["code", "ready"]);
 
     // Ready code lands in the engineer's `code_ready` queue.
-    assert!(planner
-        .matching_queues(&ready_code)
-        .contains(&QueueId::new("code_ready")));
+    assert!(
+        planner
+            .matching_queues(&ready_code)
+            .contains(&QueueId::new("code_ready"))
+    );
 
     // `open_pr` claims the issue, assigns the engineer, and creates a PR.
     let open_pr = planner
@@ -403,12 +407,14 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
             &no_ci,
         )
         .expect_err("landing is blocked until CI passes");
-    assert!(blocked
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("land_pr"),
-            gate: GateId::new("ci_gate"),
-        }));
+    assert!(
+        blocked
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("land_pr"),
+                gate: GateId::new("ci_gate"),
+            })
+    );
 }
 
 #[test]
@@ -419,9 +425,11 @@ fn failed_ci_routes_back_to_the_engineer() {
     // A PR whose CI failed lands in the engineer's `pr_ci_failed` queue.
     let failed = classify_pr(&workflow, 21, &["implementation"]);
     let ci_failed = GateSignals::new().with_ci(CiStatus::failed());
-    assert!(planner
-        .matching_queues_with(&failed, &ci_failed)
-        .contains(&QueueId::new("pr_ci_failed")));
+    assert!(
+        planner
+            .matching_queues_with(&failed, &ci_failed)
+            .contains(&QueueId::new("pr_ci_failed"))
+    );
 
     // The engineer can act on it via `address_ci_failure`.
     let respond = planner
@@ -439,9 +447,11 @@ fn failed_ci_routes_back_to_the_engineer() {
     // The same green PR does not match the CI-failure queue.
     let green = classify_pr(&workflow, 22, &["implementation"]);
     let ci_passed = GateSignals::new().with_ci(CiStatus::passed());
-    assert!(!planner
-        .matching_queues_with(&green, &ci_passed)
-        .contains(&QueueId::new("pr_ci_failed")));
+    assert!(
+        !planner
+            .matching_queues_with(&green, &ci_passed)
+            .contains(&QueueId::new("pr_ci_failed"))
+    );
 }
 
 #[test]

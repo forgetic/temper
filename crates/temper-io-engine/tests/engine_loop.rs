@@ -7,9 +7,9 @@
 use std::time::Duration;
 
 use temper_io_engine::http::{
-    serve_http, HttpCall, HttpRequestData, HttpResponder, HttpResponseData,
+    HttpCall, HttpRequestData, HttpResponder, HttpResponseData, serve_http,
 };
-use temper_io_engine::{arm_timer, channel, drive, CqSender, EngineTime, Executor, Machine};
+use temper_io_engine::{CqSender, EngineTime, Executor, Machine, arm_timer, channel, drive};
 
 /// Completions the demo service can observe.
 enum Completion {

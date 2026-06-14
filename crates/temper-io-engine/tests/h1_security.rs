@@ -182,7 +182,10 @@ fn rejects_bare_lf_in_header_value() {
 
 #[test]
 fn rejects_empty_header_name() {
-    assert_rejected(b"GET / HTTP/1.1\r\nHost: x\r\n: value\r\n\r\n", "empty header name");
+    assert_rejected(
+        b"GET / HTTP/1.1\r\nHost: x\r\n: value\r\n\r\n",
+        "empty header name",
+    );
 }
 
 #[test]

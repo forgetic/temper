@@ -1,6 +1,6 @@
 mod support;
 
-use support::{block_on, pull_request, repository, TestRoot};
+use support::{TestRoot, block_on, pull_request, repository};
 use temper_forge::{
     CreatePullRequestReview, Forge, ForgeError, PullRequestId, PullRequestReviewStatus,
     RequestReviewers, ReviewDecision, User, UserId,
@@ -71,9 +71,11 @@ fn reviews_are_requested_persisted_ordered_and_aggregated() {
         format!("review-{}-0000000000000001", pr.id)
     );
     assert!(reviews[0].submitted_at < reviews[1].submitted_at);
-    assert!(reviews
-        .iter()
-        .all(|review| review.reviewer_id == reviewer.id));
+    assert!(
+        reviews
+            .iter()
+            .all(|review| review.reviewer_id == reviewer.id)
+    );
 
     let status = PullRequestReviewStatus::from_reviews(&current.requested_reviewers, &reviews);
     assert!(status.is_approved());

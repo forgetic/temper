@@ -1,7 +1,7 @@
+use crate::FilesystemForge;
 use crate::lists::sort_pull_requests_by_number;
 use crate::metadata::next_timestamp;
 use crate::record_ids::merge_commit_sha;
-use crate::FilesystemForge;
 use temper_forge::{
     ChangeKind, ForgeError, ForgeResult, MergePullRequest, MergeRecord, PullRequestId,
     PullRequestState,

@@ -85,9 +85,9 @@ mod workspace_request;
 pub use agent::{Agent, AgentError, AgentRegistry, RoleTools};
 pub use cadence::IdlePollBackoff;
 pub use coding_workspace::{
-    CodingWorkspace, CodingWorkspaceError, CodingWorkspaceGuidance, CodingWorkspaceOutput,
-    CodingWorkspaceRepository, CodingWorkspaceRequest, CodingWorkspaceWorkItem,
-    ExternalToolExecutors, WorkspaceCheckout, CODING_WORKSPACE_TOOL_ID,
+    CODING_WORKSPACE_TOOL_ID, CodingWorkspace, CodingWorkspaceError, CodingWorkspaceGuidance,
+    CodingWorkspaceOutput, CodingWorkspaceRepository, CodingWorkspaceRequest,
+    CodingWorkspaceWorkItem, ExternalToolExecutors, WorkspaceCheckout,
 };
 pub use config::{
     ExternalToolBinding, ExternalToolBindingError, PullRequestCreateBinding, RoleBinding,
@@ -102,35 +102,35 @@ pub use multi_repo::{
     RepositoryTarget,
 };
 pub use observability::{
+    ActionDispatchEvent, MechanicalReconciliationEvent, ObservabilityArtifactType, REDACTED,
+    RoleDecisionReplyEvent, RoleDecisionRequestEvent, ScanSummaryEvent, StructuredEvent,
+    TransitionExecutionEvent, WorkItemIdentity, WorkItemSelectedEvent, WorkerCapabilitySummary,
     bounded_preview, execution_error_diagnostic_classes, execution_error_failure_class,
     postcondition_outcome_for_error, redacted_lossy_preview, redacted_preview,
     render_action_dispatch_event, render_mechanical_reconciliation_event,
     render_role_decision_reply_event, render_role_decision_request_event,
     render_scan_summary_event, render_transition_execution_event, render_work_item_selected_event,
-    render_worker_capability_event, workflow_effect_summary, ActionDispatchEvent,
-    MechanicalReconciliationEvent, ObservabilityArtifactType, RoleDecisionReplyEvent,
-    RoleDecisionRequestEvent, ScanSummaryEvent, StructuredEvent, TransitionExecutionEvent,
-    WorkItemIdentity, WorkItemSelectedEvent, WorkerCapabilitySummary, REDACTED,
+    render_worker_capability_event, workflow_effect_summary,
 };
 pub use role_decision::{
-    AuthorizedWorkflowAction, BoundExternalTool, WorkflowRoleDecisionProtocolError,
-    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, WORKFLOW_ROLE_DECISION_NO_ACTION,
-    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
+    AuthorizedWorkflowAction, BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION,
+    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION, WorkflowRoleDecisionProtocolError,
+    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
 pub use role_decision_process::{
     WorkflowRoleDecisionProcessAgent, WorkflowRoleDecisionProcessConfig,
     WorkflowRoleDecisionProcessError,
 };
 pub use scan::{
-    candidate_query_plan, scan, scan_audit, scan_automated_queues, scan_role, scan_role_audit,
-    scan_role_wake, AutomatedWorkItem, CandidateQueryPlan, ScanError, ScanMode, WorkItem,
+    AutomatedWorkItem, CandidateQueryPlan, ScanError, ScanMode, WorkItem, candidate_query_plan,
+    scan, scan_audit, scan_automated_queues, scan_role, scan_role_audit, scan_role_wake,
 };
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};
 pub use stage::{
-    run_scenario, run_scenario_with_budget, BoxError, InProcessStage, InProcessWorkerContext,
+    BoxError, DEFAULT_SCENARIO_BUDGET, InProcessStage, InProcessWorkerContext,
     InProcessWorkerFactory, MultiProcessStage, Scenario, ScenarioError, ScenarioFuture,
-    ScenarioStep, Stage, StageError, WorkerProcess, DEFAULT_SCENARIO_BUDGET,
+    ScenarioStep, Stage, StageError, WorkerProcess, run_scenario, run_scenario_with_budget,
 };
-pub use trigger::{broad_targets, ChangeHint, ChangeKind, TriggerScheduler, WakeTarget};
+pub use trigger::{ChangeHint, ChangeKind, TriggerScheduler, WakeTarget, broad_targets};
 pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
 pub use workspace_request::{pr_branch_hint, pr_correlation_key, workspace_content_key};

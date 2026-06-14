@@ -110,9 +110,11 @@ fn local_git_workspace_accepts_product_code_or_docs_diff() {
     assert_eq!(output.labels, vec!["implementation", "needs-reviewer"]);
     let head = git(&repo.path, &["log", "--oneline", "-1"]).expect("git log succeeds");
     assert!(head.contains("Implement pr-for-code-7"));
-    assert!(changed_files(&repo.path)
-        .expect("status succeeds")
-        .is_empty());
+    assert!(
+        changed_files(&repo.path)
+            .expect("status succeeds")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -213,9 +215,11 @@ fn no_result_file_keeps_head_path_unchanged() {
     assert_eq!(output.labels, vec!["implementation", "needs-reviewer"]);
     let head = git(&repo.path, &["log", "--oneline", "-1"]).expect("git log succeeds");
     assert!(head.contains("Implement pr-for-code-7"));
-    assert!(changed_files(&repo.path)
-        .expect("status succeeds")
-        .is_empty());
+    assert!(
+        changed_files(&repo.path)
+            .expect("status succeeds")
+            .is_empty()
+    );
 }
 
 #[test]

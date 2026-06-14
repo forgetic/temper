@@ -11,8 +11,8 @@ use std::sync::Mutex;
 use temper_forge::{CreateIssue, Forge, ItemNumber, RepositoryId};
 use temper_runner::{Agent, AgentError, AgentRegistry, RoleTools, WorkItem};
 use temper_workflow::{
-    global_child_correlation_key, parse_metadata_block, render_metadata_block, ArtifactKindId,
-    ArtifactRef, ArtifactSource, ExecutionError, RoleId, TransitionId, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, ArtifactSource, ExecutionError, RoleId, TransitionId,
+    WorkflowMetadata, global_child_correlation_key, parse_metadata_block, render_metadata_block,
 };
 
 use crate::pull_request_input;

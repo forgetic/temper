@@ -6,7 +6,7 @@
 
 use std::process::ExitCode;
 
-use temper_testing::daemon_worker::{parse_args, run, GitIdentity, ParseOutcome, USAGE};
+use temper_testing::daemon_worker::{GitIdentity, ParseOutcome, USAGE, parse_args, run};
 
 fn main() -> ExitCode {
     let config = match parse_args(std::env::args().skip(1)) {
@@ -36,9 +36,10 @@ fn main() -> ExitCode {
         }
     };
 
-    match temper_io_engine::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
-        run(&cx, &config, &identity).await
-    }) {
+    match temper_io_engine::runtime::block_on_runtime_with(
+        &runtime,
+        move |cx, _handle| async move { run(&cx, &config, &identity).await },
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("temper-testing-daemon-worker: {error}");

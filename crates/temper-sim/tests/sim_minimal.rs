@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use serde_json::json;
 use temper_daemon::{Daemon, InFlightJob, ResultApplier};
-use temper_io_engine::{channel, CqSender};
+use temper_io_engine::{CqSender, channel};
 use temper_sim::{Sim, SimProtocolClient};
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, RepoOutcome,
-    ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
 struct RecordingApplier {

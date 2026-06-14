@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use chrono::Duration;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
 use temper_forge::{
     CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequestReview, Forge,
@@ -14,8 +14,8 @@ use temper_forge::{
 };
 use temper_forge_filesystem::FilesystemForge;
 use temper_runner::{
-    broad_targets, Agent, AgentError, MechanicalWorker, Progress, RoleTools, RoleWorker,
-    WakeTarget, WakeablePollLoop, WorkItem, Worker,
+    Agent, AgentError, MechanicalWorker, Progress, RoleTools, RoleWorker, WakeTarget,
+    WakeablePollLoop, WorkItem, Worker, broad_targets,
 };
 use temper_testing::{actor_user, block_on, repo_input, runner_config, ts, user, workflow};
 use temper_workflow::{
@@ -291,19 +291,25 @@ fn mechanical_landing_wake_driven_by(final_wake: LandingWake) {
     );
     assert!(pull_request_is_merged(&root.forge(), &pr.id));
     assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
-    assert!(!counted
-        .issue_queries()
-        .iter()
-        .any(|query| query == &IssueQuery::default()));
-    assert!(!counted
-        .pull_request_queries()
-        .iter()
-        .any(|query| query == &PullRequestQuery::default()));
+    assert!(
+        !counted
+            .issue_queries()
+            .iter()
+            .any(|query| query == &IssueQuery::default())
+    );
+    assert!(
+        !counted
+            .pull_request_queries()
+            .iter()
+            .any(|query| query == &PullRequestQuery::default())
+    );
     assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
-    assert!(counted
-        .pull_request_queries()
-        .iter()
-        .all(is_bounded_pull_request_query));
+    assert!(
+        counted
+            .pull_request_queries()
+            .iter()
+            .all(is_bounded_pull_request_query)
+    );
 }
 
 #[test]

@@ -4,17 +4,17 @@ mod support;
 
 use support::crash::{CrashForge, ForgeOp};
 use support::{
-    add_issue_dependency, block_on, close_issue, create_issue, create_pr, new_repo, ts, workflow,
-    TestRoot,
+    TestRoot, add_issue_dependency, block_on, close_issue, create_issue, create_pr, new_repo, ts,
+    workflow,
 };
 use temper_forge::{
     Forge, IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RepositoryId, UpdatePullRequest,
 };
 use temper_workflow::{
-    reconciliation_candidate_query_plan, ArtifactSource, CommandId, CommandJournal, CommandRecord,
-    CommandState, DefaultRecoveryPolicy, InMemoryJournal, Postcondition, ReconcileFinding,
-    RecoveryAction, RoleId, TransitionId, WorkflowEffect,
+    ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState, DefaultRecoveryPolicy,
+    InMemoryJournal, Postcondition, ReconcileFinding, RecoveryAction, RoleId, TransitionId,
+    WorkflowEffect, reconciliation_candidate_query_plan,
 };
 
 fn planned_record(id: &str, target: ArtifactSource, effects: Vec<WorkflowEffect>) -> CommandRecord {
@@ -85,10 +85,11 @@ fn candidate_plan_uses_workflow_labels_explicit_states_and_summary_details() {
         "landed"
     ));
     assert!(plan.issue_queries.iter().all(is_bounded_issue_query));
-    assert!(plan
-        .pull_request_queries
-        .iter()
-        .all(is_bounded_pull_request_query));
+    assert!(
+        plan.pull_request_queries
+            .iter()
+            .all(is_bounded_pull_request_query)
+    );
 }
 
 #[test]
@@ -213,10 +214,12 @@ fn bounded_candidate_discovery_finds_impossible_state_on_closed_artifact_once() 
         })
         .count();
     assert_eq!(impossible, 1, "overlapping label queries must deduplicate");
-    assert!(crash
-        .issue_queries()
-        .iter()
-        .any(|query| query.state == Some(IssueState::Closed) && !query.labels.is_empty()));
+    assert!(
+        crash
+            .issue_queries()
+            .iter()
+            .any(|query| query.state == Some(IssueState::Closed) && !query.labels.is_empty())
+    );
     assert_observed_bounded_summary_queries(&crash);
 }
 
@@ -405,10 +408,12 @@ fn is_bounded_pull_request_query(query: &PullRequestQuery) -> bool {
 
 fn assert_observed_bounded_summary_queries<F: Forge>(crash: &CrashForge<F>) {
     assert!(crash.issue_queries().iter().all(is_bounded_issue_query));
-    assert!(crash
-        .pull_request_queries()
-        .iter()
-        .all(is_bounded_pull_request_query));
+    assert!(
+        crash
+            .pull_request_queries()
+            .iter()
+            .all(is_bounded_pull_request_query)
+    );
 }
 
 fn close_pull_request<F: Forge + ?Sized>(forge: &F, repo: &RepositoryId, number: ItemNumber) {

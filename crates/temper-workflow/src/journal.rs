@@ -30,10 +30,10 @@
 //! cloning it shares the same underlying log, which lets a test simulate a
 //! process restart by attaching a fresh handle to existing entries.
 
+use crate::ArtifactSource;
 use crate::execute::{ExecutionError, ExecutionReport, Executor};
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::WorkflowEffect;
-use crate::ArtifactSource;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::error::Error;

@@ -3,7 +3,7 @@
 //! shared item helpers in [`crate::items`]. See `docs/reference/forgejo-backend.md`.
 
 use crate::ids::{
-    format_review_id, format_user_id, parse_pull_request_id, parse_repository_id, RepoCoord,
+    RepoCoord, format_review_id, format_user_id, parse_pull_request_id, parse_repository_id,
 };
 use crate::map::{map_pull_request, map_review, merge_method_token, review_event_token};
 use crate::types::{PullRequestDto, ReviewDto};
@@ -198,9 +198,9 @@ impl<C: HttpClient> ForgejoForge<C> {
                 .reviewers
                 .iter()
                 .all(|reviewer| pull.requested_reviewers.contains(reviewer))
-            {
-                return Ok(pull);
-            }
+        {
+            return Ok(pull);
+        }
         Err(crate::error::map_status_error(
             "request reviewers",
             &response,

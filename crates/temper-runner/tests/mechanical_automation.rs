@@ -413,19 +413,25 @@ fn automated_queue_scan_keeps_normal_tick_bounded() {
             actions: 1,
         }
     );
-    assert!(!counted
-        .issue_queries()
-        .iter()
-        .any(|query| query == &IssueQuery::default()));
-    assert!(!counted
-        .pull_request_queries()
-        .iter()
-        .any(|query| query == &PullRequestQuery::default()));
+    assert!(
+        !counted
+            .issue_queries()
+            .iter()
+            .any(|query| query == &IssueQuery::default())
+    );
+    assert!(
+        !counted
+            .pull_request_queries()
+            .iter()
+            .any(|query| query == &PullRequestQuery::default())
+    );
     assert!(counted.issue_queries().iter().all(is_bounded_issue_query));
-    assert!(counted
-        .pull_request_queries()
-        .iter()
-        .all(is_bounded_pull_request_query));
+    assert!(
+        counted
+            .pull_request_queries()
+            .iter()
+            .all(is_bounded_pull_request_query)
+    );
 }
 
 #[test]
@@ -455,10 +461,12 @@ fn targeted_ci_wake_lands_pr_without_terminal_list_queries() {
         pull_request_state(&forge, &repo, ready),
         PullRequestState::Merged
     );
-    assert!(counted
-        .issue_queries()
-        .iter()
-        .all(|query| query.state != Some(IssueState::Closed)));
+    assert!(
+        counted
+            .issue_queries()
+            .iter()
+            .all(|query| query.state != Some(IssueState::Closed))
+    );
     assert!(counted.pull_request_queries().iter().all(|query| !matches!(
         query.state,
         Some(PullRequestState::Closed | PullRequestState::Merged)
@@ -485,14 +493,18 @@ fn automated_pr_merges_continue_after_gate_miss_and_retry_later() {
     );
     assert_eq!(counted.count(CountedForgeOp::MergePullRequest), 1);
     assert!(counted.count(CountedForgeOp::GetPullRequestByNumber) >= 2);
-    assert!(!counted
-        .pull_request_queries()
-        .iter()
-        .any(|query| query == &PullRequestQuery::default()));
-    assert!(counted
-        .pull_request_queries()
-        .iter()
-        .all(is_bounded_pull_request_query));
+    assert!(
+        !counted
+            .pull_request_queries()
+            .iter()
+            .any(|query| query == &PullRequestQuery::default())
+    );
+    assert!(
+        counted
+            .pull_request_queries()
+            .iter()
+            .all(is_bounded_pull_request_query)
+    );
     assert_eq!(
         pull_request_state(&forge, &repo, waiting),
         PullRequestState::Open

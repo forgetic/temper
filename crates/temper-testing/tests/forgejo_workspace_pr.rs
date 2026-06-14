@@ -10,19 +10,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use temper_coding_workspace::coding_workspace::LocalGitCodingWorkspace;
-use temper_coding_workspace::pr_diff_guard::{safety_for_files, DiffSafety};
+use temper_coding_workspace::pr_diff_guard::{DiffSafety, safety_for_files};
 use temper_forge::{BranchRef, CreateIssue, CreatePullRequest};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_forgejo_ops::forgejo_rest;
 use temper_runner::{
-    CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository, CodingWorkspaceRequest,
-    CodingWorkspaceWorkItem, WorkspaceCheckout, CODING_WORKSPACE_TOOL_ID,
+    CODING_WORKSPACE_TOOL_ID, CodingWorkspace, CodingWorkspaceGuidance, CodingWorkspaceRepository,
+    CodingWorkspaceRequest, CodingWorkspaceWorkItem, WorkspaceCheckout,
 };
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactRef, ArtifactSource, QueueId, RoleId,
-    WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, ArtifactSource, QueueId, RoleId, WorkflowMetadata,
+    render_metadata_block,
 };
 
 #[test]

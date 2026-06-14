@@ -36,10 +36,10 @@ use temper_forge::{
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{
-    commit_ci_sentinel, seed_intake_issue, start_cached_provisioned_repositories, ForgejoRunner,
-    ForgejoServer, Provisioned, RoleIdentity,
+    ForgejoRunner, ForgejoServer, Provisioned, RoleIdentity, commit_ci_sentinel, seed_intake_issue,
+    start_cached_provisioned_repositories,
 };
-use temper_workflow::{parse_metadata_block, CiStatus, RoleId};
+use temper_workflow::{CiStatus, RoleId, parse_metadata_block};
 
 /// The engineer-only daemon-delivery workflow served to the daemon binary via
 /// `--workflow` (the dogfood deployment shape: mechanical `mark_ready` intake

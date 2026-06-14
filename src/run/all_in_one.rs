@@ -56,10 +56,7 @@ pub struct AllInOneConfig {
 
 /// Run daemon + worker + agent to (effective) completion on one loop. Returns
 /// when a shutdown signal fires.
-pub async fn run_all_in_one(
-    handle: RuntimeHandle,
-    config: AllInOneConfig,
-) -> Result<(), String> {
+pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Result<(), String> {
     let AllInOneConfig {
         daemon: daemon_config,
         provider,
@@ -149,7 +146,10 @@ pub async fn run_all_in_one(
 
     // --- In-process worker + agent on the same loop ---
     let role_identities = role_identities_from_env(
-        daemon_config.roles.iter().map(|role| role.as_str().to_string()),
+        daemon_config
+            .roles
+            .iter()
+            .map(|role| role.as_str().to_string()),
         std::env::vars(),
     )?;
     let capabilities: Vec<CapabilitySpec> = repo_paths
@@ -354,7 +354,10 @@ async fn resolve_repositories<F: Forge + ?Sized>(
             .get_repository_by_path(path)
             .await
             .map_err(|error| {
-                format!("repository {}/{} lookup failed: {error}", path.owner, path.name)
+                format!(
+                    "repository {}/{} lookup failed: {error}",
+                    path.owner, path.name
+                )
             })?
             .ok_or_else(|| format!("repository {}/{} not found", path.owner, path.name))?;
         resolved.push(RepositoryTarget::new(

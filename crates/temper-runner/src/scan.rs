@@ -15,12 +15,12 @@ use std::fmt;
 use temper_forge::{Forge, ForgeError, Issue, PullRequest, RepositoryId};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
-    queue_active, ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
+    ArtifactKindId, ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow,
     ExecutionError, ExternalToolId, GateSignals, QueueId, QueueManifest, RoleId, SignalNeeds,
-    TransitionId, ValidatedWorkflow, VerdictId,
+    TransitionId, ValidatedWorkflow, VerdictId, queue_active,
 };
 
-pub use candidate::{candidate_query_plan, CandidateQueryPlan, ScanMode};
+pub use candidate::{CandidateQueryPlan, ScanMode, candidate_query_plan};
 
 /// A role-addressed member of an active queue.
 #[derive(Clone, Debug, Eq, PartialEq)]

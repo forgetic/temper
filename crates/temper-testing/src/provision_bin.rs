@@ -19,7 +19,7 @@
 //! (with `0600` permissions on Unix) and are never printed to stdout/stderr;
 //! status output names only non-secret facts (repo, role count, issue number).
 
-use crate::forgejo_server::{provision_world, seed_intake_issue, ProvisionError, Provisioned};
+use crate::forgejo_server::{ProvisionError, Provisioned, provision_world, seed_intake_issue};
 use crate::runner_config;
 use std::fmt;
 use std::path::PathBuf;
@@ -125,7 +125,7 @@ where
             other => {
                 return Err(ArgsError::new(format!(
                     "unrecognized argument '{other}'\nusage: {USAGE}"
-                )))
+                )));
             }
         }
     }
@@ -297,9 +297,10 @@ fn sh_quote(value: &str) -> String {
 /// Writes `contents` to `path`, creating parent dirs, with `0600` perms on Unix.
 fn write_secrets_file(path: &PathBuf, contents: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(path, contents)?;
     restrict_permissions(path)?;
     Ok(())

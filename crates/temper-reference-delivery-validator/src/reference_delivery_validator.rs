@@ -12,7 +12,7 @@ use temper_forge::{
     Forge, ForgeError, Issue, IssueState, ItemNumber, RepositoryId, RepositoryPath,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_workflow::{parse_metadata_block, ArtifactRef, WorkflowMetadata};
+use temper_workflow::{ArtifactRef, WorkflowMetadata, parse_metadata_block};
 
 /// Environment variable carrying a read-capable Forgejo token for validation.
 pub const VALIDATOR_TOKEN_ENV: &str = "TEMPER_FORGEJO_TOKEN";
@@ -168,7 +168,7 @@ where
             other => {
                 return Err(ArgsError(format!(
                     "unrecognized argument '{other}'\nusage: {USAGE}"
-                )))
+                )));
             }
         }
     }

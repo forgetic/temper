@@ -3,7 +3,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, pull_id, repo_id, MockHttpClient};
+use support::{MockHttpClient, block_on, body_json, forge, pull_id, repo_id};
 use temper_forge::{
     BranchRef, CreatePullRequest, ForgeError, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RequestReviewers, UpdatePullRequest, UserId,
@@ -75,10 +75,12 @@ fn list_pull_requests_maps_states_and_filters_labels_client_side() {
 
     let request = client.last_request().unwrap();
     assert_eq!(request.path, "/repos/acme/widgets/pulls");
-    assert!(request
-        .query
-        .iter()
-        .any(|(key, value)| key == "state" && value == "all"));
+    assert!(
+        request
+            .query
+            .iter()
+            .any(|(key, value)| key == "state" && value == "all")
+    );
 }
 
 #[test]
@@ -107,10 +109,12 @@ fn list_pull_requests_separates_closed_from_merged() {
 
     // The provider was asked for `state=closed` (covers closed and merged).
     let request = client.last_request().unwrap();
-    assert!(request
-        .query
-        .iter()
-        .any(|(key, value)| key == "state" && value == "closed"));
+    assert!(
+        request
+            .query
+            .iter()
+            .any(|(key, value)| key == "state" && value == "closed")
+    );
 }
 
 #[test]

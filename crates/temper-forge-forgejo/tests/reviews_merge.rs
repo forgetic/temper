@@ -4,7 +4,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, forge_with, pull_id, MockHttpClient, OWNER, REPO};
+use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with, pull_id};
 use temper_forge::{
     CreatePullRequestReview, ForgeError, MergeMethod, MergePullRequest, PullRequestReviewStatus,
     RequestReviewers, ReviewDecision, UpdatePullRequest, UserId,

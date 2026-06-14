@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use temper_worker_protocol::{
     Artifact, Assign, ErrorCode, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError, Register,
-    Release, ReleaseDisposition, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
 use crate::{DispatchCoordinator, WorkItem};
@@ -385,8 +385,12 @@ mod tests {
         core.enqueue_job("job-coord", "engineer", "ai/temper", artifact(), payload);
 
         // Capable of two of the three manifest repos: no assignment.
-        core.coordinator_mut()
-            .register(&register_multi("partial", "engineer", &["ai/temper", "ai/smith"], 1));
+        core.coordinator_mut().register(&register_multi(
+            "partial",
+            "engineer",
+            &["ai/temper", "ai/smith"],
+            1,
+        ));
         assert_error(
             core.handle(poll("partial")),
             ErrorCode::PollTimeout,

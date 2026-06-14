@@ -22,7 +22,7 @@
 #[path = "support/daemon_scenario.rs"]
 mod daemon_scenario;
 
-use daemon_scenario::{run_daemon_variant, Variant};
+use daemon_scenario::{Variant, run_daemon_variant};
 
 // Guards the real daemon binary's wiring: Forgejo API + webhook delivery + git
 // auth + role-token PR attribution + mechanical merge-on-green.

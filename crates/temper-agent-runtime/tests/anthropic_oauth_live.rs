@@ -12,8 +12,8 @@
 
 use std::time::Instant;
 
-use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 use serde::Deserialize;
+use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;
@@ -51,8 +51,10 @@ fn anthropic_oauth_validation() {
     let start = Instant::now();
     let decision: RoleDecision = {
         let prompt = role.prompt.render();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move { run_decision(handle, &provider, &prompt, &context).await })
-            .expect("Anthropic OAuth generic role decision succeeds and parses")
+        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+            run_decision(handle, &provider, &prompt, &context).await
+        })
+        .expect("Anthropic OAuth generic role decision succeeds and parses")
     };
     assert_eq!(decision.action, "advance");
     eprintln!(

@@ -7,8 +7,8 @@
 //! [`crate::ci_ui`] to keep each module within the source-size budget and are
 //! covered by the unit tests below. No I/O lives here.
 
-use crate::ci_match::Target;
 use crate::HttpResponse;
+use crate::ci_match::Target;
 use std::collections::BTreeMap;
 
 /// Records any `Set-Cookie` headers from a response into the jar.
@@ -29,9 +29,10 @@ fn store_set_cookie(jar: &mut BTreeMap<String, String>, header: &str) {
     for cookie in split_set_cookie(header) {
         let pair = cookie.split(';').next().unwrap_or("").trim();
         if let Some((name, value)) = pair.split_once('=')
-            && !name.is_empty() {
-                jar.insert(name.to_string(), value.to_string());
-            }
+            && !name.is_empty()
+        {
+            jar.insert(name.to_string(), value.to_string());
+        }
     }
 }
 
@@ -95,9 +96,10 @@ pub(super) fn extract_run_ids(html: &str) -> Vec<u64> {
     for fragment in html.split("/actions/runs/").skip(1) {
         let digits: String = fragment.chars().take_while(char::is_ascii_digit).collect();
         if let Ok(id) = digits.parse::<u64>()
-            && !ids.contains(&id) {
-                ids.push(id);
-            }
+            && !ids.contains(&id)
+        {
+            ids.push(id);
+        }
     }
     ids
 }

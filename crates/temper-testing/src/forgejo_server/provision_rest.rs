@@ -13,11 +13,11 @@
 //! Secrets discipline (same as `provision.rs`): tokens/passwords pass through
 //! these calls but are never logged; errors carry a status + body snippet only.
 
-use super::provision::{ProvisionError, Result, ROLE_PASSWORD, TOKEN_SCOPES};
+use super::provision::{ProvisionError, ROLE_PASSWORD, Result, TOKEN_SCOPES};
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_io_engine::http::{http_call, HttpCall};
+use temper_io_engine::http::{HttpCall, http_call};
 
 static NEXT_TOKEN_NAME: AtomicU64 = AtomicU64::new(0);
 

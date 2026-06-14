@@ -15,7 +15,7 @@ use temper_forge::{
 };
 use temper_forge_memory::MemoryForge;
 use temper_runner::{
-    candidate_query_plan, scan_role, scan_role_audit, scan_role_wake, ScanMode, WorkItem,
+    ScanMode, WorkItem, candidate_query_plan, scan_role, scan_role_audit, scan_role_wake,
 };
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId};
 
@@ -307,10 +307,12 @@ fn normal_candidate_plan_keeps_open_queues_and_bounded_terminal_recovery() {
     // The mechanical automated hot-poll path stays open-only: no closed/merged
     // queries on the 1s poll.
     let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
-    assert!(!automated
-        .issue_queries
-        .iter()
-        .any(|query| query.state == Some(IssueState::Closed)));
+    assert!(
+        !automated
+            .issue_queries
+            .iter()
+            .any(|query| query.state == Some(IssueState::Closed))
+    );
     assert!(!automated.pull_request_queries.iter().any(|query| {
         matches!(
             query.state,
@@ -409,16 +411,18 @@ fn automated_reference_plan_permits_single_default_kind_open_all_issue_query() {
     assert_eq!(open_all.details, ItemListDetails::summary());
 
     // No terminal history is listed during active mechanical automation scans.
-    assert!(plan
-        .issue_queries
-        .iter()
-        .all(|query| query.state != Some(IssueState::Closed)));
+    assert!(
+        plan.issue_queries
+            .iter()
+            .all(|query| query.state != Some(IssueState::Closed))
+    );
 
     // The landing automation queue stays label-bounded.
-    assert!(plan
-        .pull_request_queries
-        .iter()
-        .all(|query| !query.labels.is_empty()));
+    assert!(
+        plan.pull_request_queries
+            .iter()
+            .all(|query| !query.labels.is_empty())
+    );
     assert!(has_pull_request_query(
         &plan.pull_request_queries,
         PullRequestState::Open,
@@ -569,10 +573,12 @@ fn role_scan_does_not_request_closed_unlabelled_history() {
     // Bounded terminal-label recovery queries are label-scoped, so unlabelled
     // closed history is never requested regardless of how much of it exists, and
     // the abundant unlabelled closed issues/PRs never pollute the scan result.
-    assert!(!counting
-        .issue_queries()
-        .iter()
-        .any(|query| query.state == Some(IssueState::Closed) && query.labels.is_empty()));
+    assert!(
+        !counting
+            .issue_queries()
+            .iter()
+            .any(|query| query.state == Some(IssueState::Closed) && query.labels.is_empty())
+    );
     assert!(!counting.pull_request_queries().iter().any(|query| {
         matches!(
             query.state,

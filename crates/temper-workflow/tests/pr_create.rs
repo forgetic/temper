@@ -2,11 +2,11 @@
 
 mod support;
 
-use support::{block_on, create_issue, new_repo, workflow, TestRoot};
+use support::{TestRoot, block_on, create_issue, new_repo, workflow};
 use temper_forge::{BranchRef, CreatePullRequest, Forge, PullRequestQuery, RepositoryId, UserId};
 use temper_workflow::{
-    parse_metadata_block, ArtifactSource, ExecutionContext, Executor, RawWorkflowSpec, RoleId,
-    TransitionId, ValidatedWorkflow, WorkflowEffect,
+    ArtifactSource, ExecutionContext, Executor, RawWorkflowSpec, RoleId, TransitionId,
+    ValidatedWorkflow, WorkflowEffect, parse_metadata_block,
 };
 
 const PR_CREATE_WORKFLOW: &str = r#"{

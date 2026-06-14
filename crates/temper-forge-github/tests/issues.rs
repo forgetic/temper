@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, forge_with, issue_id, repo_id, MockHttpClient};
+use support::{MockHttpClient, block_on, body_json, forge, forge_with, issue_id, repo_id};
 use temper_forge::{
     CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemNumber, UpdateIssue, UserId,
 };
@@ -69,14 +69,18 @@ fn list_issues_filters_pull_request_rows_and_sends_provider_filters() {
 
     let request = client.last_request().unwrap();
     assert_eq!(request.path, "/repos/acme/widgets/issues");
-    assert!(request
-        .query
-        .iter()
-        .any(|(key, value)| key == "state" && value == "open"));
-    assert!(request
-        .query
-        .iter()
-        .any(|(key, value)| key == "labels" && value == "task"));
+    assert!(
+        request
+            .query
+            .iter()
+            .any(|(key, value)| key == "state" && value == "open")
+    );
+    assert!(
+        request
+            .query
+            .iter()
+            .any(|(key, value)| key == "labels" && value == "task")
+    );
 }
 
 #[test]

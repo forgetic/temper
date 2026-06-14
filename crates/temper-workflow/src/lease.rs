@@ -22,9 +22,9 @@
 //! refreshes live leases and refuses to steal one that is still held by another
 //! worker.
 
-use crate::ids::RoleId;
-use crate::metadata::{parse_metadata_block, replace_metadata_block, Lease, WorkflowMetadata};
 use crate::ArtifactSource;
+use crate::ids::RoleId;
+use crate::metadata::{Lease, WorkflowMetadata, parse_metadata_block, replace_metadata_block};
 use chrono::{DateTime, Duration, Utc};
 use std::error::Error;
 use std::fmt;

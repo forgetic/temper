@@ -6,13 +6,13 @@ pub use diagnostics::{
     InteractionSpecSymbolKind, InteractionSpecValidationErrors,
 };
 
+use crate::DETERMINISTIC_SLUG_RULE;
 use crate::spec::{
     RawAcceptanceActionDeclaration, RawAcceptanceEffect, RawInteractionSpec, RawInteractiveProfile,
     RawTranscriptPolicy,
 };
 use crate::types::is_valid_deterministic_slug;
 use crate::validated::ValidatedInteractionSpec;
-use crate::DETERMINISTIC_SLUG_RULE;
 use std::collections::{HashMap, HashSet};
 
 const TRANSCRIPT_TARGET_ISSUE: &str = "issue";

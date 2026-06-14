@@ -2,18 +2,18 @@
 
 //! Reusable whole-world scenarios for sim tests and the CI seed sweep.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
-use skein::lab::chaos::ChaosConfig;
 use skein::lab::LabConfig;
+use skein::lab::chaos::ChaosConfig;
 use temper_daemon::Daemon;
 use temper_worker_protocol::Artifact;
 
 use crate::model::{ModelApplier, ModelState, SimModel};
-use crate::worker::{run_worker, DoneGuard, WorkerProfile};
+use crate::worker::{DoneGuard, WorkerProfile, run_worker};
 use crate::{Sim, SimProtocolClient};
 
 pub const MAX_STEPS: u64 = 2_000_000;

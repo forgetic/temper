@@ -75,9 +75,10 @@ pub struct WakeListener {
 impl WakeListener {
     pub fn bind(config: WakeConfig) -> Result<Self, WakeError> {
         if let Some(parent) = config.socket.parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
         let _ = std::fs::remove_file(&config.socket);
         let socket = skein::net::unix::UnixDatagram::bind(&config.socket)?;
         Ok(Self {
@@ -188,11 +189,7 @@ fn drain_wake_batch(
             Err(error) => return Err(error),
         }
     }
-    if broad {
-        Ok(Vec::new())
-    } else {
-        Ok(hints)
-    }
+    if broad { Ok(Vec::new()) } else { Ok(hints) }
 }
 
 pub async fn wait_for_wake_or_poll(

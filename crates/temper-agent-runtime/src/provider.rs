@@ -75,6 +75,14 @@ pub enum AuthChoice {
     AnthropicOAuth,
 }
 
+/// Env var that redirects outbound provider traffic to an alternate base URL.
+///
+/// When set to a non-empty value, [`ProviderConfig::apply_base_url_override_from_env`]
+/// rewrites the provider base URL — used to point the agent at a local fake LLM.
+/// Honored unconditionally for every auth mode, so only set it in environments
+/// you control.
+pub const PROVIDER_BASE_URL_ENV: &str = "ANVIL_TEST_PROVIDER_BASE_URL";
+
 /// Env var that overrides the DeepSeek API-key file path.
 pub const API_KEY_PATH_ENV: &str = "TEMPER_DEEPSEEK_API_KEY_PATH";
 /// Env var that supplies the DeepSeek API key directly (takes precedence over
@@ -227,19 +235,31 @@ impl ProviderConfig {
         Self::anthropic_oauth(None)
     }
 
-    /// Overrides the provider base URL for hermetic tests that redirect OAuth
-    /// provider traffic to a local fake LLM server.
-    #[cfg(feature = "test-provider-base-url-override")]
+    /// Overrides the provider base URL, redirecting outbound provider traffic to
+    /// the given endpoint (e.g. a local fake LLM server in hermetic tests).
+    ///
+    /// This is honored unconditionally, including for OAuth auth modes — a caller
+    /// that can supply a base URL can therefore redirect credentialed traffic, so
+    /// only expose this knob (e.g. [`base_url_override_from_env`]) in environments
+    /// you control.
     pub fn with_base_url_override(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
-    /// The provider base URL, exposed only to feature-gated tests that verify
-    /// hermetic fake-LLM routing.
-    #[cfg(feature = "test-provider-base-url-override")]
-    pub fn base_url_for_test(&self) -> &str {
+    /// The configured provider base URL.
+    pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Applies the [`PROVIDER_BASE_URL_ENV`] override when it is set to a
+    /// non-empty value; otherwise returns the config unchanged. The single entry
+    /// point binaries use to opt into base-URL redirection from the environment.
+    pub fn apply_base_url_override_from_env(self) -> Self {
+        match std::env::var(PROVIDER_BASE_URL_ENV) {
+            Ok(base_url) if !base_url.trim().is_empty() => self.with_base_url_override(base_url),
+            _ => self,
+        }
     }
 
     /// Builds the provider config for an [`AuthChoice`], applying optional

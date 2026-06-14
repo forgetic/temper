@@ -1,12 +1,12 @@
 use crate::interaction_args::{
-    parse_with_env, ParseOutcome, BINDINGS_PATH_ENV, PROFILE_ENV, SPEC_PATH_ENV, USAGE,
+    BINDINGS_PATH_ENV, PROFILE_ENV, ParseOutcome, SPEC_PATH_ENV, USAGE, parse_with_env,
 };
 use serde_json::json;
 use temper_interaction::RawInteractionSpec;
 
 use crate::interaction_bindings::{
-    build_service, service_options, ForgeBinding, InteractionDeploymentBindings,
-    ProcessResponderBinding, ProfileBinding, ServiceBinding,
+    ForgeBinding, InteractionDeploymentBindings, ProcessResponderBinding, ProfileBinding,
+    ServiceBinding, build_service, service_options,
 };
 
 fn generic_env(key: &str) -> Option<String> {

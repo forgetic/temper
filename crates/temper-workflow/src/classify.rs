@@ -11,7 +11,7 @@
 
 use crate::artifact::{ArtifactRef, ArtifactTarget};
 use crate::ids::{ArtifactKindId, LabelId, StateDimensionId, StateId};
-use crate::metadata::{parse_metadata_block, WorkflowMetadata};
+use crate::metadata::{WorkflowMetadata, parse_metadata_block};
 use crate::relation::RelationKind;
 use crate::validated::{ValidatedArtifactKind, ValidatedWorkflow};
 use chrono::{DateTime, Utc};

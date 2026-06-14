@@ -11,7 +11,15 @@ on:
 
 # Builds are cached transparently by the kache daemon (rustc-wrapper in
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
-# builds for everything except final binaries.
+# builds for everything that emits real artifacts (rlibs, test executables, the
+# final binary). Two caching notes drive the step layout below:
+#   1. Build the cacheable test executables BEFORE linting, so the expensive
+#      shared lib compiles are warmed once and reused by clippy.
+#   2. Every cargo invocation uses the SAME `--all-targets` scope so feature
+#      unification matches and the cached lib artifacts key-match across steps
+#      (see the comment in .cargo/config.toml). clippy/check still recompile
+#      their own zero-byte `.rmeta` leaves, which kache cannot cache, but that
+#      leaf cost is small.
 #
 # temper depends on sibling repos by relative path — ../skein, ../tongs, ../jig
 # (workspace deps) and ../../../bench, ../../../jig (crate deps), all of which
@@ -49,7 +57,7 @@ jobs:
             rm -rf "$repo"
             git clone --depth 1 "${{ github.server_url }}/ai/$repo.git" "$repo"
           done
-      - name: Lint
+      - name: Format
         run: |
           set -eu
           # Format temper's own workspace members only — NOT `cargo fmt --all`,
@@ -61,15 +69,26 @@ jobs:
           # follow-up.)
           cargo fmt $(cargo metadata --no-deps --format-version 1 \
             | python3 -c "import json,sys; print(' '.join('-p '+p['name'] for p in json.load(sys.stdin)['packages']))")
-          cargo dev-clippy
-      - name: Check
-        run: |
-          set -eu
-          cargo dev-check
+      # Build the test executables first: they emit real artifacts that kache
+      # caches in full, so on a clean checkout with a warm cache this is the
+      # cheap step. Lint runs afterwards. There is deliberately no separate
+      # `cargo check` step — clippy already type-checks, so a check pass would
+      # only duplicate clippy's (uncacheable, metadata-only) work.
       - name: Build
         run: |
           set -eu
           cargo dev-test-build
+      - name: Lint
+        # `dev-clippy` lints `--all-targets`, matching the Build step's feature
+        # resolution so clippy reuses the lib artifacts just cached by Build
+        # rather than recompiling skein + its tree under a divergent feature set.
+        # clippy's own leaf targets emit zero-byte `.rmeta` that kache can't
+        # cache and always recompile, but that is cheap; the expensive shared lib
+        # compiles hit the cache. (There is no separate `cargo check` step —
+        # clippy already type-checks.)
+        run: |
+          set -eu
+          cargo dev-clippy
       - name: Test
         # The ignored daemon e2e scenarios boot a real Forgejo + CI runner and
         # wait for convergence (PR opened, CI red→green, mechanical merge). On a

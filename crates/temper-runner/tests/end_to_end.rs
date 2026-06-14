@@ -13,15 +13,15 @@ use temper_forge::{
 use temper_forge_filesystem::FilesystemForge;
 use temper_forge_memory::MemoryForge;
 use temper_runner::{
-    run_scenario_with_budget, CiSink, FixpointDriver, MultiRepoMechanicalWorker,
-    MultiRepoRoleWorker, Progress, RepositoryJournal, RepositorySet, RepositoryTarget, Scenario,
-    Stage, StageError, Worker, WorkerError,
+    CiSink, FixpointDriver, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
+    RepositoryJournal, RepositorySet, RepositoryTarget, Scenario, Stage, StageError, Worker,
+    WorkerError, run_scenario_with_budget,
 };
 use temper_workflow::{InMemoryJournal, LeasePolicy, RoleId};
 
 use temper_testing::agents::{
-    fake_registry, fake_registry_with, ClosingArchitect, FakeArchitect, FakeReviewer,
-    RequestChangesThenApproveReviewer,
+    ClosingArchitect, FakeArchitect, FakeReviewer, RequestChangesThenApproveReviewer,
+    fake_registry, fake_registry_with,
 };
 use temper_testing::block_on;
 use temper_testing::ci::{FailThenPassCiPolicy, FilesystemCiSink, FixedCiPolicy, MemoryCiSink};

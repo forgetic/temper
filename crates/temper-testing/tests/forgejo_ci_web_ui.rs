@@ -21,7 +21,7 @@
 use std::time::{Duration, Instant};
 use temper_forge::{CiJobConclusion, CiJobQuery, CiJobStatus};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_testing::forgejo_server::{start_cached_provisioned_server, ForgejoRunner};
+use temper_testing::forgejo_server::{ForgejoRunner, start_cached_provisioned_server};
 use temper_testing::runner_config;
 
 #[test]

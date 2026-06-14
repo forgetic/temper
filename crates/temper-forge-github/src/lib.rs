@@ -29,7 +29,7 @@ mod repos;
 mod types;
 
 pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
-pub use config::{CasMode, ConfigError, GitHubConfig, DEFAULT_PAGE_LIMIT};
+pub use config::{CasMode, ConfigError, DEFAULT_PAGE_LIMIT, GitHubConfig};
 
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -361,9 +361,11 @@ mod version_cache_tests {
     fn check_detects_stale_token() {
         let cache = VersionCache::default();
         let version = cache.observe("pr-1", Some("etag-a"));
-        assert!(cache
-            .check("pr-1", Some("etag-a"), version, CasMode::BestEffort)
-            .is_ok());
+        assert!(
+            cache
+                .check("pr-1", Some("etag-a"), version, CasMode::BestEffort)
+                .is_ok()
+        );
         // A changed validator resolves to a new version, so the old token is stale.
         let result = cache.check("pr-1", Some("etag-b"), version, CasMode::BestEffort);
         assert!(matches!(result, Err(ForgeError::Conflict(_))));
@@ -372,9 +374,11 @@ mod version_cache_tests {
     #[test]
     fn check_without_validator_honors_cas_mode() {
         let cache = VersionCache::default();
-        assert!(cache
-            .check("pr-1", None, Version::INITIAL, CasMode::BestEffort)
-            .is_ok());
+        assert!(
+            cache
+                .check("pr-1", None, Version::INITIAL, CasMode::BestEffort)
+                .is_ok()
+        );
         assert!(matches!(
             cache.check("pr-1", None, Version::INITIAL, CasMode::Strict),
             Err(ForgeError::InvalidRequest(_))

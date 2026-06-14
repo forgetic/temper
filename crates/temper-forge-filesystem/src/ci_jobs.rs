@@ -1,6 +1,6 @@
+use crate::FilesystemForge;
 use crate::lists::sort_ci_jobs_by_name;
 use crate::validation::validate_stored_ci_jobs;
-use crate::FilesystemForge;
 use std::path::PathBuf;
 use temper_forge::{ChangeKind, CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
 

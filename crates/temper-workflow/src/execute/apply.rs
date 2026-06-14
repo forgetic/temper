@@ -151,7 +151,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 other => {
                     return Err(ExecutionError::UnsupportedEffect {
                         effect: other.clone(),
-                    })
+                    });
                 }
             }
         }
@@ -322,7 +322,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 other => {
                     return Err(ExecutionError::UnsupportedEffect {
                         effect: other.clone(),
-                    })
+                    });
                 }
             }
         }
@@ -454,22 +454,21 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
                 }
             }
             // Third pass: cross-repo issue fan-out records parent dependency refs.
-            if any_cross_repo
-                && let ArtifactSource::Issue { number } = target {
-                    let parent_issue = self
-                        .forge
-                        .get_issue_by_number(repo_id, number)
-                        .await?
-                        .ok_or(ExecutionError::TargetMissing { target })?;
-                    for child in &create.children {
-                        let (child_repo, child_number) = child_numbers_by_slug[&child.slug].clone();
-                        self.ensure_issue_dependency_metadata(
-                            &parent_issue.id,
-                            &ArtifactRef::in_repo(child_repo, child_number),
-                        )
-                        .await?;
-                    }
+            if any_cross_repo && let ArtifactSource::Issue { number } = target {
+                let parent_issue = self
+                    .forge
+                    .get_issue_by_number(repo_id, number)
+                    .await?
+                    .ok_or(ExecutionError::TargetMissing { target })?;
+                for child in &create.children {
+                    let (child_repo, child_number) = child_numbers_by_slug[&child.slug].clone();
+                    self.ensure_issue_dependency_metadata(
+                        &parent_issue.id,
+                        &ArtifactRef::in_repo(child_repo, child_number),
+                    )
+                    .await?;
                 }
+            }
         }
         Ok(())
     }

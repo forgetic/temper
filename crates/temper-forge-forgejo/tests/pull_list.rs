@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{block_on, forge, repo_id, MockHttpClient, OWNER, REPO};
+use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge::{ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState};
 use temper_forge_forgejo::HttpMethod;
 
@@ -102,9 +102,11 @@ fn labelled_open_pull_request_summary_uses_issue_index_without_detail() {
     assert!(discovery.query.contains(&("state".into(), "open".into())));
     assert!(discovery.query.contains(&("type".into(), "pulls".into())));
     assert!(discovery.query.contains(&("labels".into(), "ready".into())));
-    assert!(!requests
-        .iter()
-        .any(|request| request.path.contains("/pulls/")));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path.contains("/pulls/"))
+    );
 }
 
 #[test]

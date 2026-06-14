@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{block_on, forge, repo_id, MockHttpClient, OWNER, REPO};
+use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge::{
     IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
 };
@@ -77,10 +77,12 @@ fn issue_body_contains_filters_after_state_and_labels() {
     assert!(request.query.contains(&("state".into(), "open".into())));
     assert!(request.query.contains(&("type".into(), "issues".into())));
     assert!(request.query.contains(&("labels".into(), "ready".into())));
-    assert!(!request
-        .query
-        .iter()
-        .any(|(key, _)| key == "q" || key == "body"));
+    assert!(
+        !request
+            .query
+            .iter()
+            .any(|(key, _)| key == "q" || key == "body")
+    );
 }
 
 #[test]
@@ -124,7 +126,9 @@ fn labelled_pull_request_body_filter_keeps_label_index_query_bounded() {
     assert!(!requests.iter().any(|request| {
         request.path.ends_with("/pulls") && request.query.contains(&("state".into(), "all".into()))
     }));
-    assert!(!requests
-        .iter()
-        .any(|request| request.path.contains("/pulls/")));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path.contains("/pulls/"))
+    );
 }

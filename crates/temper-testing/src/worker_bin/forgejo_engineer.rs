@@ -28,7 +28,7 @@ use temper_forge::{CreatePullRequest, Forge};
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::ArtifactSource;
 
-use crate::agents::{basic_engineer_service, engineer_service, EnginePrep};
+use crate::agents::{EnginePrep, basic_engineer_service, engineer_service};
 use crate::forgejo_server::{
     commit_ci_sentinel, commit_conflict_resolution_update, prepare_pull_request_head,
 };
@@ -139,9 +139,16 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
             return Ok(());
         };
         let (owner, name) = self.repo_path(tools).await?;
-        commit_ci_sentinel(&self.cx, &self.base_url, &self.token, &owner, &name, &branch)
-            .await
-            .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
+        commit_ci_sentinel(
+            &self.cx,
+            &self.base_url,
+            &self.token,
+            &owner,
+            &name,
+            &branch,
+        )
+        .await
+        .map_err(|error| AgentError::message(format!("forgejo CI fix commit failed: {error}")))
     }
 
     async fn before_resolve_merge_conflict(
@@ -153,13 +160,20 @@ impl<F: Forge + ?Sized> EnginePrep<F> for ForgejoEngineer {
             return Ok(());
         };
         let (owner, name) = self.repo_path(tools).await?;
-        commit_conflict_resolution_update(&self.cx, &self.base_url, &self.token, &owner, &name, &branch)
-            .await
-            .map_err(|error| {
-                AgentError::message(format!(
-                    "forgejo conflict-resolution commit failed: {error}"
-                ))
-            })
+        commit_conflict_resolution_update(
+            &self.cx,
+            &self.base_url,
+            &self.token,
+            &owner,
+            &name,
+            &branch,
+        )
+        .await
+        .map_err(|error| {
+            AgentError::message(format!(
+                "forgejo conflict-resolution commit failed: {error}"
+            ))
+        })
     }
 }
 

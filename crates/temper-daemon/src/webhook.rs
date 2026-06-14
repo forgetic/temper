@@ -222,9 +222,10 @@ fn parse_repo(value: &Value) -> Result<RepositoryPath, WebhookError> {
     if let Some(full) = value
         .pointer("/repository/full_name")
         .and_then(Value::as_str)
-        && let Some((owner, name)) = full.split_once('/') {
-            return Ok(RepositoryPath::new(owner, name));
-        }
+        && let Some((owner, name)) = full.split_once('/')
+    {
+        return Ok(RepositoryPath::new(owner, name));
+    }
 
     let owner = value
         .pointer("/repository/owner/login")

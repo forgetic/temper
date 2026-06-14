@@ -135,7 +135,9 @@ impl CiReadCache {
 fn is_terminal(jobs: &[CiJob], head_sha: &str) -> bool {
     !jobs.is_empty()
         && jobs.iter().all(|job| job.status == CiJobStatus::Completed)
-        && jobs.iter().any(|job| sha_matches(&job.commit_sha, head_sha))
+        && jobs
+            .iter()
+            .any(|job| sha_matches(&job.commit_sha, head_sha))
 }
 
 /// Whether a job's commit SHA identifies the target head SHA, tolerating the

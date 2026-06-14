@@ -42,13 +42,15 @@ impl Target {
     fn candidate_shas(&self) -> Vec<&str> {
         let mut shas = Vec::new();
         if let Some(sha) = self.commit_sha.as_deref()
-            && !sha.is_empty() {
-                shas.push(sha);
-            }
+            && !sha.is_empty()
+        {
+            shas.push(sha);
+        }
         if let Some(sha) = self.pr_head_sha.as_deref()
-            && !sha.is_empty() {
-                shas.push(sha);
-            }
+            && !sha.is_empty()
+        {
+            shas.push(sha);
+        }
         shas
     }
 
@@ -83,20 +85,24 @@ pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReas
         }
     }
     if let Some(number) = target.pr_number
-        && payload_pr_number(run) == Some(number) {
-            return Some(MatchReason::EventPayloadNumber);
-        }
+        && payload_pr_number(run) == Some(number)
+    {
+        return Some(MatchReason::EventPayloadNumber);
+    }
     for sha in target.candidate_shas() {
         if let Some(payload_sha) = payload_pr_head_sha(run)
-            && sha_match(&payload_sha, sha) {
-                return Some(MatchReason::EventPayloadHeadSha);
-            }
+            && sha_match(&payload_sha, sha)
+        {
+            return Some(MatchReason::EventPayloadHeadSha);
+        }
     }
     if let Some(head_ref) = target.pr_head_ref.as_deref()
-        && !head_ref.is_empty() && is_pull_request_event(&run.event) && run.head_branch == head_ref
-        {
-            return Some(MatchReason::HeadBranch);
-        }
+        && !head_ref.is_empty()
+        && is_pull_request_event(&run.event)
+        && run.head_branch == head_ref
+    {
+        return Some(MatchReason::HeadBranch);
+    }
     None
 }
 
@@ -268,11 +274,13 @@ mod tests {
     #[test]
     fn empty_target_has_no_filter() {
         assert!(!Target::default().has_filter());
-        assert!(Target {
-            pr_number: Some(1),
-            ..Default::default()
-        }
-        .has_filter());
+        assert!(
+            Target {
+                pr_number: Some(1),
+                ..Default::default()
+            }
+            .has_filter()
+        );
     }
 
     #[test]

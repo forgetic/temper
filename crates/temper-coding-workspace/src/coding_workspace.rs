@@ -20,7 +20,7 @@ use temper_runner::{
 };
 use temper_workflow::{CreateIssuesChild, VerdictId};
 
-use crate::pr_diff_guard::{safety_for_files, DiffSafety};
+use crate::pr_diff_guard::{DiffSafety, safety_for_files};
 
 pub const WORKSPACE_ROOT_ENV: &str = "TEMPER_CODING_WORKSPACE_ROOT";
 pub const WORKSPACE_COMMAND_ENV: &str = "TEMPER_CODING_WORKSPACE_COMMAND";
@@ -497,12 +497,13 @@ fn run_edit_command(
     // A PR-targeted read-only checkout fetched the pull request's head; tell the
     // command the local ref so it can compute `git diff <base> <pr-head>`.
     if request.checkout.needs_pull_request_head()
-        && let Some(number) = pull_request_number(request) {
-            cmd.env(
-                "TEMPER_CODING_WORKSPACE_PR_HEAD_REF",
-                pull_request_local_ref(number),
-            );
-        }
+        && let Some(number) = pull_request_number(request)
+    {
+        cmd.env(
+            "TEMPER_CODING_WORKSPACE_PR_HEAD_REF",
+            pull_request_local_ref(number),
+        );
+    }
     let output = cmd
         .output()
         .map_err(|error| format!("failed to run coding workspace command: {error}"))?;

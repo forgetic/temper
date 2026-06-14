@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use temper_forge::{ItemNumber, RepositoryPath};
 use temper_runner::{ChangeHint, ChangeKind};
-use temper_wake::{send_wake_with_hint, WakeError};
+use temper_wake::{WakeError, send_wake_with_hint};
 
 #[derive(Debug)]
 pub enum TriggerError {
@@ -210,19 +210,20 @@ fn wake_sockets(args: &TriggerArgs) -> Vec<(String, std::path::PathBuf)> {
         .map(|socket| (socket.name.clone(), socket.path.clone()))
         .collect();
     if let Some(dir) = &args.wake_dir
-        && let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) == Some("sock") {
-                    let name = path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or("worker")
-                        .to_string();
-                    sockets.push((name, path));
-                }
+        && let Ok(entries) = std::fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("sock") {
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("worker")
+                    .to_string();
+                sockets.push((name, path));
             }
         }
+    }
     sockets
 }
 
@@ -271,9 +272,10 @@ fn parse_repo(value: &Value) -> Result<RepositoryPath, TriggerError> {
     if let Some(full) = value
         .pointer("/repository/full_name")
         .and_then(Value::as_str)
-        && let Some((owner, name)) = full.split_once('/') {
-            return Ok(RepositoryPath::new(owner, name));
-        }
+        && let Some((owner, name)) = full.split_once('/')
+    {
+        return Ok(RepositoryPath::new(owner, name));
+    }
     let owner = value
         .pointer("/repository/owner/login")
         .or_else(|| value.pointer("/repository/owner/username"))

@@ -4,7 +4,7 @@
 
 mod support;
 
-use support::{block_on, body_json, forge, repo_id, MockHttpClient, OWNER, REPO};
+use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, repo_id};
 use temper_forge::{
     CreateRepository, RepositoryPath, RepositoryQuery, RepositorySort, RepositorySortField,
     SortDirection, UpsertLabel, UserId,
@@ -76,9 +76,11 @@ fn get_user_maps_present_and_absent() {
     assert_eq!(present.display_name.as_deref(), Some("Carol"));
     assert_eq!(client.recorded()[0].path, "/api/v1/users/carol".to_string());
 
-    assert!(block_on(forge.get_user(&UserId::new("nobody")))
-        .unwrap()
-        .is_none());
+    assert!(
+        block_on(forge.get_user(&UserId::new("nobody")))
+            .unwrap()
+            .is_none()
+    );
 }
 
 // --- repositories -----------------------------------------------------------

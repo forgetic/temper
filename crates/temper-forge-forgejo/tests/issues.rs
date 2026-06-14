@@ -6,7 +6,7 @@
 mod support;
 
 use support::{
-    block_on, body_json, forge, forge_with, issue_id, pull_id, repo_id, MockHttpClient, OWNER, REPO,
+    MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with, issue_id, pull_id, repo_id,
 };
 use temper_forge::{
     CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
@@ -67,15 +67,21 @@ fn list_issues_constructs_request_excludes_pulls_and_maps() {
     let request = &client.recorded()[0];
     assert_eq!(request.method, HttpMethod::Get);
     assert_eq!(request.path, format!("/api/v1/repos/{OWNER}/{REPO}/issues"));
-    assert!(request
-        .query
-        .contains(&("state".to_string(), "open".to_string())));
-    assert!(request
-        .query
-        .contains(&("type".to_string(), "issues".to_string())));
-    assert!(request
-        .query
-        .contains(&("labels".to_string(), "ready".to_string())));
+    assert!(
+        request
+            .query
+            .contains(&("state".to_string(), "open".to_string()))
+    );
+    assert!(
+        request
+            .query
+            .contains(&("type".to_string(), "issues".to_string()))
+    );
+    assert!(
+        request
+            .query
+            .contains(&("labels".to_string(), "ready".to_string()))
+    );
     // The dependency lookup targets the surviving issue only.
     assert_eq!(
         client.last_request().unwrap().path,
@@ -328,7 +334,7 @@ fn update_issue_patches_then_sequences_labels_and_assignees() {
         issue_json(7, "open", "[]", r#", "assignees": [{"login": "old"}]"#),
     );
     client.push_response(200, "{}"); // PATCH issue (title/state)
-                                     // One label-id read resolves names for set, remove, and add.
+    // One label-id read resolves names for set, remove, and add.
     client.push_response(
         200,
         r#"[{"id":3,"name":"base"},{"id":9,"name":"stale"},{"id":1,"name":"ready"}]"#,

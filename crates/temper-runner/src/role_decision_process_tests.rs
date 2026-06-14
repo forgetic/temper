@@ -15,8 +15,8 @@ use temper_workflow::{
 
 use crate::{
     Agent, BoundExternalTool, CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput,
-    CodingWorkspaceRequest, ExternalToolExecutors, RoleTools, WorkItem, REDACTED,
-    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
+    CodingWorkspaceRequest, ExternalToolExecutors, REDACTED, RoleTools,
+    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION, WorkItem,
 };
 
 fn temp_path(name: &str) -> PathBuf {
@@ -265,10 +265,12 @@ fn decision_reply_classification_distinguishes_adapter_branches() {
     assert_eq!(mismatch.validation_outcome, "protocol_mismatch");
     assert_eq!(mismatch.action_kind, "invalid_reply");
     assert_eq!(mismatch.disposition, DecisionDisposition::Error);
-    assert!(mismatch
-        .error
-        .expect("mismatch keeps protocol error")
-        .contains("version mismatch"));
+    assert!(
+        mismatch
+            .error
+            .expect("mismatch keeps protocol error")
+            .contains("version mismatch")
+    );
 }
 
 #[test]
@@ -363,14 +365,18 @@ fi
         assert_eq!(observability["artifact_type"], "issue");
         assert_eq!(observability["artifact_number"], fixture.issue.number.get());
         assert_eq!(observability["artifact_kind"], "task");
-        assert!(observability["work_item_id"]
-            .as_str()
-            .expect("work item id is a string")
-            .contains("artifact:issue:1"));
-        assert!(observability["decision_id"]
-            .as_str()
-            .expect("decision id is a string")
-            .starts_with("decision/work-item/"));
+        assert!(
+            observability["work_item_id"]
+                .as_str()
+                .expect("work item id is a string")
+                .contains("artifact:issue:1")
+        );
+        assert!(
+            observability["decision_id"]
+                .as_str()
+                .expect("decision id is a string")
+                .starts_with("decision/work-item/")
+        );
         assert!(observability.get("tick_id").is_none());
         assert_eq!(captured.authorized_actions[0].action, "advance");
         assert_eq!(
@@ -554,9 +560,11 @@ fn process_agent_uses_coding_workspace_for_pr_actions() {
             .expect("PR list succeeds");
         assert_eq!(pull_requests.len(), 1);
         assert_eq!(pull_requests[0].source.branch, "agent/pr-for-task-1");
-        assert!(pull_requests[0]
-            .body
-            .contains("updated docs/product-change.md"));
+        assert!(
+            pull_requests[0]
+                .body
+                .contains("updated docs/product-change.md")
+        );
     })
 }
 
@@ -959,9 +967,11 @@ fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
         let ui_meta = temper_workflow::parse_metadata_block(&created[1].body)
             .expect("metadata parses")
             .expect("metadata exists");
-        assert!(ui_meta
-            .dependencies
-            .contains(&temper_workflow::ArtifactRef::same_repo(api_number)));
+        assert!(
+            ui_meta
+                .dependencies
+                .contains(&temper_workflow::ArtifactRef::same_repo(api_number))
+        );
 
         assert_eq!(labels(&fixture).await, vec!["planned", "task"]);
         let pull_requests = fixture

@@ -8,8 +8,8 @@
 //! needs structured status.
 
 use crate::ids::{
-    format_ci_job_id, parse_ci_job_id, parse_pull_request_id, parse_repository_id, CiJobCoord,
-    RepoCoord,
+    CiJobCoord, RepoCoord, format_ci_job_id, parse_ci_job_id, parse_pull_request_id,
+    parse_repository_id,
 };
 use crate::types::{WorkflowJobDto, WorkflowJobsEnvelopeDto, WorkflowRunsEnvelopeDto};
 use crate::{GitHubForge, HttpClient, HttpMethod};

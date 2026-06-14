@@ -1,6 +1,6 @@
 use super::{EnsureOutcome, ExecutionError, Executor};
 use crate::artifact::ArtifactRef;
-use crate::metadata::{parse_metadata_block, replace_metadata_block, WorkflowMetadata};
+use crate::metadata::{WorkflowMetadata, parse_metadata_block, replace_metadata_block};
 use std::collections::BTreeSet;
 use std::sync::{Condvar, Mutex, OnceLock};
 use temper_forge::{

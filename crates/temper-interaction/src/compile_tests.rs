@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use crate::{
-    compile, AcceptanceEffect, CommandActionManifest, ForgeSessionConfig, ForgeTranscriptConfig,
-    Proposal, ProposalId, ProposalKind, ProposalPayloadValidator, RawInteractionSpec,
+    AcceptanceEffect, CommandActionManifest, ForgeSessionConfig, ForgeTranscriptConfig, Proposal,
+    ProposalId, ProposalKind, ProposalPayloadValidator, RawInteractionSpec, compile,
 };
 
 fn generic_spec() -> RawInteractionSpec {

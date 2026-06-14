@@ -16,37 +16,37 @@ use temper_forge::{
     PullRequest, PullRequestState, Repository, RepositoryId, RepositoryPath, UpdateIssue,
 };
 use temper_runner::{
-    pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake, workspace_content_key,
-    ScanError, WorkItem,
+    ScanError, WorkItem, pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake,
+    workspace_content_key,
 };
 use temper_worker_protocol::{
     Artifact, Assign, ErrorCode, FailureClass, JobChild, JobProgress, JobResult, Poll, RepoAccess,
     ResultStatus, WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
 };
+use temper_worker_registry::DaemonCore;
 #[cfg(test)]
 use temper_worker_registry::daemon_core::QueuedJob;
-use temper_worker_registry::DaemonCore;
 // Public so out-of-crate `ResultApplier` implementations can name the job type
 // the trait passes them.
 use temper_io_engine::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_io_engine::{
-    arm_timer, channel, drive, CqSender, EngineTime, Executor as EngineExecutor, Machine, Spawner,
+    CqSender, EngineTime, Executor as EngineExecutor, Machine, Spawner, arm_timer, channel, drive,
 };
 pub use temper_worker_registry::InFlightJob;
 use temper_workflow::{
-    find_pull_request_by_correlation, ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow,
-    CreateIssuesChild, Effect, ExecutionContext, ExecutionError, Executor, LeaseError,
-    LeaseManager, LeasePolicy, RoleId, ToolManifest, TransitionId, ValidatedWorkflow, VerdictId,
+    ArtifactKindId, ArtifactSource, Classifier, CompiledWorkflow, CreateIssuesChild, Effect,
+    ExecutionContext, ExecutionError, Executor, LeaseError, LeaseManager, LeasePolicy, RoleId,
+    ToolManifest, TransitionId, ValidatedWorkflow, VerdictId, find_pull_request_by_correlation,
 };
 
 pub mod config;
 pub mod mechanical;
 mod webhook;
 
-pub use config::{parse, DaemonRunConfig, ParseOutcome, USAGE};
+pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use mechanical::{
-    run_mechanical_backstop_tick, spawn_mechanical_backstop, MechanicalBackstopConfig,
-    MechanicalScope, MechanicalTrigger,
+    MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
+    spawn_mechanical_backstop,
 };
 pub use temper_runner::{RepositorySet, RepositoryTarget};
 pub use temper_worker_protocol::{JobArtifactSnapshot, JobContext, RepoOutcome};
@@ -385,21 +385,39 @@ impl<F: Forge> ForgeApplier<F> {
         let Some(role) = self.compiled.role(&role_id) else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: role not found in compiled workflow",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, action, verdict
+                job.job_id,
+                job.repo,
+                job.artifact.kind,
+                job.artifact.item,
+                job.role,
+                action,
+                verdict
             );
             return;
         };
         let Some(tool) = role.tools.iter().find(|tool| tool.name == action) else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: action not found in compiled workflow",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, action, verdict
+                job.job_id,
+                job.repo,
+                job.artifact.kind,
+                job.artifact.item,
+                job.role,
+                action,
+                verdict
             );
             return;
         };
         let Some(routed) = tool.outcomes.get(&verdict_id).cloned() else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: verdict is not declared for action",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, action, verdict
+                job.job_id,
+                job.repo,
+                job.artifact.kind,
+                job.artifact.item,
+                job.role,
+                action,
+                verdict
             );
             return;
         };
@@ -1319,9 +1337,7 @@ fn default_base_branch(repository: &Repository) -> String {
 
 /// The coordinated-landing order map: repo path -> the repo paths whose PRs must
 /// land first. Built from the job's manifest (`WorkspaceRepo.depends_on`).
-fn manifest_depends_on(
-    context: &JobContext,
-) -> std::collections::BTreeMap<String, Vec<String>> {
+fn manifest_depends_on(context: &JobContext) -> std::collections::BTreeMap<String, Vec<String>> {
     context
         .workspace
         .as_ref()
@@ -1346,7 +1362,10 @@ fn coordinated_landing_order(
     depends_on: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Vec<usize> {
     use std::collections::BTreeSet;
-    let present: BTreeSet<&str> = outcomes.iter().map(|outcome| outcome.repo.as_str()).collect();
+    let present: BTreeSet<&str> = outcomes
+        .iter()
+        .map(|outcome| outcome.repo.as_str())
+        .collect();
     let mut done: BTreeSet<String> = BTreeSet::new();
     let mut order = Vec::with_capacity(outcomes.len());
     while order.len() < outcomes.len() {
@@ -2799,7 +2818,7 @@ mod tests {
     use temper_forge_memory::MemoryForge;
     use temper_worker_protocol::{Artifact, Failure, ResultStatus, WORKER_PROTOCOL_VERSION};
     use temper_workflow::{
-        render_metadata_block, ArtifactKindId, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata,
+        ArtifactKindId, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata, render_metadata_block,
     };
 
     const BASIC_DELIVERY_FIXTURE: &str =

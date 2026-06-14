@@ -3,7 +3,7 @@
 mod support;
 
 use support::crash::{CrashForge, ForgeOp};
-use support::{block_on, create_pr, new_repo, seed_ci, submit_review, workflow, TestRoot};
+use support::{TestRoot, block_on, create_pr, new_repo, seed_ci, submit_review, workflow};
 use temper_forge::{
     CiJobConclusion, Forge, PullRequestUpdateState, ReviewDecision, UpdatePullRequest,
 };

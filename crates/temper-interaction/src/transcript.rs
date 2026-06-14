@@ -5,9 +5,9 @@ use temper_forge::{
 
 use crate::proposal_state::{parse_proposal_snapshot_marker, strip_proposal_snapshot_marker};
 use crate::{
-    is_valid_deterministic_slug, validate_deterministic_slug, CompiledProfileManifest,
-    ConversationId, ConversationProfileId, ConversationTurn, InteractionError, Participant,
-    Proposal,
+    CompiledProfileManifest, ConversationId, ConversationProfileId, ConversationTurn,
+    InteractionError, Participant, Proposal, is_valid_deterministic_slug,
+    validate_deterministic_slug,
 };
 
 /// Default number of recent Forge-backed turns supplied to a responder.

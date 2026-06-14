@@ -5,8 +5,8 @@
 //! labels, CI workflow, and one or more initialized repositories.
 
 use super::provision::{
-    bootstrap_admin, provision_repository, provision_role_identities, ProvisionError, Provisioned,
-    ProvisionedRoles, Result, ADMIN_USER, CI_WORKFLOW, WORKFLOW_PATH,
+    ADMIN_USER, CI_WORKFLOW, ProvisionError, Provisioned, ProvisionedRoles, Result, WORKFLOW_PATH,
+    bootstrap_admin, provision_repository, provision_role_identities,
 };
 use super::{ForgejoServer, ForgejoState};
 use crate::{runner_config, workflow};
@@ -235,12 +235,16 @@ mod tests {
         let json = reference_delivery_state_description(&["service-a".into()]);
         assert_eq!(json["kind"], "temper-reference-delivery-provisioned-world");
         assert_eq!(json["repositories"][0], "service-a");
-        assert!(json["roles"]
-            .as_array()
-            .is_some_and(|roles| !roles.is_empty()));
-        assert!(json["labels"]
-            .as_array()
-            .is_some_and(|labels| !labels.is_empty()));
+        assert!(
+            json["roles"]
+                .as_array()
+                .is_some_and(|roles| !roles.is_empty())
+        );
+        assert!(
+            json["labels"]
+                .as_array()
+                .is_some_and(|labels| !labels.is_empty())
+        );
         assert_eq!(json["ci_workflow_path"], WORKFLOW_PATH);
     }
 }

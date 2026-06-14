@@ -470,7 +470,9 @@ mod tests {
         });
     }
 
-    async fn rejects_other_profiles_without_provider_call_inner(handle: skein::runtime::RuntimeHandle) {
+    async fn rejects_other_profiles_without_provider_call_inner(
+        handle: skein::runtime::RuntimeHandle,
+    ) {
         let responder = ProductManagerResponder::new(ProviderConfig::new(
             "test-provider",
             "test-model",

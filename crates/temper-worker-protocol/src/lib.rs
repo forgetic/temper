@@ -602,9 +602,11 @@ mod tests {
         assert_eq!(value["repos"][2].get("branch_hint"), None);
         // Landing order: smith lands after temper; independent repos omit it.
         assert_eq!(value["repos"][0].get("depends_on"), None);
-        assert_eq!(value["repos"][1]["depends_on"], serde_json::json!(["ai/temper"]));
-        let decoded: WorkspaceManifest =
-            serde_json::from_value(value).expect("manifest parses");
+        assert_eq!(
+            value["repos"][1]["depends_on"],
+            serde_json::json!(["ai/temper"])
+        );
+        let decoded: WorkspaceManifest = serde_json::from_value(value).expect("manifest parses");
         assert_eq!(decoded, manifest);
     }
 
@@ -767,7 +769,10 @@ mod tests {
 
         let value = serde_json::to_value(&result).expect("job result serializes");
         assert_eq!(value["repos"][0]["repo"], "ai/temper");
-        assert_eq!(value["repos"][1]["branch"]["name"], "agent/coord-for-code-42");
+        assert_eq!(
+            value["repos"][1]["branch"]["name"],
+            "agent/coord-for-code-42"
+        );
         assert_eq!(value.get("verdict"), None);
         let decoded: JobResult = serde_json::from_value(value).expect("serialized result parses");
         assert_eq!(decoded, result);

@@ -5,10 +5,11 @@
 use std::{process::ExitCode, sync::Arc};
 
 use temper_daemon::{
-    config::{role_tokens_from_env, ParseOutcome, USAGE},
-    spawn_mechanical_backstop, spawn_poll_backstop, Daemon, DaemonRunConfig, ForgeApplier,
-    LeaseApplier, MechanicalBackstopConfig, PollBackstopConfig, RepositorySet, RepositoryTarget,
-    RoleFeedMode, RoleFeedTarget, RoleRoutingApplier, WebhookConfig,
+    Daemon, DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig,
+    PollBackstopConfig, RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget,
+    RoleRoutingApplier, WebhookConfig,
+    config::{ParseOutcome, USAGE, role_tokens_from_env},
+    spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -43,9 +44,9 @@ fn run(config: DaemonRunConfig) -> Result<(), String> {
     // The daemon runs entirely as engine tasks: the HTTP listener, the pure
     // daemon machine's engine loop, backstop cadence machines, appliers, and
     // wake scans are all completion-driven I/O on the skein runtime.
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
-        run_async(handle, config).await
-    })
+    temper_io_engine::block_on_with(
+        move |_cx, handle| async move { run_async(handle, config).await },
+    )
 }
 
 async fn run_async(

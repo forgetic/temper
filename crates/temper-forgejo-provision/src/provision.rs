@@ -10,7 +10,7 @@ use temper_runner::RoleBinding;
 use temper_workflow::{ArtifactTarget, Effect, IntakeAuthor, RoleId, ValidatedWorkflow};
 
 use crate::forgejo_prep::commit_ci_sentinel;
-use temper_forgejo_ops::forgejo_rest::{self, RestError, ROLE_PASSWORD};
+use temper_forgejo_ops::forgejo_rest::{self, ROLE_PASSWORD, RestError};
 use temper_reference_delivery::{repo_input, runner_config_for};
 
 const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
@@ -520,9 +520,10 @@ pub fn format_secrets_env(provisioned: &Provisioned) -> String {
 
 pub fn write_secrets_file(path: &Path, contents: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(path, contents)?;
     restrict_permissions(path)?;
     Ok(())

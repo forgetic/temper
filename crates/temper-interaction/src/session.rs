@@ -3,6 +3,8 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use temper_forge::{CreateComment, Forge, Issue, ItemNumber, Repository, RepositoryPath, User};
 
+use crate::CompiledProfileManifest;
+use crate::InteractionError;
 use crate::acceptance::{
     AcceptanceExecutor, AcceptanceRequest, AcceptedTarget, IssueAcceptanceOutcome,
 };
@@ -10,13 +12,11 @@ use crate::agent::InteractiveResponder;
 use crate::proposal::Proposal;
 use crate::proposal_state::render_agent_reply_comment_with_proposals;
 use crate::transcript::{
-    issue_url, open_forge_transcript, trim_turns, ForgeTranscript, ForgeTranscriptConfig,
-    ForgeTranscriptOpenOptions,
+    ForgeTranscript, ForgeTranscriptConfig, ForgeTranscriptOpenOptions, issue_url,
+    open_forge_transcript, trim_turns,
 };
 use crate::types::{ConversationReply, ConversationRequest, ConversationTurn, ProposalId};
 use crate::validated::AcceptanceEffect;
-use crate::CompiledProfileManifest;
-use crate::InteractionError;
 
 /// Open options for a Forge-backed interactive session.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,12 +69,12 @@ impl ForgeSessionConfig {
                         .labels()
                         .iter()
                         .any(|label| transcript.transcript_labels.contains(label))
-                    {
-                        return Err(InteractionError::InvalidConfig {
-                            field: "create_issue.labels",
-                            message: "must differ from transcript labels".into(),
-                        });
-                    }
+                {
+                    return Err(InteractionError::InvalidConfig {
+                        field: "create_issue.labels",
+                        message: "must differ from transcript labels".into(),
+                    });
+                }
             }
         }
         Ok(Self {

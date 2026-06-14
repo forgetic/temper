@@ -4,12 +4,12 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use jig_core::{Reply, Script, StopReason, Turn};
+use jig_server::FakeLlm;
 use temper_agent_runtime::{
     CheckpointHook, ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
     WorkspaceWorkItem, run_coding_agent_native, run_coding_agent_native_with_hooks,
 };
-use jig_core::{Reply, Script, StopReason, Turn};
-use jig_server::FakeLlm;
 
 /// A jig-backed engineer turn driven by the native sans-IO agent loop
 /// (`run_coding_agent_native` → `temper_agent_core::run_sub_agent`) on the skein

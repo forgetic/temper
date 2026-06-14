@@ -1,8 +1,8 @@
 use super::{ArtifactSnapshot, ReconcileError, Reconciler, RecoveryPolicy};
+use crate::ArtifactTarget;
 use crate::classify::{ArtifactSource, Classifier};
 use crate::ids::{ArtifactKindId, LabelId};
 use crate::validated::{Effect, GateCondition, ValidatedTransition, ValidatedWorkflow};
-use crate::ArtifactTarget;
 use temper_forge::{
     Forge, Issue, IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestQuery,
     PullRequestState, RepositoryId,
@@ -264,9 +264,10 @@ fn record_queue_labels(
             }
         }
         if let Some(condition) = &queue.condition
-            && let Some(label) = condition_label(workflow, condition) {
-                push_label(labels, label);
-            }
+            && let Some(label) = condition_label(workflow, condition)
+        {
+            push_label(labels, label);
+        }
     }
 }
 
@@ -300,9 +301,10 @@ fn record_gate_condition_labels(
             continue;
         }
         if let Some(condition) = &gate.condition
-            && let Some(label) = condition_label(workflow, condition) {
-                push_label(labels, label);
-            }
+            && let Some(label) = condition_label(workflow, condition)
+        {
+            push_label(labels, label);
+        }
     }
 }
 

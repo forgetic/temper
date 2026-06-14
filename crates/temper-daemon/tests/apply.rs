@@ -8,8 +8,8 @@ use std::{
 use serde_json::json;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobResult, Poll,
-    Register, ReleaseDisposition, RepoOutcome, ResultStatus, WorkerProtocolMessage,
-    WORKER_PROTOCOL_VERSION,
+    Register, ReleaseDisposition, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
+    WorkerProtocolMessage,
 };
 use temper_worker_registry::InFlightJob;
 

@@ -10,7 +10,7 @@
 
 mod support;
 
-use support::{block_on, create_issue, create_pr, issue_body, new_repo, TestRoot};
+use support::{TestRoot, block_on, create_issue, create_pr, issue_body, new_repo};
 use temper_forge::{Forge, ReviewDecision};
 use temper_workflow::{
     ArtifactSource, Effect, ExecutionContext, ExecutionError, RawEffect, RawWorkflowSpec, RoleId,
@@ -306,10 +306,12 @@ fn attach_review_submits_a_native_review_with_the_authored_body() {
         "review body should carry the authored prose, got: {review_body}"
     );
     // The co-declared label effect applied through the same transition.
-    assert!(pull_request
-        .labels
-        .iter()
-        .any(|label| label == "changes-requested"));
+    assert!(
+        pull_request
+            .labels
+            .iter()
+            .any(|label| label == "changes-requested")
+    );
 }
 
 #[test]

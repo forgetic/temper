@@ -143,30 +143,32 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn success_stub_maps_to_success_result_with_branch() {
-        let outcome = StubExecutor::success().execute(assign("job-123")).await;
-        let result = job_result("worker-1", "job-123", outcome);
+    #[test]
+    fn success_stub_maps_to_success_result_with_branch() {
+        temper_worker_io_engine::block_on(async {
+            let outcome = StubExecutor::success().execute(assign("job-123")).await;
+            let result = job_result("worker-1", "job-123", outcome);
 
-        assert_eq!(result.protocol_version, WORKER_PROTOCOL_VERSION);
-        assert_eq!(result.worker_id, "worker-1");
-        assert_eq!(result.job_id, "job-123");
-        assert_eq!(result.status, ResultStatus::Success);
-        assert_eq!(result.failure, None);
-        assert_eq!(
-            result.summary.as_deref(),
-            Some("stub executor completed without doing IO")
-        );
-        assert_eq!(
-            result.repos,
-            vec![RepoOutcome {
-                repo: "ai/temper".to_string(),
-                branch: Branch {
-                    name: "temper-worker/stub/job-123".to_string(),
-                    head_sha: "0000000000000000000000000000000000000000".to_string(),
-                },
-            }]
-        );
+            assert_eq!(result.protocol_version, WORKER_PROTOCOL_VERSION);
+            assert_eq!(result.worker_id, "worker-1");
+            assert_eq!(result.job_id, "job-123");
+            assert_eq!(result.status, ResultStatus::Success);
+            assert_eq!(result.failure, None);
+            assert_eq!(
+                result.summary.as_deref(),
+                Some("stub executor completed without doing IO")
+            );
+            assert_eq!(
+                result.repos,
+                vec![RepoOutcome {
+                    repo: "ai/temper".to_string(),
+                    branch: Branch {
+                        name: "temper-worker/stub/job-123".to_string(),
+                        head_sha: "0000000000000000000000000000000000000000".to_string(),
+                    },
+                }]
+            );
+        });
     }
 
     #[test]
@@ -257,25 +259,27 @@ mod tests {
         assert!(serialized["children"][1].get("target_repo").is_none());
     }
 
-    #[tokio::test]
-    async fn failure_stub_maps_to_failure_result_without_branch() {
-        let outcome = StubExecutor::failure(FailureClass::Permanent, "configured failure")
-            .execute(assign("job-456"))
-            .await;
-        let result = job_result("worker-2", "job-456", outcome);
+    #[test]
+    fn failure_stub_maps_to_failure_result_without_branch() {
+        temper_worker_io_engine::block_on(async {
+            let outcome = StubExecutor::failure(FailureClass::Permanent, "configured failure")
+                .execute(assign("job-456"))
+                .await;
+            let result = job_result("worker-2", "job-456", outcome);
 
-        assert_eq!(result.protocol_version, WORKER_PROTOCOL_VERSION);
-        assert_eq!(result.worker_id, "worker-2");
-        assert_eq!(result.job_id, "job-456");
-        assert_eq!(result.status, ResultStatus::Failure);
-        assert!(result.repos.is_empty());
-        assert_eq!(result.summary, None);
-        assert_eq!(
-            result.failure,
-            Some(Failure {
-                class: FailureClass::Permanent,
-                message: "configured failure".to_string(),
-            })
-        );
+            assert_eq!(result.protocol_version, WORKER_PROTOCOL_VERSION);
+            assert_eq!(result.worker_id, "worker-2");
+            assert_eq!(result.job_id, "job-456");
+            assert_eq!(result.status, ResultStatus::Failure);
+            assert!(result.repos.is_empty());
+            assert_eq!(result.summary, None);
+            assert_eq!(
+                result.failure,
+                Some(Failure {
+                    class: FailureClass::Permanent,
+                    message: "configured failure".to_string(),
+                })
+            );
+        });
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use temper_runner::{
-    ExternalToolExecutors, RunnerConfig, WorkspaceCheckout, CODING_WORKSPACE_TOOL_ID,
+    CODING_WORKSPACE_TOOL_ID, ExternalToolExecutors, RunnerConfig, WorkspaceCheckout,
 };
 use temper_workflow::ExternalToolId;
 

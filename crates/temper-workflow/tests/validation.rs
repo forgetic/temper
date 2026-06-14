@@ -210,10 +210,12 @@ fn duplicate_label_id_is_diagnosed() {
         kind: SymbolKind::Label,
         id: "ready".to_string(),
     }));
-    assert!(errors
-        .diagnostics()
-        .iter()
-        .all(|d| d.severity() == Severity::Error));
+    assert!(
+        errors
+            .diagnostics()
+            .iter()
+            .all(|d| d.severity() == Severity::Error)
+    );
 }
 
 #[test]
@@ -240,16 +242,18 @@ fn missing_state_artifact_reference_is_diagnosed() {
         .push("ghost".to_string());
 
     let errors = spec.validate().expect_err("missing artifact must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::ArtifactKind,
-            id: "ghost".to_string(),
-            site: ReferenceSite::StateArtifact {
-                dimension: "code_lifecycle".to_string(),
-                state: "ready".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::ArtifactKind,
+                id: "ghost".to_string(),
+                site: ReferenceSite::StateArtifact {
+                    dimension: "code_lifecycle".to_string(),
+                    state: "ready".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -258,15 +262,17 @@ fn missing_transition_role_reference_is_diagnosed() {
     spec.transitions[0].roles.push("ghost".to_string());
 
     let errors = spec.validate().expect_err("missing role must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Role,
-            id: "ghost".to_string(),
-            site: ReferenceSite::TransitionRole {
-                transition: "claim_code".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Role,
+                id: "ghost".to_string(),
+                site: ReferenceSite::TransitionRole {
+                    transition: "claim_code".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -277,15 +283,17 @@ fn missing_assignee_effect_role_reference_is_diagnosed() {
     });
 
     let errors = spec.validate().expect_err("missing effect role must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Role,
-            id: "ghost".to_string(),
-            site: ReferenceSite::TransitionEffectRole {
-                transition: "claim_code".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Role,
+                id: "ghost".to_string(),
+                site: ReferenceSite::TransitionEffectRole {
+                    transition: "claim_code".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -324,15 +332,17 @@ fn missing_queue_artifact_reference_is_diagnosed() {
     spec.queues[0].artifacts = vec!["nonexistent".to_string()];
 
     let errors = spec.validate().expect_err("missing artifact must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::ArtifactKind,
-            id: "nonexistent".to_string(),
-            site: ReferenceSite::QueueArtifact {
-                queue: "code_ready".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::ArtifactKind,
+                id: "nonexistent".to_string(),
+                site: ReferenceSite::QueueArtifact {
+                    queue: "code_ready".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -543,11 +553,13 @@ fn empty_queue_artifacts_are_diagnosed() {
     spec.queues[0].artifacts.clear();
 
     let errors = spec.validate().expect_err("empty artifact list must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::EmptyQueueArtifacts {
-            queue: "code_ready".to_string(),
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::EmptyQueueArtifacts {
+                queue: "code_ready".to_string(),
+            })
+    );
 }
 
 #[test]
@@ -605,15 +617,17 @@ fn undeclared_initial_label_is_diagnosed_like_an_artifact_label() {
     let errors = spec
         .validate()
         .expect_err("missing initial label must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Label,
-            id: "missing-initial".to_string(),
-            site: ReferenceSite::ArtifactLabel {
-                artifact: "code".to_string(),
-            },
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Label,
+                id: "missing-initial".to_string(),
+                site: ReferenceSite::ArtifactLabel {
+                    artifact: "code".to_string(),
+                },
+            })
+    );
 }
 
 #[test]
@@ -746,13 +760,15 @@ fn intake_author_undeclared_role_is_diagnosed() {
     let errors = spec
         .validate()
         .expect_err("intake author referencing an undeclared role must fail");
-    assert!(errors
-        .diagnostics()
-        .contains(&Diagnostic::UndeclaredReference {
-            expected: SymbolKind::Role,
-            id: "ghost".to_string(),
-            site: ReferenceSite::IntakeAuthor,
-        }));
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::UndeclaredReference {
+                expected: SymbolKind::Role,
+                id: "ghost".to_string(),
+                site: ReferenceSite::IntakeAuthor,
+            })
+    );
 }
 
 #[test]

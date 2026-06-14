@@ -9,8 +9,8 @@
 //! conflict tolerance, response shapes) is pure code over the returned data.
 
 use base64::Engine;
-use serde_json::{json, Value};
-use temper_io_engine::http::{http_call, HttpCall};
+use serde_json::{Value, json};
+use temper_io_engine::http::{HttpCall, http_call};
 
 /// The shared password assigned to demo role users.
 pub const ROLE_PASSWORD: &str = "R0le-Phase2-e2e!";

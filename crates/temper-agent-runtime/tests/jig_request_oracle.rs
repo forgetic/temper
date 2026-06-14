@@ -13,15 +13,15 @@
 //! # DeepSeek/OpenAI-compatible API-key leg
 //! TEMPER_DEEPSEEK_REQUEST_ORACLE=1 \
 //! TEMPER_DEEPSEEK_API_KEY=... \
-//!   cargo test -p anvil-temper-agent --test jig_request_oracle --features test-provider-base-url-override -- --ignored --nocapture
+//!   cargo test -p anvil-temper-agent --test jig_request_oracle -- --ignored --nocapture
 //!
 //! # Anthropic OAuth leg (requires `pi /login anthropic` first)
 //! TEMPER_ANTHROPIC_OAUTH=1 \
-//!   cargo test -p anvil-temper-agent --test jig_request_oracle --features test-provider-base-url-override -- --ignored --nocapture
+//!   cargo test -p anvil-temper-agent --test jig_request_oracle -- --ignored --nocapture
 //!
 //! # ChatGPT/Codex OAuth leg (requires `pi /login openai-codex` first)
 //! TEMPER_CHATGPT_OAUTH=1 \
-//!   cargo test -p anvil-temper-agent --test jig_request_oracle --features test-provider-base-url-override -- --ignored --nocapture
+//!   cargo test -p anvil-temper-agent --test jig_request_oracle -- --ignored --nocapture
 //! ```
 
 use std::io;
@@ -29,11 +29,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 use jig_core::conform::grammar::{GrammarFinding, grammar_findings};
 use jig_record::{bind, proxy_once};
 use serde::Deserialize;
 use serde_json::Value;
+use temper_agent_runtime::{AuthChoice, ProviderConfig, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;
@@ -156,8 +156,10 @@ fn run_leg(
     let decision: RoleDecision = {
         let provider = provider.clone();
         let prompt = role.prompt.render();
-        temper_agent_io_engine::block_on_with(move |_cx, handle| async move { run_decision(handle, &provider, &prompt, &context).await })
-            .expect("anvil decision succeeds through recorder and real upstream")
+        temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+            run_decision(handle, &provider, &prompt, &context).await
+        })
+        .expect("anvil decision succeeds through recorder and real upstream")
     };
     assert_eq!(decision.action, "advance");
 

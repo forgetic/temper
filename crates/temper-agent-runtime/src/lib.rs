@@ -44,7 +44,7 @@ pub use prompt_overlays::{
 };
 pub use provider::{
     ANTHROPIC_MODEL_ENV, AUTH_FILE_ENV, AuthChoice, CODEX_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL,
-    DEFAULT_CODEX_MODEL, ProviderConfig, ProviderError, default_auth_path,
+    DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig, ProviderError, default_auth_path,
 };
 pub use temper_process_protocol::{
     ConversationReply, ConversationRequest, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,

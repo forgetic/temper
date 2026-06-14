@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use temper_daemon::{
-    run_mechanical_backstop_tick, MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger,
+    MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
 };
 use temper_forge::{
     ChangeHint, ChangeKind, CreateIssue, CreateRepository, Forge, IssueState, ItemNumber,

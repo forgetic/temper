@@ -13,13 +13,13 @@ use temper_forge::{
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult, Poll,
-    Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus, WorkerProtocolMessage,
-    WorkspaceManifest, WorkspaceRepo, WORKER_PROTOCOL_VERSION,
+    Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
+    WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
 };
 use temper_worker_registry::InFlightJob;
 use temper_workflow::{
-    global_child_correlation_key, parse_metadata_block, ArtifactKindId, ArtifactRef,
-    ArtifactSource, LeaseManager, LeasePolicy, RawWorkflowSpec, RoleId, ValidatedWorkflow,
+    ArtifactKindId, ArtifactRef, ArtifactSource, LeaseManager, LeasePolicy, RawWorkflowSpec,
+    RoleId, ValidatedWorkflow, global_child_correlation_key, parse_metadata_block,
 };
 
 const REFERENCE_FIXTURE: &str =
@@ -621,10 +621,12 @@ async fn issue_comment_bodies(
 }
 
 async fn assert_no_attention_mark(forge: &MemoryForge, repo: &RepositoryId, issue: ItemNumber) {
-    assert!(!issue_labels(forge, repo, issue)
-        .await
-        .iter()
-        .any(|label| label == "needs-human"));
+    assert!(
+        !issue_labels(forge, repo, issue)
+            .await
+            .iter()
+            .any(|label| label == "needs-human")
+    );
     assert!(issue_comment_bodies(forge, repo, issue).await.is_empty());
 }
 
@@ -1912,10 +1914,12 @@ fn permanent_failure_replay_dedupes_by_comment_marker_when_label_is_missing() {
         applier.apply(job.clone(), result).await;
 
         assert_no_pull_requests(&forge, &repo).await;
-        assert!(!issue_labels(&forge, &repo, issue)
-            .await
-            .iter()
-            .any(|label| label == "needs-human"));
+        assert!(
+            !issue_labels(&forge, &repo, issue)
+                .await
+                .iter()
+                .any(|label| label == "needs-human")
+        );
         let comments = issue_comment_bodies(&forge, &repo, issue).await;
         assert_eq!(comments.len(), 1);
         assert!(comments[0].contains("not implemented"));
@@ -1961,11 +1965,17 @@ fn progress_checkpoints_are_recorded_once_per_step() {
             note: None,
         };
 
-        applier.apply_progress(job.clone(), progress(1, "done")).await;
+        applier
+            .apply_progress(job.clone(), progress(1, "done"))
+            .await;
         // Re-delivery of the same (correlation_key, step, state) is a no-op.
-        applier.apply_progress(job.clone(), progress(1, "done")).await;
+        applier
+            .apply_progress(job.clone(), progress(1, "done"))
+            .await;
         // A different step (or phase) appends its own checkpoint.
-        applier.apply_progress(job.clone(), progress(2, "started")).await;
+        applier
+            .apply_progress(job.clone(), progress(2, "started"))
+            .await;
 
         let issue = forge
             .get_issue_by_number(&repo, number)

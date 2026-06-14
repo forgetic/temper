@@ -6,7 +6,7 @@
 //! deterministic prompts.
 
 use temper_workflow::{
-    compile, CompiledWorkflow, LabelUsage, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow,
+    CompiledWorkflow, LabelUsage, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, compile,
 };
 
 /// The checked-in CI delivery workflow fixture.
@@ -112,12 +112,16 @@ fn role_authority_matches_tools_and_excludes_others() {
         .collect();
     assert_eq!(authority, tools);
 
-    assert!(owner
-        .authority
-        .contains(&TransitionId::new("approve_merge")));
-    assert!(owner
-        .authority
-        .contains(&TransitionId::new("clear_owner_flag")));
+    assert!(
+        owner
+            .authority
+            .contains(&TransitionId::new("approve_merge"))
+    );
+    assert!(
+        owner
+            .authority
+            .contains(&TransitionId::new("clear_owner_flag"))
+    );
     // Owner never gains an engineer-only transition.
     assert!(!owner.authority.contains(&TransitionId::new("claim_code")));
 }
@@ -234,33 +238,41 @@ fn prompt_sections_are_deterministic() {
     let role_section = prompt
         .section("Role and workflow")
         .expect("Role and workflow section");
-    assert!(role_section
-        .lines
-        .contains(&"Concurrency: up to 3 concurrent claim(s)".to_string()));
+    assert!(
+        role_section
+            .lines
+            .contains(&"Concurrency: up to 3 concurrent claim(s)".to_string())
+    );
 
     let queues = prompt
         .section("Subscribed queues")
         .expect("Subscribed queues section");
-    assert!(queues
-        .lines
-        .iter()
-        .any(|line| line.starts_with("code_ready: code where")));
+    assert!(
+        queues
+            .lines
+            .iter()
+            .any(|line| line.starts_with("code_ready: code where"))
+    );
 
     let actions = prompt
         .section("Authorized workflow actions")
         .expect("Authorized workflow actions section");
-    assert!(actions
-        .lines
-        .iter()
-        .any(|line| line.starts_with("claim_code: acts on code")));
+    assert!(
+        actions
+            .lines
+            .iter()
+            .any(|line| line.starts_with("claim_code: acts on code"))
+    );
 
     let decision_output = prompt
         .section("Decision output")
         .expect("Decision output section");
-    assert!(decision_output
-        .lines
-        .iter()
-        .any(|line| { line.contains("no_action") && line.contains("claim_code") }));
+    assert!(
+        decision_output
+            .lines
+            .iter()
+            .any(|line| { line.contains("no_action") && line.contains("claim_code") })
+    );
 
     let user_guidance = prompt
         .section("User guidance")
@@ -293,9 +305,11 @@ fn role_with_no_authority_renders_empty_action_section() {
         .prompt
         .section("User-declared external tools")
         .expect("external-tools section present");
-    assert!(external_tools
-        .lines
-        .contains(&"(no user-declared external tools)".to_string()));
+    assert!(
+        external_tools
+            .lines
+            .contains(&"(no user-declared external tools)".to_string())
+    );
     let decision_output = watcher
         .prompt
         .section("Decision output")

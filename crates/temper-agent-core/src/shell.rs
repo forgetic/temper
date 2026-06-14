@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use temper_agent_io_engine::{CqSender, Executor};
 use futures::StreamExt;
+use temper_agent_io_engine::{CqSender, Executor};
 use tongs::model::{AssistantMessage, Message, StopReason, StreamEvent};
 use tongs::provider::{Context, Provider, StreamOptions, ToolDef};
 use tongs::tools::ToolRegistry;
@@ -316,7 +316,8 @@ async fn stream_one_attempt(
     };
 
     loop {
-        let event = match temper_agent_io_engine::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
+        let event = match temper_agent_io_engine::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await
+        {
             Ok(Some(event)) => event,
             Ok(None) => {
                 return StreamAttempt::Failed {

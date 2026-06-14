@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge::{
     BranchRef, CiJob, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,

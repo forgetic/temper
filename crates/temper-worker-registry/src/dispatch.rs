@@ -122,10 +122,10 @@ impl DispatchCoordinator {
             _ => return None,
         }
 
-        let index = self
-            .pending
-            .iter()
-            .position(|item| self.registry.can_handle_all(worker_id, &item.role, &item.repos))?;
+        let index = self.pending.iter().position(|item| {
+            self.registry
+                .can_handle_all(worker_id, &item.role, &item.repos)
+        })?;
 
         let item = self
             .pending

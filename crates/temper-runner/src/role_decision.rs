@@ -10,11 +10,11 @@ use temper_forge::ReviewDecision;
 use temper_workflow::{Effect, RoleManifest, ToolManifest};
 
 pub use temper_process_protocol::workflow_role::{
-    AuthorizedWorkflowAction, BoundExternalTool, WorkflowEffect, WorkflowExternalToolManifest,
+    AuthorizedWorkflowAction, BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION,
+    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION, WorkflowEffect, WorkflowExternalToolManifest,
     WorkflowPromptManifest, WorkflowPromptSection, WorkflowReviewDecision,
     WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
     WorkflowRoleManifest, WorkflowRolePromptExtension, WorkflowToolManifest,
-    WORKFLOW_ROLE_DECISION_NO_ACTION, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
 };
 
 pub(crate) fn workflow_role_manifest_from_runtime(manifest: &RoleManifest) -> WorkflowRoleManifest {

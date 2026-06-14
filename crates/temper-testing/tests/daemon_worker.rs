@@ -71,11 +71,15 @@ fn daemon_worker_pushes_branch_and_daemon_sees_success() {
 
         // In-process daemon transport with a recording applier seam.
         let (tx, mut rx) = temper_io_engine::channel();
-        let daemon = Daemon::with_applier(Arc::new(handle.clone()), Arc::new(RecordingApplier { tx }));
-        let server =
-            temper_daemon::serve(&handle, &daemon, "127.0.0.1:0".parse().expect("loopback addr"))
-                .await
-                .expect("ephemeral daemon server binds");
+        let daemon =
+            Daemon::with_applier(Arc::new(handle.clone()), Arc::new(RecordingApplier { tx }));
+        let server = temper_daemon::serve(
+            &handle,
+            &daemon,
+            "127.0.0.1:0".parse().expect("loopback addr"),
+        )
+        .await
+        .expect("ephemeral daemon server binds");
         let addr = server.local_addr();
 
         // One enriched issue job, exactly what the daemon's scan feed enqueues.

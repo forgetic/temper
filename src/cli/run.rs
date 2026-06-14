@@ -14,20 +14,6 @@ use temper_agent_runtime::{AuthChoice, DEFAULT_MAX_ITERATIONS, ProviderConfig};
 
 use crate::run::{AllInOneConfig, run_all_in_one};
 
-/// Hermetic-test hook: when this env var is set, the agent's provider traffic is
-/// redirected to a local fake LLM (e.g. jig's `FakeLlm`) instead of the real
-/// endpoint. Compiled only under `test-provider-base-url-override`.
-#[cfg(feature = "test-provider-base-url-override")]
-const TEST_PROVIDER_BASE_URL_ENV: &str = "ANVIL_TEST_PROVIDER_BASE_URL";
-
-#[cfg(feature = "test-provider-base-url-override")]
-fn apply_test_provider_base_url_override(provider: ProviderConfig) -> ProviderConfig {
-    match std::env::var(TEST_PROVIDER_BASE_URL_ENV) {
-        Ok(base_url) if !base_url.trim().is_empty() => provider.with_base_url_override(base_url),
-        _ => provider,
-    }
-}
-
 const USAGE: &str = concat!(
     "temper run --repo <owner/name> [--repo ...] --role <role> [--role ...]\n",
     "  [--workflow <path>] [--poll-cadence-secs <n>] [--lease-ttl-secs <n>]\n",
@@ -102,9 +88,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     };
 
     let provider = ProviderConfig::from_auth(extras.auth, extras.codex_model, extras.auth_file)
-        .map_err(|error| format!("provider preflight: {error}"))?;
-    #[cfg(feature = "test-provider-base-url-override")]
-    let provider = apply_test_provider_base_url_override(provider);
+        .map_err(|error| format!("provider preflight: {error}"))?
+        .apply_base_url_override_from_env();
 
     // Default the agent's git base URL to the daemon's forge URL when not given.
     let git_base_url = match extras.git_base_url {

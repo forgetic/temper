@@ -1,7 +1,7 @@
 mod support;
 
 use std::time::Duration;
-use support::{block_on, issue, pull_request, repository, timestamp, TestRoot};
+use support::{TestRoot, block_on, issue, pull_request, repository, timestamp};
 use temper_forge::{
     ChangeKind, ChangeSource, ChangeSourceEvent, CiJob, CiJobConclusion, CiJobId, CiJobStatus,
     CreatePullRequestReview, Forge, ForgeError, ReviewDecision, UpdateIssue, Version,

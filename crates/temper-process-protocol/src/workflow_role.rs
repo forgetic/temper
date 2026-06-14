@@ -353,11 +353,13 @@ mod tests {
         assert!(request.action_is_authorized("advance"));
         assert!(request.action_is_authorized(WORKFLOW_ROLE_DECISION_NO_ACTION));
         assert!(!request.action_is_authorized("delete_everything"));
-        assert!(request
-            .role_manifest
-            .prompt
-            .render()
-            .contains("Role: banana"));
+        assert!(
+            request
+                .role_manifest
+                .prompt
+                .render()
+                .contains("Role: banana")
+        );
 
         let reply_json = include_str!("../fixtures/workflow-role-decision-reply.json");
         let reply: WorkflowRoleDecisionReply =

@@ -13,25 +13,25 @@ mod automation;
 use crate::agent::{Agent, AgentError, RoleTools};
 use crate::coding_workspace::ExternalToolExecutors;
 use crate::observability::{
+    MechanicalReconciliationEvent, ScanSummaryEvent, StructuredEvent, WorkItemSelectedEvent,
     render_mechanical_reconciliation_event, render_scan_summary_event,
-    render_work_item_selected_event, MechanicalReconciliationEvent, ScanSummaryEvent,
-    StructuredEvent, WorkItemSelectedEvent,
+    render_work_item_selected_event,
 };
 use crate::scan::{
-    scan_role, scan_role_audit, scan_role_wake, targeted_automated_work_items, ScanError, WorkItem,
+    ScanError, WorkItem, scan_role, scan_role_audit, scan_role_wake, targeted_automated_work_items,
 };
 use crate::signal::CiError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
 use temper_workflow::{
-    parse_metadata_block, Applier, ApplyError, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow,
-    DefaultRecoveryPolicy, ExecutionContext, ExecutionError, Executor, LeaseManager, LeasePolicy,
-    ReconcileError, ReconciliationMode, RecoveryPolicy, RoleId, ValidatedWorkflow,
+    Applier, ApplyError, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow, DefaultRecoveryPolicy,
+    ExecutionContext, ExecutionError, Executor, LeaseManager, LeasePolicy, ReconcileError,
+    ReconciliationMode, RecoveryPolicy, RoleId, ValidatedWorkflow, parse_metadata_block,
 };
 
 /// Progress made by one worker tick.
@@ -473,21 +473,21 @@ where
                     if matches!(kind, ChangeKind::PullRequest)
                         && let Some(metadata) = parse_metadata_block(&pull_request.body)
                             .map_err(|error| ForgeError::Backend(error.to_string()))?
+                    {
+                        for parent in metadata
+                            .parents
+                            .iter()
+                            .filter(|parent| parent.is_in_repository(self.repo))
                         {
-                            for parent in metadata
-                                .parents
-                                .iter()
-                                .filter(|parent| parent.is_in_repository(self.repo))
+                            if let Some(issue) = self
+                                .forge
+                                .get_issue_by_number(self.repo, parent.number)
+                                .await?
                             {
-                                if let Some(issue) = self
-                                    .forge
-                                    .get_issue_by_number(self.repo, parent.number)
-                                    .await?
-                                {
-                                    targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
-                                }
+                                targeted_snapshots.push(ArtifactSnapshot::from_issue(&issue));
                             }
                         }
+                    }
                     classifier.classify_pull_request(&pull_request).ok()
                 } else {
                     None

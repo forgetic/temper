@@ -11,17 +11,17 @@ use chrono::{DateTime, Utc};
 use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{
-    render_action_dispatch_event, render_mechanical_reconciliation_event,
+    ActionDispatchEvent, MechanicalReconciliationEvent, RoleDecisionReplyEvent,
+    RoleDecisionRequestEvent, ScanSummaryEvent, TransitionExecutionEvent, WorkItemIdentity,
+    WorkItemSelectedEvent, render_action_dispatch_event, render_mechanical_reconciliation_event,
     render_role_decision_reply_event, render_role_decision_request_event,
     render_scan_summary_event, render_transition_execution_event, render_work_item_selected_event,
-    scan_role, ActionDispatchEvent, MechanicalReconciliationEvent, RoleDecisionReplyEvent,
-    RoleDecisionRequestEvent, ScanSummaryEvent, TransitionExecutionEvent, WorkItemIdentity,
-    WorkItemSelectedEvent,
+    scan_role,
 };
 use temper_testing::{block_on, workflow};
 use temper_workflow::{
-    render_metadata_block, ArtifactKindId, ArtifactSource, DefaultRecoveryPolicy, DependencyStatus,
-    ReconcileFinding, RoleId, TransitionId, WorkflowMetadata,
+    ArtifactKindId, ArtifactSource, DefaultRecoveryPolicy, DependencyStatus, ReconcileFinding,
+    RoleId, TransitionId, WorkflowMetadata, render_metadata_block,
 };
 
 #[test]

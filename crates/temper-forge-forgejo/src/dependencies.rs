@@ -14,7 +14,7 @@
 //! dependency-list response) are best-effort and isolated here so live refinement
 //! only edits this module.
 
-use crate::ids::{parse_issue_id, parse_pull_request_id, RepoCoord};
+use crate::ids::{RepoCoord, parse_issue_id, parse_pull_request_id};
 use crate::pulls::response_validator;
 use crate::types::{DependencyRefDto, IssueDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};

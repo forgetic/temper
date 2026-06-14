@@ -11,8 +11,8 @@ use temper_forge_memory::MemoryForge;
 use temper_runner::RoleTools;
 use temper_testing::block_on;
 use temper_workflow::{
-    parse_metadata_block, ArtifactRef, ArtifactSource, CreateIssuesChild, ExecutionContext,
-    RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow,
+    ArtifactRef, ArtifactSource, CreateIssuesChild, ExecutionContext, RawWorkflowSpec, RoleId,
+    TransitionId, ValidatedWorkflow, parse_metadata_block,
 };
 
 const WORKFLOW: &str = r#"{
@@ -109,9 +109,11 @@ fn run_with_create_issues_fans_out_dependent_children() {
     let web_meta = parse_metadata_block(&created[1].body)
         .expect("metadata parses")
         .expect("metadata exists");
-    assert!(web_meta
-        .dependencies
-        .contains(&ArtifactRef::same_repo(api_number)));
+    assert!(
+        web_meta
+            .dependencies
+            .contains(&ArtifactRef::same_repo(api_number))
+    );
 
     // The parent became the plan record: the co-declared label flip applied.
     let parent = block_on(forge.get_issue_by_number(&repo, epic))

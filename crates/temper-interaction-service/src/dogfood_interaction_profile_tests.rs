@@ -111,10 +111,12 @@ fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
         assert!(filed.created);
         assert_eq!(filed.issue.labels, accepted_issue_labels(&profile));
         assert!(filed.issue.body.contains("requested-by: human"));
-        assert!(filed
-            .issue
-            .body
-            .contains(&format!("Transcript: {}", session.transcript_url())));
+        assert!(
+            filed
+                .issue
+                .body
+                .contains(&format!("Transcript: {}", session.transcript_url()))
+        );
 
         let retry = session
             .accept_issue_proposal_with_action(&proposal_id, Some(action_id))

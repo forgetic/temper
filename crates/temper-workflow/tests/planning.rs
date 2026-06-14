@@ -11,10 +11,10 @@ use temper_forge::{
     PullRequest, PullRequestState, RepositoryId,
 };
 use temper_workflow::{
-    compile, matches_queue, ArtifactKindId, ArtifactRef, CiState, CiStatus, ClassifiedArtifact,
-    Classifier, DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition,
-    QueueId, RawWorkflowSpec, ReviewStatus, RoleId, StateDimensionId, StateId, TransitionId,
-    ValidatedWorkflow, WorkflowEffect,
+    ArtifactKindId, ArtifactRef, CiState, CiStatus, ClassifiedArtifact, Classifier,
+    DependencyStatus, GateId, GateSignals, LabelId, PlanDiagnostic, Postcondition, QueueId,
+    RawWorkflowSpec, ReviewStatus, RoleId, StateDimensionId, StateId, TransitionId,
+    ValidatedWorkflow, WorkflowEffect, compile, matches_queue,
 };
 
 /// The checked-in CI delivery workflow fixture.
@@ -137,12 +137,16 @@ fn queue_matching_selects_code_ready_and_excludes_others() {
     assert_eq!(numbers, vec![1]);
 
     // The ready issue reports the queue, the blocked one does not.
-    assert!(planner
-        .matching_queues(&artifacts[0])
-        .contains(&QueueId::new("code_ready")));
-    assert!(!planner
-        .matching_queues(&artifacts[1])
-        .contains(&QueueId::new("code_ready")));
+    assert!(
+        planner
+            .matching_queues(&artifacts[0])
+            .contains(&QueueId::new("code_ready"))
+    );
+    assert!(
+        !planner
+            .matching_queues(&artifacts[1])
+            .contains(&QueueId::new("code_ready"))
+    );
 }
 
 #[test]
@@ -208,18 +212,22 @@ fn planning_fails_when_preconditions_are_stale_or_contradicted() {
         )
         .expect_err("a re-claim must not plan");
 
-    assert!(error
-        .diagnostics()
-        .contains(&PlanDiagnostic::StalePrecondition {
-            transition: TransitionId::new("claim_code"),
-            label: LabelId::new("ready"),
-        }));
-    assert!(error
-        .diagnostics()
-        .contains(&PlanDiagnostic::ContradictedPrecondition {
-            transition: TransitionId::new("claim_code"),
-            label: LabelId::new("in-progress"),
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&PlanDiagnostic::StalePrecondition {
+                transition: TransitionId::new("claim_code"),
+                label: LabelId::new("ready"),
+            })
+    );
+    assert!(
+        error
+            .diagnostics()
+            .contains(&PlanDiagnostic::ContradictedPrecondition {
+                transition: TransitionId::new("claim_code"),
+                label: LabelId::new("in-progress"),
+            })
+    );
 }
 
 #[test]
@@ -279,12 +287,14 @@ fn required_gates_must_be_satisfied_before_planning_a_merge() {
             &review,
         )
         .expect_err("CI must pass before a merge plans");
-    assert!(error
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("approve_merge"),
-            gate: GateId::new("ci_gate"),
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("approve_merge"),
+                gate: GateId::new("ci_gate"),
+            })
+    );
 
     let signals = review.with_ci(CiStatus::passed());
     let plan = planner
@@ -380,12 +390,14 @@ fn ci_gate_requires_runtime_ci_signal_before_merge_plans() {
             &artifact,
         )
         .expect_err("CI has not passed by default");
-    assert!(blocked
-        .diagnostics()
-        .contains(&PlanDiagnostic::GateNotSatisfied {
-            transition: TransitionId::new("approve_merge"),
-            gate: GateId::new("ci_gate"),
-        }));
+    assert!(
+        blocked
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("approve_merge"),
+                gate: GateId::new("ci_gate"),
+            })
+    );
 
     let signals = GateSignals::new().with_ci(CiStatus::passed());
     let plan = planner
@@ -411,9 +423,11 @@ fn dependency_gate_uses_native_dependency_relations() {
     let planner = workflow.planner();
     let blocked = classify_issue_with_dependencies(&workflow, 40, &["code", "blocked"], &[41]);
 
-    assert!(planner
-        .dependency_unblocks(&blocked, &DependencyStatus::default())
-        .is_empty());
+    assert!(
+        planner
+            .dependency_unblocks(&blocked, &DependencyStatus::default())
+            .is_empty()
+    );
 
     let landed = DependencyStatus::landed([ItemNumber::new(41)]);
     let plan = planner
@@ -476,13 +490,15 @@ fn unknown_transition_and_artifact_kind_mismatch_are_reported() {
             &pr,
         )
         .expect_err("a kind mismatch cannot plan");
-    assert!(mismatch
-        .diagnostics()
-        .contains(&PlanDiagnostic::ArtifactKindMismatch {
-            transition: TransitionId::new("claim_code"),
-            expected: ArtifactKindId::new("code"),
-            actual: ArtifactKindId::new("implementation_pr"),
-        }));
+    assert!(
+        mismatch
+            .diagnostics()
+            .contains(&PlanDiagnostic::ArtifactKindMismatch {
+                transition: TransitionId::new("claim_code"),
+                expected: ArtifactKindId::new("code"),
+                actual: ArtifactKindId::new("implementation_pr"),
+            })
+    );
 }
 
 #[test]
@@ -561,11 +577,13 @@ fn artifact_scoped_state_legality_is_checked_before_planning() {
         )
         .expect_err("ready is not legal for design in this workflow");
 
-    assert!(error
-        .diagnostics()
-        .contains(&PlanDiagnostic::ImpossibleState {
-            transition: TransitionId::new("bad_ready"),
-            dimension: StateDimensionId::new("work_lifecycle"),
-            states: vec![StateId::new("ready")],
-        }));
+    assert!(
+        error
+            .diagnostics()
+            .contains(&PlanDiagnostic::ImpossibleState {
+                transition: TransitionId::new("bad_ready"),
+                dimension: StateDimensionId::new("work_lifecycle"),
+                states: vec![StateId::new("ready")],
+            })
+    );
 }

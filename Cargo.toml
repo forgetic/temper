@@ -45,7 +45,7 @@ rust-version.workspace = true
 
 [features]
 # The default is the everything-binary: one `temper` that does daemon + worker
-# + agent + operator tools (the solo-dev UX). Factory deployments can strip to a
+# + agent + operator tools. Custom distributed deployments can strip to a
 # single role with `--no-default-features --features <role>`.
 default = ["unified"]
 
@@ -83,12 +83,6 @@ agent = [
 
 # Profile feature: the unified everything-binary.
 unified = ["daemon", "worker", "agent"]
-
-# Test hook surfaced from the agent runtime (provider base-url override for
-# hermetic responder tests).
-test-provider-base-url-override = [
-    "temper-agent-runtime/test-provider-base-url-override",
-]
 
 [dependencies]
 # Always present (shared, cheap): the runtime.
@@ -186,7 +180,19 @@ rust-version = "1.88"
 # so worker/daemon-only builds also link skein's TLS code. This is an accepted
 # tradeoff — TLS is small relative to the agent's LLM/HTTP stack, which slim
 # builds still exclude (it enters only via the `agent` feature crates).
-skein = { path = "../skein/crates/skein", features = ["tls", "tls-native-roots"] }
+# `tls-webpki-roots` is enabled here even though no temper crate needs the
+# webpki root bundle directly: a dev-dependency (jig-record, via
+# temper-agent-runtime) enables it, so test-scoped builds resolve skein with it
+# while non-test builds resolve it without. That feature split forced skein —
+# and its entire ~20-crate reverse-dependency tree — to recompile under two
+# different keys every CI run, defeating the build cache. Enabling it
+# unconditionally costs only a small static root bundle and keeps skein's
+# resolved feature set identical across every build, so the cache is shared.
+skein = { path = "../skein/crates/skein", features = [
+    "tls",
+    "tls-native-roots",
+    "tls-webpki-roots",
+] }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 fs2 = "0.4"
@@ -196,29 +202,8 @@ thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
 tongs = { path = "../tongs/crates/tongs" }
 uuid = { version = "1", features = ["v4"] }
-tokio = { version = "1", default-features = false }
 futures = "0.3"
 tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-
-# Fast local iteration is the default. Production/release profiles can be tuned
-# later when we have deployable artifacts. Cargo uses all available logical CPU
-# cores by default; keep `.cargo/config.toml` free of a fixed `build.jobs` value.
-[profile.dev]
-opt-level = 0
-debug = 0
-incremental = true
-codegen-units = 256
-lto = false
-
-[profile.dev.package."*"]
-debug = 0
-
-[profile.test]
-opt-level = 0
-debug = 0
-incremental = true
-codegen-units = 256
-lto = false

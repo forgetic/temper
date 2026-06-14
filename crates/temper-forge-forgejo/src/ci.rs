@@ -12,11 +12,11 @@
 //! phase's methods exist. See `docs/reference/forgejo-backend.md`.
 
 use crate::ci_match::{
-    match_run, run_created, run_index, run_pr_number, run_updated, sort_runs, Target,
+    Target, match_run, run_created, run_index, run_pr_number, run_updated, sort_runs,
 };
 use crate::ids::{
-    format_ci_job_id, format_pull_request_id, format_repository_id, parse_ci_job_id,
-    parse_pull_request_id, parse_repository_id, CiJobCoord, RepoCoord,
+    CiJobCoord, RepoCoord, format_ci_job_id, format_pull_request_id, format_repository_id,
+    parse_ci_job_id, parse_pull_request_id, parse_repository_id,
 };
 use crate::types::{ActionRunDto, ActionTaskDto, PullRequestDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
@@ -58,9 +58,10 @@ impl<C: HttpClient> ForgejoForge<C> {
             }
         }
         if let Some(commit) = query.commit_sha.as_deref()
-            && !commit.is_empty() {
-                target.commit_sha = Some(commit.to_string());
-            }
+            && !commit.is_empty()
+        {
+            target.commit_sha = Some(commit.to_string());
+        }
 
         // Prefer the REST Actions endpoint (richer, used by newer servers). On a
         // server that does not serve it (Forgejo 7.0.x → 404), or when REST is
@@ -74,7 +75,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             None => {
                 return self
                     .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
-                    .await
+                    .await;
             }
         };
         let mut matched: Vec<ActionRunDto> = if target.has_filter() {
@@ -147,14 +148,15 @@ impl<C: HttpClient> ForgejoForge<C> {
         // are what is cached, so the query's status filter/sort still applies.
         let cache_key = crate::ci_cache::CiReadKey::from_target(repo_id, target);
         if let Some(key) = cache_key.as_ref()
-            && let Some(cached) = self.ci_read_cache().get_terminal(key) {
-                let mut jobs = cached;
-                if let Some(status) = query.status {
-                    jobs.retain(|job| job.status == status);
-                }
-                sort_jobs(&mut jobs, query);
-                return Ok(jobs);
+            && let Some(cached) = self.ci_read_cache().get_terminal(key)
+        {
+            let mut jobs = cached;
+            if let Some(status) = query.status {
+                jobs.retain(|job| job.status == status);
             }
+            sort_jobs(&mut jobs, query);
+            return Ok(jobs);
+        }
 
         log_web_ui_ci_read(repo, target, "read_ci_jobs_via_web_ui");
         let raw = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
@@ -214,16 +216,17 @@ impl<C: HttpClient> ForgejoForge<C> {
         // Prefer an exact index + task-id match; fall back to the task id alone
         // in case the attempt enumeration shifted between calls.
         if let Some(task) = latest.get(coord.job_index as usize)
-            && task.id == coord.task_id {
-                return Ok(Some(task_to_job(
-                    &coord.repo,
-                    &repo_id,
-                    &run,
-                    task,
-                    coord.job_index,
-                    &target,
-                )));
-            }
+            && task.id == coord.task_id
+        {
+            return Ok(Some(task_to_job(
+                &coord.repo,
+                &repo_id,
+                &run,
+                task,
+                coord.job_index,
+                &target,
+            )));
+        }
         for (index, task) in latest.iter().enumerate() {
             if task.id == coord.task_id {
                 return Ok(Some(task_to_job(

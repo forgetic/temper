@@ -17,9 +17,9 @@ use temper_forge::{
     Repository, RepositoryId, UpdateIssue,
 };
 use temper_workflow::{
-    parse_metadata_block, replace_metadata_block, ArtifactRef, ArtifactSource,
-    CorrelationLookupPlan, CreateIssuesChild, EnsureOutcome, ExecutionContext, ExecutionError,
-    ExecutionReport, Executor, RoleId, TransitionId, ValidatedWorkflow, WorkflowMetadata,
+    ArtifactRef, ArtifactSource, CorrelationLookupPlan, CreateIssuesChild, EnsureOutcome,
+    ExecutionContext, ExecutionError, ExecutionReport, Executor, RoleId, TransitionId,
+    ValidatedWorkflow, WorkflowMetadata, parse_metadata_block, replace_metadata_block,
 };
 
 /// Error returned by an [`Agent`] while servicing a work item.

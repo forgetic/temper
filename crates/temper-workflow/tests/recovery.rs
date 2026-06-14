@@ -12,13 +12,13 @@ mod support;
 use chrono::Duration;
 use support::crash::{CrashForge, ForgeOp};
 use support::{
-    add_issue_dependency, block_on, close_issue, create_issue, issue_labels, new_repo, ts,
-    workflow, TestRoot,
+    TestRoot, add_issue_dependency, block_on, close_issue, create_issue, issue_labels, new_repo,
+    ts, workflow,
 };
 use temper_workflow::{
-    parse_metadata_block, Applier, ArtifactSource, CommandId, CommandJournal, CommandRecord,
-    CommandState, DefaultRecoveryPolicy, Executor, InMemoryJournal, LeaseManager, LeasePolicy,
-    RecoveryAction, RoleId, TransitionId, WorkflowEffect,
+    Applier, ArtifactSource, CommandId, CommandJournal, CommandRecord, CommandState,
+    DefaultRecoveryPolicy, Executor, InMemoryJournal, LeaseManager, LeasePolicy, RecoveryAction,
+    RoleId, TransitionId, WorkflowEffect, parse_metadata_block,
 };
 
 const ENGINEER: &str = "engineer";
@@ -65,9 +65,11 @@ fn requeue_lease_clears_the_lease_through_the_manager() {
         ts("2026-05-29T01:00:00Z"),
     ))
     .expect("reconcile after expiry");
-    assert!(report
-        .actions
-        .contains(&RecoveryAction::RequeueLease { target }));
+    assert!(
+        report
+            .actions
+            .contains(&RecoveryAction::RequeueLease { target })
+    );
 
     let applier = Applier::new(&executor, &manager, &journal);
     let outcome =
@@ -178,10 +180,12 @@ fn unblock_realizes_labels_and_journals_a_completed_command() {
         ts("2026-05-29T00:00:00Z"),
     ))
     .expect("reconcile");
-    assert!(report
-        .actions
-        .iter()
-        .any(|action| matches!(action, RecoveryAction::Unblock { .. })));
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|action| matches!(action, RecoveryAction::Unblock { .. }))
+    );
 
     let applier = Applier::new(&executor, &manager, &journal);
     block_on(applier.apply_report(&repo, &report, ts("2026-05-29T00:00:00Z"))).expect("apply");

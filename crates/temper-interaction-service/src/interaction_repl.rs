@@ -7,11 +7,11 @@ use temper_interaction::{CommandActionManifest, CompiledProfileManifest};
 
 use crate::interaction_args::InteractionReplArgs;
 use crate::interaction_bindings::{
-    build_service, load_bindings, load_compiled_spec, InteractionDeploymentError,
+    InteractionDeploymentError, build_service, load_bindings, load_compiled_spec,
 };
 use crate::interaction_commands::{
-    parse_repl_command, render_command_help, render_proposals, resolve_proposal_selector,
-    BuiltinReplCommand, ParsedReplCommand,
+    BuiltinReplCommand, ParsedReplCommand, parse_repl_command, render_command_help,
+    render_proposals, resolve_proposal_selector,
 };
 use crate::interaction_service::InteractionService;
 

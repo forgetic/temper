@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use temper_worker_protocol::{
     Assign, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobContext, JobResult,
-    Poll, Register, RepoOutcome, ResultStatus, WorkerProtocolMessage, WORKER_PROTOCOL_VERSION,
+    Poll, Register, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 
 pub use crate::forgejo_server::provision::CI_PASS_MARKER;
@@ -168,7 +168,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome
                     other => {
                         return Err(format!(
                             "--ci-sentinel must be 'present' or 'deferred', got '{other}'"
-                        ))
+                        ));
                     }
                 }
             }
@@ -275,7 +275,11 @@ pub async fn run(
             Some(WorkerProtocolMessage::Assign(assign)) => {
                 eprintln!(
                     "temper-testing-daemon-worker: assigned job_id={} repo={} role={} artifact={}/{}",
-                    assign.job_id, assign.repo, assign.role, assign.artifact.kind, assign.artifact.item
+                    assign.job_id,
+                    assign.repo,
+                    assign.role,
+                    assign.artifact.kind,
+                    assign.artifact.item
                 );
                 let result = execute_job(cx, config, identity, &assign).await;
                 eprintln!(
@@ -491,9 +495,10 @@ async fn run_job(
         // issue's own repo, so the `Closes #n` trailer goes on the primary
         // repo's commit only (the first manifest entry).
         if index == 0
-            && let Some(number) = issue_number {
-                message.push_str(&format!("\n\nCloses #{number}"));
-            }
+            && let Some(number) = issue_number
+        {
+            message.push_str(&format!("\n\nCloses #{number}"));
+        }
 
         workspace.commit_all(&message).await?;
         let head_sha = workspace.push_branch(&branch_name).await?;
@@ -605,11 +610,10 @@ impl Workspace<'_> {
             .arg(format!("user.name={}", self.identity.user))
             .arg("-c")
             .arg(format!("user.email={}", self.identity.email));
-        if include_remote_auth
-            && let Some(token) = self.identity.token.as_deref() {
-                git.arg("-c")
-                    .arg(format!("http.extraheader=AUTHORIZATION: token {token}"));
-            }
+        if include_remote_auth && let Some(token) = self.identity.token.as_deref() {
+            git.arg("-c")
+                .arg(format!("http.extraheader=AUTHORIZATION: token {token}"));
+        }
         if let Some(current_dir) = current_dir {
             git.arg("-C").arg(current_dir);
         }

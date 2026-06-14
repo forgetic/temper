@@ -184,11 +184,13 @@ impl InteractiveResponder for NeverResponder {
 fn issue_reply() -> ConversationReply {
     ConversationReply {
         message: "I can file that.".into(),
-        proposals: vec![Proposal::issue(
-            proposal_id("support-mvp"),
-            IssueProposal::with_rationale("Support MVP", "Build a support MVP.", "priority"),
-        )
-        .unwrap()],
+        proposals: vec![
+            Proposal::issue(
+                proposal_id("support-mvp"),
+                IssueProposal::with_rationale("Support MVP", "Build a support MVP.", "priority"),
+            )
+            .unwrap(),
+        ],
     }
 }
 
@@ -249,22 +251,28 @@ fn arbitrary_profile_issue_creation_acceptance_uses_manifest_effects() {
         );
         assert_eq!(outcome.issue.assignees, [UserId::new("customer")]);
         assert!(outcome.issue.body.contains("Build a support MVP."));
-        assert!(outcome
-            .issue
-            .body
-            .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
-        assert!(outcome
-            .issue
-            .body
-            .contains("temper:support-chat-accept-issue="));
+        assert!(
+            outcome
+                .issue
+                .body
+                .contains("Transcript: https://git.example.test/ai/temper/issues/1")
+        );
+        assert!(
+            outcome
+                .issue
+                .body
+                .contains("temper:support-chat-accept-issue=")
+        );
 
         let comments = human
             .list_issue_comments(&session.transcript_issue().id)
             .await
             .unwrap();
-        assert!(comments
-            .iter()
-            .any(|comment| comment.body.contains("Accepted support-mvp")));
+        assert!(
+            comments
+                .iter()
+                .any(|comment| comment.body.contains("Accepted support-mvp"))
+        );
     })
 }
 
@@ -294,10 +302,12 @@ fn product_manager_fixture_acceptance_preserves_filed_issue_shape() {
             .unwrap();
 
         assert_eq!(outcome.issue.labels, ["untriaged"]);
-        assert!(outcome
-            .issue
-            .body
-            .contains("Transcript: https://git.example.test/ai/temper/issues/1"));
+        assert!(
+            outcome
+                .issue
+                .body
+                .contains("Transcript: https://git.example.test/ai/temper/issues/1")
+        );
         assert!(outcome.issue.body.contains("requested-by: human"));
         assert!(outcome.issue.body.contains("temper:product-chat-file="));
     })

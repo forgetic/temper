@@ -34,8 +34,8 @@ use crate::worker_bin::args::{ForgejoArgs, ProfileKind, RoleBehavior, WorkerArgs
 use crate::worker_bin::forgejo_drive::drive_async;
 use crate::worker_bin::forgejo_engineer::{ForgejoBasicEngineer, ForgejoEngineer};
 use crate::worker_bin::run::{
-    registry_for, resolve_repository, resolve_repository_set, resolve_workflow_and_config,
-    upsert_labels, RunError,
+    RunError, registry_for, resolve_repository, resolve_repository_set,
+    resolve_workflow_and_config, upsert_labels,
 };
 
 /// Workflow role id of the engineer, the one role whose Forgejo behavior differs

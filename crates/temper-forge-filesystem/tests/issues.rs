@@ -1,6 +1,6 @@
 mod support;
 
-use support::{block_on, comment, issue, issue_with, repository, user_ids, TestRoot};
+use support::{TestRoot, block_on, comment, issue, issue_with, repository, user_ids};
 use temper_forge::{
     Comment, Forge, ForgeError, Issue, IssueId, IssueQuery, IssueState, ItemNumber, ItemSort,
     ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
