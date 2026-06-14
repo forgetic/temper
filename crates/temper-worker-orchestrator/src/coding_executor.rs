@@ -2,12 +2,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Deserialize;
 use temper_agent_protocol::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult, WorkspaceWorkItem,
 };
 use temper_worker_protocol::{
-    Assign, Branch, FailureClass, JobArtifactSnapshot, JobChild, RepoOutcome,
+    Assign, Branch, FailureClass, JobArtifactSnapshot, JobChild, JobContext, RepoOutcome,
 };
 
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink};
@@ -78,7 +77,7 @@ async fn execute<R: AgentRunner>(
     assign: Assign,
 ) -> JobOutcome {
     let artifact_item = assign.artifact.item.clone();
-    let context = match serde_json::from_value::<WireJobContext>(assign.job_payload) {
+    let context = match serde_json::from_value::<JobContext>(assign.job_payload) {
         Ok(context) => context,
         Err(error) => {
             return failure(
@@ -88,36 +87,54 @@ async fn execute<R: AgentRunner>(
         }
     };
 
-    let WireJobContext {
+    let JobContext {
         role,
         repo,
         queue,
         artifact_kind,
-        repository,
-        base_branch,
-        branch_hint,
-        correlation_key,
         artifact,
+        workspace: manifest,
         action: _action,
         checkout_capability,
         allowed_verdicts,
     } = context;
 
-    let repository = match require_enriched_field(repository, "repository") {
-        Ok(repository) => repository,
+    // The coding executor services the *primary* repo — `workspace.repos[0]` (the
+    // home of the coordinating artifact). The v2 manifest carries the branch +
+    // coordination data the old flat enriched fields used to.
+    let manifest = match require_enriched_field(manifest, "workspace") {
+        Ok(manifest) => manifest,
         Err(outcome) => return outcome,
     };
-    let base_branch = match require_enriched_field(base_branch, "base_branch") {
-        Ok(base_branch) => base_branch,
-        Err(outcome) => return outcome,
+    let correlation_key = manifest.coordination_key;
+    let primary = match manifest.repos.into_iter().next() {
+        Some(primary) => primary,
+        None => {
+            return failure(
+                FailureClass::Protocol,
+                "enriched job payload `workspace.repos` is empty".to_string(),
+            );
+        }
     };
-    let branch_hint = match require_enriched_field(branch_hint, "branch_hint") {
+    let base_branch = primary.base_branch;
+    let branch_hint = match require_enriched_field(primary.branch_hint, "workspace.repos[0].branch_hint") {
         Ok(branch_hint) => branch_hint,
         Err(outcome) => return outcome,
     };
-    let correlation_key = match require_enriched_field(correlation_key, "correlation_key") {
-        Ok(correlation_key) => correlation_key,
-        Err(outcome) => return outcome,
+    // Split the primary repo's `owner/name` path into the descriptor the
+    // workspace context builder needs.
+    let repository = match repo.split_once('/') {
+        Some((owner, name)) => JobRepository {
+            owner: owner.to_string(),
+            name: name.to_string(),
+            default_branch: primary.default_branch.clone(),
+        },
+        None => {
+            return failure(
+                FailureClass::Protocol,
+                format!("job repo `{repo}` is not an `owner/name` path"),
+            );
+        }
     };
     let artifact = match require_enriched_field(artifact, "artifact") {
         Ok(artifact) => artifact,
@@ -447,40 +464,13 @@ fn redact_secret(text: String, secret: &str) -> String {
     }
 }
 
-/// The repository descriptor the daemon enriches into a coding job payload.
-///
-/// Private to the worker's enriched-payload wire shape. (The cross-process
-/// worker protocol carries the full repo set in `WorkspaceManifest`; this is the
-/// single primary-repo descriptor the coding executor consumes today.)
-#[derive(Debug, Deserialize)]
+/// The primary-repo descriptor the coding executor consumes, derived from the
+/// v2 `JobContext` (its `repo` path + `workspace.repos[0]`).
+#[derive(Debug)]
 struct JobRepository {
     owner: String,
     name: String,
     default_branch: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WireJobContext {
-    role: String,
-    repo: String,
-    queue: String,
-    artifact_kind: String,
-    #[serde(default)]
-    repository: Option<JobRepository>,
-    #[serde(default)]
-    base_branch: Option<String>,
-    #[serde(default)]
-    branch_hint: Option<String>,
-    #[serde(default)]
-    correlation_key: Option<String>,
-    #[serde(default)]
-    artifact: Option<JobArtifactSnapshot>,
-    #[serde(default)]
-    action: Option<String>,
-    #[serde(default)]
-    checkout_capability: Option<String>,
-    #[serde(default)]
-    allowed_verdicts: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

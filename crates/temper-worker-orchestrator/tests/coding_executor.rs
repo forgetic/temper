@@ -297,7 +297,7 @@ async fn missing_enriched_artifact_maps_to_protocol_failure() {
 
     let outcome = executor
         .execute(Assign {
-            job_payload: serde_json::to_value(context).expect("JobContext serializes"),
+            job_payload: context.to_payload(),
             ..assign("agent/pr-for-code-7", "pr-for-code-7")
         })
         .await;
@@ -918,8 +918,7 @@ fn assign(branch_hint: &str, correlation_key: &str) -> Assign {
             item: json!(7),
             kind: "issue".to_string(),
         },
-        job_payload: serde_json::to_value(job_context(branch_hint, correlation_key))
-            .expect("JobContext serializes"),
+        job_payload: job_context(branch_hint, correlation_key).to_payload(),
     }
 }
 
@@ -938,31 +937,24 @@ fn pr_assign(
             item: json!(7),
             kind: "pull_request".to_string(),
         },
-        job_payload: serde_json::to_value(context).expect("PR JobContext serializes"),
+        job_payload: context.to_payload(),
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct TestJobContext {
     role: String,
     repo: String,
     queue: String,
     artifact_kind: String,
-    repository: Option<TestJobRepository>,
-    base_branch: Option<String>,
-    branch_hint: Option<String>,
-    correlation_key: Option<String>,
+    default_branch: String,
+    base_branch: String,
+    branch_hint: String,
+    correlation_key: String,
     artifact: Option<TestJobArtifactSnapshot>,
     action: Option<String>,
     checkout_capability: Option<String>,
     allowed_verdicts: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-struct TestJobRepository {
-    owner: String,
-    name: String,
-    default_branch: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -974,20 +966,45 @@ struct TestJobArtifactSnapshot {
     state: String,
 }
 
+impl TestJobContext {
+    /// Serialize into the v2 `JobContext` wire shape (the workspace manifest
+    /// carries the per-repo branch data; this is exactly what the daemon emits
+    /// and the coding executor parses).
+    fn to_payload(&self) -> serde_json::Value {
+        json!({
+            "role": self.role,
+            "repo": self.repo,
+            "queue": self.queue,
+            "artifact_kind": self.artifact_kind,
+            "artifact": self.artifact,
+            "action": self.action,
+            "checkout_capability": self.checkout_capability,
+            "allowed_verdicts": self.allowed_verdicts,
+            "workspace": {
+                "coordination_key": self.correlation_key,
+                "repos": [{
+                    "repo": self.repo,
+                    "dir": self.repo.split('/').next_back().unwrap_or(&self.repo),
+                    "access": "writable",
+                    "default_branch": self.default_branch,
+                    "base_branch": self.base_branch,
+                    "branch_hint": self.branch_hint,
+                }],
+            },
+        })
+    }
+}
+
 fn job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
     TestJobContext {
         role: "engineer".to_string(),
         repo: "acme/service".to_string(),
         queue: "code_ready".to_string(),
         artifact_kind: "code".to_string(),
-        repository: Some(TestJobRepository {
-            owner: "acme".to_string(),
-            name: "service".to_string(),
-            default_branch: "main".to_string(),
-        }),
-        base_branch: Some("main".to_string()),
-        branch_hint: Some(branch_hint.to_string()),
-        correlation_key: Some(correlation_key.to_string()),
+        default_branch: "main".to_string(),
+        base_branch: "main".to_string(),
+        branch_hint: branch_hint.to_string(),
+        correlation_key: correlation_key.to_string(),
         artifact: Some(TestJobArtifactSnapshot {
             number: 7,
             title: "Implement the thing".to_string(),
@@ -1053,7 +1070,7 @@ fn assign_with_context(correlation_key: &str, context: TestJobContext) -> Assign
             item: json!(7),
             kind: "issue".to_string(),
         },
-        job_payload: serde_json::to_value(context).expect("JobContext serializes"),
+        job_payload: context.to_payload(),
     }
 }
 

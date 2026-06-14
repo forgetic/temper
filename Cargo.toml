@@ -127,6 +127,15 @@ temper-process-protocol = { path = "crates/temper-process-protocol", optional = 
 serde_json = { workspace = true }
 temper-forgejo-ops = { path = "crates/temper-forgejo-ops" }
 temper-testing = { path = "crates/temper-testing" }
+# `temper run` e2e (`tests/run_forgejo_e2e.rs`): real bench Forgejo fixture +
+# jig fake LLM, driving one in-process `temper run`. Needs the forge API for PR
+# assertions and jig for the canned engineer-agent replies.
+temper-forge = { path = "crates/temper-forge" }
+temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
+temper-workflow = { path = "crates/temper-workflow" }
+temper-io-engine = { path = "crates/temper-io-engine" }
+jig-core = { path = "../jig/crates/jig-core" }
+jig-server = { path = "../jig/crates/jig-server" }
 
 # Unified everything-binary: `temper run` + `temper daemon|worker|agent|...`.
 [[bin]]

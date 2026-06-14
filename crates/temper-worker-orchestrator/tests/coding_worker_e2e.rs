@@ -402,22 +402,14 @@ fn poll_timeout() -> WorkerProtocolMessage {
     })
 }
 
-/// A full coding-job Assign payload (the enriched WireJobContext the executor
-/// requires).
+/// A full coding-job Assign payload (the enriched v2 `JobContext` the executor
+/// requires: per-repo branch data lives in the workspace manifest).
 fn coding_assign(_fixture: &GitFixture) -> Assign {
     let job_context = json!({
         "role": "engineer",
         "repo": "acme/service",
         "queue": "code_ready",
         "artifact_kind": "code",
-        "repository": {
-            "owner": "acme",
-            "name": "service",
-            "default_branch": "main"
-        },
-        "base_branch": "main",
-        "branch_hint": "agent/pr-for-code-7",
-        "correlation_key": "pr-for-code-7",
         "artifact": {
             "number": 7,
             "title": "Add a greeting file",
@@ -427,7 +419,18 @@ fn coding_assign(_fixture: &GitFixture) -> Assign {
         },
         "action": "open_pr",
         "checkout_capability": "writable",
-        "allowed_verdicts": []
+        "allowed_verdicts": [],
+        "workspace": {
+            "coordination_key": "pr-for-code-7",
+            "repos": [{
+                "repo": "acme/service",
+                "dir": "service",
+                "access": "writable",
+                "default_branch": "main",
+                "base_branch": "main",
+                "branch_hint": "agent/pr-for-code-7"
+            }]
+        }
     });
     Assign {
         protocol_version: WORKER_PROTOCOL_VERSION,

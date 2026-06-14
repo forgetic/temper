@@ -18,16 +18,18 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_agent_runtime::ProviderConfig;
 use temper_daemon::{
-    Daemon, DaemonRunConfig, ForgeApplier, LeaseApplier, PollBackstopConfig, RepositorySet,
-    RepositoryTarget, RoleFeedMode, RoleFeedTarget, spawn_poll_backstop,
+    Daemon, DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig,
+    PollBackstopConfig, RepositorySet, RepositoryTarget, ResultApplier, RoleFeedMode,
+    RoleFeedTarget, RoleRoutingApplier, config::role_tokens_from_env, spawn_mechanical_backstop,
+    spawn_poll_backstop,
 };
-use temper_forge::{Forge, RepositoryId, RepositoryPath};
+use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_worker_orchestrator::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
     role_identities_from_env, run_worker_with_transport,
 };
-use temper_workflow::{LeasePolicy, RoleId};
+use temper_workflow::{CompiledWorkflow, LeasePolicy, RoleId};
 
 use crate::run::{InProcessAgentRunner, InProcessTransport};
 
@@ -74,6 +76,7 @@ pub async fn run_all_in_one(
     // --- Forge + workflow + repositories (shared daemon setup) ---
     let forge_config =
         ForgejoConfig::from_env().map_err(|error| format!("Forgejo config: {error}"))?;
+    let forge_base_url = forge_config.base_url.clone();
     let forge = Arc::new(ForgejoForge::new(forge_config));
     let workflow = Arc::new(
         temper_reference_delivery::resolve_workflow(daemon_config.workflow_file.as_ref())
@@ -86,17 +89,28 @@ pub async fn run_all_in_one(
         .iter()
         .map(|repository| repository.id.clone())
         .collect();
+    // The worker registers capabilities keyed by the artifact repo's `owner/name`
+    // path — the same key the daemon assigns jobs on (NOT the RepositoryId). Capture
+    // it before `repositories` is moved into the mechanical backstop config.
+    let repo_paths: Vec<String> = repositories
+        .repositories()
+        .iter()
+        .map(|repository| repository.display_path())
+        .collect();
     let lease_ttl = chrono::Duration::from_std(daemon_config.lease_ttl)
         .map_err(|error| format!("invalid --lease-ttl-secs: {error}"))?;
 
     // --- Daemon (orchestrator) on this loop ---
-    let applier: Arc<dyn temper_daemon::ResultApplier> = Arc::new(LeaseApplier::new(
+    // Per-role Forge token routing: PRs/comments a role's job produces are
+    // applied with that role's identity (TEMPER_FORGEJO_TOKEN_<ROLE>), not the
+    // admin default — exactly as the split daemon does.
+    let applier = result_applier(
         forge.clone(),
-        LeasePolicy::new(lease_ttl),
-        daemon_config.daemon_id.clone(),
-        Arc::new(ForgeApplier::new(forge.clone(), workflow.clone())),
-        temper_daemon::system_clock(),
-    ));
+        &forge_base_url,
+        workflow.clone(),
+        &daemon_config,
+        lease_ttl,
+    );
     let daemon = Daemon::with_applier(Arc::clone(&spawner), applier);
 
     // The poll backstop discovers role work and enqueues it into the daemon —
@@ -114,17 +128,36 @@ pub async fn run_all_in_one(
         temper_daemon::system_clock(),
     );
 
+    // The mechanical backstop runs the workflow's automation transitions (stamp
+    // raw intake ready, land CI-green PRs) — without it, seeded intake never
+    // advances to the role queues, so role workers get no work. Enabled when a
+    // mechanical cadence is configured (the split daemon does the same).
+    if let Some(cadence) = daemon_config.mechanical_cadence {
+        ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
+        spawn_mechanical_backstop(
+            &spawner,
+            forge.clone(),
+            workflow.clone(),
+            MechanicalBackstopConfig {
+                repositories,
+                cadence,
+                lease_policy: LeasePolicy::new(lease_ttl),
+            },
+            temper_daemon::system_clock(),
+        );
+    }
+
     // --- In-process worker + agent on the same loop ---
     let role_identities = role_identities_from_env(
         daemon_config.roles.iter().map(|role| role.as_str().to_string()),
         std::env::vars(),
     )?;
-    let capabilities: Vec<CapabilitySpec> = repo_ids
+    let capabilities: Vec<CapabilitySpec> = repo_paths
         .iter()
         .flat_map(|repo| {
             daemon_config.roles.iter().map(move |role| CapabilitySpec {
                 role: role.as_str().to_string(),
-                repo: repo.to_string(),
+                repo: repo.clone(),
             })
         })
         .collect();
@@ -219,6 +252,96 @@ impl temper_worker_orchestrator::ProgressSink for InProcessProgressSink {
             let _ = daemon.deliver_protocol_message(message).await;
         });
     }
+}
+
+/// Build the result applier with per-role Forge token routing, mirroring the
+/// split daemon: a role's applied results (PRs, comments) use that role's
+/// identity when `TEMPER_FORGEJO_TOKEN_<ROLE>` is set, falling back to the
+/// admin/default forge otherwise.
+fn result_applier(
+    default_forge: Arc<ForgejoForge>,
+    forge_base_url: &str,
+    workflow: Arc<temper_workflow::ValidatedWorkflow>,
+    config: &DaemonRunConfig,
+    lease_ttl: chrono::Duration,
+) -> Arc<dyn ResultApplier> {
+    let default_chain = applier_chain(
+        default_forge,
+        workflow.clone(),
+        config.daemon_id.clone(),
+        lease_ttl,
+    );
+    let role_tokens = role_tokens_from_env(
+        config.roles.iter().map(|role| role.as_str().to_string()),
+        std::env::vars(),
+    );
+    if role_tokens.is_empty() {
+        return default_chain;
+    }
+    let mut routing = RoleRoutingApplier::new(default_chain);
+    for role in &config.roles {
+        let role = role.as_str().to_string();
+        if let Some(token) = role_tokens.get(&role) {
+            let role_forge = Arc::new(ForgejoForge::new(ForgejoConfig::new(
+                forge_base_url.to_string(),
+                token.clone(),
+            )));
+            let role_chain = applier_chain(
+                role_forge,
+                workflow.clone(),
+                config.daemon_id.clone(),
+                lease_ttl,
+            );
+            routing = routing.with_route(role.clone(), role_chain);
+        }
+    }
+    Arc::new(routing)
+}
+
+fn applier_chain(
+    forge: Arc<ForgejoForge>,
+    workflow: Arc<temper_workflow::ValidatedWorkflow>,
+    daemon_id: String,
+    lease_ttl: chrono::Duration,
+) -> Arc<dyn ResultApplier> {
+    Arc::new(LeaseApplier::new(
+        forge.clone(),
+        LeasePolicy::new(lease_ttl),
+        daemon_id,
+        Arc::new(ForgeApplier::new(forge, workflow)),
+        temper_daemon::system_clock(),
+    ))
+}
+
+/// Upsert every workflow label into each repository so the mechanical backstop's
+/// label-driven automation has the labels to apply. (Same as the split daemon.)
+async fn ensure_workflow_labels<F: Forge + ?Sized>(
+    forge: &F,
+    repositories: &RepositorySet,
+    compiled: &CompiledWorkflow,
+) -> Result<(), String> {
+    for repository in repositories.repositories() {
+        for label in compiled.labels().labels() {
+            forge
+                .upsert_label(
+                    &repository.id,
+                    UpsertLabel {
+                        name: label.id.to_string(),
+                        color: Some("#ededed".to_string()),
+                        description: None,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "repository {} label {} upsert failed: {error}",
+                        repository.display_path(),
+                        label.id
+                    )
+                })?;
+        }
+    }
+    Ok(())
 }
 
 async fn resolve_repositories<F: Forge + ?Sized>(
