@@ -61,6 +61,24 @@ pub enum ConfigError {
     /// A value was present but malformed (bad address, bad `owner/name`, …).
     #[error("{message}")]
     Invalid { message: String },
+
+    /// An in-memory document could not be serialized to TOML (so it was never
+    /// written). This is a programming error rather than an operator one: the
+    /// builders produce well-formed documents, so this should not occur in
+    /// practice.
+    #[error("serializing {kind} document: {message}", kind = kind.noun())]
+    Serialize { kind: FileKind, message: String },
+
+    /// The (validated) document could not be written to disk — the path already
+    /// existed without `force`, a parent directory was missing, or the write/
+    /// permission change failed.
+    #[error("writing {kind} file {path}: {source}", kind = kind.noun(), path = path.display())]
+    Write {
+        kind: FileKind,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl ConfigError {

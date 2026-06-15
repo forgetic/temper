@@ -31,7 +31,11 @@ const DEFAULT_POLL_CADENCE_SECS: u64 = 30;
 const DEFAULT_LEASE_TTL_SECS: u64 = 300;
 const DEFAULT_DAEMON_ID: &str = "temper-daemon-1";
 const DEFAULT_WORKER_ID: &str = "temper-worker-1";
-const DEFAULT_WORKSPACE_ROOT: &str = ".temper/workspaces";
+/// Last-resort relative workspace root used only when neither `$XDG_STATE_HOME`
+/// nor `$HOME` is set (so [`crate::paths::default_workspace_root`] returns
+/// `None`). The normal default is the XDG state path
+/// `~/.local/state/temper/workspace`.
+const DEFAULT_WORKSPACE_ROOT_FALLBACK: &str = ".temper/workspace";
 const DEFAULT_MAX_CONCURRENT_JOBS: u32 = 1;
 const DEFAULT_POLL_WAIT_MS: u64 = 30_000;
 const DEFAULT_HEARTBEAT_MS: u64 = 10_000;
@@ -51,7 +55,7 @@ pub fn resolve(
     let worker = resolve_worker(config, env, &engine)?;
     let roles = referenced_roles(&engine, &worker);
     let forge = resolve_forge(config, credentials, env, &roles);
-    let agent = resolve_agent(config, credentials)?;
+    let agent = resolve_agent(config, credentials, env)?;
     Ok(Resolved {
         forge,
         engine,
@@ -199,7 +203,7 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
     let workflow_file = env
         .non_empty("TEMPER_WORKFLOW")
         .or_else(|| trimmed(config.engine.workflow.as_deref()))
-        .map(PathBuf::from);
+        .map(|value| expand_tilde(&value, env));
 
     let poll_cadence = positive_duration_secs(
         config
@@ -224,8 +228,8 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
     let daemon_id = trimmed(config.engine.daemon_id.as_deref())
         .unwrap_or_else(|| DEFAULT_DAEMON_ID.to_string());
 
-    let webhook_secret_file =
-        trimmed(config.engine.webhook_secret_file.as_deref()).map(PathBuf::from);
+    let webhook_secret_file = trimmed(config.engine.webhook_secret_file.as_deref())
+        .map(|value| expand_tilde(&value, env));
 
     Ok(EngineSettings {
         bind,
@@ -286,8 +290,11 @@ fn resolve_worker(
     let workspace_root = env
         .non_empty("TEMPER_WORKSPACE")
         .or_else(|| trimmed(config.worker.workspace.as_deref()))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_ROOT));
+        .map(|value| expand_tilde(&value, env))
+        .unwrap_or_else(|| {
+            default_workspace_root(env)
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_ROOT_FALLBACK))
+        });
 
     let git_base_url = trimmed(config.worker.git_base_url.as_deref());
 
@@ -368,7 +375,11 @@ fn parse_capability(raw: &str) -> Result<Capability, ConfigError> {
 
 // ── agent ───────────────────────────────────────────────────────────────────
 
-fn resolve_agent(config: &Config, credentials: &Credentials) -> Result<AgentSettings, ConfigError> {
+fn resolve_agent(
+    config: &Config,
+    credentials: &Credentials,
+    env: &impl EnvLookup,
+) -> Result<AgentSettings, ConfigError> {
     let provider_name = trimmed(config.agent.provider.as_deref())
         .unwrap_or_else(|| ProviderKind::Anthropic.as_str().to_string());
     let kind = parse_provider_kind(&provider_name)?;
@@ -382,7 +393,7 @@ fn resolve_agent(config: &Config, credentials: &Credentials) -> Result<AgentSett
         .and_then(|m| trimmed(m.investigate.as_deref()));
     let base_url = profile.and_then(|p| trimmed(p.url.as_deref()));
 
-    let credential = resolve_provider_credential(credentials, &provider_name);
+    let credential = resolve_provider_credential(credentials, &provider_name, env);
 
     let provider = ProviderSettings {
         kind,
@@ -399,7 +410,8 @@ fn resolve_agent(config: &Config, credentials: &Credentials) -> Result<AgentSett
             .max_iterations
             .unwrap_or(DEFAULT_MAX_ITERATIONS),
         enable_subagents: config.agent.enable_subagents.unwrap_or(false),
-        config_dir: trimmed(config.agent.config_dir.as_deref()).map(PathBuf::from),
+        config_dir: trimmed(config.agent.config_dir.as_deref())
+            .map(|value| expand_tilde(&value, env)),
     })
 }
 
@@ -417,12 +429,13 @@ fn parse_provider_kind(name: &str) -> Result<ProviderKind, ConfigError> {
 fn resolve_provider_credential(
     credentials: &Credentials,
     provider_name: &str,
+    env: &impl EnvLookup,
 ) -> ProviderCredential {
     let Some(cred) = credentials.agent.providers.get(provider_name) else {
         return ProviderCredential::Ambient;
     };
     if let Some(path) = trimmed(cred.auth_file.as_deref()) {
-        return ProviderCredential::OAuthFile(PathBuf::from(path));
+        return ProviderCredential::OAuthFile(expand_tilde(&path, env));
     }
     let kind = trimmed(cred.kind.as_deref()).unwrap_or_default();
     if (kind == "api-key" || kind == "api_key")
@@ -460,6 +473,47 @@ fn trimmed(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// Expands a leading `~` / `~/…` in a path value against `$HOME`, so a
+/// hand-written `workspace = "~/.local/state/temper/workspace"` resolves to the
+/// service user's home regardless of who wrote it.
+///
+/// Only a bare `~` or a `~/` prefix is expanded (the common shell forms);
+/// `~user` and a `~` anywhere but the start are left verbatim, and when `$HOME`
+/// is unset the original value is returned unchanged.
+fn expand_tilde(value: &str, env: &impl EnvLookup) -> PathBuf {
+    if value == "~" || value.starts_with("~/") {
+        if let Some(home) = env.non_empty("HOME") {
+            let rest = value.strip_prefix("~/").or_else(|| value.strip_prefix('~'));
+            return match rest {
+                Some(rest) if !rest.is_empty() => PathBuf::from(home).join(rest),
+                _ => PathBuf::from(home),
+            };
+        }
+    }
+    PathBuf::from(value)
+}
+
+/// The base `…/temper` state directory, computed from the injected environment
+/// (mirrors [`crate::paths::state_dir`], which reads the process environment;
+/// kept env-aware here so resolution stays unit-testable).
+fn state_dir(env: &impl EnvLookup) -> Option<PathBuf> {
+    if let Some(xdg) = env.non_empty("XDG_STATE_HOME") {
+        return Some(PathBuf::from(xdg).join("temper"));
+    }
+    env.non_empty("HOME").map(|home| {
+        PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("temper")
+    })
+}
+
+/// The default worker workspace root (`<state-dir>/workspace`) from the injected
+/// environment. `None` only when neither `$XDG_STATE_HOME` nor `$HOME` is set.
+fn default_workspace_root(env: &impl EnvLookup) -> Option<PathBuf> {
+    state_dir(env).map(|dir| dir.join("workspace"))
 }
 
 fn positive_duration_secs(secs: u64, field: &str) -> Result<Duration, ConfigError> {

@@ -39,7 +39,10 @@ lease_ttl_secs = 300
 # webhook_secret_file = \"/path/to/webhook-secret\"
 
 [worker]
-workspace = \"/var/lib/temper/workspaces\"
+# Per-job agent workspace root. Omit to use the XDG state default
+# ~/.local/state/temper/workspace ($XDG_STATE_HOME/temper/workspace). A leading
+# ~ is expanded at load time.
+# workspace = \"~/.local/state/temper/workspace\"
 # Distributed topology only — where `temper daemon --service worker` reaches the
 # engine. Defaults to http://127.0.0.1:<engine.port>.
 # daemon_url = \"http://engine-host:4000\"

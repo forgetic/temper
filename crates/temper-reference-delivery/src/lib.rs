@@ -16,6 +16,13 @@ use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
+/// The bundled **basic-delivery** workflow JSON: the minimal,
+/// no-human-in-the-loop reference shape (architect + engineer + mechanical;
+/// CI-gated landing, no review gate). Embedded with the same `include_str!`
+/// pattern as the reference-delivery default.
+const BASIC_DELIVERY_FIXTURE: &str =
+    include_str!("../../temper-workflow/fixtures/basic-delivery.json");
+
 /// Failure loading a runtime-selected workflow from a file.
 #[derive(Debug)]
 pub enum WorkflowLoadError {
@@ -65,6 +72,26 @@ impl Error for WorkflowLoadError {
 pub fn workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec = serde_json::from_str(FIXTURE).expect("fixture parses");
     spec.validate().expect("reference fixture validates")
+}
+
+/// The bundled **basic-delivery** workflow JSON, verbatim.
+///
+/// This is the canonical copy of `examples/basic-delivery/config/workflow.json`,
+/// embedded at build time so a deployment carries it without a file on disk
+/// (`temper init` writes deployments that reference it). A fixture-vs-example
+/// equality test asserts the two cannot drift.
+pub fn basic_delivery_workflow_json() -> &'static str {
+    BASIC_DELIVERY_FIXTURE
+}
+
+/// Parses + validates the bundled [`basic_delivery_workflow_json`].
+///
+/// A malformed bundled fixture is a build/test bug (the fixture ships with the
+/// crate), hence the panics rather than a `Result`.
+pub fn basic_delivery_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery fixture parses");
+    spec.validate().expect("basic-delivery fixture validates")
 }
 
 /// Loads and validates a workflow from `path`.
@@ -162,6 +189,37 @@ mod tests {
     use super::*;
 
     const REFERENCE_FIXTURE_PATH: &str = "../temper-workflow/fixtures/reference-delivery.json";
+
+    /// The canonical example workflow the bundled basic-delivery fixture mirrors,
+    /// relative to this crate's manifest dir.
+    const BASIC_DELIVERY_EXAMPLE_PATH: &str = "../../examples/basic-delivery/config/workflow.json";
+
+    #[test]
+    fn basic_delivery_workflow_parses_and_validates() {
+        // Panics inside `basic_delivery_workflow` would fail the test; this also
+        // confirms the embedded fixture is non-trivial.
+        let workflow = basic_delivery_workflow();
+        assert!(
+            !workflow.roles().is_empty(),
+            "basic-delivery should define roles"
+        );
+    }
+
+    #[test]
+    fn basic_delivery_fixture_matches_example() {
+        // The bundled fixture and the example must be byte-for-byte identical so a
+        // change to one cannot silently diverge from the other. Pick the example
+        // as the canonical source and assert the embedded copy equals it.
+        let example = std::fs::read_to_string(BASIC_DELIVERY_EXAMPLE_PATH)
+            .expect("basic-delivery example workflow is present");
+        assert_eq!(
+            basic_delivery_workflow_json(),
+            example,
+            "the embedded basic-delivery fixture has drifted from \
+             examples/basic-delivery/config/workflow.json; copy the example over \
+             crates/temper-workflow/fixtures/basic-delivery.json"
+        );
+    }
 
     #[test]
     fn resolve_workflow_defaults_to_bundled_reference() {

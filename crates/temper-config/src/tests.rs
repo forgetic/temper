@@ -294,6 +294,50 @@ fn lint_flags_missing_essentials() {
 }
 
 #[test]
+fn default_workspace_is_xdg_state_path() {
+    // With no config and only HOME set, the workspace defaults to the XDG state
+    // path `~/.local/state/temper/workspace`.
+    let env: BTreeMap<String, String> =
+        BTreeMap::from([("HOME".to_string(), "/home/op".to_string())]);
+    let resolved = resolve(&Config::default(), &Credentials::default(), &env).expect("resolves");
+    assert_eq!(
+        resolved.worker.workspace_root,
+        std::path::Path::new("/home/op/.local/state/temper/workspace")
+    );
+}
+
+#[test]
+fn xdg_state_home_overrides_default_workspace() {
+    let env: BTreeMap<String, String> = BTreeMap::from([
+        ("HOME".to_string(), "/home/op".to_string()),
+        ("XDG_STATE_HOME".to_string(), "/xdg/state".to_string()),
+    ]);
+    let resolved = resolve(&Config::default(), &Credentials::default(), &env).expect("resolves");
+    assert_eq!(
+        resolved.worker.workspace_root,
+        std::path::Path::new("/xdg/state/temper/workspace")
+    );
+}
+
+#[test]
+fn hand_written_tilde_workspace_expands() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[worker]
+workspace = "~/.local/state/temper/workspace"
+"#,
+    );
+    let env: BTreeMap<String, String> =
+        BTreeMap::from([("HOME".to_string(), "/home/op".to_string())]);
+    let resolved = resolve(&config, &Credentials::default(), &env).expect("resolves");
+    assert_eq!(
+        resolved.worker.workspace_root,
+        std::path::Path::new("/home/op/.local/state/temper/workspace")
+    );
+}
+
+#[test]
 fn redacts_secrets_in_debug() {
     let config = parse_config(FULL_CONFIG);
     let credentials = parse_credentials(FULL_CREDENTIALS);
