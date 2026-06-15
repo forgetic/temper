@@ -4,7 +4,7 @@ use std::path::Path;
 
 use temper_workflow::RoleId;
 
-use super::model::{ProvisionError, Provisioned, Result};
+use super::{ProvisionError, Provisioned, Result};
 
 pub fn format_secrets_env(provisioned: &Provisioned) -> String {
     let mut out = String::new();

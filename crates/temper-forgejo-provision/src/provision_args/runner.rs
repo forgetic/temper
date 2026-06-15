@@ -90,15 +90,23 @@ fn run_seed_only(args: &ProvisionArgs) -> Result<String, RunError> {
     let number = temper_engine_io::runtime::block_on_runtime_with(
         &runtime,
         move |_cx, _handle| async move {
-            provision::seed_intake_issue(
-                &seed_args.base_url,
-                &token,
-                &seed_args.owner,
-                &seed_args.name,
-                &seed,
-                &workflow,
-            )
-            .await
+            use temper_forge::RepositoryPath;
+            use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+
+            let config = ForgejoConfig::new(&seed_args.base_url, &token)
+                .with_default_repo(&seed_args.owner, &seed_args.name);
+            let forge = ForgejoForge::new(config);
+            let repo = forge
+                .get_repository_by_path(&RepositoryPath::new(&seed_args.owner, &seed_args.name))
+                .await?
+                .ok_or_else(|| provision::ProvisionError::Shape {
+                    what: "repository".into(),
+                    detail: format!(
+                        "{}/{} not readable when seeding intake issue",
+                        seed_args.owner, seed_args.name
+                    ),
+                })?;
+            provision::seed_intake_issue(&forge, &repo.id, &seed, &workflow).await
         },
     )?;
     Ok(format!(

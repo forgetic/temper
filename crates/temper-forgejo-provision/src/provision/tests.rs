@@ -1,14 +1,13 @@
 use std::collections::BTreeMap;
 
 use temper_forge::RepositoryId;
-use temper_forgejo_ops::forgejo_rest::ROLE_PASSWORD;
+use temper_forge_forgejo::ROLE_PASSWORD;
 use temper_workflow::{RoleId, ValidatedWorkflow};
 
-use super::intake::resolve_intake_seed_token;
 use super::{
     AccessScope, BOT_USER, CI_WORKFLOW, ProvisionError, ProvisionOptions, Provisioned,
     RoleIdentity, format_secrets_env, has_default_issue_kind, intake_labels,
-    role_token_from_secrets_file, write_secrets_file,
+    resolve_intake_seed_token, role_token_from_secrets_file, write_secrets_file,
 };
 
 #[test]
