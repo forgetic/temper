@@ -11,6 +11,7 @@
 
 mod ci;
 mod issues;
+mod provisioning;
 mod pull_requests;
 mod repositories;
 

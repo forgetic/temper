@@ -86,4 +86,65 @@ impl FilesystemForge {
         self.pull_request_scope_dir(repo_id, pull_request_id)
             .map(|pull_request_dir| pull_request_dir.join("reviews.json"))
     }
+
+    // --- Provisioning record paths (ForgeContent + ForgeAdmin) ---
+
+    /// Store-global provisioned-users record file.
+    pub(crate) fn users_file(&self) -> PathBuf {
+        self.root().join("users.json")
+    }
+
+    /// Store-global minted-tokens record file.
+    pub(crate) fn tokens_file(&self) -> PathBuf {
+        self.root().join("tokens.json")
+    }
+
+    /// Store-global org Owners-team membership record file.
+    pub(crate) fn owners_file(&self) -> PathBuf {
+        self.root().join("owners.json")
+    }
+
+    /// Per-repository webhook record file.
+    pub(crate) fn webhooks_file(&self, repo_id: &RepositoryId) -> Option<PathBuf> {
+        self.repository_scope_dir(repo_id)
+            .map(|repository_dir| repository_dir.join("webhooks.json"))
+    }
+
+    /// Per-repository collaborator-grant record file.
+    pub(crate) fn grants_file(&self, repo_id: &RepositoryId) -> Option<PathBuf> {
+        self.repository_scope_dir(repo_id)
+            .map(|repository_dir| repository_dir.join("grants.json"))
+    }
+
+    /// Per-repository branch record file.
+    pub(crate) fn branches_file(&self, repo_id: &RepositoryId) -> Option<PathBuf> {
+        self.repository_scope_dir(repo_id)
+            .map(|repository_dir| repository_dir.join("branches.json"))
+    }
+
+    /// Per-repository CI-enabled marker file.
+    pub(crate) fn ci_enabled_file(&self, repo_id: &RepositoryId) -> Option<PathBuf> {
+        self.repository_scope_dir(repo_id)
+            .map(|repository_dir| repository_dir.join("ci_enabled.json"))
+    }
+
+    /// Committed-content path for a single file on a branch.
+    ///
+    /// Files live under a `content/<branch>/` tree so a branch's full content is
+    /// recoverable from one subtree. The branch and the repository-relative path
+    /// are hex-encoded per segment to keep arbitrary names filesystem-safe and
+    /// collision-free.
+    pub(crate) fn content_file(
+        &self,
+        repo_id: &RepositoryId,
+        branch: &str,
+        path: &str,
+    ) -> Option<PathBuf> {
+        let repository_dir = self.repository_scope_dir(repo_id)?;
+        let mut file = repository_dir
+            .join("content")
+            .join(crate::record_ids::hex_encode(branch.as_bytes()));
+        file.push(crate::record_ids::hex_encode(path.as_bytes()));
+        Some(file)
+    }
 }

@@ -31,11 +31,13 @@ mod util;
 use crate::fault::FaultStore;
 use crate::hint::HintBus;
 use crate::state::State;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use temper_forge::{CiJob, RepositoryId, User};
+use temper_forge::{CiJob, RepoPermission, RepositoryId, User, WebhookSpec};
 
 pub use crate::fault::FaultOp;
 pub use crate::hint::MemoryHintReceiver;
+pub use crate::state::MemUser;
 
 /// The mutex-guarded interior: record store plus armed faults.
 pub(crate) struct Inner {
@@ -119,6 +121,69 @@ impl MemoryForge {
         let mut inner = self.lock();
         inner.state.set_ci_jobs(repo_id, jobs);
         inner.publish_repo_hint(repo_id, temper_forge::ChangeKind::Ci);
+    }
+
+    /// Returns every user provisioned via
+    /// [`ForgeAdmin::ensure_user`](temper_forge::ForgeAdmin::ensure_user),
+    /// ordered by login.
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait,
+    /// mirroring the filesystem backend's accessor of the same name.
+    pub fn provisioned_users(&self) -> Vec<MemUser> {
+        self.lock().state.provisioned_users()
+    }
+
+    /// Returns the webhooks registered on `repo` via
+    /// [`ForgeAdmin::ensure_webhook`](temper_forge::ForgeAdmin::ensure_webhook).
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait.
+    pub fn webhooks(&self, repo: &RepositoryId) -> Vec<WebhookSpec> {
+        self.lock().state.webhooks(repo)
+    }
+
+    /// Returns the contents committed at `(repo, branch, path)` via
+    /// [`ForgeContent::commit_file`](temper_forge::ForgeContent::commit_file),
+    /// or `None` if no such file was committed.
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait.
+    pub fn committed_file(&self, repo: &RepositoryId, branch: &str, path: &str) -> Option<Vec<u8>> {
+        self.lock().state.committed_file(repo, branch, path)
+    }
+
+    /// Returns the repo-scoped collaborator grants recorded on `repo` via
+    /// [`ForgeAdmin::grant_access`](temper_forge::ForgeAdmin::grant_access) with
+    /// [`AccessScope::RepoCollaborator`](temper_forge::AccessScope::RepoCollaborator),
+    /// keyed by login.
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait.
+    pub fn grants(&self, repo: &RepositoryId) -> BTreeMap<String, RepoPermission> {
+        self.lock().state.grants(repo)
+    }
+
+    /// Returns the tokens minted for `login` via
+    /// [`ForgeAdmin::mint_token`](temper_forge::ForgeAdmin::mint_token), in mint
+    /// order.
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait.
+    pub fn minted_tokens(&self, login: &str) -> Vec<String> {
+        self.lock().state.minted_tokens(login)
+    }
+
+    /// Reports whether CI was enabled on `repo` via
+    /// [`ForgeAdmin::enable_ci`](temper_forge::ForgeAdmin::enable_ci).
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait.
+    pub fn ci_enabled(&self, repo: &RepositoryId) -> bool {
+        self.lock().state.ci_enabled(repo)
+    }
+
+    /// Reports whether `branch` was recorded on `repo` via
+    /// [`ForgeContent::create_branch`](temper_forge::ForgeContent::create_branch)
+    /// or as the target of a [`commit_file`](temper_forge::ForgeContent::commit_file).
+    ///
+    /// Test-only read-back companion surface, not part of any Forge trait.
+    pub fn branch_exists(&self, repo: &RepositoryId, branch: &str) -> bool {
+        self.lock().state.branch_exists(repo, branch)
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Inner> {

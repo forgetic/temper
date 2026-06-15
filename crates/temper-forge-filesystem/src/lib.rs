@@ -16,10 +16,13 @@ mod locking;
 mod merge;
 mod metadata;
 mod operations;
+mod provisioning;
 mod record_ids;
 mod reviews;
 mod storage;
 mod validation;
+
+pub use crate::provisioning::MemUser;
 
 use std::path::PathBuf;
 use temper_forge::User;
