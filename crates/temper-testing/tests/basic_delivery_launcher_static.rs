@@ -2,10 +2,10 @@
 //!
 //! Mirrors `reference_delivery_launcher_static.rs` at basic-delivery scope: it
 //! reads `run.sh` / `config/temper.env` as text and asserts the invariants that
-//! keep the no-human-in-the-loop demo correct and secret-safe — the mechanical
-//! worker gets the `bot` credentials via the environment (never argv), the
-//! bundled 3-role workflow and the basic agent selector reach both the provision
-//! and the worker invocations, intake is seeded as the site admin, the ports are
+//! keep the no-human-in-the-loop demo correct and secret-safe — `temper run` gets
+//! the `bot` credentials via the environment (never argv), the bundled 3-role
+//! workflow reaches both the provision and the run invocations, intake is seeded
+//! last as the site admin (the seed-last webhook-wake proof), the ports are
 //! distinct from reference-delivery, and the ADR-0019 CI read fallback knobs are
 //! present. It also pins `config/workflow.json` byte-for-byte to the canonical
 //! fixture so the two never drift.
@@ -45,61 +45,57 @@ fn read_example(relative: &str) -> String {
     fs::read_to_string(example_path(relative)).expect("example file is readable")
 }
 
+/// The `temper run` process gets the bot automation credentials via the
+/// environment, never on argv: the mechanical landing path and the ADR-0019 CI
+/// read fallback both need them, but secrets must not appear on a command line.
 #[test]
-fn mechanical_worker_gets_bot_credentials_without_argv_secrets() {
+fn temper_run_gets_bot_credentials_without_argv_secrets() {
     let script = read_example("run.sh");
-    let launch_workers = script
-        .split("launch_workers() {")
+    let boot_run = script
+        .split("boot_run() {")
         .nth(1)
-        .expect("launch_workers function exists");
-    let mechanical_spawn = launch_workers
-        .split("TEMPER_FORGEJO_TOKEN=\"$BOT_TOKEN\"")
+        .expect("boot_run function exists");
+    let spawn = boot_run
+        .split("FORGEJO_ACCESS_TOKEN=\"$BOT_TOKEN\"")
         .nth(1)
-        .expect("mechanical worker uses the bot REST token")
-        .split(") >\"$LOG_DIR/mechanical.log\"")
+        .expect("temper run uses the bot REST token")
+        .split(") >\"$LOG_DIR/run.log\"")
         .next()
-        .expect("mechanical spawn stanza is bounded");
+        .expect("temper run spawn stanza is bounded");
 
-    assert!(mechanical_spawn.contains("TEMPER_FORGEJO_USERNAME=\"$BOT_USER\""));
-    assert!(launch_workers.contains("ci_reader=bot"));
-    assert!(mechanical_spawn.contains("TEMPER_FORGEJO_PASSWORD=\"$BOT_PASSWORD\""));
-    assert!(mechanical_spawn.contains("--poll-ms \"$CI_STATUS_POLL_MS\""));
-    assert!(mechanical_spawn.contains("--idle-poll-max-ms \"$IDLE_POLL_MAX_MS\""));
-    assert!(!launch_workers.contains("TEMPER_FORGEJO_TOKEN=\"$ADMIN_TOKEN\""));
+    assert!(spawn.contains("FORGEJO_USERNAME=\"$BOT_USER\""));
+    assert!(spawn.contains("FORGEJO_PASSWORD=\"$BOT_PASSWORD\""));
 
-    let argv = mechanical_spawn
-        .split("\"$TESTING_WORKER_BIN\"")
-        .nth(1)
-        .expect("worker argv follows the binary path");
-    assert!(!argv.contains("BOT_PASSWORD"));
-    assert!(!argv.contains("BOT_TOKEN"));
-    assert!(!argv.contains("TEMPER_FORGEJO_PASSWORD"));
-    assert!(!argv.contains("TEMPER_FORGEJO_TOKEN"));
-    assert!(!argv.contains("--password"));
-    assert!(!argv.contains("--token"));
+    // The argv built into `$@` must never carry a secret value.
+    assert!(!boot_run.contains("--password"));
+    assert!(!boot_run.contains("--token"));
+    assert!(!boot_run.contains("--bot-token"));
+    // The run is launched via the positional argv accumulated in `$@`; the only
+    // secret-bearing env assignments are the four FORGEJO_* lines above.
+    assert!(boot_run.contains("\"$@\""));
 }
 
 #[test]
-fn bot_identity_is_resolved_before_mechanical_worker_launch() {
+fn bot_identity_is_resolved_before_temper_run_launch() {
     let script = read_example("run.sh");
     assert!(script.contains("automation user 'bot' has no username"));
     assert!(script.contains("automation user must be 'bot'"));
     assert!(script.contains("automation user 'bot' has no token"));
     assert!(script.contains("automation user 'bot' has no password"));
 
-    let launch_workers = script
-        .split("launch_workers() {")
+    let boot_run = script
+        .split("boot_run() {")
         .nth(1)
-        .expect("launch_workers function exists");
-    let resolve_index = launch_workers
+        .expect("boot_run function exists");
+    let resolve_index = boot_run
         .find("resolve_bot_identity")
         .expect("bot identity is resolved");
-    let spawn_index = launch_workers
-        .find("TEMPER_FORGEJO_TOKEN=\"$BOT_TOKEN\"")
-        .expect("mechanical worker spawn exists");
+    let spawn_index = boot_run
+        .find("FORGEJO_ACCESS_TOKEN=\"$BOT_TOKEN\"")
+        .expect("temper run spawn exists");
     assert!(
         resolve_index < spawn_index,
-        "bot credentials should fail before the mechanical worker process starts"
+        "bot credentials should fail before the temper run process starts"
     );
 }
 
@@ -111,16 +107,15 @@ fn launcher_uses_non_reserved_setup_admin_handle() {
     // uses a valid non-reserved handle.
     assert!(script.contains("ADMIN_USER=basicadmin"));
     assert!(!script.contains("ADMIN_USER=admin\n"));
-    assert!(script.contains("Forgejo reserves the"));
 }
 
 #[test]
-fn launcher_passes_workflow_and_basic_profile_to_provision_and_worker() {
+fn launcher_passes_workflow_to_provision_and_run() {
     let script = read_example("run.sh");
     let config = read_example("config/temper.env");
 
-    // W1 (#63): the bundled 3-role spec reaches BOTH the provision and the worker
-    // invocations via --workflow "$WORKFLOW_PATH".
+    // The bundled 3-role spec reaches BOTH the provision and the run invocations
+    // via --workflow "$WORKFLOW_PATH".
     assert!(config.contains("WORKFLOW_FILE=workflow.json"));
     assert!(script.contains("--workflow \"$WORKFLOW_PATH\""));
 
@@ -133,42 +128,60 @@ fn launcher_passes_workflow_and_basic_profile_to_provision_and_worker() {
         "provision invocation must pass --workflow"
     );
 
-    // W2 (#62): the role workers select the basic-delivery fake agent set. The
-    // basic profile rides only on the role workers (the mechanical reconciler is
-    // workflow-driven, not profile-driven).
-    let launch_role_worker = script
-        .split("launch_role_worker() {")
+    let boot_run = script
+        .split("boot_run() {")
         .nth(1)
-        .expect("launch_role_worker function exists")
-        .split("\nlaunch_workers() {")
-        .next()
-        .expect("launch_role_worker is bounded before launch_workers");
+        .expect("boot_run function exists");
     assert!(
-        launch_role_worker.contains("--workflow \"$WORKFLOW_PATH\" --profile basic"),
-        "role workers must pass --workflow and --profile basic"
+        boot_run.contains("--workflow \"$WORKFLOW_PATH\""),
+        "temper run invocation must pass --workflow"
     );
-    assert!(launch_role_worker.contains("--agents fake"));
+    // The run hosts the real in-process coding agent: it selects an LLM provider
+    // via --auth, not a fake-agent profile.
+    assert!(boot_run.contains("--auth \"$TEMPER_RUN_AUTH\""));
+    assert!(boot_run.contains("run --bind \"$DAEMON_BIND\""));
 }
 
 #[test]
-fn launcher_seeds_intake_as_site_admin() {
+fn launcher_seeds_intake_last_as_site_admin() {
     let script = read_example("run.sh");
     let workflow = read_example("config/workflow.json");
 
-    // W3 (#65): the bundled spec declares intake_author = site_admin, so the
-    // default --seed-intake yes pass files the intake issue as the admin (there
-    // is no `human` role). The launcher does NOT suppress intake seeding here.
+    // The bundled spec declares intake_author = site_admin, so the seed pass files
+    // the intake issue as the admin (there is no `human` role).
     assert!(workflow.contains("\"intake_author\": { \"kind\": \"site_admin\" }"));
+
+    // Seed-last: the provision pass holds the intake back (--seed-intake no), then
+    // a second --seed-only pass files it AFTER temper run is ready, so the
+    // issue-created webhook is the demonstrated wake path.
     let bootstrap = script
         .split("bootstrap_and_provision() {")
         .nth(1)
         .expect("bootstrap_and_provision function exists");
     assert!(
-        !bootstrap.contains("--seed-intake no"),
-        "intake must be seeded during provisioning, not suppressed"
+        bootstrap.contains("--seed-intake no"),
+        "the provision pass must hold the intake back for the seed-last proof"
     );
-    assert!(bootstrap.contains("site-admin intake issue"));
-    assert!(script.contains("intake_author = site_admin"));
+    let seed_intake = script
+        .split("seed_intake() {")
+        .nth(1)
+        .expect("seed_intake function exists");
+    assert!(seed_intake.contains("--seed-only"));
+    assert!(seed_intake.contains("--intake-title \"$INTAKE_TITLE\""));
+
+    // seed_intake runs after boot_run in cmd_start.
+    let cmd_start = script
+        .split("cmd_start() {")
+        .nth(1)
+        .expect("cmd_start function exists");
+    let boot_index = cmd_start.find("boot_run").expect("boot_run is called");
+    let seed_index = cmd_start
+        .find("seed_intake")
+        .expect("seed_intake is called");
+    assert!(
+        boot_index < seed_index,
+        "intake must be seeded only after temper run is ready"
+    );
 }
 
 #[test]
@@ -176,27 +189,45 @@ fn launcher_defaults_basic_forgejo_to_distinct_ports() {
     let script = read_example("run.sh");
     let config = read_example("config/temper.env");
 
-    // Distinct from reference-delivery (4000 / 38080) so both demos coexist.
+    // Distinct from reference-delivery (4200 / 38200) so both demos coexist.
     assert!(config.contains("BASE_URL=http://127.0.0.1:4100"));
-    assert!(config.contains("TRIGGER_BIND=127.0.0.1:38090"));
+    assert!(config.contains("DAEMON_BIND=127.0.0.1:38100"));
     assert!(script.contains("BASE_URL=${BASE_URL:-http://127.0.0.1:4100}"));
-    assert!(script.contains("TRIGGER_BIND=${TRIGGER_BIND:-127.0.0.1:38090}"));
-    assert!(script.contains("*)   PORT=4100 ;;"));
+    assert!(script.contains("DAEMON_BIND=${DAEMON_BIND:-127.0.0.1:38100}"));
 }
 
 #[test]
 fn validators_and_config_cover_forgejo_ci_fallback() {
     let script = read_example("run.sh");
-    let config = read_example("config/temper.env");
 
-    assert!(config.contains("CI_STATUS_POLL_MS=30000"));
-    assert!(config.contains("IDLE_POLL_MAX_MS=8000"));
-    assert!(config.contains("FAKE_CI_SENTINEL=present"));
     assert!(script.contains("CI_FALLBACK_MISSING_CREDENTIALS="));
     assert!(script.contains("validate_mechanical_bot_config || _ok=1"));
     assert!(script.contains("validate_mechanical_ci_log || _ok=1"));
-    assert!(script.contains("completed tick .*actions="));
     assert!(script.contains("no web-UI credentials configured for the CI read fallback"));
+
+    // Webhooks are the wake path: the validator inspects the unified run log for
+    // the daemon serving line, accepted deliveries, wake scans, and the
+    // in-process worker lifecycle.
+    assert!(script.contains("temper-daemon: serving on"));
+    assert!(script.contains("temper-worker: registered"));
+    assert!(script.contains("webhook wake scan"));
+}
+
+#[test]
+fn launcher_runs_a_single_temper_run_process() {
+    let script = read_example("run.sh");
+
+    // The migration collapsed the split daemon + worker (+ trigger) into ONE
+    // process. The legacy fake-worker / trigger machinery must be gone.
+    assert!(!script.contains("temper-testing-worker"));
+    assert!(!script.contains("smith-worker"));
+    assert!(!script.contains("temper-trigger-forgejo"));
+    assert!(!script.contains("--wake-socket"));
+    assert!(!script.contains("anvil-agent"));
+    assert!(!script.contains("--agent-command"));
+
+    // The unified entry point is `temper run`.
+    assert!(script.contains("\"$RUN_BIN\" run --bind"));
 }
 
 #[test]

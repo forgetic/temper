@@ -1,50 +1,51 @@
 # Reference-delivery observability guide
 
-Use this page while `./run.sh start` is still running. `./run.sh stop` removes
-the throwaway Forgejo data, so live Forge-state validation must happen before
+Use this page while `./run.sh start` is still running. `./run.sh stop` removes the
+throwaway Forgejo data, so live Forge-state validation must happen before
 teardown. Logs stay under `logs/` for later inspection.
+
+The whole topology is **one process** (`temper run`), so the daemon, the
+in-process worker, and the coding agent all write to a **single log**:
+`logs/run.log`. Daemon lines are prefixed `temper-daemon:`; worker lines
+`temper-worker:`.
 
 ## Where to look
 
-- `logs/provision.log` — one line per repo, seeded intake URLs, webhook
+- `logs/provision.log` — one line per repo: seeded intake URLs, webhook
   registration, and the cross-repo parent URL when enabled.
-- `logs/trigger.log` — webhook trigger readiness (`listening on`), accepted
-  Forgejo deliveries, and wake delivery outcomes.
-- `logs/<role>.log` — one fake role worker per provisioned role. Each log starts
-  with the configured repo set, then `temper-testing-worker` tick lines.
-- `logs/mechanical.log` — fake mechanical reconciler ticks.
+- `logs/run.log` — the unified daemon + worker + agent. Serving readiness,
+  accepted webhook deliveries + wake scans, daemon job assignments and results
+  (with `repo=` for per-repo attribution), worker register/assign/result lines,
+  cross-repo child materialisation, and mechanical automation/landing.
+- `logs/ci-seed.log` — the one-time engineer clone + push that installs the
+  bundled pass-through CI before `temper run` starts.
 - `logs/runner.log` — real Forgejo Actions runner job execution.
 - `logs/forgejo.log` — server-side errors from the throwaway Forgejo.
 
-The fake workers do not call Smith and do not emit role-decision process events.
-They log process-level movement such as:
-
-```text
-temper-testing-worker: worker 'multi-role:architect' completed tick trigger=wake actions=1 scanned_repositories=1 scanned_repository_paths=acme/service next_poll_ms=120000 idle_no_action_ticks=0
-temper-testing-worker: worker 'multi-role:engineer' consumed authenticated wake batch hints=1; ticking immediately
-```
-
 ## Minimal movement trail
 
-For the default two-repo run, expect:
+For the default two-repo cross-repo run, expect (interleaved) in `logs/run.log`:
 
 ```text
-provision.log: repo=acme/service cross_repo_parent_url=...
-trigger.log: webhook accepted repo=acme/service ...
-trigger.log: wake_delivery outcome=sent ...
-architect.log: completed tick trigger=wake actions=1
-engineer.log: completed tick trigger=wake actions=1
-reviewer.log: completed tick trigger=wake actions=1
-mechanical.log: completed tick trigger=poll actions=...
-owner.log: completed tick trigger=wake actions=0   # until the alignment cohort activates
+temper-daemon: serving on 127.0.0.1:38200
+temper-worker: registered worker_id=reference-delivery-1 capabilities=6
+temper-daemon: webhook accepted repo=acme/service kind=Issue item=<n>
+temper-daemon: webhook wake scan repo=acme/service enqueued=1
+temper-daemon: assigned job_id=... role=architect repo=acme/service worker=reference-delivery-1
+temper-worker: result sent job_id=... status=success     # fans the parent into per-repo children
+temper-daemon: assigned job_id=... role=engineer repo=acme/service ...
+temper-daemon: assigned job_id=... role=engineer repo=acme/service-canary ...
+temper-worker: result sent job_id=... status=success     # opens each implementation PR
+temper-daemon: assigned job_id=... role=reviewer repo=... worker=reference-delivery-1
+temper-worker: result sent job_id=... status=success     # reviewer approves
+temper-daemon: ... mechanical landing ...                # bot merges each CI-green, approved PR
 ```
 
-Some wake-triggered ticks may report `actions=0`; that means the worker woke,
-read fresh Forge state, and found no eligible item. Mechanical `next_poll_ms`
-and `idle_no_action_ticks` show adaptive idle backoff after repeated no-action
-normal ticks; wake and audit ticks reset the idle counter. Mechanical logs also include
-`mechanical_automation_execution`, `mechanical_automation_summary`, and, after a
-merge rejection, `mechanical_automation_merge_conflict_route`; these show the
+The seed-last webhook-wake proof is the `webhook accepted` → `webhook wake scan …
+enqueued=1` pair: intake is filed only after `temper run` is ready, so its creation
+webhook (not the slow poll backstop) drives the first scan. Mechanical logs also
+include `mechanical_automation_summary` / `mechanical_reconciliation_summary` lines
+(high volume), and after a merge rejection a merge-conflict route; these show the
 landing queue, transition, target PR, and whether the item was applied,
 gate-blocked, unchanged, or routed to `merge-conflict`.
 
@@ -62,7 +63,8 @@ Run while the demo is alive:
 - every configured repo was provisioned;
 - only the source repo received the parent intake in cross-repo mode;
 - every repo registered a webhook and produced at least one accepted delivery;
-- fake worker logs mention the repo set;
+- the run assigned at least one daemon job and one worker job per repo (matched on
+  `repo=` in `logs/run.log`);
 - the live parent issue has the expected child dependencies.
 
 For a stalled fan-out, diagnostics look like:
@@ -72,20 +74,15 @@ missing: cross-repo parent acme/service#1 expected 2 child dependencies, found 0
 diagnosis: architect blocked the parent but no fan-out side effects were recorded
 ```
 
-If webhook delivery reports persistent `outcome=no_sockets`, a webhook arrived
-before workers created their Unix wake sockets or a worker failed during startup;
-inspect the corresponding worker log.
-
-If PRs remain labelled `landing`, inspect `logs/mechanical.log`. The ADR-0019
-error:
+If PRs remain labelled `landing`, inspect `logs/run.log`. The ADR-0019 error:
 
 ```text
 no web-UI credentials configured for the CI read fallback
 ```
 
-means the mechanical worker can mutate over REST with the `bot` token but cannot
-read Forgejo 7.0.x Actions status. The launcher should pass the provisioned
-`bot` username/password as `TEMPER_FORGEJO_USERNAME` and
-`TEMPER_FORGEJO_PASSWORD`; `validate-webhooks` and `validate-multi-repo` flag
-this as a targeted failure. (The setup-only site admin is never used here; the
-bot is the mechanical worker's identity for both landing and CI reads.)
+means the run can mutate over REST with the `bot` token but cannot read Forgejo
+7.0.x Actions status. The launcher passes the provisioned `bot` username/password
+as `FORGEJO_USERNAME` / `FORGEJO_PASSWORD`; `validate-webhooks` and
+`validate-multi-repo` flag this as a targeted failure. (The setup-only site admin
+is never used here; the bot is the mechanical identity for both landing and CI
+reads.)

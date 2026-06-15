@@ -1,157 +1,148 @@
 # Basic-delivery example
 
-A **deliberately minimal**, no-human-in-the-loop Temper demo: it drives a single
-issue **from submission to a merged PR with nobody in the loop**, using
-deterministic fake agents. It is the "happy path, nothing fancy" counterpart to
-[`examples/reference-delivery/`](../reference-delivery/): **one** repo, **three**
-roles (`architect`, `engineer`, and the `bot` mechanical automation authority)
-plus CI, webhooks on, and landing gated on **CI alone** — no reviewer, no owner,
-no human, and no Smith/LLM dependency.
+A **deliberately minimal**, no-human-in-the-loop Temper demo: it drives a single,
+thin intake issue **from submission to a merged PR with nobody in the loop**,
+using the **real in-process coding agent**. It is the "happy path, nothing fancy"
+counterpart to [`examples/reference-delivery/`](../reference-delivery/): **one**
+repo, the human-capable workflow roles `architect` and `engineer`, the `bot`
+mechanical automation authority, CI, webhooks on from the start, and landing
+gated on **CI alone** — no reviewer, no owner, no human.
 
-Like reference-delivery it boots a throwaway Forgejo server, registers a real
-host-mode `forgejo-runner`, and runs `temper-testing-worker` (one OS process per
-role plus one mechanical reconciler) against the real Forgejo backend. Unlike
-reference-delivery it loads its own **3-role spec at runtime** (`--workflow
-config/workflow.json`) and seeds the intake issue as the **site admin** — there
-is no `human` role and no cross-repo fan-out.
+It boots the production topology from development-profile binaries, but as a
+**single process**: a throwaway Forgejo server, a host-mode `forgejo-runner`
+producing real CI, `temper-provision-forgejo`, and **one `temper run`** — the
+unified daemon + worker + coding agent on one event loop, serving the architect
+and engineer roles for `acme/service`.
 
-## What this example proves
+The proof this example exists to show is the thin-intake → architect-spec-rewrite
+step: the filed issue says only what the filer wants, and the architect must turn
+that into an implementable code spec before the engineer can write code.
 
-- Forgejo is the durable workflow state store: issues, labels, PRs, CI status,
-  and metadata blocks carry state.
-- CI is real: the bundled `forgejo-runner` runs the checked-in host-mode workflow
-  on this machine.
-- Role behavior is fake but process-isolated: `temper-testing-worker --profile
-  basic` runs the basic-delivery architect + engineer fakes (no reviewer / owner
-  / human), plus one mechanical reconciler, against the real Forgejo backend.
-- Webhooks are real wake hints: the production `temper-trigger-forgejo` receives
-  Forgejo webhooks and wakes the local fake workers; polling remains the
-  correctness backstop.
+## What it demonstrates
 
-## Expected flow
+The run converges through the unified daemon/worker topology with a single
+`temper run` process:
 
-The intake flows end to end with only three workers running:
-
-1. `run.sh` boots a throwaway Forgejo + runner and provisions exactly **one org +
-   repo** (`acme/service` by default) — labels, CI, role users/tokens, and the
-   webhook — passing `--workflow config/workflow.json` so the bundled 3-role spec
-   applies. Because that spec declares `intake_author: { "kind": "site_admin" }`,
-   provisioning seeds **one unlabeled intake issue authored by the site admin**
-   (the "external filer").
-2. The fake **bot** (`mechanical` worker) stamps the raw intake `untriaged` (the
-   `raw_intake` queue's `mark_untriaged` automation).
-3. The fake **architect** triages it into a `code` + `ready` issue with a crisp
-   body. `triage_intake` has a single `ready_code → triage_intake_to_code`
-   outcome — no design/breakdown branch, no fan-out.
-4. The fake **engineer** claims the ready code issue and opens an
-   `implementation` PR via a single `open_pr` transition (its head carries the
-   `[ci-pass]` marker when `FAKE_CI_SENTINEL=present`). With no review gate, the
-   PR drops straight into the `landing` queue.
-5. The real **`forgejo-runner`** runs CI on the PR head and it goes green.
-6. The **bot** sees the green PR and **auto-merges** it (the `landing` queue's
-   `land_pr` automation, gated on `ci_gate` only), then marks it `landed`.
+1. `run.sh` boots throwaway Forgejo + runner, then runs `temper-provision-forgejo`
+   against `config/workflow.json` with `--seed-intake no`. That first pass creates
+   exactly **one org + repo** (`acme/service` by default), users/tokens, labels,
+   CI, and the webhook, but it deliberately does **not** file the intake issue yet.
+2. `run.sh` starts **one `temper run`**. In one process it hosts the daemon (the
+   Forgejo webhook route `POST /forgejo/webhook`, the long poll backstop, the
+   short mechanical CI/merge backstop, leases, per-role apply tokens, result
+   appliers), an in-process worker with capabilities for `acme/service:architect`
+   and `acme/service:engineer`, and the in-process coding agent.
+3. Only after `temper run` is ready (HTTP listener up, worker registered), `run.sh`
+   runs a second `temper-provision-forgejo --seed-only` pass to file **one
+   unlabeled intake issue**. The issue is authored by the **site admin** because
+   the workflow declares `intake_author: { "kind": "site_admin" }`; the seed-only
+   pass mimics an external filer, not a workflow role.
+4. Filing the issue last is the **seed-last webhook-wake proof**: the issue-created
+   webhook reaches the daemon's `POST /forgejo/webhook` route, is accepted, and
+   triggers a targeted wake scan instead of waiting for the long poll backstop.
+5. The mechanical automation first stamps the raw intake `untriaged`, then the
+   daemon assigns the architect a **triage job** under a lease (read-only
+   checkout). The coding agent reads the issue + repo and returns
+   `verdict=ready_code` with a rewritten body.
+6. The daemon applies the `triage_intake_to_code` transition as the architect
+   identity: `set_body` replaces the thin seed with the architect's complete spec,
+   and the issue receives the `code` and `ready` labels.
+7. The daemon assigns the engineer a writable coding job. The same in-process
+   worker runs the agent in the engineer's persistent workspace, commits the
+   product diff with a `Closes #<n>` trailer, and pushes the branch as the
+   engineer, then opens an `implementation` PR. With no review gate, the PR drops
+   straight into the `landing` queue.
+8. The real **`forgejo-runner`** runs CI on the PR head and it goes green.
+9. The **bot** (the mechanical backstop) sees the green PR and **auto-merges** it
+   (the `landing` queue's `land_pr` automation, gated on `ci_gate` only), then
+   marks it `landed`. Forgejo closes the source issue via the merge trailer.
 
 No reviewer approves; no owner or human acts. The bot is the **sole landing
 authority** and lands purely on CI.
 
+## What is real vs. canned
+
+- **Real:** the Forgejo server, the host-mode `forgejo-runner` and its CI, the
+  provisioning, the daemon's Forge API authority (webhooks, leases, per-role apply
+  tokens, mechanical landing), the worker's git workspaces, and the **coding agent
+  itself** (architect triage + engineer implementation are real LLM work).
+- **Canned:** only the thin seed intake body (`config/intake-issue.md`).
+
+The coding agent's LLM provider is selected with `TEMPER_RUN_AUTH` in
+`config/temper.env` (default `chatgpt-oauth`); provider credentials live in
+`secrets/.env` (gitignored). See `secrets/.env.example`.
+
 ## Prerequisites
 
 - Rust workspace build tools.
-- The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries, either in
-  the shared `.cache/forgejo/` cache or through `TEMPER_FORGEJO_BINARY` and
+- The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries, either in the
+  shared `.cache/forgejo/` cache or through `TEMPER_FORGEJO_BINARY` and
   `TEMPER_FORGEJO_RUNNER_BINARY` in `config/temper.env` or the environment.
   Ignored Forgejo fixture tests fill the shared cache automatically on first
   startup when network access is available.
-- A host where the runner may execute host-mode jobs directly. No containers are
-  used.
+- A host where the runner may execute host-mode jobs directly. No containers.
+- Provider credentials for the coding agent (see `secrets/.env.example`).
 
-`run.sh` builds the needed development-profile binaries by default:
-
-- `temper-provision-forgejo`
-- `temper-trigger-forgejo`
-- `temper-testing-worker`
-
-Set `TEMPER_SKIP_BUILD=1` only when those paths are already current.
+`run.sh` builds the needed development-profile binaries by default with
+`cargo build -p temper` (the unified `temper` binary plus the provisioner). Set
+`TEMPER_SKIP_BUILD=1` only when those paths are already current.
 
 ## Layout
 
 ```text
 examples/basic-delivery/
 ├── README.md
-├── observability.md
 ├── config/
 │   ├── temper.env       # non-secret knobs
 │   ├── workflow.json    # the 3-role basic-delivery spec (tracks the canonical
 │   │                    #   fixture crates/temper-workflow/fixtures/
-│   │                    #   basic-delivery.json — keep the two in sync; see below)
-│   └── ci.yml           # host-mode marker CI workflow (the [ci-pass] gate the
-│                        #   fake engineer satisfies)
+│   │                    #   basic-delivery.json — keep the two in sync)
+│   ├── intake-issue.md  # the deliberately thin seed intake body (intent only)
+│   └── ci.yml           # host-mode pass-through CI (validates the engineer's
+│                        #   real product diff: shell scripts must parse)
 ├── secrets/
-│   └── .env.example     # optional local override template
+│   └── .env.example     # provider-auth + local-override template
 └── run.sh               # launcher / teardown / validators
 ```
 
-Runtime data goes under gitignored `run/`, `logs/`, and `secrets/roles.env`.
+Runtime data goes under gitignored `run/`, `logs/`, and `secrets/roles.env`. The
+single process logs to `logs/run.log`.
 
-> **Keeping the spec in sync.** `config/workflow.json` is a **byte-for-byte copy**
-> of the canonical fixture `crates/temper-workflow/fixtures/basic-delivery.json`
-> (validation/route tests in `crates/temper-workflow/tests/basic_delivery.rs`).
-> The two must stay identical; the test
-> `crates/temper-testing/tests/basic_delivery_launcher_static.rs` asserts byte
-> equality, so a drift fails CI.
-
-## Temper prerequisite
-
-This example loads its own 3-role spec at runtime and seeds intake as the site
-admin, so it depends on three child issues of #61:
-
-- **W1 — runtime workflow selection (#63).** `temper-testing-worker` and
-  `temper-provision-forgejo` accept `--workflow <path>` (and
-  `TEMPER_WORKFLOW_FILE`), defaulting to the bundled reference fixture when unset.
-  `run.sh` passes `--workflow config/workflow.json` to **both** the provision and
-  the worker invocations.
-- **W2 — basic-delivery fake agents (#62).** The worker accepts `--profile
-  <reference|basic>`; `basic` selects the architect + engineer fakes whose
-  transitions match this workflow (single `triage_intake_to_code` / `open_pr`
-  rather than the reference fan-out). `run.sh` passes `--profile basic` to the
-  role workers.
-- **W3 — `intake_author` site admin (#65).** `config/workflow.json` declares
-  `intake_author: { "kind": "site_admin" }`, so provisioning seeds the intake
-  issue as the setup-only admin rather than a `human` role (this workflow has
-  none).
+> **Keeping the spec in sync.** `config/workflow.json` tracks the canonical fixture
+> `crates/temper-workflow/fixtures/basic-delivery.json`. Keep the two identical; do
+> not fork the spec's semantics here.
 
 ## Quick start
 
 From this directory:
 
 ```sh
-POLL_MS=120000 ./run.sh start     # blocks until Ctrl-C, ./run.sh stop, or RUN_SECS
-./run.sh validate-webhooks        # while the run is still alive (or after)
+./run.sh start                  # blocks until Ctrl-C, ./run.sh stop, or RUN_SECS
+./run.sh validate-webhooks      # while the run is still alive (or after)
 ./run.sh stop
 ```
 
 Progress is printed without secrets (server URL, the seeded issue URL, where logs
-live); per-process logs land under `logs/`. The checked-in default
-`POLL_MS=120000` is intentional: polling is only the liveness backstop, while the
-trigger's webhook wakes make the demo visibly progress before the two-minute
-deadline. The default `BASE_URL` (`http://127.0.0.1:4100`) and `TRIGGER_BIND`
-(`127.0.0.1:38090`) are **distinct from reference-delivery** (`4000` / `38080`),
-so both demos can run side by side.
+live); the single process logs to `logs/run.log`. The default
+`DAEMON_POLL_CADENCE_SECS=120` is intentional: polling is only the liveness
+backstop, while the webhook wakes make the demo visibly progress before the
+two-minute deadline. The default `BASE_URL` (`http://127.0.0.1:4100`) and
+`DAEMON_BIND` (`127.0.0.1:38100`) are **distinct from reference-delivery**
+(`4200` / `38200`), so both demos can run side by side.
 
 ## Useful knobs
 
 Edit `config/temper.env` or export variables before launch:
 
 - `OWNER=acme` / `NAME=service` — the single repo provisioned and scanned.
-- `POLL_MS=120000` — long-poll mode for role workers; webhooks should wake
-  workers promptly.
-- `CI_STATUS_POLL_MS=30000` — slow mechanical landing/CI-status missed-event
-  backstop; leave blank to reuse `POLL_MS`. CI/PR webhooks and targeted wakes
-  provide prompt landing/CI reactivity without shortening role long-poll mode.
-- `IDLE_POLL_MAX_MS=8000` — cap for adaptive mechanical idle backoff.
-- `WEBHOOKS=1|0` — enable/disable the local webhook trigger.
-- `FAKE_CI_SENTINEL=present|deferred` — make the first PR head's CI pass, or force
-  a fail-then-pass repair path through the engineer's `address_ci_failure`.
+- `TEMPER_RUN_AUTH=chatgpt-oauth|anthropic-oauth|deepseek` — the coding agent's
+  LLM provider/auth (passed as `temper run --auth`).
+- `RUN_MAX_ITERATIONS=250` — max agent iterations per job.
+- `DAEMON_POLL_CADENCE_SECS=120` — long poll backstop; webhooks drive prompt
+  progress. **Do not shorten this** to compensate for webhooks — webhooks are the
+  intended wake path.
+- `DAEMON_MECHANICAL_CADENCE_SECS=2` — mechanical CI/landing reconciliation cadence
+  (Forgejo 7.0.x has no Actions-completion webhook, so landing polls CI status).
 
 ## Validation and troubleshooting
 
@@ -163,28 +154,26 @@ state.
 ```
 
 It checks provisioning logs (webhook registration, the site-admin intake URL),
-webhook delivery/wake logs, fake worker tick logs, and mechanical CI-read
-diagnostics. See `observability.md` for log names and expected event trails. A PR
-stuck with `implementation` and never `landed` usually lacks current-head CI; if
-`logs/mechanical.log` mentions missing web-UI credentials for the CI read
-fallback, the mechanical worker was not launched with the provisioned `bot`
-username/password (ADR 0019).
+the single `logs/run.log` (serving readiness, webhook delivery + wake scan, daemon
+assignments and results, the in-process worker's `temper-worker:` register /
+assign / result lines), and mechanical CI-read diagnostics. A PR stuck with
+`implementation` and never `landed` usually lacks current-head CI; if
+`logs/run.log` mentions missing web-UI credentials for the CI read fallback, the
+run was not launched with the provisioned `bot` username/password (ADR 0019).
 
 If a run is force-killed, clean up possible orphans:
 
 ```sh
 pkill -f forgejo
 pkill -f forgejo-runner
-pkill -f temper-testing-worker
-pkill -f temper-trigger-forgejo
+pkill -f 'target/debug/temper'
 rm -rf examples/basic-delivery/run
 ```
 
 ## Point it at your own Forgejo
 
 Set `BASE_URL` to your instance and provide tokens, then drop the bundled
-server/runner + provisioning steps — the same "swap to real" story as
-reference-delivery. The workflow spec, the CI-only landing gate, and the
-single-outcome triage are unchanged. A real project replaces `config/ci.yml` with
-its real CI (build, test, lint) and pairs the engineer role with a coding agent
-whose diffs pass it.
+server/runner + provisioning steps. The workflow spec, the CI-only landing gate,
+and the single-outcome triage are unchanged. A real project replaces
+`config/ci.yml` with its real CI (build, test, lint); the engineer agent produces
+diffs that pass it.

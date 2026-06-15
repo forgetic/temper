@@ -240,11 +240,23 @@ fn get_issue_missing_is_none() {
 }
 
 #[test]
-fn create_issue_posts_then_applies_labels_and_refetches() {
+fn create_issue_applies_labels_atomically_and_refetches() {
     let client = MockHttpClient::new();
-    client.push_response(201, issue_json(7, "open", "[]", "")); // POST create
+    // Label ids are resolved BEFORE the create so the POST payload carries them;
+    // the issue is therefore never visible label-less (no separate PUT follows).
+    // A create-then-label sequence would leave a window in which a concurrent
+    // daemon scan classifies the label-less issue as the catch-all `intake` kind
+    // and stamps it `untriaged` — derailing a freshly materialised `code` child.
     client.push_response(200, r#"[{"id":1,"name":"bug"}]"#); // GET labels (resolve ids)
-    client.push_response(200, "[]"); // PUT labels (by id)
+    client.push_response(
+        201,
+        issue_json(
+            7,
+            "open",
+            r#"[{"id":1,"name":"bug"}]"#,
+            r#", "assignees": [{"login": "bob"}]"#,
+        ),
+    ); // POST create (labels in the payload)
     client.push_response(
         200,
         issue_json(
@@ -268,36 +280,38 @@ fn create_issue_posts_then_applies_labels_and_refetches() {
     assert_eq!(issue.assignees, vec![UserId::new("bob")]);
 
     let requests = client.recorded();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 4);
 
-    assert_eq!(requests[0].method, HttpMethod::Post);
+    assert_eq!(requests[0].method, HttpMethod::Get);
     assert_eq!(
         requests[0].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues")
-    );
-    let create_body = body_json(&requests[0]);
-    assert_eq!(create_body["title"], "Fix bug");
-    assert_eq!(create_body["body"], "details");
-    assert_eq!(create_body["assignees"], serde_json::json!(["bob"]));
-
-    // Label names are resolved to numeric ids before the PUT, which Forgejo
-    // requires (a name array is rejected with a 422 int64 unmarshal error).
-    assert_eq!(requests[1].method, HttpMethod::Get);
-    assert_eq!(
-        requests[1].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/labels")
     );
 
-    assert_eq!(requests[2].method, HttpMethod::Put);
+    assert_eq!(requests[1].method, HttpMethod::Post);
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/issues")
+    );
+    let create_body = body_json(&requests[1]);
+    assert_eq!(create_body["title"], "Fix bug");
+    assert_eq!(create_body["body"], "details");
+    assert_eq!(create_body["assignees"], serde_json::json!(["bob"]));
+    // The create payload carries the resolved numeric label ids atomically.
+    assert_eq!(create_body["labels"], serde_json::json!([1]));
+
+    // No separate label PUT: all labels were applied on create.
+    let label_put = format!("/api/v1/repos/{OWNER}/{REPO}/issues/7/labels");
+    assert!(
+        !requests
+            .iter()
+            .any(|r| r.method == HttpMethod::Put && r.path == label_put),
+        "create must not issue a separate label PUT when labels apply atomically"
+    );
+
+    assert_eq!(requests[2].method, HttpMethod::Get);
     assert_eq!(
         requests[2].path,
-        format!("/api/v1/repos/{OWNER}/{REPO}/issues/7/labels")
-    );
-    assert_eq!(body_json(&requests[2])["labels"], serde_json::json!([1]));
-
-    assert_eq!(requests[3].method, HttpMethod::Get);
-    assert_eq!(
-        requests[3].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/issues/7")
     );
 }
