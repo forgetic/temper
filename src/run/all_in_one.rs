@@ -18,10 +18,10 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_agent_runtime::ProviderConfig;
 use temper_daemon::{
-    Daemon, DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig,
-    PollBackstopConfig, RepositorySet, RepositoryTarget, ResultApplier, RoleFeedMode,
-    RoleFeedTarget, RoleRoutingApplier, config::role_tokens_from_env, spawn_mechanical_backstop,
-    spawn_poll_backstop,
+    Daemon, DaemonRunConfig, ForgeApplier, HintedMechanical, LeaseApplier,
+    MechanicalBackstopConfig, PollBackstopConfig, RepositorySet, RepositoryTarget, ResultApplier,
+    RoleFeedMode, RoleFeedTarget, RoleRoutingApplier, WebhookConfig, config::role_tokens_from_env,
+    spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
@@ -119,7 +119,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
         workflow.clone(),
         compiled.clone(),
         PollBackstopConfig {
-            targets: role_feed_targets(&repo_ids, &daemon_config.roles),
+            targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Normal),
             cadence: daemon_config.poll_cadence,
         },
         temper_daemon::system_clock(),
@@ -129,9 +129,15 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
     // raw intake ready, land CI-green PRs) — without it, seeded intake never
     // advances to the role queues, so role workers get no work. Enabled when a
     // mechanical cadence is configured (the split daemon does the same).
+    //
+    // Its trigger handle is shared with the webhook path: a webhook delivery runs
+    // an immediate hinted mechanical pass so the backstop cadence itself can stay
+    // slow without losing reaction latency (ADR 0009), exactly as the split daemon
+    // does in `src/cli/daemon.rs`.
+    let mut mechanical_trigger: Option<Arc<dyn HintedMechanical>> = None;
     if let Some(cadence) = daemon_config.mechanical_cadence {
         ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
-        spawn_mechanical_backstop(
+        let trigger = spawn_mechanical_backstop(
             &spawner,
             forge.clone(),
             workflow.clone(),
@@ -142,6 +148,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
             },
             temper_daemon::system_clock(),
         );
+        mechanical_trigger = Some(Arc::new(trigger));
     }
 
     // --- In-process worker + agent on the same loop ---
@@ -206,6 +213,46 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
         let _ = run_worker_with_transport(worker_handle, worker_config, executor, transport).await;
     });
 
+    // --- Webhook route (optional) ---
+    // When a webhook secret is configured, install the Forgejo webhook wake
+    // scanner so issue/PR/push deliveries drive targeted scans (and an immediate
+    // hinted mechanical pass) instead of waiting on the slow poll backstop —
+    // exactly as the split daemon does in `src/cli/daemon.rs`. The webhook config
+    // is registered on the shared daemon handle, so the clones already held by the
+    // in-process transport and worker observe it too.
+    let daemon = if let Some(path) = daemon_config.webhook_secret_file.as_ref() {
+        let secret = std::fs::read_to_string(path).map_err(|error| {
+            format!(
+                "failed to read --webhook-secret-file {}: {error}",
+                path.display()
+            )
+        })?;
+        let webhook_config = Arc::new(WebhookConfig {
+            secret: secret.trim().to_string(),
+            targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Wake),
+        });
+        daemon.with_webhook_and_mechanical(
+            forge,
+            workflow,
+            compiled,
+            webhook_config,
+            temper_daemon::system_clock(),
+            mechanical_trigger,
+        )
+    } else {
+        daemon
+    };
+
+    // --- HTTP listener ---
+    // Bind the daemon's HTTP surface so Forgejo webhook deliveries (and the wake
+    // route) can reach this process. Always served, even without a webhook secret,
+    // matching the split daemon; the "serving on" line is the readiness signal
+    // operators (and the example launchers) wait for.
+    let server = temper_daemon::serve(&handle, &daemon, daemon_config.bind)
+        .await
+        .map_err(|error| format!("serve failed: {error}"))?;
+    eprintln!("temper-daemon: serving on {}", server.local_addr());
+
     // --- Wait for shutdown ---
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
@@ -219,6 +266,7 @@ pub async fn run_all_in_one(handle: RuntimeHandle, config: AllInOneConfig) -> Re
         }
     })
     .await;
+    server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
 }
 
@@ -368,14 +416,18 @@ async fn resolve_repositories<F: Forge + ?Sized>(
     Ok(RepositorySet::new(resolved))
 }
 
-fn role_feed_targets(repos: &[RepositoryId], roles: &[RoleId]) -> Vec<RoleFeedTarget> {
+fn role_feed_targets(
+    repos: &[RepositoryId],
+    roles: &[RoleId],
+    mode: RoleFeedMode,
+) -> Vec<RoleFeedTarget> {
     let mut targets = Vec::with_capacity(repos.len() * roles.len());
     for repo in repos {
         for role in roles {
             targets.push(RoleFeedTarget {
                 repo: repo.clone(),
                 role: role.clone(),
-                mode: RoleFeedMode::Normal,
+                mode,
             });
         }
     }

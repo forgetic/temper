@@ -97,10 +97,29 @@ impl<C: HttpClient> ForgejoForge<C> {
     ) -> ForgeResult<Issue> {
         let repo = parse_repository_id(repo_id)?;
         let assignees: Vec<&str> = input.assignees.iter().map(UserId::as_str).collect();
+
+        // Resolve label names to ids and include them in the create payload so the
+        // issue is NEVER visible label-less. A create-then-label sequence leaves a
+        // window in which the new issue has no labels; a concurrent daemon scan
+        // would then classify it as the catch-all `intake` kind and stamp it
+        // `untriaged`, derailing a freshly materialised `code` child (e.g. a
+        // cross-repo breakdown child) into intake re-triage. Atomic labels on
+        // create close that window.
+        let label_ids: Vec<u64> = if input.labels.is_empty() {
+            Vec::new()
+        } else {
+            let ids = self.repo_label_ids(&repo).await?;
+            input
+                .labels
+                .iter()
+                .filter_map(|name| ids.get(name).copied())
+                .collect()
+        };
         let payload = serde_json::json!({
             "title": input.title,
             "body": input.body,
             "assignees": assignees,
+            "labels": label_ids,
         })
         .to_string();
         let path = format!("/repos/{}/issues", repo.path_segment());
@@ -116,9 +135,14 @@ impl<C: HttpClient> ForgejoForge<C> {
         let created: IssueDto = Self::decode("create issue", &response)?;
         let number = ItemNumber::new(created.number);
 
-        let set_labels = (!input.labels.is_empty()).then(|| input.labels.clone());
-        self.apply_item_label_update(&repo, number, set_labels, Vec::new(), Vec::new())
-            .await?;
+        // Reconcile any labels the create payload could not resolve to ids (e.g. a
+        // label that does not yet exist in the repo); idempotent when all labels
+        // were already applied atomically above.
+        if input.labels.len() != label_ids.len() {
+            let set_labels = (!input.labels.is_empty()).then(|| input.labels.clone());
+            self.apply_item_label_update(&repo, number, set_labels, Vec::new(), Vec::new())
+                .await?;
+        }
 
         self.fetch_issue_excluding_pulls(&repo, number)
             .await?

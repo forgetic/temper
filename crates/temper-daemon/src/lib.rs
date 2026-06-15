@@ -571,11 +571,25 @@ impl<F: Forge> ForgeApplier<F> {
         number: ItemNumber,
         child: JobChild,
     ) -> Option<CreateIssuesChild> {
+        // Breakdown children are `code` work items. The labels that route a code
+        // issue to the engineer's queue are declared by the workflow (the `code`
+        // artifact-kind's identifying + initial labels), NOT left to the agent: a
+        // child created label-less (or missing the activation label) would be
+        // classified as the catch-all `intake` kind and spuriously re-triaged,
+        // wiping its parent back-reference. Union the workflow-required labels with
+        // whatever the agent authored so the child is always created
+        // engineer-ready, exactly as the single-repo triage path is.
+        let mut labels = code_child_create_labels(self.workflow.as_ref());
+        for label in child.labels {
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
         let mut mapped = CreateIssuesChild {
             slug: child.slug,
             title: child.title,
             body: child.body,
-            labels: child.labels,
+            labels,
             dependencies: child.depends_on,
             target_repo: None,
         };
@@ -1634,7 +1648,23 @@ fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
 }
 
 fn implementation_pr_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
-    let Some(kind) = workflow.artifact_kind(&ArtifactKindId::new("implementation_pr")) else {
+    artifact_kind_create_labels(workflow, "implementation_pr")
+}
+
+/// Labels a freshly-materialised `code` child issue must carry to be a valid,
+/// engineer-ready code artifact: the `code` artifact-kind's identifying labels
+/// (so it classifies as `code`, not the catch-all `intake`) plus its initial
+/// labels (the activation label, e.g. `ready`, that routes it to the engineer's
+/// queue). Derived from the workflow so the daemon never hardcodes label names.
+fn code_child_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
+    artifact_kind_create_labels(workflow, "code")
+}
+
+/// Union of an artifact-kind's identifying and initial labels, in declaration
+/// order with duplicates removed. These are the labels an artifact of that kind
+/// is created with.
+fn artifact_kind_create_labels(workflow: &ValidatedWorkflow, kind_id: &str) -> Vec<String> {
+    let Some(kind) = workflow.artifact_kind(&ArtifactKindId::new(kind_id)) else {
         return Vec::new();
     };
 

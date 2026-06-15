@@ -1,8 +1,13 @@
 # Reference-delivery example
 
-A **self-contained Temper demo**: it boots a throwaway Forgejo server, registers
-a real host-mode `forgejo-runner`, and drives the reference-delivery workflow
-with deterministic fake agent worker binaries.
+A **self-contained Temper demo** of the production daemon/worker topology with the
+**real in-process coding agent**: it boots a throwaway Forgejo server, registers a
+real host-mode `forgejo-runner`, and drives the reference-delivery workflow from
+intake to a merged green PR with a single `temper run` process. It is the richer
+counterpart to [`examples/basic-delivery/`](../basic-delivery/): it adds a
+**reviewer approval gate** to basic-delivery's architect + engineer, and (in
+multi-repo mode) demonstrates **cross-repo fan-out** — one parent intake materialised
+into one child code issue per target repo.
 
 ## What this example proves
 
@@ -10,32 +15,43 @@ with deterministic fake agent worker binaries.
   dependencies, CI status, and metadata blocks carry state.
 - CI is real: the bundled `forgejo-runner` runs the checked-in host-mode workflow
   on this machine.
-- Role behavior is fake but process-isolated: `temper-testing-worker` runs one
-  OS process per role plus one mechanical reconciler against the real Forgejo
-  backend.
-- Webhooks are real wake hints: the production `temper-trigger-forgejo` receives
-  Forgejo webhooks and wakes the local fake workers; polling remains the
-  correctness backstop.
+- The whole orchestration is **one process**: `temper run` hosts the daemon, one
+  worker, and the real coding agent on a single event loop. Architect triage,
+  engineer implementation, and reviewer approval are real LLM work.
+- Webhooks are real wake hints: `temper run` owns the Forgejo webhook route
+  (`POST /forgejo/webhook`); a delivery drives a targeted wake scan instead of
+  waiting on the long poll backstop, which remains the liveness correctness
+  backstop.
+
+## What is real vs. canned
+
+- **Real:** the Forgejo server + host-mode `forgejo-runner` and its CI, the
+  provisioning, the daemon's Forge API authority (webhooks, leases, per-role apply
+  tokens, cross-repo child materialisation, mechanical landing), the worker's git
+  workspaces, and the **coding agent** (architect / engineer / reviewer are real
+  LLM work).
+- **Canned:** only the seed intake body (`config/intake-issue.md`, or the
+  generated cross-repo parent body).
+
+The coding agent's LLM provider is selected with `TEMPER_RUN_AUTH` in
+`config/temper.env` (default `chatgpt-oauth`); provider credentials live in
+`secrets/.env` (gitignored). See `secrets/.env.example`.
 
 ## Prerequisites
 
 - Rust workspace build tools.
-- The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries, either in
-  the shared `.cache/forgejo/` cache or through `TEMPER_FORGEJO_BINARY` and
+- The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries, either in the
+  shared `.cache/forgejo/` cache or through `TEMPER_FORGEJO_BINARY` and
   `TEMPER_FORGEJO_RUNNER_BINARY` in `config/temper.env` or the environment.
   Ignored Forgejo fixture tests fill the shared cache automatically on first
   startup when network access is available.
-- A host where the runner may execute host-mode jobs directly. No containers are
-  used.
+- A host where the runner may execute host-mode jobs directly. No containers.
+- Provider credentials for the coding agent (see `secrets/.env.example`).
 
-`run.sh` builds the needed development-profile binaries by default:
-
-- `temper-provision-forgejo`
-- `temper-trigger-forgejo`
-- `temper-validate-reference-delivery`
-- `temper-testing-worker`
-
-Set `TEMPER_SKIP_BUILD=1` only when those paths are already current.
+`run.sh` builds the needed development-profile binaries by default with
+`cargo build -p temper`: the unified `temper` binary, `temper-provision-forgejo`,
+and `temper-validate-reference-delivery`. Set `TEMPER_SKIP_BUILD=1` only when those
+paths are already current.
 
 ## Layout
 
@@ -45,22 +61,25 @@ examples/reference-delivery/
 ├── observability.md
 ├── config/
 │   ├── temper.env       # non-secret knobs
-│   ├── workflow.json    # reference-delivery workflow copy
-│   └── ci.yml           # host-mode CI workflow
+│   ├── workflow.json    # the reference-delivery workflow spec
+│   ├── intake-issue.md  # the thin seed intake body (single-repo mode)
+│   └── ci.yml           # host-mode pass-through CI (validates the engineer's
+│                        #   real product diff)
 ├── secrets/
-│   └── .env.example     # optional local override template
+│   └── .env.example     # provider-auth + local-override template
 └── run.sh               # launcher / teardown / validators
 ```
 
-Runtime data goes under gitignored `run/`, `logs/`, and `secrets/roles.env`.
+Runtime data goes under gitignored `run/`, `logs/`, and `secrets/roles.env`. The
+single process logs to `logs/run.log`.
 
 ## Quick start
 
 From this directory:
 
 ```sh
-POLL_MS=120000 ./run.sh start     # blocks until Ctrl-C, ./run.sh stop, or RUN_SECS
-./run.sh validate-multi-repo      # while the run is still alive
+./run.sh start                  # blocks until Ctrl-C, ./run.sh stop, or RUN_SECS
+./run.sh validate-multi-repo    # while the run is still alive
 ./run.sh validate-webhooks
 ./run.sh stop
 ```
@@ -72,52 +91,49 @@ REPOS="acme/service acme/service-canary"
 CROSS_REPO_INTAKE=auto
 ```
 
-That seeds one parent intake in `acme/service`. The hidden fake-architect plan in
-that issue asks the fake architect to create one child code issue per repo.
+That seeds one parent intake in `acme/service`; the architect fans it out into one
+child code issue per configured repo. The default `BASE_URL`
+(`http://127.0.0.1:4200`) and `DAEMON_BIND` (`127.0.0.1:38200`) are **distinct from
+basic-delivery** (`4100` / `38100`), so both demos can run side by side.
 
 ## Expected flow
 
-1. The launcher provisions each repo with labels, CI, role users/tokens, and a
-   repo webhook.
-2. The source repo receives one parent intake issue.
-3. The fake architect fans it out into one child code issue per configured repo
-   and blocks the parent on those children.
-4. Fake engineers create real Forgejo PR heads and open implementation PRs.
+1. `run.sh` provisions each repo with labels, CI, role users/tokens, and a repo
+   webhook (`--seed-intake no`, so intake is held back).
+2. `run.sh` starts **one `temper run`** serving architect + engineer + reviewer
+   across the configured repos, then files intake last so its creation webhook
+   wakes a ready system.
+3. The architect triages the intake (single-repo: rewrites the body to a code
+   spec; cross-repo: fans it out into one child code issue per configured repo and
+   blocks the parent on those children).
+4. The engineer opens real implementation PRs (created with `implementation` +
+   `needs-reviewer`).
 5. The real `forgejo-runner` runs CI for each PR head.
-6. Fake reviewers approve PRs.
-7. The mechanical worker lands PRs after reviewer approval and current-head CI.
-   It runs as the provisioned `bot` automation user: the bot's token performs
-   REST mutations (merges) and the bot's web-UI login reads Forgejo 7.0.x CI
-   status (ADR 0019). The setup-only site admin is not involved, and the owner
-   role does not perform normal merges.
+6. The reviewer approves PRs.
+7. The mechanical backstop lands PRs after reviewer approval and current-head CI.
+   It runs as the provisioned `bot` automation user: the bot's token performs REST
+   merges and the bot's web-UI login reads Forgejo 7.0.x CI status (ADR 0019). The
+   setup-only site admin is not involved, and the owner role does not perform
+   normal merges.
 8. If a merge conflict is reported, mechanical automation removes `landing`, adds
-   `merge-conflict`, and the fake engineer requeues after updating the PR head;
-   fresh CI is still required, but a second review is not.
-9. The closing fake architect reconciles landed PRs and closes produced code
-   issues so the mechanical worker can unblock the parent dependency aggregate.
-10. Fake owners later handle alignment cohorts when the queue activation policy
-   reaches depth or age.
+   `merge-conflict`, and the engineer requeues after updating the PR head; fresh CI
+   is still required, but a second review is not.
+9. (Cross-repo) once each child PR merges and its code issue closes, the parent
+   dependency aggregate unblocks and resolves.
 
 ## Useful knobs
 
 Edit `config/temper.env` or export variables before launch:
 
-- `REPOS="owner/a owner/b"` — fixed repo set scanned by every worker.
+- `REPOS="owner/a owner/b"` — repo set served by the run.
 - `CROSS_REPO_INTAKE=auto|1|0` — one parent fan-out issue or independent intakes.
-- `POLL_MS=120000` — long-poll mode for role workers; webhooks should wake
-  workers promptly.
-- `CI_STATUS_POLL_MS=30000` — slow mechanical landing/CI-status missed-event
-  backstop; leave blank to reuse `POLL_MS`. CI/PR webhooks and targeted wakes
-  provide prompt landing/CI reactivity without shortening role long-poll mode.
-- `IDLE_POLL_MAX_MS=8000` — cap for adaptive mechanical idle backoff after
-  repeated no-action normal ticks. Wakes still tick immediately, and any
-  progress, wake, audit, or error resets the next normal poll to
-  `CI_STATUS_POLL_MS`.
-- `WEBHOOKS=1|0` — enable/disable local webhook trigger.
-- `FAKE_ARCHITECT=closing|default` — `closing` is best for cross-repo convergence.
-- `FAKE_REVIEWER=default|request-changes-then-approve`.
-- `FAKE_CI_SENTINEL=present|deferred` — make first PR CI pass, or force a
-  fail-then-pass repair path.
+- `SERVED_ROLES="architect engineer reviewer"` — the workflow roles the run serves.
+- `TEMPER_RUN_AUTH=chatgpt-oauth|anthropic-oauth|deepseek` — the coding agent's LLM
+  provider/auth.
+- `RUN_MAX_ITERATIONS=250` — max agent iterations per job.
+- `DAEMON_POLL_CADENCE_SECS=120` — long poll backstop; webhooks drive prompt
+  progress. **Do not shorten this** to compensate for webhooks.
+- `DAEMON_MECHANICAL_CADENCE_SECS=2` — mechanical CI/landing reconciliation cadence.
 
 ## Validation and troubleshooting
 
@@ -129,17 +145,14 @@ state.
 ./run.sh validate-multi-repo
 ```
 
-The multi-repo validator checks provisioning logs, webhook delivery/wake logs,
-fake worker logs, mechanical CI-read diagnostics, and live Forge state for the
-parent/child dependency shape. See `observability.md` for log names and expected
-event trails, including `mechanical_automation_*` entries for landing and
-conflict routing. Persistent `wake_delivery outcome=no_sockets` usually means a
-worker failed before binding its wake socket or the first-handoff worker ran
-before downstream sockets were ready; inspect the matching fake worker log. A PR
-stuck with `landing` usually lacks current-head CI or reviewer approval; if
-`logs/mechanical.log` mentions missing web-UI credentials for the CI read
-fallback, the mechanical worker was not launched with the provisioned `bot`
-username/password. A PR stuck with `merge-conflict` needs an engineer
+The multi-repo validator checks provisioning logs, the unified `logs/run.log`
+(serving readiness, webhook delivery + wake scans, daemon assignments and results,
+the in-process worker lifecycle), mechanical CI-read diagnostics, and live Forge
+state for the parent/child dependency shape. See `observability.md` for log
+contents and expected event trails. A PR stuck with `landing` usually lacks
+current-head CI or reviewer approval; if `logs/run.log` mentions missing web-UI
+credentials for the CI read fallback, the run was not launched with the provisioned
+`bot` username/password. A PR stuck with `merge-conflict` needs an engineer
 conflict-resolution push before mechanical landing retries.
 
 If a run is force-killed, clean up possible orphans:
@@ -147,8 +160,7 @@ If a run is force-killed, clean up possible orphans:
 ```sh
 pkill -f forgejo
 pkill -f forgejo-runner
-pkill -f temper-testing-worker
-pkill -f temper-trigger-forgejo
+pkill -f 'target/debug/temper'
 rm -rf examples/reference-delivery/run
 ```
 
@@ -161,10 +173,6 @@ Live Forgejo + runner daemon-topology e2e (see
 # both daemon scenarios
 cargo test --test daemon_forgejo_e2e -- --ignored
 
-# retry one scenario
-cargo test --test daemon_forgejo_e2e \
-  daemon_forgejo_ci_fails_then_passes_converges -- --ignored
+# the single-process temper run path (one daemon + worker + agent)
+cargo test --test run_forgejo_e2e -- --ignored
 ```
-
-Add `--test-threads=1` only as an optional host resource throttle; Forgejo
-fixture caches and runtime paths are parallel-safe.

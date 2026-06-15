@@ -17,7 +17,7 @@
             "Only read the work-item context and repository; never mutate Forge state.",
             "Return one of the declared verdicts; the engine applies the routed transition's effects."
           ],
-          "guidance": "Use this from triage_intake. If it is not bound, choose no_action for intake triage."
+          "guidance": "Use this from triage_intake. If it is not bound, choose no_action for intake triage. For needs_breakdown, label every child code issue with both `code` and `ready` so it enters the engineer's code_ready queue immediately (a child labeled `code` alone is never picked up); set each child's target_repo to the repository it implements."
         }
       ],
       "concurrency": 1,
@@ -204,6 +204,9 @@
       "target": "issue",
       "identifying_labels": [
         "code"
+      ],
+      "initial_labels": [
+        "ready"
       ]
     },
     {
@@ -211,6 +214,9 @@
       "target": "pull_request",
       "identifying_labels": [
         "implementation"
+      ],
+      "initial_labels": [
+        "needs-reviewer"
       ]
     }
   ],
@@ -234,6 +240,11 @@
       "kind": "dependency",
       "source": "code",
       "target": "code"
+    },
+    {
+      "kind": "dependency",
+      "source": "implementation_pr",
+      "target": "implementation_pr"
     },
     {
       "kind": "produced_pr",
@@ -1041,7 +1052,8 @@
       ],
       "requires_gates": [
         "review_gate",
-        "ci_gate"
+        "ci_gate",
+        "dependency_gate"
       ],
       "effects": [
         {
