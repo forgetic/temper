@@ -39,6 +39,8 @@ jobs:
         # does not disturb the kache build-ordering below and fails fast.
         # cargo-depgraph-check is pre-installed on the host runner.
         run: cargo depgraph-check check
+      - name: Rust file size
+        run: scripts/check-rust-file-size.sh
       - name: Lint
         run: cargo dev-clippy
       - name: Build

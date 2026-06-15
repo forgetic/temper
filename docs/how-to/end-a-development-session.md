@@ -73,7 +73,7 @@ Useful checks:
 
 ```sh
 wc -l README.md AGENTS.md docs/**/*.md
-find crates -type f -name '*.rs' -print0 | xargs -0 wc -l | sort -n
+scripts/check-rust-file-size.sh
 ```
 
 ## 5. Leave an explicit handoff

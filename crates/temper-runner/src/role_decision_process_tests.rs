@@ -23,6 +23,10 @@ use crate::{BoundExternalTool, RoleTools, WorkItem};
 mod classification;
 #[path = "role_decision_process_tests/process_io.rs"]
 mod process_io;
+#[path = "role_decision_process_tests/workspace_content_routing.rs"]
+mod workspace_content_routing;
+#[path = "role_decision_process_tests/workspace_review_routing.rs"]
+mod workspace_review_routing;
 #[path = "role_decision_process_tests/workspace_routing.rs"]
 mod workspace_routing;
 
