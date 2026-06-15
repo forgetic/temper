@@ -23,7 +23,6 @@ temper-forge = { path = "../temper-forge" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 bench-forgejo = { git = "http://127.0.0.1:3000/ai/bench.git", rev = "1a739a6e17df042283399df0530e2ca5adcf1785" }
-temper-forgejo-ops = { path = "../temper-forgejo-ops" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 # Reuse the generalized workflow loader (`load_workflow`/`resolve_workflow`) and
 # the workflow-derived runner config (`runner_config_for`) behind the worker's

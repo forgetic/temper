@@ -26,6 +26,7 @@ mod ids;
 mod issues;
 mod items;
 mod map;
+mod provision;
 mod pulls;
 mod repos;
 mod request;
@@ -34,6 +35,7 @@ mod version;
 
 pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
 pub use config::{CasMode, ConfigError, DEFAULT_PAGE_LIMIT, ForgejoConfig, WebUiCredentials};
+pub use provision::ROLE_PASSWORD;
 
 use std::sync::Arc;
 use version::VersionCache;

@@ -1674,7 +1674,6 @@ dependencies = [
  "temper-forge-filesystem",
  "temper-forge-forgejo",
  "temper-forge-memory",
- "temper-forgejo-ops",
  "temper-reference-delivery",
  "temper-runner",
  "temper-trigger-forgejo",

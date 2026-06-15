@@ -12,12 +12,14 @@ skein.workspace = true
 chrono.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-engine-io = { path = "../temper-engine-io" }
+# Provisioning commits file contents via the Forgejo contents API, which accepts
+# base64-encoded bodies, and mints user tokens over HTTP Basic auth.
+base64 = "0.22"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-base64 = "0.22"
 bench-forgejo = { git = "http://127.0.0.1:3000/ai/bench.git", rev = "1a739a6e17df042283399df0530e2ca5adcf1785" }
 temper-workflow = { path = "../temper-workflow" }
 

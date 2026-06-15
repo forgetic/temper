@@ -12,15 +12,12 @@
 //! - [`client`] holds the shared transport, error, and response plumbing.
 //! - [`orgs`] covers organizations, teams, and users.
 //! - [`repos`] covers repository lifecycle, content, webhooks, and access.
-//! - [`issues`] covers issues and pull requests.
 
 mod client;
-mod issues;
 mod orgs;
 mod repos;
 
 pub use client::{Client, RestError, Result, http_client};
-pub use issues::{create_issue_comment, list_issue_comment_bodies, list_pull_request_files};
 pub use orgs::{
     ROLE_PASSWORD, add_team_member, create_user, ensure_org, mint_user_token, owners_team_id,
 };

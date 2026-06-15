@@ -221,3 +221,11 @@ const _: fn() = || {
     fn is_forge<T: Forge>() {}
     is_forge::<ForgejoForge>();
 };
+
+/// Compile-time proof that the production backend provides the full provisioning
+/// surface: [`Forge`] plus the two capability traits, hence
+/// [`ProvisioningForge`](temper_forge::ProvisioningForge).
+const _: fn() = || {
+    fn is_provisioning_forge<T: temper_forge::ProvisioningForge>() {}
+    is_provisioning_forge::<ForgejoForge>();
+};
