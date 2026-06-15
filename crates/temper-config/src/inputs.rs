@@ -23,7 +23,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::env::EnvLookup;
+use crate::env::{EnvLookup, SystemEnv};
 use crate::error::{ConfigError, FileKind};
 use crate::resolved::Resolved;
 use crate::schema::{Config, Credentials};
@@ -46,24 +46,35 @@ pub struct PathResolver {
 }
 
 impl PathResolver {
-    /// Snapshots the real process environment's base directories.
+    /// Derives the base directories from an injected [`EnvLookup`].
     ///
-    /// Binary-only: this is the explicit `std::env` boundary. The daemon's
-    /// composition root (`src/bin/*`, `service_main`) builds one of these once;
-    /// everything downstream takes the resulting plain data. Tests must build a
-    /// `PathResolver` in-memory instead so they never discover the global config.
-    #[doc(hidden)]
-    pub fn from_system() -> Self {
-        let non_empty = |key: &str| {
-            std::env::var_os(key)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        };
+    /// Reads `XDG_CONFIG_HOME` / `XDG_STATE_HOME` / `HOME` through `env` (empty
+    /// values are treated as unset). This is the hermetic constructor: hand it a
+    /// test [`EnvMap`](crate::EnvMap) and discovery follows that snapshot; hand
+    /// it [`SystemEnv`] (as [`from_system`](Self::from_system) does) and it
+    /// snapshots the real process environment. With an empty `env` every field
+    /// is `None`, so no default locations are discovered.
+    pub fn from_env(env: &dyn EnvLookup) -> Self {
+        let non_empty = |key: &str| env.non_empty(key).map(PathBuf::from);
         Self {
             xdg_config_home: non_empty("XDG_CONFIG_HOME"),
             xdg_state_home: non_empty("XDG_STATE_HOME"),
             home: non_empty("HOME"),
         }
+    }
+
+    /// Snapshots the real process environment's base directories.
+    ///
+    /// Binary-only: this is the explicit `std::env` boundary, expressed as
+    /// [`from_env`](Self::from_env) over [`SystemEnv`]. The daemon's composition
+    /// root (`src/bin/*`, `service_main`) builds one of these once; everything
+    /// downstream takes the resulting plain data. Tests must build a
+    /// `PathResolver` in-memory (via [`from_env`](Self::from_env) over an
+    /// [`EnvMap`](crate::EnvMap), or `Default`) instead so they never discover
+    /// the global config.
+    #[doc(hidden)]
+    pub fn from_system() -> Self {
+        Self::from_env(&SystemEnv)
     }
 }
 

@@ -101,9 +101,16 @@ pub fn load(options: &LoadOptions) -> Result<(Resolved, LoadedPaths), ConfigErro
     })
 }
 
-/// Loads + resolves from explicit `--config` / `--credentials` paths and an
-/// injected environment, discovering **no** default locations (empty
-/// [`PathResolver`]). The seam tests use for fully isolated loads.
+/// Loads + resolves with an explicit environment source (testable seam).
+///
+/// Default-location discovery follows the **injected** `env`: the
+/// [`PathResolver`] is built from it via [`PathResolver::from_env`], so a caller
+/// whose `env` snapshot sets `HOME` / `XDG_CONFIG_HOME` still discovers
+/// `~/.config/temper/{config,credentials}.toml`, exactly as before paths/env
+/// were made injectable. An `env` that sets none of those discovers nothing.
+///
+/// For *strict* explicit-paths-only loads (the hermeticity contract) call
+/// [`load_explicit`] with an empty [`PathResolver`] directly.
 pub fn load_with_env(
     options: &LoadOptions,
     env: &impl EnvLookup,
@@ -112,7 +119,7 @@ pub fn load_with_env(
         explicit_config: options.config.clone(),
         explicit_credentials: options.credentials.clone(),
         env,
-        paths: &PathResolver::default(),
+        paths: &PathResolver::from_env(&env),
     })
 }
 

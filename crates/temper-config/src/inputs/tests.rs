@@ -169,6 +169,55 @@ fn temper_config_env_honored_from_injected_env() {
 }
 
 #[test]
+fn from_env_derives_base_dirs_from_injected_env() {
+    // PathResolver::from_env reads HOME / XDG_* through the injected env, so a
+    // load built from it discovers <home>/.config/temper — restoring the
+    // discovery `load_with_env` relied on before paths/env were injectable.
+    let home = temp_dir("from-env-home");
+    let config_dir = home.join(".config").join("temper");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let config_path = config_dir.join("config.toml");
+    std::fs::write(&config_path, MINIMAL_CONFIG).expect("write config");
+
+    let mut env = EnvMap::new();
+    env.insert("HOME", home.to_string_lossy().into_owned());
+
+    let paths = PathResolver::from_env(&env);
+    assert_eq!(paths.home.as_deref(), Some(home.as_path()));
+
+    let inputs = LoadInputs {
+        explicit_config: None,
+        explicit_credentials: None,
+        env: &env,
+        paths: &paths,
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("env-derived discovery loads");
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert_eq!(resolved.engine.roles, vec!["engineer"]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn from_env_with_empty_env_discovers_nothing() {
+    // The hermeticity contract still holds for from_env: an empty env yields an
+    // all-`None` resolver, so nothing is discovered.
+    let paths = PathResolver::from_env(&NoEnv);
+    assert!(paths.home.is_none());
+    assert!(paths.xdg_config_home.is_none());
+    assert!(paths.xdg_state_home.is_none());
+
+    let inputs = LoadInputs {
+        explicit_config: None,
+        explicit_credentials: None,
+        env: &NoEnv,
+        paths: &paths,
+    };
+    let (_resolved, loaded) = load_explicit(&inputs).expect("empty from_env load resolves");
+    assert!(loaded.config.is_none());
+    assert!(loaded.credentials.is_none());
+}
+
+#[test]
 fn missing_env_pointed_file_is_an_error() {
     // An env-var path is *required*: a missing file errors (it is not silently
     // treated as absent like a default-location file).
