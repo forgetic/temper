@@ -21,6 +21,7 @@ mod build;
 mod cli;
 mod env;
 mod error;
+mod inputs;
 mod paths;
 pub mod provider;
 mod resolve;
@@ -47,8 +48,9 @@ pub use build::{
     forge_users_from_provisioned, write_config, write_credentials,
 };
 pub use cli::{CommonArgs, parse_common_args};
-pub use env::{EnvLookup, NoEnv, SystemEnv};
+pub use env::{EnvLookup, EnvMap, NoEnv, SystemEnv};
 pub use error::{ConfigError, FileKind};
+pub use inputs::{LoadInputs, PathResolver, load_explicit};
 pub use paths::{config_dir, config_path, credentials_path, default_workspace_root, state_dir};
 pub use resolve::{env_role_key, resolve};
 pub use resolved::{
@@ -81,77 +83,37 @@ pub struct LoadedPaths {
     pub credentials: Option<PathBuf>,
 }
 
-/// Loads + resolves the deployment using the process environment.
+/// Loads + resolves the deployment from the **real** process environment.
+///
+/// Binary-only shim: it snapshots `std::env` (via [`PathResolver::from_system`]
+/// and [`SystemEnv`]) and delegates to the hermetic [`load_explicit`]. Its only
+/// callers are the binaries' composition roots (`src/bin/*`, [`service_main`]);
+/// everything else builds [`LoadInputs`] explicitly so it never discovers the
+/// operator's global config. See [`inputs`] for the hermeticity contract.
+#[doc(hidden)]
 pub fn load(options: &LoadOptions) -> Result<(Resolved, LoadedPaths), ConfigError> {
-    load_with_env(options, &SystemEnv)
+    let paths = PathResolver::from_system();
+    load_explicit(&LoadInputs {
+        explicit_config: options.config.clone(),
+        explicit_credentials: options.credentials.clone(),
+        env: &SystemEnv,
+        paths: &paths,
+    })
 }
 
-/// Loads + resolves with an explicit environment source (testable).
+/// Loads + resolves from explicit `--config` / `--credentials` paths and an
+/// injected environment, discovering **no** default locations (empty
+/// [`PathResolver`]). The seam tests use for fully isolated loads.
 pub fn load_with_env(
     options: &LoadOptions,
     env: &impl EnvLookup,
 ) -> Result<(Resolved, LoadedPaths), ConfigError> {
-    let (config, config_file) = load_optional(
-        options.config.clone(),
-        "TEMPER_CONFIG",
-        |dir| dir.join("config.toml"),
-        FileKind::Config,
+    load_explicit(&LoadInputs {
+        explicit_config: options.config.clone(),
+        explicit_credentials: options.credentials.clone(),
         env,
-        Config::parse,
-    )?;
-    let (credentials, credentials_file) = load_optional(
-        options.credentials.clone(),
-        "TEMPER_CREDENTIALS",
-        |dir| dir.join("credentials.toml"),
-        FileKind::Credentials,
-        env,
-        Credentials::parse,
-    )?;
-
-    let resolved = resolve::resolve(&config, &credentials, env)?;
-    Ok((
-        resolved,
-        LoadedPaths {
-            config: config_file,
-            credentials: credentials_file,
-        },
-    ))
-}
-
-/// Locates a file (explicit override / env var = required; default location =
-/// optional), reads + parses it, or returns a defaulted value when an optional
-/// file is absent.
-fn load_optional<T: Default>(
-    explicit: Option<PathBuf>,
-    env_key: &str,
-    default_name: impl Fn(&Path) -> PathBuf,
-    kind: FileKind,
-    env: &impl EnvLookup,
-    parse: impl Fn(&str, &Path, FileKind) -> Result<T, ConfigError>,
-) -> Result<(T, Option<PathBuf>), ConfigError> {
-    // An explicit override or an env-var path is *required*: a missing file is an
-    // error. A default-location file is *optional*: absent means env+defaults.
-    let (path, required) = match explicit {
-        Some(path) => (path, true),
-        None => match env.non_empty(env_key) {
-            Some(path) => (PathBuf::from(path), true),
-            None => match paths::config_dir() {
-                Some(dir) => (default_name(&dir), false),
-                None => return Ok((T::default(), None)),
-            },
-        },
-    };
-
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let parsed = parse(&text, &path, kind)?;
-            Ok((parsed, Some(path)))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !required => {
-            Ok((T::default(), None))
-        }
-        Err(source) => Err(ConfigError::Read { kind, path, source }),
-    }
+        paths: &PathResolver::default(),
+    })
 }
 
 impl Config {

@@ -144,11 +144,16 @@ pub struct FileTargets {
 /// concrete paths, honoring the same `--config` / `--credentials` / env /
 /// default precedence the loader uses.
 pub fn resolve_targets(options: &LoadOptions) -> Result<FileTargets, String> {
-    let config = temper_config::config_path(options.config.clone()).ok_or_else(|| {
-        "cannot determine a default config path (no HOME); pass --config".to_string()
-    })?;
-    let credentials =
-        temper_config::credentials_path(options.credentials.clone()).ok_or_else(|| {
+    // Binary-facing helper: snapshot the real environment at this boundary.
+    // Full migration to injected inputs is issue #202.
+    let paths = temper_config::PathResolver::from_system();
+    let env = temper_config::SystemEnv;
+    let config =
+        temper_config::config_path(options.config.clone(), &paths, &env).ok_or_else(|| {
+            "cannot determine a default config path (no HOME); pass --config".to_string()
+        })?;
+    let credentials = temper_config::credentials_path(options.credentials.clone(), &paths, &env)
+        .ok_or_else(|| {
             "cannot determine a default credentials path (no HOME); pass --credentials".to_string()
         })?;
     Ok(FileTargets {
