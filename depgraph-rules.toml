@@ -32,7 +32,6 @@ temper-forge-filesystem = ["temper-forge"]
 temper-forge-memory = ["temper-forge"]
 temper-forge-forgejo = ["temper-forge", "temper-engine-io"]
 temper-forge-github = ["temper-forge", "temper-engine-io"]
-temper-forgejo-ops = ["temper-engine-io"]
 temper-workflow = ["temper-forge"]
 temper-interaction = ["temper-forge", "temper-engine-io", "temper-process-protocol"]
 temper-runner = ["temper-forge", "temper-engine-io", "temper-process-protocol", "temper-workflow"]
@@ -41,7 +40,10 @@ temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
 temper-reference-delivery-validator = ["temper-forge", "temper-forge-forgejo", "temper-engine-io", "temper-workflow"]
 temper-interaction-service = ["temper-forge", "temper-forge-forgejo", "temper-interaction", "temper-engine-io"]
 temper-trigger-forgejo = ["temper-forge", "temper-runner", "temper-wake"]
-temper-forgejo-provision = ["temper-forge", "temper-forge-forgejo", "temper-forgejo-ops", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
+# Backend-agnostic provisioning orchestration: depends ONLY on the Forge traits,
+# the runner (for RoleBinding), and the workflow model. No backend crate.
+temper-provision = ["temper-forge", "temper-runner", "temper-workflow"]
+temper-forgejo-provision = ["temper-forge", "temper-forge-forgejo", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
 temper-engine = ["temper-forge", "temper-engine-io", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]

@@ -658,22 +658,27 @@ fn daemon_worker_binary() -> PathBuf {
 }
 
 fn register_webhook(server: &ForgejoServer, provisioned: &Provisioned, port: u16) {
+    use temper_forge::{ForgeAdmin, WebhookEvents, WebhookSpec};
+
     let url = format!("http://127.0.0.1:{port}/forgejo/webhook");
     let base_url = server.base_url().to_string();
     let admin_token = provisioned.admin_token.clone();
     let owner = provisioned.owner.clone();
     let name = provisioned.name.clone();
-    block_on_with_cx(move |cx| async move {
-        temper_forgejo_ops::forgejo_rest::ensure_repo_webhook(
-            &temper_forgejo_ops::forgejo_rest::http_client(cx.clone()).expect("HTTP client builds"),
-            &base_url,
-            &admin_token,
-            &owner,
-            &name,
-            &url,
-            WEBHOOK_SECRET,
-        )
-        .await
+    let repository = provisioned.repository.clone();
+    block_on_with_cx(move |_cx| async move {
+        let config = ForgejoConfig::new(&base_url, &admin_token).with_default_repo(&owner, &name);
+        let forge = ForgejoForge::new(config);
+        forge
+            .ensure_webhook(
+                &repository,
+                WebhookSpec {
+                    url,
+                    secret: WEBHOOK_SECRET.to_string(),
+                    events: WebhookEvents::All,
+                },
+            )
+            .await
     })
     .unwrap_or_else(|error| {
         panic!(

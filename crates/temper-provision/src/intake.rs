@@ -1,18 +1,25 @@
 //! Seeding the entry "intake" issue and resolving its labels and author token.
+//!
+//! These helpers are host-neutral: they inspect the workflow and drive the
+//! portable [`Forge`] trait, so the same logic seeds an intake issue against any
+//! backend.
 
 use std::collections::BTreeSet;
 
-use temper_forge::{CreateIssue, IssueQuery, ItemNumber, RepositoryPath};
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge::{CreateIssue, Forge, IssueQuery, ItemNumber, RepositoryId};
 use temper_workflow::{ArtifactTarget, Effect, IntakeAuthor, RoleId, ValidatedWorkflow};
 
-use super::model::{IntakeIssueSeed, ProvisionError, Provisioned, Result};
+use crate::error::{ProvisionError, Result};
+use crate::model::{IntakeIssueSeed, Provisioned};
 
+/// Files the entry intake issue into `repo`, returning its repository-scoped
+/// number.
+///
+/// Idempotent in the find-or-create sense: an existing issue with the seed's
+/// title is reused rather than duplicated.
 pub async fn seed_intake_issue(
-    base_url: &str,
-    token: &str,
-    owner: &str,
-    name: &str,
+    forge: &dyn Forge,
+    repo: &RepositoryId,
     seed: &IntakeIssueSeed,
     workflow: &ValidatedWorkflow,
 ) -> Result<ItemNumber> {
@@ -28,24 +35,14 @@ pub async fn seed_intake_issue(
         });
     }
 
-    let config = ForgejoConfig::new(base_url, token).with_default_repo(owner, name);
-    let forge = ForgejoForge::new(config);
-    let repo = forge
-        .get_repository_by_path(&RepositoryPath::new(owner, name))
-        .await?
-        .ok_or_else(|| ProvisionError::Shape {
-            what: "repository".into(),
-            detail: format!("{owner}/{name} not readable when seeding intake issue"),
-        })?;
-
-    let existing = forge.list_issues(&repo.id, IssueQuery::default()).await?;
+    let existing = forge.list_issues(repo, IssueQuery::default()).await?;
     if let Some(found) = existing.iter().find(|issue| issue.title == seed.title) {
         return Ok(found.number);
     }
 
     let issue = forge
         .create_issue(
-            &repo.id,
+            repo,
             CreateIssue {
                 title: seed.title.clone(),
                 body: seed.body.clone(),
@@ -57,6 +54,7 @@ pub async fn seed_intake_issue(
     Ok(issue.number)
 }
 
+/// Resolves the identifying labels of the workflow's queued entry issue kind.
 pub fn intake_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
     let produced: BTreeSet<&str> = workflow
         .transitions()
@@ -115,7 +113,7 @@ pub fn has_default_issue_kind(workflow: &ValidatedWorkflow) -> bool {
 /// - `Role(r)` uses that role's minted token; errors if the role was not
 ///   provisioned.
 /// - `None` keeps the legacy `human`-role lookup for back-compat.
-pub(super) fn resolve_intake_seed_token<'a>(
+pub fn resolve_intake_seed_token<'a>(
     workflow: &ValidatedWorkflow,
     provisioned: &'a Provisioned,
     admin_token: &'a str,

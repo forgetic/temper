@@ -21,7 +21,7 @@ members = [
     "crates/temper-testing",
     "crates/temper-reference-delivery",
     "crates/temper-wake",
-    "crates/temper-forgejo-ops",
+    "crates/temper-provision",
     "crates/temper-interaction-service",
     "crates/temper-trigger-forgejo",
     "crates/temper-forgejo-provision",
@@ -59,7 +59,6 @@ temper-cli = { path = "crates/temper-cli" }
 # webhook registration, and PR/CI assertions against the spawned daemon binary.
 # The default (`unified`) feature set compiles the daemon stack these need.
 serde_json = { workspace = true }
-temper-forgejo-ops = { path = "crates/temper-forgejo-ops" }
 temper-testing = { path = "crates/temper-testing" }
 # `temper run` e2e (`tests/run_forgejo_e2e.rs`): real bench Forgejo fixture +
 # jig fake LLM, driving one in-process `temper run`. Needs the forge API for PR

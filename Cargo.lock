@@ -1316,7 +1316,6 @@ dependencies = [
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
- "temper-forgejo-ops",
  "temper-testing",
  "temper-worker",
  "temper-worker-protocol",
@@ -1537,16 +1536,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-forgejo-ops"
-version = "0.1.0"
-dependencies = [
- "base64",
- "serde_json",
- "skein",
- "temper-engine-io",
-]
-
-[[package]]
 name = "temper-forgejo-provision"
 version = "0.1.0"
 dependencies = [
@@ -1556,7 +1545,7 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
- "temper-forgejo-ops",
+ "temper-provision",
  "temper-reference-delivery",
  "temper-runner",
  "temper-testing",
@@ -1599,6 +1588,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "temper-provision"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "temper-forge",
+ "temper-forge-filesystem",
+ "temper-forge-memory",
+ "temper-reference-delivery",
+ "temper-runner",
+ "temper-workflow",
 ]
 
 [[package]]
