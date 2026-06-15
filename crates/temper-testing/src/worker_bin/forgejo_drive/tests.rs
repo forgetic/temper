@@ -70,12 +70,16 @@ fn forgejo_drive_hint_wake_bypasses_idle_backoff() {
             token: "token".into(),
             username: None,
             password: None,
+            ci_diagnostics: false,
         }),
         root: root.clone(),
         owner: "acme".into(),
         name: "service".into(),
         repositories: vec![RepositoryPath::new("acme", "service")],
         poll_interval: Duration::seconds(60),
+        // Short, explicit debounce keeps the drain well inside the 800ms stop
+        // window and exercises the parameterized (no-env) wake path.
+        wake_debounce: StdDuration::from_millis(10),
         idle_poll_max_interval: Duration::seconds(60),
         audit_interval: Some(Duration::milliseconds(600_000)),
         stop_file: Some(stop_file.clone()),

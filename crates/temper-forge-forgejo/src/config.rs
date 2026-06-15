@@ -1,6 +1,10 @@
-//! Forgejo backend configuration and environment parsing.
-
-use thiserror::Error;
+//! Forgejo backend configuration.
+//!
+//! This crate is a library, not a process boundary: it never reads the process
+//! environment. Callers (the wiring/service layer and binaries) build a
+//! [`ForgejoConfig`] from explicit values — see `temper-engine-service`'s
+//! `forgejo_config` adapter, which translates a resolved config into one of
+//! these.
 
 /// Default page size for paginated list requests.
 pub const DEFAULT_PAGE_LIMIT: u32 = 50;
@@ -63,15 +67,10 @@ pub struct ForgejoConfig {
     pub cas_mode: CasMode,
     /// Optional web-UI credentials used only for the CI read fallback (ADR 0019).
     pub web_ui: Option<WebUiCredentials>,
-}
-
-/// Failure parsing configuration from the environment.
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum ConfigError {
-    #[error("missing required environment variable {0}")]
-    MissingEnv(&'static str),
-    #[error("invalid {name}: {value:?}")]
-    Invalid { name: &'static str, value: String },
+    /// When set, web-UI CI fallback reads are logged to stderr. The wiring layer
+    /// sets this from its diagnostics flag; the backend never reads the
+    /// environment to decide it.
+    pub ci_diagnostics: bool,
 }
 
 impl ForgejoConfig {
@@ -88,6 +87,7 @@ impl ForgejoConfig {
             page_limit: DEFAULT_PAGE_LIMIT,
             cas_mode: CasMode::default(),
             web_ui: None,
+            ci_diagnostics: false,
         }
     }
 
@@ -129,58 +129,14 @@ impl ForgejoConfig {
         self
     }
 
-    /// Builds configuration from the process environment.
+    /// Enables (or disables) stderr logging of web-UI CI fallback reads.
     ///
-    /// Reads `FORGEJO_URL` and `FORGEJO_ACCESS_TOKEN` (both required) and the
-    /// optional `FORGEJO_DEFAULT_REPO` in `owner/repo` form. These match the
-    /// environment names used by the reference TypeScript integration.
-    pub fn from_env() -> Result<Self, ConfigError> {
-        Self::from_lookup(|key| std::env::var(key).ok())
+    /// The wiring layer flips this from its own diagnostics flag; the backend
+    /// never inspects the environment to decide it.
+    pub fn with_ci_diagnostics(mut self, enabled: bool) -> Self {
+        self.ci_diagnostics = enabled;
+        self
     }
-
-    /// Builds configuration from an arbitrary key lookup; used for tests.
-    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
-        let base_url = required(&lookup, "FORGEJO_URL")?;
-        let token = required(&lookup, "FORGEJO_ACCESS_TOKEN")?;
-        let mut config = ForgejoConfig::new(base_url, token);
-
-        if let Some(repo) = non_empty(lookup("FORGEJO_DEFAULT_REPO")) {
-            let (owner, name) = repo.split_once('/').ok_or_else(|| ConfigError::Invalid {
-                name: "FORGEJO_DEFAULT_REPO",
-                value: repo.clone(),
-            })?;
-            if owner.is_empty() || name.is_empty() || name.contains('/') {
-                return Err(ConfigError::Invalid {
-                    name: "FORGEJO_DEFAULT_REPO",
-                    value: repo,
-                });
-            }
-            config = config.with_default_repo(owner, name);
-        }
-
-        // Optional web-UI credentials for the CI read fallback (ADR 0019). Both
-        // must be present and non-blank to take effect; otherwise CI reads on a
-        // REST-less server surface a hard backend error rather than a verdict.
-        if let (Some(username), Some(password)) = (
-            non_empty(lookup("FORGEJO_USERNAME")),
-            non_empty(lookup("FORGEJO_PASSWORD")),
-        ) {
-            config = config.with_web_ui_credentials(username, password);
-        }
-
-        Ok(config)
-    }
-}
-
-fn required(
-    lookup: &impl Fn(&str) -> Option<String>,
-    key: &'static str,
-) -> Result<String, ConfigError> {
-    non_empty(lookup(key)).ok_or(ConfigError::MissingEnv(key))
-}
-
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.filter(|candidate| !candidate.trim().is_empty())
 }
 
 fn strip_trailing_slashes(value: String) -> String {
@@ -190,15 +146,6 @@ fn strip_trailing_slashes(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect();
-        move |key: &str| map.get(key).cloned()
-    }
 
     #[test]
     fn new_strips_trailing_slashes_and_applies_defaults() {
@@ -208,52 +155,27 @@ mod tests {
         assert_eq!(config.default_owner, None);
         assert_eq!(config.page_limit, DEFAULT_PAGE_LIMIT);
         assert_eq!(config.cas_mode, CasMode::BestEffort);
+        assert!(!config.ci_diagnostics);
     }
 
     #[test]
-    fn from_env_parses_required_and_optional_values() {
-        let config = ForgejoConfig::from_lookup(lookup(&[
-            ("FORGEJO_URL", "https://git.example.com/"),
-            ("FORGEJO_ACCESS_TOKEN", "secret"),
-            ("FORGEJO_DEFAULT_REPO", "acme/widgets"),
-        ]))
-        .unwrap();
+    fn builders_set_explicit_values() {
+        let config = ForgejoConfig::new("https://git.example.com/", "secret")
+            .with_default_repo("acme", "widgets")
+            .with_ci_diagnostics(true);
 
         assert_eq!(config.base_url, "https://git.example.com");
         assert_eq!(config.token, "secret");
         assert_eq!(config.default_owner.as_deref(), Some("acme"));
         assert_eq!(config.default_name.as_deref(), Some("widgets"));
+        assert!(config.ci_diagnostics);
     }
 
     #[test]
-    fn from_env_allows_missing_default_repo() {
-        let config = ForgejoConfig::from_lookup(lookup(&[
-            ("FORGEJO_URL", "https://git.example.com"),
-            ("FORGEJO_ACCESS_TOKEN", "secret"),
-        ]))
-        .unwrap();
-        assert_eq!(config.default_owner, None);
-        assert_eq!(config.default_name, None);
-    }
-
-    #[test]
-    fn from_env_requires_url_and_token() {
-        assert_eq!(
-            ForgejoConfig::from_lookup(lookup(&[("FORGEJO_ACCESS_TOKEN", "secret")])),
-            Err(ConfigError::MissingEnv("FORGEJO_URL"))
-        );
-        assert_eq!(
-            ForgejoConfig::from_lookup(lookup(&[("FORGEJO_URL", "https://git.example.com")])),
-            Err(ConfigError::MissingEnv("FORGEJO_ACCESS_TOKEN"))
-        );
-        // Blank values count as missing.
-        assert_eq!(
-            ForgejoConfig::from_lookup(lookup(&[
-                ("FORGEJO_URL", "  "),
-                ("FORGEJO_ACCESS_TOKEN", "secret"),
-            ])),
-            Err(ConfigError::MissingEnv("FORGEJO_URL"))
-        );
+    fn ci_diagnostics_defaults_off_and_toggles() {
+        let config = ForgejoConfig::new("https://git.example.com", "tok");
+        assert!(!config.ci_diagnostics);
+        assert!(config.with_ci_diagnostics(true).ci_diagnostics);
     }
 
     #[test]
@@ -288,48 +210,5 @@ mod tests {
         assert!(!rendered.contains("super-secret"));
         assert!(!rendered.contains("ci-reader"));
         assert!(rendered.contains("redacted"));
-    }
-
-    #[test]
-    fn from_env_reads_web_ui_credentials() {
-        let config = ForgejoConfig::from_lookup(lookup(&[
-            ("FORGEJO_URL", "https://git.example.com"),
-            ("FORGEJO_ACCESS_TOKEN", "secret"),
-            ("FORGEJO_USERNAME", "ci-reader"),
-            ("FORGEJO_PASSWORD", "pw"),
-        ]))
-        .unwrap();
-        assert_eq!(
-            config.web_ui,
-            Some(WebUiCredentials {
-                username: "ci-reader".to_string(),
-                password: "pw".to_string(),
-            })
-        );
-
-        // Username without password (or vice versa) does not set credentials.
-        let partial = ForgejoConfig::from_lookup(lookup(&[
-            ("FORGEJO_URL", "https://git.example.com"),
-            ("FORGEJO_ACCESS_TOKEN", "secret"),
-            ("FORGEJO_USERNAME", "ci-reader"),
-        ]))
-        .unwrap();
-        assert_eq!(partial.web_ui, None);
-    }
-
-    #[test]
-    fn from_env_rejects_malformed_default_repo() {
-        let result = ForgejoConfig::from_lookup(lookup(&[
-            ("FORGEJO_URL", "https://git.example.com"),
-            ("FORGEJO_ACCESS_TOKEN", "secret"),
-            ("FORGEJO_DEFAULT_REPO", "no-slash"),
-        ]));
-        assert_eq!(
-            result,
-            Err(ConfigError::Invalid {
-                name: "FORGEJO_DEFAULT_REPO",
-                value: "no-slash".to_string(),
-            })
-        );
     }
 }

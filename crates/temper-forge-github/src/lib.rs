@@ -36,7 +36,7 @@ mod types;
 mod version;
 
 pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
-pub use config::{CasMode, ConfigError, DEFAULT_PAGE_LIMIT, GitHubConfig};
+pub use config::{CasMode, DEFAULT_PAGE_LIMIT, GitHubConfig};
 
 use std::sync::Arc;
 use version::VersionCache;

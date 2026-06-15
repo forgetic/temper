@@ -168,7 +168,8 @@ async fn run_async(
 /// The token and password never appear in logs or errors; only the base URL is
 /// echoed.
 fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
-    let mut config = ForgejoConfig::new(forgejo.base_url.clone(), forgejo.token.clone());
+    let mut config = ForgejoConfig::new(forgejo.base_url.clone(), forgejo.token.clone())
+        .with_ci_diagnostics(forgejo.ci_diagnostics);
     if let (Some(username), Some(password)) = (&forgejo.username, &forgejo.password) {
         config = config.with_web_ui_credentials(username, password);
     }

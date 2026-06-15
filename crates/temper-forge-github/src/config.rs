@@ -1,6 +1,8 @@
-//! GitHub backend configuration and environment parsing.
-
-use thiserror::Error;
+//! GitHub backend configuration.
+//!
+//! This crate is a library, not a process boundary: it never reads the process
+//! environment. Callers (the wiring/service layer and binaries) build a
+//! [`GitHubConfig`] from explicit values.
 
 /// Default page size for paginated list requests.
 pub const DEFAULT_PAGE_LIMIT: u32 = 50;
@@ -43,15 +45,6 @@ pub struct GitHubConfig {
     pub cas_mode: CasMode,
 }
 
-/// Failure parsing configuration from the environment.
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum ConfigError {
-    #[error("missing required environment variable {0}")]
-    MissingEnv(&'static str),
-    #[error("invalid {name}: {value:?}")]
-    Invalid { name: &'static str, value: String },
-}
-
 impl GitHubConfig {
     /// Builds a configuration from a token, targeting the public GitHub API.
     pub fn new(token: impl Into<String>) -> Self {
@@ -91,50 +84,6 @@ impl GitHubConfig {
         self.cas_mode = cas_mode;
         self
     }
-
-    /// Builds configuration from the process environment.
-    ///
-    /// Reads `GITHUB_TOKEN` (required), the optional `GITHUB_API_URL` (defaults
-    /// to `https://api.github.com`), and the optional `GITHUB_DEFAULT_REPO` in
-    /// `owner/repo` form. These match the names GitHub's own tooling uses.
-    pub fn from_env() -> Result<Self, ConfigError> {
-        Self::from_lookup(|key| std::env::var(key).ok())
-    }
-
-    /// Builds configuration from an arbitrary key lookup; used for tests.
-    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
-        let token = required(&lookup, "GITHUB_TOKEN")?;
-        let base_url =
-            non_empty(lookup("GITHUB_API_URL")).unwrap_or_else(|| DEFAULT_API_URL.to_string());
-        let mut config = GitHubConfig::with_base_url(base_url, token);
-
-        if let Some(repo) = non_empty(lookup("GITHUB_DEFAULT_REPO")) {
-            let (owner, name) = repo.split_once('/').ok_or_else(|| ConfigError::Invalid {
-                name: "GITHUB_DEFAULT_REPO",
-                value: repo.clone(),
-            })?;
-            if owner.is_empty() || name.is_empty() || name.contains('/') {
-                return Err(ConfigError::Invalid {
-                    name: "GITHUB_DEFAULT_REPO",
-                    value: repo,
-                });
-            }
-            config = config.with_default_repo(owner, name);
-        }
-
-        Ok(config)
-    }
-}
-
-fn required(
-    lookup: &impl Fn(&str) -> Option<String>,
-    key: &'static str,
-) -> Result<String, ConfigError> {
-    non_empty(lookup(key)).ok_or(ConfigError::MissingEnv(key))
-}
-
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.filter(|candidate| !candidate.trim().is_empty())
 }
 
 fn strip_trailing_slashes(value: String) -> String {
@@ -144,15 +93,6 @@ fn strip_trailing_slashes(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect();
-        move |key: &str| map.get(key).cloned()
-    }
 
     #[test]
     fn new_targets_public_api_and_applies_defaults() {
@@ -171,53 +111,17 @@ mod tests {
     }
 
     #[test]
-    fn from_env_parses_required_and_optional_values() {
-        let config = GitHubConfig::from_lookup(lookup(&[
-            ("GITHUB_TOKEN", "secret"),
-            ("GITHUB_API_URL", "https://ghe.example.com/api/v3/"),
-            ("GITHUB_DEFAULT_REPO", "acme/widgets"),
-        ]))
-        .unwrap();
+    fn builders_set_explicit_values() {
+        let config = GitHubConfig::with_base_url("https://ghe.example.com/api/v3/", "secret")
+            .with_default_repo("acme", "widgets")
+            .with_page_limit(10)
+            .with_cas_mode(CasMode::Strict);
 
         assert_eq!(config.base_url, "https://ghe.example.com/api/v3");
         assert_eq!(config.token, "secret");
         assert_eq!(config.default_owner.as_deref(), Some("acme"));
         assert_eq!(config.default_name.as_deref(), Some("widgets"));
-    }
-
-    #[test]
-    fn from_env_defaults_api_url_and_allows_missing_default_repo() {
-        let config = GitHubConfig::from_lookup(lookup(&[("GITHUB_TOKEN", "secret")])).unwrap();
-        assert_eq!(config.base_url, "https://api.github.com");
-        assert_eq!(config.default_owner, None);
-        assert_eq!(config.default_name, None);
-    }
-
-    #[test]
-    fn from_env_requires_token() {
-        assert_eq!(
-            GitHubConfig::from_lookup(lookup(&[])),
-            Err(ConfigError::MissingEnv("GITHUB_TOKEN"))
-        );
-        // Blank values count as missing.
-        assert_eq!(
-            GitHubConfig::from_lookup(lookup(&[("GITHUB_TOKEN", "  ")])),
-            Err(ConfigError::MissingEnv("GITHUB_TOKEN"))
-        );
-    }
-
-    #[test]
-    fn from_env_rejects_malformed_default_repo() {
-        let result = GitHubConfig::from_lookup(lookup(&[
-            ("GITHUB_TOKEN", "secret"),
-            ("GITHUB_DEFAULT_REPO", "no-slash"),
-        ]));
-        assert_eq!(
-            result,
-            Err(ConfigError::Invalid {
-                name: "GITHUB_DEFAULT_REPO",
-                value: "no-slash".to_string(),
-            })
-        );
+        assert_eq!(config.page_limit, 10);
+        assert_eq!(config.cas_mode, CasMode::Strict);
     }
 }

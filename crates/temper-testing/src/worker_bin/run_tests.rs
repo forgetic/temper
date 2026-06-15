@@ -21,6 +21,7 @@ fn base_args(root: PathBuf, kind: WorkerKind) -> WorkerArgs {
         name: "service".into(),
         repositories: vec![RepositoryPath::new("acme", "service")],
         poll_interval: Duration::milliseconds(1),
+        wake_debounce: temper_wake::DEFAULT_WAKE_DEBOUNCE,
         idle_poll_max_interval: Duration::milliseconds(60_000),
         audit_interval: Some(Duration::milliseconds(600_000)),
         stop_file: None,

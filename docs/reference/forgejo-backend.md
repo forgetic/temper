@@ -13,14 +13,18 @@ read [`forge-interface.md`](forge-interface.md).
 
 ## Configuration and tests
 
-`ForgejoConfig::from_env` reads:
+`ForgejoConfig` is built only from explicit values — this crate is a library, not
+a process boundary, and never reads the environment. The wiring layer translates
+a resolved temper config into one via `temper-engine-service`'s `forgejo_config`
+adapter, supplying:
 
-| Variable | Purpose |
+| Field | Purpose |
 | --- | --- |
-| `FORGEJO_URL` | required Forgejo base URL; trailing slashes are stripped |
-| `FORGEJO_ACCESS_TOKEN` | required REST token, sent as `Authorization: token <token>` |
-| `FORGEJO_DEFAULT_REPO` | optional `owner/repo` default |
-| `FORGEJO_USERNAME` / `FORGEJO_PASSWORD` | optional web-UI login used only for the CI fallback |
+| `base_url` | required Forgejo base URL; trailing slashes are stripped |
+| `token` | required REST token, sent as `Authorization: token <token>` |
+| `default_owner` / `default_name` (`with_default_repo`) | optional `owner/repo` default |
+| `web_ui` (`with_web_ui_credentials`) | optional web-UI login used only for the CI fallback |
+| `ci_diagnostics` (`with_ci_diagnostics`) | when set, web-UI CI fallback reads are logged to stderr |
 
 REST requests are sent under `/api/v1`, JSON typed, paginated with
 `limit`/`page`, and capped internally. Credentials are redacted from `Debug` and

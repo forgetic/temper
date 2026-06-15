@@ -315,9 +315,15 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
             break;
         }
         let wait_interval = wait_interval_until_next_tick(next_poll_due, next_audit_due);
-        match wait_for_wake_or_poll(cx, || stop.should_stop(), wait_interval, wake.as_mut())
-            .await
-            .map_err(|error| RunError::Backend(error.to_string()))?
+        match wait_for_wake_or_poll(
+            cx,
+            || stop.should_stop(),
+            wait_interval,
+            args.wake_debounce,
+            wake.as_mut(),
+        )
+        .await
+        .map_err(|error| RunError::Backend(error.to_string()))?
         {
             WakeWaitOutcome::PollDeadline => {
                 next_tick_reason = deadline_tick_reason(next_poll_due, next_audit_due)

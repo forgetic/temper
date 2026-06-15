@@ -8,8 +8,9 @@
 
 use super::args::{
     AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
-    ClockKind, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, ForgejoArgs,
-    ProfileKind, ReviewerKind, RoleBehavior, WORKFLOW_FILE_ENV, WorkerArgs, WorkerKind,
+    ClockKind, FORGEJO_CI_DIAGNOSTICS_ENV, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV,
+    FORGEJO_USERNAME_ENV, ForgejoArgs, ProfileKind, ReviewerKind, RoleBehavior,
+    WAKE_DEBOUNCE_MS_ENV, WORKFLOW_FILE_ENV, WorkerArgs, WorkerKind,
 };
 use chrono::Duration;
 use std::collections::BTreeSet;
@@ -197,6 +198,10 @@ impl RawArgs {
             .transpose()?;
         let clock = parse_clock(self.clock.as_deref())?;
         let agents = parse_agents(self.agents.as_deref())?;
+        // Resolve the local wake debounce here, at the process boundary: read the
+        // optional env override and turn it into a concrete duration that is
+        // passed explicitly to the wake bus. `temper-wake` never reads env.
+        let wake_debounce = temper_wake::wake_debounce_from(env(WAKE_DEBOUNCE_MS_ENV).as_deref());
 
         let backend = match backend_kind {
             BackendKind::Filesystem => {
@@ -234,11 +239,13 @@ impl RawArgs {
                 let token = require_env(env, FORGEJO_TOKEN_ENV)?;
                 let username = non_empty_env(env, FORGEJO_USERNAME_ENV);
                 let password = non_empty_env(env, FORGEJO_PASSWORD_ENV);
+                let ci_diagnostics = non_empty_env(env, FORGEJO_CI_DIAGNOSTICS_ENV).is_some();
                 Backend::Forgejo(ForgejoArgs {
                     base_url,
                     token,
                     username,
                     password,
+                    ci_diagnostics,
                 })
             }
         };
@@ -251,6 +258,7 @@ impl RawArgs {
             name,
             repositories,
             poll_interval,
+            wake_debounce,
             idle_poll_max_interval,
             audit_interval,
             stop_file,

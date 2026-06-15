@@ -9,13 +9,15 @@ that replay canned responses — no test touches the network.
 
 ## Configuration
 
-`GitHubConfig` is built programmatically or from the environment:
+`GitHubConfig` is built programmatically from explicit values — this crate is a
+library, not a process boundary, and never reads the environment. The wiring
+layer supplies:
 
-| Variable | Required | Meaning |
+| Field | Required | Meaning |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | yes | Personal access token, sent as `Authorization: Bearer …` |
-| `GITHUB_API_URL` | no | API root; defaults to `https://api.github.com`. GitHub Enterprise uses `https://host/api/v3` |
-| `GITHUB_DEFAULT_REPO` | no | `owner/repo` default repository |
+| `token` | yes | Personal access token, sent as `Authorization: Bearer …` |
+| `base_url` (`with_base_url`) | no | API root; defaults to `https://api.github.com`. GitHub Enterprise uses `https://host/api/v3` |
+| `default_owner` / `default_name` (`with_default_repo`) | no | `owner/repo` default repository |
 
 Every request also pins `Accept: application/vnd.github+json`,
 `X-GitHub-Api-Version: 2022-11-28`, and a `User-Agent` (GitHub rejects requests
