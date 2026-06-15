@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use temper_config::provider;
-use temper_config::{Resolved, env_role_key};
+use temper_config::{ExposeSecret, Resolved, env_role_key};
 use temper_worker::config::{CapabilitySpec, ExecutorSelection, WorkerConfig};
 use temper_worker::workspace::RoleGitIdentity;
 
@@ -66,7 +66,9 @@ pub fn role_identities(resolved: &Resolved) -> BTreeMap<String, RoleGitIdentity>
                 RoleGitIdentity {
                     user: identity.user.clone(),
                     email: identity.email.clone(),
-                    token: identity.token.clone(),
+                    // I/O boundary: the worker's git identity carries the raw
+                    // push token (used to build the git auth header).
+                    token: identity.token.expose_secret().to_string(),
                 },
             )
         })
@@ -128,7 +130,8 @@ fn role_identity_env(resolved: &Resolved) -> Vec<(String, String)> {
         ));
         env.push((
             format!("TEMPER_FORGEJO_TOKEN_{key}"),
-            identity.token.clone(),
+            // I/O boundary: the token crosses into the spawned agent's env.
+            identity.token.expose_secret().to_string(),
         ));
     }
     env

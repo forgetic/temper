@@ -215,8 +215,9 @@ fn run_child(
 }
 
 /// Last `max_len` bytes of captured stderr, on a char boundary, for error
-/// messages. (Secret redaction is applied by the executor, which holds the push
-/// token.)
+/// messages. The push token is never embedded in a command label or remote URL
+/// (it is passed via a separate `-c http.extraheader` arg), so captured stderr
+/// does not carry it.
 fn stderr_tail(stderr: &[u8], max_len: usize) -> String {
     let text = String::from_utf8_lossy(stderr).into_owned();
     if text.len() <= max_len {

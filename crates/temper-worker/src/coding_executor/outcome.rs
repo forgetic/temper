@@ -11,7 +11,6 @@ pub(super) async fn writable_outcome(
     allowed_verdicts: &[String],
     coordination_key: &str,
     artifact_item: &serde_json::Value,
-    token: &str,
 ) -> JobOutcome {
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
@@ -20,13 +19,11 @@ pub(super) async fn writable_outcome(
             verdict,
             allowed_verdicts,
             coordination_key,
-            token,
         )
         .await;
     }
 
-    let outcomes = match push_writable_repos(prepared, coordination_key, artifact_item, token).await
-    {
+    let outcomes = match push_writable_repos(prepared, coordination_key, artifact_item).await {
         Ok(outcomes) => outcomes,
         Err(outcome) => return outcome,
     };
@@ -51,7 +48,6 @@ async fn writable_verdict_outcome(
     verdict: String,
     allowed_verdicts: &[String],
     coordination_key: &str,
-    token: &str,
 ) -> JobOutcome {
     if !allowed_verdicts.contains(&verdict) {
         return failure(
@@ -62,7 +58,7 @@ async fn writable_verdict_outcome(
 
     for prepared in prepared {
         if let Err(error) = prepared.workspace.discard_changes().await {
-            return workspace_failure("discard verdict workspace changes", error, token);
+            return workspace_failure("discard verdict workspace changes", error);
         }
     }
     JobOutcome::Verdict {
@@ -79,12 +75,11 @@ async fn push_writable_repos(
     prepared: &[PreparedRepo],
     coordination_key: &str,
     artifact_item: &serde_json::Value,
-    token: &str,
 ) -> Result<Vec<RepoOutcome>, JobOutcome> {
     let mut outcomes = Vec::new();
     for (index, prepared) in prepared.iter().enumerate() {
         if let Some(outcome) =
-            push_writable_repo(prepared, index, coordination_key, artifact_item, token).await?
+            push_writable_repo(prepared, index, coordination_key, artifact_item).await?
         {
             outcomes.push(outcome);
         }
@@ -97,7 +92,6 @@ async fn push_writable_repo(
     index: usize,
     coordination_key: &str,
     artifact_item: &serde_json::Value,
-    token: &str,
 ) -> Result<Option<RepoOutcome>, JobOutcome> {
     if !prepared.writable {
         return Ok(None);
@@ -106,8 +100,8 @@ async fn push_writable_repo(
         .branch_hint
         .clone()
         .expect("writable repo carries a branch hint (checked at prepare)");
-    let has_tree_changes = repo_has_tree_changes(prepared, token).await?;
-    if !repo_produced_diff(prepared, has_tree_changes, token).await? {
+    let has_tree_changes = repo_has_tree_changes(prepared).await?;
+    if !repo_produced_diff(prepared, has_tree_changes).await? {
         return Ok(None);
     }
     if has_tree_changes {
@@ -116,13 +110,13 @@ async fn push_writable_repo(
             .workspace
             .commit_all(&message)
             .await
-            .map_err(|error| workspace_failure("commit workspace changes", error, token))?;
+            .map_err(|error| workspace_failure("commit workspace changes", error))?;
     }
     let head_sha = prepared
         .workspace
         .push_branch(&branch)
         .await
-        .map_err(|error| workspace_failure("push workspace branch", error, token))?;
+        .map_err(|error| workspace_failure("push workspace branch", error))?;
     Ok(Some(RepoOutcome {
         repo: prepared.repo.clone(),
         branch: Branch {
@@ -132,18 +126,17 @@ async fn push_writable_repo(
     }))
 }
 
-async fn repo_has_tree_changes(prepared: &PreparedRepo, token: &str) -> Result<bool, JobOutcome> {
+async fn repo_has_tree_changes(prepared: &PreparedRepo) -> Result<bool, JobOutcome> {
     prepared
         .workspace
         .has_changes()
         .await
-        .map_err(|error| workspace_failure("inspect workspace changes", error, token))
+        .map_err(|error| workspace_failure("inspect workspace changes", error))
 }
 
 async fn repo_produced_diff(
     prepared: &PreparedRepo,
     has_tree_changes: bool,
-    token: &str,
 ) -> Result<bool, JobOutcome> {
     if has_tree_changes {
         return Ok(true);
@@ -152,7 +145,7 @@ async fn repo_produced_diff(
         .workspace
         .commits_ahead_of_base()
         .await
-        .map_err(|error| workspace_failure("inspect workspace commits", error, token))
+        .map_err(|error| workspace_failure("inspect workspace commits", error))
 }
 
 /// Builds the implementation commit message.

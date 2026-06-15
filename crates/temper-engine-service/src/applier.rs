@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use temper_config::{ExposeSecret, Secret};
 use temper_engine::{
     DaemonRunConfig, ForgeApplier, LeaseApplier, ResultApplier, RoleRoutingApplier,
 };
@@ -20,7 +21,7 @@ pub fn result_applier(
     forge_base_url: String,
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     config: &DaemonRunConfig,
-    role_tokens: &BTreeMap<String, String>,
+    role_tokens: &BTreeMap<String, Secret>,
     lease_ttl: chrono::Duration,
 ) -> Arc<dyn ResultApplier> {
     let default_chain = applier_chain(
@@ -40,9 +41,10 @@ pub fn result_applier(
     for role in &config.roles {
         let role = role.as_str().to_string();
         if let Some(token) = role_tokens.get(&role) {
+            // I/O boundary: the per-role token is handed to its Forgejo client.
             let role_forge = temper_forge::factory::new_forgejo(ForgejoConfig::new(
                 forge_base_url.clone(),
-                token.clone(),
+                token.expose_secret(),
             ));
             let role_chain = applier_chain(
                 role_forge,

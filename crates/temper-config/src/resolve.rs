@@ -17,6 +17,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use secrecy::SecretString;
+
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolved::{
@@ -92,7 +94,8 @@ fn resolve_forge(
                 .as_deref()
                 .and_then(|name| credentials.forge.users.get(name))
                 .and_then(|user| trimmed(user.token.as_deref()))
-        });
+        })
+        .map(SecretString::from);
 
     let ci_user =
         trimmed(config.forge.ci_user.as_deref()).unwrap_or_else(|| DEFAULT_CI_USER.to_string());
@@ -102,10 +105,17 @@ fn resolve_forge(
     let mut role_identities = BTreeMap::new();
     for role in roles {
         if let Some(token) = role_token(credentials, env, role) {
-            role_tokens.insert(role.clone(), token.clone());
             let user = role_user(credentials, env, role);
             let email = role_email(credentials, env, role, &user);
-            role_identities.insert(role.clone(), GitIdentity { user, email, token });
+            role_tokens.insert(role.clone(), SecretString::from(token.clone()));
+            role_identities.insert(
+                role.clone(),
+                GitIdentity {
+                    user,
+                    email,
+                    token: SecretString::from(token),
+                },
+            );
         }
     }
 
@@ -132,7 +142,10 @@ fn resolve_web_ui(
     let password = env
         .non_empty("FORGEJO_PASSWORD")
         .or_else(|| user.and_then(|u| trimmed(u.password.as_deref())))?;
-    Some(WebUiCreds { username, password })
+    Some(WebUiCreds {
+        username,
+        password: SecretString::from(password),
+    })
 }
 
 fn role_token(credentials: &Credentials, env: &impl EnvLookup, role: &str) -> Option<String> {
@@ -455,17 +468,17 @@ fn resolve_provider_credential(
     if (kind == "api-key" || kind == "api_key")
         && let Some(key) = trimmed(cred.key.as_deref())
     {
-        return ProviderCredential::ApiKey(key);
+        return ProviderCredential::ApiKey(SecretString::from(key));
     }
     if let Some(access) = trimmed(cred.access.as_deref()) {
         return ProviderCredential::OAuthInline {
-            access,
-            refresh: trimmed(cred.refresh.as_deref()),
+            access: SecretString::from(access),
+            refresh: trimmed(cred.refresh.as_deref()).map(SecretString::from),
             expires: cred.expires.unwrap_or(0),
         };
     }
     if let Some(key) = trimmed(cred.key.as_deref()) {
-        return ProviderCredential::ApiKey(key);
+        return ProviderCredential::ApiKey(SecretString::from(key));
     }
     ProviderCredential::Ambient
 }

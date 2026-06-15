@@ -5,7 +5,7 @@
 //! These are pure (no I/O) and `pub` so the unified binary's standalone mode can
 //! reuse the exact same translation the slim `temper-engine` binary uses.
 
-use temper_config::Resolved;
+use temper_config::{ExposeSecret, Resolved};
 use temper_engine::DaemonRunConfig;
 use temper_forge::RepositoryPath;
 use temper_forge::config::ForgejoConfig;
@@ -24,9 +24,13 @@ pub fn forgejo_config(resolved: &Resolved) -> Result<ForgejoConfig, String> {
         .forge
         .require_admin_token()
         .map_err(|error| error.to_string())?;
-    let mut config = ForgejoConfig::new(url, token);
+    // I/O boundary: the token is handed to the Forgejo HTTP client.
+    let mut config = ForgejoConfig::new(url, token.expose_secret());
     if let Some(web) = &resolved.forge.web_ui {
-        config = config.with_web_ui_credentials(web.username.clone(), web.password.clone());
+        config = config.with_web_ui_credentials(
+            web.username.clone(),
+            web.password.expose_secret().to_string(),
+        );
     }
     Ok(config)
 }
