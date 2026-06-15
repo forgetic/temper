@@ -33,6 +33,7 @@ pub fn worker_config(resolved: &Resolved) -> Result<WorkerConfig, String> {
         daemon_url: worker.daemon_url.clone(),
         worker_id: worker.worker_id.clone(),
         capabilities,
+        role_identities: role_identities(resolved),
         max_concurrent_jobs: worker.max_concurrent_jobs,
         poll_wait: worker.poll_wait,
         heartbeat_interval: worker.heartbeat_interval,

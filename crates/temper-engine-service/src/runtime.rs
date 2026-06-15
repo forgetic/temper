@@ -6,16 +6,15 @@ use std::sync::Arc;
 
 use temper_config::Resolved;
 use temper_engine::{
-    Daemon, DaemonRunConfig, HintedMechanical, MechanicalBackstopConfig, PollBackstopConfig,
-    RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig, spawn_mechanical_backstop,
-    spawn_poll_backstop,
+    Daemon, DaemonRunConfig, EngineConfig, HintedMechanical, MechanicalBackstopConfig,
+    PollBackstopConfig, RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig,
+    spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
-    daemon_run_config, ensure_workflow_labels, forgejo_config, resolve_repositories,
-    result_applier, role_feed_targets,
+    engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
 };
 
 /// Runs the engine on the skein runtime until SIGINT/SIGTERM, then drains.
@@ -36,10 +35,13 @@ pub async fn run_async(
     resolved: &Resolved,
 ) -> Result<(), String> {
     let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle.clone());
-    let forge_config = forgejo_config(resolved)?;
+    let EngineConfig {
+        daemon: config,
+        forge: forge_config,
+        role_tokens,
+    } = engine_config(resolved)?;
     let forge_base_url = forge_config.base_url.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
-    let config = daemon_run_config(resolved)?;
 
     let (workflow, compiled) = load_workflow(&config)?;
     let (repositories, repo_ids) = resolve_repo_targets(forge.as_ref(), &config.repos).await?;
@@ -54,7 +56,7 @@ pub async fn run_async(
             forge_base_url,
             workflow.clone(),
             &config,
-            &resolved.forge.role_tokens,
+            &role_tokens,
             lease_ttl,
         ),
     );

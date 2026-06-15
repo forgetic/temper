@@ -1,3 +1,19 @@
+//! The orchestration **worker**: long-polls the daemon for jobs and drives one
+//! agent turn per job out-of-process behind the agent protocol.
+//!
+//! ## Config objects
+//!
+//! The worker subsystem is configured by one struct, [`WorkerConfig`], passed to
+//! the [`run_worker`] factory. It is constructible **in memory** (no files, env,
+//! or args) so unit and integration tests can stand a worker up directly. It
+//! carries the worker's identity/cadence knobs **and** the per-role git
+//! identities ([`WorkerConfig::role_identities`]) — the single source of truth
+//! the coding executor sources its identities from, rather than threading them
+//! in separately. The adapter that builds the config unwraps the engine-side
+//! `SecretString` push tokens at that boundary. Per the per-subsystem
+//! config-object rule, factories with long parameter lists take a config object;
+//! small ones stay as-is.
+
 pub mod agent_runner;
 pub mod client;
 pub mod coding_executor;

@@ -104,6 +104,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseOutcome, Str
         daemon_url,
         worker_id,
         capabilities,
+        // The CLI surface carries no identities; the `smith-worker` binary fills
+        // them from the environment for the coding executor (the env reads stay in
+        // the binary, not the library).
+        role_identities: std::collections::BTreeMap::new(),
         max_concurrent_jobs,
         poll_wait: Duration::from_millis(poll_wait_ms),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_ms),

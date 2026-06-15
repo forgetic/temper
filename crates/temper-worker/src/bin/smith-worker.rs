@@ -31,7 +31,7 @@ fn main() {
 /// (the `anvil-agent` binary by default, or any operator-provided coder),
 /// relaying its step-progress checkpoints. Credentials are the agent process's
 /// concern — it preflights its own provider login at job start.
-fn run(config: temper_worker::WorkerConfig) -> Result<(), String> {
+fn run(mut config: temper_worker::WorkerConfig) -> Result<(), String> {
     match config.executor.clone() {
         ExecutorSelection::Stub => {
             let executor = Arc::new(StubExecutor::success());
@@ -42,7 +42,10 @@ fn run(config: temper_worker::WorkerConfig) -> Result<(), String> {
             })
         }
         ExecutorSelection::Coding(surface) => {
-            let role_identities = {
+            // The binary fills the worker config's role identities from the
+            // environment; the executor then sources them from the config (the
+            // worker's single source of truth — issue #199).
+            config.role_identities = {
                 let roles = config
                     .capabilities
                     .iter()
@@ -52,7 +55,7 @@ fn run(config: temper_worker::WorkerConfig) -> Result<(), String> {
             let executor_config = CodingExecutorConfig {
                 workspace_root: surface.workspace_root,
                 git_base_url: surface.git_base_url,
-                role_identities,
+                role_identities: config.role_identities.clone(),
             };
 
             // Both surfaces resolve to a command the out-of-process runner spawns:

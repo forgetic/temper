@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use crate::workspace::RoleGitIdentity;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilitySpec {
@@ -12,6 +15,17 @@ pub struct WorkerConfig {
     pub daemon_url: String,
     pub worker_id: String,
     pub capabilities: Vec<CapabilitySpec>,
+    /// Role id -> git identity (user, email, push token) for the worker's
+    /// per-role checkouts/pushes.
+    ///
+    /// This is the worker subsystem's single config input: the coding executor's
+    /// identities come from here (the worker factory builds its
+    /// [`CodingExecutorConfig`](crate::CodingExecutorConfig) from this map),
+    /// rather than being threaded into the executor separately. The push token is
+    /// the already-exposed `String` the git auth header needs — secrets are
+    /// unwrapped by the adapter that builds this config (the engine-side
+    /// `Resolved` keeps them as `SecretString` until that I/O boundary).
+    pub role_identities: BTreeMap<String, RoleGitIdentity>,
     /// How many jobs this worker runs at once.
     ///
     /// The design point is **one job at a time** (the default, and what the
