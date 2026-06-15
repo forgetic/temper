@@ -94,7 +94,7 @@ temper = ["temper-cli"]
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-engine", "temper-engine-io", "temper-worker-protocol"]
 # Shared non-production test machinery (engine-side).
-temper-testing = ["temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-forgejo-ops", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
+temper-testing = ["temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
 
 [options]
 # Every workspace member must be listed above (a new, unlisted crate fails CI).
