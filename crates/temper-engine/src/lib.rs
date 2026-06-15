@@ -16,12 +16,23 @@
 //!   serving.
 //! - [`config`], [`mechanical`], [`webhook`] — run config, the mechanical
 //!   reconciliation backstop, and webhook intake.
+//! - [`engine_config`] — the per-subsystem [`EngineConfig`] bundle.
+//!
+//! ## Config objects
+//!
+//! Factories that would otherwise take a long, growing parameter list accept one
+//! per-subsystem config object instead. [`EngineConfig`] is the engine's: it
+//! bundles the [`DaemonRunConfig`], the forge client config, and the per-role
+//! applier tokens, so the engine-service runtime stands the daemon up from a
+//! single struct (built by `temper_engine_service::engine_config`). Small
+//! factories with a handful of args stay as-is.
 
 use std::time::Duration;
 
 pub mod applier;
 pub mod config;
 pub mod daemon;
+pub mod engine_config;
 pub mod feed;
 pub mod forge_applier;
 pub mod lease_applier;
@@ -38,6 +49,7 @@ pub(crate) const APPLY_GRACE: Duration = Duration::from_secs(10);
 pub use applier::{NoopApplier, ResultApplier, RoleRoutingApplier};
 pub use config::{DaemonRunConfig, ParseOutcome, USAGE, parse};
 pub use daemon::{Daemon, HintedMechanical, h1_handler, serve};
+pub use engine_config::EngineConfig;
 pub use feed::{
     PollBackstopConfig, RoleFeedMode, RoleFeedTarget, WorkItemJob, job_from_work_item,
     run_poll_backstop_tick, spawn_poll_backstop,

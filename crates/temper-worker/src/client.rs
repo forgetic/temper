@@ -118,6 +118,7 @@ mod tests {
                     role: "engineer".to_string(),
                 },
             ],
+            role_identities: std::collections::BTreeMap::new(),
             max_concurrent_jobs: 2,
             poll_wait: Duration::from_millis(1_500),
             heartbeat_interval: Duration::from_millis(500),

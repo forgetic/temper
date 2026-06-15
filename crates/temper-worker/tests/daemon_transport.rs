@@ -30,6 +30,7 @@ fn worker_config() -> WorkerConfig {
             repo: "ai/smith".to_string(),
             role: "engineer".to_string(),
         }],
+        role_identities: std::collections::BTreeMap::new(),
         max_concurrent_jobs: 1,
         poll_wait: Duration::from_millis(25),
         heartbeat_interval: Duration::from_millis(25),

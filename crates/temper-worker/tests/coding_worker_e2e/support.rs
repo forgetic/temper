@@ -29,6 +29,9 @@ pub fn worker_config() -> WorkerConfig {
             repo: "acme/service".to_string(),
             role: "engineer".to_string(),
         }],
+        // The worker config carries the role identities (issue #199); the executor
+        // sources them from here.
+        role_identities: role_identities(),
         max_concurrent_jobs: 1,
         poll_wait: std::time::Duration::from_millis(50),
         heartbeat_interval: std::time::Duration::from_millis(50),

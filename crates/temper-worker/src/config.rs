@@ -11,6 +11,8 @@ mod parse_test_support;
 mod parse_tests;
 #[cfg(test)]
 mod role_tests;
+#[cfg(test)]
+mod types_tests;
 
 pub use agent::TEMPER_AGENT_PROGRAM;
 pub use parse::{USAGE, parse};

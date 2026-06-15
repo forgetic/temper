@@ -28,16 +28,30 @@
 //! `--codex-model <id>` `--max-iterations <n>` `--config-dir <path>`
 //! `--enable-subagents`.
 //!
+//! ## Config objects
+//!
+//! The agent session is configured by one struct, [`AgentConfig`], which the
+//! coding-loop factory accepts. It bundles the provider wiring plus every
+//! loop/session knob (iterations, sub-agents, config dir, deadline, checkpoint
+//! cadence, capture dir, test base URL) so the factory takes a single struct
+//! rather than a growing parameter list. It is constructible in memory for tests.
+//! Per the per-subsystem config-object rule, big factories take a config object;
+//! small ones stay as-is. (The env reads that still feed some of these fields move
+//! onto the struct in issue #201 — not here.)
+//!
 //! [`WorkspaceContext`]: temper_agent_protocol::WorkspaceContext
 //! [`StepProgress`]: temper_agent_protocol::StepProgress
 //! [`WorkspaceResult`]: temper_agent_protocol::WorkspaceResult
 
 mod checkpoint;
+mod config;
 mod options;
 mod progress;
 mod run;
 
 use std::process::ExitCode;
+
+pub use config::{AgentConfig, DEFAULT_CHECKPOINT_INTERVAL};
 
 pub fn main<I>(args: I) -> ExitCode
 where

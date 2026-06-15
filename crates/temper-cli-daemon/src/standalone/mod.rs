@@ -23,12 +23,11 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_config::Resolved;
 use temper_engine::{
-    Daemon, HintedMechanical, MechanicalBackstopConfig, PollBackstopConfig, RoleFeedMode,
-    WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
+    Daemon, EngineConfig, HintedMechanical, MechanicalBackstopConfig, PollBackstopConfig,
+    RoleFeedMode, WebhookConfig, spawn_mechanical_backstop, spawn_poll_backstop,
 };
 use temper_engine_service::{
-    daemon_run_config, ensure_workflow_labels, forgejo_config, resolve_repositories,
-    result_applier, role_feed_targets,
+    engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
 };
 use temper_forge::RepositoryId;
 use temper_worker::{
@@ -50,10 +49,13 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
 
     // --- Forge + workflow + repositories (the engine half, reusing the engine
     //     service's adapters + wiring) ---
-    let forge_config = forgejo_config(resolved)?;
+    let EngineConfig {
+        daemon: daemon_config,
+        forge: forge_config,
+        role_tokens,
+    } = engine_config(resolved)?;
     let forge_base_url = forge_config.base_url.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
-    let daemon_config = daemon_run_config(resolved)?;
 
     let workflow = Arc::new(
         temper_reference_delivery::resolve_workflow(daemon_config.workflow_file.as_ref())
@@ -83,7 +85,7 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
         forge_base_url,
         workflow.clone(),
         &daemon_config,
-        &resolved.forge.role_tokens,
+        &role_tokens,
         lease_ttl,
     );
     let daemon = Daemon::with_applier(Arc::clone(&spawner), applier);
@@ -123,7 +125,6 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
         resolved,
         &resolved.worker.workspace_root.join(".temper-auth"),
     )?;
-    let role_identities = temper_worker_service::role_identities(resolved);
     let git_base_url = temper_worker_service::git_base_url(resolved)?;
     let capabilities: Vec<CapabilitySpec> = repo_paths
         .iter()
@@ -134,6 +135,18 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
             })
         })
         .collect();
+
+    let worker_config = WorkerConfig {
+        // Unused on the in-process transport, but the struct carries it.
+        daemon_url: String::new(),
+        worker_id: resolved.worker.worker_id.clone(),
+        capabilities,
+        role_identities: temper_worker_service::role_identities(resolved),
+        max_concurrent_jobs: 1,
+        poll_wait: Duration::from_secs(20),
+        heartbeat_interval: Duration::from_secs(10),
+        executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
+    };
 
     let runner = Arc::new(InProcessAgentRunner::new(
         handle.clone(),
@@ -147,7 +160,9 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
             CodingExecutorConfig {
                 workspace_root: resolved.worker.workspace_root.clone(),
                 git_base_url,
-                role_identities,
+                // The worker config is the single source of truth for role
+                // identities (issue #199); the executor sources them from it.
+                role_identities: worker_config.role_identities.clone(),
             },
             runner,
         )
@@ -157,17 +172,6 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
             resolved.worker.worker_id.clone(),
         ))),
     );
-
-    let worker_config = WorkerConfig {
-        // Unused on the in-process transport, but the struct carries it.
-        daemon_url: String::new(),
-        worker_id: resolved.worker.worker_id.clone(),
-        capabilities,
-        max_concurrent_jobs: 1,
-        poll_wait: Duration::from_secs(20),
-        heartbeat_interval: Duration::from_secs(10),
-        executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
-    };
     let transport = Arc::new(InProcessTransport::new(daemon.clone()));
 
     let worker_handle = handle.clone();

@@ -13,6 +13,7 @@ use temper_agent_protocol::{
 };
 
 use crate::checkpoint::Checkpointer;
+use crate::config::AgentConfig;
 use crate::options::Options;
 use crate::progress::emit;
 
@@ -21,13 +22,6 @@ where
     I: Iterator<Item = String>,
 {
     let options = Options::parse(args)?;
-    // Split off the loop knobs before `from_auth` consumes the credential fields,
-    // so both halves of `options` can be used without a partial-move borrow.
-    let loop_options = LoopOptions {
-        max_iterations: options.max_iterations,
-        config_dir: options.config_dir.clone(),
-        enable_subagents: options.enable_subagents,
-    };
 
     let result_path = std::env::var(RESULT_ENV)
         .map_err(|_| format!("missing required env var {RESULT_ENV} (result file path)"))?;
@@ -44,30 +38,37 @@ where
         note: Some(format!("protocol v{PROTOCOL_VERSION}")),
     });
 
-    // Provider/model/credential wiring comes from flags (`--auth`, …) and the
-    // worker-injected environment (model ids, base-URL override, the
-    // materialized OAuth `auth.json` path). `apply_base_url_override_from_env`
-    // honors the config-file `[agent.providers.*] url` the worker forwards.
-    let provider = ProviderConfig::from_auth(options.auth, options.codex_model, options.auth_file)
-        .map_err(|error| format!("provider preflight: {error}"))?
-        .apply_base_url_override_from_env();
+    let config = agent_config(options)?;
 
     // The checkout is our cwd: the worker runs us there, exactly as the legacy
     // file-protocol coder was run.
     let cwd = std::env::current_dir().map_err(|error| format!("resolve cwd: {error}"))?;
 
     let (checkpointer, resume_note) = prepare_checkpointer(&cwd, &context);
-    let result = drive_coding_loop(
-        provider,
-        &context,
-        &cwd,
-        loop_options,
-        checkpointer.clone(),
-        resume_note,
-    )
-    .map_err(|error| describe_agent_error(&error))?;
+    let result = drive_coding_loop(&config, &context, &cwd, checkpointer.clone(), resume_note)
+        .map_err(|error| describe_agent_error(&error))?;
 
     finalize(&result_path, &context, checkpointer.as_deref(), &result)
+}
+
+/// Assembles the agent's per-subsystem config from the parsed options.
+///
+/// Provider/model/credential wiring comes from flags (`--auth`, …) and the
+/// worker-injected environment (model ids, base-URL override, the materialized
+/// OAuth `auth.json` path). `apply_base_url_override_from_env` honors the
+/// config-file `[agent.providers.*] url` the worker forwards. The host-supplied
+/// deadline/capture/checkpoint-cadence fields keep their existing read sites for
+/// now (issue #201 relocates them onto the config), so they default here.
+fn agent_config(options: Options) -> Result<AgentConfig, String> {
+    let provider = ProviderConfig::from_auth(options.auth, options.codex_model, options.auth_file)
+        .map_err(|error| format!("provider preflight: {error}"))?
+        .apply_base_url_override_from_env();
+    Ok(AgentConfig::new(
+        provider,
+        options.max_iterations,
+        options.enable_subagents,
+        options.config_dir,
+    ))
 }
 
 /// Reads and parses the [`WorkspaceContext`] from the file named by
@@ -132,22 +133,28 @@ fn prepare_checkpointer(
 /// as both the mechanical backstop ([`TurnHook`]) and the model-driven
 /// `checkpoint` tool ([`CheckpointHook`]).
 ///
+/// Takes the session's per-subsystem [`AgentConfig`] (issue #199): the provider,
+/// iteration cap, config dir, and sub-agent toggle all come from it.
+///
 /// [`TurnHook`]: temper_agent_core::TurnHook
 /// [`CheckpointHook`]: temper_agent::CheckpointHook
 fn drive_coding_loop(
-    provider: ProviderConfig,
+    config: &AgentConfig,
     context: &WorkspaceContext,
     cwd: &Path,
-    options: LoopOptions,
     checkpointer: Option<Arc<Checkpointer>>,
     resume_note: Option<String>,
 ) -> Result<WorkspaceResult, CodingAgentError> {
     // Clone the values the run consumes so the originals survive for the
     // terminal marker; the closure moves only these clones (and the owned
-    // `provider`/`options`), so it satisfies the `'static` bound
-    // `block_on_with` requires.
+    // config knobs), so it satisfies the `'static` bound `block_on_with`
+    // requires.
     let run_context = context.clone();
     let run_cwd = cwd.to_path_buf();
+    let provider = config.provider.clone();
+    let max_iterations = config.max_iterations;
+    let config_dir = config.config_dir.clone();
+    let enable_subagents = config.enable_subagents;
     temper_agent_io::block_on_with(move |_cx, handle| async move {
         let turn_hook = checkpointer.as_ref().map(Checkpointer::as_turn_hook);
         let checkpoint_hook = checkpointer.as_ref().map(Checkpointer::as_checkpoint_hook);
@@ -156,23 +163,15 @@ fn drive_coding_loop(
             &provider,
             &run_context,
             &run_cwd,
-            options.max_iterations,
-            options.config_dir.as_deref(),
-            options.enable_subagents,
+            max_iterations,
+            config_dir.as_deref(),
+            enable_subagents,
             resume_note.as_deref(),
             turn_hook,
             checkpoint_hook,
         )
         .await
     })
-}
-
-/// The subset of [`Options`] the coding loop needs, split off so the credential
-/// fields can be moved into `ProviderConfig::from_auth` independently.
-struct LoopOptions {
-    max_iterations: usize,
-    config_dir: Option<std::path::PathBuf>,
-    enable_subagents: bool,
 }
 
 /// Emits the terminal Done marker (taking the next free step index after any

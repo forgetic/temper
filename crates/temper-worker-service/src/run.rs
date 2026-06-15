@@ -30,17 +30,18 @@ async fn run_async(
 ) -> Result<(), String> {
     let worker_config = adapt::worker_config(resolved)?;
     let git_base_url = adapt::git_base_url(resolved)?;
-    let role_identities = adapt::role_identities(resolved);
     let workspace_root = resolved.worker.workspace_root.clone();
     let auth_dir = workspace_root.join(".temper-auth");
 
     let invocation = adapt::agent_invocation(resolved, agent_program, &auth_dir)?;
     let runner = Arc::new(OutOfProcessRunner::new(invocation.command).with_env(invocation.env));
 
+    // The coding executor's identities come from the worker config — the worker
+    // subsystem's single source of truth for role identities (issue #199).
     let executor_config = CodingExecutorConfig {
         workspace_root,
         git_base_url,
-        role_identities,
+        role_identities: worker_config.role_identities.clone(),
     };
 
     // Relay agent step-progress checkpoints to the daemon (which applies them to

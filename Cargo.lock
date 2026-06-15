@@ -1515,6 +1515,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hmac",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",
