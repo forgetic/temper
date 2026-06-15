@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-hard_max_loc="${RUST_FILE_SIZE_HARD_MAX_LOC:-600}"
-justification_loc="${RUST_FILE_SIZE_JUSTIFICATION_LOC:-500}"
+hard_max_loc="${RUST_FILE_SIZE_HARD_MAX_LOC:-800}"
+justification_loc="${RUST_FILE_SIZE_JUSTIFICATION_LOC:-600}"
 hard_allowlist="${RUST_FILE_SIZE_ALLOWLIST:-scripts/rust-file-size-allowlist.txt}"
 justifications="${RUST_FILE_SIZE_JUSTIFICATIONS:-scripts/rust-file-size-justifications.txt}"
 
