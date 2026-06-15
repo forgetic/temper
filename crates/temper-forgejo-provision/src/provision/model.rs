@@ -84,24 +84,11 @@ jobs:
 /// How provisioned identities (role users + the `bot`) are granted access to
 /// the target repo.
 ///
-/// Defaults to [`AccessScope::OrgOwners`], reproducing today's throwaway-repo
-/// behavior. [`AccessScope::RepoCollaborator`] is the narrower scope used when
-/// provisioning onto a shared org (e.g. `ai`, which also hosts `temper`): it
-/// confers access to a single repository instead of every repo in the org.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AccessScope {
-    /// Add every role user and the `bot` to the org **Owners** team. This makes
-    /// them owners of *every* repo in the org — correct only for a throwaway
-    /// org dedicated to one demo run.
-    #[default]
-    OrgOwners,
-    /// Grant each identity a repo-scoped collaborator permission on the target
-    /// repo and never touch the Owners team. Role users and the `bot` all get
-    /// `write` — enough for the bot to merge approved PRs and read Actions
-    /// status over the web UI (ADR-0019); `admin` is intentionally not used
-    /// absent a concrete need.
-    RepoCollaborator,
-}
+/// The canonical definition now lives in `temper-forge` as shared provisioning
+/// vocabulary; this is a temporary re-export shim so existing
+/// `crate::provision::AccessScope` paths keep working unchanged. Issue #180
+/// removes the shim and switches call sites to the `temper-forge` path.
+pub use temper_forge::AccessScope;
 
 /// Options that tune [`provision_world`](super::provision_world) away from its
 /// throwaway-repo defaults.

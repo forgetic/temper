@@ -2,6 +2,8 @@
 //!
 //! Types are grouped by domain responsibility:
 //!
+//! - [`access`]: shared provisioning vocabulary (access scopes, repo
+//!   permissions, webhook event selection).
 //! - [`common`]: shared entities and the optimistic-concurrency [`Version`]
 //!   token (users, repositories, labels, comments, branch refs).
 //! - [`issue`]: issue artifacts and their create/update inputs.
@@ -11,11 +13,13 @@
 //! All public types are re-exported here so the module flattens to a single
 //! `temper_forge::model` namespace.
 
+pub mod access;
 pub mod ci;
 pub mod common;
 pub mod issue;
 pub mod pull_request;
 
+pub use access::*;
 pub use ci::*;
 pub use common::*;
 pub use issue::*;
