@@ -15,7 +15,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest, CreateRepository,
     Forge, ItemNumber, PullRequestState, RepositoryId, UserId,
 };

@@ -14,7 +14,7 @@ use support::{
     TestRoot, block_on, create_issue, create_pr, issue_body, new_repo, pr_labels, pr_state,
     seed_ci, submit_review, ts, workflow,
 };
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, CiJobConclusion, CreateIssue, CreatePullRequest, Forge, IssueQuery,
     PullRequestQuery, PullRequestState, RepositoryId, ReviewDecision, UserId,
 };

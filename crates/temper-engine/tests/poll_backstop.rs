@@ -6,7 +6,7 @@ use serde_json::json;
 use temper_engine::{
     Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget, run_poll_backstop_tick,
 };
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,

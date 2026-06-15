@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use temper_forge_model::{Forge, ItemNumber, RepositoryPath};
+use temper_forge::{Forge, ItemNumber, RepositoryPath};
 use temper_worker_protocol::JobProgress;
 use temper_worker_protocol::JobResult;
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
@@ -31,7 +31,7 @@ pub fn system_clock() -> WallClock {
 /// the inner applier only while that lease is held, and then releases the lease
 /// best-effort. Duplicate or double-dispatched results that lose the lease race
 /// no-op without disturbing the peer's live lease.
-pub struct LeaseApplier<F: Forge> {
+pub struct LeaseApplier<F: Forge + ?Sized> {
     forge: Arc<F>,
     policy: LeasePolicy,
     owner: String,
@@ -39,7 +39,7 @@ pub struct LeaseApplier<F: Forge> {
     clock: WallClock,
 }
 
-impl<F: Forge> LeaseApplier<F> {
+impl<F: Forge + ?Sized> LeaseApplier<F> {
     pub fn new(
         forge: Arc<F>,
         policy: LeasePolicy,
@@ -58,7 +58,7 @@ impl<F: Forge> LeaseApplier<F> {
 }
 
 #[async_trait::async_trait]
-impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
+impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     /// Progress checkpoints are daemon-authored bookkeeping comments, not
     /// role-authored workflow mutations, so they bypass the lease gate.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
@@ -110,7 +110,7 @@ impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
 async fn resolve_target<F: Forge + ?Sized>(
     forge: &F,
     job: &InFlightJob,
-) -> Option<(temper_forge_model::RepositoryId, ArtifactSource)> {
+) -> Option<(temper_forge::RepositoryId, ArtifactSource)> {
     let (owner, name) = job.repo.split_once('/')?;
 
     let repository = match forge

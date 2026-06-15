@@ -8,7 +8,7 @@
 use crate::classify::{ArtifactSource, ClassificationError};
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::{PlanDiagnostic, PlanError, Postcondition, WorkflowEffect};
-use temper_forge_model::ForgeError;
+use temper_forge::ForgeError;
 
 /// Why a transition execution failed.
 ///

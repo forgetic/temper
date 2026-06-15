@@ -4,11 +4,11 @@
 mod support;
 
 use support::{MockHttpClient, block_on, body_json, forge, pull_id, repo_id};
+use temper_forge_github::HttpMethod;
 use temper_forge_model::{
     BranchRef, CreatePullRequest, ForgeError, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RequestReviewers, UpdatePullRequest, UserId,
 };
-use temper_forge_github::HttpMethod;
 
 fn pull_json(number: u64, state: &str, merged_at: &str) -> String {
     let merged_at = if merged_at.is_empty() {

@@ -9,8 +9,7 @@ description = "Deployable REPL/HTTP interaction service and transport glue."
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-temper-forge-model = { path = "../temper-forge-model" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forge = { path = "../temper-forge" }
 temper-interaction = { path = "../temper-interaction" }
 temper-engine-io = { path = "../temper-engine-io" }
 

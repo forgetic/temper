@@ -7,7 +7,9 @@ use crate::ids::{
     format_user_id,
 };
 use crate::types::{CommentDto, IssueDto, LabelDto, RepositoryDto, UserDto};
-use temper_forge_model::{Comment, Issue, IssueState, ItemNumber, Label, Repository, User, Version};
+use temper_forge_model::{
+    Comment, Issue, IssueState, ItemNumber, Label, Repository, User, Version,
+};
 
 /// Maps a Forgejo user DTO into a portable [`User`].
 ///

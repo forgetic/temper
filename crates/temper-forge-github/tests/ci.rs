@@ -202,7 +202,10 @@ fn get_ci_job_reads_the_job_endpoint() {
     assert_eq!(job.repo_id, repo_id());
     assert_eq!(job.name, "build");
     assert_eq!(job.status, CiJobStatus::Completed);
-    assert_eq!(job.conclusion, Some(temper_forge_model::CiJobConclusion::Failure));
+    assert_eq!(
+        job.conclusion,
+        Some(temper_forge_model::CiJobConclusion::Failure)
+    );
     assert!(job.pull_request_id.is_none());
 
     assert_eq!(
@@ -228,7 +231,10 @@ fn get_ci_job_rejects_foreign_id_shapes() {
 
     let error = block_on(forge.get_ci_job(&CiJobId::new("forgejo:acme/widgets:actions:1:2:3")))
         .unwrap_err();
-    assert!(matches!(error, temper_forge_model::ForgeError::InvalidRequest(_)));
+    assert!(matches!(
+        error,
+        temper_forge_model::ForgeError::InvalidRequest(_)
+    ));
     assert_eq!(client.call_count(), 0);
 }
 

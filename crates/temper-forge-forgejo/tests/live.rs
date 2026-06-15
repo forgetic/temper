@@ -16,11 +16,11 @@ use bench_forgejo::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use temper_engine_io::http::{HttpCall, HttpResponseData, http_call};
+use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
 use temper_forge_model::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, IssueQuery, IssueState,
     PullRequestQuery, RepositoryId, RepositoryPath, UpdateIssue,
 };
-use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
 
 const ADMIN_USER: &str = "liveadmin";
 const ADMIN_PASSWORD: &str = "L1ve-Smoke-Admin!";

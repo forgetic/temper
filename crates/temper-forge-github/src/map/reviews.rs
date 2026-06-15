@@ -4,7 +4,9 @@
 use super::normalize;
 use crate::ids::{RepoCoord, format_review_id, format_user_id};
 use crate::types::ReviewDto;
-use temper_forge_model::{ForgeError, ForgeResult, PullRequestId, PullRequestReview, ReviewDecision};
+use temper_forge_model::{
+    ForgeError, ForgeResult, PullRequestId, PullRequestReview, ReviewDecision,
+};
 
 /// Maps a GitHub review DTO into a portable [`PullRequestReview`].
 ///

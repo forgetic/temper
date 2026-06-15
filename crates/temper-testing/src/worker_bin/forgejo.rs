@@ -22,8 +22,8 @@
 
 use std::sync::Arc;
 
-use temper_forge_model::Forge;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge_model::Forge;
 use temper_runner::{
     Agent, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, RepositoryJournal,
     RoleWorker, RunReport,

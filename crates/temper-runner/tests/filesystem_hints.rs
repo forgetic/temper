@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
-use temper_forge_model::{
+use temper_forge::{
     CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequestReview, Forge,
     IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestId, PullRequestQuery,
     PullRequestState, RepositoryId, RequestReviewers, ReviewDecision, UpdateIssue,

@@ -7,8 +7,7 @@ rust-version.workspace = true
 description = "Operator CLI for the `temper provision-forgejo` reference-delivery demo subcommand: builds a ForgejoForge, runs the backend-agnostic temper-provision orchestration, seeds the demo intake issue, and writes secrets.env."
 
 [dependencies]
-temper-forge-model = { path = "../temper-forge-model" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forge = { path = "../temper-forge" }
 temper-provision = { path = "../temper-provision" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-runner = { path = "../temper-runner" }

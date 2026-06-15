@@ -6,7 +6,7 @@
 //! them into the validated model.
 
 use serde::{Deserialize, Serialize};
-use temper_forge_model::ReviewDecision;
+use temper_forge::ReviewDecision;
 
 /// A raw transition effect.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -11,7 +11,7 @@ use chrono::Duration;
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::{CreatePullRequest, CreateRepository, User};
+use temper_forge::{CreatePullRequest, CreateRepository, User};
 use temper_process_protocol::workflow_role::BoundExternalTool;
 use temper_workflow::{
     CompiledWorkflow, ExecutionContext, ExternalToolId, ExternalToolManifest, RoleId, RoleManifest,

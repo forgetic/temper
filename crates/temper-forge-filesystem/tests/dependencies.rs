@@ -1,7 +1,9 @@
 mod support;
 
 use support::{TestRoot, block_on, issue, pull_request, repository};
-use temper_forge_model::{Forge, ForgeError, IssueQuery, ItemListDetails, ItemNumber, PullRequestQuery};
+use temper_forge_model::{
+    Forge, ForgeError, IssueQuery, ItemListDetails, ItemNumber, PullRequestQuery,
+};
 
 #[test]
 fn dependency_links_are_set_like_persisted_and_deterministic() {

@@ -7,7 +7,7 @@ pub(crate) use std::time::Instant;
 pub(crate) use temper_engine::{
     Daemon, ForgeApplier, JobContext, LeaseApplier, ResultApplier, RoleFeedMode,
 };
-pub(crate) use temper_forge_model::{
+pub(crate) use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, Issue, IssueQuery,
     ItemNumber, PullRequest, PullRequestQuery, PullRequestReview, RepositoryId, ReviewDecision,
     UpdateIssue, UpdatePullRequest, UserId,

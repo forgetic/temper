@@ -9,7 +9,9 @@ use crate::ids::format_pull_request_id;
 use crate::map::map_issue;
 use crate::types::IssueDto;
 use std::cmp::Ordering;
-use temper_forge_model::{BranchRef, ItemSortField, PullRequestQuery, PullRequestState, SortDirection};
+use temper_forge_model::{
+    BranchRef, ItemSortField, PullRequestQuery, PullRequestState, SortDirection,
+};
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists pull requests in a repository, filtered and sorted per `query`.

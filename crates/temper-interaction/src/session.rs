@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
-use temper_forge_model::{CreateComment, Forge, Issue, ItemNumber, Repository, RepositoryPath, User};
+use temper_forge::{CreateComment, Forge, Issue, ItemNumber, Repository, RepositoryPath, User};
 
 use crate::CompiledProfileManifest;
 use crate::InteractionError;

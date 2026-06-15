@@ -1,7 +1,7 @@
 //! Behavior tests for the deterministic reference-delivery fake agents.
 
 use std::sync::Arc;
-use temper_forge_model::{
+use temper_forge::{
     CreatePullRequestReview, CreateRepository, Forge, IssueQuery, IssueState, ItemNumber,
     PullRequestState, RepositoryId, RequestReviewers, ReviewDecision, UserId,
 };
@@ -386,7 +386,7 @@ fn owner_fake_ignores_landing_prs_because_merges_are_mechanical() {
     block_on(MemoryCiSink::new(forge.clone()).record(
         &repo,
         number,
-        temper_forge_model::CiJobConclusion::Success,
+        temper_forge::CiJobConclusion::Success,
     ))
     .expect("CI recorded");
     let workflow = temper_testing::workflow();
@@ -466,7 +466,7 @@ fn issue_count(forge: &MemoryForge, repo: &RepositoryId) -> usize {
         .len()
 }
 
-fn request_reviewer(forge: &MemoryForge, repo: &temper_forge_model::RepositoryId, number: ItemNumber) {
+fn request_reviewer(forge: &MemoryForge, repo: &temper_forge::RepositoryId, number: ItemNumber) {
     let pr = block_on(forge.get_pull_request_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("pull request exists");
@@ -481,7 +481,7 @@ fn request_reviewer(forge: &MemoryForge, repo: &temper_forge_model::RepositoryId
 
 fn approve_as_requested_reviewer(
     forge: &MemoryForge,
-    repo: &temper_forge_model::RepositoryId,
+    repo: &temper_forge::RepositoryId,
     number: ItemNumber,
 ) {
     request_reviewer(forge, repo, number);

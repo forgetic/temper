@@ -4,12 +4,12 @@
 //! paths: resolve a job's source issue, pull request, or repository, logging and
 //! returning `None` on malformed coordinates or lookup misses.
 
-use temper_forge_model::{Forge, Issue, ItemNumber, PullRequest, Repository, RepositoryPath};
+use temper_forge::{Forge, Issue, ItemNumber, PullRequest, Repository, RepositoryPath};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn resolve_issue(&self, job: &InFlightJob) -> Option<(Repository, Issue)> {
         if job.artifact.kind != "issue" {
             eprintln!(

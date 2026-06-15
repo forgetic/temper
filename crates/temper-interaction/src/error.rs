@@ -2,7 +2,7 @@ use std::error::Error;
 use std::io;
 use std::time::Duration;
 
-use temper_forge_model::ForgeError;
+use temper_forge::ForgeError;
 use temper_process_protocol::interaction::InteractionProtocolError;
 use thiserror::Error;
 

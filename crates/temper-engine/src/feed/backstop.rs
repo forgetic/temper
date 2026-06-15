@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use temper_engine_io::Spawner;
-use temper_forge_model::{Forge, RepositoryId};
+use temper_forge::{Forge, RepositoryId};
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
 use crate::Daemon;
@@ -87,7 +87,7 @@ fn poll_backstop_log_line(enqueued: usize) -> String {
 ///
 /// A cadence machine requests one tick, the shell executes the scan, and the
 /// next tick is scheduled one cadence after the previous tick completed.
-pub fn spawn_poll_backstop<F: Forge + Send + Sync + 'static>(
+pub fn spawn_poll_backstop<F: Forge + Send + Sync + ?Sized + 'static>(
     spawner: &Arc<dyn Spawner>,
     daemon: Daemon,
     forge: Arc<F>,

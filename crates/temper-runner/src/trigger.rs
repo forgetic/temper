@@ -1,13 +1,13 @@
 //! Portable webhook/poll trigger primitives.
 //!
-//! Triggering stays above the [`temper_forge_model::Forge`] trait: a [`ChangeHint`]
+//! Triggering stays above the [`temper_forge::Forge`] trait: a [`ChangeHint`]
 //! is only a wake-up hint that tells a worker to run its normal
 //! pull/classify/plan/execute path.
 
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, BTreeSet};
-use temper_forge_model::ItemNumber;
-pub use temper_forge_model::{ChangeHint, ChangeKind};
+use temper_forge::ItemNumber;
+pub use temper_forge::{ChangeHint, ChangeKind};
 use temper_workflow::RoleId;
 
 /// Worker endpoint selected for a wake.
@@ -141,7 +141,7 @@ impl TriggerScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_forge_model::{ItemNumber, RepositoryPath};
+    use temper_forge::{ItemNumber, RepositoryPath};
 
     fn t(seconds: i64) -> DateTime<Utc> {
         DateTime::<Utc>::from_timestamp(seconds, 0).expect("valid timestamp")

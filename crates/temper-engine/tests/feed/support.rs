@@ -4,7 +4,7 @@ pub(crate) use std::sync::Arc;
 
 pub(crate) use serde_json::json;
 pub(crate) use temper_engine::{Daemon, RoleFeedMode};
-pub(crate) use temper_forge_model::{
+pub(crate) use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber,
     MergeMethod, MergePullRequest, PullRequest, PullRequestUpdateState, RepositoryId, UpdateIssue,
     UpdatePullRequest,
@@ -101,7 +101,7 @@ pub(crate) async fn create_issue_record(
     forge: &MemoryForge,
     repo: &RepositoryId,
     labels: &[&str],
-) -> temper_forge_model::Issue {
+) -> temper_forge::Issue {
     forge
         .create_issue(
             repo,

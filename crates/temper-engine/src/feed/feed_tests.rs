@@ -5,7 +5,7 @@
 use super::*;
 use serde_json::json;
 use std::sync::Arc;
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber, UpdateIssue,
     UpdatePullRequest,
 };
@@ -72,7 +72,7 @@ fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
         let issue = forge
             .create_issue(
                 &repo,
-                temper_forge_model::CreateIssue {
+                temper_forge::CreateIssue {
                     title: "ready".to_string(),
                     body: "needs implementation".to_string(),
                     labels: vec!["code".to_string(), "ready".to_string()],
@@ -111,8 +111,8 @@ fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
         forge
             .merge_pull_request(
                 &pull_request.id,
-                temper_forge_model::MergePullRequest {
-                    method: temper_forge_model::MergeMethod::Squash,
+                temper_forge::MergePullRequest {
+                    method: temper_forge::MergeMethod::Squash,
                     commit_title: None,
                     commit_body: None,
                 },
@@ -239,7 +239,7 @@ fn enrich_work_item_job_skips_closed_issue() {
         let issue = forge
             .create_issue(
                 &repo,
-                temper_forge_model::CreateIssue {
+                temper_forge::CreateIssue {
                     title: "closed".to_string(),
                     body: "done".to_string(),
                     labels: vec!["code".to_string(), "ready".to_string()],
@@ -403,7 +403,7 @@ fn enrich_work_item_job_skips_closed_pull_request() {
             .update_pull_request(
                 &pull_request.id,
                 UpdatePullRequest {
-                    state: Some(temper_forge_model::PullRequestUpdateState::Closed),
+                    state: Some(temper_forge::PullRequestUpdateState::Closed),
                     ..UpdatePullRequest::default()
                 },
             )

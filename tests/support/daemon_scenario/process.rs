@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use temper_forge_model::{ForgeAdmin, WebhookEvents, WebhookSpec};
+use temper_forge::{ForgeAdmin, WebhookEvents, WebhookSpec};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{ForgejoServer, Provisioned, RoleIdentity};

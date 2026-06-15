@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use temper_engine::{
     MechanicalBackstopConfig, MechanicalScope, MechanicalTrigger, run_mechanical_backstop_tick,
 };
-use temper_forge_model::{
+use temper_forge::{
     ChangeHint, ChangeKind, CreateIssue, CreateRepository, Forge, IssueState, ItemNumber,
     RepositoryId, RepositoryPath, UpdateIssue,
 };

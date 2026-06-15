@@ -1,7 +1,7 @@
 //! Deterministic repository target set and hint-ordering helpers.
 
 use std::collections::BTreeSet;
-use temper_forge_model::{ChangeHint, Forge, ForgeError, RepositoryId, RepositoryPath};
+use temper_forge::{ChangeHint, Forge, ForgeError, RepositoryId, RepositoryPath};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositoryTarget {

@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
-use temper_forge_model::{Forge, Issue, PullRequest, RepositoryId};
+use temper_forge::{Forge, Issue, PullRequest, RepositoryId};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow, ExecutionError, GateSignals,
@@ -113,13 +113,13 @@ async fn read_artifacts<F: Forge + ?Sized>(
     Ok(artifacts)
 }
 
-fn issue_key(issue: &Issue) -> (temper_forge_model::IssueId, temper_forge_model::ItemNumber) {
+fn issue_key(issue: &Issue) -> (temper_forge::IssueId, temper_forge::ItemNumber) {
     (issue.id.clone(), issue.number)
 }
 
 fn pull_request_key(
     pull_request: &PullRequest,
-) -> (temper_forge_model::PullRequestId, temper_forge_model::ItemNumber) {
+) -> (temper_forge::PullRequestId, temper_forge::ItemNumber) {
     (pull_request.id.clone(), pull_request.number)
 }
 

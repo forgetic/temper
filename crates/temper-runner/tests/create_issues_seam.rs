@@ -6,7 +6,7 @@
 //! children the workspace authored are bound through the runtime seam. This test
 //! drives that path end-to-end against the in-memory backend.
 
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::RoleTools;
 use temper_testing::block_on;

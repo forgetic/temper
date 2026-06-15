@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use temper_engine::{ForgeApplier, InFlightJob, ResultApplier};
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, UserId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{Artifact, JobProgress, WORKER_PROTOCOL_VERSION};
 use temper_workflow::RawWorkflowSpec;

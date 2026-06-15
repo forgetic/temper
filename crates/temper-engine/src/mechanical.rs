@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use temper_forge_model::{ChangeHint, Forge, ForgeError};
+use temper_forge::{ChangeHint, Forge, ForgeError};
 use temper_runner::{
     MultiRepoMechanicalWorker, MultiRepoTickReport, Progress, RepositoryJournal, RepositorySet,
     WorkerError,
@@ -113,7 +113,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
 /// pass re-reads fresh forge state and so subsumes the skipped one — matching the
 /// ADR 0009 "coalesce bursts" guidance and keeping the per-repo journals free of
 /// concurrent mutation on the single-threaded engine.
-pub struct MechanicalTrigger<F: Forge + Send + Sync + 'static> {
+pub struct MechanicalTrigger<F: Forge + Send + Sync + ?Sized + 'static> {
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
     config: MechanicalBackstopConfig,
@@ -124,7 +124,7 @@ pub struct MechanicalTrigger<F: Forge + Send + Sync + 'static> {
     running: Arc<std::sync::Mutex<bool>>,
 }
 
-impl<F: Forge + Send + Sync + 'static> Clone for MechanicalTrigger<F> {
+impl<F: Forge + Send + Sync + ?Sized + 'static> Clone for MechanicalTrigger<F> {
     fn clone(&self) -> Self {
         Self {
             forge: Arc::clone(&self.forge),
@@ -137,7 +137,7 @@ impl<F: Forge + Send + Sync + 'static> Clone for MechanicalTrigger<F> {
     }
 }
 
-impl<F: Forge + Send + Sync + 'static> MechanicalTrigger<F> {
+impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
     /// Builds a trigger with one fresh in-memory journal per configured repo.
     pub fn new(
         forge: Arc<F>,
@@ -216,7 +216,7 @@ impl<F: Forge + Send + Sync + 'static> MechanicalTrigger<F> {
 ///
 /// Tick errors are logged by [`run_mechanical_backstop_tick`] and skipped so a
 /// transient backend failure does not stop the daemon-owned backstop.
-pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + 'static>(
+pub fn spawn_mechanical_backstop<F: Forge + Send + Sync + ?Sized + 'static>(
     spawner: &std::sync::Arc<dyn temper_engine_io::Spawner>,
     forge: std::sync::Arc<F>,
     workflow: std::sync::Arc<ValidatedWorkflow>,

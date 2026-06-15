@@ -1,4 +1,4 @@
-use temper_forge_model::{IssueQuery, IssueState, ItemListDetails, PullRequestQuery, PullRequestState};
+use temper_forge::{IssueQuery, IssueState, ItemListDetails, PullRequestQuery, PullRequestState};
 use temper_workflow::{
     ArtifactTarget, CompiledWorkflow, Effect, GateCondition, LabelId, QueueManifest, RoleId,
     ValidatedTransition, ValidatedWorkflow,

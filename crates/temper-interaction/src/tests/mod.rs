@@ -1,7 +1,7 @@
 mod protocol;
 mod session;
 
-use temper_forge_model::{User, UserId};
+use temper_forge::{User, UserId};
 
 use crate::ProposalId;
 

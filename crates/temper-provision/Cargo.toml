@@ -8,7 +8,7 @@ description = "Backend-agnostic provisioning orchestration over the Forge capabi
 
 [dependencies]
 async-trait.workspace = true
-temper-forge-model = { path = "../temper-forge-model" }
+temper-forge = { path = "../temper-forge" }
 temper-runner = { path = "../temper-runner" }
 temper-workflow = { path = "../temper-workflow" }
 

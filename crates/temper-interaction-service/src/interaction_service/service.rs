@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde_json::Value;
-use temper_forge_model::{Forge, ItemNumber, RepositoryPath};
+use temper_forge::{Forge, ItemNumber, RepositoryPath};
 use temper_interaction::{
     AcceptanceActionId, CompiledProfileManifest, ConversationEventLog, ConversationEventPayload,
     ConversationId, ConversationProfileId, ConversationReply, ConversationTurn,

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueQuery};
+use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery};
 use temper_forge_memory::MemoryForge;
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, CreateIssuesChild, ExternalToolId, QueueId,

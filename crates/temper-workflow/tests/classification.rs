@@ -1,7 +1,7 @@
 //! Tests for Forge artifact classification (Phase 3).
 
 use chrono::{DateTime, Utc};
-use temper_forge_model::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
+use temper_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, ArtifactTarget, ClassificationDiagnostic,
     ClassifiedRelation, Classifier, LabelId, RawWorkflowSpec, RelationKind, StateDimensionId,

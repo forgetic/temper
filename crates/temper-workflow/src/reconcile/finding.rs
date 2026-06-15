@@ -5,7 +5,7 @@ use crate::metadata::Lease;
 use crate::plan::{Postcondition, WorkflowEffect};
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::ForgeError;
+use temper_forge::ForgeError;
 
 /// A single problem reconciliation found in durable state.
 #[derive(Clone, Debug, Eq, PartialEq)]

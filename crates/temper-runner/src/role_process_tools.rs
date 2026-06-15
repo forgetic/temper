@@ -3,7 +3,7 @@
 mod logging;
 mod resolve;
 
-use temper_forge_model::Forge;
+use temper_forge::Forge;
 use temper_workflow::{
     ArtifactSource, ExecutionError, ExecutionReport, RoleManifest, ToolManifest, TransitionId,
 };

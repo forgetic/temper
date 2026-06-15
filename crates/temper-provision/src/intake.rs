@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use temper_forge_model::{CreateIssue, Forge, IssueQuery, ItemNumber, RepositoryId};
+use temper_forge::{CreateIssue, Forge, IssueQuery, ItemNumber, RepositoryId};
 use temper_workflow::{ArtifactTarget, Effect, IntakeAuthor, RoleId, ValidatedWorkflow};
 
 use crate::error::{ProvisionError, Result};

@@ -1,5 +1,5 @@
 use chrono::Utc;
-use temper_forge_model::{
+use temper_forge::{
     CreateIssue, Forge, Issue, ItemNumber, Repository, RepositoryPath, UpdateIssue, User,
 };
 

@@ -9,7 +9,7 @@ mod support;
 
 use chrono::Duration;
 use support::{TestRoot, block_on, create_issue, issue_body, new_repo, ts};
-use temper_forge_model::ItemNumber;
+use temper_forge::ItemNumber;
 use temper_workflow::{
     ArtifactSource, Lease, LeaseConflict, LeaseError, LeaseManager, LeasePlanner, LeasePolicy,
     RoleId, parse_metadata_block,

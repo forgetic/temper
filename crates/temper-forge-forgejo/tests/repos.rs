@@ -5,11 +5,11 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, repo_id};
+use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 use temper_forge_model::{
     CreateRepository, RepositoryPath, RepositoryQuery, RepositorySort, RepositorySortField,
     SortDirection, UpsertLabel, UserId,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 
 /// Renders a user DTO JSON body.
 fn user_json(login: &str, full_name: &str, email: &str) -> String {
@@ -358,7 +358,10 @@ fn create_repository_conflict_maps_to_already_exists() {
         description: None,
     };
     let error = block_on(forge.create_repository(input)).unwrap_err();
-    assert!(matches!(error, temper_forge_model::ForgeError::AlreadyExists(_)));
+    assert!(matches!(
+        error,
+        temper_forge_model::ForgeError::AlreadyExists(_)
+    ));
 }
 
 // --- labels -----------------------------------------------------------------

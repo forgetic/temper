@@ -4,9 +4,9 @@
 //! organization, role users and their tokens, the automation (bot) identity,
 //! the repository, labels, seed commits, CI enablement, an optional webhook, and
 //! an optional intake issue — entirely through the
-//! [`Forge`](temper_forge_model::Forge),
-//! [`ForgeContent`](temper_forge_model::ForgeContent), and
-//! [`ForgeAdmin`](temper_forge_model::ForgeAdmin) capability traits. It contains no
+//! [`Forge`](temper_forge::Forge),
+//! [`ForgeContent`](temper_forge::ForgeContent), and
+//! [`ForgeAdmin`](temper_forge::ForgeAdmin) capability traits. It contains no
 //! backend-specific logic, so it works against any backend that implements the
 //! provisioning surface — the in-memory and filesystem reference backends as
 //! well as Forgejo.

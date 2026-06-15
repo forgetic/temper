@@ -4,7 +4,7 @@
 //! workflow to a declared transition and execute it against the source issue or
 //! pull request, binding any `create_issues` children the verdict produced.
 
-use temper_forge_model::{Forge, ItemNumber, RepositoryId, RepositoryPath};
+use temper_forge::{Forge, ItemNumber, RepositoryId, RepositoryPath};
 use temper_worker_protocol::{JobChild, JobResult};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, Classifier, Effect, ExecutionContext, ExecutionError, Executor,
@@ -42,7 +42,7 @@ pub(super) struct VerdictChildrenBinding<'a> {
     pub(super) context: &'a mut ExecutionContext,
 }
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_verdict(&self, job: InFlightJob, result: JobResult) {
         let Some(verdict) = result.verdict.clone() else {
             return;

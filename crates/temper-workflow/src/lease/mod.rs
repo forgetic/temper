@@ -13,7 +13,7 @@
 //!   lease (if any), a worker identity, and the current time, it decides the
 //!   next lease or a [`LeaseConflict`]. It never touches a backend. It lives in
 //!   the [`planner`] submodule.
-//! - [`LeaseManager`] applies those decisions to a [`Forge`](temper_forge_model::Forge)
+//! - [`LeaseManager`] applies those decisions to a [`Forge`](temper_forge::Forge)
 //!   by rewriting the target artifact's metadata block, following the same
 //!   load-fresh-then-write discipline as [`crate::execute::Executor`]. It lives
 //!   in the [`manager`] submodule.
@@ -37,9 +37,9 @@ pub use planner::{LeaseConflict, LeasePlanner, LeasePolicy};
 use crate::ArtifactSource;
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::ForgeError;
+use temper_forge::ForgeError;
 
-/// Why a lease operation against a [`Forge`](temper_forge_model::Forge) failed.
+/// Why a lease operation against a [`Forge`](temper_forge::Forge) failed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LeaseError {
     /// The target artifact does not exist in the backend.

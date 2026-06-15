@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temper_forge_model::CreateRepository;
+use temper_forge::CreateRepository;
 use temper_runner::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
     ExternalToolBindingError, ExternalToolExecutors, RunnerConfig,

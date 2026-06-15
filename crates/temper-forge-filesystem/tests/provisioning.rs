@@ -7,12 +7,12 @@
 mod support;
 
 use support::{TestRoot, block_on};
+use temper_forge_filesystem::FilesystemForge;
 use temper_forge_model::{
     AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
     ForgeError, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope, WebhookEvents,
     WebhookSpec,
 };
-use temper_forge_filesystem::FilesystemForge;
 
 #[test]
 fn filesystem_forge_is_a_provisioning_forge() {

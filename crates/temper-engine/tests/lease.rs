@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use temper_engine::{LeaseApplier, ResultApplier};
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Artifact, Branch, JobResult, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,

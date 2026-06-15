@@ -1,7 +1,7 @@
 //! Tests for workflow metadata block render/parse (Phase 3).
 
 use chrono::{DateTime, Utc};
-use temper_forge_model::{ItemNumber, RepositoryId};
+use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, Lease, MetadataError, RoleId, WorkflowMetadata,
     global_child_correlation_key, parse_metadata_block, render_metadata_block,

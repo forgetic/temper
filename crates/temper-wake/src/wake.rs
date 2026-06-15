@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn payload_round_trips_repo_hint() {
         let hint = ChangeHint::repo(
-            temper_forge_model::RepositoryPath::new("acme", "service"),
+            temper_forge::RepositoryPath::new("acme", "service"),
             temper_runner::ChangeKind::Issue,
         );
         let payload = encode_payload(Some("wake-secret"), Some(&hint)).expect("payload encodes");

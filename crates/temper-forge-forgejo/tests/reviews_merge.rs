@@ -5,11 +5,11 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with, pull_id};
+use temper_forge_forgejo::{CasMode, HttpMethod};
 use temper_forge_model::{
     CreatePullRequestReview, ForgeError, MergeMethod, MergePullRequest, PullRequestReviewStatus,
     RequestReviewers, ReviewDecision, UpdatePullRequest, UserId,
 };
-use temper_forge_forgejo::{CasMode, HttpMethod};
 
 /// Renders a pull-request DTO JSON body with overridable fields.
 fn pr_json(number: u64, state: &str, extra: &str) -> String {

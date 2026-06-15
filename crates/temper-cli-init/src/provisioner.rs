@@ -61,11 +61,11 @@ pub struct ForgejoProvisioner;
 
 /// Token scopes role workers need for the reference-delivery demo (the same set
 /// the dissolved Forgejo provisioning adapter emitted).
-const ROLE_TOKEN_SCOPES: &[temper_forge_model::TokenScope] = &[
-    temper_forge_model::TokenScope::WriteRepository,
-    temper_forge_model::TokenScope::WriteIssue,
-    temper_forge_model::TokenScope::WriteUser,
-    temper_forge_model::TokenScope::ReadOrg,
+const ROLE_TOKEN_SCOPES: &[temper_forge::TokenScope] = &[
+    temper_forge::TokenScope::WriteRepository,
+    temper_forge::TokenScope::WriteIssue,
+    temper_forge::TokenScope::WriteUser,
+    temper_forge::TokenScope::ReadOrg,
 ];
 
 impl Provisioner for ForgejoProvisioner {
@@ -74,7 +74,7 @@ impl Provisioner for ForgejoProvisioner {
         let request = request.clone();
         temper_engine_io::runtime::block_on_runtime_with(&runtime, move |_cx, _handle| async move {
             // Exchange the admin user+password for an admin REST token.
-            let admin_token = temper_forge_forgejo::admin_token_via_basic_auth(
+            let admin_token = temper_forge::config::forgejo_admin_token_via_basic_auth(
                 &request.base_url,
                 &request.admin_user,
                 &request.admin_password,
@@ -101,17 +101,17 @@ impl Provisioner for ForgejoProvisioner {
                 })?
                 .trim()
                 .to_string();
-            let webhook = temper_forge_model::WebhookSpec {
+            let webhook = temper_forge::WebhookSpec {
                 url: request.webhook_url.clone(),
                 secret,
-                events: temper_forge_model::WebhookEvents::All,
+                events: temper_forge::WebhookEvents::All,
             };
 
             let plan_options = temper_provision::ProvisionOptions {
                 existing_repo: request.existing_repo,
                 roles: config.role_bindings.clone(),
                 automation_login: temper_provision::BOT_USER.to_string(),
-                password: temper_forge_forgejo::ROLE_PASSWORD.to_string(),
+                password: temper_forge::config::FORGEJO_ROLE_PASSWORD.to_string(),
                 token_scopes: ROLE_TOKEN_SCOPES.to_vec(),
                 labels: Vec::new(),
                 seed_commits: temper_reference_delivery::ci_seed_commits(&default_branch),
@@ -121,21 +121,22 @@ impl Provisioner for ForgejoProvisioner {
             };
             let plan = temper_provision::ProvisionPlan::from_workflow(
                 &workflow,
-                temper_forge_model::RepositoryPath::new(&request.owner, &request.name),
+                temper_forge::RepositoryPath::new(&request.owner, &request.name),
                 default_branch,
-                temper_forge_model::AccessScope::default(),
+                temper_forge::AccessScope::default(),
                 plan_options,
             )
             .map_err(|error| error.to_string())?;
 
             let forge_config =
-                temper_forge_forgejo::ForgejoConfig::new(&request.base_url, &admin_token)
+                temper_forge::config::ForgejoConfig::new(&request.base_url, &admin_token)
                     .with_default_repo(&request.owner, &request.name);
-            let forge = temper_forge_forgejo::ForgejoForge::new(forge_config);
+            let forge = temper_forge::factory::new_forgejo_provisioning(forge_config);
 
-            let provisioned = temper_provision::provision(&plan, &forge, &forge, &forge)
-                .await
-                .map_err(|error| error.to_string())?;
+            let provisioned =
+                temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref())
+                    .await
+                    .map_err(|error| error.to_string())?;
             Ok(ProvisionOutcome {
                 provisioned,
                 admin_token,

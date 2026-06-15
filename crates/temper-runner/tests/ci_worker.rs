@@ -1,6 +1,6 @@
 //! Tests for the fake CI producer seam.
 
-use temper_forge_model::{CiJobConclusion, CiJobQuery, Forge};
+use temper_forge::{CiJobConclusion, CiJobQuery, Forge};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{CiWorker, Progress, Worker};
 use temper_workflow::ArtifactSource;
@@ -61,8 +61,8 @@ fn ci_worker_injected_fail_policy_records_failing_native_job() {
 
 fn ci_signals(
     forge: &MemoryForge,
-    repo: &temper_forge_model::RepositoryId,
-    number: temper_forge_model::ItemNumber,
+    repo: &temper_forge::RepositoryId,
+    number: temper_forge::ItemNumber,
 ) -> temper_workflow::GateSignals {
     let workflow = temper_testing::workflow();
     block_on(

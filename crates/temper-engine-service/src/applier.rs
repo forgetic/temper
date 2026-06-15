@@ -8,14 +8,15 @@ use std::sync::Arc;
 use temper_engine::{
     DaemonRunConfig, ForgeApplier, LeaseApplier, ResultApplier, RoleRoutingApplier,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge::Forge;
+use temper_forge::config::ForgejoConfig;
 use temper_workflow::LeasePolicy;
 
 /// Builds the result applier chain, routing each role's writes through that
 /// role's forge identity when a per-role token is available (otherwise the
 /// default identity).
 pub fn result_applier(
-    default_forge: Arc<ForgejoForge>,
+    default_forge: Arc<dyn Forge>,
     forge_base_url: String,
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     config: &DaemonRunConfig,
@@ -39,10 +40,10 @@ pub fn result_applier(
     for role in &config.roles {
         let role = role.as_str().to_string();
         if let Some(token) = role_tokens.get(&role) {
-            let role_forge = Arc::new(ForgejoForge::new(ForgejoConfig::new(
+            let role_forge = temper_forge::factory::new_forgejo(ForgejoConfig::new(
                 forge_base_url.clone(),
                 token.clone(),
-            )));
+            ));
             let role_chain = applier_chain(
                 role_forge,
                 workflow.clone(),
@@ -66,7 +67,7 @@ pub fn result_applier(
 }
 
 fn applier_chain(
-    forge: Arc<ForgejoForge>,
+    forge: Arc<dyn Forge>,
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     daemon_id: String,
     lease_ttl: chrono::Duration,

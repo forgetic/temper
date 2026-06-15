@@ -8,10 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-use temper_forge_model::{
+use temper_forge::config::ForgejoConfig;
+use temper_forge::{
     Forge, ForgeError, Issue, IssueState, ItemNumber, RepositoryId, RepositoryPath,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_workflow::{ArtifactRef, WorkflowMetadata, parse_metadata_block};
 
 /// Environment variable carrying a read-capable Forgejo token for validation.
@@ -199,11 +199,11 @@ where
 
 pub fn run(args: &ValidatorArgs) -> Result<String, RunError> {
     let runtime = temper_engine_io::build_runtime().map_err(RunError::Runtime)?;
-    let forge = ForgejoForge::new(ForgejoConfig::new(
+    let forge = temper_forge::factory::new_forgejo(ForgejoConfig::new(
         args.base_url.clone(),
         args.token.clone(),
     ));
-    let report = runtime.block_on(validate_state(&forge, &args.config))?;
+    let report = runtime.block_on(validate_state(forge.as_ref(), &args.config))?;
     let rendered = report.render();
     if report.is_ok() {
         Ok(rendered)

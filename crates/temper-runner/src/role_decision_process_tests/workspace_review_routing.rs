@@ -115,7 +115,7 @@ impl CodingWorkspace for ReviewWorkspace {
 #[test]
 fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
-        use temper_forge_model::{BranchRef, CreatePullRequest, CreateRepository, PullRequestQuery};
+        use temper_forge::{BranchRef, CreatePullRequest, CreateRepository, PullRequestQuery};
 
         let forge = MemoryForge::new();
         let repo = forge
@@ -228,7 +228,7 @@ fn workspace_verdict_routes_review_pr_to_native_review_without_pr_create() {
         assert_eq!(reviews.len(), 1, "exactly one native review was attached");
         assert_eq!(
             reviews[0].decision,
-            temper_forge_model::ReviewDecision::ChangesRequested
+            temper_forge::ReviewDecision::ChangesRequested
         );
         // The native review carries the workspace-authored body. `attach_review`
         // appends an idempotency marker comment, so assert the authored text leads.

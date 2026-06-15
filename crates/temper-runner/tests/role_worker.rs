@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{Agent, AgentError, Progress, RoleTools, RoleWorker, WorkItem, Worker};
 use temper_workflow::{

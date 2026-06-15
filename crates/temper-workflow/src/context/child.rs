@@ -4,7 +4,7 @@
 //! separate from the [`ExecutionContext`](super::ExecutionContext) that carries
 //! the rest of the runtime bindings.
 
-use temper_forge_model::RepositoryId;
+use temper_forge::RepositoryId;
 
 /// One workspace-authored child artifact bound for a `CreateIssues` effect.
 ///

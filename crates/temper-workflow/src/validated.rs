@@ -14,7 +14,7 @@ use crate::ids::{
 use crate::relation::RelationKind;
 use chrono::Duration;
 use std::collections::BTreeMap;
-use temper_forge_model::ReviewDecision;
+use temper_forge::ReviewDecision;
 
 /// A workflow that has passed static validation.
 ///

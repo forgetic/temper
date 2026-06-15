@@ -6,7 +6,7 @@ use crate::{ExternalToolExecutors, MechanicalWorker, Progress, Worker, WorkerErr
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
-use temper_forge_model::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
+use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_workflow::{
     CommandJournal, DefaultRecoveryPolicy, LeasePolicy, ReconciliationMode, RecoveryPolicy,
     ValidatedWorkflow,

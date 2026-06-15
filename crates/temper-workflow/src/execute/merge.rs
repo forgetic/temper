@@ -7,7 +7,7 @@
 use super::{ExecutionError, Executor, Loaded};
 use crate::classify::ArtifactSource;
 use crate::plan::WorkflowEffect;
-use temper_forge_model::{
+use temper_forge::{
     Forge, ForgeError, MergeMethod, MergePullRequest, PullRequestState, RepositoryId,
 };
 

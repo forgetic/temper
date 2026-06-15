@@ -14,7 +14,7 @@ use std::sync::Arc;
 use temper_engine::{
     Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget, spawn_poll_backstop,
 };
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, RepositoryId, UserId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_sim::{Sim, SimProtocolClient};
 use temper_worker_protocol::{

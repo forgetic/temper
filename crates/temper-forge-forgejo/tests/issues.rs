@@ -8,11 +8,11 @@ mod support;
 use support::{
     MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with, issue_id, pull_id, repo_id,
 };
+use temper_forge_forgejo::{CasMode, HttpMethod};
 use temper_forge_model::{
     CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
     ItemSort, ItemSortField, SortDirection, UpdateIssue, UserId, Version,
 };
-use temper_forge_forgejo::{CasMode, HttpMethod};
 
 /// Renders an issue DTO JSON body with overridable labels and trailing fields.
 fn issue_json(number: u64, state: &str, labels: &str, extra: &str) -> String {

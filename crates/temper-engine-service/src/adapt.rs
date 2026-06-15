@@ -7,8 +7,8 @@
 
 use temper_config::Resolved;
 use temper_engine::DaemonRunConfig;
-use temper_forge_model::RepositoryPath;
-use temper_forge_forgejo::ForgejoConfig;
+use temper_forge::RepositoryPath;
+use temper_forge::config::ForgejoConfig;
 use temper_workflow::RoleId;
 
 /// Builds the Forgejo backend config from the resolved forge settings.

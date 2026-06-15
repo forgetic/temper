@@ -8,10 +8,10 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge_model::{IssueId, PullRequestId, RepositoryId};
 use temper_forge_forgejo::{
     CasMode, ForgejoConfig, ForgejoForge, HttpClient, HttpError, HttpRequest, HttpResponse,
 };
+use temper_forge_model::{IssueId, PullRequestId, RepositoryId};
 
 /// Repository coordinate every offline pull-request test operates on.
 pub const OWNER: &str = "acme";

@@ -12,7 +12,7 @@ mod support;
 use std::collections::BTreeMap;
 
 use support::{TestRoot, block_on, create_issue, issue_labels, new_repo};
-use temper_forge_model::{CreateRepository, Forge, Issue, IssueQuery, ItemNumber, RepositoryId};
+use temper_forge::{CreateRepository, Forge, Issue, IssueQuery, ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactRef, ArtifactSource, CreateIssuesChild, Effect, ExecutionContext, ExecutionError,
     RawEffect, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,

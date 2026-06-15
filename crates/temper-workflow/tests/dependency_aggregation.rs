@@ -5,7 +5,7 @@ mod support;
 use chrono::Duration;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, ItemNumber,
     MergeMethod, MergePullRequest, RepositoryId, UpdateIssue, UserId,
 };

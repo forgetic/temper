@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use temper_forge_model::{Forge, UserId};
+use temper_forge::{Forge, UserId};
 
 use super::{
     StaticResponder, issue_reply, open_session, product_manifest, proposal_id, seeded,

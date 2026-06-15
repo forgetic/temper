@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_forge_model::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
+use temper_forge::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
 use temper_worker_protocol::{JobContext, JobResult, RepoOutcome};
 use temper_workflow::{ArtifactKindId, Executor};
 
@@ -21,7 +21,7 @@ use crate::workflow_meta::{
     default_base_branch, implementation_pr_create_labels, implementation_pr_labels,
 };
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_success(&self, job: InFlightJob, result: JobResult) {
         if result.verdict.is_some() {
             self.apply_verdict(job, result).await;

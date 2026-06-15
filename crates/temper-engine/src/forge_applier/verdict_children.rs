@@ -4,7 +4,7 @@
 //! mapping each [`JobChild`] to a [`CreateIssuesChild`] (resolving cross-repo
 //! targets) and stamping the deterministic content correlation key.
 
-use temper_forge_model::{Forge, ItemNumber, Repository, RepositoryId};
+use temper_forge::{Forge, ItemNumber, Repository, RepositoryId};
 use temper_worker_protocol::JobChild;
 use temper_workflow::{ArtifactKindId, CreateIssuesChild};
 
@@ -17,7 +17,7 @@ use crate::forge_applier::verdict::{
 };
 use crate::workflow_meta::code_child_create_labels;
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn bind_create_issues_children(
         &self,
         binding: VerdictChildrenBinding<'_>,

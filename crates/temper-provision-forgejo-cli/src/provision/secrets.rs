@@ -149,8 +149,8 @@ fn sh_unquote(value: &str) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use temper_forge_model::RepositoryId;
-    use temper_forge_forgejo::ROLE_PASSWORD;
+    use temper_forge::RepositoryId;
+    use temper_forge::config::FORGEJO_ROLE_PASSWORD as ROLE_PASSWORD;
     use temper_provision::{BOT_USER, Provisioned, RoleIdentity};
     use temper_workflow::RoleId;
 

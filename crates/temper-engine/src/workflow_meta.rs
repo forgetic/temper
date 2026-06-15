@@ -6,7 +6,7 @@
 //! The daemon never hardcodes label names: every label set a job or PR must
 //! carry is derived from the validated workflow's artifact-kind declarations.
 
-use temper_forge_model::Repository;
+use temper_forge::Repository;
 use temper_workflow::{ArtifactKindId, ValidatedWorkflow};
 
 /// The repository's default branch, falling back to `main` when the Forge

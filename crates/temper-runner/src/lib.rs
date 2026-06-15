@@ -2,7 +2,7 @@
 //!
 //! `temper-runner` contains production orchestration building blocks that sit
 //! above `temper-workflow` and coordinate only through the portable
-//! [`temper_forge_model::Forge`] interface. It intentionally contains no concrete
+//! [`temper_forge::Forge`] interface. It intentionally contains no concrete
 //! provider adapters and no agent/provider behavior.
 //!
 //! Three constraints guide this crate:

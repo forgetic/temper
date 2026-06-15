@@ -14,7 +14,7 @@ use crate::relation::RelationKind;
 use crate::validated::{ValidatedArtifactKind, ValidatedWorkflow};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashSet};
-use temper_forge_model::{Issue, ItemNumber, PullRequest};
+use temper_forge::{Issue, ItemNumber, PullRequest};
 
 /// Classifies Forge artifacts against a validated workflow.
 pub struct Classifier<'a> {

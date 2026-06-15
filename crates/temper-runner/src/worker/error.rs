@@ -5,7 +5,7 @@ use crate::scan::ScanError;
 use crate::signal::CiError;
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::ForgeError;
+use temper_forge::ForgeError;
 use temper_workflow::{ApplyError, ExecutionError, ReconcileError};
 
 /// Errors that can stop a worker tick.

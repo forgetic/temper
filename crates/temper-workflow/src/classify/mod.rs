@@ -22,7 +22,7 @@ use crate::metadata::WorkflowMetadata;
 use crate::relation::RelationKind;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
-use temper_forge_model::ItemNumber;
+use temper_forge::ItemNumber;
 
 pub use classifier::Classifier;
 pub use diagnostic::{ClassificationDiagnostic, ClassificationError};

@@ -3,11 +3,11 @@
 mod support;
 
 use support::{MockHttpClient, block_on, body_json, forge, repo_id};
+use temper_forge_github::HttpMethod;
 use temper_forge_model::{
     CreateRepository, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort,
     RepositorySortField, SortDirection, UpsertLabel, UserId,
 };
-use temper_forge_github::HttpMethod;
 
 fn repo_json(owner: &str, name: &str, default_branch: &str) -> String {
     format!(

@@ -18,7 +18,7 @@
 //! `IntakeAuthor::SiteAdmin` to the admin token. This keeps the canonical spec
 //! byte-for-byte aligned with the Smith `config/workflow.json`.
 
-use temper_forge_model::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
+use temper_forge::{BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState};
 use temper_workflow::{
     ArtifactKindId, CiStatus, ClassifiedArtifact, Classifier, GateCondition, GateId, GateSignals,
     IntakeAuthor, LabelId, PlanDiagnostic, QueueId, RawWorkflowSpec, ReviewStatus, RoleId,

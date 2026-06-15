@@ -10,7 +10,7 @@ mod support;
 use support::{
     TestRoot, add_issue_dependency, block_on, close_issue, create_issue, new_repo, ts, workflow,
 };
-use temper_forge_model::{CreateRepository, Forge, ItemNumber};
+use temper_forge::{CreateRepository, Forge, ItemNumber};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSnapshot, ArtifactSource, CommandId, CommandJournal,
     CommandRecord, CommandState, DefaultRecoveryPolicy, DependencyStatus, InMemoryJournal, Lease,

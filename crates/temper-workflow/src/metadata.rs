@@ -50,7 +50,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::{ItemNumber, RepositoryId};
+use temper_forge::{ItemNumber, RepositoryId};
 
 /// Marker that opens a workflow metadata block.
 pub const METADATA_BEGIN: &str = "<!-- temper:workflow";

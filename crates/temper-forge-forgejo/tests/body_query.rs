@@ -3,10 +3,10 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
+use temper_forge_forgejo::HttpMethod;
 use temper_forge_model::{
     IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
 };
-use temper_forge_forgejo::HttpMethod;
 
 fn issue_json(number: u64, body: &str, labels: &str) -> String {
     format!(

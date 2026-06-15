@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
-use temper_forge_model::{
+use temper_forge::{
     ChangeSource, ChangeSourceEvent, CreateIssue, Forge, IssueState, ItemNumber, RepositoryId,
     RepositoryPath, UpdateIssue,
 };
@@ -142,7 +142,7 @@ impl<S: ChangeSource> ChangeSource for ParkSignalSource<S> {
 }
 
 fn create_repo(forge: &FilesystemForge, name: &str) -> RepositoryTarget {
-    let repo = block_on(forge.create_repository(temper_forge_model::CreateRepository {
+    let repo = block_on(forge.create_repository(temper_forge::CreateRepository {
         owner: "acme".into(),
         name: name.into(),
         default_branch: "main".into(),

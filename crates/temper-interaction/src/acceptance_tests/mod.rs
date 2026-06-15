@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use temper_forge_model::{
+use temper_forge::{
     CreateRepository, Forge, Repository, RepositoryPath, UpsertLabel, User, UserId,
 };
 use temper_forge_memory::MemoryForge;
@@ -202,7 +202,7 @@ async fn open_session<R: InteractiveResponder + ?Sized>(
     agent: MemoryForge,
     responder: Arc<R>,
     manifest: crate::CompiledProfileManifest,
-    transcript_issue: Option<temper_forge_model::ItemNumber>,
+    transcript_issue: Option<temper_forge::ItemNumber>,
 ) -> ForgeInteractionSession<MemoryForge, MemoryForge, R> {
     let config = ForgeSessionConfig::from_profile_manifest(&manifest).unwrap();
     ForgeInteractionSession::open(

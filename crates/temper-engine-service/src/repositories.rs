@@ -3,7 +3,7 @@
 //! Repository resolution, label bootstrap, and role feed target helpers.
 
 use temper_engine::{RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget};
-use temper_forge_model::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
+use temper_forge::{Forge, RepositoryId, RepositoryPath, UpsertLabel};
 use temper_workflow::{CompiledWorkflow, RoleId};
 
 /// Resolves each configured `owner/name` to a live repository (id + path),

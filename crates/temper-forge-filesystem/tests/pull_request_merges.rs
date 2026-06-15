@@ -111,7 +111,9 @@ fn merging_missing_pull_request_returns_not_found() {
     let forge = root.forge();
 
     let error = block_on(forge.merge_pull_request(
-        &temper_forge_model::PullRequestId::new("pull-request-repo-0000000000000001-0000000000009999"),
+        &temper_forge_model::PullRequestId::new(
+            "pull-request-repo-0000000000000001-0000000000009999",
+        ),
         merge_input(MergeMethod::Squash),
     ))
     .unwrap_err();

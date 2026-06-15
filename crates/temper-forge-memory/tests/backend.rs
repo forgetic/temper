@@ -9,13 +9,13 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
+use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_forge_model::{
     BranchRef, ChangeSource, ChangeSourceEvent, CiJob, CiJobQuery, CiJobStatus, CreateComment,
     CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueQuery, IssueState,
     ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
     RepositoryId, RepositoryPath, UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
 };
-use temper_forge_memory::{FaultOp, MemoryForge};
 
 struct NoopWake;
 impl Wake for NoopWake {

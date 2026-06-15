@@ -8,7 +8,7 @@ use temper_engine::{
     Daemon, ForgeApplier, LeaseApplier, RoleFeedMode, RoleFeedTarget, WebhookConfig,
     webhook_signature,
 };
-use temper_forge_model::{
+use temper_forge::{
     CreateIssue, CreateRepository, Forge, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
     UserId,
 };

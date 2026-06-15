@@ -53,7 +53,7 @@ use crate::reconcile::{ReconcileFinding, ReconcileReport, RecoveryAction};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::{Forge, RepositoryId};
+use temper_forge::{Forge, RepositoryId};
 
 /// What an [`Applier::apply_report`] run did with each action.
 ///

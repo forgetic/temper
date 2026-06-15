@@ -7,7 +7,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, ChangeKind, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery,
     IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,

@@ -7,7 +7,7 @@ use std::task::{Context, Poll, Wake, Waker};
 mod support;
 
 use support::{CountedForgeOp, CountingForge};
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
     ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RepositoryId, UpdateIssue, UpdatePullRequest, UserId,

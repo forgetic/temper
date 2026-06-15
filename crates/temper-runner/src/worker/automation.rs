@@ -6,7 +6,7 @@ use crate::observability::{
 use crate::scan::{AutomatedWorkItem, scan_automated_queues};
 use crate::workspace_automation::{WorkspaceAutomationOutcome, execute_workspace_automation};
 use chrono::{DateTime, Utc};
-use temper_forge_model::{Forge, ItemNumber, RepositoryId};
+use temper_forge::{Forge, ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, ExecutionError, Executor, PlanDiagnostic, TransitionId,
     ValidatedWorkflow, VerdictId,

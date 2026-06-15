@@ -10,8 +10,7 @@ description = "The interactive `temper init` command: prompt for forge/admin/pro
 temper-cli-common = { path = "../temper-cli-common" }
 temper-config = { path = "../temper-config" }
 temper-provision = { path = "../temper-provision" }
-temper-forge-model = { path = "../temper-forge-model" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forge = { path = "../temper-forge" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }

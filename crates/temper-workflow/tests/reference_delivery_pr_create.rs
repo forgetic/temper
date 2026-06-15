@@ -1,7 +1,7 @@
 //! Focused reference-delivery PR-create transition tests.
 
 use chrono::{DateTime, Utc};
-use temper_forge_model::{Issue, IssueState, ItemNumber};
+use temper_forge::{Issue, IssueState, ItemNumber};
 use temper_workflow::{
     ArtifactKindId, Classifier, LabelId, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow,
     WorkflowEffect,

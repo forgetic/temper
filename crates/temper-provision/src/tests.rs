@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_forge_model::{AccessScope, RepositoryId, RepositoryPath};
+use temper_forge::{AccessScope, RepositoryId, RepositoryPath};
 use temper_workflow::{RawIntakeAuthor, RawRole, RawWorkflowSpec, RoleId, ValidatedWorkflow};
 
 use crate::intake::resolve_intake_seed_token;

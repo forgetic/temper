@@ -20,8 +20,7 @@ temper-agent-session = { path = "../temper-agent-session" }
 # In-process all-in-one glue spans all three tiers (composition root).
 temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }
-temper-forge-model = { path = "../temper-forge-model" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-forge = { path = "../temper-forge" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-worker = { path = "../temper-worker" }

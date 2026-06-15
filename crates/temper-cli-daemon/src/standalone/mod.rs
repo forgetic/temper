@@ -30,8 +30,7 @@ use temper_engine_service::{
     daemon_run_config, ensure_workflow_labels, forgejo_config, resolve_repositories,
     result_applier, role_feed_targets,
 };
-use temper_forge_model::RepositoryId;
-use temper_forge_forgejo::ForgejoForge;
+use temper_forge::RepositoryId;
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
     run_worker_with_transport,
@@ -53,7 +52,7 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
     //     service's adapters + wiring) ---
     let forge_config = forgejo_config(resolved)?;
     let forge_base_url = forge_config.base_url.clone();
-    let forge = Arc::new(ForgejoForge::new(forge_config));
+    let forge = temper_forge::factory::new_forgejo(forge_config);
     let daemon_config = daemon_run_config(resolved)?;
 
     let workflow = Arc::new(

@@ -13,7 +13,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use temper_engine_io::process::{ProcessCall, ProcessCallError, run_process};
 
-use temper_forge_model::Forge;
+use temper_forge::Forge;
 use temper_workflow::{RoleManifest, ToolManifest};
 
 use crate::role_decision::workflow_role_manifest_from_runtime;

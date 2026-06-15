@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use temper_engine::{Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig, webhook_signature};
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_sim::{Sim, SimProtocolClient, http_request};
 use temper_worker_protocol::{

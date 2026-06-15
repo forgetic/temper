@@ -10,7 +10,7 @@ use super::{ExecutionError, Executor};
 use crate::classify::ArtifactSource;
 use crate::plan::{Postcondition, WorkflowEffect};
 use std::collections::HashSet;
-use temper_forge_model::{Forge, RepositoryId, UserId};
+use temper_forge::{Forge, RepositoryId, UserId};
 
 /// Labels and assignees returned by the backend immediately after the commit update.
 pub(super) struct AppliedState {

@@ -4,7 +4,7 @@ use super::repository_set::RepositoryTarget;
 use crate::{Progress, WorkerError};
 use std::error::Error;
 use std::fmt;
-use temper_forge_model::RepositoryId;
+use temper_forge::RepositoryId;
 use temper_workflow::CommandJournal;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

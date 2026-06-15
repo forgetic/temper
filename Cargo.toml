@@ -12,6 +12,7 @@ members = [
     "crates/temper-engine",
     "crates/temper-workflow",
     "crates/temper-forge-model",
+    "crates/temper-forge",
     "crates/temper-process-protocol",
     "crates/temper-worker-protocol",
     "crates/temper-worker-registry",
@@ -67,7 +68,9 @@ temper-testing = { path = "crates/temper-testing" }
 # `temper run` e2e (`tests/run_forgejo_e2e.rs`): real bench Forgejo fixture +
 # jig fake LLM, driving one in-process `temper run`. Needs the forge API for PR
 # assertions and jig for the canned engineer-agent replies.
-temper-forge-model = { path = "crates/temper-forge-model" }
+temper-forge = { path = "crates/temper-forge" }
+# Concrete backend (test-only): the daemon-scenario e2e helpers construct a
+# ForgejoForge directly. Dev-dependency, so exempt from the depgraph backend rule.
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-workflow = { path = "crates/temper-workflow" }
 temper-engine = { path = "crates/temper-engine" }

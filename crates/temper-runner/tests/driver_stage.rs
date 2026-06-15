@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration as StdDuration, Instant};
-use temper_forge_model::{
+use temper_forge::{
     ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, CreateIssue, CreateRepository, Forge,
     IssueQuery, ItemNumber, RepositoryId, RepositoryPath, User, UserId,
 };

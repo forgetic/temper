@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
-use temper_forge_model::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
+use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
 
 use crate::{Daemon, RoleFeedMode, RoleFeedTarget};

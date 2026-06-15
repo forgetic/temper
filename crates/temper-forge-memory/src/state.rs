@@ -158,7 +158,10 @@ impl State {
             .cloned()
     }
 
-    pub(crate) fn labels_mut(&mut self, repo_id: &RepositoryId) -> &mut Vec<temper_forge_model::Label> {
+    pub(crate) fn labels_mut(
+        &mut self,
+        repo_id: &RepositoryId,
+    ) -> &mut Vec<temper_forge_model::Label> {
         self.labels.entry(repo_id.as_str().to_string()).or_default()
     }
 

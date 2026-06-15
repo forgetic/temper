@@ -1,6 +1,6 @@
 //! CLI-facing provisioning options for the demo provision-forgejo subcommand.
 
-use temper_forge_model::AccessScope;
+use temper_forge::AccessScope;
 
 /// Options that tune [`provision_world`](super::provision_world) away from its
 /// throwaway-repo defaults.

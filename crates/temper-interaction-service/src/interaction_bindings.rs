@@ -13,8 +13,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use temper_forge_model::RepositoryPath;
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge::Forge;
+use temper_forge::RepositoryPath;
+use temper_forge::config::ForgejoConfig;
 use temper_interaction::{
     CompiledInteractionSpec, ConversationProfileId, InteractionError, InteractiveResponder,
     ProcessResponder, ProcessResponderConfig, RawInteractionSpec, ResponderId,
@@ -239,8 +240,8 @@ where
         let agent_token = require_env(&env, &binding.agent_token_env)?;
         profiles.push(InteractionProfileRuntime {
             manifest,
-            human_forge: Arc::new(build_forge(&bindings.forge.base_url, &human_token)),
-            agent_forge: Arc::new(build_forge(&bindings.forge.base_url, &agent_token)),
+            human_forge: build_forge(&bindings.forge.base_url, &human_token),
+            agent_forge: build_forge(&bindings.forge.base_url, &agent_token),
             responder,
         });
     }
@@ -325,8 +326,8 @@ where
     Ok(config)
 }
 
-fn build_forge(base_url: &str, token: &str) -> ForgejoForge {
-    ForgejoForge::new(ForgejoConfig::new(base_url.to_string(), token.to_string()))
+fn build_forge(base_url: &str, token: &str) -> Arc<dyn Forge> {
+    temper_forge::factory::new_forgejo(ForgejoConfig::new(base_url.to_string(), token.to_string()))
 }
 
 fn require_env<E>(env: &E, key: &str) -> Result<String, InteractionDeploymentError>

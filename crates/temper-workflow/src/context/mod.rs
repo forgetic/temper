@@ -10,7 +10,7 @@
 //! the portable workflow spec: branch refs, title, body, labels, assignees, and
 //! sometimes a per-work-item idempotency correlation key. A `CreatePullRequest`
 //! effect may carry a static correlation key; when it does not, the matching
-//! runtime key and [`temper_forge_model::CreatePullRequest`] input are supplied here.
+//! runtime key and [`temper_forge::CreatePullRequest`] input are supplied here.
 //!
 //! The content-bearing `SetBody` and `AttachReview` effects share the same
 //! shape: the effect declares only an optional correlation key, while the
@@ -31,7 +31,7 @@ pub use child::CreateIssuesChild;
 
 use crate::ids::{RoleId, TransitionId};
 use std::collections::BTreeMap;
-use temper_forge_model::{CreatePullRequest, UserId};
+use temper_forge::{CreatePullRequest, UserId};
 
 /// Runtime context for a transition execution.
 ///

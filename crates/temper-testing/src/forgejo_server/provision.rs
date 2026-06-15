@@ -29,8 +29,8 @@ use super::{ForgejoServer, ServerError};
 use crate::{runner_config, workflow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use temper_forge_model::RepositoryId;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge_model::RepositoryId;
 use temper_runner::RoleBinding;
 use temper_workflow::RoleId;
 

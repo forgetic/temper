@@ -7,7 +7,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge_model::{
+use temper_forge::{
     BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, ItemNumber, PullRequestState,
     RepositoryId, ReviewDecision, UserId,
 };
@@ -104,7 +104,7 @@ fn non_label_workflow() -> ValidatedWorkflow {
 }
 
 fn new_repo(forge: &MemoryForge) -> RepositoryId {
-    let repo = block_on(forge.create_repository(temper_forge_model::CreateRepository {
+    let repo = block_on(forge.create_repository(temper_forge::CreateRepository {
         owner: "acme".into(),
         name: "service".into(),
         default_branch: "main".into(),
@@ -489,7 +489,7 @@ fn ensure_issue_is_idempotent_across_retries() {
     assert_eq!(second.artifact().id, created.id);
 
     // Exactly one issue exists; the retry did not duplicate it.
-    let issues = block_on(forge.list_issues(&repo, temper_forge_model::IssueQuery::default()))
+    let issues = block_on(forge.list_issues(&repo, temper_forge::IssueQuery::default()))
         .expect("issues list");
     assert_eq!(issues.len(), 1);
 }

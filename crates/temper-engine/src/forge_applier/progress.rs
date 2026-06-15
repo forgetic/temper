@@ -3,7 +3,7 @@
 //! The [`ResultApplier`] trait impl for [`ForgeApplier`] and the step-progress
 //! checkpoint comments it records.
 
-use temper_forge_model::{CreateComment, Forge};
+use temper_forge::{CreateComment, Forge};
 use temper_worker_protocol::{JobProgress, JobResult, ResultStatus};
 
 use crate::InFlightJob;
@@ -11,7 +11,7 @@ use crate::applier::ResultApplier;
 use crate::forge_applier::ForgeApplier;
 
 #[async_trait::async_trait]
-impl<F: Forge + 'static> ResultApplier for ForgeApplier<F> {
+impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     async fn apply(&self, job: InFlightJob, result: JobResult) {
         match result.status {
             ResultStatus::Success => self.apply_success(job, result).await,

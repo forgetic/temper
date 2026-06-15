@@ -6,7 +6,7 @@ use super::*;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temper_forge_model::PullRequestQuery;
+use temper_forge::PullRequestQuery;
 
 use crate::{
     CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,
@@ -271,7 +271,7 @@ fn workspace_verdict_routes_to_create_issues_and_fans_out_children() {
         let parent_ref = temper_workflow::ArtifactRef::same_repo(fixture.issue.number);
         let mut created: Vec<_> = fixture
             .forge
-            .list_issues(&fixture.repo, temper_forge_model::IssueQuery::default())
+            .list_issues(&fixture.repo, temper_forge::IssueQuery::default())
             .await
             .expect("issues list")
             .into_iter()

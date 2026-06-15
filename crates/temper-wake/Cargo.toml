@@ -13,7 +13,7 @@ temper-engine-io = { path = "../temper-engine-io" }
 temper-runner = { path = "../temper-runner" }
 
 [dev-dependencies]
-temper-forge-model = { path = "../temper-forge-model" }
+temper-forge = { path = "../temper-forge" }
 
 [lints]
 workspace = true

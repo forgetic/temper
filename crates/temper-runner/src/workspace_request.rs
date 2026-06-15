@@ -8,7 +8,7 @@
 //! workspace head are shared here so both paths produce identical, idempotent
 //! Forge writes for the same work item.
 
-use temper_forge_model::{BranchRef, CreatePullRequest, ItemNumber, RepositoryId};
+use temper_forge::{BranchRef, CreatePullRequest, ItemNumber, RepositoryId};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, TransitionId, WorkflowMetadata,
     render_metadata_block,

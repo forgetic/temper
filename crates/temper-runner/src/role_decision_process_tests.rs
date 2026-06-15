@@ -10,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, Issue, RepositoryId};
+use temper_forge::{CreateIssue, CreateRepository, Forge, Issue, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, ExecutionContext, QueueId, RawWorkflowSpec, RoleId,

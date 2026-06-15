@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::Path;
 
 use chrono::Duration;
-use temper_forge_model::{CreateRepository, User, UserId};
+use temper_forge::{CreateRepository, User, UserId};
 use temper_runner::RunnerConfig;
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 

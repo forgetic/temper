@@ -13,7 +13,7 @@
 mod workspace;
 
 use serde_json::json;
-use temper_forge_model::{Forge, ForgeError, PullRequestState, RepositoryId};
+use temper_forge::{Forge, ForgeError, PullRequestState, RepositoryId};
 use temper_runner::{
     ScanError, WorkItem, pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake,
 };
