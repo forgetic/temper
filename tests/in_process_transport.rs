@@ -5,18 +5,15 @@
 //! worker would — register, then poll an enqueued job into an `Assign` — with no
 //! socket and no HTTP byte round-trip.
 
-#![cfg(feature = "unified")]
-
 use std::sync::Arc;
 
+use temper_cli::InProcessTransport;
 use temper_engine::Daemon;
 use temper_worker::Transport;
 use temper_worker_protocol::{
     Artifact, Branch, Capability, Capacity, JobResult, Poll, Register, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
-
-use temper::run::InProcessTransport;
 
 fn register(worker_id: &str, role: &str, repo: &str) -> WorkerProtocolMessage {
     WorkerProtocolMessage::Register(Register {

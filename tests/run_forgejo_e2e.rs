@@ -223,34 +223,46 @@ fn spawn_temper_run(
     fake_llm_url: &str,
     log: &Path,
 ) -> ChildGuard {
+    // The new CLI is config-file driven: standalone `temper daemon` (no
+    // --service) runs engine + worker + agent in one process. Deployment
+    // settings go in the config file; secrets (forge token, the engineer's
+    // role identity, the dummy LLM key) and the fake-LLM redirect come from the
+    // environment, which the resolver layers over the file.
+    let config_path = workspace.join("run-config.toml");
+    let config = format!(
+        "schema_version = 1\n\
+         [forge]\n\
+         type = \"forgejo\"\n\
+         url = \"{base_url}\"\n\
+         [engine]\n\
+         repos = [\"{owner}/{name}\"]\n\
+         roles = [\"{ENGINEER}\"]\n\
+         workflow = \"{workflow}\"\n\
+         poll_cadence_secs = 2\n\
+         mechanical_cadence_secs = 2\n\
+         daemon_id = \"temper-run-e2e\"\n\
+         [worker]\n\
+         worker_id = \"temper-run-e2e-worker\"\n\
+         workspace = \"{workspace_root}\"\n\
+         git_base_url = \"{base_url}\"\n\
+         [agent]\n\
+         provider = \"deepseek\"\n\
+         max_iterations = 6\n",
+        base_url = server.base_url(),
+        owner = provisioned.owner,
+        name = provisioned.name,
+        workflow = workflow_file.display(),
+        workspace_root = workspace.join("run/agent-workspaces").display(),
+    );
+    std::fs::write(&config_path, config).expect("write run config");
+
     let log_file = log_file(log);
     let engineer_upper = ENGINEER.to_uppercase();
     let child = Command::new(env!("CARGO_BIN_EXE_temper"))
-        .arg("run")
-        .arg("--repo")
-        .arg(format!("{}/{}", provisioned.owner, provisioned.name))
-        .arg("--role")
-        .arg(ENGINEER)
-        .arg("--workflow")
-        .arg(workflow_file)
-        .arg("--poll-cadence-secs")
-        .arg("2")
-        .arg("--mechanical-cadence-secs")
-        .arg("2")
-        .arg("--daemon-id")
-        .arg("temper-run-e2e")
-        .arg("--worker-id")
-        .arg("temper-run-e2e-worker")
-        .arg("--auth")
-        .arg("deepseek")
-        .arg("--max-iterations")
-        .arg("6")
-        .arg("--workspace-root")
-        .arg(workspace.join("run/agent-workspaces"))
-        .arg("--git-base-url")
-        .arg(server.base_url())
-        // Forge connection.
-        .env("FORGEJO_URL", server.base_url())
+        .arg("daemon")
+        .arg("--config")
+        .arg(&config_path)
+        // Forge connection (token is secret -> env).
         .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
         .env("FORGEJO_USERNAME", &engineer.user)
         .env("FORGEJO_PASSWORD", &engineer.password)
@@ -272,13 +284,14 @@ fn spawn_temper_run(
         // redirected to the local fake LLM.
         .env("TEMPER_DEEPSEEK_API_KEY", "sk-jig-test")
         .env("ANVIL_TEST_PROVIDER_BASE_URL", fake_llm_url)
+        .env_remove("FORGEJO_URL")
         .env_remove("FORGEJO_DEFAULT_REPO")
         .stdout(Stdio::from(log_file.try_clone().expect("log clones")))
         .stderr(Stdio::from(log_file))
         .spawn()
-        .expect("`temper run` binary spawns");
+        .expect("standalone `temper daemon` binary spawns");
     ChildGuard {
-        label: "temper run",
+        label: "temper daemon",
         child,
         log: log.to_path_buf(),
     }

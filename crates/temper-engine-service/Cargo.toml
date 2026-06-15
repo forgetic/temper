@@ -1,0 +1,25 @@
+[package]
+name = "temper-engine-service"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The engine (orchestrator) service: wires a Resolved config into a running daemon. Ships the slim `temper-engine` binary; reused by the unified binary's standalone mode."
+
+[dependencies]
+skein = { workspace = true }
+chrono = { workspace = true }
+temper-config = { path = "../temper-config" }
+temper-engine = { path = "../temper-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
+temper-forge = { path = "../temper-forge" }
+temper-forge-forgejo = { path = "../temper-forge-forgejo" }
+temper-workflow = { path = "../temper-workflow" }
+temper-reference-delivery = { path = "../temper-reference-delivery" }
+
+[[bin]]
+name = "temper-engine"
+path = "src/bin/temper-engine.rs"
+
+[lints]
+workspace = true

@@ -71,6 +71,10 @@ fn should_skip(path: &Path) -> bool {
             || name == "temper-agent-core"
             || name == "temper-agent"
             || name == "temper-agent-io"
+            // The CLI composition root dispatches the concrete responder
+            // subcommands (e.g. `product-manager-responder`) — the same role the
+            // old root-package `src/cli/` played, which this guard never scanned.
+            || name == "temper-cli"
     })
 }
 

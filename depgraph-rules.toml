@@ -73,8 +73,24 @@ temper-agent = ["temper-agent-core", "temper-agent-protocol", "temper-process-pr
 # COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get
 # broad allowlists rather than tier rules.
 # ===========================================================================
-# The unified `temper` binary wires daemon + worker + agent together.
-temper = ["temper-agent-core", "temper-agent-io", "temper-agent-protocol", "temper-agent", "temper-engine", "temper-forge", "temper-forge-forgejo", "temper-forgejo-provision", "temper-interaction-service", "temper-engine-io", "temper-process-protocol", "temper-reference-delivery", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-worker-io", "temper-worker", "temper-worker-protocol", "temper-workflow"]
+# Tier-agnostic config: schema + resolution, no internal deps. A shared leaf
+# (like the protocol crates) every binary can read config without linking a tier.
+temper-config = []
+
+# Per-tier service crates. Each links ONLY its own tier + temper-config, and
+# ships its slim binary (temper-engine / temper-worker / temper-agent). These
+# allowlists ARE the proof of tier isolation.
+temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-workflow", "temper-reference-delivery"]
+temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io"]
+temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-agent-protocol"]
+
+# The CLI composition root: the config/daemon/agent dispatcher, the standalone
+# (in-process all-in-one), and the operator tools. Spans tiers by design (it
+# reuses the three service crates and wires the in-process glue).
+temper-cli = ["temper-config", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-agent-protocol", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-forgejo-provision", "temper-interaction-service", "temper-process-protocol", "temper-reference-delivery", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-worker", "temper-worker-protocol", "temper-workflow"]
+
+# The unified `temper` binary is now a one-line shim over temper-cli.
+temper = ["temper-cli"]
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-engine", "temper-engine-io", "temper-worker-protocol"]
 # Shared non-production test machinery (engine-side).

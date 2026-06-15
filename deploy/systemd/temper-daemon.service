@@ -1,22 +1,25 @@
-# Repo-tracked template for the consolidated temper-daemon systemd user unit.
+# Repo-tracked template for the temper engine-service systemd user unit.
 #
-# The daemon is the sole Forgejo API writer in the two-tier topology: webhook
+# The engine is the sole Forgejo API writer in the two-tier topology: webhook
 # intake, poll backstop, scan-to-enqueue dispatch to long-polling workers,
-# lease-gated role-attributed applies, and optional mechanical backstop all run
-# here. Workers connect to DAEMON_BIND and never touch the Forge API.
+# lease-gated role-attributed applies, and the optional mechanical backstop all
+# run here. Workers connect to the engine's bind address and never touch the
+# Forge API.
 #
-# Install with deploy/install.sh, then adjust %h/.config/temper/daemon.env as
-# needed. Forgejo API tokens are loaded from the provisioned roles.env file;
-# this template does not contain secrets.
+# Install with deploy/install.sh, then adjust %h/.config/temper/config.toml
+# (run `temper config validate`). Forgejo API tokens load from the provisioned
+# roles.env file; this template and config.toml contain no secrets.
 
 [Unit]
-Description=Temper consolidated daemon
+Description=Temper engine service
 After=forgejo.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=%h/.config/temper/daemon.env
+# Optional operator env overrides (e.g. TEMPER_CONFIG); the secrets file is
+# required. The `-` prefix makes the first file optional.
+EnvironmentFile=-%h/.config/temper/daemon.env
 EnvironmentFile=%h/.config/temper/secrets/roles.env
 ExecStart=%h/.local/bin/temper-daemon-launcher
 Restart=on-failure

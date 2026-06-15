@@ -156,6 +156,11 @@ pub struct ProviderConfig {
     model_id: String,
     base_url: String,
     auth: AuthMode,
+    /// Explicit sub-agent (investigate) model override. When set, it takes
+    /// precedence over the env/default sub-agent model — the config-file driven
+    /// path uses this so the in-process agent honors `models.investigate`
+    /// without relying on ambient environment.
+    subagent_model_override: Option<String>,
 }
 
 impl ProviderConfig {
@@ -173,7 +178,24 @@ impl ProviderConfig {
             auth: AuthMode::ApiKey {
                 api_key: api_key.into(),
             },
+            subagent_model_override: None,
         }
+    }
+
+    /// Builds a DeepSeek (OpenAI-compatible) config from an explicit API key,
+    /// with optional model and base-URL overrides — the config-file driven
+    /// counterpart to [`deepseek_from_env`](Self::deepseek_from_env).
+    pub fn deepseek_with_key(
+        api_key: impl Into<String>,
+        model: Option<String>,
+        base_url: Option<String>,
+    ) -> Self {
+        Self::new(
+            PROVIDER_ID,
+            model.unwrap_or_else(|| DEFAULT_MODEL_ID.to_string()),
+            base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            api_key,
+        )
     }
 
     /// Builds the default DeepSeek config, reading the key at runtime.
@@ -206,6 +228,7 @@ impl ProviderConfig {
             auth: AuthMode::ChatGptOAuth {
                 settings: oauth::OAuthSettings::new(auth_file),
             },
+            subagent_model_override: None,
         }
     }
 
@@ -227,6 +250,7 @@ impl ProviderConfig {
             auth: AuthMode::AnthropicOAuth {
                 settings: anthropic_oauth::AnthropicOAuthSettings::new(auth_file),
             },
+            subagent_model_override: None,
         }
     }
 
@@ -309,6 +333,16 @@ impl ProviderConfig {
         clone
     }
 
+    /// Sets an explicit sub-agent (investigate) model override (config-file
+    /// driven). `None` clears it, restoring env/default resolution.
+    #[must_use]
+    pub fn with_subagent_model_id(mut self, model_id: Option<String>) -> Self {
+        self.subagent_model_override = model_id
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        self
+    }
+
     /// The model id to run read-only `investigate` sub-agents on.
     ///
     /// For the Anthropic OAuth mode this is the (cheaper, overridable) sub-agent
@@ -316,6 +350,9 @@ impl ProviderConfig {
     /// smaller model. For other modes (Codex, DeepSeek) there is no separate
     /// cheap tier wired up, so sub-agents stay on the main model.
     pub fn subagent_model_id(&self) -> String {
+        if let Some(override_id) = &self.subagent_model_override {
+            return override_id.clone();
+        }
         match &self.auth {
             AuthMode::AnthropicOAuth { .. } => anthropic_oauth::anthropic_subagent_model_from_env(),
             _ => self.model_id.clone(),

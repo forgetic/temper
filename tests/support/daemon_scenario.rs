@@ -4,9 +4,9 @@
 //!
 //! - `ForgejoServer` + host-mode `ForgejoRunner` from the shared bench fixture
 //!   (real Forgejo API, real git, real Actions CI),
-//! - the real **`temper-daemon` binary** (`CARGO_BIN_EXE_temper-daemon`):
-//!   env→config→composition, webhook route, long poll backstop, short
-//!   mechanical backstop, per-role token routing,
+//! - the real engine service (`temper daemon --service engine`, from the
+//!   `CARGO_BIN_EXE_temper` binary, config-file driven): webhook route, long
+//!   poll backstop, short mechanical backstop, per-role token routing,
 //! - the deterministic **`temper-testing-daemon-worker`** binary: wire-protocol
 //!   client + real git push as the engineer role identity.
 //!
@@ -490,25 +490,45 @@ fn spawn_daemon(
     secret_file: &Path,
     log: &Path,
 ) -> ChildGuard {
+    // The new CLI is config-file driven: write the engine's deployment settings
+    // to a config file and run `temper daemon --service engine`. Secrets (forge
+    // token, CI web-UI creds, the engineer's per-role token) still come from the
+    // environment, which the resolver layers over the file.
+    let config_path = log
+        .parent()
+        .expect("daemon log has a parent dir")
+        .join("daemon-config.toml");
+    let config = format!(
+        "schema_version = 1\n\
+         [forge]\n\
+         type = \"forgejo\"\n\
+         url = \"{base_url}\"\n\
+         [engine]\n\
+         bind = \"127.0.0.1:{port}\"\n\
+         repos = [\"{owner}/{name}\"]\n\
+         roles = [\"{ENGINEER}\"]\n\
+         workflow = \"{workflow}\"\n\
+         webhook_secret_file = \"{secret}\"\n\
+         poll_cadence_secs = {poll}\n\
+         mechanical_cadence_secs = {mech}\n\
+         daemon_id = \"temper-daemon-e2e\"\n",
+        base_url = server.base_url(),
+        owner = provisioned.owner,
+        name = provisioned.name,
+        workflow = workflow_file.display(),
+        secret = secret_file.display(),
+        poll = DAEMON_POLL_CADENCE_SECS,
+        mech = DAEMON_MECHANICAL_CADENCE_SECS,
+    );
+    std::fs::write(&config_path, config).expect("write daemon config");
+
     let log_file = log_file(log);
-    let child = Command::new(env!("CARGO_BIN_EXE_temper-daemon"))
-        .arg("--bind")
-        .arg(format!("127.0.0.1:{port}"))
-        .arg("--repo")
-        .arg(format!("{}/{}", provisioned.owner, provisioned.name))
-        .arg("--role")
-        .arg(ENGINEER)
-        .arg("--workflow")
-        .arg(workflow_file)
-        .arg("--webhook-secret-file")
-        .arg(secret_file)
-        .arg("--poll-cadence-secs")
-        .arg(DAEMON_POLL_CADENCE_SECS.to_string())
-        .arg("--mechanical-cadence-secs")
-        .arg(DAEMON_MECHANICAL_CADENCE_SECS.to_string())
-        .arg("--daemon-id")
-        .arg("temper-daemon-e2e")
-        .env("FORGEJO_URL", server.base_url())
+    let child = Command::new(env!("CARGO_BIN_EXE_temper"))
+        .arg("daemon")
+        .arg("--service")
+        .arg("engine")
+        .arg("--config")
+        .arg(&config_path)
         .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
         // ADR 0019 web-UI CI-read fallback used by the mechanical backstop.
         .env("FORGEJO_USERNAME", &engineer.user)
@@ -516,14 +536,15 @@ fn spawn_daemon(
         // Per-role Forge API token routing (consolidation phase 4d).
         .env("TEMPER_FORGEJO_TOKEN_ENGINEER", &engineer.token)
         .env_remove("FORGEJO_DEFAULT_REPO")
+        .env_remove("FORGEJO_URL")
         .stdout(Stdio::from(
             log_file.try_clone().expect("daemon log clones"),
         ))
         .stderr(Stdio::from(log_file))
         .spawn()
-        .expect("temper-daemon binary spawns");
+        .expect("temper daemon binary spawns");
     ChildGuard {
-        label: "temper-daemon",
+        label: "temper daemon --service engine",
         child,
         log: log.to_path_buf(),
     }
@@ -606,7 +627,7 @@ fn daemon_worker_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("TEMPER_TESTING_DAEMON_WORKER_BIN") {
         return PathBuf::from(path);
     }
-    let daemon = PathBuf::from(env!("CARGO_BIN_EXE_temper-daemon"));
+    let daemon = PathBuf::from(env!("CARGO_BIN_EXE_temper"));
     let candidate = daemon
         .parent()
         .expect("daemon binary has a target directory")
