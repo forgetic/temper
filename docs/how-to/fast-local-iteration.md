@@ -10,12 +10,6 @@ Use the workspace alias:
 cargo dev-check
 ```
 
-This expands to:
-
-```sh
-cargo check --workspace --all-targets
-```
-
 ## Tests
 
 When behavior changes, run relevant tests. For the quick workspace suite:
@@ -24,30 +18,11 @@ When behavior changes, run relevant tests. For the quick workspace suite:
 cargo dev-test-quick
 ```
 
-This expands to:
-
-```sh
-cargo test --workspace --all-targets
-```
-
-`cargo dev-test-quick` runs non-ignored tests.
-
-It includes the hermetic daemon test-worker contract test (`temper-testing`'s
-`daemon_worker` test). Cargo builds the `temper-testing` package's
-`temper-testing-daemon-worker` test-support binary for that integration test
-and exposes its path through `CARGO_BIN_EXE_temper-testing-daemon-worker`.
-
 To prebuild every workspace test harness and integration-test binary without
 running tests:
 
 ```sh
 cargo dev-test-build
-```
-
-This expands to:
-
-```sh
-cargo test --workspace --all-targets --no-run
 ```
 
 Use it before the full suite when you want `cargo dev-test-full` to start with
@@ -57,12 +32,6 @@ For the full self-contained local suite:
 
 ```sh
 cargo dev-test-full
-```
-
-This expands to:
-
-```sh
-cargo test --workspace --all-targets -- --include-ignored
 ```
 
 `cargo dev-test-full` runs the quick suite plus the ignored Forgejo-based
