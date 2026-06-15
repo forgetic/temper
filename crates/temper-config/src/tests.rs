@@ -148,6 +148,46 @@ fn resolves_full_deployment() {
 }
 
 #[test]
+fn mechanical_backstop_on_by_default_when_omitted() {
+    // Omitting `mechanical_cadence_secs` must leave the backstop enabled: it is
+    // the level-triggered safety net that stamps intake and lands PRs. A
+    // minimal config that forgot the key should still get a working bot.
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["architect", "engineer"]
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    assert_eq!(
+        resolved.engine.mechanical_cadence,
+        Some(std::time::Duration::from_secs(120)),
+        "omitted cadence must default the mechanical backstop on"
+    );
+}
+
+#[test]
+fn mechanical_backstop_disabled_with_explicit_zero() {
+    // `0` is the explicit opt-out: no mechanical worker is spawned.
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["architect", "engineer"]
+mechanical_cadence_secs = 0
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    assert_eq!(
+        resolved.engine.mechanical_cadence, None,
+        "explicit 0 must disable the mechanical backstop"
+    );
+}
+
+#[test]
 fn env_overrides_file() {
     let config = parse_config(FULL_CONFIG);
     let credentials = parse_credentials(FULL_CREDENTIALS);

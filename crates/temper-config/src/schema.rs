@@ -94,8 +94,10 @@ pub struct EngineConfig {
     /// Poll-backstop cadence in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_cadence_secs: Option<u64>,
-    /// Mechanical-backstop cadence in seconds. Omit to disable the mechanical
-    /// backstop (label transitions / lease-gated PR landing).
+    /// Mechanical-backstop cadence in seconds. The mechanical backstop (label
+    /// transitions / lease-gated PR landing) runs by default; webhooks are the
+    /// primary reaction path and this is the level-triggered safety net. Omit
+    /// for the default cadence; set `0` to disable the mechanical worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mechanical_cadence_secs: Option<u64>,
     /// Lease TTL in seconds.

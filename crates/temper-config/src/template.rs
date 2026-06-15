@@ -33,8 +33,10 @@ port = 4000
 repos = [\"acme/widgets\"]
 roles = [\"architect\", \"engineer\", \"code-reviewer\"]
 poll_cadence_secs = 30
-# Omit to disable the mechanical backstop (label transitions / PR landing).
-mechanical_cadence_secs = 5
+# Mechanical backstop (label transitions / PR landing). On by default;
+# webhooks are the primary reaction path and this is the level-triggered
+# safety net. Omit for the default cadence; set 0 to disable.
+# mechanical_cadence_secs = 120
 lease_ttl_secs = 300
 # webhook_secret_file = \"/path/to/webhook-secret\"
 
