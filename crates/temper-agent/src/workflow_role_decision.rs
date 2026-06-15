@@ -10,12 +10,11 @@ use std::time::Instant;
 
 use serde::Deserialize;
 use temper_process_protocol::{
-    BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
-    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, WorkflowRoleManifest,
+    WORKFLOW_ROLE_DECISION_NO_ACTION, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
+    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
 
 use crate::decision::{DecisionError, run_decision};
-use crate::observability::{REASON_PREVIEW_CHARS, redacted_preview};
 use crate::provider::{ProviderConfig, ProviderError};
 use crate::workflow_role_decision_capture::{
     CaptureWriteResult, WorkflowRoleDecisionCapture, WorkflowRoleDecisionCaptureInput,
@@ -25,9 +24,21 @@ use crate::workflow_role_decision_observability::{
     capture_written_event, emit, provider_call_finish_event, provider_call_start_event,
     reply_event, request_event,
 };
+use crate::workflow_role_decision_prompt::{
+    no_action_for_request, validated_reply_for_model_decision,
+};
 
-const EXTERNAL_TOOL_SECTION: &str = "User-declared external tools";
-const CODING_WORKSPACE_TOOL_ID: &str = "coding_workspace";
+// Re-export the prompt/validation surface so callers (and lib.rs) see it on the
+// `workflow_role_decision` module as before.
+pub use crate::workflow_role_decision_prompt::{
+    reply_for_model_decision, workflow_role_system_prompt, workflow_role_user_context,
+};
+
+// Internal prompt-module item the unit tests reach through `super::*`
+// (`validated_reply_for_model_decision` is already imported above for `respond`,
+// so the test's glob import sees it too).
+#[cfg(test)]
+use crate::workflow_role_decision_prompt::EXTERNAL_TOOL_SECTION;
 
 /// Provider-backed workflow-role decision responder.
 pub struct WorkflowRoleDecisionResponder {
@@ -106,94 +117,110 @@ impl WorkflowRoleDecisionResponder {
         )
         .await;
         let latency_ms = elapsed_ms(provider_call_started);
+        let context = DecisionLogContext {
+            request,
+            trace: &trace,
+            system_prompt: &system_prompt,
+            user_context: &user_context,
+            latency_ms,
+        };
 
         match decision_result {
-            Ok(decision) => {
-                let model_action = decision.action.trim().to_string();
-                emit(provider_call_finish_event(
-                    request,
-                    &trace,
-                    &self.provider,
-                    latency_ms,
-                    ProviderCallLogOutcome::Model {
-                        action: &model_action,
-                    },
-                ));
-                let model_decision = decision.clone();
-                let validated = validated_reply_for_model_decision(request, decision);
-                emit(reply_event(
-                    request,
-                    &trace,
-                    &self.provider,
-                    &validated.reply,
-                    &validated.log_metadata,
-                ));
-                self.write_capture(DecisionCaptureArgs {
-                    request,
-                    trace: &trace,
-                    system_prompt: Some(&system_prompt),
-                    user_context: Some(&user_context),
-                    model_decision: Some(&model_decision),
-                    final_reply: Some(&validated.reply),
-                    latency_ms: Some(latency_ms),
-                    outcome: validated.log_metadata.outcome,
-                    failure_class: None,
-                });
-                Ok(validated.reply)
-            }
-            Err(DecisionError::Provider(error)) => {
-                let error = DecisionError::Provider(error);
-                emit(provider_call_finish_event(
-                    request,
-                    &trace,
-                    &self.provider,
-                    latency_ms,
-                    ProviderCallLogOutcome::Error(&error),
-                ));
-                self.write_capture(DecisionCaptureArgs {
-                    request,
-                    trace: &trace,
-                    system_prompt: Some(&system_prompt),
-                    user_context: Some(&user_context),
-                    model_decision: None,
-                    final_reply: None,
-                    latency_ms: Some(latency_ms),
-                    outcome: "provider_error",
-                    failure_class: Some(decision_failure_class(&error)),
-                });
-                Err(WorkflowRoleDecisionError::Decision(error))
-            }
-            Err(error) => {
-                emit(provider_call_finish_event(
-                    request,
-                    &trace,
-                    &self.provider,
-                    latency_ms,
-                    ProviderCallLogOutcome::Error(&error),
-                ));
-                let reply = no_action_for_request(request, "decision failed");
-                let log_metadata = ReplyLogMetadata::decision_error_no_action();
-                emit(reply_event(
-                    request,
-                    &trace,
-                    &self.provider,
-                    &reply,
-                    &log_metadata,
-                ));
-                self.write_capture(DecisionCaptureArgs {
-                    request,
-                    trace: &trace,
-                    system_prompt: Some(&system_prompt),
-                    user_context: Some(&user_context),
-                    model_decision: None,
-                    final_reply: Some(&reply),
-                    latency_ms: Some(latency_ms),
-                    outcome: log_metadata.outcome,
-                    failure_class: Some(decision_failure_class(&error)),
-                });
-                Ok(reply)
-            }
+            Ok(decision) => Ok(self.finish_model_decision(&context, decision)),
+            Err(DecisionError::Provider(error)) => Err(self.finish_provider_error(&context, error)),
+            Err(error) => Ok(self.finish_decision_error(&context, &error)),
         }
+    }
+
+    /// Logs and captures a parseable model decision, returning the validated
+    /// (authority-checked) reply.
+    fn finish_model_decision(
+        &self,
+        context: &DecisionLogContext<'_>,
+        decision: WorkflowRoleModelDecision,
+    ) -> WorkflowRoleDecisionReply {
+        let model_action = decision.action.trim().to_string();
+        emit(provider_call_finish_event(
+            context.request,
+            context.trace,
+            &self.provider,
+            context.latency_ms,
+            ProviderCallLogOutcome::Model {
+                action: &model_action,
+            },
+        ));
+        let model_decision = decision.clone();
+        let validated = validated_reply_for_model_decision(context.request, decision);
+        emit(reply_event(
+            context.request,
+            context.trace,
+            &self.provider,
+            &validated.reply,
+            &validated.log_metadata,
+        ));
+        self.write_capture(context.capture_args(
+            Some(&model_decision),
+            Some(&validated.reply),
+            validated.log_metadata.outcome,
+            None,
+        ));
+        validated.reply
+    }
+
+    /// Logs and captures a provider-layer failure, surfacing it as a hard error
+    /// (the worker should fail rather than silently no-op).
+    fn finish_provider_error(
+        &self,
+        context: &DecisionLogContext<'_>,
+        error: ProviderError,
+    ) -> WorkflowRoleDecisionError {
+        let error = DecisionError::Provider(error);
+        emit(provider_call_finish_event(
+            context.request,
+            context.trace,
+            &self.provider,
+            context.latency_ms,
+            ProviderCallLogOutcome::Error(&error),
+        ));
+        self.write_capture(context.capture_args(
+            None,
+            None,
+            "provider_error",
+            Some(decision_failure_class(&error)),
+        ));
+        WorkflowRoleDecisionError::Decision(error)
+    }
+
+    /// Logs and captures a non-provider decision failure (empty/unparseable
+    /// reply), returning a safe `no_action` reply.
+    fn finish_decision_error(
+        &self,
+        context: &DecisionLogContext<'_>,
+        error: &DecisionError,
+    ) -> WorkflowRoleDecisionReply {
+        emit(provider_call_finish_event(
+            context.request,
+            context.trace,
+            &self.provider,
+            context.latency_ms,
+            ProviderCallLogOutcome::Error(error),
+        ));
+        let reply = no_action_for_request(context.request, "decision failed");
+        let log_metadata = ReplyLogMetadata::decision_error_no_action();
+        emit(reply_event(
+            context.request,
+            context.trace,
+            &self.provider,
+            &reply,
+            &log_metadata,
+        ));
+        self.write_capture(context.capture_args(
+            None,
+            Some(&reply),
+            log_metadata.outcome,
+            Some(decision_failure_class(error)),
+        ));
+        reply
     }
 
     fn write_capture(&self, args: DecisionCaptureArgs<'_>) {
@@ -239,6 +266,43 @@ struct DecisionCaptureArgs<'a> {
     latency_ms: Option<u64>,
     outcome: &'static str,
     failure_class: Option<&'static str>,
+}
+
+/// Shared context for the post-provider-call logging/capture paths.
+///
+/// Bundles the request-scoped values every `finish_*` helper needs so they take
+/// one borrow instead of five, and centralizes building [`DecisionCaptureArgs`]
+/// for the always-present prompts and known latency.
+struct DecisionLogContext<'a> {
+    request: &'a WorkflowRoleDecisionRequest,
+    trace: &'a WorkflowRoleTrace,
+    system_prompt: &'a str,
+    user_context: &'a str,
+    latency_ms: u64,
+}
+
+impl<'a> DecisionLogContext<'a> {
+    /// Builds capture args carrying this context's prompts and latency, with the
+    /// outcome-specific decision/reply/outcome/failure-class supplied per call.
+    fn capture_args(
+        &self,
+        model_decision: Option<&'a WorkflowRoleModelDecision>,
+        final_reply: Option<&'a WorkflowRoleDecisionReply>,
+        outcome: &'static str,
+        failure_class: Option<&'static str>,
+    ) -> DecisionCaptureArgs<'a> {
+        DecisionCaptureArgs {
+            request: self.request,
+            trace: self.trace,
+            system_prompt: Some(self.system_prompt),
+            user_context: Some(self.user_context),
+            model_decision,
+            final_reply,
+            latency_ms: Some(self.latency_ms),
+            outcome,
+            failure_class,
+        }
+    }
 }
 
 /// Minimal model decision shape. Extra fields are ignored for compatibility with
@@ -336,146 +400,8 @@ fn decision_failure_class(error: &DecisionError) -> &'static str {
     }
 }
 
-/// Builds the generated runtime system prompt for a workflow-role request.
-pub fn workflow_role_system_prompt(request: &WorkflowRoleDecisionRequest) -> String {
-    runtime_system_prompt(&request.role_manifest, &request.available_external_tools)
-}
-
-fn runtime_system_prompt(manifest: &WorkflowRoleManifest, tools: &[BoundExternalTool]) -> String {
-    if manifest.external_tools.is_empty() {
-        return manifest.prompt.render();
-    }
-    let mut prompt = manifest.prompt.clone();
-    if let Some(section) = prompt.section_mut(EXTERNAL_TOOL_SECTION) {
-        section.lines = runtime_external_tool_lines(tools);
-    }
-    prompt.render()
-}
-
-/// Builds the user-context JSON string sent to the provider.
-pub fn workflow_role_user_context(
-    request: &WorkflowRoleDecisionRequest,
-) -> Result<String, serde_json::Error> {
-    let allowed_actions = std::iter::once(WORKFLOW_ROLE_DECISION_NO_ACTION.to_string())
-        .chain(
-            request
-                .authorized_actions
-                .iter()
-                .map(|action| action.action.clone()),
-        )
-        .collect::<Vec<_>>();
-    let context = serde_json::json!({
-        "work_item": request.work_item_context,
-        "allowed_actions": allowed_actions,
-        "authorized_actions": request.authorized_actions,
-        "available_external_tools": request.available_external_tools,
-    });
-    serde_json::to_string_pretty(&context)
-}
-
-/// Validates a model decision and turns unauthorized actions into `no_action`.
-pub fn reply_for_model_decision(
-    request: &WorkflowRoleDecisionRequest,
-    decision: WorkflowRoleModelDecision,
-) -> WorkflowRoleDecisionReply {
-    validated_reply_for_model_decision(request, decision).reply
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ValidatedWorkflowRoleReply {
-    reply: WorkflowRoleDecisionReply,
-    log_metadata: ReplyLogMetadata,
-}
-
-fn validated_reply_for_model_decision(
-    request: &WorkflowRoleDecisionRequest,
-    decision: WorkflowRoleModelDecision,
-) -> ValidatedWorkflowRoleReply {
-    let action = decision.action.trim().to_string();
-    if action == WORKFLOW_ROLE_DECISION_NO_ACTION {
-        return ValidatedWorkflowRoleReply {
-            reply: no_action_for_request(request, decision.reason),
-            log_metadata: ReplyLogMetadata::no_action(action),
-        };
-    }
-    if request
-        .authorized_actions
-        .iter()
-        .any(|candidate| candidate.action == action)
-    {
-        return ValidatedWorkflowRoleReply {
-            reply: WorkflowRoleDecisionReply {
-                protocol_version: request.protocol_version,
-                action: action.clone(),
-                reason: decision.reason,
-            },
-            log_metadata: ReplyLogMetadata::authorized_action(action),
-        };
-    }
-
-    ValidatedWorkflowRoleReply {
-        reply: no_action_for_request(
-            request,
-            format!(
-                "unauthorized model action: {}",
-                redacted_preview(&action, REASON_PREVIEW_CHARS)
-            ),
-        ),
-        log_metadata: ReplyLogMetadata::unauthorized_action_downgraded(action),
-    }
-}
-
-fn no_action_for_request(
-    request: &WorkflowRoleDecisionRequest,
-    reason: impl Into<String>,
-) -> WorkflowRoleDecisionReply {
-    WorkflowRoleDecisionReply {
-        protocol_version: request.protocol_version,
-        action: WORKFLOW_ROLE_DECISION_NO_ACTION.to_string(),
-        reason: reason.into(),
-    }
-}
-
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
-fn runtime_external_tool_lines(tools: &[BoundExternalTool]) -> Vec<String> {
-    let mut lines = vec![
-        "Only the external tools listed in this section are bound and available for this run."
-            .to_string(),
-        "Declared tools not listed here are unavailable; do not claim to use them.".to_string(),
-        "You do not and cannot call these tools yourself: selecting the workflow action a bound tool backs makes the engine run that tool automatically while it executes the action.".to_string(),
-        "Because a bound tool runs on action selection, never return no_action just because you cannot run the tool directly or because its output (a branch, head, diff, or verdict) does not exist yet; selecting the action is what produces it.".to_string(),
-        "External tools do not grant workflow or Forge mutation authority beyond the authorized workflow actions above.".to_string(),
-    ];
-    if tools.is_empty() {
-        lines.push("(no external tools are bound for this run)".to_string());
-    } else {
-        for tool in tools {
-            lines.push(format!(
-                "{} via {}: {}",
-                tool.id, tool.provider, tool.description
-            ));
-            if !tool.constraints.is_empty() {
-                lines.push(format!(
-                    "{} constraints: {}",
-                    tool.id,
-                    tool.constraints.join("; ")
-                ));
-            }
-            if tool.id == CODING_WORKSPACE_TOOL_ID {
-                lines.push(format!(
-                    "{} rule: it is bound, so selecting the PR-opening workflow action runs it to produce the implementation branch/head and then opens the PR. Choose that PR-opening action for ready code work; do not return no_action expecting to run the workspace first.",
-                    tool.id
-                ));
-            }
-            if let Some(guidance) = &tool.guidance {
-                lines.push(format!("{} guidance: {guidance}", tool.id));
-            }
-        }
-    }
-    lines
 }
 
 #[cfg(test)]

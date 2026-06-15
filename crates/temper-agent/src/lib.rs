@@ -12,6 +12,7 @@ pub mod coding_agent;
 pub mod decision;
 pub mod interaction_profile;
 mod interaction_profile_config;
+mod interaction_profile_config_raw;
 mod observability;
 pub mod product_manager;
 pub mod prompt_overlays;
@@ -20,6 +21,7 @@ pub mod usage;
 pub mod workflow_role_decision;
 mod workflow_role_decision_capture;
 mod workflow_role_decision_observability;
+mod workflow_role_decision_prompt;
 
 pub use coding_agent::{
     Capability, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, WorkspaceContext,

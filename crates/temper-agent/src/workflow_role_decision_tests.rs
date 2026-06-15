@@ -1,6 +1,6 @@
 use super::*;
 use temper_process_protocol::{
-    WorkflowExternalToolManifest, WorkflowPromptManifest, WorkflowPromptSection,
+    BoundExternalTool, WorkflowExternalToolManifest, WorkflowPromptManifest, WorkflowPromptSection,
     WorkflowRoleDecisionRequest, WorkflowRoleManifest, WorkflowRolePromptExtension,
     WorkflowToolManifest,
 };

@@ -1,5 +1,8 @@
 use super::*;
 
+use super::anthropic_model::DEFAULT_ANTHROPIC_SUBAGENT_MODEL;
+use tongs::model::{InputType, ThinkingLevel};
+
 fn jig_auth_fixture() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jig_auth.json")
 }
@@ -75,22 +78,13 @@ fn anthropic_oauth_subagent_uses_cheaper_tier_by_default() {
     let config = ProviderConfig::anthropic_oauth_from_env();
     // Main agent stays on the full model; sub-agents drop to the cheaper tier.
     assert_eq!(config.model_id(), DEFAULT_ANTHROPIC_MODEL);
-    assert_eq!(
-        config.subagent_model_id(),
-        anthropic_oauth::DEFAULT_ANTHROPIC_SUBAGENT_MODEL
-    );
+    assert_eq!(config.subagent_model_id(), DEFAULT_ANTHROPIC_SUBAGENT_MODEL);
     assert_ne!(config.model_id(), config.subagent_model_id());
 
     // The retargeted config builds a provider whose model id is the sub-tier.
     let sub = config.with_model_id(config.subagent_model_id());
-    assert_eq!(
-        sub.model_id(),
-        anthropic_oauth::DEFAULT_ANTHROPIC_SUBAGENT_MODEL
-    );
-    assert_eq!(
-        sub.model_entry().model.id,
-        anthropic_oauth::DEFAULT_ANTHROPIC_SUBAGENT_MODEL
-    );
+    assert_eq!(sub.model_id(), DEFAULT_ANTHROPIC_SUBAGENT_MODEL);
+    assert_eq!(sub.model_entry().model.id, DEFAULT_ANTHROPIC_SUBAGENT_MODEL);
     // Auth/route are preserved — only the model changed.
     assert_eq!(sub.model_entry().model.api, ANTHROPIC_MESSAGES_API);
     assert!(sub.build_provider().is_ok());
