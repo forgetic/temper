@@ -8,7 +8,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use temper_worker_orchestrator::{
+use temper_worker::{
     AgentSurface, CodingExecutor, CodingExecutorConfig, ExecutorSelection, OutOfProcessRunner,
     ParseOutcome, StubExecutor, USAGE, WorkerConfig, role_identities_from_env, run_worker,
 };
@@ -17,7 +17,7 @@ pub fn main<I>(args: I) -> ExitCode
 where
     I: Iterator<Item = String>,
 {
-    match temper_worker_orchestrator::config::parse(args) {
+    match temper_worker::config::parse(args) {
         Ok(ParseOutcome::Help) => {
             println!("usage: {USAGE}");
             ExitCode::SUCCESS
@@ -47,7 +47,7 @@ fn run(config: WorkerConfig) -> Result<(), String> {
     match config.executor.clone() {
         ExecutorSelection::Stub => {
             let executor = Arc::new(StubExecutor::success());
-            temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+            temper_worker_io::block_on_with(move |_cx, handle| async move {
                 run_worker(handle, config, executor)
                     .await
                     .map_err(|error| error.to_string())
@@ -75,17 +75,16 @@ fn run(config: WorkerConfig) -> Result<(), String> {
                 AgentSurface::ExternalCommand(command) => command,
             };
             let runner = Arc::new(OutOfProcessRunner::new(command));
-            temper_worker_io_engine::block_on_with(move |_cx, handle| async move {
+            temper_worker_io::block_on_with(move |_cx, handle| async move {
                 // Relay agent step-progress checkpoints to the daemon (which
                 // applies them to the forge idempotently); transport trouble is
                 // logged and dropped, never failing the turn. Built inside the
                 // engine task so it holds the runtime handle explicitly.
-                let progress_sink =
-                    Arc::new(temper_worker_orchestrator::DaemonRelayProgressSink::new(
-                        handle.clone(),
-                        &config.daemon_url,
-                        config.worker_id.clone(),
-                    ));
+                let progress_sink = Arc::new(temper_worker::DaemonRelayProgressSink::new(
+                    handle.clone(),
+                    &config.daemon_url,
+                    config.worker_id.clone(),
+                ));
                 let executor = Arc::new(
                     CodingExecutor::new(executor_config, runner).with_progress_sink(progress_sink),
                 );

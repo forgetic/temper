@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
+use temper_agent::ProviderConfig;
 use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
-use temper_agent_runtime::ProviderConfig;
 use tongs::provider::StreamOptions;
 use tongs::tools::ToolRegistry;
 use tongs::tools::{create_read_tool, create_write_tool};
@@ -45,7 +45,7 @@ fn sub_agent_runs_a_tool_loop_and_completes() {
         create_write_tool(checkout.path()),
     ]);
 
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_sub_agent(
             handle,
             SubAgent {
@@ -141,7 +141,7 @@ fn turn_hook_runs_before_every_model_call() {
     });
 
     let hook_for_run = Arc::clone(&hook);
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| {
         let hook = hook_for_run;
         async move {
             run_sub_agent_with_hook(
@@ -213,7 +213,7 @@ fn sub_agent_reports_budget_exhaustion_when_model_loops_forever() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_sub_agent(
             handle,
             SubAgent {
@@ -272,7 +272,7 @@ fn sub_agent_forwards_live_events_to_the_sink() {
 
     let recorder = Arc::new(Recorder::default());
     let recorder_for_run = Arc::clone(&recorder);
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         run_sub_agent_with_events(
             handle,
             SubAgent {
@@ -366,7 +366,7 @@ fn sub_agent_can_be_aborted_mid_run() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         // A high iteration budget so the run would otherwise spin for a long
         // time; abort is what ends it.
         let (control, run) = run_sub_agent_controllable(
@@ -390,7 +390,7 @@ fn sub_agent_can_be_aborted_mid_run() {
         handle.spawn_with_cx(move |cx| async move {
             // Let a couple of turns happen first (virtual time).
             skein::time::sleep(
-                temper_agent_io_engine::timer_now(&cx),
+                temper_agent_io::timer_now(&cx),
                 std::time::Duration::from_millis(50),
             )
             .await;
@@ -466,7 +466,7 @@ fn sub_agent_steering_reaches_the_model() {
 
     let tools = ToolRegistry::from_tools(vec![create_read_tool(checkout.path())]);
 
-    let outcome = temper_agent_io_engine::block_on_with(move |_cx, handle| async move {
+    let outcome = temper_agent_io::block_on_with(move |_cx, handle| async move {
         let (control, run) = run_sub_agent_controllable(
             handle,
             SubAgent {

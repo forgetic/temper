@@ -28,7 +28,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let runtime = match temper_io_engine::build_runtime() {
+    let runtime = match temper_engine_io::build_runtime() {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("temper-testing-daemon-worker: failed to build engine runtime: {error}");
@@ -36,7 +36,7 @@ fn main() -> ExitCode {
         }
     };
 
-    match temper_io_engine::runtime::block_on_runtime_with(
+    match temper_engine_io::runtime::block_on_runtime_with(
         &runtime,
         move |cx, _handle| async move { run(&cx, &config, &identity).await },
     ) {

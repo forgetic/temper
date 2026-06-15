@@ -4,7 +4,7 @@
 
 use std::{process::ExitCode, sync::Arc};
 
-use temper_daemon::{
+use temper_engine::{
     Daemon, DaemonRunConfig, ForgeApplier, LeaseApplier, MechanicalBackstopConfig,
     PollBackstopConfig, RepositorySet, RepositoryTarget, RoleFeedMode, RoleFeedTarget,
     RoleRoutingApplier, WebhookConfig,
@@ -19,7 +19,7 @@ pub fn main<I>(args: I) -> ExitCode
 where
     I: Iterator<Item = String>,
 {
-    let config = match temper_daemon::config::parse(args) {
+    let config = match temper_engine::config::parse(args) {
         Ok(ParseOutcome::Help) => {
             println!("usage: {USAGE}");
             return ExitCode::SUCCESS;
@@ -44,7 +44,7 @@ fn run(config: DaemonRunConfig) -> Result<(), String> {
     // The daemon runs entirely as engine tasks: the HTTP listener, the pure
     // daemon machine's engine loop, backstop cadence machines, appliers, and
     // wake scans are all completion-driven I/O on the skein runtime.
-    temper_io_engine::block_on_with(
+    temper_engine_io::block_on_with(
         move |_cx, handle| async move { run_async(handle, config).await },
     )
 }
@@ -53,7 +53,7 @@ async fn run_async(
     handle: skein::runtime::RuntimeHandle,
     config: DaemonRunConfig,
 ) -> Result<(), String> {
-    let spawner: Arc<dyn temper_io_engine::Spawner> = Arc::new(handle.clone());
+    let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle.clone());
     let forge_config =
         ForgejoConfig::from_env().map_err(|error| format!("Forgejo config: {error}"))?;
     let forge_base_url = forge_config.base_url.clone();
@@ -96,14 +96,14 @@ async fn run_async(
         workflow.clone(),
         compiled.clone(),
         poll_config,
-        temper_daemon::system_clock(),
+        temper_engine::system_clock(),
     );
 
     // The mechanical accelerator shared with the webhook path, if the mechanical
     // backstop is enabled. A webhook delivery runs an immediate hinted mechanical
     // pass through this, so the backstop cadence itself can stay slow (idle
     // quiet) without losing reaction latency (ADR 0009).
-    let mut mechanical_trigger: Option<Arc<dyn temper_daemon::HintedMechanical>> = None;
+    let mut mechanical_trigger: Option<Arc<dyn temper_engine::HintedMechanical>> = None;
     if let Some(cadence) = config.mechanical_cadence {
         ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
         let mechanical_config = MechanicalBackstopConfig {
@@ -116,7 +116,7 @@ async fn run_async(
             forge.clone(),
             workflow.clone(),
             mechanical_config,
-            temper_daemon::system_clock(),
+            temper_engine::system_clock(),
         );
         mechanical_trigger = Some(Arc::new(trigger));
     }
@@ -137,7 +137,7 @@ async fn run_async(
             workflow,
             compiled,
             webhook_config,
-            temper_daemon::system_clock(),
+            temper_engine::system_clock(),
             mechanical_trigger,
         )
     } else {
@@ -149,7 +149,7 @@ async fn run_async(
     let mut sigterm = skein::signal::sigterm()
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
 
-    let server = temper_daemon::serve(&handle, &daemon, config.bind)
+    let server = temper_engine::serve(&handle, &daemon, config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
 
@@ -171,7 +171,7 @@ fn result_applier(
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     config: &DaemonRunConfig,
     lease_ttl: chrono::Duration,
-) -> Arc<dyn temper_daemon::ResultApplier> {
+) -> Arc<dyn temper_engine::ResultApplier> {
     let default_chain = applier_chain(
         default_forge,
         workflow.clone(),
@@ -224,13 +224,13 @@ fn applier_chain(
     workflow: Arc<temper_workflow::ValidatedWorkflow>,
     daemon_id: String,
     lease_ttl: chrono::Duration,
-) -> Arc<dyn temper_daemon::ResultApplier> {
+) -> Arc<dyn temper_engine::ResultApplier> {
     Arc::new(LeaseApplier::new(
         forge.clone(),
         LeasePolicy::new(lease_ttl),
         daemon_id,
         Arc::new(ForgeApplier::new(forge, workflow)),
-        temper_daemon::system_clock(),
+        temper_engine::system_clock(),
     ))
 }
 

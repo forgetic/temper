@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
-use temper_daemon::{Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig, webhook_signature};
+use temper_engine::{Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig, webhook_signature};
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_sim::{Sim, SimProtocolClient, http_request};
@@ -133,7 +133,7 @@ fn run_world(seed: u64, storm: usize) -> (Vec<u16>, usize, u64) {
         }),
         sim.wall_clock(),
     );
-    let handler = temper_daemon::h1_handler(&daemon);
+    let handler = temper_engine::h1_handler(&daemon);
 
     // The storm: `storm` concurrent deliveries of the same event.
     let statuses: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));

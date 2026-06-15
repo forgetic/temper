@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use temper_io_engine::process::{ProcessCall, ProcessCallError, run_process};
+use temper_engine_io::process::{ProcessCall, ProcessCallError, run_process};
 
 use crate::{ConversationReply, ConversationRequest, InteractionError, InteractiveResponder};
 
@@ -120,14 +120,14 @@ impl ProcessResponderConfig {
 pub struct ProcessResponder {
     /// Clock/deadline capability of the engine task this responder runs
     /// under, injected at construction — process timeouts compute against it.
-    cx: temper_io_engine::Cx,
+    cx: temper_engine_io::Cx,
     config: ProcessResponderConfig,
 }
 
 impl ProcessResponder {
     /// Builds a process responder after validating static configuration.
     pub fn new(
-        cx: temper_io_engine::Cx,
+        cx: temper_engine_io::Cx,
         config: ProcessResponderConfig,
     ) -> Result<Self, InteractionError> {
         validate_config(&config)?;

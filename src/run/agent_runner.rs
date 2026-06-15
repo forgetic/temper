@@ -3,7 +3,7 @@
 //! The unified-mode in-process coding-agent runner.
 //!
 //! [`InProcessAgentRunner`] implements the orchestrator's
-//! [`AgentRunner`](temper_worker_orchestrator::AgentRunner) by calling the agent
+//! [`AgentRunner`](temper_worker::AgentRunner) by calling the agent
 //! core ([`run_coding_agent_native_with_hooks`]) directly on the host event loop
 //! — no subprocess, no temp files. `WorkspaceContext` flows in as a value and
 //! `WorkspaceResult` comes back as the return value; step-progress is reported
@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use skein::runtime::RuntimeHandle;
+use temper_agent::{CodingAgentError, ProviderConfig, run_coding_agent_native_with_hooks};
 use temper_agent_protocol::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
-use temper_agent_runtime::{CodingAgentError, ProviderConfig, run_coding_agent_native_with_hooks};
-use temper_worker_orchestrator::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
+use temper_worker::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.
 pub struct InProcessAgentRunner {

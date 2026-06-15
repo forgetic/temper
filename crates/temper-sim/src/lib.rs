@@ -31,8 +31,8 @@ use skein::http::h1::{
 };
 use skein::lab::{LabConfig, LabRunReport, LabRuntime, LabSpawner};
 use skein::net::tcp::virtual_tcp::VirtualTcpStream;
-use temper_io_engine::Spawner;
-use temper_io_engine::http::H1CompletionHandler;
+use temper_engine_io::Spawner;
+use temper_engine_io::http::H1CompletionHandler;
 use temper_worker_protocol::WorkerProtocolMessage;
 
 /// One deterministic simulation world.
@@ -164,10 +164,10 @@ impl Sim {
         self.lab.report()
     }
 
-    /// A [`temper_daemon::WallClock`] derived from the lab's virtual clock
+    /// A [`temper_engine::WallClock`] derived from the lab's virtual clock
     /// (Unix epoch + virtual nanoseconds): deterministic, and consistent
     /// with every timer in the simulation.
-    pub fn wall_clock(&self) -> temper_daemon::WallClock {
+    pub fn wall_clock(&self) -> temper_engine::WallClock {
         let driver = self
             .lab
             .state
@@ -214,10 +214,10 @@ pub struct SimProtocolClient {
 
 impl SimProtocolClient {
     /// Client against the given daemon (its production request handler).
-    pub fn new(spawner: LabSpawner, daemon: &temper_daemon::Daemon) -> Self {
+    pub fn new(spawner: LabSpawner, daemon: &temper_engine::Daemon) -> Self {
         Self {
             spawner,
-            handler: temper_daemon::h1_handler(daemon),
+            handler: temper_engine::h1_handler(daemon),
         }
     }
 

@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_agent_runtime::{AuthChoice, DEFAULT_MAX_ITERATIONS, ProviderConfig};
+use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS, ProviderConfig};
 
 use crate::run::{AllInOneConfig, run_all_in_one};
 
@@ -78,9 +78,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
     // Split the run-only flags out, leaving the rest for the daemon parser.
     let (daemon_args, extras) = split_args(args)?;
 
-    let daemon_config = match temper_daemon::config::parse(daemon_args) {
-        Ok(temper_daemon::config::ParseOutcome::Run(config)) => config,
-        Ok(temper_daemon::config::ParseOutcome::Help) => {
+    let daemon_config = match temper_engine::config::parse(daemon_args) {
+        Ok(temper_engine::config::ParseOutcome::Run(config)) => config,
+        Ok(temper_engine::config::ParseOutcome::Help) => {
             println!("{USAGE}");
             return Ok(());
         }
@@ -109,7 +109,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         worker_id: extras.worker_id,
     };
 
-    temper_io_engine::block_on_with(move |_cx, handle| async move {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
         run_all_in_one(handle, config).await
     })
 }

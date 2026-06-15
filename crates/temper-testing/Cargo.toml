@@ -19,7 +19,6 @@ async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-temper-coding-workspace = { path = "../temper-coding-workspace" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
@@ -50,12 +49,12 @@ base64 = "0.22"
 # The filesystem path keeps using `block_on`. This is a normal dependency (not
 # dev-only) because the production binaries need the engine runtime.
 skein.workspace = true
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
 # The hermetic daemon-worker contract test boots an in-process daemon transport
 # and serves it on an ephemeral local port.
-temper-daemon = { path = "../temper-daemon" }
+temper-engine = { path = "../temper-engine" }
 
 [lints]
 workspace = true

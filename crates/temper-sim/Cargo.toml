@@ -12,8 +12,8 @@ async-trait.workspace = true
 chrono.workspace = true
 skein.workspace = true
 serde_json.workspace = true
-temper-io-engine = { path = "../temper-io-engine" }
-temper-daemon = { path = "../temper-daemon" }
+temper-engine-io = { path = "../temper-engine-io" }
+temper-engine = { path = "../temper-engine" }
 temper-worker-protocol = { path = "../temper-worker-protocol" }
 
 [dev-dependencies]

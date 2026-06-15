@@ -13,11 +13,11 @@ futures.workspace = true
 tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-temper-agent-io-engine = { path = "../temper-agent-io-engine" }
+temper-agent-io = { path = "../temper-agent-io" }
 
 [dev-dependencies]
-temper-agent-io-engine = { path = "../temper-agent-io-engine" }
-temper-agent-runtime = { path = "../temper-agent-runtime" }
+temper-agent-io = { path = "../temper-agent-io" }
+temper-agent = { path = "../temper-agent" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 

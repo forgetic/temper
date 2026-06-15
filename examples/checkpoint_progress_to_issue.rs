@@ -3,7 +3,7 @@
 //!
 //! Reads a JSONL file of `smith-agent-protocol` `StepProgress` records (the
 //! exact lines an agent prints on stdout — `argv[1]`), then for each one calls
-//! the **real** [`temper_daemon::ForgeApplier::apply_progress`] against a fresh
+//! the **real** [`temper_engine::ForgeApplier::apply_progress`] against a fresh
 //! in-memory forge issue. The output is the human-facing checklist the daemon
 //! posts on the coordinating issue/PR as the agent checkpoints.
 //!
@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use temper_daemon::{ForgeApplier, InFlightJob, ResultApplier};
+use temper_engine::{ForgeApplier, InFlightJob, ResultApplier};
 use temper_forge::{CreateIssue, CreateRepository, Forge, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{Artifact, JobProgress, WORKER_PROTOCOL_VERSION};

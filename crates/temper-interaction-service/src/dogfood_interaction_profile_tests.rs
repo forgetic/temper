@@ -69,7 +69,7 @@ fn dogfood_fixture_product_manager_profile_validates_and_compiles() {
 
 #[test]
 fn dogfood_fixture_runs_through_generic_session_and_acceptance() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let profile = compiled_profile();
         let (human, agent) = seeded(&profile).await;
         let human_reader = human.clone();

@@ -12,7 +12,7 @@ const CI_SENTINEL_DIR: &str = ".temper-ci";
 pub const CI_PASS_MARKER: &str = "[ci-pass]";
 
 pub async fn commit_ci_sentinel(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     base_url: &str,
     token: &str,
     owner: &str,

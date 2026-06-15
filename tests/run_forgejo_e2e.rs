@@ -147,7 +147,7 @@ fn temper_run_opens_an_engineer_pr_via_fake_llm() {
 
 /// The fake engineer agent: first turn writes the product file via the `write`
 /// tool, second turn returns the result JSON. Mirrors the
-/// `temper-agent-runtime` jig coding-agent fixture.
+/// `temper-agent` jig coding-agent fixture.
 fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
     // The agent's cwd is the workspace root; the single repo is checked out in
     // its sibling dir (the repo's last path segment, ADR 0023). Write the product
@@ -294,7 +294,7 @@ fn admin_forge(server: &ForgejoServer, provisioned: &Provisioned) -> ForgejoForg
 /// Borrow-friendly block_on (no `'static` bound), matching the daemon e2e
 /// harness: builds a throwaway engine runtime and drives one future on it.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    temper_io_engine::build_runtime()
+    temper_engine_io::build_runtime()
         .expect("engine runtime builds")
         .block_on(future)
 }

@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use temper_daemon::{InFlightJob, ResultApplier};
-use temper_io_engine::Spawner;
+use temper_engine::{InFlightJob, ResultApplier};
+use temper_engine_io::Spawner;
 use temper_worker_protocol::JobResult;
 
 /// Recorded world state. All maps are ordered so snapshots compare and print
@@ -134,10 +134,10 @@ impl ResultApplier for ModelApplier {
         if !self.apply_time.is_zero() {
             // `apply` runs on a task whose Cx lives in the executor's spawn
             // closure; borrow a timer through a helper task's own Cx instead.
-            let (tx, rx) = temper_io_engine::oneshot();
+            let (tx, rx) = temper_engine_io::oneshot();
             let delay = self.apply_time;
             self.spawner.spawn_with_cx(move |cx| async move {
-                skein::time::sleep(temper_io_engine::runtime::timer_now(&cx), delay).await;
+                skein::time::sleep(temper_engine_io::runtime::timer_now(&cx), delay).await;
                 tx.send(());
             });
             let _ = rx.recv().await;

@@ -472,7 +472,7 @@ impl InteractionHttpApp {
 pub fn run_http(
     bind: SocketAddr,
     app: InteractionHttpApp,
-    runtime: &temper_io_engine::EngineRuntime,
+    runtime: &temper_engine_io::EngineRuntime,
 ) -> Result<(), InteractionServiceError> {
     let listener = TcpListener::bind(bind)?;
     eprintln!("temper-interaction: serving on {bind}");
@@ -493,13 +493,13 @@ pub fn run_http(
 fn handle_connection(
     mut stream: TcpStream,
     app: &std::sync::Arc<InteractionHttpApp>,
-    runtime: &temper_io_engine::EngineRuntime,
+    runtime: &temper_engine_io::EngineRuntime,
 ) -> Result<(), InteractionServiceError> {
     let request = HttpRequest::read_from(&mut stream)?;
     // Each request runs as one engine task: responder subprocess calls and
     // their deadlines are engine I/O requests needing a task context.
     let app = std::sync::Arc::clone(app);
-    let response = temper_io_engine::runtime::block_on_runtime(runtime, async move {
+    let response = temper_engine_io::runtime::block_on_runtime(runtime, async move {
         app.handle_http_request(request).await
     });
     stream.write_all(response.to_http().as_bytes())?;

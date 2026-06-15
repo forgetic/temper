@@ -317,7 +317,7 @@ fn forge_marker_render_and_parse() {
 
 #[test]
 fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let (human, agent, _repo) = seeded().await;
         let mut session = ForgeInteractionSession::open(
             Arc::new(human.clone()),
@@ -365,7 +365,7 @@ fn forge_session_drives_transcript_and_idempotent_issue_acceptance() {
 
 #[test]
 fn transcript_resume_refuses_non_transcript_label_policy() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let (human, agent, repo) = seeded().await;
         let issue = human
             .create_issue(
@@ -407,7 +407,7 @@ fn transcript_resume_refuses_non_transcript_label_policy() {
 
 #[test]
 fn transcript_resume_reconstructs_recent_turns_by_author_identity() {
-    temper_io_engine::block_on(async move {
+    temper_engine_io::block_on(async move {
         let (human, agent, repo) = seeded().await;
         let marker = render_transcript_marker(MARKER_NAMESPACE, "pc-existing");
         let issue = human

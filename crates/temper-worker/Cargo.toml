@@ -1,27 +1,42 @@
 [package]
 name = "temper-worker"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
-license.workspace = true
 rust-version.workspace = true
-description = "Forgejo-backed production worker wiring for Temper role and mechanical workers."
+license.workspace = true
+description = "Temper worker process: long-polls a Temper daemon and runs role/coding jobs. Speaks only the worker/daemon wire protocol; never calls the Forge API. (Formerly smith-worker.)"
 
 [dependencies]
-async-trait.workspace = true
-chrono.workspace = true
+skein.workspace = true
+temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-worker-io = { path = "../temper-worker-io" }
+temper-worker-protocol = { path = "../temper-worker-protocol" }
+serde.workspace = true
 serde_json.workspace = true
-temper-coding-workspace = { path = "../temper-coding-workspace" }
-temper-forge = { path = "../temper-forge" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
-temper-forgejo-ops = { path = "../temper-forgejo-ops" }
-temper-reference-delivery = { path = "../temper-reference-delivery" }
-temper-runner = { path = "../temper-runner" }
-temper-wake = { path = "../temper-wake" }
-temper-workflow = { path = "../temper-workflow" }
-temper-io-engine = { path = "../temper-io-engine" }
+tempfile.workspace = true
+thiserror.workspace = true
+# NOTE: no tokio, anywhere. Production code and tests both run on the skein
+# runtime; the transport e2e tests drive the real daemon through its in-process
+# carrier rather than a tokio/axum fake. Keeping tokio out of the graph means
+# non-test builds of this crate — and everything downstream — never pull it in.
 
 [dev-dependencies]
-temper-forge-memory = { path = "../temper-forge-memory" }
+temper-agent-protocol = { path = "../temper-agent-protocol" }
+# Transport e2e tests drive the real daemon through its in-process carrier on the
+# skein runtime (no fake daemon, no tokio/axum): the daemon now lives in this
+# workspace, so tests run the real thing and tap the worker's posted result.
+temper-engine = { path = "../temper-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
+temper-worker-io = { path = "../temper-worker-io" }
+
+# A deterministic, hermetic agent that speaks the temper-agent-protocol: writes
+# a product file, emits step-progress, writes a result. Lets the worker e2e drive
+# the real out-of-process boundary without a cross-repo binary path or an LLM, via
+# CARGO_BIN_EXE_temper-fake-agent.
+[[bin]]
+name = "temper-fake-agent"
+path = "tests/support/smith_fake_agent.rs"
+test = false
 
 [lints]
 workspace = true

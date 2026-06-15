@@ -33,6 +33,12 @@ jobs:
         uses: actions/checkout@v4
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Dependency graph
+        # Enforce the engine -> worker -> agent tier boundaries (allowlist in
+        # depgraph-rules.toml). Compiles nothing (just `cargo metadata`), so it
+        # does not disturb the kache build-ordering below and fails fast.
+        # cargo-depgraph-check is pre-installed on the host runner.
+        run: cargo depgraph-check check
       - name: Lint
         run: cargo dev-clippy
       - name: Build

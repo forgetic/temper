@@ -12,7 +12,7 @@ serde_json.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-interaction = { path = "../temper-interaction" }
-temper-io-engine = { path = "../temper-io-engine" }
+temper-engine-io = { path = "../temper-engine-io" }
 
 [dev-dependencies]
 async-trait.workspace = true

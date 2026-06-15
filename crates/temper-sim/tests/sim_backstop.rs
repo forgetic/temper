@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use temper_daemon::{
+use temper_engine::{
     Daemon, PollBackstopConfig, RoleFeedMode, RoleFeedTarget, spawn_poll_backstop,
 };
 use temper_forge::{CreateIssue, CreateRepository, Forge, RepositoryId, UserId};
@@ -105,7 +105,7 @@ fn run_world(seed: u64) -> (u32, u64, u64) {
         // the still-empty repo; only the next cadence tick can discover the
         // issue created below.
         skein::time::sleep(
-            temper_io_engine::runtime::timer_now(&cx),
+            temper_engine_io::runtime::timer_now(&cx),
             std::time::Duration::from_secs(1),
         )
         .await;

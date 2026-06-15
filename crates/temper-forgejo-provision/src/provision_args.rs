@@ -226,8 +226,8 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| (!value.trim().is_empty()).then_some(value))
 }
 
-fn build_runtime() -> Result<temper_io_engine::EngineRuntime, RunError> {
-    temper_io_engine::build_runtime().map_err(RunError::Runtime)
+fn build_runtime() -> Result<temper_engine_io::EngineRuntime, RunError> {
+    temper_engine_io::build_runtime().map_err(RunError::Runtime)
 }
 
 fn intake_seed_from_args(args: &ProvisionArgs) -> Result<provision::IntakeIssueSeed, RunError> {
@@ -256,7 +256,7 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
     };
     let provision_args = args.clone();
     let provision_workflow = workflow;
-    let (provisioned, issue) = temper_io_engine::runtime::block_on_runtime_with(
+    let (provisioned, issue) = temper_engine_io::runtime::block_on_runtime_with(
         &runtime,
         move |cx, _handle| async move {
             provision::provision_and_seed(
@@ -307,7 +307,7 @@ fn run_seed_only(args: &ProvisionArgs) -> Result<String, RunError> {
         None => provision::role_token_from_secrets_file(&args.out, &RoleId::new("human"))?,
     };
     let seed_args = args.clone();
-    let number = temper_io_engine::runtime::block_on_runtime_with(
+    let number = temper_engine_io::runtime::block_on_runtime_with(
         &runtime,
         move |_cx, _handle| async move {
             provision::seed_intake_issue(

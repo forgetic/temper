@@ -215,7 +215,7 @@ where
 }
 
 pub fn build_service<E>(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     spec: &CompiledInteractionSpec,
     bindings: &InteractionDeploymentBindings,
     env: E,
@@ -259,7 +259,7 @@ where
 }
 
 fn responder_for<E>(
-    cx: &temper_io_engine::Cx,
+    cx: &temper_engine_io::Cx,
     responder_id: &ResponderId,
     bindings: &InteractionDeploymentBindings,
     cache: &mut BTreeMap<ResponderId, Arc<dyn InteractiveResponder>>,

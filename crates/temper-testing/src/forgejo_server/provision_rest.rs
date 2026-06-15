@@ -17,7 +17,7 @@ use super::provision::{ProvisionError, ROLE_PASSWORD, Result, TOKEN_SCOPES};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_io_engine::http::{HttpCall, http_call};
+use temper_engine_io::http::{HttpCall, http_call};
 
 static NEXT_TOKEN_NAME: AtomicU64 = AtomicU64::new(0);
 
@@ -84,7 +84,7 @@ impl Client {
         };
 
         let result = match skein::time::timeout(
-            temper_io_engine::runtime::timer_now(&self.cx),
+            temper_engine_io::runtime::timer_now(&self.cx),
             REQUEST_TIMEOUT,
             Box::pin(http_call(&self.inner, call)),
         )
@@ -110,7 +110,7 @@ impl Client {
 pub(super) fn http_client(cx: skein::cx::Cx) -> Result<Client> {
     Ok(Client {
         cx,
-        inner: temper_io_engine::http::build_http_client(),
+        inner: temper_engine_io::http::build_http_client(),
     })
 }
 

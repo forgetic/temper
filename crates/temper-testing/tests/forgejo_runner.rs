@@ -55,7 +55,7 @@ fn runner_runs_failing_job_and_reports_failure() {
     let cached = ForgejoServer::start_with_state(&state, |server| {
         let base = server.base_url().to_string();
         let token = create_admin_token(server);
-        let client = temper_io_engine::http::BlockingJsonClient::new();
+        let client = temper_engine_io::http::BlockingJsonClient::new();
         create_repo(&client, &base, &token);
         Ok::<RunnerSmokeMetadata, String>(RunnerSmokeMetadata { admin_token: token })
     })
@@ -63,7 +63,7 @@ fn runner_runs_failing_job_and_reports_failure() {
     let server = cached.server;
     let token = cached.metadata.admin_token;
     let base = server.base_url().to_string();
-    let client = temper_io_engine::http::BlockingJsonClient::new();
+    let client = temper_engine_io::http::BlockingJsonClient::new();
 
     // Register the host-mode runner *before* pushing the workflow so it is ready
     // to claim the job the moment Actions sees it.
@@ -131,7 +131,7 @@ fn create_admin_token(server: &ForgejoServer) -> String {
     token
 }
 
-fn create_repo(client: &temper_io_engine::http::BlockingJsonClient, base: &str, token: &str) {
+fn create_repo(client: &temper_engine_io::http::BlockingJsonClient, base: &str, token: &str) {
     let (status, body) = client.send_expect_json(
         "POST",
         format!("{base}/api/v1/user/repos"),
@@ -153,7 +153,7 @@ fn create_repo(client: &temper_io_engine::http::BlockingJsonClient, base: &str, 
 /// Commits the failing workflow file and returns the resulting commit SHA (the
 /// head the runner will report a status against).
 fn put_workflow_file(
-    client: &temper_io_engine::http::BlockingJsonClient,
+    client: &temper_engine_io::http::BlockingJsonClient,
     base: &str,
     token: &str,
 ) -> String {
@@ -181,7 +181,7 @@ fn put_workflow_file(
 }
 
 fn enable_repo_actions(
-    client: &temper_io_engine::http::BlockingJsonClient,
+    client: &temper_engine_io::http::BlockingJsonClient,
     base: &str,
     token: &str,
 ) {
@@ -201,7 +201,7 @@ fn enable_repo_actions(
 /// Polls the commit-status API until a terminal state appears or a generous
 /// deadline passes. Returns the observed `state` (e.g. `failure`, `success`).
 fn wait_for_commit_state(
-    client: &temper_io_engine::http::BlockingJsonClient,
+    client: &temper_engine_io::http::BlockingJsonClient,
     base: &str,
     token: &str,
     sha: &str,
