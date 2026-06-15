@@ -1,0 +1,31 @@
+# Existing dense integration coverage; split when the Forgejo issue workflow
+# fixtures get another focused refactor.
+crates/temper-forge-forgejo/tests/issues.rs
+
+# Argument parser matrix tests are table-like and mostly assertion fixtures.
+crates/temper-testing/src/worker_bin/args_parse_tests.rs
+
+# Shared scenario builder data for real Forgejo tests; splitting risks hiding
+# the scenario flow until the fixture model is revised.
+crates/temper-testing/src/scenarios.rs
+
+# Workflow planner integration coverage with many case-specific assertions.
+crates/temper-workflow/tests/planning.rs
+
+# Multi-repository runner scenarios with coupled setup, scan, and assertion
+# phases; should be split during the next multi-repo test cleanup.
+crates/temper-runner/tests/multi_repo_filesystem.rs
+crates/temper-runner/tests/multi_repo_worker.rs
+
+# Workflow safety/property coverage remains scenario-dense but under the hard
+# limit after the current focused splits.
+crates/temper-workflow/tests/safety_properties.rs
+crates/temper-workflow/tests/multi_artifact_effects.rs
+crates/temper-workflow/tests/execution.rs
+
+# Worker automation has many constructor-style helpers around one role flow.
+crates/temper-runner/src/worker/automation.rs
+
+# Memory/filesystem backend contract tests retain grouped backend behavior.
+crates/temper-forge-memory/tests/backend.rs
+crates/temper-forge-filesystem/tests/issues.rs

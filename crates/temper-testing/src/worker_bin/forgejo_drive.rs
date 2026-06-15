@@ -1,14 +1,20 @@
 //! Forgejo worker drive loop with wake-hint narrowing.
 
+mod targeting;
+#[cfg(all(test, unix))]
+mod tests;
+
 use std::time::{Duration as StdDuration, Instant};
 
-use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
+use temper_forge::{ChangeHint, Forge};
 use temper_runner::{
     IdlePollBackoff, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
-    RepositorySet, RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
+    RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,
 };
 use temper_wake::{WakeConfig, WakeListener, WakeWaitOutcome, wait_for_wake_or_poll};
 use temper_workflow::{CommandJournal, RecoveryPolicy};
+
+use targeting::{known_hints_for, targeted_multi_repo_hints, targeted_single_repo_hints};
 
 use crate::worker_bin::args::WorkerArgs;
 use crate::worker_bin::run::{RunError, StopSignal};
@@ -18,7 +24,6 @@ use crate::worker_bin::run::{RunError, StopSignal};
 /// a level-triggered poll worker must survive those and retry. A long run of
 /// failures means a genuine misconfiguration, so abort loudly.
 const MAX_CONSECUTIVE_TICK_FAILURES: u32 = 50;
-const MECHANICAL_TARGETED_WAKE_CAP: usize = 32;
 
 pub(super) struct ForgejoTickReport {
     progress: Progress,
@@ -195,101 +200,6 @@ where
     fn name(&self) -> &str {
         Worker::name(self)
     }
-}
-
-async fn targeted_single_repo_hints<F, J, P>(
-    worker: &MechanicalWorker<'_, F, J, P>,
-    hints: &[ChangeHint],
-) -> Result<Option<Vec<(ItemNumber, ChangeKind)>>, WorkerError>
-where
-    F: Forge + ?Sized,
-    J: CommandJournal,
-    P: RecoveryPolicy + Send + Sync,
-{
-    let repo_path = worker.repository_path().await?;
-    let targets = targeted_hints_for_path(Some(&repo_path), hints).map(|items| {
-        items
-            .into_iter()
-            .map(|(_, item, kind)| (item, kind))
-            .collect()
-    });
-    Ok(targets)
-}
-
-fn targeted_multi_repo_hints(
-    repositories: &RepositorySet,
-    hints: &[ChangeHint],
-) -> Option<Vec<(RepositoryPath, ItemNumber, ChangeKind)>> {
-    targeted_hints_for_path(None, hints).and_then(|targets| {
-        if targets.iter().all(|(path, _, _)| {
-            !repositories
-                .matching_hints(&[ChangeHint::repo(path.clone(), ChangeKind::Issue)])
-                .is_empty()
-        }) {
-            Some(targets)
-        } else {
-            None
-        }
-    })
-}
-
-fn targeted_hints_for_path(
-    single_repo: Option<&RepositoryPath>,
-    hints: &[ChangeHint],
-) -> Option<Vec<(RepositoryPath, ItemNumber, ChangeKind)>> {
-    let mut targets = Vec::new();
-    for hint in hints {
-        if !matches!(
-            hint.kind,
-            ChangeKind::Ci
-                | ChangeKind::PullRequest
-                | ChangeKind::Issue
-                | ChangeKind::Label
-                | ChangeKind::Review
-                | ChangeKind::Comment
-        ) {
-            return None;
-        }
-        if single_repo
-            .is_some_and(|path| path.owner != hint.repo.owner || path.name != hint.repo.name)
-        {
-            return None;
-        }
-        let item = hint.item?;
-        targets.push((hint.repo.clone(), item, hint.kind));
-    }
-    targets.sort_by(|left, right| {
-        (&left.0.owner, &left.0.name, left.1, left.2).cmp(&(
-            &right.0.owner,
-            &right.0.name,
-            right.1,
-            right.2,
-        ))
-    });
-    targets.dedup();
-    if targets.len() > MECHANICAL_TARGETED_WAKE_CAP {
-        None
-    } else {
-        Some(targets)
-    }
-}
-
-fn known_hints_for(repositories: &RepositorySet, hints: &[ChangeHint]) -> Vec<ChangeHint> {
-    let mut known = Vec::new();
-    for hint in hints {
-        if repositories
-            .matching_hints(std::slice::from_ref(hint))
-            .is_empty()
-        {
-            eprintln!(
-                "temper-testing-worker: wake hint for unconfigured repo {}/{}; treating wake as broad scan if no configured hints remain",
-                hint.repo.owner, hint.repo.name
-            );
-        } else {
-            known.push(hint.clone());
-        }
-    }
-    known
 }
 
 /// Drives `worker` with a resilient wall-clock poll loop on the current Tokio
@@ -477,193 +387,5 @@ fn render_repo_paths(paths: &[String]) -> String {
         "-".to_string()
     } else {
         paths.join(",")
-    }
-}
-
-#[cfg(test)]
-mod targeting_tests {
-    use super::*;
-
-    fn item_hint(n: u64, kind: ChangeKind) -> ChangeHint {
-        ChangeHint::item(
-            RepositoryPath::new("ai", "temper"),
-            ItemNumber::new(n),
-            kind,
-        )
-    }
-
-    #[test]
-    fn routable_item_hints_return_targets() {
-        let hints = [item_hint(7, ChangeKind::Ci), item_hint(7, ChangeKind::Ci)];
-
-        let out = targeted_hints_for_path(None, &hints).expect("routable hints target items");
-
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].0, RepositoryPath::new("ai", "temper"));
-        assert_eq!(out[0].1, ItemNumber::new(7));
-        assert_eq!(out[0].2, ChangeKind::Ci);
-    }
-
-    #[test]
-    fn missing_item_falls_back() {
-        let hints = [ChangeHint::repo(
-            RepositoryPath::new("ai", "temper"),
-            ChangeKind::Ci,
-        )];
-
-        assert!(targeted_hints_for_path(None, &hints).is_none());
-    }
-
-    #[test]
-    fn unroutable_kind_falls_back() {
-        assert!(targeted_hints_for_path(None, &[item_hint(7, ChangeKind::Push)]).is_none());
-        assert!(targeted_hints_for_path(None, &[item_hint(7, ChangeKind::Unknown)]).is_none());
-    }
-
-    #[test]
-    fn wrong_single_repo_falls_back() {
-        let other = RepositoryPath::new("ai", "other");
-
-        assert!(targeted_hints_for_path(Some(&other), &[item_hint(7, ChangeKind::Ci)]).is_none());
-    }
-
-    #[test]
-    fn over_cap_falls_back_but_exact_cap_targets() {
-        let exactly_cap: Vec<ChangeHint> = (1..=MECHANICAL_TARGETED_WAKE_CAP as u64)
-            .map(|n| item_hint(n, ChangeKind::Ci))
-            .collect();
-        assert!(targeted_hints_for_path(None, &exactly_cap).is_some());
-
-        let over_cap: Vec<ChangeHint> = (1..=(MECHANICAL_TARGETED_WAKE_CAP as u64 + 1))
-            .map(|n| item_hint(n, ChangeKind::Ci))
-            .collect();
-        assert!(targeted_hints_for_path(None, &over_cap).is_none());
-    }
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use async_trait::async_trait;
-    use chrono::{DateTime, Duration, Utc};
-    use std::path::PathBuf;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::thread;
-    use temper_forge::{ChangeKind, RepositoryPath};
-    use temper_wake::send_wake_with_hint;
-
-    use crate::worker_bin::args::{
-        AgentsKind, Backend, ClockKind, ForgejoArgs, WorkerArgs, WorkerKind,
-    };
-
-    struct BurstWorker {
-        ticks: AtomicU64,
-        reasons: Mutex<Vec<TickReason>>,
-        socket: PathBuf,
-    }
-
-    #[async_trait]
-    impl Worker for BurstWorker {
-        async fn tick(&self, _now: DateTime<Utc>) -> Result<Progress, WorkerError> {
-            let tick = self.ticks.fetch_add(1, Ordering::SeqCst) + 1;
-            if tick == 1 {
-                let hint =
-                    ChangeHint::repo(RepositoryPath::new("acme", "service"), ChangeKind::Issue);
-                for _ in 0..3 {
-                    send_wake_with_hint(&self.socket, Some("wake-secret"), &hint)
-                        .expect("wake sends");
-                }
-            }
-            Ok(Progress::unchanged())
-        }
-
-        fn name(&self) -> &str {
-            "burst-worker"
-        }
-    }
-
-    #[async_trait]
-    impl ForgejoDriveWorker for BurstWorker {
-        async fn tick_for_reason(
-            &self,
-            now: DateTime<Utc>,
-            reason: TickReason,
-            _hints: &[ChangeHint],
-        ) -> Result<ForgejoTickReport, WorkerError> {
-            self.reasons.lock().expect("reasons lock").push(reason);
-            Worker::tick(self, now).await.map(ForgejoTickReport::single)
-        }
-
-        fn name(&self) -> &str {
-            Worker::name(self)
-        }
-    }
-
-    #[test]
-    fn forgejo_drive_hint_wake_bypasses_idle_backoff() {
-        let root = temp_root("hint-wake-bypasses-idle");
-        std::fs::create_dir_all(&root).expect("temp root exists");
-        let socket = root.join("worker.sock");
-        let secret_file = root.join("wake-secret");
-        let stop_file = root.join("stop");
-        std::fs::write(&secret_file, "wake-secret\n").expect("secret writes");
-        let args = WorkerArgs {
-            kind: WorkerKind::Mechanical,
-            backend: Backend::Forgejo(ForgejoArgs {
-                base_url: "http://127.0.0.1:1".into(),
-                token: "token".into(),
-                username: None,
-                password: None,
-            }),
-            root: root.clone(),
-            owner: "acme".into(),
-            name: "service".into(),
-            repositories: vec![RepositoryPath::new("acme", "service")],
-            poll_interval: Duration::seconds(60),
-            idle_poll_max_interval: Duration::seconds(60),
-            audit_interval: Some(Duration::milliseconds(600_000)),
-            stop_file: Some(stop_file.clone()),
-            run_secs: None,
-            clock: ClockKind::Wall,
-            agents: AgentsKind::Fake,
-            wake_socket: Some(socket.clone()),
-            wake_secret_file: Some(secret_file),
-            workflow_file: None,
-        };
-        let worker = std::sync::Arc::new(BurstWorker {
-            ticks: AtomicU64::new(0),
-            reasons: Mutex::new(Vec::new()),
-            socket,
-        });
-        let stop_file_for_thread = stop_file.clone();
-        let stopper = thread::spawn(move || {
-            thread::sleep(StdDuration::from_millis(800));
-            std::fs::write(stop_file_for_thread, b"stop").expect("stop file writes");
-        });
-        let worker_for_drive = std::sync::Arc::clone(&worker);
-        let report = temper_engine_io::block_on_with(move |cx, _handle| async move {
-            drive_async(&cx, &args, &*worker_for_drive).await
-        })
-        .expect("drive succeeds");
-        stopper.join().expect("stopper joins");
-
-        assert_eq!(worker.ticks.load(Ordering::SeqCst), 2);
-        assert_eq!(report.ticks, 2);
-        assert_eq!(
-            *worker.reasons.lock().expect("reasons lock"),
-            vec![TickReason::Initial, TickReason::Wake]
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    fn temp_root(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "temper-testing-forgejo-{name}-{}-{}",
-            std::process::id(),
-            Utc::now()
-                .timestamp_nanos_opt()
-                .expect("timestamp has nanoseconds")
-        ))
     }
 }

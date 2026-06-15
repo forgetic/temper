@@ -3,9 +3,9 @@
 //! # Why this exists
 //!
 //! The deterministic fake engineer opens a PR with head branch
-//! `fake/pr-for-code-{N}` (`crate::pull_request_input`,
-//! `crate::agents::implementation_pr_input`). On the filesystem/memory backends
-//! that head is never a real git ref — nothing checks. On **real Forgejo**,
+//! `fake/pr-for-code-{N}` through `crate::pull_request_input`. On the
+//! filesystem/memory backends that head is never a real git ref — nothing
+//! checks. On **real Forgejo**,
 //! `create_pull_request` against a non-existent head fails with
 //! `HTTP 404 "The target couldn't be found."` (Phase 0 spike, findings §1). A PR
 //! cannot be opened until its head branch exists with a commit that differs from

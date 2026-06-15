@@ -24,42 +24,34 @@
 //! Forgejo 7.0.x, which is exactly what the short mechanical cadence backstops,
 //! same as the legacy fleet's narrow CI status poll).
 
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[path = "daemon_scenario/convergence.rs"]
+mod convergence;
+#[path = "daemon_scenario/process.rs"]
+mod process;
+#[path = "daemon_scenario/runtime.rs"]
+mod runtime;
+
 use std::time::{Duration, Instant};
 
-use temper_forge::{
-    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, IssueState, ItemNumber, PullRequest,
-    PullRequestQuery, PullRequestState, UserId,
+use process::{
+    RunWorkspaceGuard, free_port, register_webhook, spawn_daemon, spawn_worker, wait_for_daemon,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
-use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{
-    ForgejoRunner, ForgejoServer, Provisioned, RoleIdentity, commit_ci_sentinel, seed_intake_issue,
-    start_cached_provisioned_repositories,
+    ForgejoRunner, seed_intake_issue, start_cached_provisioned_repositories,
 };
-use temper_workflow::{CiStatus, RoleId, parse_metadata_block};
+use temper_workflow::RoleId;
 
 /// The engineer-only daemon-delivery workflow served to the daemon binary via
 /// `--workflow` (the dogfood deployment shape: mechanical `mark_ready` intake
 /// automation + engineer `open_pr` + mechanical CI-gated `land_pr`).
 const DAEMON_WORKFLOW: &str = include_str!("daemon-delivery.json");
 
-/// How often the driver re-runs the assert closure while polling.
-const ASSERT_POLL: Duration = Duration::from_secs(1);
 /// Deliberately long daemon poll backstop; scenario progress must come from
 /// Forgejo webhooks delivered to the daemon's webhook route before this
 /// deadline.
 const DAEMON_POLL_CADENCE_SECS: u64 = 600;
-/// Narrow mechanical backstop cadence. Forgejo 7.0.x does not emit
-/// Actions-completion webhooks through repository hooks, so mechanical landing
-/// keeps a short poll for CI status transitions only (legacy `CI_STATUS_POLL`).
-const DAEMON_MECHANICAL_CADENCE_SECS: u64 = 2;
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(300);
-const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
-const WEBHOOK_SECRET: &str = "daemon-e2e-webhook-secret";
 const ENGINEER: &str = "engineer";
 
 pub fn convergence_timeout() -> Duration {
@@ -125,9 +117,10 @@ pub fn run_daemon_variant(variant: Variant) {
     );
 
     let workspace = RunWorkspaceGuard::new("temper-daemon-forgejo-e2e");
-    let secret_file = workspace
-        .0
-        .write_file("daemon/webhook-secret", format!("{WEBHOOK_SECRET}\n"));
+    let secret_file = workspace.0.write_file(
+        "daemon/webhook-secret",
+        format!("{}\n", process::WEBHOOK_SECRET),
+    );
     let workflow_file = workspace
         .0
         .write_file("daemon/workflow.json", DAEMON_WORKFLOW);
@@ -165,7 +158,7 @@ pub fn run_daemon_variant(variant: Variant) {
 
     // Seed one raw intake issue; the daemon's mechanical backstop stamps it
     // code+ready and the resulting label webhook wakes the engineer feed.
-    let issue = block_on(seed_intake_issue(
+    let issue = runtime::block_on(seed_intake_issue(
         server.base_url(),
         &provisioned.admin_token,
         &provisioned.owner,
@@ -179,9 +172,9 @@ pub fn run_daemon_variant(variant: Variant) {
 
     let timeout = convergence_timeout();
     let convergence_start = Instant::now();
-    let forge = admin_forge(&server, &provisioned, &engineer);
+    let forge = convergence::admin_forge(&server, &provisioned, &engineer);
 
-    let converged = drive_variant(
+    let converged = convergence::drive_variant(
         &variant,
         &server,
         &provisioned,
@@ -202,7 +195,7 @@ pub fn run_daemon_variant(variant: Variant) {
             runner.log_tail(),
             daemon.log_tail(),
             worker.log_tail(),
-            ci_diagnostics(&forge, &provisioned)
+            convergence::ci_diagnostics(&forge, &provisioned)
         );
     }
 
@@ -231,611 +224,4 @@ pub fn run_daemon_variant(variant: Variant) {
         variant.name,
         test_start.elapsed()
     );
-}
-
-fn drive_variant(
-    variant: &Variant,
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-    forge: &ForgejoForge,
-    issue: ItemNumber,
-    timeout: Duration,
-) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-    match variant.ci_sentinel {
-        "present" => poll_until(deadline, || {
-            block_on(assert_converged(forge, provisioned, engineer, issue, 1))
-        }),
-        "deferred" => {
-            // Phase A: the worker's marker-less head fails real CI and the PR
-            // must stay unmerged while red.
-            let head_branch = poll_until(deadline, || {
-                block_on(assert_ci_red_and_unmerged(
-                    forge,
-                    provisioned,
-                    engineer,
-                    issue,
-                ))
-            })?;
-
-            // Phase B: push the CI sentinel fix to the PR head as the engineer;
-            // the new head goes green and the mechanical backstop lands it.
-            {
-                let base_url = server.base_url().to_string();
-                let token = engineer.token.clone();
-                let owner = provisioned.owner.clone();
-                let name = provisioned.name.clone();
-                let branch = head_branch.clone();
-                block_on_with_cx(move |cx| async move {
-                    commit_ci_sentinel(&cx, &base_url, &token, &owner, &name, &branch).await
-                })
-            }
-            .map_err(|error| format!("ci sentinel commit failed: {error}"))?;
-            eprintln!(
-                "daemon_forgejo_e2e scenario '{}' pushed CI sentinel fix to {head_branch}",
-                variant.name
-            );
-
-            poll_until(deadline, || {
-                block_on(assert_converged(forge, provisioned, engineer, issue, 2))
-            })
-        }
-        other => panic!("unknown ci_sentinel variant '{other}'"),
-    }
-}
-
-/// Full convergence: one merged engineer-authored implementation PR correlated
-/// to the seeded issue, green real CI, and the source issue closed.
-async fn assert_converged(
-    forge: &ForgejoForge,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-    issue: ItemNumber,
-    min_ci_verdicts: usize,
-) -> Result<(), String> {
-    let pull_request = implementation_pr(forge, provisioned, issue).await?;
-
-    if pull_request.author_id != UserId::new(engineer.user.clone()) {
-        return Err(format!(
-            "implementation PR #{} was authored by {:?}, not the engineer role identity",
-            pull_request.number, pull_request.author_id
-        ));
-    }
-
-    if pull_request.state != PullRequestState::Merged {
-        return Err(format!(
-            "implementation PR #{} is not merged (state {:?})",
-            pull_request.number, pull_request.state
-        ));
-    }
-    let merge = pull_request
-        .merge
-        .as_ref()
-        .ok_or("merged implementation PR has no merge record")?;
-    if merge.merged_by == UserId::new(engineer.user.clone()) {
-        return Err(
-            "PR was merged by the engineer role identity, not the daemon's mechanical backstop"
-                .to_string(),
-        );
-    }
-    if !pull_request.labels.iter().any(|label| label == "landed") {
-        return Err("merged implementation PR is missing the landed label".to_string());
-    }
-
-    let jobs = completed_ci_jobs(forge, provisioned, &pull_request).await?;
-    if jobs.len() < min_ci_verdicts {
-        return Err(format!(
-            "expected at least {min_ci_verdicts} completed CI verdicts, found {}",
-            jobs.len()
-        ));
-    }
-    if min_ci_verdicts >= 2
-        && jobs.first().and_then(|job| job.conclusion) != Some(CiJobConclusion::Failure)
-    {
-        return Err("first CI verdict did not fail".to_string());
-    }
-    if jobs.last().and_then(|job| job.conclusion) != Some(CiJobConclusion::Success) {
-        return Err("latest CI verdict did not pass".to_string());
-    }
-    if !CiStatus::from_jobs(&jobs).is_passed() {
-        return Err("latest CI aggregate is not passing".to_string());
-    }
-
-    let issue = forge
-        .get_issue_by_number(&provisioned.repository, issue)
-        .await
-        .map_err(|error| format!("issue lookup failed: {error}"))?
-        .ok_or("source issue disappeared")?;
-    if issue.state != IssueState::Closed {
-        return Err(format!(
-            "source issue #{} was not closed on merge (labels {:?})",
-            issue.number, issue.labels
-        ));
-    }
-
-    Ok(())
-}
-
-/// Red phase of the CI variant: the engineer-authored PR exists, has at least
-/// one failed real CI verdict, and is **not** merged. Returns the head branch.
-async fn assert_ci_red_and_unmerged(
-    forge: &ForgejoForge,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-    issue: ItemNumber,
-) -> Result<String, String> {
-    let pull_request = implementation_pr(forge, provisioned, issue).await?;
-
-    if pull_request.author_id != UserId::new(engineer.user.clone()) {
-        return Err(format!(
-            "implementation PR #{} was authored by {:?}, not the engineer role identity",
-            pull_request.number, pull_request.author_id
-        ));
-    }
-    assert!(
-        pull_request.merge.is_none() && pull_request.state == PullRequestState::Open,
-        "implementation PR #{} merged or closed while its CI was red (state {:?})",
-        pull_request.number,
-        pull_request.state
-    );
-
-    let jobs = completed_ci_jobs(forge, provisioned, &pull_request).await?;
-    if jobs.last().and_then(|job| job.conclusion) != Some(CiJobConclusion::Failure) {
-        return Err(format!(
-            "no failed CI verdict for PR #{} yet ({} completed jobs)",
-            pull_request.number,
-            jobs.len()
-        ));
-    }
-
-    Ok(pull_request.source.branch.clone())
-}
-
-/// Finds the single implementation PR and checks its workflow correlation
-/// metadata points at the seeded issue.
-async fn implementation_pr(
-    forge: &ForgejoForge,
-    provisioned: &Provisioned,
-    issue: ItemNumber,
-) -> Result<PullRequest, String> {
-    let pull_requests: Vec<PullRequest> = forge
-        .list_pull_requests(&provisioned.repository, PullRequestQuery::default())
-        .await
-        .map_err(|error| format!("list_pull_requests failed: {error}"))?
-        .into_iter()
-        .filter(|pull_request| {
-            pull_request
-                .labels
-                .iter()
-                .any(|label| label == "implementation")
-        })
-        .collect();
-    if pull_requests.len() != 1 {
-        return Err(format!(
-            "expected exactly one implementation PR, found {}",
-            pull_requests.len()
-        ));
-    }
-    let pull_request = pull_requests.into_iter().next().expect("one PR");
-
-    let metadata = parse_metadata_block(&pull_request.body)
-        .map_err(|error| format!("implementation PR metadata is malformed: {error}"))?
-        .ok_or("implementation PR is missing workflow metadata")?;
-    let expected_key = format!("pr-for-code-{issue}");
-    if metadata.correlation_key.as_deref() != Some(expected_key.as_str()) {
-        return Err(format!(
-            "implementation PR correlation key {:?} != {expected_key:?}",
-            metadata.correlation_key
-        ));
-    }
-    if !metadata
-        .parents
-        .iter()
-        .any(|parent| parent.is_same_repo() && parent.number == issue)
-    {
-        return Err(format!(
-            "implementation PR parents {:?} do not include issue #{issue}",
-            metadata.parents
-        ));
-    }
-
-    Ok(pull_request)
-}
-
-async fn completed_ci_jobs(
-    forge: &ForgejoForge,
-    provisioned: &Provisioned,
-    pull_request: &PullRequest,
-) -> Result<Vec<CiJob>, String> {
-    let mut jobs = forge
-        .list_ci_jobs(
-            &provisioned.repository,
-            CiJobQuery {
-                pull_request_id: Some(pull_request.id.clone()),
-                status: Some(CiJobStatus::Completed),
-                ..CiJobQuery::default()
-            },
-        )
-        .await
-        .map_err(|error| format!("list_ci_jobs failed: {error}"))?;
-    jobs.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then(left.id.cmp(&right.id))
-    });
-    Ok(jobs)
-}
-
-/// Admin-token forge handle with the engineer's web-UI credentials attached for
-/// the ADR 0019 CI reads, mirroring the daemon binary's own environment.
-fn admin_forge(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-) -> ForgejoForge {
-    ForgejoForge::new(
-        ForgejoConfig::new(server.base_url(), &provisioned.admin_token)
-            .with_default_repo(&provisioned.owner, &provisioned.name)
-            .with_web_ui_credentials(&engineer.user, &engineer.password),
-    )
-}
-
-fn spawn_daemon(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-    port: u16,
-    workflow_file: &Path,
-    secret_file: &Path,
-    log: &Path,
-) -> ChildGuard {
-    // The new CLI is config-file driven: write the engine's deployment settings
-    // to a config file and run `temper daemon --service engine`. Secrets (forge
-    // token, CI web-UI creds, the engineer's per-role token) still come from the
-    // environment, which the resolver layers over the file.
-    let config_path = log
-        .parent()
-        .expect("daemon log has a parent dir")
-        .join("daemon-config.toml");
-    let config = format!(
-        "schema_version = 1\n\
-         [forge]\n\
-         type = \"forgejo\"\n\
-         url = \"{base_url}\"\n\
-         [engine]\n\
-         bind = \"127.0.0.1:{port}\"\n\
-         repos = [\"{owner}/{name}\"]\n\
-         roles = [\"{ENGINEER}\"]\n\
-         workflow = \"{workflow}\"\n\
-         webhook_secret_file = \"{secret}\"\n\
-         poll_cadence_secs = {poll}\n\
-         mechanical_cadence_secs = {mech}\n\
-         daemon_id = \"temper-daemon-e2e\"\n",
-        base_url = server.base_url(),
-        owner = provisioned.owner,
-        name = provisioned.name,
-        workflow = workflow_file.display(),
-        secret = secret_file.display(),
-        poll = DAEMON_POLL_CADENCE_SECS,
-        mech = DAEMON_MECHANICAL_CADENCE_SECS,
-    );
-    std::fs::write(&config_path, config).expect("write daemon config");
-
-    let log_file = log_file(log);
-    let child = Command::new(env!("CARGO_BIN_EXE_temper"))
-        .arg("daemon")
-        .arg("--service")
-        .arg("engine")
-        .arg("--config")
-        .arg(&config_path)
-        .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
-        // ADR 0019 web-UI CI-read fallback used by the mechanical backstop.
-        .env("FORGEJO_USERNAME", &engineer.user)
-        .env("FORGEJO_PASSWORD", &engineer.password)
-        // Per-role Forge API token routing (consolidation phase 4d).
-        .env("TEMPER_FORGEJO_TOKEN_ENGINEER", &engineer.token)
-        .env_remove("FORGEJO_DEFAULT_REPO")
-        .env_remove("FORGEJO_URL")
-        .stdout(Stdio::from(
-            log_file.try_clone().expect("daemon log clones"),
-        ))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .expect("temper daemon binary spawns");
-    ChildGuard {
-        label: "temper daemon --service engine",
-        child,
-        log: log.to_path_buf(),
-    }
-}
-
-/// Waits until the daemon accepts TCP connections on its bind port. Startup
-/// includes Forge repository resolution and workflow label upserts, so this can
-/// take a few seconds on a fresh world.
-fn wait_for_daemon(port: u16, daemon: &mut ChildGuard) {
-    let deadline = Instant::now() + DAEMON_READY_TIMEOUT;
-    loop {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return;
-        }
-        if let Some(status) = daemon.child.try_wait().expect("daemon try_wait") {
-            panic!(
-                "temper-daemon exited during startup with {status:?}\n--- daemon log ---\n{}",
-                daemon.log_tail()
-            );
-        }
-        assert!(
-            Instant::now() < deadline,
-            "temper-daemon did not bind 127.0.0.1:{port} within {DAEMON_READY_TIMEOUT:?}\n--- daemon log ---\n{}",
-            daemon.log_tail()
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_worker(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-    daemon_port: u16,
-    workspace: &Path,
-    stop_file: &Path,
-    ci_sentinel: &str,
-    log: &Path,
-) -> ChildGuard {
-    let log_file = log_file(log);
-    let child = Command::new(daemon_worker_binary())
-        .arg("--daemon-url")
-        .arg(format!("http://127.0.0.1:{daemon_port}"))
-        .arg("--worker-id")
-        .arg("daemon-e2e-worker-1")
-        .arg("--capability")
-        .arg(format!(
-            "{}/{}:{ENGINEER}",
-            provisioned.owner, provisioned.name
-        ))
-        .arg("--git-base-url")
-        .arg(server.base_url())
-        .arg("--workspace-root")
-        .arg(workspace.join("worker/root"))
-        .arg("--stop-file")
-        .arg(stop_file)
-        .arg("--ci-sentinel")
-        .arg(ci_sentinel)
-        .env("TEMPER_E2E_GIT_USER", &engineer.user)
-        .env("TEMPER_E2E_GIT_TOKEN", &engineer.token)
-        .stdout(Stdio::from(
-            log_file.try_clone().expect("worker log clones"),
-        ))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .expect("temper-testing-daemon-worker binary spawns");
-    ChildGuard {
-        label: "temper-testing-daemon-worker",
-        child,
-        log: log.to_path_buf(),
-    }
-}
-
-/// Resolves the daemon test worker binary, which lives in the `temper-testing`
-/// package (so no `CARGO_BIN_EXE_…` is exported to this root-package test).
-/// Resolution order: explicit env override, then the workspace target dir next
-/// to the daemon binary, building it on demand when absent.
-fn daemon_worker_binary() -> PathBuf {
-    if let Some(path) = std::env::var_os("TEMPER_TESTING_DAEMON_WORKER_BIN") {
-        return PathBuf::from(path);
-    }
-    let daemon = PathBuf::from(env!("CARGO_BIN_EXE_temper"));
-    let candidate = daemon
-        .parent()
-        .expect("daemon binary has a target directory")
-        .join("temper-testing-daemon-worker");
-    if !candidate.exists() {
-        let status = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-j2",
-                "-p",
-                "temper-testing",
-                "--bin",
-                "temper-testing-daemon-worker",
-            ])
-            .status()
-            .expect("cargo build for the daemon test worker runs");
-        assert!(
-            status.success(),
-            "building temper-testing-daemon-worker failed"
-        );
-        assert!(
-            candidate.exists(),
-            "temper-testing-daemon-worker missing at {} after build; set TEMPER_TESTING_DAEMON_WORKER_BIN",
-            candidate.display()
-        );
-    }
-    candidate
-}
-
-fn register_webhook(server: &ForgejoServer, provisioned: &Provisioned, port: u16) {
-    use temper_forge::{ForgeAdmin, WebhookEvents, WebhookSpec};
-
-    let url = format!("http://127.0.0.1:{port}/forgejo/webhook");
-    let base_url = server.base_url().to_string();
-    let admin_token = provisioned.admin_token.clone();
-    let owner = provisioned.owner.clone();
-    let name = provisioned.name.clone();
-    let repository = provisioned.repository.clone();
-    block_on_with_cx(move |_cx| async move {
-        let config = ForgejoConfig::new(&base_url, &admin_token).with_default_repo(&owner, &name);
-        let forge = ForgejoForge::new(config);
-        forge
-            .ensure_webhook(
-                &repository,
-                WebhookSpec {
-                    url,
-                    secret: WEBHOOK_SECRET.to_string(),
-                    events: WebhookEvents::All,
-                },
-            )
-            .await
-    })
-    .unwrap_or_else(|error| {
-        panic!(
-            "repo webhook registration failed for {}/{}: {error}",
-            provisioned.owner, provisioned.name
-        )
-    });
-}
-
-/// Lists each PR, its head, and its CI jobs for convergence-failure messages.
-fn ci_diagnostics(forge: &ForgejoForge, provisioned: &Provisioned) -> String {
-    block_on(async {
-        let mut out = String::new();
-        match forge
-            .list_pull_requests(&provisioned.repository, PullRequestQuery::default())
-            .await
-        {
-            Ok(pull_requests) => {
-                for pull_request in &pull_requests {
-                    out.push_str(&format!(
-                        "PR #{} head={} labels={:?} state={:?} merge={}\n",
-                        pull_request.number,
-                        pull_request.source.branch,
-                        pull_request.labels,
-                        pull_request.state,
-                        pull_request.merge.is_some()
-                    ));
-                    match forge
-                        .list_ci_jobs(
-                            &provisioned.repository,
-                            CiJobQuery {
-                                pull_request_id: Some(pull_request.id.clone()),
-                                ..CiJobQuery::default()
-                            },
-                        )
-                        .await
-                    {
-                        Ok(jobs) => {
-                            for job in jobs {
-                                out.push_str(&format!(
-                                    "  job {} status={:?} conclusion={:?} created={}\n",
-                                    job.name, job.status, job.conclusion, job.created_at
-                                ));
-                            }
-                        }
-                        Err(error) => out.push_str(&format!("  list_ci_jobs error: {error}\n")),
-                    }
-                }
-            }
-            Err(error) => out.push_str(&format!("list_pull_requests error: {error}\n")),
-        }
-        out
-    })
-}
-
-/// Polls `assert` until it passes or `deadline` elapses, returning the last
-/// error on timeout.
-fn poll_until<T>(
-    deadline: Instant,
-    mut assert: impl FnMut() -> Result<T, String>,
-) -> Result<T, String> {
-    loop {
-        let error = match assert() {
-            Ok(value) => return Ok(value),
-            Err(error) => error,
-        };
-        if Instant::now() >= deadline {
-            return Err(error);
-        }
-        std::thread::sleep(ASSERT_POLL);
-    }
-}
-
-/// Allocates a free local port via bind-then-drop.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("ephemeral port binds")
-        .local_addr()
-        .expect("bound listener has an address")
-        .port()
-}
-
-fn log_file(path: &Path) -> std::fs::File {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("log dir creates");
-    }
-    std::fs::File::create(path).expect("log file creates")
-}
-
-/// Drives a single boxed future to completion on a one-shot engine runtime;
-/// the real backend's futures park on network IO.
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    temper_engine_io::build_runtime()
-        .expect("engine runtime builds")
-        .block_on(future)
-}
-
-/// [`block_on`] handing the body the root task's `Cx` (clock capability) for
-/// code whose deadlines must be computed against the engine clock.
-fn block_on_with_cx<F, Fut>(f: F) -> Fut::Output
-where
-    F: FnOnce(temper_engine_io::Cx) -> Fut + Send + 'static,
-    Fut: std::future::Future + Send + 'static,
-    Fut::Output: Send + 'static,
-{
-    let runtime = temper_engine_io::build_runtime().expect("engine runtime builds");
-    temper_engine_io::runtime::block_on_runtime_with(&runtime, move |cx, _handle| f(cx))
-}
-
-/// Kills the spawned child on drop so a panic cannot leak daemon or worker
-/// processes (ported from the legacy fleet support's drop discipline).
-struct ChildGuard {
-    label: &'static str,
-    child: Child,
-    log: PathBuf,
-}
-
-impl ChildGuard {
-    fn log_tail(&self) -> String {
-        match std::fs::read_to_string(&self.log) {
-            Ok(contents) => {
-                let lines: Vec<&str> = contents.lines().rev().take(120).collect();
-                lines.into_iter().rev().collect::<Vec<_>>().join("\n")
-            }
-            Err(error) => format!("<could not read {}: {error}>", self.log.display()),
-        }
-    }
-
-    /// Waits for a graceful exit, escalating to kill at `timeout`.
-    fn wait(&mut self, timeout: Duration) -> std::process::ExitStatus {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.child.try_wait().expect("child try_wait") {
-                return status;
-            }
-            if Instant::now() >= deadline {
-                let _ = self.child.kill();
-                return self.child.wait().expect("child waits after kill");
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = self.label;
-    }
-}
-
-/// Owns the run workspace; kept so its drop cleanup runs after the children's.
-struct RunWorkspaceGuard(RunWorkspace);
-
-impl RunWorkspaceGuard {
-    fn new(prefix: &str) -> Self {
-        Self(RunWorkspace::new(prefix))
-    }
 }
