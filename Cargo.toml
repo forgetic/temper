@@ -79,6 +79,17 @@ jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2
 # through the daemon's apply_progress against an in-memory forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }
 temper-worker-protocol = { path = "crates/temper-worker-protocol" }
+# `temper init` e2e (`tests/init_forgejo_e2e.rs`): drives the `run_init` library
+# entry point with the real `ForgejoProvisioner` against the bench Forgejo
+# fixture, then asserts the produced config/credentials resolve + lint clean and
+# the forge state matches.
+temper-cli-init = { path = "crates/temper-cli-init" }
+temper-cli-common = { path = "crates/temper-cli-common" }
+temper-config = { path = "crates/temper-config" }
+temper-provision = { path = "crates/temper-provision" }
+temper-reference-delivery = { path = "crates/temper-reference-delivery" }
+toml = { workspace = true }
+tempfile = { workspace = true }
 
 # The unified everything-binary: `temper config|daemon|agent` (+ hidden operator
 # tools). A one-line shim over `temper_cli::run()`.
