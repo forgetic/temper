@@ -71,7 +71,7 @@ fn prep_makes_head_real_and_pr_is_mergeable() {
             .create_pull_request(&provisioned.repository, input.clone())
             .await;
         assert!(
-            matches!(unprepared, Err(temper_forge::ForgeError::NotFound(_))),
+            matches!(unprepared, Err(temper_forge_model::ForgeError::NotFound(_))),
             "expected NotFound for a non-existent head branch, got {unprepared:?}"
         );
 

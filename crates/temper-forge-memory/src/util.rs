@@ -1,4 +1,4 @@
-use temper_forge::{ForgeError, ForgeResult, ItemNumber, UpsertLabel, Version};
+use temper_forge_model::{ForgeError, ForgeResult, ItemNumber, UpsertLabel, Version};
 
 pub(crate) fn check_expected_version(
     kind: &str,
@@ -15,7 +15,7 @@ pub(crate) fn check_expected_version(
 }
 
 pub(crate) fn validate_create_repository(
-    input: &temper_forge::CreateRepository,
+    input: &temper_forge_model::CreateRepository,
 ) -> ForgeResult<()> {
     if input.owner.trim().is_empty() {
         return Err(ForgeError::InvalidRequest(

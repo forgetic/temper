@@ -1,7 +1,7 @@
 //! Issue operations: list/get/create/update plus issue comments.
 //!
 //! These are inherent methods on [`ForgejoForge`] mirroring the
-//! [`temper_forge::Forge`] issue surface; the trait implementation is assembled
+//! [`temper_forge_model::Forge`] issue surface; the trait implementation is assembled
 //! once every phase's methods exist. Forgejo serves both issues and pull
 //! requests through the issue endpoints, so the read paths exclude PR-as-issue
 //! rows (a pull request is never returned as an [`Issue`]). Label and assignee
@@ -16,7 +16,7 @@ use crate::pulls::response_validator;
 use crate::types::IssueDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue, IssueId, IssueQuery,
     IssueState, ItemNumber, ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
 };

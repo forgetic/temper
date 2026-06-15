@@ -1,7 +1,7 @@
 //! Top-level orchestration tying world provisioning, webhook, and seeding.
 //!
-//! This is the demo Forgejo operator entry point: it builds a
-//! [`ForgejoForge`](temper_forge_forgejo::ForgejoForge) authenticated with the
+//! This is the demo Forgejo operator entry point: it builds a forge handle (via
+//! `temper_forge::factory::new_forgejo_provisioning`) authenticated with the
 //! admin token, distills a [`ProvisionPlan`](temper_provision::ProvisionPlan)
 //! (with the demo CI seed commits and, when requested, a webhook), runs the
 //! backend-agnostic [`temper_provision::provision`] orchestration, then seeds
@@ -10,8 +10,12 @@
 
 use std::path::Path;
 
-use temper_forge::{ItemNumber, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec};
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ROLE_PASSWORD};
+use std::sync::Arc;
+
+use temper_forge::config::{FORGEJO_ROLE_PASSWORD as ROLE_PASSWORD, ForgejoConfig};
+use temper_forge::{
+    ItemNumber, ProvisioningForge, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec,
+};
 use temper_provision::{ProvisionPlan, Provisioned, resolve_intake_seed_token, seed_intake_issue};
 use temper_reference_delivery::{ci_seed_commits, repo_input, runner_config_for};
 use temper_runner::RoleBinding;
@@ -72,16 +76,25 @@ pub async fn provision_and_seed(
     }
 
     let forge = admin_forge(base_url, admin_token, owner, name);
-    let provisioned = temper_provision::provision(&plan, &forge, &forge, &forge).await?;
+    let provisioned =
+        temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref()).await?;
 
     // Seed the entry intake issue with the workflow-resolved author token (the
     // site admin, or a provisioned role's token), which may differ from the
-    // admin token used for the rest of provisioning. Building a fresh
-    // `ForgejoForge` bound to that token authors the issue as that identity.
+    // admin token used for the rest of provisioning. Building a fresh forge
+    // bound to that token authors the issue as that identity.
     let issue = if let Some(seed) = intake_seed {
         let seed_token = resolve_intake_seed_token(workflow, &provisioned, admin_token)?;
         let author_forge = admin_forge(base_url, seed_token, owner, name);
-        Some(seed_intake_issue(&author_forge, &provisioned.repository, seed, workflow).await?)
+        Some(
+            seed_intake_issue(
+                author_forge.as_ref(),
+                &provisioned.repository,
+                seed,
+                workflow,
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -102,14 +115,22 @@ pub async fn provision_world(
 ) -> Result<Provisioned> {
     let forge = admin_forge(base_url, admin_token, owner, name);
     let plan = build_plan(workflow, owner, name, default_branch, roles, options)?;
-    let provisioned = temper_provision::provision(&plan, &forge, &forge, &forge).await?;
+    let provisioned =
+        temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref()).await?;
     Ok(provisioned)
 }
 
-/// Builds a [`ForgejoForge`] authenticated with the admin token for `owner/name`.
-fn admin_forge(base_url: &str, admin_token: &str, owner: &str, name: &str) -> ForgejoForge {
+/// Builds a provisioning-capable forge authenticated with the admin token for
+/// `owner/name`. Returned as `Arc<dyn ProvisioningForge>` so it upcasts to the
+/// `&dyn Forge` / `&dyn ForgeContent` / `&dyn ForgeAdmin` the orchestration needs.
+fn admin_forge(
+    base_url: &str,
+    admin_token: &str,
+    owner: &str,
+    name: &str,
+) -> Arc<dyn ProvisioningForge> {
     let config = ForgejoConfig::new(base_url, admin_token).with_default_repo(owner, name);
-    ForgejoForge::new(config)
+    temper_forge::factory::new_forgejo_provisioning(config)
 }
 
 /// Distills a [`ProvisionPlan`] for the throwaway/existing-repo flows: role

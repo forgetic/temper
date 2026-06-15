@@ -25,7 +25,7 @@ mod validation;
 pub use crate::provisioning::MemUser;
 
 use std::path::PathBuf;
-use temper_forge::User;
+use temper_forge_model::User;
 
 /// Local filesystem Forge backend.
 #[derive(Clone, Debug)]

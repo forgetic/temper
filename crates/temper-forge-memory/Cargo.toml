@@ -9,7 +9,7 @@ description = "In-memory Forge implementation for Temper development and tests."
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-temper-forge = { path = "../temper-forge" }
+temper-forge-model = { path = "../temper-forge-model" }
 
 [lints]
 workspace = true

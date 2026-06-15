@@ -11,7 +11,7 @@
 //! - [`ci`]: CI job artifacts and status enums.
 //!
 //! All public types are re-exported here so the module flattens to a single
-//! `temper_forge::model` namespace.
+//! `temper_forge_model::model` namespace.
 
 pub mod access;
 pub mod ci;

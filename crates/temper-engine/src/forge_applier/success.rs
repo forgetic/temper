@@ -21,7 +21,7 @@ use crate::workflow_meta::{
     default_base_branch, implementation_pr_create_labels, implementation_pr_labels,
 };
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_success(&self, job: InFlightJob, result: JobResult) {
         if result.verdict.is_some() {
             self.apply_verdict(job, result).await;

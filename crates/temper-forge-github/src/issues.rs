@@ -1,7 +1,7 @@
 //! Issue operations: list/get/create/update plus issue comments.
 //!
 //! These are inherent methods on [`GitHubForge`] mirroring the
-//! [`temper_forge::Forge`] issue surface; the trait implementation is assembled
+//! [`temper_forge_model::Forge`] issue surface; the trait implementation is assembled
 //! in [`crate::forge_impl`]. GitHub serves both issues and pull requests
 //! through the issue endpoints and offers no `type` filter, so the read paths
 //! drop every row carrying a `pull_request` marker (a pull request is never
@@ -16,7 +16,7 @@ use crate::pulls::response_validator;
 use crate::types::IssueDto;
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue, IssueId, IssueQuery,
     IssueState, ItemNumber, ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
 };

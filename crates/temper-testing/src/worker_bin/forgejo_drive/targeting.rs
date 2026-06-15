@@ -1,4 +1,4 @@
-use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
+use temper_forge_model::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_runner::{MechanicalWorker, RepositorySet, WorkerError};
 use temper_workflow::{CommandJournal, RecoveryPolicy};
 

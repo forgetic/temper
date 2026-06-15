@@ -42,7 +42,7 @@ pub(super) struct VerdictChildrenBinding<'a> {
     pub(super) context: &'a mut ExecutionContext,
 }
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_verdict(&self, job: InFlightJob, result: JobResult) {
         let Some(verdict) = result.verdict.clone() else {
             return;

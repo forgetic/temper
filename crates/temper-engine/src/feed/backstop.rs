@@ -87,7 +87,7 @@ fn poll_backstop_log_line(enqueued: usize) -> String {
 ///
 /// A cadence machine requests one tick, the shell executes the scan, and the
 /// next tick is scheduled one cadence after the previous tick completed.
-pub fn spawn_poll_backstop<F: Forge + Send + Sync + 'static>(
+pub fn spawn_poll_backstop<F: Forge + Send + Sync + ?Sized + 'static>(
     spawner: &Arc<dyn Spawner>,
     daemon: Daemon,
     forge: Arc<F>,

@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_filesystem::FilesystemForge;
+use temper_forge_model::{
     BranchRef, CiJob, CreateComment, CreateIssue, CreatePullRequest, CreateRepository,
     RepositoryId, UserId,
 };
-use temper_forge_filesystem::FilesystemForge;
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 

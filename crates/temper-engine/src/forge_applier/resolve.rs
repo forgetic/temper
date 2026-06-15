@@ -9,7 +9,7 @@ use temper_forge::{Forge, Issue, ItemNumber, PullRequest, Repository, Repository
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn resolve_issue(&self, job: &InFlightJob) -> Option<(Repository, Issue)> {
         if job.artifact.kind != "issue" {
             eprintln!(

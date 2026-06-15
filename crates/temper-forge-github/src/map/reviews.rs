@@ -4,7 +4,9 @@
 use super::normalize;
 use crate::ids::{RepoCoord, format_review_id, format_user_id};
 use crate::types::ReviewDto;
-use temper_forge::{ForgeError, ForgeResult, PullRequestId, PullRequestReview, ReviewDecision};
+use temper_forge_model::{
+    ForgeError, ForgeResult, PullRequestId, PullRequestReview, ReviewDecision,
+};
 
 /// Maps a GitHub review DTO into a portable [`PullRequestReview`].
 ///
@@ -66,7 +68,7 @@ pub(crate) fn review_event_token(decision: ReviewDecision) -> ForgeResult<&'stat
 mod tests {
     use super::*;
     use crate::ids::format_pull_request_id;
-    use temper_forge::{ItemNumber, UserId};
+    use temper_forge_model::{ItemNumber, UserId};
 
     fn repo() -> RepoCoord {
         RepoCoord::new("acme", "widgets")

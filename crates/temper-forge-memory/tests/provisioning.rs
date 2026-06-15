@@ -7,11 +7,11 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_memory::MemoryForge;
+use temper_forge_model::{
     AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
     NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec,
 };
-use temper_forge_memory::MemoryForge;
 
 struct NoopWake;
 impl Wake for NoopWake {
@@ -30,7 +30,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 #[test]
 fn memory_forge_is_a_provisioning_forge() {
-    fn assert_provisioning<T: temper_forge::ProvisioningForge>() {}
+    fn assert_provisioning<T: temper_forge_model::ProvisioningForge>() {}
     assert_provisioning::<MemoryForge>();
 }
 
@@ -69,7 +69,7 @@ fn ensure_repository_is_idempotent_and_require_resolves() {
 
     let missing = RepositoryPath::new("acme", "absent");
     let error = block_on(forge.require_repository(&missing)).unwrap_err();
-    assert!(matches!(error, temper_forge::ForgeError::NotFound(_)));
+    assert!(matches!(error, temper_forge_model::ForgeError::NotFound(_)));
 }
 
 #[test]

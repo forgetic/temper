@@ -7,7 +7,7 @@ mod support;
 
 use serde_json::json;
 use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
-use temper_forge::{
+use temper_forge_model::{
     CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus, SortDirection,
 };
 

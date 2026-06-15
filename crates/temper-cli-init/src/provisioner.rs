@@ -74,7 +74,7 @@ impl Provisioner for ForgejoProvisioner {
         let request = request.clone();
         temper_engine_io::runtime::block_on_runtime_with(&runtime, move |_cx, _handle| async move {
             // Exchange the admin user+password for an admin REST token.
-            let admin_token = temper_forge_forgejo::admin_token_via_basic_auth(
+            let admin_token = temper_forge::config::forgejo_admin_token_via_basic_auth(
                 &request.base_url,
                 &request.admin_user,
                 &request.admin_password,
@@ -111,7 +111,7 @@ impl Provisioner for ForgejoProvisioner {
                 existing_repo: request.existing_repo,
                 roles: config.role_bindings.clone(),
                 automation_login: temper_provision::BOT_USER.to_string(),
-                password: temper_forge_forgejo::ROLE_PASSWORD.to_string(),
+                password: temper_forge::config::FORGEJO_ROLE_PASSWORD.to_string(),
                 token_scopes: ROLE_TOKEN_SCOPES.to_vec(),
                 labels: Vec::new(),
                 seed_commits: temper_reference_delivery::ci_seed_commits(&default_branch),
@@ -129,13 +129,14 @@ impl Provisioner for ForgejoProvisioner {
             .map_err(|error| error.to_string())?;
 
             let forge_config =
-                temper_forge_forgejo::ForgejoConfig::new(&request.base_url, &admin_token)
+                temper_forge::config::ForgejoConfig::new(&request.base_url, &admin_token)
                     .with_default_repo(&request.owner, &request.name);
-            let forge = temper_forge_forgejo::ForgejoForge::new(forge_config);
+            let forge = temper_forge::factory::new_forgejo_provisioning(forge_config);
 
-            let provisioned = temper_provision::provision(&plan, &forge, &forge, &forge)
-                .await
-                .map_err(|error| error.to_string())?;
+            let provisioned =
+                temper_provision::provision(&plan, forge.as_ref(), forge.as_ref(), forge.as_ref())
+                    .await
+                    .map_err(|error| error.to_string())?;
             Ok(ProvisionOutcome {
                 provisioned,
                 admin_token,

@@ -1,6 +1,6 @@
 //! In-memory Forge backend for Temper development and tests.
 //!
-//! [`MemoryForge`] implements [`temper_forge::Forge`] entirely in process: all
+//! [`MemoryForge`] implements [`temper_forge_model::Forge`] entirely in process: all
 //! records live in ordinary collections behind a single mutex, with no
 //! filesystem, network, or async runtime involved. It is a sibling reference
 //! backend to `temper-forge-filesystem` and intentionally reproduces the same
@@ -11,7 +11,7 @@
 //!
 //! Because there is no durable store to corrupt, a small one-shot
 //! [`fault hook`](MemoryForge::fail_next) lets tests force a chosen operation to
-//! return [`ForgeError::Backend`](temper_forge::ForgeError::Backend) so backend
+//! return [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) so backend
 //! error paths stay exercisable. CI jobs have no create operation in the Forge
 //! interface, so [`MemoryForge::seed_ci_jobs`] seeds them directly, mirroring how
 //! the filesystem backend seeds its `ci_jobs.json` fixture. [`MemoryForge::as_user`]
@@ -33,7 +33,7 @@ use crate::hint::HintBus;
 use crate::state::State;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use temper_forge::{CiJob, RepoPermission, RepositoryId, User, WebhookSpec};
+use temper_forge_model::{CiJob, RepoPermission, RepositoryId, User, WebhookSpec};
 
 pub use crate::fault::FaultOp;
 pub use crate::hint::MemoryHintReceiver;
@@ -46,7 +46,7 @@ pub(crate) struct Inner {
     pub(crate) hints: HintBus,
 }
 
-/// In-memory [`Forge`](temper_forge::Forge) backend.
+/// In-memory [`Forge`](temper_forge_model::Forge) backend.
 ///
 /// Cloning a `MemoryForge` shares the same underlying store, so a clone observes
 /// and mutates the same records — useful for handing a backend to several
@@ -91,7 +91,7 @@ impl MemoryForge {
     /// Arms a one-shot backend fault for the next call to `op`.
     ///
     /// The next invocation of `op` returns
-    /// [`ForgeError::Backend`](temper_forge::ForgeError::Backend) with `message`
+    /// [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) with `message`
     /// before touching any state; later calls proceed normally. Arming the same
     /// op again queues another fault.
     pub fn fail_next(&self, op: FaultOp, message: impl Into<String>) {
@@ -120,11 +120,11 @@ impl MemoryForge {
     pub fn seed_ci_jobs(&self, repo_id: &RepositoryId, jobs: Vec<CiJob>) {
         let mut inner = self.lock();
         inner.state.set_ci_jobs(repo_id, jobs);
-        inner.publish_repo_hint(repo_id, temper_forge::ChangeKind::Ci);
+        inner.publish_repo_hint(repo_id, temper_forge_model::ChangeKind::Ci);
     }
 
     /// Returns every user provisioned via
-    /// [`ForgeAdmin::ensure_user`](temper_forge::ForgeAdmin::ensure_user),
+    /// [`ForgeAdmin::ensure_user`](temper_forge_model::ForgeAdmin::ensure_user),
     /// ordered by login.
     ///
     /// Test-only read-back companion surface, not part of any Forge trait,
@@ -134,7 +134,7 @@ impl MemoryForge {
     }
 
     /// Returns the webhooks registered on `repo` via
-    /// [`ForgeAdmin::ensure_webhook`](temper_forge::ForgeAdmin::ensure_webhook).
+    /// [`ForgeAdmin::ensure_webhook`](temper_forge_model::ForgeAdmin::ensure_webhook).
     ///
     /// Test-only read-back companion surface, not part of any Forge trait.
     pub fn webhooks(&self, repo: &RepositoryId) -> Vec<WebhookSpec> {
@@ -142,7 +142,7 @@ impl MemoryForge {
     }
 
     /// Returns the contents committed at `(repo, branch, path)` via
-    /// [`ForgeContent::commit_file`](temper_forge::ForgeContent::commit_file),
+    /// [`ForgeContent::commit_file`](temper_forge_model::ForgeContent::commit_file),
     /// or `None` if no such file was committed.
     ///
     /// Test-only read-back companion surface, not part of any Forge trait.
@@ -151,8 +151,8 @@ impl MemoryForge {
     }
 
     /// Returns the repo-scoped collaborator grants recorded on `repo` via
-    /// [`ForgeAdmin::grant_access`](temper_forge::ForgeAdmin::grant_access) with
-    /// [`AccessScope::RepoCollaborator`](temper_forge::AccessScope::RepoCollaborator),
+    /// [`ForgeAdmin::grant_access`](temper_forge_model::ForgeAdmin::grant_access) with
+    /// [`AccessScope::RepoCollaborator`](temper_forge_model::AccessScope::RepoCollaborator),
     /// keyed by login.
     ///
     /// Test-only read-back companion surface, not part of any Forge trait.
@@ -161,7 +161,7 @@ impl MemoryForge {
     }
 
     /// Returns the tokens minted for `login` via
-    /// [`ForgeAdmin::mint_token`](temper_forge::ForgeAdmin::mint_token), in mint
+    /// [`ForgeAdmin::mint_token`](temper_forge_model::ForgeAdmin::mint_token), in mint
     /// order.
     ///
     /// Test-only read-back companion surface, not part of any Forge trait.
@@ -170,7 +170,7 @@ impl MemoryForge {
     }
 
     /// Reports whether CI was enabled on `repo` via
-    /// [`ForgeAdmin::enable_ci`](temper_forge::ForgeAdmin::enable_ci).
+    /// [`ForgeAdmin::enable_ci`](temper_forge_model::ForgeAdmin::enable_ci).
     ///
     /// Test-only read-back companion surface, not part of any Forge trait.
     pub fn ci_enabled(&self, repo: &RepositoryId) -> bool {
@@ -178,8 +178,8 @@ impl MemoryForge {
     }
 
     /// Reports whether `branch` was recorded on `repo` via
-    /// [`ForgeContent::create_branch`](temper_forge::ForgeContent::create_branch)
-    /// or as the target of a [`commit_file`](temper_forge::ForgeContent::commit_file).
+    /// [`ForgeContent::create_branch`](temper_forge_model::ForgeContent::create_branch)
+    /// or as the target of a [`commit_file`](temper_forge_model::ForgeContent::commit_file).
     ///
     /// Test-only read-back companion surface, not part of any Forge trait.
     pub fn branch_exists(&self, repo: &RepositoryId, branch: &str) -> bool {

@@ -3,7 +3,7 @@
 use super::normalize;
 use crate::ids::{RepoCoord, format_review_id, format_user_id};
 use crate::types::ReviewDto;
-use temper_forge::{
+use temper_forge_model::{
     ForgeError, ForgeResult, MergeMethod, PullRequestId, PullRequestReview, ReviewDecision,
 };
 
@@ -15,7 +15,7 @@ use temper_forge::{
 /// **Dismissed and stale reviews are kept.** The reference (filesystem/memory)
 /// backends have no dismissal concept and return every verdict event, and the
 /// portable review aggregate
-/// ([`PullRequestReviewStatus::from_reviews`](temper_forge::PullRequestReviewStatus))
+/// ([`PullRequestReviewStatus::from_reviews`](temper_forge_model::PullRequestReviewStatus))
 /// already resolves superseding by taking the **latest review per reviewer**.
 /// Forgejo, however, auto-dismisses a reviewer's prior review when they submit a
 /// new one (e.g. an approval after a changes-requested review), so dropping
@@ -85,7 +85,7 @@ pub(crate) fn merge_method_token(method: MergeMethod) -> &'static str {
 mod tests {
     use super::*;
     use crate::ids::format_pull_request_id;
-    use temper_forge::{ItemNumber, UserId};
+    use temper_forge_model::{ItemNumber, UserId};
 
     fn repo() -> RepoCoord {
         RepoCoord::new("acme", "widgets")

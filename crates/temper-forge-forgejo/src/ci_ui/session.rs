@@ -10,7 +10,7 @@ use crate::config::WebUiCredentials;
 use crate::ids::RepoCoord;
 use crate::{ForgejoForge, HttpClient, HttpMethod, HttpRequest, HttpResponse};
 use std::collections::BTreeMap;
-use temper_forge::{ForgeError, ForgeResult};
+use temper_forge_model::{ForgeError, ForgeResult};
 
 /// Maximum redirects followed for a single web-UI request.
 const MAX_REDIRECTS: usize = 8;

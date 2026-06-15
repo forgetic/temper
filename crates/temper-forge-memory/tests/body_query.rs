@@ -1,12 +1,12 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_memory::MemoryForge;
+use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
     ItemNumber, PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId,
     UpdateIssue, UpdatePullRequest,
 };
-use temper_forge_memory::MemoryForge;
 
 struct NoopWake;
 impl Wake for NoopWake {

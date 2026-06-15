@@ -3,7 +3,7 @@
 use crate::Inner;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::Duration;
-use temper_forge::{
+use temper_forge_model::{
     ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, ItemNumber, PullRequest, RepositoryId,
     RepositoryPath,
 };
@@ -87,6 +87,6 @@ impl Inner {
     }
 }
 
-fn repo_path(repo: &temper_forge::Repository) -> RepositoryPath {
+fn repo_path(repo: &temper_forge_model::Repository) -> RepositoryPath {
     RepositoryPath::new(repo.owner.clone(), repo.name.clone())
 }

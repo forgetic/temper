@@ -290,7 +290,7 @@ pub struct WorkerArgs {
     pub name: String,
     /// Repositories this worker scans. Forge permissions, not this list, remain
     /// the write authority; this is only the worker's scan shard.
-    pub repositories: Vec<temper_forge::RepositoryPath>,
+    pub repositories: Vec<temper_forge_model::RepositoryPath>,
     /// Poll cadence between ticks.
     pub poll_interval: Duration,
     /// Maximum Forgejo mechanical poll cadence after repeated no-action ticks.

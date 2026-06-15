@@ -9,13 +9,13 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
-use temper_forge::{
+use temper_forge_memory::{FaultOp, MemoryForge};
+use temper_forge_model::{
     BranchRef, ChangeSource, ChangeSourceEvent, CiJob, CiJobQuery, CiJobStatus, CreateComment,
     CreateIssue, CreatePullRequest, CreateRepository, Forge, ForgeError, IssueQuery, IssueState,
     ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
     RepositoryId, RepositoryPath, UpdateIssue, UpdatePullRequest, UpsertLabel, UserId, Version,
 };
-use temper_forge_memory::{FaultOp, MemoryForge};
 
 struct NoopWake;
 impl Wake for NoopWake {
@@ -78,7 +78,7 @@ fn successful_mutation_publishes_hint_to_shared_handle() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);
     let mut hints = forge
-        .as_user(temper_forge::User {
+        .as_user(temper_forge_model::User {
             id: UserId::new("user-observer"),
             handle: "observer".into(),
             display_name: None,
@@ -287,7 +287,7 @@ fn issue_comments_are_numbered_and_ordered() {
     assert!(comments[0].created_at <= comments[1].created_at);
 
     assert!(matches!(
-        block_on(forge.list_issue_comments(&temper_forge::IssueId::new("issue-missing"))),
+        block_on(forge.list_issue_comments(&temper_forge_model::IssueId::new("issue-missing"))),
         Err(ForgeError::NotFound(_))
     ));
 }
@@ -503,13 +503,13 @@ fn ci_jobs_can_be_seeded_filtered_and_looked_up() {
     let repo = new_repo(&forge);
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp(10, 0).unwrap();
     let job = CiJob {
-        id: temper_forge::CiJobId::new("ci-1"),
+        id: temper_forge_model::CiJobId::new("ci-1"),
         repo_id: repo.clone(),
         pull_request_id: None,
         commit_sha: "abc123".into(),
         name: "build".into(),
         status: CiJobStatus::Completed,
-        conclusion: Some(temper_forge::CiJobConclusion::Success),
+        conclusion: Some(temper_forge_model::CiJobConclusion::Success),
         url: None,
         created_at: now,
         started_at: Some(now),
@@ -539,7 +539,7 @@ fn ci_jobs_can_be_seeded_filtered_and_looked_up() {
     assert!(none.is_empty());
 
     assert_eq!(
-        block_on(forge.get_ci_job(&temper_forge::CiJobId::new("ci-1"))).unwrap(),
+        block_on(forge.get_ci_job(&temper_forge_model::CiJobId::new("ci-1"))).unwrap(),
         Some(job)
     );
 }

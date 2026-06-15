@@ -6,7 +6,7 @@ mod tests;
 
 use std::time::{Duration as StdDuration, Instant};
 
-use temper_forge::{ChangeHint, Forge};
+use temper_forge_model::{ChangeHint, Forge};
 use temper_runner::{
     IdlePollBackoff, MechanicalWorker, MultiRepoMechanicalWorker, MultiRepoRoleWorker, Progress,
     RoleWorker, RunReport, Worker, WorkerError, WorkerRunReport,

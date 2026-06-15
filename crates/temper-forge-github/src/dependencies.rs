@@ -16,7 +16,7 @@
 
 use crate::ids::{parse_issue_id, parse_pull_request_id};
 use crate::{GitHubForge, HttpClient};
-use temper_forge::{
+use temper_forge_model::{
     ForgeError, ForgeResult, Issue, IssueId, ItemNumber, PullRequest, PullRequestId,
 };
 

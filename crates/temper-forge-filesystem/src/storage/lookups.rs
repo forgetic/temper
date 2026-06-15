@@ -1,5 +1,5 @@
 use crate::FilesystemForge;
-use temper_forge::{
+use temper_forge_model::{
     ForgeError, ForgeResult, Issue, IssueId, PullRequest, PullRequestId, Repository, RepositoryId,
     RepositoryPath,
 };

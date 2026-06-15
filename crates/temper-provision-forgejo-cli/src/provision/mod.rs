@@ -1,6 +1,6 @@
 //! Forgejo provisioning glue for the reference-delivery demo CLI.
 //!
-//! Builds a [`ForgejoForge`](temper_forge_forgejo::ForgejoForge) authenticated
+//! Builds a forge handle (via `temper_forge::factory`) authenticated
 //! with the admin token, distills a
 //! [`ProvisionPlan`](temper_provision::ProvisionPlan) (the demo CI seed commits
 //! plus an optional webhook), runs the backend-agnostic

@@ -1,4 +1,4 @@
-//! Proves [`ForgejoForge`] is a real `temper_forge::Forge` backend.
+//! Proves [`ForgejoForge`] is a real `temper_forge_model::Forge` backend.
 //!
 //! Three checks, all offline:
 //! - a read exercised end to end through a `&dyn Forge` handle against canned
@@ -12,8 +12,8 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
-use temper_forge::{Forge, IssueState, ItemNumber, UserId};
 use temper_forge_forgejo::{EngineHttpClient, ForgejoForge};
+use temper_forge_model::{Forge, IssueState, ItemNumber, UserId};
 use temper_workflow::{Executor, ValidatedWorkflow};
 
 #[test]

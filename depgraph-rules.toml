@@ -15,6 +15,35 @@
 # any internal dependency not listed is a violation. Dev-dependencies are NOT
 # checked (`check_dev_deps = false`), which is what lets e2e/integration tests
 # cross tiers freely (e.g. the worker's tests drive the daemon + a fake agent).
+#
+# ---------------------------------------------------------------------------
+# INVARIANT: concrete forge backends stay out of business logic.
+# ---------------------------------------------------------------------------
+# The forge layer is split so that no business-logic crate ever names a concrete
+# backend:
+#
+#   temper-forge-model    the Forge trait + backend-agnostic domain model.
+#   temper-forge-forgejo  }
+#   temper-forge-github   }  concrete backends implementing the model's traits.
+#   temper-forge-memory   }  Each depends ONLY on temper-forge-model.
+#   temper-forge-filesystem }
+#   temper-forge          the FACADE: re-exports temper-forge-model and offers a
+#                         backend factory (new_forgejo/new_github/new_memory/
+#                         new_filesystem -> Arc<dyn Forge>). The ONLY non-test
+#                         crate allowed to depend on the concrete backends.
+#
+# Every other crate depends on `temper-forge` (the facade) and receives an
+# abstract `Arc<dyn Forge>` (or `Arc<dyn ProvisioningForge>` for provisioning).
+# A concrete backend dep (temper-forge-forgejo / -github / -memory / -filesystem)
+# on any crate OTHER than temper-forge therefore fails this check — that is the
+# enforcement of the invariant.
+#
+# THE ONE EXCEPTION is `temper-testing`, the sim/e2e harness: it keeps direct
+# backend deps for test-only affordances that are not on the production Forge
+# trait (e.g. MemoryForge::seed_ci_jobs, FilesystemForge::as_user/root). It is
+# non-shipping test machinery and is documented as the sole allowed exception.
+# (Other crates' e2e helpers reach for concrete backends only via *dev*-deps,
+# which this check ignores — see check_dev_deps below.)
 
 [rules]
 
@@ -24,30 +53,41 @@
 # crates and the leaf protocol crates the engine owns.
 # ===========================================================================
 temper-engine-io = []
-temper-forge = []
+# The backend-agnostic forge model: Forge trait + domain types. Leaf.
+temper-forge-model = []
 temper-process-protocol = []
 temper-worker-protocol = []
 temper-worker-registry = ["temper-worker-protocol"]
-temper-forge-filesystem = ["temper-forge"]
-temper-forge-memory = ["temper-forge"]
-temper-forge-forgejo = ["temper-forge", "temper-engine-io"]
-temper-forge-github = ["temper-forge", "temper-engine-io"]
+# Concrete backends — each implements the model's traits and depends ONLY on the
+# model (plus engine-io for the HTTP backends). They are wired into the system
+# exclusively through the temper-forge facade below.
+temper-forge-filesystem = ["temper-forge-model"]
+temper-forge-memory = ["temper-forge-model"]
+temper-forge-forgejo = ["temper-forge-model", "temper-engine-io"]
+temper-forge-github = ["temper-forge-model", "temper-engine-io"]
+# The forge FACADE: the single seam where concrete backends are constructed and
+# erased to `dyn Forge`. This is the ONLY non-test crate permitted to depend on
+# the concrete backend crates. Everything downstream depends on this.
+temper-forge = ["temper-forge-model", "temper-forge-forgejo", "temper-forge-github", "temper-forge-memory", "temper-forge-filesystem"]
 temper-workflow = ["temper-forge"]
 temper-interaction = ["temper-forge", "temper-engine-io", "temper-process-protocol"]
 temper-runner = ["temper-forge", "temper-engine-io", "temper-process-protocol", "temper-workflow"]
 temper-wake = ["temper-engine-io", "temper-runner"]
 temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
-temper-reference-delivery-validator = ["temper-forge", "temper-forge-forgejo", "temper-engine-io", "temper-workflow"]
-temper-interaction-service = ["temper-forge", "temper-forge-forgejo", "temper-interaction", "temper-engine-io"]
+# Validates live forge state. Builds its forge through the facade factory; no
+# concrete backend dep.
+temper-reference-delivery-validator = ["temper-forge", "temper-engine-io", "temper-workflow"]
+# Deploys interaction profiles. Builds its forges through the facade factory.
+temper-interaction-service = ["temper-forge", "temper-interaction", "temper-engine-io"]
 temper-trigger-forgejo = ["temper-forge", "temper-runner", "temper-wake"]
-# Backend-agnostic provisioning orchestration: depends ONLY on the Forge traits,
-# the runner (for RoleBinding), and the workflow model. No backend crate.
+# Backend-agnostic provisioning orchestration: depends ONLY on the Forge traits
+# (via the facade), the runner (for RoleBinding), and the workflow model.
 temper-provision = ["temper-forge", "temper-runner", "temper-workflow"]
 # Reference-delivery demo / operator CLI for `temper provision-forgejo`: builds a
-# ForgejoForge and runs the backend-agnostic temper-provision orchestration. The
-# only provider-specific code is constructing the ForgejoForge + the demo
-# CI/secrets/intake bits (the latter live in temper-reference-delivery).
-temper-provision-forgejo-cli = ["temper-forge", "temper-forge-forgejo", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
+# forge through the facade factory (new_forgejo_provisioning) and runs the
+# backend-agnostic temper-provision orchestration. No concrete backend dep — the
+# demo CI/secrets/intake bits live in temper-reference-delivery.
+temper-provision-forgejo-cli = ["temper-forge", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
 temper-engine = ["temper-forge", "temper-engine-io", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]
@@ -85,8 +125,9 @@ temper-config = []
 
 # Per-tier service crates. Each links ONLY its own tier + temper-config, and
 # ships its slim binary (temper-engine / temper-worker / temper-agent). These
-# allowlists ARE the proof of tier isolation.
-temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-workflow", "temper-reference-delivery"]
+# allowlists ARE the proof of tier isolation. The engine service builds its forge
+# through the facade factory — no concrete backend dep.
+temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-workflow", "temper-reference-delivery"]
 temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io"]
 temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-agent-protocol"]
 
@@ -108,12 +149,14 @@ temper-cli-config = ["temper-cli-common", "temper-config"]
 
 # `temper daemon`: the standalone all-in-one + per-service runners. Inherits the
 # heavy engine/worker/agent wiring the monolithic CLI used to carry (the
-# in-process transport + agent runner live here).
-temper-cli-daemon = ["temper-config", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-agent-protocol", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-reference-delivery", "temper-worker", "temper-worker-protocol", "temper-workflow"]
+# in-process transport + agent runner live here). Builds its forge through the
+# facade factory — no concrete backend dep.
+temper-cli-daemon = ["temper-config", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-agent-protocol", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-worker-protocol", "temper-workflow"]
 
 # `temper init`: interactive first-run. Orchestration only — config writing in
-# temper-config, provisioning inlined directly via temper-provision.
-temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "temper-forge", "temper-forge-forgejo", "temper-engine-io", "temper-workflow", "temper-reference-delivery"]
+# temper-config, provisioning inlined directly via temper-provision. Builds its
+# forge through the facade factory — no concrete backend dep.
+temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "temper-forge", "temper-engine-io", "temper-workflow", "temper-reference-delivery"]
 
 # The thin dispatcher: routes argv to the per-subcommand crates and the hidden
 # operator/responder tools. Re-exports the in-process transport from
@@ -124,8 +167,12 @@ temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-c
 temper = ["temper-cli"]
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-engine", "temper-engine-io", "temper-worker-protocol"]
-# Shared non-production test machinery (engine-side).
-temper-testing = ["temper-forge", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
+# Shared non-production test machinery (engine-side). THE SOLE EXCEPTION to the
+# forge-backend invariant: it depends directly on the concrete backends for
+# test-only affordances absent from the production Forge trait (see the invariant
+# note at the top of this file). It also links temper-forge-model directly for
+# those concrete types alongside the temper-forge facade.
+temper-testing = ["temper-forge", "temper-forge-model", "temper-forge-filesystem", "temper-forge-forgejo", "temper-forge-memory", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-trigger-forgejo", "temper-wake", "temper-worker-protocol", "temper-workflow"]
 
 [options]
 # Every workspace member must be listed above (a new, unlisted crate fails CI).

@@ -1,4 +1,4 @@
-//! Forgejo-backed [`temper_forge::Forge`] implementation.
+//! Forgejo-backed [`temper_forge_model::Forge`] implementation.
 //!
 //! This crate adapts the portable Forge interface to Forgejo's HTTP API. It is
 //! a best-effort, offline-tested backend: the provider is reached through a

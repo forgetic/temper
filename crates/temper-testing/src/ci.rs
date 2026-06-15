@@ -1,10 +1,10 @@
 use chrono::Duration;
-use temper_forge::{
+use temper_forge_filesystem::FilesystemForge;
+use temper_forge_memory::MemoryForge;
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, ForgeError, ItemNumber,
     PullRequest, RepositoryId,
 };
-use temper_forge_filesystem::FilesystemForge;
-use temper_forge_memory::MemoryForge;
 use temper_runner::{CiError, CiPolicy, CiSink};
 use temper_workflow::CiStatus;
 

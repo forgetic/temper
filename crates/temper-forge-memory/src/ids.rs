@@ -5,7 +5,7 @@
 //! the schemes aligned lets tests move between backends without re-baking
 //! identifier expectations.
 
-use temper_forge::{
+use temper_forge_model::{
     CommentId, IssueId, ItemNumber, LabelId, PullRequestId, RepositoryId, ReviewId,
 };
 

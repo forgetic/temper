@@ -31,7 +31,7 @@ pub fn system_clock() -> WallClock {
 /// the inner applier only while that lease is held, and then releases the lease
 /// best-effort. Duplicate or double-dispatched results that lose the lease race
 /// no-op without disturbing the peer's live lease.
-pub struct LeaseApplier<F: Forge> {
+pub struct LeaseApplier<F: Forge + ?Sized> {
     forge: Arc<F>,
     policy: LeasePolicy,
     owner: String,
@@ -39,7 +39,7 @@ pub struct LeaseApplier<F: Forge> {
     clock: WallClock,
 }
 
-impl<F: Forge> LeaseApplier<F> {
+impl<F: Forge + ?Sized> LeaseApplier<F> {
     pub fn new(
         forge: Arc<F>,
         policy: LeasePolicy,
@@ -58,7 +58,7 @@ impl<F: Forge> LeaseApplier<F> {
 }
 
 #[async_trait::async_trait]
-impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
+impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
     /// Progress checkpoints are daemon-authored bookkeeping comments, not
     /// role-authored workflow mutations, so they bypass the lease gate.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {

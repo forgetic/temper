@@ -17,7 +17,7 @@ use crate::forge_applier::verdict::{
 };
 use crate::workflow_meta::code_child_create_labels;
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn bind_create_issues_children(
         &self,
         binding: VerdictChildrenBinding<'_>,

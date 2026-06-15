@@ -1,4 +1,4 @@
-//! The `temper_forge::Forge` trait implementation for [`GitHubForge`].
+//! The `temper_forge_model::Forge` trait implementation for [`GitHubForge`].
 //!
 //! This is the keystone that turns the backend's inherent methods into a usable
 //! [`Forge`] backend: every trait method delegates, one line each, to the
@@ -11,7 +11,7 @@
 //! [`crate::HttpClient`]), so `GitHubForge<C>` satisfies `Forge: Send + Sync`.
 
 use crate::{GitHubForge, HttpClient};
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
     ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,

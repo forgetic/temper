@@ -3,7 +3,7 @@ use crate::record_ids::{
     stored_issue_comment_number, stored_pull_request_comment_number,
     stored_pull_request_review_number,
 };
-use temper_forge::{
+use temper_forge_model::{
     CiJob, Comment, CommentId, ForgeError, ForgeResult, Issue, IssueId, Label, PullRequest,
     PullRequestId, PullRequestReview, PullRequestState, RepositoryId,
 };
@@ -261,7 +261,7 @@ pub(crate) fn validate_stored_pull_request_reviews(
 fn validate_dependency_set(
     target_kind: &str,
     target_id: &str,
-    dependencies: &[temper_forge::ItemNumber],
+    dependencies: &[temper_forge_model::ItemNumber],
 ) -> ForgeResult<()> {
     for (index, dependency) in dependencies.iter().enumerate() {
         if dependency.get() == 0 {

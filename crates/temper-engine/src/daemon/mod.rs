@@ -52,7 +52,7 @@ pub trait HintedMechanical: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 }
 
-impl<F: temper_forge::Forge + Send + Sync + 'static> HintedMechanical
+impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> HintedMechanical
     for crate::MechanicalTrigger<F>
 {
     fn run_hinted(

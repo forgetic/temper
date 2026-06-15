@@ -8,11 +8,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use temper_forge::{
+use temper_forge_filesystem::FilesystemForge;
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, Forge, ItemNumber, PullRequest,
     PullRequestQuery, PullRequestState, RepositoryId,
 };
-use temper_forge_filesystem::FilesystemForge;
 use temper_runner::{CiSink, Progress, Worker, WorkerError};
 use temper_workflow::CiStatus;
 

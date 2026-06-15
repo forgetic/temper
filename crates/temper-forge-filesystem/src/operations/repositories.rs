@@ -3,7 +3,7 @@ use crate::lists::{sort_labels, sort_repositories};
 use crate::metadata::next_timestamp;
 use crate::record_ids::label_id;
 use crate::validation::{validate_create_repository, validate_upsert_label};
-use temper_forge::{
+use temper_forge_model::{
     ChangeKind, CreateRepository, ForgeError, ForgeResult, Label, Repository, RepositoryId,
     RepositoryPath, RepositoryQuery, UpsertLabel, User, UserId,
 };

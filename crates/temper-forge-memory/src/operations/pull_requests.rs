@@ -14,7 +14,7 @@ use crate::lists::{
 };
 use crate::reviews::{list_reviews, request_reviewers, submit_review};
 use crate::util::{check_expected_version, next_comment_number, next_item_number};
-use temper_forge::{
+use temper_forge_model::{
     ChangeKind, Comment, CreateComment, CreatePullRequest, CreatePullRequestReview, ForgeError,
     ForgeResult, ItemNumber, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
     PullRequestQuery, PullRequestReview, PullRequestState, RepositoryId, RequestReviewers,

@@ -6,7 +6,7 @@ use crate::ids::{format_review_id, format_user_id};
 use crate::map::{map_review, review_event_token};
 use crate::types::ReviewDto;
 use chrono::Utc;
-use temper_forge::{CreatePullRequestReview, PullRequestReview, RequestReviewers};
+use temper_forge_model::{CreatePullRequestReview, PullRequestReview, RequestReviewers};
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Requests reviews from users; idempotent when the set already matches.
@@ -19,7 +19,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         let reviewers: Vec<&str> = input
             .reviewers
             .iter()
-            .map(temper_forge::UserId::as_str)
+            .map(temper_forge_model::UserId::as_str)
             .collect();
         let path = format!(
             "/repos/{}/pulls/{}/requested_reviewers",

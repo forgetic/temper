@@ -10,7 +10,7 @@
 use crate::types::ActionRunDto;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use temper_forge::PullRequestId;
+use temper_forge_model::PullRequestId;
 
 /// Why a run was considered a match for a query target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

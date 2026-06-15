@@ -7,7 +7,7 @@ use crate::ids::{RepoCoord, parse_pull_request_id, parse_repository_id};
 use crate::map::{map_pull_request, merge_method_token};
 use crate::types::PullRequestDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
-use temper_forge::{
+use temper_forge_model::{
     Comment, CreateComment, CreatePullRequest, ForgeError, ForgeResult, ItemNumber,
     MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestUpdateState,
     RepositoryId, UpdatePullRequest,

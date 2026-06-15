@@ -3,7 +3,7 @@
 use crate::config::CasMode;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use temper_forge::{ForgeError, ForgeResult, Version};
+use temper_forge_model::{ForgeError, ForgeResult, Version};
 
 /// Captures provider validators for best-effort optimistic concurrency.
 ///
@@ -14,7 +14,7 @@ use temper_forge::{ForgeError, ForgeResult, Version};
 /// reads of an unchanged artifact report the same version while any mutation
 /// bumps it. [`Self::check`] re-resolves the fresh validator on a conditional
 /// write and reports a stale token as
-/// [`ForgeError::Conflict`](temper_forge::ForgeError::Conflict).
+/// [`ForgeError::Conflict`](temper_forge_model::ForgeError::Conflict).
 ///
 /// The cache is shared behind an [`Arc`](std::sync::Arc) so cloning the backend
 /// shares one cache. It is per-process and per-backend-instance: a version is

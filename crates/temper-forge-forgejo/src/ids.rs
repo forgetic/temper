@@ -2,7 +2,7 @@
 //!
 //! These encodings are private to the Forgejo backend. Workflow code must treat
 //! the resulting ids as opaque and never parse them; only this module maps
-//! between portable [`temper_forge`] id newtypes and Forgejo coordinates.
+//! between portable [`temper_forge_model`] id newtypes and Forgejo coordinates.
 //!
 //! Shapes (see `forgejo-00-plan.md`):
 //!
@@ -18,7 +18,7 @@
 //! Owner and repository names cannot contain `:` or `/` on Forgejo, so splitting
 //! on those characters is unambiguous.
 
-use temper_forge::{
+use temper_forge_model::{
     CiJobId, CommentId, ForgeError, ForgeResult, IssueId, ItemNumber, LabelId, PullRequestId,
     RepositoryId, ReviewId, UserId,
 };

@@ -7,12 +7,12 @@ mod support;
 use support::{
     MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with_web_ui, pull_id, repo_id,
 };
-use temper_forge::{
+use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
+use temper_forge_model::{
     BranchRef, CreateComment, CreatePullRequest, ItemListDetails, ItemNumber, ItemSort,
     ItemSortField, PullRequestQuery, PullRequestState, PullRequestUpdateState, SortDirection,
     UpdatePullRequest, UserId,
 };
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 
 /// Renders a pull-request DTO JSON body with overridable fields.
 fn pr_json(number: u64, state: &str, labels: &str, extra: &str) -> String {
@@ -422,7 +422,10 @@ fn update_pull_request_missing_is_not_found() {
     client.push_response(404, r#"{"message":"not found"}"#);
     let forge = forge(client);
     let result = block_on(forge.update_pull_request(&pull_id(5), UpdatePullRequest::default()));
-    assert!(matches!(result, Err(temper_forge::ForgeError::NotFound(_))));
+    assert!(matches!(
+        result,
+        Err(temper_forge_model::ForgeError::NotFound(_))
+    ));
 }
 
 #[test]

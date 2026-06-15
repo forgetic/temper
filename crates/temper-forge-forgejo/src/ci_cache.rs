@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use temper_forge::{CiJob, CiJobStatus, RepositoryId};
+use temper_forge_model::{CiJob, CiJobStatus, RepositoryId};
 
 use crate::ci_match::Target;
 
@@ -153,7 +153,7 @@ fn sha_matches(job_sha: &str, head_sha: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_forge::{CiJobConclusion, CiJobId, RepositoryId};
+    use temper_forge_model::{CiJobConclusion, CiJobId, RepositoryId};
 
     fn job(status: CiJobStatus, conclusion: Option<CiJobConclusion>) -> CiJob {
         job_at("sha-a", status, conclusion)

@@ -12,7 +12,7 @@ use crate::forge_applier::ForgeApplier;
 
 const FAILURE_AUDIT_COMMENT_KEY_PREFIX: &str = "daemon_failure_audit:";
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub(super) async fn apply_failure(&self, job: InFlightJob, result: JobResult) {
         let failure = result.failure.as_ref();
         let class = match failure.map(|failure| failure.class) {

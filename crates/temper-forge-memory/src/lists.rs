@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobQuery, CiJobSortField, Comment, ForgeError, ForgeResult, Issue, IssueQuery,
     IssueState, ItemSortField, Label, PullRequest, PullRequestQuery, PullRequestReview,
     PullRequestState, PullRequestUpdateState, Repository, RepositoryQuery, RepositorySortField,

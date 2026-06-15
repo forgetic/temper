@@ -20,7 +20,7 @@ impl Daemon {
     /// deliveries are verified and parsed by the daemon machine, then executed
     /// as wake scans against the given forge/workflow before the held `202`
     /// response is released.
-    pub fn with_webhook<F: Forge + Send + Sync + 'static>(
+    pub fn with_webhook<F: Forge + Send + Sync + ?Sized + 'static>(
         self,
         forge: Arc<F>,
         workflow: Arc<ValidatedWorkflow>,
@@ -37,7 +37,7 @@ impl Daemon {
     /// backstop cadence be slow (idle quiet) without losing reaction latency —
     /// the webhook is the edge-trigger (ADR 0009). Pass `None` to keep the
     /// wake-scan-only behavior.
-    pub fn with_webhook_and_mechanical<F: Forge + Send + Sync + 'static>(
+    pub fn with_webhook_and_mechanical<F: Forge + Send + Sync + ?Sized + 'static>(
         self,
         forge: Arc<F>,
         workflow: Arc<ValidatedWorkflow>,
@@ -63,7 +63,7 @@ impl Daemon {
     }
 }
 
-struct ForgeWakeScanner<F: Forge + Send + Sync + 'static> {
+struct ForgeWakeScanner<F: Forge + Send + Sync + ?Sized + 'static> {
     daemon: Daemon,
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
@@ -73,7 +73,7 @@ struct ForgeWakeScanner<F: Forge + Send + Sync + 'static> {
     mechanical: Option<Arc<dyn HintedMechanical>>,
 }
 
-impl<F: Forge + Send + Sync + 'static> WakeScanner for ForgeWakeScanner<F> {
+impl<F: Forge + Send + Sync + ?Sized + 'static> WakeScanner for ForgeWakeScanner<F> {
     fn scan(
         &self,
         hint: temper_runner::ChangeHint,

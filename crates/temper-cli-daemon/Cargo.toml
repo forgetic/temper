@@ -21,7 +21,6 @@ temper-agent-session = { path = "../temper-agent-session" }
 temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-forge = { path = "../temper-forge" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-worker = { path = "../temper-worker" }

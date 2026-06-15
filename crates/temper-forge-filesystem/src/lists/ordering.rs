@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobQuery, CiJobSortField, Comment, Issue, IssueQuery, ItemSortField, Label,
     PullRequest, PullRequestQuery, PullRequestReview, Repository, RepositoryQuery,
     RepositorySortField, SortDirection,

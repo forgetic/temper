@@ -10,8 +10,7 @@ use temper_engine::{
     RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig, spawn_mechanical_backstop,
     spawn_poll_backstop,
 };
-use temper_forge::{RepositoryId, RepositoryPath};
-use temper_forge_forgejo::ForgejoForge;
+use temper_forge::{Forge, RepositoryId, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 
 use crate::{
@@ -39,7 +38,7 @@ pub async fn run_async(
     let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle.clone());
     let forge_config = forgejo_config(resolved)?;
     let forge_base_url = forge_config.base_url.clone();
-    let forge = Arc::new(ForgejoForge::new(forge_config));
+    let forge = temper_forge::factory::new_forgejo(forge_config);
     let config = daemon_run_config(resolved)?;
 
     let (workflow, compiled) = load_workflow(&config)?;
@@ -105,7 +104,7 @@ fn load_workflow(
 }
 
 async fn resolve_repo_targets(
-    forge: &ForgejoForge,
+    forge: &dyn Forge,
     repos: &[RepositoryPath],
 ) -> Result<(RepositorySet, Vec<RepositoryId>), String> {
     let repositories = resolve_repositories(forge, repos).await?;
@@ -125,7 +124,7 @@ fn lease_ttl(config: &DaemonRunConfig) -> Result<chrono::Duration, String> {
 fn spawn_poll(
     spawner: &Arc<dyn temper_engine_io::Spawner>,
     daemon: Daemon,
-    forge: Arc<ForgejoForge>,
+    forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: Arc<CompiledWorkflow>,
     targets: Vec<RoleFeedTarget>,
@@ -145,7 +144,7 @@ fn spawn_poll(
 
 async fn spawn_mechanical(
     spawner: &Arc<dyn temper_engine_io::Spawner>,
-    forge: Arc<ForgejoForge>,
+    forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: &CompiledWorkflow,
     repositories: RepositorySet,
@@ -175,7 +174,7 @@ async fn spawn_mechanical(
 
 fn attach_webhook(
     daemon: Daemon,
-    forge: Arc<ForgejoForge>,
+    forge: Arc<dyn Forge>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: Arc<CompiledWorkflow>,
     secret_file: Option<&std::path::PathBuf>,

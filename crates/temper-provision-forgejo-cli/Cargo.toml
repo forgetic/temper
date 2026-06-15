@@ -8,7 +8,6 @@ description = "Operator CLI for the `temper provision-forgejo` reference-deliver
 
 [dependencies]
 temper-forge = { path = "../temper-forge" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-provision = { path = "../temper-provision" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-runner = { path = "../temper-runner" }

@@ -13,7 +13,7 @@ pub const DEFAULT_PAGE_LIMIT: u32 = 50;
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum CasMode {
     /// Refuse conditional writes without a captured validator
-    /// ([`temper_forge::ForgeError::InvalidRequest`]). Favors safety.
+    /// ([`temper_forge_model::ForgeError::InvalidRequest`]). Favors safety.
     Strict,
     /// Fall back to a documented weak read-before-write when no validator
     /// exists. Favors availability; the residual race is documented.

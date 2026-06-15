@@ -15,7 +15,7 @@ use crate::ids::RepoCoord;
 use crate::map::map_comment;
 use crate::types::CommentDto;
 use crate::{GitHubForge, HttpClient, HttpMethod};
-use temper_forge::{Comment, ForgeResult, ItemNumber, UserId};
+use temper_forge_model::{Comment, ForgeResult, ItemNumber, UserId};
 
 impl<C: HttpClient> GitHubForge<C> {
     /// Lists comments on an issue or pull request in chronological order.

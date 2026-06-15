@@ -1,11 +1,11 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_memory::MemoryForge;
+use temper_forge_model::{
     BranchRef, CreatePullRequest, CreatePullRequestReview, CreateRepository, Forge, ForgeError,
     PullRequestReviewStatus, RepositoryId, RequestReviewers, ReviewDecision, User, UserId,
 };
-use temper_forge_memory::MemoryForge;
 
 struct NoopWake;
 impl Wake for NoopWake {
@@ -177,7 +177,7 @@ fn handles_over_one_store_can_act_as_different_users() {
 #[test]
 fn review_operations_report_missing_pull_requests() {
     let forge = MemoryForge::new();
-    let missing = temper_forge::PullRequestId::new("pull-request-missing");
+    let missing = temper_forge_model::PullRequestId::new("pull-request-missing");
     assert!(matches!(
         block_on(forge.list_pull_request_reviews(&missing)),
         Err(ForgeError::NotFound(_))

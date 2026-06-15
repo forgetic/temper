@@ -4,7 +4,7 @@
 use super::{map_logins, normalize, sorted_dedup, sorted_dedup_users};
 use crate::ids::{RepoCoord, format_pull_request_id, format_repository_id, format_user_id};
 use crate::types::{PrBranchDto, PrRepoDto, PullRequestDto};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, ItemNumber, MergeMethod, MergeRecord, PullRequest, PullRequestState, Version,
 };
 
@@ -140,7 +140,7 @@ fn strip_owner_prefix(label: &str) -> String {
 mod tests {
     use super::*;
     use crate::ids::parse_pull_request_id;
-    use temper_forge::UserId;
+    use temper_forge_model::UserId;
 
     fn repo() -> RepoCoord {
         RepoCoord::new("acme", "widgets")

@@ -1,7 +1,7 @@
 mod support;
 
 use support::{TestRoot, block_on, comment, pull_request, repository};
-use temper_forge::{Comment, Forge, ForgeError, PullRequestId, UserId};
+use temper_forge_model::{Comment, Forge, ForgeError, PullRequestId, UserId};
 
 fn comment_bodies(comments: &[Comment]) -> Vec<String> {
     comments

@@ -9,7 +9,7 @@ description = "GitHub-backed Forge implementation (best-effort, offline-tested).
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-temper-forge = { path = "../temper-forge" }
+temper-forge-model = { path = "../temper-forge-model" }
 skein.workspace = true
 temper-engine-io = { path = "../temper-engine-io" }
 serde.workspace = true

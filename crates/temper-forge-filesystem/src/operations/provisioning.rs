@@ -14,7 +14,7 @@ use crate::FilesystemForge;
 use crate::storage::{UserRecord, WebhookRecord};
 use crate::validation::validate_create_repository;
 use async_trait::async_trait;
-use temper_forge::{
+use temper_forge_model::{
     AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository, ForgeContent,
     ForgeError, ForgeResult, NewUser, RepositoryId, RepositoryPath, TokenScope, WebhookSpec,
 };
@@ -32,7 +32,7 @@ impl ForgeContent for FilesystemForge {
 
         let mut metadata = self.read_metadata()?;
         let now = crate::metadata::next_timestamp(&mut metadata)?;
-        let repository = temper_forge::Repository {
+        let repository = temper_forge_model::Repository {
             id: self.next_repository_id(&mut metadata)?,
             owner: input.owner,
             name: input.name,
@@ -83,7 +83,7 @@ impl ForgeContent for FilesystemForge {
 }
 
 #[async_trait]
-impl temper_forge::ForgeAdmin for FilesystemForge {
+impl temper_forge_model::ForgeAdmin for FilesystemForge {
     async fn ensure_owner(&self, owner: &str) -> ForgeResult<()> {
         let _guard = self.write_lock()?;
         let mut owners = self.read_owners()?;

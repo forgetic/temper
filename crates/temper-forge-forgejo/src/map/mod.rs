@@ -1,7 +1,7 @@
-//! Pure conversions from Forgejo DTOs into portable `temper_forge` models.
+//! Pure conversions from Forgejo DTOs into portable `temper_forge_model` models.
 //!
 //! These functions contain no HTTP or state; they translate the lenient DTOs in
-//! [`crate::types`] into the domain types in [`temper_forge`]. Keeping mapping
+//! [`crate::types`] into the domain types in [`temper_forge_model`]. Keeping mapping
 //! pure makes the request/response plumbing in [`crate::pulls`] and
 //! [`crate::items`] thin and lets the conversions be unit-tested directly.
 //!
@@ -18,7 +18,7 @@ mod items;
 mod pulls;
 mod reviews;
 
-use temper_forge::UserId;
+use temper_forge_model::UserId;
 
 pub(crate) use items::{map_comment, map_issue, map_label, map_repository, map_user};
 pub(crate) use pulls::map_pull_request;

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use temper_forge::{Forge, ItemNumber};
+use temper_forge_model::{Forge, ItemNumber};
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::ArtifactSource;
 

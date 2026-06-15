@@ -1,7 +1,7 @@
 //! Identity, repository, and label operations.
 //!
 //! These are inherent methods on [`GitHubForge`] mirroring the
-//! [`temper_forge::Forge`] identity/repository/label surface; the trait
+//! [`temper_forge_model::Forge`] identity/repository/label surface; the trait
 //! implementation is assembled in [`crate::forge_impl`]. Pure DTO→model
 //! conversions live in [`crate::map`].
 
@@ -10,7 +10,7 @@ use crate::map::{map_label, map_repository, map_user};
 use crate::types::{LabelDto, RepositoryDto, UserDto};
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     CreateRepository, ForgeError, ForgeResult, Label, Repository, RepositoryId, RepositoryPath,
     RepositoryQuery, RepositorySortField, SortDirection, UpsertLabel, User, UserId,
 };

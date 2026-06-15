@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration as StdDuration;
-use temper_forge::{ChangeHint, ChangeKind, RepositoryPath};
+use temper_forge_model::{ChangeHint, ChangeKind, RepositoryPath};
 use temper_runner::{Progress, Worker, WorkerError};
 use temper_wake::send_wake_with_hint;
 

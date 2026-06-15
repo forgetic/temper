@@ -11,7 +11,7 @@
 use crate::MemoryForge;
 use crate::util::validate_create_repository;
 use async_trait::async_trait;
-use temper_forge::{
+use temper_forge_model::{
     AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository, ForgeContent,
     ForgeResult, NewUser, RepositoryId, RepositoryPath, TokenScope, WebhookSpec,
 };
@@ -29,7 +29,7 @@ impl ForgeContent for MemoryForge {
 
         let now = inner.state.next_timestamp()?;
         let id = inner.state.allocate_repository_id()?;
-        let repository = temper_forge::Repository {
+        let repository = temper_forge_model::Repository {
             id: id.clone(),
             owner: input.owner,
             name: input.name,
@@ -50,7 +50,7 @@ impl ForgeContent for MemoryForge {
             .find_repository_by_path(path)
             .map(|repository| repository.id)
             .ok_or_else(|| {
-                temper_forge::ForgeError::NotFound(format!(
+                temper_forge_model::ForgeError::NotFound(format!(
                     "repository {}/{}",
                     path.owner, path.name
                 ))
@@ -77,7 +77,7 @@ impl ForgeContent for MemoryForge {
 }
 
 #[async_trait]
-impl temper_forge::ForgeAdmin for MemoryForge {
+impl temper_forge_model::ForgeAdmin for MemoryForge {
     async fn ensure_owner(&self, owner: &str) -> ForgeResult<()> {
         self.lock().state.ensure_owner(owner);
         Ok(())

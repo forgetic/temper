@@ -3,10 +3,10 @@
 mod support;
 
 use support::{MockHttpClient, block_on, body_json, forge, pull_id};
-use temper_forge::{
+use temper_forge_github::HttpMethod;
+use temper_forge_model::{
     CreatePullRequestReview, ForgeError, MergeMethod, MergePullRequest, ReviewDecision, UserId,
 };
-use temper_forge_github::HttpMethod;
 
 fn merged_pull_json(number: u64) -> String {
     format!(

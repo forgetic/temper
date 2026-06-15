@@ -29,11 +29,11 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_memory::MemoryForge;
+use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, ItemNumber, RepositoryId,
     User, UserId,
 };
-use temper_forge_memory::MemoryForge;
 use temper_runner::RunnerConfig;
 use temper_workflow::ValidatedWorkflow;
 

@@ -11,7 +11,6 @@ temper-cli-common = { path = "../temper-cli-common" }
 temper-config = { path = "../temper-config" }
 temper-provision = { path = "../temper-provision" }
 temper-forge = { path = "../temper-forge" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }

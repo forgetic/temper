@@ -21,8 +21,8 @@
 //! provisioning REST calls and the per-role identity checks all run under it.
 
 use std::collections::BTreeSet;
-use temper_forge::RepositoryPath;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge_model::RepositoryPath;
 use temper_testing::forgejo_server::start_cached_provisioned_server;
 use temper_testing::{runner_config, workflow};
 

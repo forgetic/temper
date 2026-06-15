@@ -14,7 +14,7 @@ use super::args::{
 use chrono::Duration;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use temper_forge::RepositoryPath;
+use temper_forge_model::RepositoryPath;
 
 const DEFAULT_AUDIT_INTERVAL_MS: i64 = 600_000;
 const DEFAULT_IDLE_POLL_MAX_MS: i64 = 60_000;

@@ -10,8 +10,8 @@ mod support;
 
 use serde_json::json;
 use support::{MockHttpClient, block_on, forge, forge_with_web_ui, pull_id, repo_id};
-use temper_forge::{CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus};
 use temper_forge_forgejo::{HttpMethod, HttpResponse};
+use temper_forge_model::{CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus};
 
 /// A `200` HTML login page carrying a hidden `_csrf` input.
 fn login_page() -> HttpResponse {

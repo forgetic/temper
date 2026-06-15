@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use temper_forge::{
+use temper_forge_model::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, Forge, Issue, IssueQuery, IssueState,
     ItemNumber, PullRequest, PullRequestQuery, PullRequestState, Repository, RepositoryId,
     RepositoryQuery, ReviewDecision, UserId,

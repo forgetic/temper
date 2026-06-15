@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use temper_forge::{ForgeError, ForgeResult, User, UserId};
+use temper_forge_model::{ForgeError, ForgeResult, User, UserId};
 
 const STORAGE_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_USER_ID: &str = "user-1";

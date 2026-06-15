@@ -32,14 +32,14 @@ use temper_forge::Forge;
 
 /// Forge-backed applier for daemon-accepted worker results. See the module docs
 /// for the application semantics.
-pub struct ForgeApplier<F: Forge> {
+pub struct ForgeApplier<F: Forge + ?Sized> {
     forge: Arc<F>,
     workflow: Arc<ValidatedWorkflow>,
     compiled: CompiledWorkflow,
     attention_labels: Vec<String>,
 }
 
-impl<F: Forge> ForgeApplier<F> {
+impl<F: Forge + ?Sized> ForgeApplier<F> {
     pub fn new(forge: Arc<F>, workflow: Arc<ValidatedWorkflow>) -> Self {
         let compiled = workflow.compile();
         Self {

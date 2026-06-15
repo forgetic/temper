@@ -11,12 +11,12 @@ mod support;
 
 use base64::Engine;
 use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, repo_id};
-use temper_forge::{
+use temper_forge_forgejo::HttpMethod;
+use temper_forge_model::{
     AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
     ForgeError, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope, WebhookEvents,
     WebhookSpec,
 };
-use temper_forge_forgejo::HttpMethod;
 
 // --- ForgeContent ------------------------------------------------------------
 

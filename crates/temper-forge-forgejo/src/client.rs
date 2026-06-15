@@ -88,7 +88,7 @@ pub enum HttpError {
 ///
 /// Implementations join the request path with their configured base URL, send
 /// it, and return the observed status, headers, and body. They must not
-/// interpret status codes; status-to-[`ForgeError`](temper_forge::ForgeError)
+/// interpret status codes; status-to-[`ForgeError`](temper_forge_model::ForgeError)
 /// mapping lives in [`crate::error`].
 #[async_trait]
 pub trait HttpClient: Send + Sync {

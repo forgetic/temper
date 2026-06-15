@@ -8,7 +8,7 @@
 mod support;
 
 use support::{TestRoot, block_on, issue, pull_request, repository};
-use temper_forge::{Forge, ForgeError, UpdateIssue, UpdatePullRequest, Version};
+use temper_forge_model::{Forge, ForgeError, UpdateIssue, UpdatePullRequest, Version};
 
 #[test]
 fn conditional_issue_update_rejects_a_stale_version() {

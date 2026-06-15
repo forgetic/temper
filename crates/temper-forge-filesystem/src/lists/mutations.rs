@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use temper_forge::{
+use temper_forge_model::{
     ForgeError, ForgeResult, Issue, IssueState, PullRequest, PullRequestState,
     PullRequestUpdateState, UserId,
 };

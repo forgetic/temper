@@ -35,7 +35,7 @@
 
 use super::provision::{self, ProvisionError, Result};
 use super::provision_rest as rest;
-use temper_forge::CreatePullRequest;
+use temper_forge_model::CreatePullRequest;
 
 /// The directory the trivial prep file lives in, off the repo root. Kept out of
 /// the way of the CI sentinel (`ci-ok`) and the workflow file.
