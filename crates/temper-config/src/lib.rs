@@ -30,6 +30,17 @@ mod template;
 
 use std::path::{Path, PathBuf};
 
+/// Crate-local alias for a type-level string secret.
+///
+/// Backed by [`secrecy::SecretString`]: `Debug` prints `[REDACTED]`, there is no
+/// `Display`, it is not `Serialize` (so a secret cannot leak through a struct
+/// dump or accidental serialization), and the buffer zeroizes on drop. Construct
+/// one with `Secret::from("…")` and read the raw value at an I/O boundary with
+/// [`ExposeSecret::expose_secret`]. For a non-string secret, use
+/// [`secrecy::SecretBox`] directly.
+pub type Secret = secrecy::SecretString;
+pub use secrecy::ExposeSecret;
+
 pub use build::{
     ConfigInputs, CredentialInputs, ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser,
     build_config, build_credentials, default_config_path, default_credentials_path, forge_user,

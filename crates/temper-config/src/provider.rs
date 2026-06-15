@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+use secrecy::ExposeSecret;
+
 use crate::resolved::{ProviderCredential, ProviderKind, ProviderSettings};
 
 /// Env var the agent reads for the OAuth `auth.json` path.
@@ -71,7 +73,11 @@ pub fn provider_env(
         env.push((PROVIDER_BASE_URL_ENV.to_string(), url.clone()));
     }
     if let ProviderCredential::ApiKey(key) = &provider.credential {
-        env.push((DEEPSEEK_API_KEY_ENV.to_string(), key.clone()));
+        // I/O boundary: the key crosses into the spawned agent's environment.
+        env.push((
+            DEEPSEEK_API_KEY_ENV.to_string(),
+            key.expose_secret().to_string(),
+        ));
     }
     if let Some(path) = auth_file {
         env.push((AUTH_FILE_ENV.to_string(), path.display().to_string()));
@@ -92,13 +98,15 @@ pub fn oauth_auth_json(provider: &ProviderSettings) -> Option<String> {
         return None;
     };
     let key = oauth_provider_key(provider.kind);
+    // I/O boundary: the OAuth tokens are written to the agent's `auth.json`.
+    let refresh = refresh.as_ref().map(|token| token.expose_secret());
     // The nodejs pi `auth.json` schema: `{ <key>: { type, access, refresh,
     // expires } }`, with `expires` in unix milliseconds (see the agent's
     // tolerant OAuth reader).
     let entry = serde_json::json!({
         key: {
             "type": "oauth",
-            "access": access,
+            "access": access.expose_secret(),
             "refresh": refresh,
             "expires": expires,
         }

@@ -2,9 +2,16 @@
 
 use std::collections::BTreeMap;
 
+use secrecy::{ExposeSecret, SecretString};
+
 use crate::{
     Config, Credentials, FileKind, NoEnv, ProviderCredential, ProviderKind, lint, resolve,
 };
+
+/// The raw value behind an optional secret, for assertions.
+fn exposed(secret: &Option<SecretString>) -> Option<&str> {
+    secret.as_ref().map(|secret| secret.expose_secret())
+}
 
 fn parse_config(text: &str) -> Config {
     Config::parse(text, std::path::Path::new("config.toml"), FileKind::Config)
@@ -68,11 +75,11 @@ fn resolves_full_deployment() {
 
     // forge: trailing slash stripped, admin token from the admin user.
     assert_eq!(resolved.forge.url.as_deref(), Some("http://localhost:3000"));
-    assert_eq!(resolved.forge.admin_token.as_deref(), Some("agent-tok"));
+    assert_eq!(exposed(&resolved.forge.admin_token), Some("agent-tok"));
     // web-ui from the default ci_user "bot".
     let web = resolved.forge.web_ui.as_ref().expect("web ui");
     assert_eq!(web.username, "bot");
-    assert_eq!(web.password, "bot-pw");
+    assert_eq!(web.password.expose_secret(), "bot-pw");
 
     // engine
     assert_eq!(resolved.engine.bind.to_string(), "127.0.0.1:4000");
@@ -108,14 +115,14 @@ fn resolves_full_deployment() {
         .expect("engineer identity");
     assert_eq!(eng.user, "engineer");
     assert_eq!(eng.email, "eng@example.test");
-    assert_eq!(eng.token, "eng-tok");
+    assert_eq!(eng.token.expose_secret(), "eng-tok");
     assert!(!resolved.forge.role_identities.contains_key("architect"));
     assert_eq!(
         resolved
             .forge
             .role_tokens
             .get("engineer")
-            .map(String::as_str),
+            .map(ExposeSecret::expose_secret),
         Some("eng-tok")
     );
 
@@ -139,8 +146,11 @@ fn resolves_full_deployment() {
             refresh,
             expires,
         } => {
-            assert_eq!(access, "secret-access-jwt");
-            assert_eq!(refresh.as_deref(), Some("secret-refresh-token"));
+            assert_eq!(access.expose_secret(), "secret-access-jwt");
+            assert_eq!(
+                refresh.as_ref().map(ExposeSecret::expose_secret),
+                Some("secret-refresh-token")
+            );
             assert_eq!(*expires, 1781371005373);
         }
         other => panic!("expected inline oauth, got {other:?}"),
@@ -205,7 +215,7 @@ fn env_overrides_file() {
     ]);
     let resolved = resolve(&config, &credentials, &env).expect("resolves");
     assert_eq!(resolved.forge.url.as_deref(), Some("http://env-forge:9000"));
-    assert_eq!(resolved.forge.admin_token.as_deref(), Some("env-admin-tok"));
+    assert_eq!(exposed(&resolved.forge.admin_token), Some("env-admin-tok"));
     assert_eq!(resolved.engine.bind.to_string(), "127.0.0.1:5555");
     assert_eq!(resolved.worker.daemon_url, "http://127.0.0.1:5555");
     assert_eq!(
@@ -244,7 +254,7 @@ token = "agent-tok"
         .expect("engineer identity");
     assert_eq!(eng.user, "eng-login");
     assert_eq!(eng.email, "eng-login@noreply.localhost");
-    assert_eq!(eng.token, "eng-env-tok");
+    assert_eq!(eng.token.expose_secret(), "eng-env-tok");
 }
 
 #[test]
@@ -314,7 +324,7 @@ key = "sk-secret"
     let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
     assert_eq!(resolved.agent.provider.kind, ProviderKind::DeepSeek);
     match &resolved.agent.provider.credential {
-        ProviderCredential::ApiKey(key) => assert_eq!(key, "sk-secret"),
+        ProviderCredential::ApiKey(key) => assert_eq!(key.expose_secret(), "sk-secret"),
         other => panic!("expected api key, got {other:?}"),
     }
 }
@@ -391,7 +401,53 @@ fn redacts_secrets_in_debug() {
         !rendered.contains("secret-refresh-token"),
         "refresh token leaked: {rendered}"
     );
-    assert!(rendered.contains("redacted"));
+    // secrecy renders a `SecretString` as `[REDACTED]`.
+    assert!(
+        rendered.contains("[REDACTED]"),
+        "no redaction marker: {rendered}"
+    );
     let web = format!("{:?}", resolved.forge.web_ui);
-    assert!(!web.contains("bot-pw"));
+    assert!(!web.contains("bot-pw"), "web-ui password leaked: {web}");
+}
+
+/// Anti-leak golden test: a full `Debug` of `Resolved` must contain none of the
+/// secret substrings present in the fixture credentials. This is the structural
+/// guard against a future field type regressing back to a plain `String`.
+#[test]
+fn resolved_debug_leaks_no_secret() {
+    let config = parse_config(FULL_CONFIG);
+    let credentials = parse_credentials(FULL_CREDENTIALS);
+    let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
+    let rendered = format!("{resolved:?}");
+    for secret in [
+        "agent-tok",
+        "agent-pw",
+        "eng-tok",
+        "eng-pw",
+        "bot-tok",
+        "bot-pw",
+        "secret-access-jwt",
+        "secret-refresh-token",
+    ] {
+        assert!(
+            !rendered.contains(secret),
+            "secret `{secret}` leaked into Resolved Debug: {rendered}"
+        );
+    }
+}
+
+/// The `Secret` alias round-trips: `expose_secret()` returns the raw value while
+/// `Debug` renders `[REDACTED]`.
+#[test]
+fn secret_alias_round_trips_and_redacts() {
+    use crate::Secret;
+
+    let secret = Secret::from("hunter2");
+    assert_eq!(secret.expose_secret(), "hunter2");
+    let rendered = format!("{secret:?}");
+    assert!(
+        rendered.contains("[REDACTED]"),
+        "no redaction marker: {rendered}"
+    );
+    assert!(!rendered.contains("hunter2"), "secret leaked: {rendered}");
 }

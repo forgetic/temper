@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use secrecy::ExposeSecret;
+
 use super::*;
 use crate::{NoEnv, ProviderKind, resolve};
 
@@ -214,12 +216,31 @@ fn credentials_round_trip_and_are_0600() {
 
     let loaded = Credentials::load(&path).expect("loads back");
     assert_eq!(loaded.forge.users.len(), 3);
+    // The guarded write path emits the REAL secret to disk (schema fields are
+    // raw `Option<String>`), so the on-disk TOML carries the verbatim token …
+    let on_disk = std::fs::read_to_string(&path).expect("reads back");
+    assert!(
+        on_disk.contains("agent-tok"),
+        "credentials file must store the real admin token"
+    );
+    assert!(
+        on_disk.contains("secret-access"),
+        "credentials file must store the real oauth access token"
+    );
+    // … and it re-reads (toml -> schema -> Resolved) into the same secret.
     let config = build_config(&sample_config_inputs());
     let resolved = resolve(&config, &loaded, &NoEnv).expect("resolves");
-    assert_eq!(resolved.forge.admin_token.as_deref(), Some("agent-tok"));
+    assert_eq!(
+        resolved
+            .forge
+            .admin_token
+            .as_ref()
+            .map(ExposeSecret::expose_secret),
+        Some("agent-tok")
+    );
     match &resolved.agent.provider.credential {
         crate::ProviderCredential::OAuthInline { access, .. } => {
-            assert_eq!(access, "secret-access");
+            assert_eq!(access.expose_secret(), "secret-access");
         }
         other => panic!("expected inline oauth, got {other:?}"),
     }

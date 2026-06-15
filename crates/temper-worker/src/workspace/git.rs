@@ -55,13 +55,14 @@ impl Workspace {
         if output.status.success() {
             Ok(output)
         } else {
+            // The labeled `command` is a hand-written, token-free string and the
+            // remote URL never embeds the token (it is passed via a separate
+            // `-c http.extraheader` arg), so neither the command nor git's
+            // stderr carries the push token.
             Err(WorkspaceError::Git {
-                command: redact_secret(command, &self.identity.token),
+                command,
                 status: status_string(output.status),
-                stderr: redact_secret(
-                    String::from_utf8_lossy(&output.stderr).into_owned(),
-                    &self.identity.token,
-                ),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             })
         }
     }
@@ -71,12 +72,4 @@ fn status_string(status: ExitStatus) -> String {
     status
         .code()
         .map_or_else(|| status.to_string(), |code| code.to_string())
-}
-
-fn redact_secret(text: String, secret: &str) -> String {
-    if secret.is_empty() {
-        text
-    } else {
-        text.replace(secret, "<redacted>")
-    }
 }

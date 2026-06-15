@@ -17,9 +17,19 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use secrecy::SecretString;
+
 use crate::error::ConfigError;
 
 /// The fully resolved deployment.
+///
+/// Note: `Resolved` deliberately does **not** implement `Serialize`. Its secret
+/// fields are [`secrecy::SecretString`]s, and the `secrecy/serde` feature is not
+/// enabled, so `SecretString` is not `SerializableSecret` — a `Resolved` cannot
+/// be serialized (and thus cannot leak a token to a log/snapshot/wire) even by
+/// accident. The only audited path secrets take to disk is
+/// [`crate::write_credentials`], which serializes the raw-`String`
+/// [`crate::Credentials`] schema, never `Resolved`.
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub forge: ForgeSettings,
@@ -36,13 +46,13 @@ pub struct ForgeSettings {
     /// Base URL with trailing slashes stripped. `None` if unset anywhere.
     pub url: Option<String>,
     /// The admin/default REST token. `None` if the admin user has no token.
-    pub admin_token: Option<String>,
+    pub admin_token: Option<SecretString>,
     /// Web-UI credentials for CI status reads (ADR 0019), if a `ci_user` with a
     /// password is configured.
     pub web_ui: Option<WebUiCreds>,
     /// Role → REST token, for the engine's per-role routing applier. Absent roles
     /// fall back to the admin token.
-    pub role_tokens: BTreeMap<String, String>,
+    pub role_tokens: BTreeMap<String, SecretString>,
     /// Role → git identity, for the worker's per-role checkouts/pushes.
     pub role_identities: BTreeMap<String, GitIdentity>,
 }
@@ -54,29 +64,19 @@ pub enum ForgeKind {
 }
 
 /// A git author identity plus its push token.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct GitIdentity {
     pub user: String,
     pub email: String,
-    pub token: String,
+    pub token: SecretString,
 }
 
-/// Web-UI login used only for the CI read fallback.
-#[derive(Clone, Eq, PartialEq)]
+/// Web-UI login used only for the CI read fallback. The password is a
+/// [`SecretString`], so the derived `Debug` prints it as `[REDACTED]`.
+#[derive(Debug, Clone)]
 pub struct WebUiCreds {
     pub username: String,
-    pub password: String,
-}
-
-impl std::fmt::Debug for WebUiCreds {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never leak the password (or user) through logs.
-        formatter
-            .debug_struct("WebUiCreds")
-            .field("username", &"<redacted>")
-            .field("password", &"<redacted>")
-            .finish()
-    }
+    pub password: SecretString,
 }
 
 /// Resolved engine (orchestrator) settings.
@@ -180,44 +180,24 @@ impl ProviderKind {
     }
 }
 
-/// Resolved provider secret. Secrets are redacted from `Debug`.
-#[derive(Clone)]
+/// Resolved provider secret. The secret-bearing variants hold [`SecretString`]s,
+/// so the derived `Debug` prints them as `[REDACTED]`.
+#[derive(Debug, Clone)]
 pub enum ProviderCredential {
     /// Inline OAuth tokens (the binary materializes these into a pi-format
     /// `auth.json` the provider stack reads + refreshes).
     OAuthInline {
-        access: String,
-        refresh: Option<String>,
+        access: SecretString,
+        refresh: Option<SecretString>,
         expires: i64,
     },
     /// A path to an existing pi-format `auth.json`.
     OAuthFile(PathBuf),
     /// A static API key.
-    ApiKey(String),
+    ApiKey(SecretString),
     /// No credential in the file — fall back to the provider stack's ambient
     /// resolution (env / default auth.json).
     Ambient,
-}
-
-impl std::fmt::Debug for ProviderCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProviderCredential::OAuthInline { expires, .. } => formatter
-                .debug_struct("OAuthInline")
-                .field("access", &"<redacted>")
-                .field("refresh", &"<redacted>")
-                .field("expires", expires)
-                .finish(),
-            ProviderCredential::OAuthFile(path) => {
-                formatter.debug_tuple("OAuthFile").field(path).finish()
-            }
-            ProviderCredential::ApiKey(_) => formatter
-                .debug_tuple("ApiKey")
-                .field(&"<redacted>")
-                .finish(),
-            ProviderCredential::Ambient => formatter.write_str("Ambient"),
-        }
-    }
 }
 
 impl ForgeSettings {
@@ -232,8 +212,8 @@ impl ForgeSettings {
     }
 
     /// The admin REST token, or a `Missing` error.
-    pub fn require_admin_token(&self) -> Result<&str, ConfigError> {
-        self.admin_token.as_deref().ok_or_else(|| {
+    pub fn require_admin_token(&self) -> Result<&SecretString, ConfigError> {
+        self.admin_token.as_ref().ok_or_else(|| {
             ConfigError::missing(
                 "forge admin token is unset; set a `token` under \
                  `[forge.users.<admin>]` in the credentials file (and name the \

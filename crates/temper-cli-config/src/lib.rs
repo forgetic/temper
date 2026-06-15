@@ -147,7 +147,7 @@ fn init(args: &[String]) -> Result<ExitCode, String> {
 fn render(resolved: &Resolved) -> String {
     use std::fmt::Write;
     let mut out = String::new();
-    let present = |value: &Option<String>| if value.is_some() { "set" } else { "unset" };
+    let present = |value: &Option<_>| if value.is_some() { "set" } else { "unset" };
 
     let _ = writeln!(out, "[forge]");
     let _ = writeln!(

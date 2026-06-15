@@ -130,8 +130,6 @@ async fn execute<R: AgentRunner>(
             );
         }
     };
-    let token = identity.token.clone();
-
     let coordination_key = manifest.coordination_key.clone();
     // Coordinated workspace root: the manifest repos are checked out as flat
     // siblings under here (one dir each) so their inter-repo path dependencies
@@ -148,7 +146,6 @@ async fn execute<R: AgentRunner>(
         artifact_number: artifact.number,
         mode,
         coordination_key: &coordination_key,
-        token: &token,
     })
     .await
     {
@@ -177,7 +174,7 @@ async fn execute<R: AgentRunner>(
     {
         Ok(result) => result,
         Err(AgentRunError { class, message }) => {
-            return failure(class, redact_secret(message, &token));
+            return failure(class, message);
         }
     };
 
@@ -189,7 +186,6 @@ async fn execute<R: AgentRunner>(
                 &allowed_verdicts,
                 &coordination_key,
                 &artifact_item,
-                &token,
             )
             .await
         }
@@ -199,7 +195,6 @@ async fn execute<R: AgentRunner>(
                 result,
                 &allowed_verdicts,
                 &coordination_key,
-                &token,
             )
             .await
         }
@@ -222,7 +217,6 @@ struct PrepareRequest<'a> {
     artifact_number: u64,
     mode: JobMode,
     coordination_key: &'a str,
-    token: &'a str,
 }
 
 async fn prepare_repos(request: PrepareRequest<'_>) -> Result<Vec<PreparedRepo>, JobOutcome> {
@@ -243,7 +237,7 @@ async fn prepare_repo(
     repo_spec: &WorkspaceRepo,
 ) -> Result<PreparedRepo, JobOutcome> {
     let remote_url = forgejo_remote_url(request.git_base_url, &repo_spec.repo)
-        .map_err(|error| workspace_failure("construct git remote URL", error, ""))?;
+        .map_err(|error| workspace_failure("construct git remote URL", error))?;
     let base_branch = if repo_spec.base_branch.trim().is_empty() {
         "main".to_string()
     } else {
@@ -282,19 +276,18 @@ async fn prepare_workspace(
                 .await
         }
         JobMode::Writable if repo_spec.is_writable() => {
-            return prepare_writable(workspace, repo_spec, request.token).await;
+            return prepare_writable(workspace, repo_spec).await;
         }
         // Read-only sibling in a writable job, or any repo in a read-only
         // (triage) job: materialize the base branch, never push.
         JobMode::Writable | JobMode::ReadOnly => workspace.prepare_read_only().await,
     };
-    result.map_err(|error| workspace_failure("prepare workspace", error, request.token))
+    result.map_err(|error| workspace_failure("prepare workspace", error))
 }
 
 async fn prepare_writable(
     workspace: &Workspace,
     repo_spec: &WorkspaceRepo,
-    token: &str,
 ) -> Result<(), JobOutcome> {
     let Some(branch_hint) = repo_spec.branch_hint.clone() else {
         return Err(failure(
@@ -308,7 +301,7 @@ async fn prepare_writable(
     workspace
         .prepare(&branch_hint)
         .await
-        .map_err(|error| workspace_failure("prepare workspace", error, token))
+        .map_err(|error| workspace_failure("prepare workspace", error))
 }
 
 async fn verdict_only_outcome(
@@ -316,7 +309,6 @@ async fn verdict_only_outcome(
     result: WorkspaceResult,
     allowed_verdicts: &[String],
     correlation_key: &str,
-    token: &str,
 ) -> JobOutcome {
     let WorkspaceResult {
         verdict,
@@ -342,7 +334,7 @@ async fn verdict_only_outcome(
     }
 
     if let Err(error) = workspace.discard_changes().await {
-        return workspace_failure("discard verdict workspace changes", error, token);
+        return workspace_failure("discard verdict workspace changes", error);
     }
 
     let children = children
@@ -374,25 +366,14 @@ fn require_enriched_field<T>(field: Option<T>, name: &str) -> Result<T, JobOutco
     })
 }
 
-fn workspace_failure(action: &str, error: WorkspaceError, token: &str) -> JobOutcome {
-    failure(
-        FailureClass::Transient,
-        redact_secret(format!("{action}: {error}"), token),
-    )
+fn workspace_failure(action: &str, error: WorkspaceError) -> JobOutcome {
+    failure(FailureClass::Transient, format!("{action}: {error}"))
 }
 
 fn failure(class: FailureClass, message: impl Into<String>) -> JobOutcome {
     JobOutcome::Failure {
         class,
         message: message.into(),
-    }
-}
-
-fn redact_secret(text: String, secret: &str) -> String {
-    if secret.is_empty() {
-        text
-    } else {
-        text.replace(secret, "<redacted>")
     }
 }
 

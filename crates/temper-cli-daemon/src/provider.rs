@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use temper_agent::{AuthChoice, ProviderConfig};
-use temper_config::{ProviderCredential, ProviderKind, Resolved, provider};
+use temper_config::{ExposeSecret, ProviderCredential, ProviderKind, Resolved, provider};
 
 /// Constructs the agent provider config from the resolved agent settings,
 /// materializing OAuth credentials under `auth_dir` when given inline.
@@ -24,7 +24,8 @@ pub fn build_provider(resolved: &Resolved, auth_dir: &Path) -> Result<ProviderCo
     let config = match settings.kind {
         ProviderKind::DeepSeek => match &settings.credential {
             ProviderCredential::ApiKey(key) => ProviderConfig::deepseek_with_key(
-                key.clone(),
+                // I/O boundary: the key is handed to the in-process provider.
+                key.expose_secret().to_string(),
                 settings.main_model.clone(),
                 settings.base_url.clone(),
             ),
