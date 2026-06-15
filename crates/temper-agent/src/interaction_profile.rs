@@ -202,5 +202,4 @@ fn validate_reply(
 }
 
 #[cfg(test)]
-#[path = "interaction_profile_tests.rs"]
 mod tests;

@@ -1,0 +1,35 @@
+//! The pure agent loop, as a sans-IO state machine.
+//!
+//! [`AgentMachine`] is the functional core of an LLM agent turn: it owns the
+//! conversation state and the iteration budget, and decides — purely — when to
+//! call the model, which tools to run, when to inject steering, and when to
+//! stop. It performs no I/O. The actual model streaming and tool execution are
+//! done by the shell ([`crate::shell`]), which reuses tongs providers and
+//! tools and feeds results back as [`AgentCompletion`]s.
+//!
+//! This mirrors the [`temper_agent_io::Machine`] discipline used by the worker:
+//! `(state, completion) -> [request]`, deterministic and replayable, so the
+//! whole loop — tool orchestration, max-iteration cutoff, stop-reason handling,
+//! steering at turn boundaries — is unit-testable with synthetic completions and
+//! drivable under the skein lab for simulation/fuzz testing.
+//!
+//! Design note (steering): steering messages are injected at **turn
+//! boundaries** — after a model turn and its tool batch complete, before the
+//! next model call — not mid-tool-batch. This keeps the machine simple while
+//! still supporting live interaction (the user's stated control goal); pi's
+//! finer-grained mid-batch steering is deliberately not reproduced.
+//!
+//! Split by domain responsibility:
+//! - [`protocol`] — the I/O types exchanged with the shell.
+//! - [`batching`] — the pure effect-compatible tool-batching policy.
+//! - [`core`] — the [`AgentMachine`] driving logic and `Machine` trait impl.
+
+mod batching;
+mod core;
+mod protocol;
+
+pub use core::AgentMachine;
+pub use protocol::{AgentCompletion, AgentEvent, AgentRequest, AgentStop, StreamDelta};
+
+#[cfg(test)]
+mod tests;

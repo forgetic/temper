@@ -44,36 +44,26 @@
 //! `Debug` redacts credentials and errors carry only the provider/path, never
 //! token bytes.
 
+mod anthropic_model;
 mod anthropic_oauth;
+mod auth;
+mod error;
+mod model_entry;
 mod oauth;
+mod request_options;
 
-use std::collections::HashMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use tongs::model::{InputType, Model, ModelCost, ThinkingLevel};
-use tongs::provider::{ModelEntry, Provider};
+use tongs::provider::Provider;
+
+use auth::{AuthMode, ProviderIdentity};
 
 pub use anthropic_oauth::{ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL};
+pub use auth::AuthChoice;
+pub use error::{API_KEY_ENV, API_KEY_PATH_ENV, ProviderError};
 pub use oauth::{AUTH_FILE_ENV, CODEX_MODEL_ENV, DEFAULT_CODEX_MODEL, default_auth_path};
-
-/// Which credential the real agents authenticate with.
-///
-/// The library default is [`AuthChoice::DeepSeek`] (so callers choose concrete
-/// production wiring explicitly); anvil's CLI/preflight and responder binaries
-/// default to [`AuthChoice::ChatGptOAuth`] per the local cost policy (a flat
-/// subscription instead of pay-per-token). Resolve a [`ProviderConfig`] for a
-/// choice with [`ProviderConfig::from_auth`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthChoice {
-    /// DeepSeek API key (pay-per-token). The library default.
-    DeepSeek,
-    /// ChatGPT (OpenAI Codex) OAuth subscription. The test/dev default.
-    ChatGptOAuth,
-    /// Anthropic OAuth subscription targeting Claude through `anthropic-messages`.
-    AnthropicOAuth,
-}
 
 /// Env var that redirects outbound provider traffic to an alternate base URL.
 ///
@@ -83,14 +73,6 @@ pub enum AuthChoice {
 /// you control.
 pub const PROVIDER_BASE_URL_ENV: &str = "ANVIL_TEST_PROVIDER_BASE_URL";
 
-/// Env var that overrides the DeepSeek API-key file path.
-pub const API_KEY_PATH_ENV: &str = "TEMPER_DEEPSEEK_API_KEY_PATH";
-/// Env var that supplies the DeepSeek API key directly (takes precedence over
-/// the file path).
-pub const API_KEY_ENV: &str = "TEMPER_DEEPSEEK_API_KEY";
-
-/// Default file the key is read from when no env override is set.
-const DEFAULT_KEY_PATH: &str = ".cache/deepseek-api-key";
 /// DeepSeek's OpenAI-compatible base; the SDK appends `chat/completions`.
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
 /// DeepSeek v4 Flash model id (per the Phase B contract).
@@ -110,39 +92,6 @@ const ANTHROPIC_PROVIDER_ID: &str = "anthropic";
 const ANTHROPIC_MESSAGES_API: &str = "anthropic-messages";
 /// Anthropic API base URL; the SDK normalizes it to `/v1/messages`.
 const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
-
-/// How an agent decision authenticates to its LLM provider.
-#[derive(Clone)]
-enum AuthMode {
-    /// A static API key carried as the per-request bearer (DeepSeek default).
-    ApiKey { api_key: String },
-    /// ChatGPT (OpenAI Codex) OAuth: the bearer is resolved fresh per decision
-    /// from the shared auth file (load → refresh → access token).
-    ChatGptOAuth { settings: oauth::OAuthSettings },
-    /// Anthropic OAuth: the bearer and Claude Code-compatible request identity
-    /// headers are resolved fresh per decision from the shared auth file.
-    AnthropicOAuth {
-        settings: anthropic_oauth::AnthropicOAuthSettings,
-    },
-}
-
-impl AuthMode {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::ApiKey { .. } => "api_key",
-            Self::ChatGptOAuth { .. } => "chatgpt_oauth",
-            Self::AnthropicOAuth { .. } => "anthropic_oauth",
-        }
-    }
-}
-
-/// Non-secret provider/model identity for observability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProviderIdentity<'a> {
-    pub(crate) provider_id: &'a str,
-    pub(crate) model_id: &'a str,
-    pub(crate) auth_mode: &'static str,
-}
 
 /// Resolved provider/model/auth wiring.
 ///
@@ -201,9 +150,10 @@ impl ProviderConfig {
     /// Builds the default DeepSeek config, reading the key at runtime.
     ///
     /// Key resolution order: [`API_KEY_ENV`] (direct), else the file at
-    /// [`API_KEY_PATH_ENV`], else [`DEFAULT_KEY_PATH`]. Uses DeepSeek v4 Flash.
+    /// [`API_KEY_PATH_ENV`], else the default `.cache/deepseek-api-key` file.
+    /// Uses DeepSeek v4 Flash.
     pub fn deepseek_from_env() -> Result<Self, ProviderError> {
-        let api_key = load_api_key()?;
+        let api_key = error::load_api_key()?;
         Ok(Self::new(
             PROVIDER_ID,
             DEFAULT_MODEL_ID,
@@ -368,86 +318,6 @@ impl ProviderConfig {
         }
     }
 
-    /// Resolves the per-request bearer.
-    ///
-    /// For [`AuthMode::ApiKey`] this is the stored key. For OAuth modes it reads
-    /// (and refreshes when near expiry) the shared auth file, so it must be
-    /// called **each time** a decision runs. Callers must not log the result.
-    pub(crate) async fn resolve_bearer(&self) -> Result<String, ProviderError> {
-        match &self.auth {
-            AuthMode::ApiKey { api_key } => Ok(api_key.clone()),
-            AuthMode::ChatGptOAuth { settings } => settings.resolve_bearer().await,
-            AuthMode::AnthropicOAuth { settings } => settings.resolve_bearer().await,
-        }
-    }
-
-    /// Extra per-request headers for this mode.
-    ///
-    /// Anthropic OAuth injects Claude Code-compatible request identity headers;
-    /// all other modes use the SDK defaults.
-    pub(crate) fn request_headers(&self) -> HashMap<String, String> {
-        match &self.auth {
-            // The beta-flag set depends on the model: the 1M-context beta is not
-            // granted to every model/tier (Haiku rejects it with a 400 on the
-            // standard subscription), so the headers are model-aware.
-            AuthMode::AnthropicOAuth { .. } => anthropic_oauth::request_headers(&self.model_id),
-            AuthMode::ApiKey { .. } | AuthMode::ChatGptOAuth { .. } => HashMap::new(),
-        }
-    }
-
-    /// The mandatory first `system` block for this mode, if any.
-    ///
-    /// `Some` only for Anthropic OAuth, whose Claude subscription path rejects
-    /// any request whose first system block is not exactly the Claude Code
-    /// identity (HTTP 429). Because the SDK sends `system` as a single string,
-    /// the decision adapter sets this as the system prompt and folds the role
-    /// prompt into the user turn. All other modes return `None` and keep the
-    /// role prompt as the system prompt.
-    pub(crate) fn required_system_identity(&self) -> Option<&'static str> {
-        match &self.auth {
-            AuthMode::AnthropicOAuth { .. } => Some(anthropic_oauth::CLAUDE_CODE_SYSTEM_IDENTITY),
-            AuthMode::ApiKey { .. } | AuthMode::ChatGptOAuth { .. } => None,
-        }
-    }
-
-    /// The request temperature for this mode. API-key (DeepSeek) pins `0.0` for
-    /// deterministic decisions; Codex reasoning models and Anthropic OAuth leave
-    /// temperature unset.
-    pub(crate) fn temperature(&self) -> Option<f32> {
-        match &self.auth {
-            AuthMode::ApiKey { .. } => Some(0.0),
-            AuthMode::ChatGptOAuth { .. } | AuthMode::AnthropicOAuth { .. } => None,
-        }
-    }
-
-    /// The reasoning effort for this mode. API-key and Anthropic OAuth requests
-    /// leave it unset; the codex reasoning models read effort from this field,
-    /// so Codex OAuth requests the **lowest supported** effort to keep one-shot
-    /// JSON decisions fast and cheap. Live validation found Codex models reject
-    /// `minimal` (supported values are `none`/`low`/`medium`/`high`/
-    /// `xhigh`), so Codex OAuth uses [`ThinkingLevel::Low`], not `Minimal`.
-    pub(crate) fn thinking_level(&self) -> Option<ThinkingLevel> {
-        match &self.auth {
-            AuthMode::ApiKey { .. } | AuthMode::AnthropicOAuth { .. } => None,
-            AuthMode::ChatGptOAuth { .. } => Some(ThinkingLevel::Low),
-        }
-    }
-
-    /// The reasoning effort for the **coding/triage workspace** agent, which does
-    /// real multi-step work (read/edit/verify) and benefits from maximal
-    /// reasoning — distinct from [`thinking_level`](Self::thinking_level), used by
-    /// the lightweight one-shot role-decision path. The codex reasoning models
-    /// read effort from `stream_options.thinking_level`, so under Codex OAuth the
-    /// coding agent requests the **highest** supported effort (`xhigh`). Non-codex
-    /// providers (DeepSeek API key, Anthropic OAuth) leave it unset, matching
-    /// `thinking_level`.
-    pub(crate) fn coding_thinking_level(&self) -> Option<ThinkingLevel> {
-        match &self.auth {
-            AuthMode::ApiKey { .. } | AuthMode::AnthropicOAuth { .. } => None,
-            AuthMode::ChatGptOAuth { .. } => Some(ThinkingLevel::XHigh),
-        }
-    }
-
     /// Builds an SDK [`Provider`] for this config.
     ///
     /// The returned provider authenticates per request from the bearer carried in
@@ -459,89 +329,19 @@ impl ProviderConfig {
             .map_err(|error| ProviderError::Build(error.to_string()))
     }
 
-    /// Builds the [`ModelEntry`] the SDK factory consumes.
-    fn model_entry(&self) -> ModelEntry {
-        let (api, reasoning, input, cost, context_window, max_tokens) = match &self.auth {
-            AuthMode::ChatGptOAuth { .. } => {
-                // Codex models are reasoning models; the codex route sends no
-                // explicit `max_output_tokens` (the model decides) and reads the
-                // reasoning effort from `stream_options.thinking_level`. A
-                // generous context window matches the gpt-5.x context.
-                (
-                    CODEX_RESPONSES_API,
-                    true,
-                    vec![InputType::Text],
-                    zero_cost(),
-                    400_000,
-                    0,
-                )
-            }
-            AuthMode::AnthropicOAuth { .. } => {
-                // Anthropic Opus 4.x is a reasoning-capable, multimodal model,
-                // but the initial OAuth path deliberately sends no explicit
-                // thinking level until live validation proves the SDK's legacy
-                // thinking-body shape is compatible with this model.
-                //
-                // `max_tokens` must not exceed the *model's* output ceiling: the
-                // API rejects an over-cap request with a 400
-                // `invalid_request_error`, and since the sub-agent tier runs a
-                // smaller model (e.g. Haiku, capped at 64K vs Opus' 128K) a
-                // single hard-coded cap would break every sub-agent request.
-                (
-                    ANTHROPIC_MESSAGES_API,
-                    true,
-                    vec![InputType::Text, InputType::Image],
-                    ModelCost {
-                        input: 15.0,
-                        output: 75.0,
-                        cache_read: 1.5,
-                        cache_write: 18.75,
-                    },
-                    anthropic_oauth::context_window_for(&self.model_id),
-                    anthropic_oauth::max_output_tokens_for(&self.model_id),
-                )
-            }
-            AuthMode::ApiKey { .. } => (
-                OPENAI_COMPLETIONS_API,
-                false,
-                vec![InputType::Text],
-                zero_cost(),
-                64_000,
-                8_192,
-            ),
-        };
-        let model = Model {
-            id: self.model_id.clone(),
-            name: self.model_id.clone(),
-            api: api.to_string(),
-            provider: self.provider_id.clone(),
-            base_url: self.base_url.clone(),
-            reasoning,
-            input,
-            cost,
-            context_window,
-            max_tokens,
-            headers: HashMap::new(),
-        };
-        ModelEntry {
-            model,
-            // The bearer flows through the agent's `stream_options.api_key`, not
-            // the entry, so it is not duplicated here.
-            api_key: None,
-            headers: HashMap::new(),
-            auth_header: true,
-            compat: None,
-            oauth_config: None,
-        }
+    /// Builds the SDK [`tongs::provider::ModelEntry`] the factory consumes.
+    fn model_entry(&self) -> tongs::provider::ModelEntry {
+        model_entry::build_model_entry(self)
     }
-}
 
-fn zero_cost() -> ModelCost {
-    ModelCost {
-        input: 0.0,
-        output: 0.0,
-        cache_read: 0.0,
-        cache_write: 0.0,
+    /// The (non-secret) provider id this config routes through.
+    pub(in crate::provider) fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// The resolved auth mode (read by the model-entry and bearer helpers).
+    pub(in crate::provider) fn auth(&self) -> &AuthMode {
+        &self.auth
     }
 }
 
@@ -556,70 +356,6 @@ impl fmt::Debug for ProviderConfig {
             .field("credential", &"<redacted>")
             .finish()
     }
-}
-
-/// Failure building provider wiring or resolving a credential.
-#[derive(Debug)]
-pub enum ProviderError {
-    /// The API key could not be read from env or the configured file.
-    KeyUnavailable(String),
-    /// The ChatGPT OAuth bearer could not be resolved or refreshed.
-    OAuthUnavailable(String),
-    /// The Anthropic OAuth bearer could not be resolved or refreshed.
-    AnthropicOAuthUnavailable(String),
-    /// The SDK provider factory rejected the model entry.
-    Build(String),
-}
-
-impl fmt::Display for ProviderError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProviderError::KeyUnavailable(message) => {
-                write!(formatter, "DeepSeek API key unavailable: {message}")
-            }
-            ProviderError::OAuthUnavailable(message) => {
-                write!(formatter, "ChatGPT OAuth unavailable: {message}")
-            }
-            ProviderError::AnthropicOAuthUnavailable(message) => {
-                write!(formatter, "Anthropic OAuth unavailable: {message}")
-            }
-            ProviderError::Build(message) => {
-                write!(formatter, "building LLM provider failed: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ProviderError {}
-
-/// Reads the API key from env or the configured file, redacting the value on
-/// error (only the path is ever surfaced).
-fn load_api_key() -> Result<String, ProviderError> {
-    if let Ok(key) = std::env::var(API_KEY_ENV) {
-        let trimmed = key.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    let path = std::env::var(API_KEY_PATH_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_KEY_PATH));
-    read_key_file(&path)
-}
-
-fn read_key_file(path: &Path) -> Result<String, ProviderError> {
-    let raw = std::fs::read_to_string(path).map_err(|error| {
-        ProviderError::KeyUnavailable(format!("reading {}: {error}", path.display()))
-    })?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(ProviderError::KeyUnavailable(format!(
-            "{} is empty",
-            path.display()
-        )));
-    }
-    Ok(trimmed.to_string())
 }
 
 #[cfg(test)]

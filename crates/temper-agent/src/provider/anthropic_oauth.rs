@@ -9,61 +9,29 @@
 //!
 //! This is intentionally anvil-local: the SDK provider remains unpatched. The
 //! Claude Code-compatible identity headers are supplied through
-//! `StreamOptions.headers`, which the SDK applies after its own defaults.
+//! `StreamOptions.headers`, which the SDK applies after its own defaults. The
+//! model-id selection, identity headers, and per-model limit tables live in the
+//! [`anthropic_model`] submodule and are re-exported here so callers see one
+//! `anthropic_oauth` surface.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use uuid::Uuid;
 
 use super::ProviderError;
 use super::oauth::AUTH_FILE_ENV;
 
-/// Env var overriding the Anthropic model id.
-pub const ANTHROPIC_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_MODEL";
-/// Env var overriding the Anthropic model id used for *sub-agents* (the
-/// read-only `investigate` fan-out). Defaults to [`DEFAULT_ANTHROPIC_SUBAGENT_MODEL`].
-pub const ANTHROPIC_SUBAGENT_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_SUBAGENT_MODEL";
+pub use super::anthropic_model::{
+    ANTHROPIC_MODEL_ENV, CLAUDE_CODE_SYSTEM_IDENTITY, DEFAULT_ANTHROPIC_MODEL,
+    anthropic_model_from_env, anthropic_subagent_model_from_env, context_window_for,
+    max_output_tokens_for, request_headers,
+};
+
 /// Env var overriding the Anthropic OAuth token endpoint (used by tests).
 const TOKEN_URL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_TOKEN_URL";
-
-/// Default Anthropic model targeted by the OAuth mode (overridable).
-///
-/// `claude-opus-4-8` is the model the standard subscription tier actually
-/// serves over this OAuth path: requesting `claude-fable-5` on a non-Mythos
-/// subscription returns `404 "Claude Fable 5 is not available. Please use
-/// Opus 4.8."`. The Claude Code CLI hides this by transparently falling back;
-/// anvil sends the literal id, so the default must be a model the tier grants.
-/// Override with `TEMPER_AGENTS_ANTHROPIC_MODEL` when a tier with Fable access
-/// is in use.
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
-/// Default Anthropic model for read-only `investigate` sub-agents.
-///
-/// Sub-agents do mechanical search-and-read work whose product is a focused
-/// report, not the final deliverable, so they run on a cheaper, faster model
-/// than the main agent — mirroring Claude Code, which routes its `Explore`
-/// investigation sub-agents to Haiku while keeping the orchestrator on Opus.
-/// On a large fan-out the sub-agents dominate token spend, so this is the main
-/// efficiency lever. `claude-haiku-4-5` is served on the standard subscription
-/// tier (verified live). Override with [`ANTHROPIC_SUBAGENT_MODEL_ENV`]; set it
-/// equal to the main model to disable tiering.
-pub const DEFAULT_ANTHROPIC_SUBAGENT_MODEL: &str = "claude-haiku-4-5";
-/// Identity line Anthropic's Claude **subscription OAuth** path requires as the
-/// first `system` block. Any request whose first system block is not exactly
-/// this line is rejected with a generic `429 rate_limit_error`
-/// (`{"message":"Error"}`), independent of `anthropic-beta` flags. The pinned
-/// SDK sends `system` as a single string and never injects this itself, so the
-/// decision adapter sends this identity as the system prompt and folds the role
-/// prompt into the user turn. Verified live against `claude-opus-4-8`:
-/// identity-only system → 200; role-only, arbitrary, or
-/// identity-prefixed-then-appended single string → 429; identity as a separate
-/// first array block → 200 (but the SDK cannot send an array `system`).
-pub const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
-    "You are Claude Code, Anthropic's official CLI for Claude.";
 /// Provider key under which the Anthropic credential lives in the auth file.
 const PROVIDER_KEY: &str = "anthropic";
 /// Compiled-in Anthropic OAuth refresh endpoint + public client id (matching the
@@ -74,88 +42,6 @@ const ANTHROPIC_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REFRESH_WINDOW_MS: i64 = 5 * 60 * 1000;
 /// Safety margin subtracted from a freshly issued token's lifetime.
 const EXPIRY_SAFETY_MS: i64 = 5 * 60 * 1000;
-
-/// Beta flags sent for every Anthropic OAuth model.
-const ANTHROPIC_BETA_BASE: &str = concat!(
-    "claude-code-20250219,",
-    "oauth-2025-04-20,",
-    "interleaved-thinking-2025-05-14,",
-    "context-management-2025-06-27,",
-    "prompt-caching-scope-2026-01-05,",
-    "advisor-tool-2026-03-01,",
-    "advanced-tool-use-2025-11-20,",
-    "effort-2025-11-24,",
-    "extended-cache-ttl-2025-04-11"
-);
-
-/// The 1M-context beta, appended only for models/tiers that grant it. Requesting
-/// it for a model the subscription does not entitle (e.g. Haiku on the standard
-/// tier) is rejected with `400 "The long context beta is not yet available for
-/// this subscription."`, which would fail every request on that model.
-const ANTHROPIC_BETA_LONG_CONTEXT: &str = "context-1m-2025-08-07";
-
-/// Whether `model_id` may request the 1M-context beta. Conservative: only the
-/// larger models (Opus/Sonnet) that this subscription serves with long context.
-/// The Haiku family is excluded (it 400s), as is any unknown id.
-fn supports_long_context_beta(model_id: &str) -> bool {
-    let id = model_id.to_ascii_lowercase();
-    id.contains("opus") || id.contains("sonnet")
-}
-
-/// The `anthropic-beta` header value for `model_id`.
-fn anthropic_beta_for(model_id: &str) -> String {
-    if supports_long_context_beta(model_id) {
-        format!("{ANTHROPIC_BETA_BASE},{ANTHROPIC_BETA_LONG_CONTEXT}")
-    } else {
-        ANTHROPIC_BETA_BASE.to_string()
-    }
-}
-
-/// Resolves the configured Anthropic model id (env override or default).
-pub fn anthropic_model_from_env() -> String {
-    std::env::var(ANTHROPIC_MODEL_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string())
-}
-
-/// The maximum `max_tokens` (output) the Anthropic API accepts for `model_id`.
-///
-/// The API returns a 400 `invalid_request_error` when `max_tokens` exceeds the
-/// model's ceiling, so this must track each model family. Opus/Sonnet 4.x serve
-/// up to 128K output; the Haiku 4.x family caps at 64K. Unknown ids fall back to
-/// the conservative 64K so a new/cheaper model never over-asks.
-pub fn max_output_tokens_for(model_id: &str) -> usize {
-    let id = model_id.to_ascii_lowercase();
-    if id.contains("haiku") {
-        64_000
-    } else if id.contains("opus") || id.contains("sonnet") {
-        128_000
-    } else {
-        64_000
-    }
-}
-
-/// The context-window size to declare for `model_id`. Models granted the
-/// 1M-context beta advertise 1M; the rest use the standard 200K window. This is
-/// a local SDK hint (used for budgeting), kept consistent with the beta flags.
-pub fn context_window_for(model_id: &str) -> usize {
-    if supports_long_context_beta(model_id) {
-        1_000_000
-    } else {
-        200_000
-    }
-}
-
-/// Resolves the Anthropic model id for sub-agents (env override or default).
-pub fn anthropic_subagent_model_from_env() -> String {
-    std::env::var(ANTHROPIC_SUBAGENT_MODEL_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_ANTHROPIC_SUBAGENT_MODEL.to_string())
-}
 
 /// Where the Anthropic OAuth credential is read from.
 #[derive(Clone)]
@@ -206,44 +92,6 @@ impl fmt::Debug for AnthropicOAuthSettings {
             .field("auth_file", &self.auth_file)
             .finish()
     }
-}
-
-/// Claude Code-compatible headers injected per Anthropic OAuth request.
-///
-/// `model_id` selects the `anthropic-beta` flag set: the 1M-context beta is sent
-/// only for models the subscription entitles (see [`anthropic_beta_for`]).
-pub fn request_headers(model_id: &str) -> HashMap<String, String> {
-    HashMap::from([
-        (
-            "x-client-request-id".to_string(),
-            Uuid::new_v4().to_string(),
-        ),
-        ("anthropic-beta".to_string(), anthropic_beta_for(model_id)),
-        ("anthropic-version".to_string(), "2023-06-01".to_string()),
-        (
-            "user-agent".to_string(),
-            "claude-cli/2.1.139 (external, sdk-cli)".to_string(),
-        ),
-        ("x-app".to_string(), "cli".to_string()),
-        (
-            "X-Claude-Code-Session-Id".to_string(),
-            Uuid::new_v4().to_string(),
-        ),
-        ("X-Stainless-Arch".to_string(), "x64".to_string()),
-        ("X-Stainless-Lang".to_string(), "js".to_string()),
-        ("X-Stainless-OS".to_string(), "Linux".to_string()),
-        (
-            "X-Stainless-Package-Version".to_string(),
-            "0.93.0".to_string(),
-        ),
-        ("X-Stainless-Retry-Count".to_string(), "0".to_string()),
-        ("X-Stainless-Runtime".to_string(), "node".to_string()),
-        (
-            "X-Stainless-Runtime-Version".to_string(),
-            "v24.3.0".to_string(),
-        ),
-        ("X-Stainless-Timeout".to_string(), "600".to_string()),
-    ])
 }
 
 /// A parsed `anthropic` OAuth entry plus the schema it was read in.
@@ -450,202 +298,5 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
-
-    struct Fixture {
-        settings: AnthropicOAuthSettings,
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.settings.auth_file);
-        }
-    }
-
-    fn far_future_ms() -> i64 {
-        now_ms() + 60 * 60 * 1000
-    }
-
-    fn write_fixture(contents: &str) -> Fixture {
-        let id = NEXT_FIXTURE.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!(
-            "anvil-temper-agent-anthropic-oauth-test-{}-{id}.json",
-            std::process::id()
-        ));
-        std::fs::write(&path, contents).expect("write fixture");
-        Fixture {
-            settings: AnthropicOAuthSettings { auth_file: path },
-        }
-    }
-
-    #[test]
-    fn reads_nodejs_schema_access_token() {
-        let contents = serde_json::json!({
-            "anthropic": {
-                "type": "oauth",
-                "access": "sk-ant-oat-node-access",
-                "refresh": "node-refresh",
-                "expires": far_future_ms(),
-            }
-        })
-        .to_string();
-        let fixture = write_fixture(&contents);
-        let entry = AnthropicEntry::read(&fixture.settings.auth_file).expect("read entry");
-        assert!(entry.nodejs_schema);
-        assert_eq!(entry.access, "sk-ant-oat-node-access");
-        assert!(!entry.is_expiring(now_ms()));
-    }
-
-    #[test]
-    fn reads_rust_schema_access_token() {
-        let contents = serde_json::json!({
-            "anthropic": {
-                "type": "o_auth",
-                "access_token": "sk-ant-oat-rust-access",
-                "refresh_token": "rust-refresh",
-                "expires": far_future_ms(),
-            }
-        })
-        .to_string();
-        let fixture = write_fixture(&contents);
-        let entry = AnthropicEntry::read(&fixture.settings.auth_file).expect("read entry");
-        assert!(!entry.nodejs_schema);
-        assert_eq!(entry.access, "sk-ant-oat-rust-access");
-    }
-
-    #[test]
-    fn missing_entry_is_an_error_with_login_hint() {
-        let contents = serde_json::json!({ "openai-codex": { "type": "oauth" } }).to_string();
-        let fixture = write_fixture(&contents);
-        let Err(error) = AnthropicEntry::read(&fixture.settings.auth_file) else {
-            panic!("expected missing entry error");
-        };
-        let rendered = format!("{error}");
-        assert!(matches!(error, ProviderError::AnthropicOAuthUnavailable(_)));
-        assert!(rendered.contains("anthropic"));
-        assert!(rendered.contains("pi /login anthropic"));
-    }
-
-    #[test]
-    fn write_back_preserves_schema_unknown_fields_and_other_entries() {
-        let contents = serde_json::json!({
-            "anthropic": {
-                "type": "oauth",
-                "access": "old-access",
-                "refresh": "old-refresh",
-                "extra": "keep-me",
-                "expires": 0,
-            },
-            "openai-codex": { "type": "oauth", "access": "keep-codex" }
-        })
-        .to_string();
-        let fixture = write_fixture(&contents);
-        let mut entry = AnthropicEntry::read(&fixture.settings.auth_file).expect("read entry");
-        entry.access = "new-access".to_string();
-        entry.refresh = "new-refresh".to_string();
-        entry.expires_ms = far_future_ms();
-        entry.sync_raw();
-        entry
-            .write_back(&fixture.settings.auth_file)
-            .expect("write back");
-
-        let reread: Value =
-            serde_json::from_str(&std::fs::read_to_string(&fixture.settings.auth_file).unwrap())
-                .unwrap();
-        let anthropic = &reread["anthropic"];
-        assert_eq!(anthropic["access"], "new-access");
-        assert_eq!(anthropic["refresh"], "new-refresh");
-        assert_eq!(anthropic["extra"], "keep-me");
-        assert!(anthropic.get("access_token").is_none());
-        assert_eq!(reread["openai-codex"]["access"], "keep-codex");
-    }
-
-    #[test]
-    fn errors_never_contain_token_bytes() {
-        let contents = serde_json::json!({
-            "anthropic": {
-                "type": "oauth",
-                "access": "sk-ant-oat-super-secret",
-                "expires": far_future_ms(),
-            }
-        })
-        .to_string();
-        let fixture = write_fixture(&contents);
-        let Err(error) = AnthropicEntry::read(&fixture.settings.auth_file) else {
-            panic!("expected missing-refresh error");
-        };
-        let rendered = format!("{error}");
-        assert!(rendered.contains("refresh token"));
-        assert!(!rendered.contains("sk-ant-oat-super-secret"));
-    }
-
-    #[test]
-    fn request_headers_match_claude_code_identity_without_tokens() {
-        let headers = request_headers(DEFAULT_ANTHROPIC_MODEL);
-        assert_eq!(
-            headers.get("anthropic-version").map(String::as_str),
-            Some("2023-06-01")
-        );
-        assert_eq!(headers.get("x-app").map(String::as_str), Some("cli"));
-        assert_eq!(
-            headers.get("user-agent").map(String::as_str),
-            Some("claude-cli/2.1.139 (external, sdk-cli)")
-        );
-        let beta = headers.get("anthropic-beta").expect("beta header");
-        // Opus (default) gets the full set including the 1M-context beta.
-        for flag in [
-            "claude-code-20250219",
-            "oauth-2025-04-20",
-            "context-1m-2025-08-07",
-            "effort-2025-11-24",
-        ] {
-            assert!(beta.contains(flag), "missing beta flag {flag}");
-        }
-        assert!(Uuid::parse_str(headers.get("x-client-request-id").unwrap()).is_ok());
-        assert!(Uuid::parse_str(headers.get("X-Claude-Code-Session-Id").unwrap()).is_ok());
-        let rendered = format!("{headers:?}");
-        assert!(!rendered.contains("sk-ant"));
-        assert!(!rendered.contains("refresh"));
-    }
-
-    #[test]
-    fn haiku_headers_omit_unentitled_long_context_beta() {
-        // The standard subscription rejects the 1M-context beta for Haiku with a
-        // 400; the sub-agent tier must not send it. Base flags stay.
-        let headers = request_headers(DEFAULT_ANTHROPIC_SUBAGENT_MODEL);
-        let beta = headers.get("anthropic-beta").expect("beta header");
-        assert!(
-            !beta.contains("context-1m"),
-            "haiku must not request the long-context beta: {beta}"
-        );
-        assert!(beta.contains("claude-code-20250219"));
-        assert!(beta.contains("effort-2025-11-24"));
-        // And its declared limits match what the API serves Haiku on this tier.
-        assert_eq!(
-            max_output_tokens_for(DEFAULT_ANTHROPIC_SUBAGENT_MODEL),
-            64_000
-        );
-        assert_eq!(
-            context_window_for(DEFAULT_ANTHROPIC_SUBAGENT_MODEL),
-            200_000
-        );
-    }
-
-    #[test]
-    fn request_headers_use_fresh_ids() {
-        let first = request_headers(DEFAULT_ANTHROPIC_MODEL);
-        let second = request_headers(DEFAULT_ANTHROPIC_MODEL);
-        assert_ne!(
-            first.get("x-client-request-id"),
-            second.get("x-client-request-id")
-        );
-        assert_ne!(
-            first.get("X-Claude-Code-Session-Id"),
-            second.get("X-Claude-Code-Session-Id")
-        );
-    }
-}
+#[path = "anthropic_oauth_tests.rs"]
+mod tests;

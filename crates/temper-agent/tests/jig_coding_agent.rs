@@ -1,6 +1,4 @@
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,6 +8,10 @@ use temper_agent::{
     CheckpointHook, ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
     WorkspaceWorkItem, run_coding_agent_native, run_coding_agent_native_with_hooks,
 };
+
+#[path = "support/coding_agent_workspace.rs"]
+mod coding_agent_workspace;
+use coding_agent_workspace::{REPO_DIR, TempCheckout, run_git, seed_repo};
 
 /// A jig-backed engineer turn driven by the native sans-IO agent loop
 /// (`run_coding_agent_native` → `temper_agent_core::run_sub_agent`) on the skein
@@ -125,76 +127,6 @@ fn workspace_context() -> WorkspaceContext {
             tool_constraints: vec!["Do not run git commit.".to_string()],
         },
     }
-}
-
-/// The single repo's sibling dir under the workspace root (cwd). A single-repo
-/// job is a one-entry manifest; the repo still lives in its own subdir, as in
-/// the coordinated multi-repo layout (ADR 0023).
-const REPO_DIR: &str = "demo";
-
-struct TempCheckout {
-    path: PathBuf,
-}
-
-impl TempCheckout {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "anvil-{name}-{}-{}",
-            std::process::id(),
-            unique_nanos()
-        ));
-        fs::create_dir_all(&path).expect("create temp checkout");
-        Self { path }
-    }
-
-    /// The workspace root — the agent's cwd.
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// The repo checkout, a subdir of the workspace root.
-    fn repo_path(&self) -> PathBuf {
-        self.path.join(REPO_DIR)
-    }
-
-    fn init_git(&self) {
-        fs::create_dir_all(self.repo_path()).expect("create repo dir");
-        fs::write(self.repo_path().join("README.md"), "# demo\n").expect("seed README");
-        self.git(&["init", "-b", "main"]);
-        self.git(&["config", "user.email", "jig@example.invalid"]);
-        self.git(&["config", "user.name", "Jig Test"]);
-        self.git(&["add", "README.md"]);
-        self.git(&["commit", "-m", "seed"]);
-    }
-
-    fn git(&self, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(self.repo_path())
-            .output()
-            .expect("run git");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).expect("git stdout is utf8")
-    }
-}
-
-impl Drop for TempCheckout {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-fn unique_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system time after epoch")
-        .as_nanos()
 }
 
 // ---------------------------------------------------------------------------
@@ -429,32 +361,4 @@ fn checkpoint_tool_fake() -> FakeLlm {
         }
     }))
     .expect("start fake LLM")
-}
-
-/// Seeds a git repo with one commit at `<root>/<dir>`.
-fn seed_repo(root: &Path, dir: &str) {
-    let repo = root.join(dir);
-    fs::create_dir_all(&repo).expect("create repo dir");
-    fs::write(repo.join("README.md"), format!("# {dir}\n")).expect("seed README");
-    run_git(&repo, &["init", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "jig@example.invalid"]);
-    run_git(&repo, &["config", "user.name", "Jig Test"]);
-    run_git(&repo, &["add", "README.md"]);
-    run_git(&repo, &["commit", "-m", "seed"]);
-}
-
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("git stdout is utf8")
 }
