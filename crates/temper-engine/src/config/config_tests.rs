@@ -121,7 +121,9 @@ fn defaults_apply_when_only_repo_and_role_given() {
     assert_eq!(config.repos, vec![repo("acme", "service")]);
     assert_eq!(config.roles, vec![role("engineer")]);
     assert_eq!(config.poll_cadence, Duration::from_secs(30));
-    assert_eq!(config.mechanical_cadence, None);
+    // The mechanical backstop is on by default; webhooks are the primary
+    // reaction path and this is the level-triggered safety net.
+    assert_eq!(config.mechanical_cadence, Some(Duration::from_secs(120)));
     assert_eq!(config.lease_ttl, Duration::from_secs(300));
     assert_eq!(config.daemon_id, "temper-daemon-1");
     assert_eq!(config.workflow_file, None);
@@ -256,21 +258,34 @@ fn invalid_cadence_is_rejected() {
 
 #[test]
 fn invalid_mechanical_cadence_is_rejected() {
-    for raw in ["nope", "0"] {
-        let error = parse(strings(&[
-            "--repo",
-            "a/b",
-            "--role",
-            "engineer",
-            "--mechanical-cadence-secs",
-            raw,
-        ]))
-        .unwrap_err();
-        assert!(
-            error.contains("--mechanical-cadence-secs"),
-            "error for {raw:?}: {error}"
-        );
-    }
+    let error = parse(strings(&[
+        "--repo",
+        "a/b",
+        "--role",
+        "engineer",
+        "--mechanical-cadence-secs",
+        "nope",
+    ]))
+    .unwrap_err();
+    assert!(
+        error.contains("--mechanical-cadence-secs"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn zero_mechanical_cadence_disables_the_backstop() {
+    // `0` is the explicit opt-out, not an error: the mechanical worker is not
+    // spawned.
+    let config = run(&[
+        "--repo",
+        "a/b",
+        "--role",
+        "engineer",
+        "--mechanical-cadence-secs",
+        "0",
+    ]);
+    assert_eq!(config.mechanical_cadence, None);
 }
 
 #[test]

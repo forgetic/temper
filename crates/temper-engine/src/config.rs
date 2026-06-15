@@ -14,6 +14,10 @@ use temper_workflow::RoleId;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 30;
+/// Mechanical backstop runs by default. Webhooks are the primary reaction path,
+/// so this level-triggered safety net uses a conservative cadence. Pass
+/// `--mechanical-cadence-secs 0` to disable the mechanical worker entirely.
+const DEFAULT_MECHANICAL_CADENCE_SECS: u64 = 120;
 const DEFAULT_LEASE_TTL_SECS: u64 = 300;
 const DEFAULT_DAEMON_ID: &str = "temper-daemon-1";
 
@@ -153,9 +157,10 @@ impl RawArgs {
             "--poll-cadence-secs",
             DEFAULT_POLL_CADENCE_SECS,
         )?;
-        let mechanical_cadence = parse_optional_positive_secs(
+        let mechanical_cadence = parse_disableable_secs(
             self.mechanical_cadence_secs.as_deref(),
             "--mechanical-cadence-secs",
+            DEFAULT_MECHANICAL_CADENCE_SECS,
         )?;
         let lease_ttl = parse_positive_secs(
             self.lease_ttl_secs.as_deref(),
@@ -252,9 +257,22 @@ fn parse_positive_secs(
     positive_duration(secs, flag)
 }
 
-fn parse_optional_positive_secs(raw: Option<&str>, flag: &str) -> Result<Option<Duration>, String> {
-    raw.map(|raw| parse_secs(raw, flag).and_then(|secs| positive_duration(secs, flag)))
-        .transpose()
+/// Parses a cadence that is on by default and can be explicitly disabled with
+/// `0`. An unset value falls back to `default_secs`; an explicit `0` yields
+/// `None` (disabled); any other value must be a positive number of seconds.
+fn parse_disableable_secs(
+    raw: Option<&str>,
+    flag: &str,
+    default_secs: u64,
+) -> Result<Option<Duration>, String> {
+    let secs = match raw {
+        Some(raw) => parse_secs(raw, flag)?,
+        None => default_secs,
+    };
+    match secs {
+        0 => Ok(None),
+        secs => Ok(Some(Duration::from_secs(secs))),
+    }
 }
 
 fn parse_secs(raw: &str, flag: &str) -> Result<u64, String> {

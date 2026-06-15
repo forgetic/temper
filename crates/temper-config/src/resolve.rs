@@ -28,6 +28,11 @@ use crate::schema::{Config, Credentials};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
 const DEFAULT_POLL_CADENCE_SECS: u64 = 30;
+/// Mechanical backstop runs by default. It is the level-triggered safety net
+/// (webhooks accelerate it), so the cadence is conservative rather than
+/// aggressive: a slow idle backstop. Set `mechanical_cadence_secs = 0` to
+/// disable the mechanical worker entirely.
+const DEFAULT_MECHANICAL_CADENCE_SECS: u64 = 120;
 const DEFAULT_LEASE_TTL_SECS: u64 = 300;
 const DEFAULT_DAEMON_ID: &str = "temper-daemon-1";
 const DEFAULT_WORKER_ID: &str = "temper-worker-1";
@@ -212,11 +217,20 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
             .unwrap_or(DEFAULT_POLL_CADENCE_SECS),
         "engine.poll_cadence_secs",
     )?;
-    let mechanical_cadence = config
+    // The mechanical backstop is on by default; webhooks are the primary
+    // reaction path and this backstop is the level-triggered safety net. An
+    // explicit `mechanical_cadence_secs = 0` disables the mechanical worker.
+    let mechanical_cadence = match config
         .engine
         .mechanical_cadence_secs
-        .map(|secs| positive_duration_secs(secs, "engine.mechanical_cadence_secs"))
-        .transpose()?;
+        .unwrap_or(DEFAULT_MECHANICAL_CADENCE_SECS)
+    {
+        0 => None,
+        secs => Some(positive_duration_secs(
+            secs,
+            "engine.mechanical_cadence_secs",
+        )?),
+    };
     let lease_ttl = positive_duration_secs(
         config
             .engine
