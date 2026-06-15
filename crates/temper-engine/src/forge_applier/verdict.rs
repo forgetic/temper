@@ -48,19 +48,18 @@ impl<F: Forge> ForgeApplier<F> {
             return;
         };
 
-        let job_context =
-            match serde_json::from_value::<temper_worker_protocol::JobContext>(
-                job.job_payload.clone(),
-            ) {
-                Ok(context) => context,
-                Err(error) => {
-                    eprintln!(
-                        "temper-daemon: forge applier could not parse JobContext for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
-                        job.job_id, job.repo, job.artifact.kind, job.artifact.item
-                    );
-                    return;
-                }
-            };
+        let job_context = match serde_json::from_value::<temper_worker_protocol::JobContext>(
+            job.job_payload.clone(),
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!(
+                    "temper-daemon: forge applier could not parse JobContext for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
+                    job.job_id, job.repo, job.artifact.kind, job.artifact.item
+                );
+                return;
+            }
+        };
         let Some(action) = job_context.action.as_deref() else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} verdict={}: missing action in JobContext",
@@ -74,33 +73,65 @@ impl<F: Forge> ForgeApplier<F> {
         let Some(role) = self.compiled.role(&role_id) else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: role not found in compiled workflow",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, action, verdict
+                job.job_id,
+                job.repo,
+                job.artifact.kind,
+                job.artifact.item,
+                job.role,
+                action,
+                verdict
             );
             return;
         };
         let Some(tool) = role.tools.iter().find(|tool| tool.name == action) else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: action not found in compiled workflow",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, action, verdict
+                job.job_id,
+                job.repo,
+                job.artifact.kind,
+                job.artifact.item,
+                job.role,
+                action,
+                verdict
             );
             return;
         };
         let Some(routed) = tool.outcomes.get(&verdict_id).cloned() else {
             eprintln!(
                 "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: verdict is not declared for action",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, action, verdict
+                job.job_id,
+                job.repo,
+                job.artifact.kind,
+                job.artifact.item,
+                job.role,
+                action,
+                verdict
             );
             return;
         };
 
         match job.artifact.kind.as_str() {
             "issue" => {
-                self.apply_issue_verdict(&job, &job_context, &role_id, action, &verdict, &routed, result)
-                    .await;
+                self.apply_issue_verdict(
+                    &job,
+                    &job_context,
+                    &role_id,
+                    action,
+                    &verdict,
+                    &routed,
+                    result,
+                )
+                .await;
             }
             "pull_request" => {
                 self.apply_pull_request_verdict(
-                    &job, &job_context, &role_id, action, &verdict, &routed, result,
+                    &job,
+                    &job_context,
+                    &role_id,
+                    action,
+                    &verdict,
+                    &routed,
+                    result,
                 )
                 .await;
             }
@@ -140,12 +171,8 @@ impl<F: Forge> ForgeApplier<F> {
             return;
         }
 
-        let mut context = verdict_execution_context(
-            &job_context.artifact_kind,
-            routed,
-            number,
-            result.body,
-        );
+        let mut context =
+            verdict_execution_context(&job_context.artifact_kind, routed, number, result.body);
         if !result.children.is_empty()
             && !self
                 .bind_create_issues_children(VerdictChildrenBinding {
@@ -224,7 +251,12 @@ impl<F: Forge> ForgeApplier<F> {
 
     pub(super) async fn execute_routed_verdict(&self, apply: RoutedVerdictApply<'_>) {
         match Executor::with_context(self.workflow.as_ref(), self.forge.as_ref(), apply.context)
-            .execute(apply.repository_id, apply.source, apply.routed, apply.role_id)
+            .execute(
+                apply.repository_id,
+                apply.source,
+                apply.routed,
+                apply.role_id,
+            )
             .await
         {
             Ok(_) => {}

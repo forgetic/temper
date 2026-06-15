@@ -123,8 +123,8 @@ fn enrich_work_item_job_skips_merged_correlated_implementation_pr() {
             number: issue.number,
         });
         let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
-            .expect("basic-delivery workflow parses");
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
         let workflow = workflow
             .validate()
             .expect("basic-delivery workflow validates");
@@ -262,8 +262,8 @@ fn enrich_work_item_job_skips_closed_issue() {
             number: issue.number,
         });
         let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
-            .expect("basic-delivery workflow parses");
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
         let workflow = workflow
             .validate()
             .expect("basic-delivery workflow validates");
@@ -316,8 +316,8 @@ fn enrich_work_item_job_enriches_open_pull_request_artifact_snapshot() {
             number: pull_request.number,
         });
         let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
-            .expect("basic-delivery workflow parses");
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
         let workflow = workflow
             .validate()
             .expect("basic-delivery workflow validates");
@@ -413,8 +413,8 @@ fn enrich_work_item_job_skips_closed_pull_request() {
             number: pull_request.number,
         });
         let mut job = job_from_work_item("ai/temper", &item);
-        let workflow: RawWorkflowSpec = serde_json::from_str(BASIC_DELIVERY_FIXTURE)
-            .expect("basic-delivery workflow parses");
+        let workflow: RawWorkflowSpec =
+            serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery workflow parses");
         let workflow = workflow
             .validate()
             .expect("basic-delivery workflow validates");

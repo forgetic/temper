@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::{
-    ConversationId, ConversationProfileId, ConversationReply, ConversationRequest, ConversationTurn,
-    InteractionError, InteractionProtocolError, InteractiveResponder, IssueProposal, Participant,
-    Proposal, ProposalId, ProposalKind, is_valid_proposal_slug,
+    ConversationId, ConversationProfileId, ConversationReply, ConversationRequest,
+    ConversationTurn, InteractionError, InteractionProtocolError, InteractiveResponder,
+    IssueProposal, Participant, Proposal, ProposalId, ProposalKind, is_valid_proposal_slug,
 };
 
 use super::proposal_id;

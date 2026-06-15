@@ -18,9 +18,9 @@ use async_trait::async_trait;
 use temper_forge::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
-    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,
-    PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery,
-    RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
+    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
+    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait]

@@ -121,7 +121,16 @@ pub async fn scan_role<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     role: &RoleId,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    query::scan_inner(forge, repo, workflow, compiled, now, Some(role), ScanMode::Normal).await
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Normal,
+    )
+    .await
 }
 
 /// Wake-triggered scan for one role. Queue scoping stays role-bounded while
@@ -134,7 +143,16 @@ pub async fn scan_role_wake<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     role: &RoleId,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    query::scan_inner(forge, repo, workflow, compiled, now, Some(role), ScanMode::Wake).await
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Wake,
+    )
+    .await
 }
 
 /// Scans active queues that declare mechanical automation metadata.
@@ -187,5 +205,14 @@ pub async fn scan_role_audit<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     role: &RoleId,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    query::scan_inner(forge, repo, workflow, compiled, now, Some(role), ScanMode::Audit).await
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Audit,
+    )
+    .await
 }

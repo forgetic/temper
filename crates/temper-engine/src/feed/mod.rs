@@ -299,11 +299,20 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
         match enrich_work_item_job(forge, repo, item, &mut job, workflow, compiled).await {
             Ok(EnrichOutcome::Enriched) => {
                 daemon
-                    .enqueue_job(job.job_id, job.role, job.repo, job.artifact, job.job_payload)
+                    .enqueue_job(
+                        job.job_id,
+                        job.role,
+                        job.repo,
+                        job.artifact,
+                        job.job_payload,
+                    )
                     .await;
                 enqueued += 1;
             }
-            Ok(skip @ (EnrichOutcome::SkipTerminalArtifact | EnrichOutcome::SkipExistingPullRequest)) => {
+            Ok(
+                skip @ (EnrichOutcome::SkipTerminalArtifact
+                | EnrichOutcome::SkipExistingPullRequest),
+            ) => {
                 eprintln!("{}", skip_log_line(&repo_label, role, item, skip));
             }
             Err(error) => eprintln!(

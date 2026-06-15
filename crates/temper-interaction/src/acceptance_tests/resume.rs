@@ -5,8 +5,8 @@ use serde_json::json;
 use crate::{InteractionError, Proposal, ProposalKind};
 
 use super::{
-    issue_reply, open_session, proposal_id, seeded, support_manifest, NeverResponder,
-    StaticResponder,
+    NeverResponder, StaticResponder, issue_reply, open_session, proposal_id, seeded,
+    support_manifest,
 };
 
 #[test]

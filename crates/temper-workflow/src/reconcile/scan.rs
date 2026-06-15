@@ -6,6 +6,7 @@
 //! backend loaders that gather snapshots before calling [`Reconciler::scan`]
 //! live in the sibling [`load`](super::load) module.
 
+use super::finding::{ReconcileFinding, ReconcileReport, RecoveryPolicy};
 use super::{ArtifactSnapshot, Reconciler};
 use crate::classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
@@ -15,7 +16,6 @@ use crate::journal::CommandRecord;
 use crate::metadata::parse_metadata_block;
 use crate::plan::{DependencyStatus, GateSignals, Planner, Postcondition, WorkflowEffect};
 use crate::relation::RelationKind;
-use super::finding::{ReconcileFinding, ReconcileReport, RecoveryPolicy};
 use crate::validated::{GateCondition, ValidatedTransition};
 use std::collections::HashSet;
 

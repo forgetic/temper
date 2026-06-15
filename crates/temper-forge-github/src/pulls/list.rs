@@ -4,9 +4,7 @@
 use super::*;
 use crate::types::PullRequestDto;
 use std::cmp::Ordering;
-use temper_forge::{
-    ItemSortField, PullRequestQuery, PullRequestState, SortDirection,
-};
+use temper_forge::{ItemSortField, PullRequestQuery, PullRequestState, SortDirection};
 
 impl<C: HttpClient> GitHubForge<C> {
     /// Lists pull requests in a repository, filtered and sorted per `query`.

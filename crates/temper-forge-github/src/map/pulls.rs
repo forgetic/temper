@@ -2,9 +2,7 @@
 //! including head/base branch resolution and the merge-method token.
 
 use super::{map_logins, normalize, sorted_dedup, sorted_dedup_users};
-use crate::ids::{
-    RepoCoord, format_pull_request_id, format_repository_id, format_user_id,
-};
+use crate::ids::{RepoCoord, format_pull_request_id, format_repository_id, format_user_id};
 use crate::types::{PrBranchDto, PrRepoDto, PullRequestDto};
 use temper_forge::{
     BranchRef, ItemNumber, MergeMethod, MergeRecord, PullRequest, PullRequestState, Version,

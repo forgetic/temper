@@ -23,7 +23,10 @@ pub(super) struct PendingTool {
 /// The effect declaration for a tool name, defaulting to write (serialize) for
 /// unknown tools — fail-closed, matching pi.
 pub(super) fn effects_for(effects: &BTreeMap<String, ToolEffects>, name: &str) -> ToolEffects {
-    effects.get(name).copied().unwrap_or_else(ToolEffects::write)
+    effects
+        .get(name)
+        .copied()
+        .unwrap_or_else(ToolEffects::write)
 }
 
 /// Partition tool calls into contiguous effect-compatible batches (front of the

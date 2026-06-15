@@ -29,9 +29,7 @@ mod core;
 mod protocol;
 
 pub use core::AgentMachine;
-pub use protocol::{
-    AgentCompletion, AgentEvent, AgentRequest, AgentStop, StreamDelta,
-};
+pub use protocol::{AgentCompletion, AgentEvent, AgentRequest, AgentStop, StreamDelta};
 
 #[cfg(test)]
 mod tests;

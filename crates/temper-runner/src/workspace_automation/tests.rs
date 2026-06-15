@@ -144,11 +144,10 @@ fn automation_verdict_routes_to_create_issues_and_fans_out_children() {
             kind: ArtifactKindId::new("epic"),
         };
 
-        let outcome = execute_workspace_automation(
-            &workflow, &compiled, &executors, &forge, &repo, &item,
-        )
-        .await
-        .expect("workspace automation routes to the breakdown");
+        let outcome =
+            execute_workspace_automation(&workflow, &compiled, &executors, &forge, &repo, &item)
+                .await
+                .expect("workspace automation routes to the breakdown");
 
         assert!(matches!(
             outcome,

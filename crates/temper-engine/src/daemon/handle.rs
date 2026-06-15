@@ -126,8 +126,14 @@ impl Daemon {
     /// Map a scanned `WorkItem` to a job and enqueue it.
     pub async fn enqueue_work_item(&self, repo: &str, item: &WorkItem) {
         let job = job_from_work_item(repo, item);
-        self.enqueue_job(job.job_id, job.role, job.repo, job.artifact, job.job_payload)
-            .await;
+        self.enqueue_job(
+            job.job_id,
+            job.role,
+            job.repo,
+            job.artifact,
+            job.job_payload,
+        )
+        .await;
     }
 
     /// Scans `repo` for `role`'s active queue work and enqueues each resulting

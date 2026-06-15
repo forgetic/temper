@@ -10,14 +10,12 @@ use std::time::Duration;
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_worker_protocol::{Artifact, JobProgress, JobResult, Poll, WorkerProtocolMessage};
 
-use crate::webhook::{
-    WebhookError, parse_verified_webhook, webhook_accepted_log_line,
-};
+use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 
 use super::machine::{DaemonMachine, DaemonRequest, PollWaiter};
 use super::protocol::{
-    assignment_log_line, is_poll_timeout, progress_log_line, protocol_response,
-    result_disposition, result_disposition_log_value, result_received_log_line, ResultDisposition,
+    ResultDisposition, assignment_log_line, is_poll_timeout, progress_log_line, protocol_response,
+    result_disposition, result_disposition_log_value, result_received_log_line,
 };
 
 impl DaemonMachine {

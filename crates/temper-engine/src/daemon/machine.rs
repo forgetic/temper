@@ -198,7 +198,10 @@ impl Machine for DaemonMachine {
             }
             #[cfg(test)]
             DaemonCompletion::QueuedJobs { reply } => {
-                vec![DaemonRequest::QueuedJobsReply(reply, self.core.queued_jobs())]
+                vec![DaemonRequest::QueuedJobsReply(
+                    reply,
+                    self.core.queued_jobs(),
+                )]
             }
         }
     }

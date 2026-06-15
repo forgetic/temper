@@ -2,15 +2,15 @@ use crate::FilesystemForge;
 use crate::dependencies::{add_pull_request_dependency, remove_pull_request_dependency};
 use crate::lists::{
     apply_assignee_update, apply_label_update, next_pull_request_number, normalize_string_set,
-    normalize_user_set, pull_request_matches_query, sort_pull_requests, sort_pull_requests_by_number,
-    update_pull_request_state,
+    normalize_user_set, pull_request_matches_query, sort_pull_requests,
+    sort_pull_requests_by_number, update_pull_request_state,
 };
 use crate::metadata::next_timestamp;
 use crate::record_ids::pull_request_id;
 use crate::validation::check_expected_version;
 use temper_forge::{
-    ChangeKind, CreatePullRequest, ForgeError, ForgeResult, ItemNumber, PullRequest,
-    PullRequestId, PullRequestQuery, PullRequestState, RepositoryId, UpdatePullRequest, Version,
+    ChangeKind, CreatePullRequest, ForgeError, ForgeResult, ItemNumber, PullRequest, PullRequestId,
+    PullRequestQuery, PullRequestState, RepositoryId, UpdatePullRequest, Version,
 };
 
 pub(crate) fn list_pull_requests(

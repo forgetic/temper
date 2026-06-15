@@ -3,8 +3,8 @@
 use serde_json::{Map, Value};
 use temper_forge::{Forge, Issue};
 use temper_interaction::{
-    AcceptedProposalTarget, CompiledProfileManifest, ConversationTranscriptRef, ForgeInteractionSession,
-    InteractiveResponder, ProposalId,
+    AcceptedProposalTarget, CompiledProfileManifest, ConversationTranscriptRef,
+    ForgeInteractionSession, InteractiveResponder, ProposalId,
 };
 
 use crate::interaction_service::{

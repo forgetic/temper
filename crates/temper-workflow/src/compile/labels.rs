@@ -5,7 +5,9 @@
 //! transition effects, and gate outcomes/conditions). Split from the compilation
 //! root to keep each file within the source-size budget.
 
-use crate::ids::{ArtifactKindId, GateId, LabelId, QueueId, StateDimensionId, StateId, TransitionId};
+use crate::ids::{
+    ArtifactKindId, GateId, LabelId, QueueId, StateDimensionId, StateId, TransitionId,
+};
 use crate::validated::{Effect, GateCondition, ValidatedWorkflow};
 
 /// The labels a workflow needs, each annotated with why it is needed.

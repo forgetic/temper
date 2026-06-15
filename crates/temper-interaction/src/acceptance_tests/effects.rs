@@ -3,8 +3,8 @@ use std::sync::Arc;
 use temper_forge::{Forge, UserId};
 
 use super::{
-    issue_reply, open_session, product_manifest, proposal_id, seeded, support_manifest,
-    StaticResponder,
+    StaticResponder, issue_reply, open_session, product_manifest, proposal_id, seeded,
+    support_manifest,
 };
 
 #[test]

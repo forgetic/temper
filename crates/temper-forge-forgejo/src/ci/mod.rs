@@ -207,7 +207,10 @@ impl<C: HttpClient> ForgejoForge<C> {
         };
 
         let tasks: Vec<ActionTaskDto> = self
-            .fetch_actions_array("list Forgejo Actions tasks", &fetch::tasks_path(&coord.repo))
+            .fetch_actions_array(
+                "list Forgejo Actions tasks",
+                &fetch::tasks_path(&coord.repo),
+            )
             .await?;
         let latest = latest_attempt(&tasks, coord.run);
         let target = Target::default();
