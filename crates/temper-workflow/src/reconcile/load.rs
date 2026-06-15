@@ -12,7 +12,7 @@ use crate::classify::{ArtifactSource, Classifier};
 use crate::dependency_state;
 use crate::journal::{CommandJournal, CommandRecord};
 use crate::plan::DependencyStatus;
-use temper_forge::{Forge, IssueQuery, ItemNumber, PullRequestQuery, RepositoryId};
+use temper_forge_model::{Forge, IssueQuery, ItemNumber, PullRequestQuery, RepositoryId};
 
 impl<P: RecoveryPolicy> Reconciler<'_, P> {
     /// Runs bounded reconciliation without listing the whole repository.

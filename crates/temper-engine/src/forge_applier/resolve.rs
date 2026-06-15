@@ -4,7 +4,7 @@
 //! paths: resolve a job's source issue, pull request, or repository, logging and
 //! returning `None` on malformed coordinates or lookup misses.
 
-use temper_forge::{Forge, Issue, ItemNumber, PullRequest, Repository, RepositoryPath};
+use temper_forge_model::{Forge, Issue, ItemNumber, PullRequest, Repository, RepositoryPath};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;

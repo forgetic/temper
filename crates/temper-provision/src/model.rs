@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use temper_forge::{
+use temper_forge_model::{
     AccessScope, CommitFile, RepositoryId, RepositoryPath, TokenScope, WebhookSpec,
 };
 use temper_runner::RoleBinding;
@@ -17,7 +17,7 @@ pub const BOT_USER: &str = "bot";
 /// A single label to upsert into the target repository.
 ///
 /// The orchestration upserts each of these via
-/// [`Forge::upsert_label`](temper_forge::Forge::upsert_label).
+/// [`Forge::upsert_label`](temper_forge_model::Forge::upsert_label).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LabelSpec {
     /// Label name to create or update.

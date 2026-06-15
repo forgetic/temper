@@ -16,7 +16,7 @@ fn planned(id: &str, number: u64) -> CommandRecord {
     CommandRecord::planned(
         CommandId::new(id),
         ArtifactSource::Issue {
-            number: temper_forge::ItemNumber::new(number),
+            number: temper_forge_model::ItemNumber::new(number),
         },
         TransitionId::new("claim_code"),
         RoleId::new("engineer"),

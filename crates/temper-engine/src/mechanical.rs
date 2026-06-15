@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use temper_forge::{ChangeHint, Forge, ForgeError};
+use temper_forge_model::{ChangeHint, Forge, ForgeError};
 use temper_runner::{
     MultiRepoMechanicalWorker, MultiRepoTickReport, Progress, RepositoryJournal, RepositorySet,
     WorkerError,

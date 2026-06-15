@@ -30,7 +30,7 @@ use temper_engine_service::{
     daemon_run_config, ensure_workflow_labels, forgejo_config, resolve_repositories,
     result_applier, role_feed_targets,
 };
-use temper_forge::RepositoryId;
+use temper_forge_model::RepositoryId;
 use temper_forge_forgejo::ForgejoForge;
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,

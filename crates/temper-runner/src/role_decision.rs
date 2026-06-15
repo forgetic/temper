@@ -6,7 +6,7 @@
 //! keeps the historical `temper_runner::...` exports and converts runtime
 //! workflow manifests into the protocol mirror before invoking a process.
 
-use temper_forge::ReviewDecision;
+use temper_forge_model::ReviewDecision;
 use temper_workflow::{Effect, RoleManifest, ToolManifest};
 
 pub use temper_process_protocol::workflow_role::{

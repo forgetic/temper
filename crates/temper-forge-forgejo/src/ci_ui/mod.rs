@@ -32,7 +32,7 @@ use crate::ids::{CiJobCoord, RepoCoord};
 use crate::{ForgejoForge, HttpClient};
 use map::live_run_to_jobs;
 use session::WebUiClient;
-use temper_forge::{CiJob, ForgeResult, RepositoryId};
+use temper_forge_model::{CiJob, ForgeResult, RepositoryId};
 
 /// Most-recent runs scraped per read. The Actions page lists runs newest-first,
 /// and a CI read only ever cares about the target's current head — the latest
@@ -93,7 +93,7 @@ pub(crate) async fn read_ci_jobs<C: HttpClient>(
         // `[Failure, Success]` for fail→pass) and stops a stray cancellation from
         // masking the real latest verdict in `CiStatus::from_jobs`.
         for job in live_run_to_jobs(repo, repo_id, run, &live, target) {
-            if job.conclusion == Some(temper_forge::CiJobConclusion::Cancelled) {
+            if job.conclusion == Some(temper_forge_model::CiJobConclusion::Cancelled) {
                 continue;
             }
             jobs.push(job);

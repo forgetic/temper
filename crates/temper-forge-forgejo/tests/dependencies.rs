@@ -9,7 +9,7 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, issue_id, pull_id};
-use temper_forge::{ForgeError, ItemNumber};
+use temper_forge_model::{ForgeError, ItemNumber};
 use temper_forge_forgejo::HttpMethod;
 
 /// Renders an issue DTO JSON body.

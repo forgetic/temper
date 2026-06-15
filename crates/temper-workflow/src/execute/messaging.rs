@@ -9,7 +9,7 @@
 use super::{ExecutionError, Executor, Loaded};
 use crate::ids::TransitionId;
 use crate::plan::WorkflowEffect;
-use temper_forge::{
+use temper_forge_model::{
     CreateComment, CreatePullRequestReview, Forge, RequestReviewers, ReviewDecision, UserId,
 };
 
@@ -88,7 +88,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
 
     async fn review_exists(
         &self,
-        id: &temper_forge::PullRequestId,
+        id: &temper_forge_model::PullRequestId,
         key: &str,
     ) -> Result<bool, ExecutionError> {
         let marker = review_marker(key);

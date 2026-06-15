@@ -3,7 +3,7 @@
 mod support;
 
 use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
-use temper_forge::{CiJobId, CiJobQuery, CiJobStatus, ItemNumber};
+use temper_forge_model::{CiJobId, CiJobQuery, CiJobStatus, ItemNumber};
 
 fn runs_envelope(run_id: u64, head_sha: &str) -> String {
     format!(
@@ -85,7 +85,7 @@ fn list_ci_jobs_by_commit_narrows_runs_with_head_sha() {
     assert_eq!(jobs[0].status, CiJobStatus::Completed);
     assert_eq!(
         jobs[0].conclusion,
-        Some(temper_forge::CiJobConclusion::Success)
+        Some(temper_forge_model::CiJobConclusion::Success)
     );
     assert_eq!(jobs[0].commit_sha, "abc123");
     assert_eq!(
@@ -202,7 +202,7 @@ fn get_ci_job_reads_the_job_endpoint() {
     assert_eq!(job.repo_id, repo_id());
     assert_eq!(job.name, "build");
     assert_eq!(job.status, CiJobStatus::Completed);
-    assert_eq!(job.conclusion, Some(temper_forge::CiJobConclusion::Failure));
+    assert_eq!(job.conclusion, Some(temper_forge_model::CiJobConclusion::Failure));
     assert!(job.pull_request_id.is_none());
 
     assert_eq!(
@@ -228,7 +228,7 @@ fn get_ci_job_rejects_foreign_id_shapes() {
 
     let error = block_on(forge.get_ci_job(&CiJobId::new("forgejo:acme/widgets:actions:1:2:3")))
         .unwrap_err();
-    assert!(matches!(error, temper_forge::ForgeError::InvalidRequest(_)));
+    assert!(matches!(error, temper_forge_model::ForgeError::InvalidRequest(_)));
     assert_eq!(client.call_count(), 0);
 }
 

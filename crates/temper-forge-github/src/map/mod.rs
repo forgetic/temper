@@ -1,7 +1,7 @@
-//! Pure conversions from GitHub DTOs into portable `temper_forge` models.
+//! Pure conversions from GitHub DTOs into portable `temper_forge_model` models.
 //!
 //! These functions contain no HTTP or state; they translate the lenient DTOs in
-//! [`crate::types`] into the domain types in [`temper_forge`]. Keeping mapping
+//! [`crate::types`] into the domain types in [`temper_forge_model`]. Keeping mapping
 //! pure makes the request/response plumbing in [`crate::pulls`] and
 //! [`crate::items`] thin and lets the conversions be unit-tested directly.
 //!
@@ -23,7 +23,7 @@ pub(crate) use issues::map_issue;
 pub(crate) use pulls::{map_pull_request, merge_method_token};
 pub(crate) use reviews::{map_review, review_event_token};
 
-use temper_forge::UserId;
+use temper_forge_model::UserId;
 
 /// Returns `None` for a missing or empty string, else the value unchanged.
 pub(super) fn non_empty(value: Option<String>) -> Option<String> {

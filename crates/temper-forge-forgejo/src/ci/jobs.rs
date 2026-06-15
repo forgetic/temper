@@ -6,7 +6,7 @@ use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id, format_pull_request_id
 use crate::types::{ActionRunDto, ActionTaskDto};
 use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobQuery, CiJobSortField, CiJobStatus, ItemNumber, PullRequestId,
     RepositoryId, SortDirection,
 };

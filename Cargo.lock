@@ -1337,9 +1337,9 @@ dependencies = [
  "temper-config",
  "temper-engine",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-provision",
  "temper-reference-delivery",
  "temper-testing",
@@ -1465,8 +1465,8 @@ dependencies = [
  "temper-engine",
  "temper-engine-io",
  "temper-engine-service",
- "temper-forge",
  "temper-forge-forgejo",
+ "temper-forge-model",
  "temper-reference-delivery",
  "temper-worker",
  "temper-worker-protocol",
@@ -1481,8 +1481,8 @@ dependencies = [
  "temper-cli-common",
  "temper-config",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-forgejo",
+ "temper-forge-model",
  "temper-provision",
  "temper-reference-delivery",
  "temper-workflow",
@@ -1512,8 +1512,8 @@ dependencies = [
  "sha2",
  "skein",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-runner",
  "temper-worker-protocol",
  "temper-worker-registry",
@@ -1538,21 +1538,10 @@ dependencies = [
  "temper-config",
  "temper-engine",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-forgejo",
+ "temper-forge-model",
  "temper-reference-delivery",
  "temper-workflow",
-]
-
-[[package]]
-name = "temper-forge"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]
@@ -1564,7 +1553,7 @@ dependencies = [
  "fs2",
  "serde",
  "serde_json",
- "temper-forge",
+ "temper-forge-model",
 ]
 
 [[package]]
@@ -1579,7 +1568,7 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-engine-io",
- "temper-forge",
+ "temper-forge-model",
  "temper-workflow",
  "thiserror",
 ]
@@ -1594,7 +1583,7 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-engine-io",
- "temper-forge",
+ "temper-forge-model",
  "thiserror",
 ]
 
@@ -1604,7 +1593,18 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
- "temper-forge",
+ "temper-forge-model",
+]
+
+[[package]]
+name = "temper-forge-model"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1616,8 +1616,8 @@ dependencies = [
  "serde",
  "serde_json",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-process-protocol",
  "thiserror",
 ]
@@ -1630,9 +1630,9 @@ dependencies = [
  "serde",
  "serde_json",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-interaction",
 ]
 
@@ -1650,9 +1650,9 @@ name = "temper-provision"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-reference-delivery",
  "temper-runner",
  "temper-workflow",
@@ -1666,8 +1666,8 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-forgejo",
+ "temper-forge-model",
  "temper-provision",
  "temper-reference-delivery",
  "temper-runner",
@@ -1681,7 +1681,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde_json",
- "temper-forge",
+ "temper-forge-model",
  "temper-runner",
  "temper-workflow",
 ]
@@ -1691,9 +1691,9 @@ name = "temper-reference-delivery-validator"
 version = "0.1.0"
 dependencies = [
  "temper-engine-io",
- "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-workflow",
 ]
 
@@ -1706,9 +1706,9 @@ dependencies = [
  "serde",
  "serde_json",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-process-protocol",
  "temper-testing",
  "temper-workflow",
@@ -1724,8 +1724,8 @@ dependencies = [
  "skein",
  "temper-engine",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-worker-protocol",
  "temper-workflow",
 ]
@@ -1744,10 +1744,10 @@ dependencies = [
  "skein",
  "temper-engine",
  "temper-engine-io",
- "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-forge-model",
  "temper-reference-delivery",
  "temper-runner",
  "temper-trigger-forgejo",
@@ -1764,7 +1764,7 @@ dependencies = [
  "hmac",
  "serde_json",
  "sha2",
- "temper-forge",
+ "temper-forge-model",
  "temper-runner",
  "temper-wake",
 ]
@@ -1776,7 +1776,7 @@ dependencies = [
  "serde_json",
  "skein",
  "temper-engine-io",
- "temper-forge",
+ "temper-forge-model",
  "temper-runner",
 ]
 
@@ -1840,9 +1840,9 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
+ "temper-forge-model",
 ]
 
 [[package]]

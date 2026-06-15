@@ -1,4 +1,4 @@
-//! The `temper_forge::Forge` trait implementation for [`ForgejoForge`].
+//! The `temper_forge_model::Forge` trait implementation for [`ForgejoForge`].
 //!
 //! This is the keystone that turns the backend's inherent methods into a usable
 //! [`Forge`] backend: every trait method delegates, one line each, to the
@@ -11,7 +11,7 @@
 //! [`crate::HttpClient`]), so `ForgejoForge<C>` satisfies `Forge: Send + Sync`.
 
 use crate::{ForgejoForge, HttpClient};
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeResult, Issue, IssueId, IssueQuery,
     ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestQuery,
@@ -224,8 +224,8 @@ const _: fn() = || {
 
 /// Compile-time proof that the production backend provides the full provisioning
 /// surface: [`Forge`] plus the two capability traits, hence
-/// [`ProvisioningForge`](temper_forge::ProvisioningForge).
+/// [`ProvisioningForge`](temper_forge_model::ProvisioningForge).
 const _: fn() = || {
-    fn is_provisioning_forge<T: temper_forge::ProvisioningForge>() {}
+    fn is_provisioning_forge<T: temper_forge_model::ProvisioningForge>() {}
     is_provisioning_forge::<ForgejoForge>();
 };

@@ -5,7 +5,7 @@
 //! marker-based issue lookup, and the rule that resolves which acceptance action
 //! handles a given proposal kind.
 
-use temper_forge::{Forge, Issue, IssueQuery, Repository};
+use temper_forge_model::{Forge, Issue, IssueQuery, Repository};
 
 use crate::ids::AcceptanceActionId;
 use crate::types::{ProposalId, ProposalKind};

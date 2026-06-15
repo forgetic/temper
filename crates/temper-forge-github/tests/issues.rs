@@ -3,7 +3,7 @@
 mod support;
 
 use support::{MockHttpClient, block_on, body_json, forge, forge_with, issue_id, repo_id};
-use temper_forge::{
+use temper_forge_model::{
     CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemNumber, UpdateIssue, UserId,
 };
 use temper_forge_github::{CasMode, HttpMethod};
@@ -147,7 +147,7 @@ fn get_issue_parses_backend_id() {
 
     // A foreign id shape is rejected without any HTTP call.
     let error =
-        block_on(forge.get_issue(&temper_forge::IssueId::new("forgejo:a/b:issue:1"))).unwrap_err();
+        block_on(forge.get_issue(&temper_forge_model::IssueId::new("forgejo:a/b:issue:1"))).unwrap_err();
     assert!(matches!(error, ForgeError::InvalidRequest(_)));
     assert_eq!(client.call_count(), 1);
 }

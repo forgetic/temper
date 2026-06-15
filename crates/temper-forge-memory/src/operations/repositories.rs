@@ -4,7 +4,7 @@ use crate::MemoryForge;
 use crate::ids::label_id;
 use crate::lists::{sort_labels, sort_repositories};
 use crate::util::{validate_create_repository, validate_upsert_label};
-use temper_forge::{
+use temper_forge_model::{
     ChangeKind, CreateRepository, ForgeError, ForgeResult, Label, Repository, RepositoryId,
     RepositoryPath, RepositoryQuery, UpsertLabel, User, UserId,
 };

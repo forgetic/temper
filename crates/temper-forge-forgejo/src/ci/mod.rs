@@ -8,7 +8,7 @@
 //! intentionally out of scope; the portable trait only needs structured status.
 //!
 //! These are inherent methods on [`ForgejoForge`] matching the
-//! [`temper_forge::Forge`] CI signatures; the trait is assembled once every
+//! [`temper_forge_model::Forge`] CI signatures; the trait is assembled once every
 //! phase's methods exist. See `docs/reference/forgejo-backend.md`.
 //!
 //! The orchestration (REST-then-web-UI fallback) lives here; the REST list/path
@@ -25,7 +25,7 @@ use crate::ids::{
 };
 use crate::types::{ActionRunDto, ActionTaskDto};
 use crate::{ForgejoForge, HttpClient};
-use temper_forge::{CiJob, CiJobId, CiJobQuery, ForgeError, ForgeResult, RepositoryId};
+use temper_forge_model::{CiJob, CiJobId, CiJobQuery, ForgeError, ForgeResult, RepositoryId};
 
 pub(crate) use jobs::map_status;
 use jobs::{latest_attempt, sort_jobs, task_to_job};

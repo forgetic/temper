@@ -3,7 +3,7 @@
 //! The [`ResultApplier`] trait impl for [`ForgeApplier`] and the step-progress
 //! checkpoint comments it records.
 
-use temper_forge::{CreateComment, Forge};
+use temper_forge_model::{CreateComment, Forge};
 use temper_worker_protocol::{JobProgress, JobResult, ResultStatus};
 
 use crate::InFlightJob;

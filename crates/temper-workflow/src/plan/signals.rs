@@ -19,7 +19,7 @@ use super::{DependencyStatus, queue::QueueQuery};
 use crate::ids::TransitionId;
 use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use std::collections::HashMap;
-use temper_forge::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
+use temper_forge_model::{CiJob, CiJobConclusion, CiJobStatus, PullRequestReviewStatus};
 
 /// Runtime signal categories a queue or transition may need.
 ///

@@ -8,7 +8,7 @@ mod support;
 use support::{
     MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with, issue_id, pull_id, repo_id,
 };
-use temper_forge::{
+use temper_forge_model::{
     CreateComment, CreateIssue, ForgeError, IssueQuery, IssueState, ItemListDetails, ItemNumber,
     ItemSort, ItemSortField, SortDirection, UpdateIssue, UserId, Version,
 };

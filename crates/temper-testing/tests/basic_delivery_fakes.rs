@@ -12,7 +12,7 @@
 //! without a live Forgejo run.
 
 use std::sync::Arc;
-use temper_forge::{Forge, IssueState, PullRequestState, UserId};
+use temper_forge_model::{Forge, IssueState, PullRequestState, UserId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{Progress, RoleWorker, Worker};
 use temper_workflow::{RoleId, parse_metadata_block};

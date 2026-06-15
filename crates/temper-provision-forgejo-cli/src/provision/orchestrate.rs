@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use temper_forge::{ItemNumber, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec};
+use temper_forge_model::{ItemNumber, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ROLE_PASSWORD};
 use temper_provision::{ProvisionPlan, Provisioned, resolve_intake_seed_token, seed_intake_issue};
 use temper_reference_delivery::{ci_seed_commits, repo_input, runner_config_for};

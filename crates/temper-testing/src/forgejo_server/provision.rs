@@ -29,7 +29,7 @@ use super::{ForgejoServer, ServerError};
 use crate::{runner_config, workflow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use temper_forge::RepositoryId;
+use temper_forge_model::RepositoryId;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_runner::RoleBinding;
 use temper_workflow::RoleId;
@@ -247,7 +247,7 @@ pub enum ProvisionError {
     /// A response was missing an expected field.
     Shape { what: String, detail: String },
     /// The async Forge backend rejected an operation (e.g. label upsert).
-    Forge(temper_forge::ForgeError),
+    Forge(temper_forge_model::ForgeError),
     /// The reusable Forgejo state-cache fixture failed.
     Fixture(ServerError),
 }
@@ -271,8 +271,8 @@ impl std::fmt::Display for ProvisionError {
 
 impl std::error::Error for ProvisionError {}
 
-impl From<temper_forge::ForgeError> for ProvisionError {
-    fn from(err: temper_forge::ForgeError) -> Self {
+impl From<temper_forge_model::ForgeError> for ProvisionError {
+    fn from(err: temper_forge_model::ForgeError) -> Self {
         ProvisionError::Forge(err)
     }
 }
@@ -502,7 +502,7 @@ async fn upsert_labels(
     owner: &str,
     name: &str,
 ) -> Result<RepositoryId> {
-    use temper_forge::{RepositoryPath, UpsertLabel};
+    use temper_forge_model::{RepositoryPath, UpsertLabel};
 
     let config = ForgejoConfig::new(base, admin_token).with_default_repo(owner, name);
     let forge = ForgejoForge::new(config);

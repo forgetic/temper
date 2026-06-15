@@ -9,7 +9,7 @@ use crate::ids::format_pull_request_id;
 use crate::map::map_issue;
 use crate::types::IssueDto;
 use std::cmp::Ordering;
-use temper_forge::{BranchRef, ItemSortField, PullRequestQuery, PullRequestState, SortDirection};
+use temper_forge_model::{BranchRef, ItemSortField, PullRequestQuery, PullRequestState, SortDirection};
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists pull requests in a repository, filtered and sorted per `query`.
@@ -175,7 +175,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         let number = issue.number;
         let state = if merge_state.unwrap_or(false) {
             PullRequestState::Merged
-        } else if issue.state == temper_forge::IssueState::Closed {
+        } else if issue.state == temper_forge_model::IssueState::Closed {
             PullRequestState::Closed
         } else {
             PullRequestState::Open
@@ -204,7 +204,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             requested_reviewers: Vec::new(),
             dependencies: Vec::new(),
             merge: None,
-            version: temper_forge::Version::INITIAL,
+            version: temper_forge_model::Version::INITIAL,
             created_at: issue.created_at,
             updated_at: issue.updated_at,
             closed_at: issue.closed_at,

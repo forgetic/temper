@@ -46,7 +46,7 @@
 //!
 //! Phase 6 added runtime execution ([`execute`]): an [`Executor`] loads fresh
 //! Forge state, re-plans a transition against it, applies the planned effects
-//! through the [`temper_forge::Forge`] trait, and verifies postconditions. It
+//! through the [`temper_forge_model::Forge`] trait, and verifies postconditions. It
 //! also offers idempotent create through correlation keys.
 //!
 //! Phase 7 added recovery: leases ([`lease`]) with a pure planner and a

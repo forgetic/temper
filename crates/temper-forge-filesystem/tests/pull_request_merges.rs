@@ -1,7 +1,7 @@
 mod support;
 
 use support::{TestRoot, block_on, pull_request, repository};
-use temper_forge::{
+use temper_forge_model::{
     Forge, ForgeError, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, UpdatePullRequest, UserId,
 };
@@ -111,7 +111,7 @@ fn merging_missing_pull_request_returns_not_found() {
     let forge = root.forge();
 
     let error = block_on(forge.merge_pull_request(
-        &temper_forge::PullRequestId::new("pull-request-repo-0000000000000001-0000000000009999"),
+        &temper_forge_model::PullRequestId::new("pull-request-repo-0000000000000001-0000000000009999"),
         merge_input(MergeMethod::Squash),
     ))
     .unwrap_err();

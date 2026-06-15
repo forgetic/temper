@@ -1,7 +1,7 @@
 use crate::FilesystemForge;
 use crate::metadata::Metadata;
 use std::path::{Path, PathBuf};
-use temper_forge::User;
+use temper_forge_model::User;
 
 impl FilesystemForge {
     /// Creates a backend rooted at `root`.

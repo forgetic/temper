@@ -1,7 +1,7 @@
 mod support;
 
 use support::{TestRoot, block_on, repository};
-use temper_forge::{Forge, ForgeError, Label, RepositoryId, UpsertLabel};
+use temper_forge_model::{Forge, ForgeError, Label, RepositoryId, UpsertLabel};
 
 fn label(name: &str, color: Option<&str>, description: Option<&str>) -> UpsertLabel {
     UpsertLabel {

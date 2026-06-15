@@ -2,7 +2,7 @@
 //! workflow state.
 
 use std::collections::BTreeSet;
-use temper_forge::{
+use temper_forge_model::{
     CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest,
     Repository, RepositoryId, UpdateIssue,
 };

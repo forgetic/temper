@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use temper_forge::{Forge, ForgeError, RepositoryId, UpsertLabel};
+use temper_forge_model::{Forge, ForgeError, RepositoryId, UpsertLabel};
 use temper_workflow::{CompiledWorkflow, RoleId};
 
 pub use in_process::InProcessStage;

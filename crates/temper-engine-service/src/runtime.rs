@@ -10,7 +10,7 @@ use temper_engine::{
     RepositorySet, RoleFeedMode, RoleFeedTarget, WebhookConfig, spawn_mechanical_backstop,
     spawn_poll_backstop,
 };
-use temper_forge::{RepositoryId, RepositoryPath};
+use temper_forge_model::{RepositoryId, RepositoryPath};
 use temper_forge_forgejo::ForgejoForge;
 use temper_workflow::{CompiledWorkflow, LeasePolicy, ValidatedWorkflow};
 

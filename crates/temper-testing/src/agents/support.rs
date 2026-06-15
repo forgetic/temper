@@ -1,4 +1,4 @@
-use temper_forge::Forge;
+use temper_forge_model::Forge;
 use temper_runner::{AgentError, RoleTools};
 use temper_workflow::{ArtifactSource, ExecutionError, TransitionId};
 
@@ -51,7 +51,7 @@ pub(super) async fn run_pull_request_create_or_ignore_stale<F: Forge + ?Sized>(
     transition: &str,
     effect_index: usize,
     correlation_key: String,
-    input: temper_forge::CreatePullRequest,
+    input: temper_forge_model::CreatePullRequest,
 ) -> Result<bool, AgentError> {
     match tools
         .run_with_pull_request_create_at(

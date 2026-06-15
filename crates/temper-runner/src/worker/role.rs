@@ -10,7 +10,7 @@ use crate::scan::{WorkItem, scan_role, scan_role_audit, scan_role_wake};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 use temper_workflow::{CompiledWorkflow, ExecutionContext, RoleId, ValidatedWorkflow};
 
 /// Per-role worker that scans active queues and delegates behavior to an agent.

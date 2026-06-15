@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
 
-use temper_forge::Forge;
+use temper_forge_model::Forge;
 
 /// Forge-backed applier for daemon-accepted worker results. See the module docs
 /// for the application semantics.

@@ -1,7 +1,7 @@
 //! Builders that turn a live session into profile-neutral API responses.
 
 use serde_json::{Map, Value};
-use temper_forge::{Forge, Issue};
+use temper_forge_model::{Forge, Issue};
 use temper_interaction::{
     AcceptedProposalTarget, CompiledProfileManifest, ConversationTranscriptRef,
     ForgeInteractionSession, InteractiveResponder, ProposalId,

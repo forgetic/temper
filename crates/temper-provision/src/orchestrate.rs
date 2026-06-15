@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_forge::{
+use temper_forge_model::{
     AccessGrant, CreateIssue, CreateRepository, Forge, ForgeAdmin, ForgeContent, NewUser,
     ProvisioningForge, RepoPermission, RepositoryId, UpsertLabel,
 };
@@ -140,7 +140,7 @@ async fn seed_intake(
     labels: &[String],
 ) -> Result<()> {
     let existing = forge
-        .list_issues(repo, temper_forge::IssueQuery::default())
+        .list_issues(repo, temper_forge_model::IssueQuery::default())
         .await?;
     if existing.iter().any(|issue| issue.title == seed.title) {
         return Ok(());
@@ -176,7 +176,7 @@ async fn ensure_identity(
     admin: &dyn ForgeAdmin,
     login: &str,
     password: &str,
-    scopes: &[temper_forge::TokenScope],
+    scopes: &[temper_forge_model::TokenScope],
 ) -> Result<RoleIdentity> {
     let email = role_email(login);
     admin
@@ -201,7 +201,7 @@ async fn grant_access(
     admin: &dyn ForgeAdmin,
     repo: &RepositoryId,
     login: &str,
-    access: temper_forge::AccessScope,
+    access: temper_forge_model::AccessScope,
 ) -> Result<()> {
     admin
         .grant_access(AccessGrant {

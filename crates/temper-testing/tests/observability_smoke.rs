@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use temper_forge::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
+use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_runner::{
     ActionDispatchEvent, MechanicalReconciliationEvent, RoleDecisionReplyEvent,

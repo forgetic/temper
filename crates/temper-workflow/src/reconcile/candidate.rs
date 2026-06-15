@@ -3,7 +3,7 @@ use crate::ArtifactTarget;
 use crate::classify::{ArtifactSource, Classifier};
 use crate::ids::{ArtifactKindId, LabelId};
 use crate::validated::{Effect, GateCondition, ValidatedTransition, ValidatedWorkflow};
-use temper_forge::{
+use temper_forge_model::{
     Forge, Issue, IssueQuery, IssueState, ItemListDetails, PullRequest, PullRequestQuery,
     PullRequestState, RepositoryId,
 };

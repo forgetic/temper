@@ -91,7 +91,7 @@ fn run_seed_only(args: &ProvisionArgs) -> Result<String, RunError> {
     let number = temper_engine_io::runtime::block_on_runtime_with(
         &runtime,
         move |_cx, _handle| async move {
-            use temper_forge::RepositoryPath;
+            use temper_forge_model::RepositoryPath;
             use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 
             let config = ForgejoConfig::new(&seed_args.base_url, &token)

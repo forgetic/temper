@@ -4,7 +4,7 @@ mod support;
 
 use support::crash::{CrashForge, ForgeOp};
 use support::{TestRoot, block_on, create_issue, new_repo, workflow};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, Forge, IssueQuery, IssueState, ItemListDetails,
     MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue,
     UserId,

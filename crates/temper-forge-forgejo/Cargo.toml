@@ -10,7 +10,7 @@ description = "Forgejo-backed Forge implementation (best-effort, offline-tested)
 async-trait.workspace = true
 skein.workspace = true
 chrono.workspace = true
-temper-forge = { path = "../temper-forge" }
+temper-forge-model = { path = "../temper-forge-model" }
 temper-engine-io = { path = "../temper-engine-io" }
 # Provisioning commits file contents via the Forgejo contents API, which accepts
 # base64-encoded bodies, and mints user tokens over HTTP Basic auth.

@@ -9,7 +9,7 @@ use crate::driver::{FixpointDriver, ManualClock, RunReport};
 use crate::{AgentRegistry, MechanicalWorker, RoleWorker, Worker};
 use async_trait::async_trait;
 use std::sync::Arc;
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 use temper_workflow::{CompiledWorkflow, InMemoryJournal, LeasePolicy, ValidatedWorkflow};
 
 /// Single-process stage over one shared backend store.

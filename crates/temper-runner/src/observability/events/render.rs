@@ -228,7 +228,7 @@ fn action_effect_count(action: &RecoveryAction) -> Option<usize> {
     }
 }
 
-fn source_parts(source: ArtifactSource) -> (&'static str, temper_forge::ItemNumber) {
+fn source_parts(source: ArtifactSource) -> (&'static str, temper_forge_model::ItemNumber) {
     match source {
         ArtifactSource::Issue { number } => ("issue", number),
         ArtifactSource::PullRequest { number } => ("pull_request", number),

@@ -1,4 +1,4 @@
-use temper_forge::{
+use temper_forge_model::{
     CommentId, ForgeError, ForgeResult, IssueId, ItemNumber, LabelId, PullRequestId, RepositoryId,
     ReviewId,
 };

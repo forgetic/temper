@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_forge::{CreatePullRequest, ItemNumber, RepositoryId};
+use temper_forge_model::{CreatePullRequest, ItemNumber, RepositoryId};
 use temper_worker_protocol::{JobContext, RepoOutcome};
 use temper_workflow::ArtifactKindId;
 
@@ -160,11 +160,11 @@ pub(super) fn coordinated_pr_pull_request_input(
     CreatePullRequest {
         title: format!("Implement #{coordinating_number}: {issue_title}"),
         body,
-        source: temper_forge::BranchRef {
+        source: temper_forge_model::BranchRef {
             repository_id: repo.clone(),
             branch: head_branch,
         },
-        target: temper_forge::BranchRef {
+        target: temper_forge_model::BranchRef {
             repository_id: repo,
             branch: base_branch,
         },

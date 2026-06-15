@@ -7,11 +7,11 @@ use crate::ids::{
     format_user_id,
 };
 use crate::types::{CommentDto, IssueDto, LabelDto, RepositoryDto, UserDto};
-use temper_forge::{Comment, Issue, IssueState, ItemNumber, Label, Repository, User, Version};
+use temper_forge_model::{Comment, Issue, IssueState, ItemNumber, Label, Repository, User, Version};
 
 /// Maps a Forgejo user DTO into a portable [`User`].
 ///
-/// The Forgejo login is both the portable [`UserId`](temper_forge::UserId) and
+/// The Forgejo login is both the portable [`UserId`](temper_forge_model::UserId) and
 /// the human-facing handle. Empty `full_name`/`email` strings (Forgejo's
 /// "unset" form) map to `None`, matching the reference backends' optional
 /// fields.
@@ -41,7 +41,7 @@ pub(crate) fn map_repository(dto: RepositoryDto) -> Repository {
 /// Maps a Forgejo label DTO into a portable [`Label`] scoped to `repo`.
 ///
 /// The numeric provider id becomes the prefixed opaque
-/// [`LabelId`](temper_forge::LabelId); empty color/description strings map to
+/// [`LabelId`](temper_forge_model::LabelId); empty color/description strings map to
 /// `None`.
 pub(crate) fn map_label(repo: &RepoCoord, dto: LabelDto) -> Label {
     Label {
@@ -107,7 +107,7 @@ pub(crate) fn map_issue(repo: &RepoCoord, dto: IssueDto) -> Issue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_forge::UserId;
+    use temper_forge_model::UserId;
 
     fn repo() -> RepoCoord {
         RepoCoord::new("acme", "widgets")

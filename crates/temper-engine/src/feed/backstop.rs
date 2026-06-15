@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use temper_engine_io::Spawner;
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};
 
 use crate::Daemon;

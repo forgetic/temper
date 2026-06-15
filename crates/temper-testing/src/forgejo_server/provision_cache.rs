@@ -12,7 +12,7 @@ use super::{ForgejoServer, ForgejoState};
 use crate::{runner_config, workflow};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use temper_forge::RepositoryId;
+use temper_forge_model::RepositoryId;
 
 /// Cached metadata for one initial reference-delivery Forgejo world.
 #[derive(Clone, Debug, Deserialize, Serialize)]

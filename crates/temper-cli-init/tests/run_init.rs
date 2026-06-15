@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use temper_cli_common::{LoadOptions, ScriptedPrompter};
 use temper_cli_init::{InitOptions, ProvisionOutcome, ProvisionRequest, Provisioner, run_init};
-use temper_forge::RepositoryId;
+use temper_forge_model::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
 use temper_workflow::RoleId;
 

@@ -6,7 +6,7 @@ use crate::Worker;
 use crate::trigger::{TriggerScheduler, WakeTarget};
 use chrono::{DateTime, Duration, Utc};
 use std::time::Instant;
-use temper_forge::{ChangeHint, ChangeSource, ChangeSourceEvent};
+use temper_forge_model::{ChangeHint, ChangeSource, ChangeSourceEvent};
 
 #[derive(Clone, Debug)]
 enum PollClock {

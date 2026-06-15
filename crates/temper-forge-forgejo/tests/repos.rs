@@ -5,7 +5,7 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, repo_id};
-use temper_forge::{
+use temper_forge_model::{
     CreateRepository, RepositoryPath, RepositoryQuery, RepositorySort, RepositorySortField,
     SortDirection, UpsertLabel, UserId,
 };
@@ -166,7 +166,7 @@ fn three_repo_body() -> String {
     )
 }
 
-fn names(repos: &[temper_forge::Repository]) -> Vec<String> {
+fn names(repos: &[temper_forge_model::Repository]) -> Vec<String> {
     repos.iter().map(|repo| repo.name.clone()).collect()
 }
 
@@ -358,7 +358,7 @@ fn create_repository_conflict_maps_to_already_exists() {
         description: None,
     };
     let error = block_on(forge.create_repository(input)).unwrap_err();
-    assert!(matches!(error, temper_forge::ForgeError::AlreadyExists(_)));
+    assert!(matches!(error, temper_forge_model::ForgeError::AlreadyExists(_)));
 }
 
 // --- labels -----------------------------------------------------------------
@@ -387,7 +387,7 @@ fn list_labels_maps_and_sorts_by_name() {
     assert_eq!(blocked.repo_id, repo_id());
     assert_eq!(
         blocked.id,
-        temper_forge::LabelId::new(format!("forgejo:{OWNER}/{REPO}:label:1"))
+        temper_forge_model::LabelId::new(format!("forgejo:{OWNER}/{REPO}:label:1"))
     );
     assert_eq!(blocked.color.as_deref(), Some("ff0000"));
     // An empty description maps to None.
@@ -420,7 +420,7 @@ fn upsert_label_creates_when_absent() {
     assert_eq!(label.name, "ready");
     assert_eq!(
         label.id,
-        temper_forge::LabelId::new(format!("forgejo:{OWNER}/{REPO}:label:7"))
+        temper_forge_model::LabelId::new(format!("forgejo:{OWNER}/{REPO}:label:7"))
     );
     assert_eq!(label.color.as_deref(), Some("00ff00"));
 

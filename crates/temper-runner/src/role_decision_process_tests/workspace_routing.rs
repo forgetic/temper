@@ -6,7 +6,7 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use temper_forge::{Forge, PullRequestQuery};
+use temper_forge_model::{Forge, PullRequestQuery};
 
 use crate::{
     Agent, CodingWorkspace, CodingWorkspaceError, CodingWorkspaceOutput, CodingWorkspaceRequest,

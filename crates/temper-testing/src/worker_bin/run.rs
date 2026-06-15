@@ -31,7 +31,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use temper_forge::{
+use temper_forge_model::{
     CreateRepository, Forge, ForgeError, RepositoryId, RepositoryPath, UpsertLabel, User,
 };
 use temper_forge_filesystem::FilesystemForge;

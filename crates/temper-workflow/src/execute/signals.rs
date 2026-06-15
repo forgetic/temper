@@ -3,7 +3,7 @@ use crate::ClassifiedArtifact;
 use crate::classify::ArtifactSource;
 use crate::dependency_state;
 use crate::plan::{CiStatus, GateSignals, ReviewStatus, SignalNeeds};
-use temper_forge::{CiJobQuery, Forge, PullRequestReviewStatus, RepositoryId};
+use temper_forge_model::{CiJobQuery, Forge, PullRequestReviewStatus, RepositoryId};
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
     /// Reads runtime gate signals for a target from fresh Forge state.

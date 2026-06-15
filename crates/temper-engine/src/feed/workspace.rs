@@ -8,7 +8,7 @@
 //! worker-side agent reads, skipping artifacts that have reached a terminal
 //! state.
 
-use temper_forge::{
+use temper_forge_model::{
     Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest, PullRequestState, Repository,
     RepositoryId, RepositoryPath,
 };

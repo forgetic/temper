@@ -8,14 +8,14 @@
 use crate::ids::repository_id;
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
-use temper_forge::{
+use temper_forge_model::{
     CiJob, Comment, ForgeError, ForgeResult, Issue, IssueId, PullRequest, PullRequestId,
     RepoPermission, Repository, RepositoryId, RepositoryPath, User, UserId, WebhookSpec,
 };
 
 /// A provisioned user account recorded by the in-memory backend.
 ///
-/// This mirrors [`NewUser`](temper_forge::NewUser) but is a plain, cloneable
+/// This mirrors [`NewUser`](temper_forge_model::NewUser) but is a plain, cloneable
 /// record used by the test-only read-back surface
 /// ([`MemoryForge::provisioned_users`](crate::MemoryForge::provisioned_users)).
 /// `password` is retained verbatim so tests can assert it; production backends
@@ -41,12 +41,12 @@ pub(crate) struct State {
     clock_tick: u64,
     next_repository_number: u64,
     repositories: Vec<Repository>,
-    labels: BTreeMap<String, Vec<temper_forge::Label>>,
+    labels: BTreeMap<String, Vec<temper_forge_model::Label>>,
     issues: BTreeMap<String, Vec<Issue>>,
     pull_requests: BTreeMap<String, Vec<PullRequest>>,
     issue_comments: BTreeMap<String, Vec<Comment>>,
     pull_request_comments: BTreeMap<String, Vec<Comment>>,
-    pull_request_reviews: BTreeMap<String, Vec<temper_forge::PullRequestReview>>,
+    pull_request_reviews: BTreeMap<String, Vec<temper_forge_model::PullRequestReview>>,
     ci_jobs: BTreeMap<String, Vec<CiJob>>,
     provisioned_users: BTreeMap<String, MemUser>,
     tokens: BTreeMap<String, Vec<String>>,
@@ -158,11 +158,11 @@ impl State {
             .cloned()
     }
 
-    pub(crate) fn labels_mut(&mut self, repo_id: &RepositoryId) -> &mut Vec<temper_forge::Label> {
+    pub(crate) fn labels_mut(&mut self, repo_id: &RepositoryId) -> &mut Vec<temper_forge_model::Label> {
         self.labels.entry(repo_id.as_str().to_string()).or_default()
     }
 
-    pub(crate) fn labels(&self, repo_id: &RepositoryId) -> Vec<temper_forge::Label> {
+    pub(crate) fn labels(&self, repo_id: &RepositoryId) -> Vec<temper_forge_model::Label> {
         self.labels
             .get(repo_id.as_str())
             .cloned()
@@ -245,7 +245,7 @@ impl State {
     pub(crate) fn pull_request_reviews_mut(
         &mut self,
         id: &PullRequestId,
-    ) -> &mut Vec<temper_forge::PullRequestReview> {
+    ) -> &mut Vec<temper_forge_model::PullRequestReview> {
         self.pull_request_reviews
             .entry(id.as_str().to_string())
             .or_default()
@@ -254,7 +254,7 @@ impl State {
     pub(crate) fn pull_request_reviews(
         &self,
         id: &PullRequestId,
-    ) -> Vec<temper_forge::PullRequestReview> {
+    ) -> Vec<temper_forge_model::PullRequestReview> {
         self.pull_request_reviews
             .get(id.as_str())
             .cloned()
@@ -273,7 +273,7 @@ impl State {
     }
 
     /// Finds a CI job by id across every repository.
-    pub(crate) fn find_ci_job(&self, id: &temper_forge::CiJobId) -> Option<CiJob> {
+    pub(crate) fn find_ci_job(&self, id: &temper_forge_model::CiJobId) -> Option<CiJob> {
         self.ci_jobs
             .values()
             .flat_map(|jobs| jobs.iter())

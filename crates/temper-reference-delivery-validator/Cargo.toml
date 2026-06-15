@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Operator-facing reference-delivery Forge-state validator."
 
 [dependencies]
-temper-forge = { path = "../temper-forge" }
+temper-forge-model = { path = "../temper-forge-model" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 temper-workflow = { path = "../temper-workflow" }
 temper-engine-io = { path = "../temper-engine-io" }

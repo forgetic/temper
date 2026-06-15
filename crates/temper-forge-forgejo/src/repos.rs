@@ -1,7 +1,7 @@
 //! Identity, repository, and label operations.
 //!
 //! These are inherent methods on [`ForgejoForge`] mirroring the
-//! [`temper_forge::Forge`] identity/repository/label surface; the trait
+//! [`temper_forge_model::Forge`] identity/repository/label surface; the trait
 //! implementation is assembled once every phase's methods exist. Pure DTO→model
 //! conversions live in [`crate::map`]. See `docs/reference/forgejo-backend.md`.
 
@@ -10,7 +10,7 @@ use crate::map::{map_label, map_repository, map_user};
 use crate::types::{LabelDto, RepositoryDto, UserDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
-use temper_forge::{
+use temper_forge_model::{
     CreateRepository, ForgeError, ForgeResult, Label, Repository, RepositoryId, RepositoryPath,
     RepositoryQuery, RepositorySortField, SortDirection, UpsertLabel, User, UserId,
 };

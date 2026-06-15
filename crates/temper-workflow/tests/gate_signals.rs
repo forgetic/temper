@@ -4,7 +4,7 @@ mod support;
 
 use support::crash::{CrashForge, ForgeOp};
 use support::{TestRoot, block_on, create_pr, new_repo, seed_ci, submit_review, workflow};
-use temper_forge::{
+use temper_forge_model::{
     CiJobConclusion, Forge, PullRequestUpdateState, ReviewDecision, UpdatePullRequest,
 };
 use temper_workflow::{ArtifactSource, RoleId, SignalNeeds, TransitionId};

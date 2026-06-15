@@ -4,7 +4,7 @@ use crate::lists::{
 };
 use crate::metadata::next_timestamp;
 use crate::record_ids::pull_request_review_id;
-use temper_forge::{
+use temper_forge_model::{
     CreatePullRequestReview, ForgeError, ForgeResult, PullRequest, PullRequestId,
     PullRequestReview, RequestReviewers,
 };

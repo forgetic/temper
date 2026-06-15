@@ -55,7 +55,7 @@ impl DependencyStatus {
     }
 
     /// Builds a status from the artifact references whose work has landed.
-    /// Bare [`temper_forge::ItemNumber`] inputs remain same-repository
+    /// Bare [`temper_forge_model::ItemNumber`] inputs remain same-repository
     /// references for backward-compatible call sites.
     pub fn landed<I, T>(items: I) -> Self
     where

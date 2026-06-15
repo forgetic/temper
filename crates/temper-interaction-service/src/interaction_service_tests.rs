@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use temper_forge::{
+use temper_forge_model::{
     CreateRepository, Forge, Repository, RepositoryPath, UpsertLabel, User, UserId,
 };
 use temper_forge_memory::MemoryForge;

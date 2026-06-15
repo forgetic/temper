@@ -7,7 +7,7 @@ use temper_engine::{
     Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig, WebhookError, handle_webhook,
     webhook_signature,
 };
-use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
+use temper_forge_model::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
 use temper_forge_memory::MemoryForge;
 use temper_worker_protocol::{
     Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,

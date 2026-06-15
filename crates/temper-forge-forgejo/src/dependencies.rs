@@ -7,7 +7,7 @@
 //! provider-specific adaptation documented in `docs/reference/forgejo-backend.md`.
 //!
 //! These are inherent methods on [`ForgejoForge`] mirroring the
-//! [`temper_forge::Forge`] dependency-link surface; the trait implementation is
+//! [`temper_forge_model::Forge`] dependency-link surface; the trait implementation is
 //! assembled once every phase's methods exist. The endpoint shapes (the
 //! `{ "index": <number>, "owner": …, "repo": … }` add/remove payload — Forgejo
 //! resolves the target by `(owner, repo, index)`, not `index` alone — and the
@@ -18,7 +18,7 @@ use crate::ids::{RepoCoord, parse_issue_id, parse_pull_request_id};
 use crate::pulls::response_validator;
 use crate::types::{DependencyRefDto, IssueDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
-use temper_forge::{
+use temper_forge_model::{
     ForgeError, ForgeResult, Issue, IssueId, ItemNumber, PullRequest, PullRequestId,
 };
 

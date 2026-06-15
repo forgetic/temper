@@ -10,7 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use temper_forge::{
+use temper_forge_model::{
     ChangeHint, ChangeKind, ChangeSource, ChangeSourceEvent, ItemNumber, PullRequest, Repository,
     RepositoryId, RepositoryPath,
 };
@@ -140,7 +140,7 @@ impl FilesystemForge {
         let _ = self.append_hint(&hint);
     }
 
-    fn append_hint(&self, hint: &ChangeHint) -> temper_forge::ForgeResult<()> {
+    fn append_hint(&self, hint: &ChangeHint) -> temper_forge_model::ForgeResult<()> {
         fs::create_dir_all(self.root()).map_err(|error| {
             backend_error(
                 format!("create storage root {}", self.root().display()),

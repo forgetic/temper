@@ -5,7 +5,7 @@ mod render;
 
 use std::time::Duration;
 
-use temper_forge::RepositoryId;
+use temper_forge_model::RepositoryId;
 use temper_workflow::{ReconcileFinding, RecoveryAction, TransitionId, WorkflowEffect};
 
 use super::WorkItemIdentity;
@@ -93,14 +93,14 @@ pub struct MechanicalReconciliationEvent<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_forge::ItemNumber;
+    use temper_forge_model::ItemNumber;
     use temper_workflow::{
         ArtifactKindId, ArtifactSource, ExecutionError, LabelId, Postcondition, QueueId, RoleId,
     };
 
     fn identity() -> WorkItemIdentity {
         WorkItemIdentity::new(
-            &temper_forge::RepositoryId::new("forgejo:acme/service"),
+            &temper_forge_model::RepositoryId::new("forgejo:acme/service"),
             &RoleId::new("engineer"),
             &QueueId::new("ready"),
             ArtifactSource::Issue {

@@ -14,7 +14,7 @@ use crate::ids::{
 use crate::types::{WorkflowJobDto, WorkflowJobsEnvelopeDto, WorkflowRunsEnvelopeDto};
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use chrono::{DateTime, Utc};
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobSortField, CiJobStatus, ForgeResult,
     PullRequestId, RepositoryId, SortDirection,
 };

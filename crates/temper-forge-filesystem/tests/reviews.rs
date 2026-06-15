@@ -1,7 +1,7 @@
 mod support;
 
 use support::{TestRoot, block_on, pull_request, repository};
-use temper_forge::{
+use temper_forge_model::{
     CreatePullRequestReview, Forge, ForgeError, PullRequestId, PullRequestReviewStatus,
     RequestReviewers, ReviewDecision, User, UserId,
 };

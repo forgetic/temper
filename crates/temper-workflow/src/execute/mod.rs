@@ -59,7 +59,7 @@
 //! [`GateSignals`](crate::plan::GateSignals). Dependency gates are fed by native
 //! dependency targets (closed issues or merged pull requests), CI gate/queue
 //! conditions are fed by native CI jobs from
-//! [`Forge::list_ci_jobs`](temper_forge::Forge::list_ci_jobs) (see
+//! [`Forge::list_ci_jobs`](temper_forge_model::Forge::list_ci_jobs) (see
 //! [`CiStatus::from_jobs`](crate::plan::CiStatus::from_jobs), ADR 0014, and ADR
 //! 0017), and review gates are fed by requested reviewers plus native review
 //! events (ADR 0016).
@@ -107,7 +107,7 @@ use crate::ids::{RoleId, TransitionId};
 use crate::plan::TransitionPlan;
 use crate::validated::ValidatedWorkflow;
 use error::classify_plan_error;
-use temper_forge::{Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId};
+use temper_forge_model::{Forge, IssueId, PullRequestId, PullRequestState, RepositoryId, UserId};
 
 /// A loaded Forge artifact with the handle needed to mutate it.
 enum Loaded {

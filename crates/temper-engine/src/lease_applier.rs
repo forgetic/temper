@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use temper_forge::{Forge, ItemNumber, RepositoryPath};
+use temper_forge_model::{Forge, ItemNumber, RepositoryPath};
 use temper_worker_protocol::JobProgress;
 use temper_worker_protocol::JobResult;
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
@@ -110,7 +110,7 @@ impl<F: Forge + 'static> ResultApplier for LeaseApplier<F> {
 async fn resolve_target<F: Forge + ?Sized>(
     forge: &F,
     job: &InFlightJob,
-) -> Option<(temper_forge::RepositoryId, ArtifactSource)> {
+) -> Option<(temper_forge_model::RepositoryId, ArtifactSource)> {
     let (owner, name) = job.repo.split_once('/')?;
 
     let repository = match forge

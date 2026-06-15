@@ -1,7 +1,7 @@
 //! On-disk provisioning records and their read/write helpers.
 //!
-//! These back the [`ForgeContent`](temper_forge::ForgeContent) and
-//! [`ForgeAdmin`](temper_forge::ForgeAdmin) capabilities. Store-global records
+//! These back the [`ForgeContent`](temper_forge_model::ForgeContent) and
+//! [`ForgeAdmin`](temper_forge_model::ForgeAdmin) capabilities. Store-global records
 //! (users, tokens, org Owners-team membership) live at the store root; the
 //! repository-scoped records (webhooks, collaborator grants, branches, the
 //! CI-enabled marker, and committed content) live under
@@ -14,11 +14,11 @@ use crate::errors::backend_error;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use temper_forge::{ForgeError, ForgeResult, RepoPermission, RepositoryId, WebhookEvents};
+use temper_forge_model::{ForgeError, ForgeResult, RepoPermission, RepositoryId, WebhookEvents};
 
 /// On-disk provisioned-user record.
 ///
-/// Mirrors [`NewUser`](temper_forge::NewUser) and the in-memory `MemUser`.
+/// Mirrors [`NewUser`](temper_forge_model::NewUser) and the in-memory `MemUser`.
 /// `password` is retained verbatim so provisioning tests can assert it; this is
 /// a development/test backend only.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,7 +33,7 @@ pub struct UserRecord {
 
 /// On-disk webhook record.
 ///
-/// Mirrors [`WebhookSpec`](temper_forge::WebhookSpec) (which is not itself
+/// Mirrors [`WebhookSpec`](temper_forge_model::WebhookSpec) (which is not itself
 /// serializable, to keep its secret out of `Debug`). `secret` is retained
 /// verbatim; this is a development/test backend only.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

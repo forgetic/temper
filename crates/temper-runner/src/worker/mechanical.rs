@@ -10,7 +10,7 @@ use crate::scan::targeted_automated_work_items;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_forge::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
+use temper_forge_model::{ChangeKind, Forge, ForgeError, ItemNumber, RepositoryId};
 use temper_workflow::{
     Applier, ApplyOutcome, ArtifactSnapshot, CompiledWorkflow, DefaultRecoveryPolicy, Executor,
     LeaseManager, LeasePolicy, ReconciliationMode, RecoveryPolicy, ValidatedWorkflow,
@@ -121,13 +121,13 @@ where
     }
 
     /// Repository path configured for this single-repository worker.
-    pub async fn repository_path(&self) -> Result<temper_forge::RepositoryPath, WorkerError> {
+    pub async fn repository_path(&self) -> Result<temper_forge_model::RepositoryPath, WorkerError> {
         let repository = self
             .forge
             .get_repository(self.repo)
             .await?
             .ok_or_else(|| ForgeError::NotFound(format!("repository {}", self.repo)))?;
-        Ok(temper_forge::RepositoryPath::new(
+        Ok(temper_forge_model::RepositoryPath::new(
             repository.owner,
             repository.name,
         ))

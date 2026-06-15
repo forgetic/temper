@@ -61,11 +61,11 @@ pub struct ForgejoProvisioner;
 
 /// Token scopes role workers need for the reference-delivery demo (the same set
 /// the dissolved Forgejo provisioning adapter emitted).
-const ROLE_TOKEN_SCOPES: &[temper_forge::TokenScope] = &[
-    temper_forge::TokenScope::WriteRepository,
-    temper_forge::TokenScope::WriteIssue,
-    temper_forge::TokenScope::WriteUser,
-    temper_forge::TokenScope::ReadOrg,
+const ROLE_TOKEN_SCOPES: &[temper_forge_model::TokenScope] = &[
+    temper_forge_model::TokenScope::WriteRepository,
+    temper_forge_model::TokenScope::WriteIssue,
+    temper_forge_model::TokenScope::WriteUser,
+    temper_forge_model::TokenScope::ReadOrg,
 ];
 
 impl Provisioner for ForgejoProvisioner {
@@ -101,10 +101,10 @@ impl Provisioner for ForgejoProvisioner {
                 })?
                 .trim()
                 .to_string();
-            let webhook = temper_forge::WebhookSpec {
+            let webhook = temper_forge_model::WebhookSpec {
                 url: request.webhook_url.clone(),
                 secret,
-                events: temper_forge::WebhookEvents::All,
+                events: temper_forge_model::WebhookEvents::All,
             };
 
             let plan_options = temper_provision::ProvisionOptions {
@@ -121,9 +121,9 @@ impl Provisioner for ForgejoProvisioner {
             };
             let plan = temper_provision::ProvisionPlan::from_workflow(
                 &workflow,
-                temper_forge::RepositoryPath::new(&request.owner, &request.name),
+                temper_forge_model::RepositoryPath::new(&request.owner, &request.name),
                 default_branch,
-                temper_forge::AccessScope::default(),
+                temper_forge_model::AccessScope::default(),
                 plan_options,
             )
             .map_err(|error| error.to_string())?;

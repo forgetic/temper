@@ -6,7 +6,7 @@
 //! small inline workflows drive the impossible-state edge case.
 
 use chrono::{DateTime, Utc};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, Issue, IssueState, ItemNumber,
     PullRequest, PullRequestState, RepositoryId,
 };

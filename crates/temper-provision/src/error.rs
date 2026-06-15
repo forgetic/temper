@@ -10,8 +10,8 @@ pub enum ProvisionError {
     ///
     /// This replaces the host-specific REST error the Forgejo adapter used to
     /// surface: every backend call now flows through the portable
-    /// [`ForgeError`](temper_forge::ForgeError).
-    Backend(temper_forge::ForgeError),
+    /// [`ForgeError`](temper_forge_model::ForgeError).
+    Backend(temper_forge_model::ForgeError),
     /// A provisioning input or backend response was structurally wrong (e.g. a
     /// workflow that declares no intake entry point, or a repository that is not
     /// readable after creation).
@@ -45,8 +45,8 @@ impl std::error::Error for ProvisionError {
     }
 }
 
-impl From<temper_forge::ForgeError> for ProvisionError {
-    fn from(err: temper_forge::ForgeError) -> Self {
+impl From<temper_forge_model::ForgeError> for ProvisionError {
+    fn from(err: temper_forge_model::ForgeError) -> Self {
         Self::Backend(err)
     }
 }

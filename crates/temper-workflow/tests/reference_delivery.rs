@@ -1,7 +1,7 @@
 //! Confirmation tests for the reference delivery workflow fixture.
 
 use chrono::{DateTime, Duration, Utc};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, Issue, IssueState, ItemNumber, PullRequest, PullRequestState, ReviewDecision,
 };
 use temper_workflow::{

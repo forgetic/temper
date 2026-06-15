@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use temper_forge::{Forge, ItemNumber};
+use temper_forge_model::{Forge, ItemNumber};
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, WorkflowMetadata, render_metadata_block,
@@ -54,7 +54,7 @@ pub(crate) trait EnginePrep<F: Forge + ?Sized>: Send + Sync {
     async fn before_open_pr(
         &self,
         _tools: &RoleTools<'_, F>,
-        _input: &temper_forge::CreatePullRequest,
+        _input: &temper_forge_model::CreatePullRequest,
     ) -> Result<(), AgentError> {
         Ok(())
     }
@@ -251,7 +251,7 @@ pub(crate) fn implementation_pr_input<F: Forge + ?Sized>(
     tools: &RoleTools<'_, F>,
     code_number: ItemNumber,
     issue_title: &str,
-) -> temper_forge::CreatePullRequest {
+) -> temper_forge_model::CreatePullRequest {
     let metadata = WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
         parents: vec![ArtifactRef::same_repo(code_number)],

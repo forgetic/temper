@@ -24,7 +24,7 @@
 //! plain `FakeEngineer`.
 
 use async_trait::async_trait;
-use temper_forge::{CreatePullRequest, Forge};
+use temper_forge_model::{CreatePullRequest, Forge};
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::ArtifactSource;
 

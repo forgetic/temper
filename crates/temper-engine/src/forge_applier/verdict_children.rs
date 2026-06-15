@@ -4,7 +4,7 @@
 //! mapping each [`JobChild`] to a [`CreateIssuesChild`] (resolving cross-repo
 //! targets) and stamping the deterministic content correlation key.
 
-use temper_forge::{Forge, ItemNumber, Repository, RepositoryId};
+use temper_forge_model::{Forge, ItemNumber, Repository, RepositoryId};
 use temper_worker_protocol::JobChild;
 use temper_workflow::{ArtifactKindId, CreateIssuesChild};
 

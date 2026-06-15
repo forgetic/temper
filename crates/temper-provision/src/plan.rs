@@ -1,6 +1,6 @@
 //! Distilling a [`ProvisionPlan`] from a validated workflow.
 
-use temper_forge::{AccessScope, RepositoryPath};
+use temper_forge_model::{AccessScope, RepositoryPath};
 use temper_workflow::ValidatedWorkflow;
 
 use crate::error::{ProvisionError, Result};

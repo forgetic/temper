@@ -6,7 +6,7 @@ use crate::ci_match::Target;
 use crate::ci_ui_parse::first_non_empty;
 use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id};
 use chrono::{DateTime, Utc};
-use temper_forge::{CiJob, CiJobStatus, PullRequestId, RepositoryId};
+use temper_forge_model::{CiJob, CiJobStatus, PullRequestId, RepositoryId};
 
 /// Maps a run's live-view jobs to portable [`CiJob`]s.
 pub(super) fn live_run_to_jobs(
@@ -88,7 +88,7 @@ fn epoch() -> DateTime<Utc> {
 mod tests {
     use super::*;
     use crate::ci_ui::dto::{LiveBranchDto, LiveCommitDto, LiveJobDto, LiveRunDto};
-    use temper_forge::CiJobConclusion;
+    use temper_forge_model::CiJobConclusion;
 
     #[test]
     fn live_run_maps_jobs_to_portable_status() {

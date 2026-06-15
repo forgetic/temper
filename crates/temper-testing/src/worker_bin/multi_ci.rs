@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, Forge, ItemNumber, PullRequest,
     PullRequestQuery, PullRequestState, RepositoryId,
 };

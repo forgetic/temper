@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_forge::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
+use temper_forge_model::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
 use temper_worker_protocol::{JobContext, JobResult, RepoOutcome};
 use temper_workflow::{ArtifactKindId, Executor};
 

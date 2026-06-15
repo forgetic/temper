@@ -2,7 +2,7 @@ use crate::FilesystemForge;
 use crate::lists::sort_ci_jobs_by_name;
 use crate::validation::validate_stored_ci_jobs;
 use std::path::PathBuf;
-use temper_forge::{ChangeKind, CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
+use temper_forge_model::{ChangeKind, CiJob, CiJobId, ForgeError, ForgeResult, RepositoryId};
 
 impl FilesystemForge {
     /// Seeds CI jobs for a repository, replacing any previously stored jobs.
@@ -10,7 +10,7 @@ impl FilesystemForge {
     /// The Forge interface has no CI job creation operation. Tests and local
     /// scenarios use this backend-specific helper to write the same
     /// `ci_jobs.json` fixture file that
-    /// [`list_ci_jobs`](temper_forge::Forge::list_ci_jobs) reads.
+    /// [`list_ci_jobs`](temper_forge_model::Forge::list_ci_jobs) reads.
     pub fn seed_ci_jobs(&self, repo_id: &RepositoryId, ci_jobs: Vec<CiJob>) -> ForgeResult<()> {
         let _guard = self.write_lock()?;
         self.require_repository(repo_id)?;

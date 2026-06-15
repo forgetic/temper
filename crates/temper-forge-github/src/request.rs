@@ -9,7 +9,7 @@
 
 use crate::{GitHubForge, HttpClient, HttpMethod, HttpResponse, client, error};
 use serde::de::DeserializeOwned;
-use temper_forge::{ForgeError, ForgeResult};
+use temper_forge_model::{ForgeError, ForgeResult};
 
 /// Maximum number of paginated pages a list request will fetch before stopping.
 ///
@@ -35,7 +35,7 @@ impl<C: HttpClient> GitHubForge<C> {
     ///
     /// The path is relative to the configured API root (which already contains
     /// any `/api/v3` Enterprise prefix). Transport failures are mapped to
-    /// [`ForgeError::Backend`](temper_forge::ForgeError); status interpretation
+    /// [`ForgeError::Backend`](temper_forge_model::ForgeError); status interpretation
     /// is the caller's responsibility (see [`crate::error`]).
     pub(crate) async fn send(
         &self,

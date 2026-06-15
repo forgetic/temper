@@ -1,12 +1,12 @@
 mod support;
 
 use support::{TestRoot, block_on, repository};
-use temper_forge::{
+use temper_forge_model::{
     Forge, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort, RepositorySortField,
     SortDirection, User, UserId,
 };
 
-fn repository_names(repositories: &[temper_forge::Repository]) -> Vec<String> {
+fn repository_names(repositories: &[temper_forge_model::Repository]) -> Vec<String> {
     repositories
         .iter()
         .map(|repository| format!("{}/{}", repository.owner, repository.name))

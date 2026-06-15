@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
-use temper_forge::{
+use temper_forge_model::{
     AccessScope, CommitFile, Forge, ForgeContent, IssueQuery, RepoPermission, RepositoryId,
     RepositoryPath, TokenScope, WebhookEvents, WebhookSpec,
 };
@@ -377,7 +377,7 @@ fn existing_repo_requires_repo_and_skips_seed_commits() {
     // Now pre-create the repo, then provision: the seed CI commit must be
     // skipped under `existing_repo`.
     let forge = MemoryForge::new();
-    let repo = block_on(forge.ensure_repository(temper_forge::CreateRepository {
+    let repo = block_on(forge.ensure_repository(temper_forge_model::CreateRepository {
         owner: OWNER.into(),
         name: NAME.into(),
         default_branch: BRANCH.into(),

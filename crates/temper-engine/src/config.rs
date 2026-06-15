@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use temper_forge::RepositoryPath;
+use temper_forge_model::RepositoryPath;
 use temper_workflow::RoleId;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";

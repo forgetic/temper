@@ -6,7 +6,7 @@ use crate::{Agent, Progress, RoleWorker, Worker, WorkerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use temper_forge::{ChangeHint, Forge};
+use temper_forge_model::{ChangeHint, Forge};
 use temper_workflow::{CompiledWorkflow, ExecutionContext, RoleId, ValidatedWorkflow};
 
 pub struct MultiRepoRoleWorker<'a, F: Forge + ?Sized> {

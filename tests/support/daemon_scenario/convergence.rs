@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, IssueState, ItemNumber, PullRequest,
     PullRequestQuery, PullRequestState, UserId,
 };

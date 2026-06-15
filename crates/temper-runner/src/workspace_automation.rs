@@ -23,7 +23,7 @@ mod helpers;
 #[cfg(test)]
 mod tests;
 
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, ExecutionContext, ExecutionError, TransitionId,
     ValidatedWorkflow,

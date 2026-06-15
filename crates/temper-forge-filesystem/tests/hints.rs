@@ -2,12 +2,12 @@ mod support;
 
 use std::time::Duration;
 use support::{TestRoot, block_on, issue, pull_request, repository, timestamp};
-use temper_forge::{
+use temper_forge_model::{
     ChangeKind, ChangeSource, ChangeSourceEvent, CiJob, CiJobConclusion, CiJobId, CiJobStatus,
     CreatePullRequestReview, Forge, ForgeError, ReviewDecision, UpdateIssue, Version,
 };
 
-fn completed_ci_job(repo_id: &temper_forge::RepositoryId) -> CiJob {
+fn completed_ci_job(repo_id: &temper_forge_model::RepositoryId) -> CiJob {
     CiJob {
         id: CiJobId::new(format!("ci-job-{}-test", repo_id.as_str())),
         repo_id: repo_id.clone(),
@@ -24,7 +24,7 @@ fn completed_ci_job(repo_id: &temper_forge::RepositoryId) -> CiJob {
     }
 }
 
-fn expect_hint(source: &mut impl ChangeSource) -> temper_forge::ChangeHint {
+fn expect_hint(source: &mut impl ChangeSource) -> temper_forge_model::ChangeHint {
     match source.recv_timeout(Duration::from_millis(200)) {
         ChangeSourceEvent::Hint(hint) => hint,
         other => panic!("expected hint, got {other:?}"),

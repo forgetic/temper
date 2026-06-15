@@ -5,7 +5,7 @@
 //! non-success response into the category below.
 
 use crate::client::{HttpError, HttpResponse};
-use temper_forge::ForgeError;
+use temper_forge_model::ForgeError;
 
 /// Maximum number of characters of a response body included in error messages.
 const SNIPPET_LIMIT: usize = 200;

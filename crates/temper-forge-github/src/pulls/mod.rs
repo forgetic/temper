@@ -12,7 +12,7 @@ use crate::map::{map_pull_request, map_review, merge_method_token, review_event_
 use crate::types::{MergeResultDto, PullRequestDto, ReviewDto};
 use crate::{GitHubForge, HttpClient, HttpMethod};
 use chrono::Utc;
-use temper_forge::{
+use temper_forge_model::{
     Comment, CreateComment, CreatePullRequest, CreatePullRequestReview, ForgeError, ForgeResult,
     ItemNumber, MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestReview,
     PullRequestUpdateState, RepositoryId, RequestReviewers, UpdatePullRequest,
@@ -173,7 +173,7 @@ impl<C: HttpClient> GitHubForge<C> {
         let reviewers: Vec<&str> = input
             .reviewers
             .iter()
-            .map(temper_forge::UserId::as_str)
+            .map(temper_forge_model::UserId::as_str)
             .collect();
         let path = format!(
             "/repos/{}/pulls/{}/requested_reviewers",

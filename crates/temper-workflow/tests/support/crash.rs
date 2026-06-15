@@ -21,7 +21,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobId, CiJobQuery, Comment, CreateComment, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ForgeError, ForgeResult, Issue, IssueId,
     IssueQuery, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestId,

@@ -38,7 +38,7 @@ mod scan;
 
 use crate::classify::ArtifactSource;
 use crate::validated::ValidatedWorkflow;
-use temper_forge::{Issue, ItemNumber, PullRequest};
+use temper_forge_model::{Issue, ItemNumber, PullRequest};
 
 pub use candidate::{ReconciliationCandidateQueryPlan, reconciliation_candidate_query_plan};
 pub use finding::{

@@ -3,7 +3,7 @@
 mod support;
 
 use support::{TestRoot, block_on, create_pr, new_repo, ts, workflow};
-use temper_forge::{
+use temper_forge_model::{
     Forge, IssueQuery, IssueState, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery,
     PullRequestState, RepositoryId,
 };

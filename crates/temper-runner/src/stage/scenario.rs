@@ -6,7 +6,7 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 
 /// Default tick budget used by [`run_scenario`].
 pub const DEFAULT_SCENARIO_BUDGET: u64 = 100;

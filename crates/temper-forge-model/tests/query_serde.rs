@@ -1,4 +1,4 @@
-use temper_forge::{IssueQuery, PullRequestQuery};
+use temper_forge_model::{IssueQuery, PullRequestQuery};
 
 #[test]
 fn query_defaults_have_no_body_filter() {

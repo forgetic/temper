@@ -85,6 +85,6 @@ fn unsupported_proposal_kind_is_rejected_before_persistence() {
 
 #[test]
 fn responder_boundary_exposes_no_forge_mutation_handle() {
-    assert!(!include_str!("../agent.rs").contains("temper_forge"));
-    assert!(!include_str!("../process.rs").contains("temper_forge"));
+    assert!(!include_str!("../agent.rs").contains("temper_forge_model"));
+    assert!(!include_str!("../process.rs").contains("temper_forge_model"));
 }

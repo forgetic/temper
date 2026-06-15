@@ -1,5 +1,5 @@
 use super::*;
-use temper_forge::{CreateIssue, CreateRepository, Forge, IssueState, UpdateIssue};
+use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueState, UpdateIssue};
 use temper_forge_memory::MemoryForge;
 use temper_workflow::{ArtifactKindId, render_metadata_block};
 

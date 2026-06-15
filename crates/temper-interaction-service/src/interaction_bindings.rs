@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use temper_forge::RepositoryPath;
+use temper_forge_model::RepositoryPath;
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_interaction::{
     CompiledInteractionSpec, ConversationProfileId, InteractionError, InteractiveResponder,

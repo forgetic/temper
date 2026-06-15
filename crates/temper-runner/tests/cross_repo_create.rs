@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use support::{CountedForgeOp, CountingForge};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
     ItemListDetails, ItemNumber, MergeMethod, MergePullRequest, PullRequestQuery, PullRequestState,
     RepositoryId, UpdateIssue, UserId,

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use temper_forge::{
+use temper_forge_model::{
     CiJobConclusion, CiJobQuery, CiJobStatus, CreateRepository, Forge, ItemNumber,
     PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, UpsertLabel,
 };
@@ -254,7 +254,7 @@ fn role_forges<F, M>(
     mut map: M,
 ) -> Vec<(temper_workflow::RoleId, F)>
 where
-    M: FnMut(temper_forge::User) -> F,
+    M: FnMut(temper_forge_model::User) -> F,
 {
     config
         .role_bindings

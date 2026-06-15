@@ -1,7 +1,7 @@
 //! Test-only outside-world signal producers.
 //!
 //! The workflow engine reads CI natively through
-//! [`Forge::list_ci_jobs`](temper_forge::Forge::list_ci_jobs); a production
+//! [`Forge::list_ci_jobs`](temper_forge_model::Forge::list_ci_jobs); a production
 //! deployment relies on its provider (for example Forgejo Actions) to create
 //! those jobs. The seam in this module exists so layered tests can plug in a
 //! fake producer without teaching the workflow engine or role agents how to
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Mutex;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, Forge, ForgeError, ItemNumber, PullRequest,
     PullRequestQuery, PullRequestState, RepositoryId,
 };

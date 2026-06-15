@@ -10,7 +10,7 @@ use crate::validation::{
 };
 use std::fs;
 use std::path::Path;
-use temper_forge::{
+use temper_forge_model::{
     Comment, ForgeError, ForgeResult, Issue, IssueId, Label, PullRequest, PullRequestId,
     PullRequestReview, Repository, RepositoryId,
 };

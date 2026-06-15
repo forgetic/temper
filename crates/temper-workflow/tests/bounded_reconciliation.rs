@@ -7,7 +7,7 @@ use support::{
     TestRoot, add_issue_dependency, block_on, close_issue, create_issue, create_pr, new_repo, ts,
     workflow,
 };
-use temper_forge::{
+use temper_forge_model::{
     Forge, IssueQuery, IssueState, ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RepositoryId, UpdatePullRequest,
 };

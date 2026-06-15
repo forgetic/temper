@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use temper_forge::{ItemNumber, RepositoryPath};
+use temper_forge_model::{ItemNumber, RepositoryPath};
 use temper_runner::{ChangeHint, ChangeKind};
 use temper_wake::{WakeError, send_wake_with_hint};
 

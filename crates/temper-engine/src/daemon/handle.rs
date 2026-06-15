@@ -10,7 +10,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_engine_io::{Spawner, channel, drive};
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 use temper_runner::WorkItem;
 use temper_worker_protocol::{Artifact, WorkerProtocolMessage};
 use temper_workflow::{CompiledWorkflow, RoleId, ValidatedWorkflow};

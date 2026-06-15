@@ -20,9 +20,9 @@ pub use orchestrate::{provision_and_seed, provision_world};
 pub use secrets::{format_secrets_env, role_token_from_secrets_file, write_secrets_file};
 
 // Host-neutral provisioning types and intake-seed helpers, re-exported so the
-// CLI modules can name them without a second `temper_provision`/`temper_forge`
+// CLI modules can name them without a second `temper_provision`/`temper_forge_model`
 // import path.
-pub use temper_forge::AccessScope;
+pub use temper_forge_model::AccessScope;
 pub use temper_provision::{
     BOT_USER, IntakeIssueSeed, ProvisionError, Provisioned, Result, seed_intake_issue,
 };

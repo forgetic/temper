@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueQuery, IssueState,
     ItemNumber, PullRequestQuery, PullRequestState, PullRequestUpdateState, RepositoryId,
     UpdateIssue, UpdatePullRequest,

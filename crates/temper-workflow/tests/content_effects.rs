@@ -11,7 +11,7 @@
 mod support;
 
 use support::{TestRoot, block_on, create_issue, create_pr, issue_body, new_repo};
-use temper_forge::{Forge, ReviewDecision};
+use temper_forge_model::{Forge, ReviewDecision};
 use temper_workflow::{
     ArtifactSource, Effect, ExecutionContext, ExecutionError, RawEffect, RawWorkflowSpec, RoleId,
     TransitionId, ValidatedWorkflow, WorkflowEffect,

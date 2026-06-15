@@ -3,7 +3,7 @@
 use super::{map_logins, normalize, sorted_dedup, sorted_dedup_users};
 use crate::ids::{RepoCoord, format_issue_id, format_repository_id, format_user_id};
 use crate::types::IssueDto;
-use temper_forge::{Issue, IssueState, ItemNumber, Version};
+use temper_forge_model::{Issue, IssueState, ItemNumber, Version};
 
 /// Maps a GitHub issue DTO into a portable [`Issue`].
 ///
@@ -48,7 +48,7 @@ pub(crate) fn map_issue(repo: &RepoCoord, dto: IssueDto) -> Issue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_forge::UserId;
+    use temper_forge_model::UserId;
 
     fn repo() -> RepoCoord {
         RepoCoord::new("acme", "widgets")

@@ -1,6 +1,6 @@
 //! Routing, guidance, and stale-state helpers for workspace-backed automation.
 
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 use temper_workflow::{
     Effect, ExecutionContext, ExecutionError, Executor, RoleManifest, TransitionId,
     ValidatedWorkflow, VerdictId,

@@ -9,7 +9,7 @@ mod engineer;
 mod reviewers;
 mod support;
 
-use temper_forge::Forge;
+use temper_forge_model::Forge;
 use temper_runner::{Agent, AgentRegistry};
 use temper_workflow::RoleId;
 

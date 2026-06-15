@@ -10,7 +10,7 @@ description = "Filesystem-backed Forge implementation for Temper development and
 async-trait.workspace = true
 chrono.workspace = true
 fs2.workspace = true
-temper-forge = { path = "../temper-forge" }
+temper-forge-model = { path = "../temper-forge-model" }
 serde.workspace = true
 serde_json.workspace = true
 

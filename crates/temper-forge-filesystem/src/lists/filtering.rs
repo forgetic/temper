@@ -1,4 +1,4 @@
-use temper_forge::{CiJob, CiJobQuery, Issue, IssueQuery, PullRequest, PullRequestQuery};
+use temper_forge_model::{CiJob, CiJobQuery, Issue, IssueQuery, PullRequest, PullRequestQuery};
 
 pub(crate) fn ci_job_matches_query(ci_job: &CiJob, query: &CiJobQuery) -> bool {
     if let Some(pull_request_id) = &query.pull_request_id

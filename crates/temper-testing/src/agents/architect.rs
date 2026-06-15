@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::Deserialize;
-use temper_forge::{CreateIssue, Forge, ItemNumber, RepositoryId};
+use temper_forge_model::{CreateIssue, Forge, ItemNumber, RepositoryId};
 use temper_runner::{Agent, AgentError, RoleTools, WorkItem};
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, ArtifactSource, WorkflowMetadata, global_child_correlation_key,

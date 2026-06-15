@@ -5,7 +5,7 @@
 //! hand-rolled `block_on` is enough. Each test binary that needs a backend
 //! includes this module with `mod support;`.
 //!
-//! The [`crash`] submodule adds a fault-injecting [`temper_forge::Forge`]
+//! The [`crash`] submodule adds a fault-injecting [`temper_forge_model::Forge`]
 //! wrapper used by the Phase 8 robustness tests.
 #![allow(dead_code)]
 
@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue, CreatePullRequest,
     CreatePullRequestReview, Forge, IssueState, ItemNumber, PullRequestState, RepositoryId,
     RequestReviewers, ReviewDecision, UpdateIssue, UserId,
@@ -83,7 +83,7 @@ pub fn ts(value: &str) -> DateTime<Utc> {
 
 /// Creates a fresh repository in the backend.
 pub fn new_repo(forge: &MemoryForge) -> RepositoryId {
-    block_on(forge.create_repository(temper_forge::CreateRepository {
+    block_on(forge.create_repository(temper_forge_model::CreateRepository {
         owner: "acme".into(),
         name: "service".into(),
         default_branch: "main".into(),

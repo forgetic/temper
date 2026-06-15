@@ -7,7 +7,7 @@ use crate::types::PullRequestDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use temper_forge::{ForgeError, ForgeResult, ItemNumber};
+use temper_forge_model::{ForgeError, ForgeResult, ItemNumber};
 
 /// Bound on Actions list responses, mirroring the reference TypeScript tooling.
 const ACTIONS_LIMIT: &str = "200";

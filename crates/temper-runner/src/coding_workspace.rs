@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use temper_forge::RepositoryId;
+use temper_forge_model::RepositoryId;
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, CreateIssuesChild, ExternalToolId, QueueId, RoleId, VerdictId,
 };

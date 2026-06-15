@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use temper_forge::{Forge, ForgeError, RepositoryId};
+use temper_forge_model::{Forge, ForgeError, RepositoryId};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, ClassifiedArtifact, CompiledWorkflow, ExecutionError,
     ExternalToolId, QueueId, RoleId, TransitionId, ValidatedWorkflow, VerdictId,

@@ -8,7 +8,7 @@
 
 use crate::{ForgejoForge, HttpClient, HttpMethod, HttpResponse, client, error};
 use serde::de::DeserializeOwned;
-use temper_forge::{ForgeError, ForgeResult};
+use temper_forge_model::{ForgeError, ForgeResult};
 
 /// Maximum number of paginated pages a list request will fetch before stopping.
 ///
@@ -34,7 +34,7 @@ impl<C: HttpClient> ForgejoForge<C> {
     ///
     /// The path is relative to the host and excludes the `/api/v1` prefix, which
     /// [`client::build_request`] adds. Transport failures are mapped to
-    /// [`ForgeError::Backend`](temper_forge::ForgeError); status interpretation
+    /// [`ForgeError::Backend`](temper_forge_model::ForgeError); status interpretation
     /// is the caller's responsibility (see [`crate::error`]).
     pub(crate) async fn send(
         &self,

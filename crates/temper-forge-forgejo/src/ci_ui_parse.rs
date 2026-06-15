@@ -208,7 +208,7 @@ pub(super) fn first_non_empty(values: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_forge::PullRequestId;
+    use temper_forge_model::PullRequestId;
 
     #[test]
     fn extracts_csrf_input_value() {

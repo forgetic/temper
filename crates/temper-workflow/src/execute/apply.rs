@@ -22,7 +22,7 @@ use super::{ExecutionError, Executor, Loaded};
 use crate::context::CreateIssuesChild;
 use crate::ids::RoleId;
 use crate::plan::{TransitionPlan, WorkflowEffect};
-use temper_forge::{
+use temper_forge_model::{
     CreatePullRequest, Forge, RepositoryId, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 

@@ -1,4 +1,4 @@
-//! GitHub-backed [`temper_forge::Forge`] implementation.
+//! GitHub-backed [`temper_forge_model::Forge`] implementation.
 //!
 //! This crate adapts the portable Forge interface to GitHub's REST API
 //! (`api.github.com`, or a GitHub Enterprise `/api/v3` root). It is a

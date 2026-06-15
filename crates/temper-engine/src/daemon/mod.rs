@@ -48,16 +48,16 @@ pub trait HintedMechanical: Send + Sync {
     /// Run a mechanical pass covering only the hinted repositories.
     fn run_hinted(
         &self,
-        hints: Vec<temper_forge::ChangeHint>,
+        hints: Vec<temper_forge_model::ChangeHint>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 }
 
-impl<F: temper_forge::Forge + Send + Sync + 'static> HintedMechanical
+impl<F: temper_forge_model::Forge + Send + Sync + 'static> HintedMechanical
     for crate::MechanicalTrigger<F>
 {
     fn run_hinted(
         &self,
-        hints: Vec<temper_forge::ChangeHint>,
+        hints: Vec<temper_forge_model::ChangeHint>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         let trigger = self.clone();
         Box::pin(async move {

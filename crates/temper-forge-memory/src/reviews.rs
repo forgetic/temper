@@ -2,7 +2,7 @@ use crate::MemoryForge;
 use crate::ids::pull_request_review_id;
 use crate::lists::{normalize_user_set, sort_pull_requests_by_number, sort_reviews};
 use crate::util::next_comment_number;
-use temper_forge::{
+use temper_forge_model::{
     CreatePullRequestReview, ForgeError, ForgeResult, ItemNumber, PullRequest, PullRequestId,
     PullRequestReview, RepositoryId, RequestReviewers,
 };

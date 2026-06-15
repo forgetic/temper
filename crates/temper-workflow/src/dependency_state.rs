@@ -11,7 +11,7 @@ use crate::classify::ClassifiedArtifact;
 use crate::plan::DependencyStatus;
 use crate::relation::RelationKind;
 use std::collections::BTreeSet;
-use temper_forge::{Forge, ForgeError, IssueState, PullRequestState, RepositoryId};
+use temper_forge_model::{Forge, ForgeError, IssueState, PullRequestState, RepositoryId};
 
 pub(crate) async fn status_for_artifact<F: Forge + ?Sized>(
     forge: &F,

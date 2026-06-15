@@ -7,7 +7,7 @@
 mod support;
 
 use support::{MockHttpClient, block_on, forge, issue_id, pull_id};
-use temper_forge::{ForgeError, IssueId, ItemNumber, PullRequestId};
+use temper_forge_model::{ForgeError, IssueId, ItemNumber, PullRequestId};
 
 #[test]
 fn issue_dependency_mutations_are_rejected_without_http() {

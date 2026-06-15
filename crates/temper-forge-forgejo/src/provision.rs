@@ -9,7 +9,7 @@
 //! preserved verbatim. The only change is that they now run on the backend's own
 //! [`HttpClient`](crate::HttpClient) seam (so offline contract tests can drive
 //! them through the recording mock) and surface failures as
-//! [`ForgeError`](temper_forge::ForgeError) through the trait.
+//! [`ForgeError`](temper_forge_model::ForgeError) through the trait.
 //!
 //! ## Authentication / the admin token
 //!
@@ -28,7 +28,7 @@ use crate::ids::{format_repository_id, parse_repository_id};
 use crate::{EngineHttpClient, ForgejoForge, HttpClient, HttpMethod, HttpRequest, HttpResponse};
 use base64::Engine;
 use serde_json::{Value, json};
-use temper_forge::{
+use temper_forge_model::{
     AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
     ForgeError, ForgeResult, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope,
     WebhookEvents, WebhookSpec,

@@ -14,7 +14,7 @@ use crate::context::CreateIssuesChild;
 use crate::ids::TransitionId;
 use crate::metadata::global_child_correlation_key;
 use std::collections::{BTreeMap, HashSet};
-use temper_forge::{CreateIssue, Forge, ItemNumber, RepositoryId};
+use temper_forge_model::{CreateIssue, Forge, ItemNumber, RepositoryId};
 
 /// A concrete, idempotent multi-artifact issue-create request prepared from a
 /// `CreateIssues` effect plus the runtime [`crate::context::ExecutionContext`].

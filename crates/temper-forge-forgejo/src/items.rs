@@ -17,7 +17,7 @@ use crate::map::map_comment;
 use crate::types::{CommentDto, LabelDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::collections::HashMap;
-use temper_forge::{Comment, ForgeResult, ItemNumber, UserId};
+use temper_forge_model::{Comment, ForgeResult, ItemNumber, UserId};
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists comments on an issue or pull request in chronological order.

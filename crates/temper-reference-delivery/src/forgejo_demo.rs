@@ -11,7 +11,7 @@
 //! helpers only retain the commit-message marker that makes the provisioned
 //! default branch's CI workflow pass after setup.
 
-use temper_forge::CommitFile;
+use temper_forge_model::CommitFile;
 
 /// Demo intake issue title (the "add a greeting" reference-delivery story).
 pub const DEFAULT_INTAKE_TITLE: &str = "Add a configurable greeting to the service banner";

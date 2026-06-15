@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
-use temper_forge::ForgeError;
+use temper_forge_model::ForgeError;
 use temper_workflow::ExecutionError;
 
 /// Error returned by an [`Agent`](super::Agent) while servicing a work item.

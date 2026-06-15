@@ -3,7 +3,7 @@
 mod support;
 
 use support::{TestRoot, block_on, create_issue, new_repo, workflow};
-use temper_forge::{BranchRef, CreatePullRequest, Forge, PullRequestQuery, RepositoryId, UserId};
+use temper_forge_model::{BranchRef, CreatePullRequest, Forge, PullRequestQuery, RepositoryId, UserId};
 use temper_workflow::{
     ArtifactSource, ExecutionContext, Executor, RawWorkflowSpec, RoleId, TransitionId,
     ValidatedWorkflow, WorkflowEffect, parse_metadata_block,
@@ -113,9 +113,9 @@ fn ensure_pull_request_with_lookup_ignores_removed_create_only_labels() {
     let created = first.artifact().clone();
     block_on(forge.update_pull_request(
         &created.id,
-        temper_forge::UpdatePullRequest {
+        temper_forge_model::UpdatePullRequest {
             remove_labels: vec!["needs-reviewer".to_string()],
-            ..temper_forge::UpdatePullRequest::default()
+            ..temper_forge_model::UpdatePullRequest::default()
         },
     ))
     .expect("review routing label is removed");

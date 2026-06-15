@@ -1,5 +1,5 @@
 use chrono::Duration;
-use temper_forge::{
+use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobId, CiJobQuery, CiJobStatus, Forge, ForgeError, ItemNumber,
     PullRequest, RepositoryId,
 };

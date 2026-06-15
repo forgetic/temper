@@ -9,7 +9,7 @@ use crate::lists::{
     normalize_user_set, sort_comments, sort_issues, sort_issues_by_number, update_issue_state,
 };
 use crate::util::{check_expected_version, next_comment_number, next_item_number};
-use temper_forge::{
+use temper_forge_model::{
     ChangeKind, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue, IssueId,
     IssueQuery, IssueState, ItemNumber, RepositoryId, UpdateIssue, Version,
 };

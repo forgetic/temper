@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-use temper_forge::{
+use temper_forge_model::{
     Forge, ForgeError, Issue, IssueState, ItemNumber, RepositoryId, RepositoryPath,
 };
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};

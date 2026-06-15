@@ -4,7 +4,7 @@
 //! issue for human attention and add a one-time, idempotency-marked audit
 //! comment. Transient and canceled failures are not applied here.
 
-use temper_forge::{CreateComment, Forge, UpdateIssue};
+use temper_forge_model::{CreateComment, Forge, UpdateIssue};
 use temper_worker_protocol::{FailureClass, JobResult};
 
 use crate::InFlightJob;

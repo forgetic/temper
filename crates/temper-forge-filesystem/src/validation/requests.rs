@@ -1,4 +1,4 @@
-use temper_forge::{CreateRepository, ForgeError, ForgeResult, UpsertLabel, Version};
+use temper_forge_model::{CreateRepository, ForgeError, ForgeResult, UpsertLabel, Version};
 
 /// Enforces an optimistic-concurrency precondition.
 pub(crate) fn check_expected_version(

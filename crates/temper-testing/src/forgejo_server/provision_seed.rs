@@ -13,7 +13,7 @@
 use super::provision::{ProvisionError, Result};
 use crate::workflow;
 use std::collections::BTreeSet;
-use temper_forge::{CreateIssue, IssueQuery, ItemNumber, RepositoryPath};
+use temper_forge_model::{CreateIssue, IssueQuery, ItemNumber, RepositoryPath};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_workflow::{ArtifactTarget, Effect, ValidatedWorkflow};
 

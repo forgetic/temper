@@ -322,7 +322,7 @@ mod tests {
     use super::*;
     use crate::forgejo_server::RoleIdentity;
     use std::collections::BTreeMap;
-    use temper_forge::RepositoryId;
+    use temper_forge_model::RepositoryId;
     use temper_workflow::RoleId;
 
     fn sample_provisioned() -> Provisioned {

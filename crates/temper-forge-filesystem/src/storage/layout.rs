@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use temper_forge::{ForgeError, ForgeResult, RepositoryId};
+use temper_forge_model::{ForgeError, ForgeResult, RepositoryId};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 

@@ -2,7 +2,7 @@ use crate::FilesystemForge;
 use crate::errors::backend_error;
 use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
-use temper_forge::ForgeResult;
+use temper_forge_model::ForgeResult;
 
 impl FilesystemForge {
     /// Acquires the store-level exclusive advisory lock for a mutation.

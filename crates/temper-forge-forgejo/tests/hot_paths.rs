@@ -8,7 +8,7 @@ mod support;
 
 use chrono::{DateTime, Utc};
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, ItemNumber, PullRequestState, UserId,
 };
 use temper_forge_forgejo::{HttpMethod, HttpRequest};

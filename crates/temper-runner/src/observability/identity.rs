@@ -1,7 +1,7 @@
 //! Stable, provider-neutral observability identities for work items.
 
 use serde_json::Value;
-use temper_forge::{ItemNumber, RepositoryId};
+use temper_forge_model::{ItemNumber, RepositoryId};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RoleId};
 
 /// Artifact target type used in observability identities.

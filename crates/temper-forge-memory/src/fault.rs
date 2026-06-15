@@ -1,7 +1,7 @@
 //! A small, deterministic fault-injection hook for the in-memory backend.
 //!
 //! The hook lets a test force a chosen operation to fail with
-//! [`ForgeError::Backend`](temper_forge::ForgeError::Backend) *before* it
+//! [`ForgeError::Backend`](temper_forge_model::ForgeError::Backend) *before* it
 //! touches in-memory state, modelling a backend that is momentarily unreachable
 //! or whose stored data could not be read. Faults are one-shot and queued
 //! per-operation: arming a fault adds one message; the next call to that
@@ -11,11 +11,11 @@
 //! the set used by the crash-injection test wrapper. Every other [`Forge`]
 //! method ignores the hook.
 //!
-//! [`Forge`]: temper_forge::Forge
+//! [`Forge`]: temper_forge_model::Forge
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use temper_forge::{ForgeError, ForgeResult};
+use temper_forge_model::{ForgeError, ForgeResult};
 
 /// The fault-aware in-memory backend operations.
 ///

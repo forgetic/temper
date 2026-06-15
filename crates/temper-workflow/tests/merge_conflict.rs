@@ -6,7 +6,7 @@ use support::crash::{CrashForge, Fault, ForgeOp};
 use support::{
     TestRoot, block_on, create_pr, new_repo, pr_labels, pr_state, seed_ci, submit_review, workflow,
 };
-use temper_forge::{
+use temper_forge_model::{
     CiJobConclusion, Forge, PullRequestState, PullRequestUpdateState, ReviewDecision,
     UpdatePullRequest,
 };
@@ -14,8 +14,8 @@ use temper_workflow::{ArtifactSource, ExecutionError, Executor, RoleId, Transiti
 
 fn gated_pr(
     forge: &temper_forge_memory::MemoryForge,
-    repo: &temper_forge::RepositoryId,
-) -> temper_forge::ItemNumber {
+    repo: &temper_forge_model::RepositoryId,
+) -> temper_forge_model::ItemNumber {
     let number = create_pr(forge, repo, &["implementation"], "");
     submit_review(forge, repo, number, ReviewDecision::Approved);
     seed_ci(forge, repo, number, CiJobConclusion::Success);
@@ -24,8 +24,8 @@ fn gated_pr(
 
 fn close_pr(
     forge: &temper_forge_memory::MemoryForge,
-    repo: &temper_forge::RepositoryId,
-    number: temper_forge::ItemNumber,
+    repo: &temper_forge_model::RepositoryId,
+    number: temper_forge_model::ItemNumber,
 ) {
     let pull_request = block_on(forge.get_pull_request_by_number(repo, number))
         .expect("lookup succeeds")

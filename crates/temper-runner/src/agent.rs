@@ -14,7 +14,7 @@ use crate::WorkItem;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use temper_forge::Forge;
+use temper_forge_model::Forge;
 use temper_workflow::RoleId;
 
 pub use error::AgentError;

@@ -4,7 +4,7 @@
 mod support;
 
 use support::{MockHttpClient, block_on, body_json, forge, pull_id, repo_id};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CreatePullRequest, ForgeError, ItemNumber, PullRequestQuery, PullRequestState,
     PullRequestUpdateState, RequestReviewers, UpdatePullRequest, UserId,
 };
@@ -324,7 +324,7 @@ fn pull_request_comments_use_issue_endpoints() {
 
     let comment = block_on(forge.add_pull_request_comment(
         &pull_id(42),
-        temper_forge::CreateComment {
+        temper_forge_model::CreateComment {
             body: "hi".to_string(),
         },
     ))

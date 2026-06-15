@@ -7,7 +7,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use support::{CountedForgeOp, CountingForge};
-use temper_forge::{
+use temper_forge_model::{
     BranchRef, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreatePullRequest,
     CreatePullRequestReview, CreateRepository, Forge, ItemNumber, PullRequestState, RepositoryId,
     RequestReviewers, ReviewDecision, UserId,
@@ -153,7 +153,7 @@ fn pull_request_id(
     forge: &MemoryForge,
     repo: &RepositoryId,
     number: ItemNumber,
-) -> temper_forge::PullRequestId {
+) -> temper_forge_model::PullRequestId {
     block_on(forge.get_pull_request_by_number(repo, number))
         .expect("lookup succeeds")
         .expect("pull request exists")

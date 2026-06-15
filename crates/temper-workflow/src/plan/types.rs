@@ -7,7 +7,7 @@
 use crate::classify::ArtifactSource;
 use crate::ids::{ArtifactKindId, LabelId, RoleId, TransitionId};
 use crate::metadata::Lease;
-use temper_forge::ReviewDecision;
+use temper_forge_model::ReviewDecision;
 
 /// A typed side effect a transition plan would apply.
 ///

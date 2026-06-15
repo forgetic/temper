@@ -6,11 +6,11 @@ use crate::ids::{
     RepoCoord, format_comment_id, format_label_id, format_repository_id, format_user_id,
 };
 use crate::types::{CommentDto, LabelDto, RepositoryDto, UserDto};
-use temper_forge::{Comment, Label, Repository, User};
+use temper_forge_model::{Comment, Label, Repository, User};
 
 /// Maps a GitHub user DTO into a portable [`User`].
 ///
-/// The GitHub login is both the portable [`UserId`](temper_forge::UserId) and
+/// The GitHub login is both the portable [`UserId`](temper_forge_model::UserId) and
 /// the human-facing handle. `name`/`email` are `null` when unset and map to
 /// `None`.
 pub(crate) fn map_user(dto: UserDto) -> User {
@@ -39,7 +39,7 @@ pub(crate) fn map_repository(dto: RepositoryDto) -> Repository {
 /// Maps a GitHub label DTO into a portable [`Label`] scoped to `repo`.
 ///
 /// The numeric provider id becomes the prefixed opaque
-/// [`LabelId`](temper_forge::LabelId); empty color/description strings map to
+/// [`LabelId`](temper_forge_model::LabelId); empty color/description strings map to
 /// `None`. GitHub colors carry no `#` prefix and are passed through unchanged.
 pub(crate) fn map_label(repo: &RepoCoord, dto: LabelDto) -> Label {
     Label {

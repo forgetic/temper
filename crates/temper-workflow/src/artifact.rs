@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
-use temper_forge::{ItemNumber, RepositoryId};
+use temper_forge_model::{ItemNumber, RepositoryId};
 
 /// The Forge artifact type a workflow artifact kind maps to.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]

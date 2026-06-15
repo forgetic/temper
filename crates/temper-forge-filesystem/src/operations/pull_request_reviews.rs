@@ -4,7 +4,7 @@ use crate::merge::merge_pull_request as merge_pull_request_impl;
 use crate::metadata::next_timestamp;
 use crate::record_ids::pull_request_comment_id;
 use crate::reviews::{list_reviews, request_reviewers, submit_review};
-use temper_forge::{
+use temper_forge_model::{
     ChangeKind, Comment, CreateComment, CreatePullRequestReview, ForgeError, ForgeResult,
     MergePullRequest, MergeRecord, PullRequest, PullRequestId, PullRequestReview, RequestReviewers,
 };

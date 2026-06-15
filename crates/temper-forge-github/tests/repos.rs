@@ -3,7 +3,7 @@
 mod support;
 
 use support::{MockHttpClient, block_on, body_json, forge, repo_id};
-use temper_forge::{
+use temper_forge_model::{
     CreateRepository, ForgeError, RepositoryPath, RepositoryQuery, RepositorySort,
     RepositorySortField, SortDirection, UpsertLabel, UserId,
 };

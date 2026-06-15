@@ -25,7 +25,7 @@
 //!
 //! [`CommandJournal`] is a trait so durable storage (a database or the
 //! filesystem backend) can be added later without changing the runtime. It is
-//! async to match the [`Forge`](temper_forge::Forge) interface. This phase ships
+//! async to match the [`Forge`](temper_forge_model::Forge) interface. This phase ships
 //! [`InMemoryJournal`], a shared-store implementation for deterministic tests;
 //! cloning it shares the same underlying log, which lets a test simulate a
 //! process restart by attaching a fresh handle to existing entries.
@@ -39,7 +39,7 @@ use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use temper_forge::{Forge, RepositoryId};
+use temper_forge_model::{Forge, RepositoryId};
 
 /// Stable identifier for a journaled command.
 ///

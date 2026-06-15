@@ -2,7 +2,7 @@ use crate::record_ids::{
     stored_issue_comment_number, stored_pull_request_comment_number,
     stored_pull_request_review_number,
 };
-use temper_forge::{
+use temper_forge_model::{
     Comment, CommentId, ForgeError, ForgeResult, Issue, IssueId, ItemNumber, PullRequest,
     PullRequestId, PullRequestReview, RepositoryId,
 };

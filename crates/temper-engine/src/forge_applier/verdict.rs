@@ -4,7 +4,7 @@
 //! workflow to a declared transition and execute it against the source issue or
 //! pull request, binding any `create_issues` children the verdict produced.
 
-use temper_forge::{Forge, ItemNumber, RepositoryId, RepositoryPath};
+use temper_forge_model::{Forge, ItemNumber, RepositoryId, RepositoryPath};
 use temper_worker_protocol::{JobChild, JobResult};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, Classifier, Effect, ExecutionContext, ExecutionError, Executor,

@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
-use temper_forge::{ItemNumber, PullRequest, PullRequestQuery, UserId};
+use temper_forge_model::{ItemNumber, PullRequest, PullRequestQuery, UserId};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{

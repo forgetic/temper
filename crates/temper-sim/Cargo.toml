@@ -17,7 +17,7 @@ temper-engine = { path = "../temper-engine" }
 temper-worker-protocol = { path = "../temper-worker-protocol" }
 
 [dev-dependencies]
-temper-forge = { path = "../temper-forge" }
+temper-forge-model = { path = "../temper-forge-model" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-workflow = { path = "../temper-workflow" }
 

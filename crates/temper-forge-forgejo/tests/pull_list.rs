@@ -3,7 +3,7 @@
 mod support;
 
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
-use temper_forge::{ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState};
+use temper_forge_model::{ItemListDetails, ItemNumber, PullRequestQuery, PullRequestState};
 use temper_forge_forgejo::HttpMethod;
 
 fn pr_issue_json(number: u64, state: &str, labels: &str) -> String {

@@ -16,7 +16,7 @@ use marker::{
 };
 use template::{TemplateContext, render_non_empty_values, render_template};
 
-use temper_forge::{CreateComment, CreateIssue, Forge, Issue, Repository, User, UserId};
+use temper_forge_model::{CreateComment, CreateIssue, Forge, Issue, Repository, User, UserId};
 
 use crate::ids::AcceptanceActionId;
 use crate::transcript::append_marker;

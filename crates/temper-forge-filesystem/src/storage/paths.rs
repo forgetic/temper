@@ -1,7 +1,7 @@
 use crate::FilesystemForge;
 use crate::record_ids::is_record_id;
 use std::path::PathBuf;
-use temper_forge::{IssueId, PullRequestId, RepositoryId};
+use temper_forge_model::{IssueId, PullRequestId, RepositoryId};
 
 impl FilesystemForge {
     pub(crate) fn metadata_path(&self) -> PathBuf {
