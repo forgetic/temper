@@ -108,20 +108,21 @@ pub fn restrict_600(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Expands a leading `~` / `~/…` in `value` to the user's home directory.
+/// Expands a leading `~` / `~/…` in `value` to `home`.
 ///
 /// Anything else (an absolute path, a relative path, a `~user` form) is taken
-/// verbatim. Used so an operator can type `~/.config/temper` and have it land
-/// where they expect.
-pub fn expand_tilde(value: &str) -> PathBuf {
+/// verbatim. So is a tilde when `home` is `None`. The home directory is passed
+/// in explicitly — this crate is a library and never reads the environment;
+/// `src/bin` resolves `HOME` once and hands it down.
+pub fn expand_tilde(value: &str, home: Option<&Path>) -> PathBuf {
     if value == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = home {
+            return home.to_path_buf();
         }
     } else if let Some(rest) = value.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = home
     {
-        return PathBuf::from(home).join(rest);
+        return home.join(rest);
     }
     PathBuf::from(value)
 }
@@ -160,9 +161,15 @@ pub fn resolve_targets(options: &LoadOptions) -> Result<FileTargets, String> {
 mod tests {
     use super::*;
 
+    /// A writable temporary directory for tests, chosen without reading the
+    /// process environment (this crate is a library and must stay env-free).
+    fn temp_dir() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
+
     #[test]
     fn write_new_file_refuses_to_clobber_without_force() {
-        let dir = std::env::temp_dir().join(format!("temper-cli-common-{}", std::process::id()));
+        let dir = temp_dir().join(format!("temper-cli-common-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("a.txt");
         assert_eq!(
@@ -181,7 +188,36 @@ mod tests {
 
     #[test]
     fn expand_tilde_passes_through_non_tilde() {
-        assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
-        assert_eq!(expand_tilde("rel/path"), PathBuf::from("rel/path"));
+        let home = Path::new("/home/operator");
+        assert_eq!(
+            expand_tilde("/abs/path", Some(home)),
+            PathBuf::from("/abs/path")
+        );
+        assert_eq!(
+            expand_tilde("rel/path", Some(home)),
+            PathBuf::from("rel/path")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_uses_explicit_home() {
+        let home = Path::new("/home/operator");
+        assert_eq!(
+            expand_tilde("~", Some(home)),
+            PathBuf::from("/home/operator")
+        );
+        assert_eq!(
+            expand_tilde("~/.config/temper", Some(home)),
+            PathBuf::from("/home/operator/.config/temper")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_without_home_is_verbatim() {
+        assert_eq!(expand_tilde("~", None), PathBuf::from("~"));
+        assert_eq!(
+            expand_tilde("~/.config/temper", None),
+            PathBuf::from("~/.config/temper")
+        );
     }
 }

@@ -187,6 +187,22 @@ pub const FORGEJO_PASSWORD_ENV: &str = "TEMPER_FORGEJO_PASSWORD";
 /// not a secret, but it is read through the same env seam for parity.
 pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
 
+/// Local wake-drain debounce override in milliseconds.
+///
+/// Resolved at this process boundary into a concrete duration (via
+/// [`temper_wake::wake_debounce_from`]) and passed explicitly to the wake bus;
+/// `temper-wake` itself never reads the environment. An absent, blank,
+/// unparseable, or zero value falls back to [`temper_wake::DEFAULT_WAKE_DEBOUNCE`].
+pub const WAKE_DEBOUNCE_MS_ENV: &str = "TEMPER_WAKE_DEBOUNCE_MS";
+
+/// When set to a non-blank value, the Forgejo backend logs web-UI CI fallback
+/// reads to stderr.
+///
+/// Read here, at the process boundary, and passed explicitly into
+/// [`temper_forge::config::ForgejoConfig::with_ci_diagnostics`]; the backend
+/// never reads the environment itself.
+pub const FORGEJO_CI_DIAGNOSTICS_ENV: &str = "TEMPER_FORGEJO_CI_DIAGNOSTICS";
+
 /// Which Forge backend a worker process builds its handle against (`--backend`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum BackendKind {
@@ -228,6 +244,10 @@ pub struct ForgejoArgs {
     /// Optional web-UI login password (from [`FORGEJO_PASSWORD_ENV`]); paired
     /// with [`Self::username`].
     pub password: Option<String>,
+    /// Whether the backend logs web-UI CI fallback reads (from
+    /// [`FORGEJO_CI_DIAGNOSTICS_ENV`]). Resolved at the process boundary and
+    /// passed explicitly into the backend config.
+    pub ci_diagnostics: bool,
 }
 
 impl fmt::Debug for ForgejoArgs {
@@ -238,6 +258,7 @@ impl fmt::Debug for ForgejoArgs {
             .field("token", &Redacted(self.token.is_empty()))
             .field("username", &self.username)
             .field("password", &Redacted(self.password.is_none()))
+            .field("ci_diagnostics", &self.ci_diagnostics)
             .finish()
     }
 }
@@ -293,6 +314,10 @@ pub struct WorkerArgs {
     pub repositories: Vec<temper_forge_model::RepositoryPath>,
     /// Poll cadence between ticks.
     pub poll_interval: Duration,
+    /// Debounce window applied after the first local wake before draining a
+    /// batch. Resolved at the process boundary (CLI/env) into a concrete
+    /// duration; the wake bus itself never reads the environment.
+    pub wake_debounce: std::time::Duration,
     /// Maximum Forgejo mechanical poll cadence after repeated no-action ticks.
     pub idle_poll_max_interval: Duration,
     /// Low-frequency broad audit cadence. `None` disables audit ticks.

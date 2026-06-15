@@ -30,9 +30,6 @@ use temper_forge_model::{CiJob, CiJobId, CiJobQuery, ForgeError, ForgeResult, Re
 pub(crate) use jobs::map_status;
 use jobs::{latest_attempt, sort_jobs, task_to_job};
 
-/// Optional diagnostic flag: when set, web-UI CI fallback reads are logged.
-const CI_DIAGNOSTICS_ENV: &str = "TEMPER_FORGEJO_CI_DIAGNOSTICS";
-
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists CI jobs for a repository, filtered by [`CiJobQuery`].
     ///
@@ -157,7 +154,12 @@ impl<C: HttpClient> ForgejoForge<C> {
             return Ok(jobs);
         }
 
-        log_web_ui_ci_read(repo, target, "read_ci_jobs_via_web_ui");
+        log_web_ui_ci_read(
+            self.config().ci_diagnostics,
+            repo,
+            target,
+            "read_ci_jobs_via_web_ui",
+        );
         let raw = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
         if let Some(key) = cache_key {
             self.ci_read_cache().store(key, raw.clone());
@@ -183,7 +185,12 @@ impl<C: HttpClient> ForgejoForge<C> {
                     .to_string(),
             ));
         };
-        log_web_ui_ci_read(&coord.repo, &Target::default(), "read_ci_job_via_web_ui");
+        log_web_ui_ci_read(
+            self.config().ci_diagnostics,
+            &coord.repo,
+            &Target::default(),
+            "read_ci_job_via_web_ui",
+        );
         crate::ci_ui::read_ci_job(self, credentials, coord, repo_id).await
     }
 
@@ -245,8 +252,8 @@ impl<C: HttpClient> ForgejoForge<C> {
     }
 }
 
-fn log_web_ui_ci_read(repo: &RepoCoord, target: &Target, operation: &str) {
-    if std::env::var_os(CI_DIAGNOSTICS_ENV).is_none() {
+fn log_web_ui_ci_read(diagnostics: bool, repo: &RepoCoord, target: &Target, operation: &str) {
+    if !diagnostics {
         return;
     }
     eprintln!(

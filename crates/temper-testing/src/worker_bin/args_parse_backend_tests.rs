@@ -38,9 +38,42 @@ fn parses_forgejo_role_with_env_secrets() {
             token: "tok-engineer".to_string(),
             username: Some("engineer".to_string()),
             password: Some("pw-engineer".to_string()),
+            ci_diagnostics: false,
         })
     );
     assert_eq!(args.backend.kind(), BackendKind::Forgejo);
+}
+
+#[test]
+fn forgejo_ci_diagnostics_comes_from_env() {
+    let args = run_env(
+        &[
+            "--kind",
+            "role",
+            "--role",
+            "engineer",
+            "--user",
+            "engineer",
+            "--backend",
+            "forgejo",
+            "--base-url",
+            "http://127.0.0.1:3000",
+            "--root",
+            "/tmp/unused",
+            "--repo",
+            "acme/service",
+            "--clock",
+            "wall",
+        ],
+        &[
+            (FORGEJO_TOKEN_ENV, "tok-engineer"),
+            (FORGEJO_CI_DIAGNOSTICS_ENV, "1"),
+        ],
+    );
+    let Backend::Forgejo(forgejo) = &args.backend else {
+        panic!("expected forgejo backend");
+    };
+    assert!(forgejo.ci_diagnostics);
 }
 
 #[test]
@@ -204,6 +237,7 @@ fn forgejo_debug_redacts_secrets() {
         token: "super-secret-token".to_string(),
         username: Some("engineer".to_string()),
         password: Some("super-secret-password".to_string()),
+        ci_diagnostics: false,
     };
     let rendered = format!("{args:?}");
     assert!(!rendered.contains("super-secret-token"));

@@ -139,15 +139,22 @@ pub enum WakeWaitOutcome {
 }
 
 const MAX_WAKE_DRAIN: usize = 1024;
-const DEFAULT_WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
-const WAKE_DEBOUNCE_MS_ENV: &str = "TEMPER_WAKE_DEBOUNCE_MS";
+/// Default debounce window applied after the first wake before a batch is
+/// drained. The wiring layer uses this when no override is configured; the
+/// library itself never reads the environment.
+pub const DEFAULT_WAKE_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
 const STOP_CHECK_INTERVAL: StdDuration = StdDuration::from_millis(250);
 
-fn wake_debounce() -> StdDuration {
-    wake_debounce_from(std::env::var(WAKE_DEBOUNCE_MS_ENV).ok().as_deref())
-}
-
-fn wake_debounce_from(raw: Option<&str>) -> StdDuration {
+/// Parses a debounce window from an optional millisecond string, falling back
+/// to [`DEFAULT_WAKE_DEBOUNCE`] for an absent, blank, unparseable, or zero
+/// value.
+///
+/// This is the pure parse the wiring layer uses to turn its own override (e.g.
+/// a CLI flag or an environment variable it reads at the process boundary) into
+/// a [`Duration`](StdDuration); the value is then passed to
+/// [`wait_for_wake_or_poll`]. The function takes the raw string explicitly and
+/// never touches the process environment.
+pub fn wake_debounce_from(raw: Option<&str>) -> StdDuration {
     raw.and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|milliseconds| *milliseconds > 0)
         .map(StdDuration::from_millis)
@@ -196,6 +203,7 @@ pub async fn wait_for_wake_or_poll(
     cx: &skein::cx::Cx,
     mut should_stop: impl FnMut() -> bool,
     interval: StdDuration,
+    debounce: StdDuration,
     mut wake: Option<&mut WakeListener>,
 ) -> Result<WakeWaitOutcome, WakeError> {
     // Imperative-shell wait: slice the poll interval into bounded waits so the
@@ -223,11 +231,8 @@ pub async fn wait_for_wake_or_poll(
                 match received {
                     Err(_elapsed) => {}
                     Ok(Ok(hint)) => {
-                        skein::time::sleep(
-                            temper_engine_io::runtime::timer_now(cx),
-                            wake_debounce(),
-                        )
-                        .await;
+                        skein::time::sleep(temper_engine_io::runtime::timer_now(cx), debounce)
+                            .await;
                         return drain_wake_batch(listener, hint).map(WakeWaitOutcome::Wake);
                     }
                     Ok(Err(WakeError::Unauthorized)) => {

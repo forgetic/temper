@@ -29,9 +29,9 @@ pub const USAGE: &str = concat!(
     "[--workflow <path>] [--poll-cadence-secs <n>] ",
     "[--mechanical-cadence-secs <n>] [--lease-ttl-secs <n>] ",
     "[--webhook-secret-file <path>] [--daemon-id <id>]\n",
-    "  Forgejo connection settings come from FORGEJO_URL + ",
-    "FORGEJO_ACCESS_TOKEN; optional Forgejo environment variables are read by ",
-    "ForgejoConfig::from_env"
+    "  Forgejo connection settings (URL, admin token, optional CI web-UI ",
+    "credentials) come from the resolved temper config, translated by ",
+    "temper-engine-service's forgejo_config adapter"
 );
 
 /// Fully parsed daemon runtime configuration.

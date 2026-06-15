@@ -48,7 +48,9 @@ the Forgejo token decides what the worker may read or mutate.
   production so cross-repo recovery can see dependency sources, but each per-repo
   reconciliation and automated-queue scan is bounded.
   `TEMPER_WAKE_DEBOUNCE_MS` can override the default 500ms local wake drain
-  window when a deployment or fixture needs different burst coalescing.
+  window when a deployment or fixture needs different burst coalescing. The
+  worker binary reads it once at startup and passes a concrete duration to the
+  wake bus (`temper-wake` itself never reads the environment).
 
 Every tick re-reads fresh Forge state before planning or mutating. Webhooks only
 accelerate latency; polling and audits remain the correctness backstops.
@@ -69,6 +71,8 @@ also emit `mechanical_reconciliation_summary` with `mode`, `snapshot_count`,
 `finding_count`, and applied/advisory action counts. Normal mechanical ticks emit
 `mechanical_automation_execution` per automated item and
 `mechanical_automation_summary` with candidate, applied, unchanged,
-gate-not-satisfied, and error counts. When `TEMPER_FORGEJO_CI_DIAGNOSTICS=1` is
-set, Forgejo web-UI CI fallback reads are logged as `read_ci_jobs_via_web_ui`;
-non-CI role ticks should not produce them.
+gate-not-satisfied, and error counts. When `TEMPER_FORGEJO_CI_DIAGNOSTICS` is set
+to a non-blank value, Forgejo web-UI CI fallback reads are logged as
+`read_ci_jobs_via_web_ui`; non-CI role ticks should not produce them. The worker
+binary reads this env var at startup and sets the backend's `ci_diagnostics`
+config flag explicitly (the backend never reads the environment).
