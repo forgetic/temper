@@ -106,7 +106,10 @@ pub fn agent_invocation(
 
     let auth_file = materialize_auth_file(resolved, auth_dir)?;
     let mut env = role_identity_env(resolved);
-    env.extend(provider::provider_env(&agent.provider, auth_file.as_deref()));
+    env.extend(provider::provider_env(
+        &agent.provider,
+        auth_file.as_deref(),
+    ));
 
     Ok(AgentInvocation { command, env })
 }
@@ -119,8 +122,14 @@ fn role_identity_env(resolved: &Resolved) -> Vec<(String, String)> {
     for (role, identity) in &resolved.forge.role_identities {
         let key = env_role_key(role);
         env.push((format!("TEMPER_FORGEJO_USER_{key}"), identity.user.clone()));
-        env.push((format!("TEMPER_FORGEJO_EMAIL_{key}"), identity.email.clone()));
-        env.push((format!("TEMPER_FORGEJO_TOKEN_{key}"), identity.token.clone()));
+        env.push((
+            format!("TEMPER_FORGEJO_EMAIL_{key}"),
+            identity.email.clone(),
+        ));
+        env.push((
+            format!("TEMPER_FORGEJO_TOKEN_{key}"),
+            identity.token.clone(),
+        ));
     }
     env
 }
@@ -128,6 +137,10 @@ fn role_identity_env(resolved: &Resolved) -> Vec<(String, String)> {
 /// Materializes the OAuth `auth.json` (for inline tokens) or returns the
 /// configured external auth-file path, or `None` for api-key/ambient creds.
 fn materialize_auth_file(resolved: &Resolved, auth_dir: &Path) -> Result<Option<PathBuf>, String> {
-    provider::materialize_auth_file(&resolved.agent.provider, auth_dir)
-        .map_err(|error| format!("materialize agent auth file in {}: {error}", auth_dir.display()))
+    provider::materialize_auth_file(&resolved.agent.provider, auth_dir).map_err(|error| {
+        format!(
+            "materialize agent auth file in {}: {error}",
+            auth_dir.display()
+        )
+    })
 }

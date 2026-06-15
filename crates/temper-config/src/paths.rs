@@ -13,9 +13,10 @@ use std::path::PathBuf;
 /// `~/.config/temper`).
 pub fn config_dir() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
-        && !xdg.is_empty() {
-            return Some(PathBuf::from(xdg).join("temper"));
-        }
+        && !xdg.is_empty()
+    {
+        return Some(PathBuf::from(xdg).join("temper"));
+    }
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(|home| PathBuf::from(home).join(".config").join("temper"))

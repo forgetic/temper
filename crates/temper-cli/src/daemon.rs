@@ -62,10 +62,9 @@ pub fn main(args: std::env::Args) -> ExitCode {
     let result = match service.as_deref() {
         None => standalone::run(&resolved),
         Some("engine") => temper_engine_service::run(&resolved),
-        Some("worker") => temper_worker_service::run(
-            &resolved,
-            temper_worker_service::self_subcommand("agent"),
-        ),
+        Some("worker") => {
+            temper_worker_service::run(&resolved, temper_worker_service::self_subcommand("agent"))
+        }
         Some(other) => Err(format!(
             "unknown --service `{other}` (expected `engine` or `worker`)"
         )),

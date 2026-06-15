@@ -32,18 +32,18 @@ use temper_engine_service::{
 };
 use temper_forge::RepositoryId;
 use temper_forge_forgejo::ForgejoForge;
-use temper_workflow::LeasePolicy;
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
     run_worker_with_transport,
 };
+use temper_workflow::LeasePolicy;
 
 /// Runs the standalone daemon on the skein runtime until SIGINT/SIGTERM.
 pub fn run(resolved: &Resolved) -> Result<(), String> {
     let resolved = resolved.clone();
-    temper_engine_io::block_on_with(move |_cx, handle| async move {
-        run_async(handle, &resolved).await
-    })
+    temper_engine_io::block_on_with(
+        move |_cx, handle| async move { run_async(handle, &resolved).await },
+    )
 }
 
 async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), String> {

@@ -211,9 +211,10 @@ impl std::fmt::Debug for ProviderCredential {
             ProviderCredential::OAuthFile(path) => {
                 formatter.debug_tuple("OAuthFile").field(path).finish()
             }
-            ProviderCredential::ApiKey(_) => {
-                formatter.debug_tuple("ApiKey").field(&"<redacted>").finish()
-            }
+            ProviderCredential::ApiKey(_) => formatter
+                .debug_tuple("ApiKey")
+                .field(&"<redacted>")
+                .finish(),
             ProviderCredential::Ambient => formatter.write_str("Ambient"),
         }
     }

@@ -41,8 +41,8 @@ pub use resolved::{
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, EngineConfig,
-    ForgeConfig, ForgeCredentials, ForgeUser, ModelMap, ProviderCredential as ProviderCredentialFile,
-    SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
+    ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
+    ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
 };
 pub use template::{config_template, credentials_template};
 
@@ -306,7 +306,9 @@ pub fn lint(resolved: &Resolved) -> Vec<Finding> {
         ));
     }
     if resolved.engine.repos.is_empty() {
-        findings.push(Finding::error("no repositories configured (`[engine] repos`)"));
+        findings.push(Finding::error(
+            "no repositories configured (`[engine] repos`)",
+        ));
     }
     if resolved.engine.roles.is_empty() {
         findings.push(Finding::error("no roles configured (`[engine] roles`)"));
@@ -321,7 +323,11 @@ pub fn lint(resolved: &Resolved) -> Vec<Finding> {
     // Every capability role should have a resolvable git identity (the worker
     // needs a push token), or it cannot run that role's jobs.
     for capability in &resolved.worker.capabilities {
-        if !resolved.forge.role_identities.contains_key(&capability.role) {
+        if !resolved
+            .forge
+            .role_identities
+            .contains_key(&capability.role)
+        {
             findings.push(Finding::error(format!(
                 "role `{}` (capability `{}`) has no git identity: add \
                  `[forge.users.{}]` with a token to the credentials file",

@@ -112,7 +112,9 @@ impl ResponderOptions {
             match arg.as_str() {
                 "--auth" => {
                     auth = parse_auth_choice(
-                        &iter.next().ok_or_else(|| "--auth requires a value".to_string())?,
+                        &iter
+                            .next()
+                            .ok_or_else(|| "--auth requires a value".to_string())?,
                     )?;
                 }
                 "--codex-model" => {

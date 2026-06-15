@@ -16,7 +16,10 @@ use temper_workflow::RoleId;
 /// Requires a forge URL and an admin token; applies the optional CI-reader
 /// web-UI credentials (ADR 0019).
 pub fn forgejo_config(resolved: &Resolved) -> Result<ForgejoConfig, String> {
-    let url = resolved.forge.require_url().map_err(|error| error.to_string())?;
+    let url = resolved
+        .forge
+        .require_url()
+        .map_err(|error| error.to_string())?;
     let token = resolved
         .forge
         .require_admin_token()

@@ -7,7 +7,8 @@ use crate::{
 };
 
 fn parse_config(text: &str) -> Config {
-    Config::parse(text, std::path::Path::new("config.toml"), FileKind::Config).expect("config parses")
+    Config::parse(text, std::path::Path::new("config.toml"), FileKind::Config)
+        .expect("config parses")
 }
 
 fn parse_credentials(text: &str) -> Credentials {
@@ -100,23 +101,44 @@ fn resolves_full_deployment() {
 
     // role identities: engineer has an explicit email; architect has none in the
     // credentials, so no identity is produced for it (no token).
-    let eng = resolved.forge.role_identities.get("engineer").expect("engineer identity");
+    let eng = resolved
+        .forge
+        .role_identities
+        .get("engineer")
+        .expect("engineer identity");
     assert_eq!(eng.user, "engineer");
     assert_eq!(eng.email, "eng@example.test");
     assert_eq!(eng.token, "eng-tok");
     assert!(!resolved.forge.role_identities.contains_key("architect"));
-    assert_eq!(resolved.forge.role_tokens.get("engineer").map(String::as_str), Some("eng-tok"));
+    assert_eq!(
+        resolved
+            .forge
+            .role_tokens
+            .get("engineer")
+            .map(String::as_str),
+        Some("eng-tok")
+    );
 
     // agent provider
     assert_eq!(resolved.agent.provider.kind, ProviderKind::Anthropic);
-    assert_eq!(resolved.agent.provider.main_model.as_deref(), Some("claude-opus-4-8"));
+    assert_eq!(
+        resolved.agent.provider.main_model.as_deref(),
+        Some("claude-opus-4-8")
+    );
     assert_eq!(
         resolved.agent.provider.investigate_model.as_deref(),
         Some("claude-haiku-4-5")
     );
-    assert_eq!(resolved.agent.provider.base_url.as_deref(), Some("http://fake-llm"));
+    assert_eq!(
+        resolved.agent.provider.base_url.as_deref(),
+        Some("http://fake-llm")
+    );
     match &resolved.agent.provider.credential {
-        ProviderCredential::OAuthInline { access, refresh, expires } => {
+        ProviderCredential::OAuthInline {
+            access,
+            refresh,
+            expires,
+        } => {
             assert_eq!(access, "secret-access-jwt");
             assert_eq!(refresh.as_deref(), Some("secret-refresh-token"));
             assert_eq!(*expires, 1781371005373);
@@ -130,8 +152,14 @@ fn env_overrides_file() {
     let config = parse_config(FULL_CONFIG);
     let credentials = parse_credentials(FULL_CREDENTIALS);
     let env: BTreeMap<String, String> = BTreeMap::from([
-        ("FORGEJO_URL".to_string(), "http://env-forge:9000".to_string()),
-        ("FORGEJO_ACCESS_TOKEN".to_string(), "env-admin-tok".to_string()),
+        (
+            "FORGEJO_URL".to_string(),
+            "http://env-forge:9000".to_string(),
+        ),
+        (
+            "FORGEJO_ACCESS_TOKEN".to_string(),
+            "env-admin-tok".to_string(),
+        ),
         ("TEMPER_ENGINE_PORT".to_string(), "5555".to_string()),
         ("TEMPER_WORKFLOW".to_string(), "/env-wf.json".to_string()),
     ]);
@@ -159,11 +187,21 @@ token = "agent-tok"
 "#,
     );
     let env: BTreeMap<String, String> = BTreeMap::from([
-        ("TEMPER_FORGEJO_USER_ENGINEER".to_string(), "eng-login".to_string()),
-        ("TEMPER_FORGEJO_TOKEN_ENGINEER".to_string(), "eng-env-tok".to_string()),
+        (
+            "TEMPER_FORGEJO_USER_ENGINEER".to_string(),
+            "eng-login".to_string(),
+        ),
+        (
+            "TEMPER_FORGEJO_TOKEN_ENGINEER".to_string(),
+            "eng-env-tok".to_string(),
+        ),
     ]);
     let resolved = resolve(&config, &credentials, &env).expect("resolves");
-    let eng = resolved.forge.role_identities.get("engineer").expect("engineer identity");
+    let eng = resolved
+        .forge
+        .role_identities
+        .get("engineer")
+        .expect("engineer identity");
     assert_eq!(eng.user, "eng-login");
     assert_eq!(eng.email, "eng-login@noreply.localhost");
     assert_eq!(eng.token, "eng-env-tok");
@@ -196,8 +234,12 @@ fn schema_version_must_match() {
     .expect_err("rejects v2");
     assert!(format!("{err}").contains("unsupported schema_version 2"));
 
-    let err = Config::parse("[forge]\n", std::path::Path::new("c.toml"), FileKind::Config)
-        .expect_err("rejects missing version");
+    let err = Config::parse(
+        "[forge]\n",
+        std::path::Path::new("c.toml"),
+        FileKind::Config,
+    )
+    .expect_err("rejects missing version");
     assert!(format!("{err}").contains("missing `schema_version`"));
 }
 
@@ -241,7 +283,11 @@ key = "sk-secret"
 fn lint_flags_missing_essentials() {
     let resolved = resolve(&Config::default(), &Credentials::default(), &NoEnv).expect("resolves");
     let findings = lint(&resolved);
-    let errors: Vec<_> = findings.iter().filter(|f| f.error).map(|f| f.message.clone()).collect();
+    let errors: Vec<_> = findings
+        .iter()
+        .filter(|f| f.error)
+        .map(|f| f.message.clone())
+        .collect();
     assert!(errors.iter().any(|m| m.contains("forge URL")));
     assert!(errors.iter().any(|m| m.contains("no repositories")));
     assert!(errors.iter().any(|m| m.contains("no roles")));
@@ -253,8 +299,14 @@ fn redacts_secrets_in_debug() {
     let credentials = parse_credentials(FULL_CREDENTIALS);
     let resolved = resolve(&config, &credentials, &NoEnv).expect("resolves");
     let rendered = format!("{:?}", resolved.agent.provider.credential);
-    assert!(!rendered.contains("secret-access-jwt"), "access token leaked: {rendered}");
-    assert!(!rendered.contains("secret-refresh-token"), "refresh token leaked: {rendered}");
+    assert!(
+        !rendered.contains("secret-access-jwt"),
+        "access token leaked: {rendered}"
+    );
+    assert!(
+        !rendered.contains("secret-refresh-token"),
+        "refresh token leaked: {rendered}"
+    );
     assert!(rendered.contains("redacted"));
     let web = format!("{:?}", resolved.forge.web_ui);
     assert!(!web.contains("bot-pw"));

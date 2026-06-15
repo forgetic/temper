@@ -33,9 +33,9 @@ pub fn run(resolved: &Resolved) -> Result<(), String> {
     // daemon machine's loop, backstop cadence machines, appliers, and wake scans
     // are all completion-driven I/O on the skein runtime.
     let resolved = resolved.clone();
-    temper_engine_io::block_on_with(move |_cx, handle| async move {
-        run_async(handle, &resolved).await
-    })
+    temper_engine_io::block_on_with(
+        move |_cx, handle| async move { run_async(handle, &resolved).await },
+    )
 }
 
 /// The async engine wiring: builds the daemon, backstops, and webhook route, then

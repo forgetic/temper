@@ -24,9 +24,7 @@ pub struct CommonArgs {
 
 /// Parses `--config <path>`, `--credentials <path>`, `-h`/`--help`, and
 /// `-V`/`--version`, collecting everything else into [`CommonArgs::rest`].
-pub fn parse_common_args(
-    args: impl IntoIterator<Item = String>,
-) -> Result<CommonArgs, String> {
+pub fn parse_common_args(args: impl IntoIterator<Item = String>) -> Result<CommonArgs, String> {
     let mut parsed = CommonArgs::default();
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {

@@ -85,8 +85,8 @@ fn resolve_forge(
                 .and_then(|user| trimmed(user.token.as_deref()))
         });
 
-    let ci_user = trimmed(config.forge.ci_user.as_deref())
-        .unwrap_or_else(|| DEFAULT_CI_USER.to_string());
+    let ci_user =
+        trimmed(config.forge.ci_user.as_deref()).unwrap_or_else(|| DEFAULT_CI_USER.to_string());
     let web_ui = resolve_web_ui(credentials, env, &ci_user);
 
     let mut role_tokens = BTreeMap::new();
@@ -96,14 +96,7 @@ fn resolve_forge(
             role_tokens.insert(role.clone(), token.clone());
             let user = role_user(credentials, env, role);
             let email = role_email(credentials, env, role, &user);
-            role_identities.insert(
-                role.clone(),
-                GitIdentity {
-                    user,
-                    email,
-                    token,
-                },
-            );
+            role_identities.insert(role.clone(), GitIdentity { user, email, token });
         }
     }
 
@@ -152,12 +145,7 @@ fn role_user(credentials: &Credentials, env: &impl EnvLookup, role: &str) -> Str
         .unwrap_or_else(|| role.to_string())
 }
 
-fn role_email(
-    credentials: &Credentials,
-    env: &impl EnvLookup,
-    role: &str,
-    user: &str,
-) -> String {
+fn role_email(credentials: &Credentials, env: &impl EnvLookup, role: &str, user: &str) -> String {
     credentials
         .forge
         .users
@@ -214,7 +202,10 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
         .map(PathBuf::from);
 
     let poll_cadence = positive_duration_secs(
-        config.engine.poll_cadence_secs.unwrap_or(DEFAULT_POLL_CADENCE_SECS),
+        config
+            .engine
+            .poll_cadence_secs
+            .unwrap_or(DEFAULT_POLL_CADENCE_SECS),
         "engine.poll_cadence_secs",
     )?;
     let mechanical_cadence = config
@@ -223,14 +214,18 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
         .map(|secs| positive_duration_secs(secs, "engine.mechanical_cadence_secs"))
         .transpose()?;
     let lease_ttl = positive_duration_secs(
-        config.engine.lease_ttl_secs.unwrap_or(DEFAULT_LEASE_TTL_SECS),
+        config
+            .engine
+            .lease_ttl_secs
+            .unwrap_or(DEFAULT_LEASE_TTL_SECS),
         "engine.lease_ttl_secs",
     )?;
 
     let daemon_id = trimmed(config.engine.daemon_id.as_deref())
         .unwrap_or_else(|| DEFAULT_DAEMON_ID.to_string());
 
-    let webhook_secret_file = trimmed(config.engine.webhook_secret_file.as_deref()).map(PathBuf::from);
+    let webhook_secret_file =
+        trimmed(config.engine.webhook_secret_file.as_deref()).map(PathBuf::from);
 
     Ok(EngineSettings {
         bind,
@@ -305,9 +300,14 @@ fn resolve_worker(
             "worker.max_concurrent_jobs must be greater than zero",
         ));
     }
-    let poll_wait = Duration::from_millis(config.worker.poll_wait_ms.unwrap_or(DEFAULT_POLL_WAIT_MS));
-    let heartbeat_interval =
-        Duration::from_millis(config.worker.heartbeat_interval_ms.unwrap_or(DEFAULT_HEARTBEAT_MS));
+    let poll_wait =
+        Duration::from_millis(config.worker.poll_wait_ms.unwrap_or(DEFAULT_POLL_WAIT_MS));
+    let heartbeat_interval = Duration::from_millis(
+        config
+            .worker
+            .heartbeat_interval_ms
+            .unwrap_or(DEFAULT_HEARTBEAT_MS),
+    );
 
     let capabilities = match &config.worker.capabilities {
         Some(raw) => raw
@@ -347,17 +347,13 @@ fn default_capabilities(engine: &EngineSettings) -> Vec<Capability> {
 
 fn parse_capability(raw: &str) -> Result<Capability, ConfigError> {
     let (repo, role) = raw.split_once(':').ok_or_else(|| {
-        ConfigError::invalid(format!(
-            "capability `{raw}` must be `owner/name:role`"
-        ))
+        ConfigError::invalid(format!("capability `{raw}` must be `owner/name:role`"))
     })?;
     let repo = repo.trim();
     let role = role.trim();
     // Validate the repo half is owner/name.
     RepoPath::parse(repo).map_err(|_| {
-        ConfigError::invalid(format!(
-            "capability `{raw}`: repo must be `owner/name`"
-        ))
+        ConfigError::invalid(format!("capability `{raw}`: repo must be `owner/name`"))
     })?;
     if role.is_empty() {
         return Err(ConfigError::invalid(format!(
@@ -398,7 +394,10 @@ fn resolve_agent(config: &Config, credentials: &Credentials) -> Result<AgentSett
 
     Ok(AgentSettings {
         provider,
-        max_iterations: config.agent.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS),
+        max_iterations: config
+            .agent
+            .max_iterations
+            .unwrap_or(DEFAULT_MAX_ITERATIONS),
         enable_subagents: config.agent.enable_subagents.unwrap_or(false),
         config_dir: trimmed(config.agent.config_dir.as_deref()).map(PathBuf::from),
     })
@@ -415,7 +414,10 @@ fn parse_provider_kind(name: &str) -> Result<ProviderKind, ConfigError> {
     }
 }
 
-fn resolve_provider_credential(credentials: &Credentials, provider_name: &str) -> ProviderCredential {
+fn resolve_provider_credential(
+    credentials: &Credentials,
+    provider_name: &str,
+) -> ProviderCredential {
     let Some(cred) = credentials.agent.providers.get(provider_name) else {
         return ProviderCredential::Ambient;
     };
@@ -424,9 +426,10 @@ fn resolve_provider_credential(credentials: &Credentials, provider_name: &str) -
     }
     let kind = trimmed(cred.kind.as_deref()).unwrap_or_default();
     if (kind == "api-key" || kind == "api_key")
-        && let Some(key) = trimmed(cred.key.as_deref()) {
-            return ProviderCredential::ApiKey(key);
-        }
+        && let Some(key) = trimmed(cred.key.as_deref())
+    {
+        return ProviderCredential::ApiKey(key);
+    }
     if let Some(access) = trimmed(cred.access.as_deref()) {
         return ProviderCredential::OAuthInline {
             access,
@@ -461,7 +464,9 @@ fn trimmed(value: Option<&str>) -> Option<String> {
 
 fn positive_duration_secs(secs: u64, field: &str) -> Result<Duration, ConfigError> {
     if secs == 0 {
-        return Err(ConfigError::invalid(format!("{field} must be greater than zero")));
+        return Err(ConfigError::invalid(format!(
+            "{field} must be greater than zero"
+        )));
     }
     Ok(Duration::from_secs(secs))
 }

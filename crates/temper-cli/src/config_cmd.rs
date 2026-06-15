@@ -182,8 +182,16 @@ fn render(resolved: &Resolved) -> String {
     let present = |value: &Option<String>| if value.is_some() { "set" } else { "unset" };
 
     let _ = writeln!(out, "[forge]");
-    let _ = writeln!(out, "  url          = {}", resolved.forge.url.as_deref().unwrap_or("(unset)"));
-    let _ = writeln!(out, "  admin_token  = {}", present(&resolved.forge.admin_token));
+    let _ = writeln!(
+        out,
+        "  url          = {}",
+        resolved.forge.url.as_deref().unwrap_or("(unset)")
+    );
+    let _ = writeln!(
+        out,
+        "  admin_token  = {}",
+        present(&resolved.forge.admin_token)
+    );
     let _ = writeln!(
         out,
         "  web_ui       = {}",
@@ -217,7 +225,11 @@ fn render(resolved: &Resolved) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let _ = writeln!(out, "  roles        = [{}]", resolved.engine.roles.join(", "));
+    let _ = writeln!(
+        out,
+        "  roles        = [{}]",
+        resolved.engine.roles.join(", ")
+    );
     let _ = writeln!(
         out,
         "  workflow     = {}",
@@ -253,7 +265,11 @@ fn render(resolved: &Resolved) -> String {
     let _ = writeln!(out, "\n[worker]");
     let _ = writeln!(out, "  worker_id    = {}", resolved.worker.worker_id);
     let _ = writeln!(out, "  daemon_url   = {}", resolved.worker.daemon_url);
-    let _ = writeln!(out, "  workspace    = {}", resolved.worker.workspace_root.display());
+    let _ = writeln!(
+        out,
+        "  workspace    = {}",
+        resolved.worker.workspace_root.display()
+    );
     let _ = writeln!(
         out,
         "  capabilities = [{}]",
@@ -267,21 +283,40 @@ fn render(resolved: &Resolved) -> String {
     );
 
     let _ = writeln!(out, "\n[agent]");
-    let _ = writeln!(out, "  provider     = {}", resolved.agent.provider.kind.as_str());
+    let _ = writeln!(
+        out,
+        "  provider     = {}",
+        resolved.agent.provider.kind.as_str()
+    );
     let _ = writeln!(
         out,
         "  main model   = {}",
-        resolved.agent.provider.main_model.as_deref().unwrap_or("(default)")
+        resolved
+            .agent
+            .provider
+            .main_model
+            .as_deref()
+            .unwrap_or("(default)")
     );
     let _ = writeln!(
         out,
         "  investigate  = {}",
-        resolved.agent.provider.investigate_model.as_deref().unwrap_or("(default)")
+        resolved
+            .agent
+            .provider
+            .investigate_model
+            .as_deref()
+            .unwrap_or("(default)")
     );
     let _ = writeln!(
         out,
         "  base_url     = {}",
-        resolved.agent.provider.base_url.as_deref().unwrap_or("(default)")
+        resolved
+            .agent
+            .provider
+            .base_url
+            .as_deref()
+            .unwrap_or("(default)")
     );
     let _ = writeln!(
         out,

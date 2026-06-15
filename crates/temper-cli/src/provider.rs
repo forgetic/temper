@@ -31,10 +31,12 @@ pub fn build_provider(resolved: &Resolved, auth_dir: &Path) -> Result<ProviderCo
             _ => ProviderConfig::from_auth(AuthChoice::DeepSeek, None, None)
                 .map_err(|error| error.to_string())?,
         },
-        ProviderKind::ChatGpt => {
-            ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, settings.main_model.clone(), auth_file)
-                .map_err(|error| error.to_string())?
-        }
+        ProviderKind::ChatGpt => ProviderConfig::from_auth(
+            AuthChoice::ChatGptOAuth,
+            settings.main_model.clone(),
+            auth_file,
+        )
+        .map_err(|error| error.to_string())?,
         ProviderKind::Anthropic => {
             let mut config = ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, auth_file)
                 .map_err(|error| error.to_string())?;
