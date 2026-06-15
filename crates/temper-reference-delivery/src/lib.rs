@@ -14,6 +14,13 @@ use temper_forge::{CreateRepository, User, UserId};
 use temper_runner::RunnerConfig;
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
+mod forgejo_demo;
+
+pub use forgejo_demo::{
+    CI_PASS_MARKER, CI_WORKFLOW, DEFAULT_INTAKE_BODY, DEFAULT_INTAKE_TITLE, ci_seed_commits,
+    ci_sentinel_commit,
+};
+
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");
 
 /// The bundled **basic-delivery** workflow JSON: the minimal,

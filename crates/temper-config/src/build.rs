@@ -22,8 +22,8 @@
 //! knowledge of the forge or the provisioner. The provisioning seam is the
 //! plain-data [`ProvisionedForgeUser`] type defined *here* and the
 //! [`forge_users_from_provisioned`] adapter — the caller (e.g. `temper init`,
-//! issue #182) maps a `temper-forgejo-provision` result into these, so this
-//! crate never depends on the provisioner.
+//! issue #182) maps a `temper-provision` result into these, so this crate never
+//! depends on the provisioner.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -71,7 +71,7 @@ pub struct ConfigInputs {
 ///
 /// This is the *seam* that keeps `temper-config` free of any provision/forge
 /// dependency: it mirrors the fields a provisioning run yields for one user
-/// (`temper-forgejo-provision`'s `RoleIdentity`) without naming that type. The
+/// (`temper-provision`'s `RoleIdentity`) without naming that type. The
 /// caller maps each provisioned identity into one of these; this crate then
 /// folds them into [`ForgeUser`] credentials via [`forge_users_from_provisioned`].
 #[derive(Debug, Clone, Default)]
@@ -218,7 +218,7 @@ pub fn build_credentials(inputs: &CredentialInputs) -> Credentials {
 /// `temper init`) collects the provisioner's per-role result — keyed by role/user
 /// name — into [`ProvisionedForgeUser`]s and hands them here. Because the input
 /// type lives in this crate and carries only plain data, `temper-config` never
-/// links `temper-forgejo-provision`. A `user` that equals its key is dropped
+/// links `temper-provision`. A `user` that equals its key is dropped
 /// (the key is the default) so the written file stays minimal.
 pub fn forge_users_from_provisioned(
     provisioned: &BTreeMap<String, ProvisionedForgeUser>,

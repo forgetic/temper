@@ -1,5 +1,6 @@
-//! Top-level runner for `temper-provision-forgejo`: drives provisioning/seeding.
+//! Top-level runner for `temper provision-forgejo`: drives provisioning/seeding.
 
+use temper_reference_delivery::{DEFAULT_INTAKE_BODY, DEFAULT_INTAKE_TITLE};
 use temper_workflow::{IntakeAuthor, RoleId};
 
 use crate::provision::{self, ProvisionOptions};
@@ -15,10 +16,10 @@ fn intake_seed_from_args(args: &ProvisionArgs) -> Result<provision::IntakeIssueS
         title: args
             .intake_title
             .clone()
-            .unwrap_or_else(|| provision::DEFAULT_INTAKE_TITLE.into()),
+            .unwrap_or_else(|| DEFAULT_INTAKE_TITLE.into()),
         body: match &args.intake_body_file {
             Some(path) => std::fs::read_to_string(path)?,
-            None => provision::DEFAULT_INTAKE_BODY.into(),
+            None => DEFAULT_INTAKE_BODY.into(),
         },
     })
 }

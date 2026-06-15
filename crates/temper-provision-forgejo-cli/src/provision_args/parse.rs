@@ -1,4 +1,4 @@
-//! Argument parsing for `temper-provision-forgejo`.
+//! Argument parsing for `temper provision-forgejo`.
 
 use std::path::PathBuf;
 

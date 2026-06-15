@@ -59,11 +59,20 @@ pub trait Provisioner {
 /// deployment; filing the first issue is left to the operator.
 pub struct ForgejoProvisioner;
 
+/// Token scopes role workers need for the reference-delivery demo (the same set
+/// the dissolved Forgejo provisioning adapter emitted).
+const ROLE_TOKEN_SCOPES: &[temper_forge::TokenScope] = &[
+    temper_forge::TokenScope::WriteRepository,
+    temper_forge::TokenScope::WriteIssue,
+    temper_forge::TokenScope::WriteUser,
+    temper_forge::TokenScope::ReadOrg,
+];
+
 impl Provisioner for ForgejoProvisioner {
     fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String> {
         let runtime = temper_engine_io::build_runtime()?;
         let request = request.clone();
-        temper_engine_io::runtime::block_on_runtime_with(&runtime, move |cx, _handle| async move {
+        temper_engine_io::runtime::block_on_runtime_with(&runtime, move |_cx, _handle| async move {
             // Exchange the admin user+password for an admin REST token.
             let admin_token = temper_forge_forgejo::admin_token_via_basic_auth(
                 &request.base_url,
@@ -74,25 +83,59 @@ impl Provisioner for ForgejoProvisioner {
             .map_err(|error| format!("mint admin token: {error}"))?;
 
             let workflow = temper_reference_delivery::basic_delivery_workflow();
-            let options = temper_forgejo_provision::provision::ProvisionOptions {
-                existing_repo: request.existing_repo,
-                access: temper_forge::AccessScope::default(),
-            };
-            let (provisioned, _issue) = temper_forgejo_provision::provision::provision_and_seed(
-                &cx,
-                &request.base_url,
-                &admin_token,
-                &request.owner,
-                &request.name,
-                Some(request.webhook_url.as_str()),
-                Some(request.webhook_secret_file.as_path()),
-                // No intake issue seeded by `temper init`.
-                None,
+            let config = temper_reference_delivery::runner_config_for(
                 &workflow,
-                options,
+                temper_reference_delivery::repo_input(),
+            );
+            let default_branch = config.repository.default_branch.clone();
+
+            // Read the freshly written webhook secret the daemon will serve
+            // and fold it into the plan so the orchestration registers the
+            // hook idempotently after the repo exists.
+            let secret = std::fs::read_to_string(&request.webhook_secret_file)
+                .map_err(|error| {
+                    format!(
+                        "read webhook secret {}: {error}",
+                        request.webhook_secret_file.display()
+                    )
+                })?
+                .trim()
+                .to_string();
+            let webhook = temper_forge::WebhookSpec {
+                url: request.webhook_url.clone(),
+                secret,
+                events: temper_forge::WebhookEvents::All,
+            };
+
+            let plan_options = temper_provision::ProvisionOptions {
+                existing_repo: request.existing_repo,
+                roles: config.role_bindings.clone(),
+                automation_login: temper_provision::BOT_USER.to_string(),
+                password: temper_forge_forgejo::ROLE_PASSWORD.to_string(),
+                token_scopes: ROLE_TOKEN_SCOPES.to_vec(),
+                labels: Vec::new(),
+                seed_commits: temper_reference_delivery::ci_seed_commits(&default_branch),
+                webhook: Some(webhook),
+                // No intake issue seeded by `temper init`.
+                intake: None,
+            };
+            let plan = temper_provision::ProvisionPlan::from_workflow(
+                &workflow,
+                temper_forge::RepositoryPath::new(&request.owner, &request.name),
+                default_branch,
+                temper_forge::AccessScope::default(),
+                plan_options,
             )
-            .await
             .map_err(|error| error.to_string())?;
+
+            let forge_config =
+                temper_forge_forgejo::ForgejoConfig::new(&request.base_url, &admin_token)
+                    .with_default_repo(&request.owner, &request.name);
+            let forge = temper_forge_forgejo::ForgejoForge::new(forge_config);
+
+            let provisioned = temper_provision::provision(&plan, &forge, &forge, &forge)
+                .await
+                .map_err(|error| error.to_string())?;
             Ok(ProvisionOutcome {
                 provisioned,
                 admin_token,

@@ -1,4 +1,4 @@
-//! CLI argument and error types for `temper-provision-forgejo`.
+//! CLI argument and error types for `temper provision-forgejo`.
 
 use std::fmt;
 use std::path::PathBuf;

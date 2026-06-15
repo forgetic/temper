@@ -1,4 +1,4 @@
-//! Argument parsing and top-level runner for `temper-provision-forgejo`.
+//! Argument parsing and top-level runner for `temper provision-forgejo`.
 
 mod model;
 mod parse;

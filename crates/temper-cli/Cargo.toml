@@ -23,7 +23,7 @@ temper-agent-io = { path = "../temper-agent-io" }
 temper-process-protocol = { path = "../temper-process-protocol" }
 
 # Operator tools.
-temper-forgejo-provision = { path = "../temper-forgejo-provision" }
+temper-provision-forgejo-cli = { path = "../temper-provision-forgejo-cli" }
 temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
 temper-reference-delivery-validator = { path = "../temper-reference-delivery-validator" }
 temper-interaction-service = { path = "../temper-interaction-service" }
