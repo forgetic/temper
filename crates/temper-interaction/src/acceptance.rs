@@ -6,17 +6,23 @@
 //! uses hidden correlation markers rendered from each acceptance action's
 //! idempotency-key template.
 
-use temper_forge::{
-    CreateComment, CreateIssue, Forge, Issue, IssueQuery, Repository, User, UserId,
+mod marker;
+mod template;
+
+pub use marker::{find_issue_by_marker, render_acceptance_marker, render_filed_issue_body};
+
+use marker::{
+    append_visible_line, effect_marker_key, select_acceptance_action, validate_marker_value,
 };
+use template::{TemplateContext, render_non_empty_values, render_template};
+
+use temper_forge::{CreateComment, CreateIssue, Forge, Issue, Repository, User, UserId};
 
 use crate::ids::AcceptanceActionId;
 use crate::transcript::append_marker;
-use crate::types::{ConversationId, ProposalId, ProposalKind};
+use crate::types::{ConversationId, ProposalId};
 use crate::validated::{AcceptanceEffect, AddTranscriptCommentEffect, CreateIssueEffect};
-use crate::{
-    AcceptanceManifest, CompiledProfileManifest, InteractionError, IssueProposal, Proposal,
-};
+use crate::{AcceptanceManifest, CompiledProfileManifest, InteractionError, Proposal};
 
 /// Request consumed by [`AcceptanceExecutor`] for one explicit proposal
 /// acceptance command.
@@ -293,230 +299,5 @@ impl<'a, F: Forge + ?Sized> AcceptanceExecutor<'a, F> {
             .add_issue_comment(&transcript_issue.id, CreateComment { body })
             .await?;
         Ok(())
-    }
-}
-
-fn select_acceptance_action<'a>(
-    profile: &'a CompiledProfileManifest,
-    proposal_id: &ProposalId,
-    proposal_kind: &ProposalKind,
-    requested: Option<&AcceptanceActionId>,
-) -> Result<&'a AcceptanceManifest, InteractionError> {
-    if let Some(requested) = requested {
-        let action = profile.acceptance_action(requested).ok_or_else(|| {
-            InteractionError::InvalidConfig {
-                field: "acceptance_action",
-                message: format!("acceptance action `{requested}` is not declared"),
-            }
-        })?;
-        if &action.proposal_kind != proposal_kind {
-            return Err(InteractionError::UnsupportedProposalKind {
-                id: proposal_id.clone(),
-                kind: proposal_kind.clone(),
-            });
-        }
-        return Ok(action);
-    }
-
-    let mut matches = profile
-        .acceptance_actions
-        .iter()
-        .filter(|action| &action.proposal_kind == proposal_kind);
-    let Some(action) = matches.next() else {
-        return Err(InteractionError::UnsupportedProposalKind {
-            id: proposal_id.clone(),
-            kind: proposal_kind.clone(),
-        });
-    };
-    if matches.next().is_some() {
-        return Err(InteractionError::InvalidConfig {
-            field: "acceptance_actions",
-            message: format!(
-                "multiple acceptance actions accept proposal kind `{proposal_kind}`; transport must select one"
-            ),
-        });
-    }
-    Ok(action)
-}
-
-/// Finds an issue whose body contains a hidden marker.
-pub async fn find_issue_by_marker<F: Forge + ?Sized>(
-    forge: &F,
-    repository: &Repository,
-    marker: &str,
-) -> Result<Option<Issue>, InteractionError> {
-    let issues = forge
-        .list_issues(&repository.id, IssueQuery::default())
-        .await?;
-    Ok(issues.into_iter().find(|issue| issue.body.contains(marker)))
-}
-
-/// Renders the generic hidden acceptance marker used for idempotency.
-pub fn render_acceptance_marker(
-    marker_namespace: &str,
-    marker_key: &str,
-    idempotency_key: &str,
-) -> String {
-    format!("<!-- temper:{marker_namespace}-{marker_key}={idempotency_key} -->")
-}
-
-fn effect_marker_key<'a>(marker_key: Option<&'a str>, action: &'a AcceptanceManifest) -> &'a str {
-    marker_key.unwrap_or_else(|| action.id.as_str())
-}
-
-fn validate_marker_value(field: &'static str, value: &str) -> Result<(), InteractionError> {
-    if !value.trim().is_empty() && !value.contains('\n') && !value.contains("-->") {
-        Ok(())
-    } else {
-        Err(InteractionError::InvalidConfig {
-            field,
-            message: "rendered marker value must be non-empty and fit in one HTML comment".into(),
-        })
-    }
-}
-
-/// Renders the body used by the deprecated issue-intake helper.
-pub fn render_filed_issue_body(
-    draft: &IssueProposal,
-    transcript_url: &str,
-    marker: &str,
-    requested_by: Option<&str>,
-) -> String {
-    let mut body = draft.body.trim_end().to_string();
-    body.push_str("\n\n---\n");
-    body.push_str(&format!("Transcript: {transcript_url}\n"));
-    if let Some(human) = requested_by.filter(|value| !value.trim().is_empty()) {
-        body.push_str(&format!("requested-by: {human}\n"));
-    }
-    body.push('\n');
-    body.push_str(marker);
-    body
-}
-
-#[derive(Clone, Copy)]
-struct TemplateContext<'a> {
-    request: AcceptanceRequest<'a>,
-    proposal: &'a Proposal,
-    action: &'a AcceptanceManifest,
-    idempotency_key: Option<&'a str>,
-    effect_marker: Option<&'a str>,
-}
-
-impl<'a> TemplateContext<'a> {
-    fn new(
-        request: AcceptanceRequest<'a>,
-        proposal: &'a Proposal,
-        action: &'a AcceptanceManifest,
-        idempotency_key: Option<&'a str>,
-        effect_marker: Option<&'a str>,
-    ) -> Self {
-        Self {
-            request,
-            proposal,
-            action,
-            idempotency_key,
-            effect_marker,
-        }
-    }
-}
-
-fn render_template(
-    template: &str,
-    context: &TemplateContext<'_>,
-) -> Result<String, InteractionError> {
-    let mut rendered = String::new();
-    let mut rest = template;
-    while let Some(start) = rest.find("${") {
-        rendered.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        let Some(end) = after.find('}') else {
-            return Err(InteractionError::InvalidConfig {
-                field: "template",
-                message: format!("unterminated template variable in `{template}`"),
-            });
-        };
-        let variable = &after[..end];
-        rendered.push_str(&template_value(variable, context)?);
-        rest = &after[end + 1..];
-    }
-    rendered.push_str(rest);
-    Ok(rendered)
-}
-
-fn template_value(
-    variable: &str,
-    context: &TemplateContext<'_>,
-) -> Result<String, InteractionError> {
-    match variable {
-        "conversation.id" => Ok(context.request.conversation_id.to_string()),
-        "conversation.transcript_url" => Ok(context.request.transcript_url.to_string()),
-        "proposal.id" => Ok(context.proposal.id.to_string()),
-        "proposal.kind" => Ok(context.proposal.kind.to_string()),
-        "proposal.title" => Ok(context.proposal.title.clone()),
-        "proposal.summary" => Ok(context.proposal.summary.clone().unwrap_or_default()),
-        "human.handle" => Ok(context
-            .request
-            .requested_by
-            .map(|user| user.handle.clone())
-            .unwrap_or_default()),
-        "acceptance.action_id" => Ok(context.action.id.to_string()),
-        "idempotency.key" => Ok(context.idempotency_key.unwrap_or_default().to_string()),
-        "effect.marker" => Ok(context.effect_marker.unwrap_or_default().to_string()),
-        value if value.starts_with("proposal.payload.") => json_path_string(
-            &context.proposal.payload,
-            value.trim_start_matches("proposal.payload."),
-        ),
-        other => Err(InteractionError::InvalidConfig {
-            field: "template",
-            message: format!("unsupported template variable `{other}`"),
-        }),
-    }
-}
-
-fn json_path_string(value: &serde_json::Value, path: &str) -> Result<String, InteractionError> {
-    let mut current = value;
-    for segment in path.split('.') {
-        current = current
-            .get(segment)
-            .ok_or_else(|| InteractionError::InvalidConfig {
-                field: "template",
-                message: format!("proposal payload has no `{path}` field"),
-            })?;
-    }
-    Ok(match current {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(value) => value.clone(),
-        other => other.to_string(),
-    })
-}
-
-fn render_non_empty_values(
-    values: &[String],
-    context: &TemplateContext<'_>,
-    field: &'static str,
-) -> Result<Vec<String>, InteractionError> {
-    values
-        .iter()
-        .map(|value| {
-            let rendered = render_template(value, context)?.trim().to_string();
-            if rendered.is_empty() {
-                Err(InteractionError::InvalidConfig {
-                    field,
-                    message: "rendered value must not be empty".into(),
-                })
-            } else {
-                Ok(rendered)
-            }
-        })
-        .collect()
-}
-
-fn append_visible_line(mut body: String, line: &str) -> String {
-    if body.trim().is_empty() {
-        line.to_string()
-    } else {
-        body.push_str("\n\n---\n");
-        body.push_str(line);
-        body
     }
 }

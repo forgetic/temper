@@ -4,10 +4,11 @@
 //! configured subprocess, and executes any authorized action only through
 //! [`RoleTools`]. The subprocess receives no Forge handle or mutation tool.
 
-use std::error::Error;
-use std::fmt;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+mod classify;
+mod config;
+mod error;
+
+use std::time::Instant;
 
 use async_trait::async_trait;
 use temper_engine_io::process::{ProcessCall, ProcessCallError, run_process};
@@ -18,179 +19,20 @@ use temper_workflow::{RoleManifest, ToolManifest};
 use crate::role_decision::workflow_role_manifest_from_runtime;
 use crate::role_process_tools::{build_work_item_context, run_process_action};
 use crate::{
-    Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleDecisionReplyEvent,
-    RoleDecisionRequestEvent, RoleTools, WorkItem, WorkflowRoleDecisionProtocolError,
+    Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleTools, WorkItem,
     WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, redacted_lossy_preview,
-    render_role_decision_reply_event, render_role_decision_request_event,
 };
 
+use classify::{
+    DecisionDisposition, classify_decision_reply, classify_process_error, log_decision_reply,
+    log_decision_request,
+};
+pub use config::WorkflowRoleDecisionProcessConfig;
+pub use error::WorkflowRoleDecisionProcessError;
+
+use config::validate_config;
+
 const STDERR_PREVIEW_LIMIT: usize = 4096;
-
-/// Configuration for invoking an out-of-process workflow-role decision engine.
-///
-/// `Debug` redacts forwarded environment values (which may be secrets such as
-/// API keys or Forge tokens) while keeping their names visible.
-#[derive(Clone, Eq, PartialEq)]
-pub struct WorkflowRoleDecisionProcessConfig {
-    /// Program to execute.
-    pub program: PathBuf,
-    /// Arguments supplied to the program.
-    pub args: Vec<String>,
-    /// Optional working directory for the process.
-    pub working_dir: Option<PathBuf>,
-    /// Environment variables forwarded to the subprocess as resolved
-    /// name→value pairs. Values are resolved once at the config/arg boundary;
-    /// this adapter never reads ambient process environment at spawn time.
-    pub env: Vec<(String, String)>,
-    /// Maximum wall-clock duration for one decision.
-    pub timeout: Duration,
-}
-
-impl fmt::Debug for WorkflowRoleDecisionProcessConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let env_redacted: Vec<(&str, &str)> = self
-            .env
-            .iter()
-            .map(|(name, _value)| (name.as_str(), "<redacted>"))
-            .collect();
-        formatter
-            .debug_struct("WorkflowRoleDecisionProcessConfig")
-            .field("program", &self.program)
-            .field("args", &self.args)
-            .field("working_dir", &self.working_dir)
-            .field("env", &env_redacted)
-            .field("timeout", &self.timeout)
-            .finish()
-    }
-}
-
-impl WorkflowRoleDecisionProcessConfig {
-    /// Default one-decision timeout.
-    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
-
-    /// Builds process configuration with no inherited environment and the
-    /// default timeout.
-    pub fn new(program: impl Into<PathBuf>) -> Self {
-        Self {
-            program: program.into(),
-            args: Vec::new(),
-            working_dir: None,
-            env: Vec::new(),
-            timeout: Self::DEFAULT_TIMEOUT,
-        }
-    }
-
-    /// Replaces command arguments.
-    pub fn with_args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.args = args.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Sets the working directory.
-    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
-        self.working_dir = Some(working_dir.into());
-        self
-    }
-
-    /// Replaces the forwarded environment with resolved name→value pairs.
-    ///
-    /// Values must be resolved by the caller at the config/arg boundary (where
-    /// process environment is read once); this adapter forwards them verbatim
-    /// and never reads ambient environment itself.
-    pub fn with_env<I, K, V>(mut self, pairs: I) -> Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
-    {
-        self.env = pairs
-            .into_iter()
-            .map(|(name, value)| (name.into(), value.into()))
-            .collect();
-        self
-    }
-
-    /// Sets the timeout.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-}
-
-/// Errors produced by the workflow-role decision process adapter before they
-/// are mapped onto generic [`AgentError`] values.
-#[derive(Debug)]
-pub enum WorkflowRoleDecisionProcessError {
-    /// Static process configuration is invalid.
-    InvalidConfig {
-        field: &'static str,
-        message: String,
-    },
-    /// Spawning, writing to, or waiting for the process failed.
-    Io {
-        operation: &'static str,
-        source: std::io::Error,
-    },
-    /// The process exceeded its timeout.
-    Timeout { timeout: Duration },
-    /// The process exited unsuccessfully.
-    Exit { status: String, stderr: String },
-    /// Stdout did not contain exactly one valid reply JSON value.
-    MalformedJson { source: serde_json::Error },
-    /// The reply did not satisfy the request contract.
-    Protocol(WorkflowRoleDecisionProtocolError),
-}
-
-impl fmt::Display for WorkflowRoleDecisionProcessError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidConfig { field, message } => {
-                write!(
-                    formatter,
-                    "invalid role decision process config `{field}`: {message}"
-                )
-            }
-            Self::Io { operation, source } => {
-                write!(
-                    formatter,
-                    "role decision process {operation} I/O failed: {source}"
-                )
-            }
-            Self::Timeout { timeout } => {
-                write!(
-                    formatter,
-                    "role decision process timed out after {timeout:?}"
-                )
-            }
-            Self::Exit { status, stderr } => write!(
-                formatter,
-                "role decision process exited unsuccessfully with status {status}: {stderr}"
-            ),
-            Self::MalformedJson { source } => {
-                write!(
-                    formatter,
-                    "role decision process returned malformed JSON: {source}"
-                )
-            }
-            Self::Protocol(error) => write!(formatter, "{error}"),
-        }
-    }
-}
-
-impl Error for WorkflowRoleDecisionProcessError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            Self::MalformedJson { source } => Some(source),
-            Self::Protocol(error) => Some(error),
-            Self::InvalidConfig { .. } | Self::Timeout { .. } | Self::Exit { .. } => None,
-        }
-    }
-}
 
 /// Agent adapter that obtains one workflow-role decision from a subprocess.
 pub struct WorkflowRoleDecisionProcessAgent {
@@ -409,159 +251,6 @@ impl<F: Forge + ?Sized> Agent<F> for WorkflowRoleDecisionProcessAgent {
             }
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DecisionDisposition {
-    ExecuteAction,
-    NoAction,
-    Error,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DecisionReplyClassification {
-    validation_outcome: &'static str,
-    action_kind: &'static str,
-    disposition: DecisionDisposition,
-    error: Option<String>,
-}
-
-fn classify_decision_reply(
-    request: &WorkflowRoleDecisionRequest,
-    reply: &WorkflowRoleDecisionReply,
-) -> DecisionReplyClassification {
-    if reply.protocol_version != request.protocol_version {
-        let error = WorkflowRoleDecisionProtocolError::VersionMismatch {
-            expected: request.protocol_version,
-            actual: reply.protocol_version,
-        };
-        return DecisionReplyClassification {
-            validation_outcome: "protocol_mismatch",
-            action_kind: "invalid_reply",
-            disposition: DecisionDisposition::Error,
-            error: Some(error.to_string()),
-        };
-    }
-    if !request.action_is_authorized(&reply.action) {
-        return DecisionReplyClassification {
-            validation_outcome: "unauthorized_downgraded_to_no_action",
-            action_kind: "no_action",
-            disposition: DecisionDisposition::NoAction,
-            error: None,
-        };
-    }
-    if reply.is_no_action() {
-        return DecisionReplyClassification {
-            validation_outcome: "valid",
-            action_kind: "no_action",
-            disposition: DecisionDisposition::NoAction,
-            error: None,
-        };
-    }
-    DecisionReplyClassification {
-        validation_outcome: "valid",
-        action_kind: "authorized_action",
-        disposition: DecisionDisposition::ExecuteAction,
-        error: None,
-    }
-}
-
-fn classify_process_error(
-    error: &WorkflowRoleDecisionProcessError,
-) -> (&'static str, &'static str) {
-    match error {
-        WorkflowRoleDecisionProcessError::MalformedJson { .. } => {
-            ("malformed_json", "invalid_reply")
-        }
-        WorkflowRoleDecisionProcessError::Timeout { .. } => ("timeout", "process_unavailable"),
-        WorkflowRoleDecisionProcessError::Protocol(
-            WorkflowRoleDecisionProtocolError::VersionMismatch { .. },
-        ) => ("protocol_mismatch", "invalid_reply"),
-        WorkflowRoleDecisionProcessError::Protocol(
-            WorkflowRoleDecisionProtocolError::UnauthorizedAction { .. },
-        ) => ("unauthorized_downgraded_to_no_action", "no_action"),
-        WorkflowRoleDecisionProcessError::InvalidConfig { .. }
-        | WorkflowRoleDecisionProcessError::Io { .. }
-        | WorkflowRoleDecisionProcessError::Exit { .. } => {
-            ("process_failure", "process_unavailable")
-        }
-    }
-}
-
-fn log_decision_request(identity: &crate::WorkItemIdentity, request: &WorkflowRoleDecisionRequest) {
-    let authorized_actions = request
-        .authorized_actions
-        .iter()
-        .map(|action| action.action.clone())
-        .collect::<Vec<_>>();
-    let available_external_tools = request
-        .available_external_tools
-        .iter()
-        .map(|tool| tool.id.to_string())
-        .collect::<Vec<_>>();
-    eprintln!(
-        "{}",
-        render_role_decision_request_event(&RoleDecisionRequestEvent {
-            identity,
-            workflow_id: &request.workflow_id,
-            authorized_actions: &authorized_actions,
-            available_external_tools: &available_external_tools,
-        })
-    );
-}
-
-fn log_decision_reply(
-    identity: &crate::WorkItemIdentity,
-    selected_action: Option<&str>,
-    validation_outcome: &str,
-    action_kind: &str,
-    reason: Option<&str>,
-    latency: Duration,
-    error: Option<&str>,
-) {
-    eprintln!(
-        "{}",
-        render_role_decision_reply_event(&RoleDecisionReplyEvent {
-            identity,
-            selected_action,
-            validation_outcome,
-            action_kind,
-            reason,
-            latency,
-            error,
-        })
-    );
-}
-
-fn validate_config(
-    config: &WorkflowRoleDecisionProcessConfig,
-) -> Result<(), WorkflowRoleDecisionProcessError> {
-    if config.program.as_os_str().is_empty() {
-        return Err(WorkflowRoleDecisionProcessError::InvalidConfig {
-            field: "role_decision_process.program",
-            message: "must not be empty".to_string(),
-        });
-    }
-    if config.timeout.is_zero() {
-        return Err(WorkflowRoleDecisionProcessError::InvalidConfig {
-            field: "role_decision_process.timeout",
-            message: "must be greater than zero".to_string(),
-        });
-    }
-    for (name, _value) in &config.env {
-        validate_env_name(name)?;
-    }
-    Ok(())
-}
-
-fn validate_env_name(name: &str) -> Result<(), WorkflowRoleDecisionProcessError> {
-    if name.is_empty() || name.contains('=') || name.contains('\0') {
-        return Err(WorkflowRoleDecisionProcessError::InvalidConfig {
-            field: "role_decision_process.env_allowlist",
-            message: format!("invalid environment variable name `{name}`"),
-        });
-    }
-    Ok(())
 }
 
 fn preview_lossy(bytes: &[u8]) -> String {

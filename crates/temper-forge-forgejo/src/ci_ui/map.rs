@@ -1,0 +1,136 @@
+//! Mapping a run's live-view jobs into portable [`CiJob`]s.
+
+use super::dto::LiveRunDto;
+use crate::ci::map_status;
+use crate::ci_match::Target;
+use crate::ci_ui_parse::first_non_empty;
+use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id};
+use chrono::{DateTime, Utc};
+use temper_forge::{CiJob, CiJobStatus, PullRequestId, RepositoryId};
+
+/// Maps a run's live-view jobs to portable [`CiJob`]s.
+pub(super) fn live_run_to_jobs(
+    repo: &RepoCoord,
+    repo_id: &RepositoryId,
+    run: u64,
+    live: &LiveRunDto,
+    target: &Target,
+) -> Vec<CiJob> {
+    let commit_sha = first_non_empty(&[
+        live.commit.short_sha.as_str(),
+        target.pr_head_sha.as_deref().unwrap_or_default(),
+        target.commit_sha.as_deref().unwrap_or_default(),
+    ]);
+    let pull_request_id: Option<PullRequestId> = target.pr_id.clone();
+
+    live.jobs
+        .iter()
+        .enumerate()
+        .map(|(index, job)| {
+            let (status, conclusion) = map_status(&job.status);
+            let name = if job.name.is_empty() {
+                format!("job-{index}")
+            } else {
+                job.name.clone()
+            };
+            let coord = CiJobCoord {
+                repo: repo.clone(),
+                run,
+                job_index: index as u64,
+                // The web UI exposes no stable task id; the run id is the page's
+                // job coordinate, so reuse it as the encoded task id.
+                task_id: run,
+            };
+            // The live view exposes no per-job timestamp, but CI runs are created
+            // in execution order, so the run id is monotonic in time. Derive
+            // `created_at`/`updated_at` from it (epoch + run seconds) so the
+            // portable ordering by `created_at` reflects "older run before newer".
+            // This is what lets `CiStatus::from_jobs` pick the latest run per job
+            // (the merge gate) and the `ci_fails_then_passes` assert read the
+            // failing run before the fixed, passing one — both keyed on real
+            // ordering rather than a shared epoch that would tie every run.
+            let run_time = run_ordering_time(run);
+            let completed_at = (status == CiJobStatus::Completed).then_some(run_time);
+            CiJob {
+                id: format_ci_job_id(&coord),
+                repo_id: repo_id.clone(),
+                pull_request_id: pull_request_id.clone(),
+                commit_sha: commit_sha.clone(),
+                name,
+                status,
+                conclusion,
+                url: None,
+                created_at: run_time,
+                started_at: None,
+                completed_at,
+                updated_at: run_time,
+            }
+        })
+        .collect()
+}
+
+/// A monotonic ordering timestamp derived from a run id.
+///
+/// The web UI exposes no per-job timestamp; run ids increase with creation time,
+/// so `epoch + run_id` seconds gives a stable, run-ordered timestamp. It is an
+/// **ordering** key, not a wall-clock truth — only the relative order of runs is
+/// meaningful (newer run ⇒ later timestamp).
+fn run_ordering_time(run: u64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(run as i64, 0).unwrap_or_else(epoch)
+}
+
+/// The unix epoch fallback.
+fn epoch() -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(0, 0).expect("unix epoch is a valid timestamp")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci_ui::dto::{LiveBranchDto, LiveCommitDto, LiveJobDto, LiveRunDto};
+    use temper_forge::CiJobConclusion;
+
+    #[test]
+    fn live_run_maps_jobs_to_portable_status() {
+        let repo = RepoCoord::new("acme", "widgets");
+        let repo_id = RepositoryId::new("forgejo:acme/widgets");
+        let live = LiveRunDto {
+            status: "failure".to_string(),
+            jobs: vec![
+                LiveJobDto {
+                    name: "build".to_string(),
+                    status: "failure".to_string(),
+                },
+                LiveJobDto {
+                    name: String::new(),
+                    status: "running".to_string(),
+                },
+            ],
+            commit: LiveCommitDto {
+                short_sha: "c456eec18b".to_string(),
+                branch: LiveBranchDto {
+                    name: "main".to_string(),
+                },
+            },
+        };
+        let target = Target {
+            pr_id: Some(PullRequestId::new("forgejo:acme/widgets:pull:7")),
+            ..Default::default()
+        };
+        let jobs = live_run_to_jobs(&repo, &repo_id, 1, &live, &target);
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].name, "build");
+        assert_eq!(jobs[0].status, CiJobStatus::Completed);
+        assert_eq!(jobs[0].conclusion, Some(CiJobConclusion::Failure));
+        assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:1:0:1");
+        assert_eq!(jobs[0].commit_sha, "c456eec18b");
+        assert_eq!(
+            jobs[0].pull_request_id.as_ref().unwrap().as_str(),
+            "forgejo:acme/widgets:pull:7"
+        );
+        // Fallback job name and running status.
+        assert_eq!(jobs[1].name, "job-1");
+        assert_eq!(jobs[1].status, CiJobStatus::Running);
+        assert_eq!(jobs[1].conclusion, None);
+    }
+}
