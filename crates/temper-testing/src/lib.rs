@@ -75,14 +75,10 @@ pub fn workflow() -> ValidatedWorkflow {
 /// shape exercised by the basic-delivery fakes ([`agents::BasicArchitect`] /
 /// [`agents::BasicEngineer`]).
 ///
-/// Loaded from the same fixture the `temper-workflow` confirmation tests use, so
-/// the fakes and the fixture-shape tests agree on one document. Validated at call
-/// time; a malformed bundled fixture is a build/test bug, hence the panics.
+/// Delegates to the shared reference-delivery loader so the testing fakes, the
+/// fixture-shape tests, and the deployable binaries all agree on one document.
 pub fn basic_delivery_workflow() -> ValidatedWorkflow {
-    const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
-    let spec: temper_workflow::RawWorkflowSpec =
-        serde_json::from_str(FIXTURE).expect("basic-delivery fixture is valid JSON");
-    spec.validate().expect("basic-delivery fixture validates")
+    temper_reference_delivery::basic_delivery_workflow()
 }
 
 /// Runner config derived from [`basic_delivery_workflow`].

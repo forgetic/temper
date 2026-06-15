@@ -37,3 +37,35 @@ pub fn credentials_path(explicit: Option<PathBuf>) -> Option<PathBuf> {
         .or_else(|| std::env::var_os("TEMPER_CREDENTIALS").map(PathBuf::from))
         .or_else(|| config_dir().map(|dir| dir.join("credentials.toml")))
 }
+
+/// The base `…/temper` **state** directory (`$XDG_STATE_HOME/temper` or
+/// `~/.local/state/temper`), per the XDG Base Directory spec.
+///
+/// State is mutable, machine-local data the daemon owns at runtime (the
+/// per-job worker workspaces live under [`default_workspace_root`]). It is
+/// deliberately separate from the *config* dir ([`config_dir`]): config is
+/// hand-edited and may be checked in, state is generated and disposable.
+pub fn state_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME")
+        && !xdg.is_empty()
+    {
+        return Some(PathBuf::from(xdg).join("temper"));
+    }
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".local")
+                .join("state")
+                .join("temper")
+        })
+}
+
+/// The default worker workspace root: `<state-dir>/workspace`, where the state
+/// dir is `$XDG_STATE_HOME/temper` or `~/.local/state/temper`.
+///
+/// `None` only when neither `$XDG_STATE_HOME` nor `$HOME` is set; the resolver
+/// then falls back to a relative literal (see [`crate::resolve`]).
+pub fn default_workspace_root() -> Option<PathBuf> {
+    state_dir().map(|dir| dir.join("workspace"))
+}

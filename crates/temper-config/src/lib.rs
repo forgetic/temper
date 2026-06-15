@@ -17,6 +17,7 @@
 //! tier-agnostic so every binary (unified or slim per-service) can read config
 //! without pulling in the engine/worker/agent stacks.
 
+mod build;
 mod cli;
 mod env;
 mod error;
@@ -29,10 +30,15 @@ mod template;
 
 use std::path::{Path, PathBuf};
 
+pub use build::{
+    ConfigInputs, CredentialInputs, ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser,
+    build_config, build_credentials, default_config_path, default_credentials_path, forge_user,
+    forge_users_from_provisioned, write_config, write_credentials,
+};
 pub use cli::{CommonArgs, parse_common_args};
 pub use env::{EnvLookup, NoEnv, SystemEnv};
 pub use error::{ConfigError, FileKind};
-pub use paths::{config_dir, config_path, credentials_path};
+pub use paths::{config_dir, config_path, credentials_path, default_workspace_root, state_dir};
 pub use resolve::{env_role_key, resolve};
 pub use resolved::{
     AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
