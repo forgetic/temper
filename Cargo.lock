@@ -1332,15 +1332,22 @@ dependencies = [
  "jig-server",
  "serde_json",
  "temper-cli",
+ "temper-cli-common",
+ "temper-cli-init",
+ "temper-config",
  "temper-engine",
  "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-provision",
+ "temper-reference-delivery",
  "temper-testing",
  "temper-worker",
  "temper-worker-protocol",
  "temper-workflow",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
