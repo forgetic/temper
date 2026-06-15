@@ -32,14 +32,29 @@ use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink, WorkspaceRes
 #[derive(Clone, Debug)]
 pub struct OutOfProcessRunner {
     /// Program followed by fixed arguments, e.g.
-    /// `["temper-agent", "--auth", "chatgpt-oauth"]`.
+    /// `["temper", "agent", "--auth", "chatgpt-oauth"]`.
     command: Vec<String>,
+    /// Environment injected into every spawned agent (on top of the inherited
+    /// environment): the per-role git identities and the provider/model wiring,
+    /// which a config-driven worker passes explicitly rather than relying on its
+    /// own inherited environment.
+    env: Vec<(String, String)>,
 }
 
 impl OutOfProcessRunner {
     /// Builds a runner for the given command (program first, then args).
     pub fn new(command: Vec<String>) -> Self {
-        Self { command }
+        Self {
+            command,
+            env: Vec::new(),
+        }
+    }
+
+    /// Sets the environment injected into every spawned agent.
+    #[must_use]
+    pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
+        self.env = env;
+        self
     }
 }
 
@@ -76,6 +91,7 @@ impl AgentRunner for OutOfProcessRunner {
 
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
+        let env_owned: Vec<(String, String)> = self.env.clone();
         let cwd_owned = cwd.to_path_buf();
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
@@ -86,6 +102,7 @@ impl AgentRunner for OutOfProcessRunner {
             run_child(
                 &program_owned,
                 &args_owned,
+                &env_owned,
                 &cwd_owned,
                 &context_path_owned,
                 &result_path_owned,
@@ -140,16 +157,24 @@ struct ChildOutcome {
 fn run_child(
     program: &str,
     args: &[String],
+    env: &[(String, String)],
     cwd: &Path,
     context_path: &Path,
     result_path: &Path,
     sender: &temper_worker_io::CqSender<StepProgress>,
 ) -> Result<ChildOutcome, AgentRunError> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(cwd)
         .env(CONTEXT_ENV, context_path)
-        .env(RESULT_ENV, result_path)
+        .env(RESULT_ENV, result_path);
+    // Inject the per-role git identities and provider/model wiring explicitly,
+    // so the agent does not depend on the worker's own inherited environment.
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

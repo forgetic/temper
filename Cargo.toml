@@ -1,5 +1,10 @@
 [workspace]
 members = [
+    "crates/temper-config",
+    "crates/temper-engine-service",
+    "crates/temper-worker-service",
+    "crates/temper-agent-session",
+    "crates/temper-cli",
     "crates/temper-engine",
     "crates/temper-workflow",
     "crates/temper-forge",
@@ -41,76 +46,13 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-[features]
-# The default is the everything-binary: one `temper` that does daemon + worker
-# + agent + operator tools. Custom distributed deployments can strip to a
-# single role with `--no-default-features --features <role>`.
-default = ["unified"]
-
-# Capability features — each gates the crates and subcommands for one role.
-daemon = [
-    "dep:temper-engine",
-    "dep:temper-forge",
-    "dep:temper-forge-forgejo",
-    "dep:temper-forgejo-provision",
-    "dep:temper-interaction-service",
-    "dep:temper-reference-delivery",
-    "dep:temper-reference-delivery-validator",
-    "dep:temper-trigger-forgejo",
-    "dep:temper-engine-io",
-    "dep:temper-workflow",
-    "dep:chrono",
-]
-worker = [
-    "dep:temper-worker",
-    "dep:temper-worker-io",
-    "dep:temper-worker-protocol",
-    "dep:temper-agent-protocol",
-]
-# The agent pulls tongs + jig + the LLM/HTTP stack. Worker/daemon-only builds
-# omit this feature and never compile it.
-agent = [
-    "dep:temper-agent",
-    "dep:temper-agent-core",
-    "dep:temper-agent-io",
-    "dep:temper-agent-protocol",
-    "dep:temper-process-protocol",
-    "dep:async-trait",
-    "dep:serde_json",
-]
-
-# Profile feature: the unified everything-binary.
-unified = ["daemon", "worker", "agent"]
-
 [dependencies]
-# Always present (shared, cheap): the runtime.
-skein = { workspace = true }
-
-# Gated, optional — pulled in by the capability features above.
-async-trait = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
-temper-engine = { path = "crates/temper-engine", optional = true }
-temper-forge = { path = "crates/temper-forge", optional = true }
-temper-forge-forgejo = { path = "crates/temper-forge-forgejo", optional = true }
-temper-forgejo-provision = { path = "crates/temper-forgejo-provision", optional = true }
-temper-interaction-service = { path = "crates/temper-interaction-service", optional = true }
-temper-reference-delivery = { path = "crates/temper-reference-delivery", optional = true }
-temper-reference-delivery-validator = { path = "crates/temper-reference-delivery-validator", optional = true }
-temper-trigger-forgejo = { path = "crates/temper-trigger-forgejo", optional = true }
-temper-engine-io = { path = "crates/temper-engine-io", optional = true }
-temper-workflow = { path = "crates/temper-workflow", optional = true }
-# worker
-temper-worker = { path = "crates/temper-worker", optional = true }
-temper-worker-io = { path = "crates/temper-worker-io", optional = true }
-temper-worker-protocol = { path = "crates/temper-worker-protocol", optional = true }
-# agent (heavy: tongs + jig + LLM/HTTP enter only here)
-temper-agent = { path = "crates/temper-agent", optional = true }
-temper-agent-core = { path = "crates/temper-agent-core", optional = true }
-temper-agent-io = { path = "crates/temper-agent-io", optional = true }
-# shared protocol DTOs (worker↔agent and role-decision)
-temper-agent-protocol = { path = "crates/temper-agent-protocol", optional = true }
-temper-process-protocol = { path = "crates/temper-process-protocol", optional = true }
+# The unified binary is a one-line shim over the CLI composition root, which
+# wires every tier together. The slim per-service binaries (`temper-engine`,
+# `temper-worker`, `temper-agent`) live in their service crates and link only
+# their own tier — built with `cargo build -p temper-{engine-service,
+# worker-service,agent-session}`.
+temper-cli = { path = "crates/temper-cli" }
 
 [dev-dependencies]
 # Daemon-topology e2e (`tests/daemon_forgejo_e2e.rs`): real Forgejo fixture,
@@ -125,7 +67,9 @@ temper-testing = { path = "crates/temper-testing" }
 temper-forge = { path = "crates/temper-forge" }
 temper-forge-forgejo = { path = "crates/temper-forge-forgejo" }
 temper-workflow = { path = "crates/temper-workflow" }
+temper-engine = { path = "crates/temper-engine" }
 temper-engine-io = { path = "crates/temper-engine-io" }
+temper-worker = { path = "crates/temper-worker" }
 jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
 # `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
@@ -133,27 +77,11 @@ jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2
 temper-forge-memory = { path = "crates/temper-forge-memory" }
 temper-worker-protocol = { path = "crates/temper-worker-protocol" }
 
-# Unified everything-binary: `temper run` + `temper daemon|worker|agent|...`.
+# The unified everything-binary: `temper config|daemon|agent` (+ hidden operator
+# tools). A one-line shim over `temper_cli::run()`.
 [[bin]]
 name = "temper"
 path = "src/bin/temper.rs"
-required-features = ["unified"]
-
-# Role split binaries — each compiles only its role's code.
-[[bin]]
-name = "temper-daemon"
-path = "src/bin/temper-daemon.rs"
-required-features = ["daemon"]
-
-[[bin]]
-name = "temper-worker"
-path = "src/bin/temper-worker.rs"
-required-features = ["worker"]
-
-[[bin]]
-name = "temper-agent"
-path = "src/bin/temper-agent.rs"
-required-features = ["agent"]
 
 [lints]
 workspace = true
@@ -196,6 +124,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
 tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "de509a589cfe01970d406e0430237be9e206ab0d" }

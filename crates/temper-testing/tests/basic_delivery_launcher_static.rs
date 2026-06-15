@@ -66,13 +66,13 @@ fn temper_run_gets_bot_credentials_without_argv_secrets() {
     assert!(spawn.contains("FORGEJO_USERNAME=\"$BOT_USER\""));
     assert!(spawn.contains("FORGEJO_PASSWORD=\"$BOT_PASSWORD\""));
 
-    // The argv built into `$@` must never carry a secret value.
+    // Neither the argv nor the generated config file carries a secret value.
     assert!(!boot_run.contains("--password"));
     assert!(!boot_run.contains("--token"));
     assert!(!boot_run.contains("--bot-token"));
-    // The run is launched via the positional argv accumulated in `$@`; the only
-    // secret-bearing env assignments are the four FORGEJO_* lines above.
-    assert!(boot_run.contains("\"$@\""));
+    // The run is launched config-driven (`temper daemon --config`); the only
+    // secret-bearing env assignments are the FORGEJO_* lines above.
+    assert!(boot_run.contains("daemon --config \"$_config\""));
 }
 
 #[test]
@@ -114,8 +114,9 @@ fn launcher_passes_workflow_to_provision_and_run() {
     let script = read_example("run.sh");
     let config = read_example("config/temper.env");
 
-    // The bundled 3-role spec reaches BOTH the provision and the run invocations
-    // via --workflow "$WORKFLOW_PATH".
+    // The bundled 3-role spec reaches the provision invocation via
+    // --workflow "$WORKFLOW_PATH" and the run via the config file's
+    // workflow = "$WORKFLOW_PATH".
     assert!(config.contains("WORKFLOW_FILE=workflow.json"));
     assert!(script.contains("--workflow \"$WORKFLOW_PATH\""));
 
@@ -132,14 +133,18 @@ fn launcher_passes_workflow_to_provision_and_run() {
         .split("boot_run() {")
         .nth(1)
         .expect("boot_run function exists");
+    // The config-driven run writes the workflow + bind into the generated config
+    // and launches the standalone daemon.
     assert!(
-        boot_run.contains("--workflow \"$WORKFLOW_PATH\""),
-        "temper run invocation must pass --workflow"
+        boot_run.contains("workflow = \"$WORKFLOW_PATH\""),
+        "config must set the workflow path"
     );
+    assert!(boot_run.contains("bind = \"$DAEMON_BIND\""));
+    assert!(boot_run.contains("daemon --config"));
     // The run hosts the real in-process coding agent: it selects an LLM provider
-    // via --auth, not a fake-agent profile.
-    assert!(boot_run.contains("--auth \"$TEMPER_RUN_AUTH\""));
-    assert!(boot_run.contains("run --bind \"$DAEMON_BIND\""));
+    // (derived from TEMPER_RUN_AUTH), not a fake-agent profile.
+    assert!(boot_run.contains("TEMPER_RUN_AUTH"));
+    assert!(boot_run.contains("provider = \"$_provider\""));
 }
 
 #[test]
@@ -226,8 +231,8 @@ fn launcher_runs_a_single_temper_run_process() {
     assert!(!script.contains("anvil-agent"));
     assert!(!script.contains("--agent-command"));
 
-    // The unified entry point is `temper run`.
-    assert!(script.contains("\"$RUN_BIN\" run --bind"));
+    // The unified entry point is the config-driven `temper daemon`.
+    assert!(script.contains("\"$RUN_BIN\" daemon --config"));
 }
 
 #[test]

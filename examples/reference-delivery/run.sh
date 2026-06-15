@@ -775,43 +775,58 @@ boot_run() {
     ensure_secret_file "$WEBHOOK_SECRET_FILE"
     mkdir -p "$RUN_DIR/workspaces"
 
-    set -- "$RUN_BIN" run --bind "$DAEMON_BIND"
-    for _repo in $CONFIGURED_REPOS; do
-        set -- "$@" --repo "$_repo"
-    done
-    for _role in $SERVED_ROLES; do
-        set -- "$@" --role "$_role"
-    done
-    set -- "$@" --workflow "$WORKFLOW_PATH" \
-        --poll-cadence-secs "$DAEMON_POLL_CADENCE_SECS" \
-        --mechanical-cadence-secs "$DAEMON_MECHANICAL_CADENCE_SECS" \
-        --lease-ttl-secs "$DAEMON_LEASE_TTL_SECS" \
-        --webhook-secret-file "$WEBHOOK_SECRET_FILE" \
-        --daemon-id reference-delivery-daemon \
-        --worker-id reference-delivery-1 \
-        --workspace-root "$RUN_DIR/workspaces" \
-        --git-base-url "$BASE_URL" \
-        --auth "$TEMPER_RUN_AUTH" \
-        --max-iterations "$RUN_MAX_ITERATIONS"
+    # The new CLI is config-file driven: standalone `temper daemon` (no
+    # --service) runs engine + worker + agent in one process. Write the
+    # deployment to a config file; secrets stay in the environment.
+    _repos_toml=$(printf '"%s", ' $CONFIGURED_REPOS); _repos_toml="[${_repos_toml%, }]"
+    _roles_toml=$(printf '"%s", ' $SERVED_ROLES); _roles_toml="[${_roles_toml%, }]"
+    case "$TEMPER_RUN_AUTH" in
+        chatgpt-oauth) _provider=chatgpt ;;
+        anthropic-oauth) _provider=anthropic ;;
+        *) _provider=deepseek ;;
+    esac
+    _config="$RUN_DIR/config.toml"
+    cat >"$_config" <<EOF
+schema_version = 1
+[forge]
+type = "forgejo"
+url = "$BASE_URL"
+[engine]
+bind = "$DAEMON_BIND"
+repos = $_repos_toml
+roles = $_roles_toml
+workflow = "$WORKFLOW_PATH"
+webhook_secret_file = "$WEBHOOK_SECRET_FILE"
+poll_cadence_secs = $DAEMON_POLL_CADENCE_SECS
+mechanical_cadence_secs = $DAEMON_MECHANICAL_CADENCE_SECS
+lease_ttl_secs = $DAEMON_LEASE_TTL_SECS
+daemon_id = "reference-delivery-daemon"
+[worker]
+worker_id = "reference-delivery-1"
+workspace = "$RUN_DIR/workspaces"
+git_base_url = "$BASE_URL"
+[agent]
+provider = "$_provider"
+max_iterations = $RUN_MAX_ITERATIONS
+EOF
 
-    log "starting temper run at $DAEMON_BIND (repos: $CONFIGURED_REPOS; roles: $SERVED_ROLES; poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s auth=$TEMPER_RUN_AUTH) ..."
+    log "starting temper daemon at $DAEMON_BIND (repos: $CONFIGURED_REPOS; roles: $SERVED_ROLES; poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=$_provider) ..."
     : >"$LOG_DIR/run.log"
     (
         export_run_role_env
-        FORGEJO_URL="$BASE_URL" \
         FORGEJO_ACCESS_TOKEN="$BOT_TOKEN" \
         FORGEJO_USERNAME="$BOT_USER" \
         FORGEJO_PASSWORD="$BOT_PASSWORD" \
-            "$@"
+            "$RUN_BIN" daemon --config "$_config"
     ) >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
     # Readiness: the HTTP listener must be up before the seed-last webhook can be
     # delivered, and the in-process worker must have registered before any job can
     # be assigned. Wait for both, in order.
-    wait_for_log_line "$LOG_DIR/run.log" 'temper-daemon: serving on' "$RUN_PID" 'temper run'
-    wait_for_log_line "$LOG_DIR/run.log" 'temper-worker: registered' "$RUN_PID" 'temper run'
-    log "temper run up (pid $RUN_PID; logs/run.log)"
+    wait_for_log_line "$LOG_DIR/run.log" 'temper-daemon: serving on' "$RUN_PID" 'temper daemon'
+    wait_for_log_line "$LOG_DIR/run.log" 'temper-worker: registered' "$RUN_PID" 'temper daemon'
+    log "temper daemon up (pid $RUN_PID; logs/run.log)"
 }
 
 # --- Validation ---------------------------------------------------------------
@@ -913,7 +928,7 @@ cmd_validate_webhooks() {
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
     validate_contains "$_run_log" 'temper-daemon: serving on' \
-        'temper run reached serving readiness' || _ok=1
+        'temper daemon reached serving readiness' || _ok=1
     validate_contains "$_run_log" 'webhook accepted' \
         'Forgejo delivered at least one accepted webhook' || _ok=1
     validate_contains "$_run_log" 'webhook wake scan' \

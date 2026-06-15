@@ -68,7 +68,7 @@ fn temper_run_gets_bot_credentials_without_argv_secrets() {
     assert!(!boot_run.contains("--password"));
     assert!(!boot_run.contains("--token"));
     assert!(!boot_run.contains("--bot-token"));
-    assert!(boot_run.contains("\"$@\""));
+    assert!(boot_run.contains("daemon --config \"$_config\""));
 }
 
 #[test]
@@ -134,11 +134,13 @@ fn launcher_passes_workflow_and_serves_reviewer() {
         .split("boot_run() {")
         .nth(1)
         .expect("boot_run function exists");
-    assert!(boot_run.contains("--workflow \"$WORKFLOW_PATH\""));
-    assert!(boot_run.contains("--auth \"$TEMPER_RUN_AUTH\""));
-    // Roles (incl. reviewer) and repos are looped onto the run argv.
-    assert!(boot_run.contains("for _role in $SERVED_ROLES"));
-    assert!(boot_run.contains("for _repo in $CONFIGURED_REPOS"));
+    // The config-driven run writes workflow + provider into the generated config.
+    assert!(boot_run.contains("workflow = \"$WORKFLOW_PATH\""));
+    assert!(boot_run.contains("TEMPER_RUN_AUTH"));
+    assert!(boot_run.contains("provider = \"$_provider\""));
+    // Roles (incl. reviewer) and repos are rendered into the config's TOML arrays.
+    assert!(boot_run.contains("$SERVED_ROLES"));
+    assert!(boot_run.contains("$CONFIGURED_REPOS"));
 }
 
 #[test]
@@ -206,5 +208,5 @@ fn launcher_runs_a_single_temper_run_process() {
     assert!(!script.contains("anvil-agent"));
     assert!(!script.contains("--agent-command"));
 
-    assert!(script.contains("\"$RUN_BIN\" run --bind"));
+    assert!(script.contains("\"$RUN_BIN\" daemon --config"));
 }
