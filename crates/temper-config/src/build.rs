@@ -370,11 +370,21 @@ pub fn forge_user(
 
 /// The default config-file path (`<config-dir>/config.toml`), if a config dir
 /// can be determined. A convenience for `temper init`'s "where do I write?".
+///
+/// Binary-only shim: it snapshots the real environment ([`PathResolver::from_system`]
+/// + [`SystemEnv`]). Hermetic callers should resolve via
+/// [`crate::config_path`] with an explicit [`PathResolver`] + [`EnvLookup`].
+#[doc(hidden)]
 pub fn default_config_path() -> Option<PathBuf> {
-    crate::paths::config_path(None)
+    let paths = crate::PathResolver::from_system();
+    crate::paths::config_path(None, &paths, &crate::SystemEnv)
 }
 
 /// The default credentials-file path (`<config-dir>/credentials.toml`).
+///
+/// Binary-only shim; see [`default_config_path`].
+#[doc(hidden)]
 pub fn default_credentials_path() -> Option<PathBuf> {
-    crate::paths::credentials_path(None)
+    let paths = crate::PathResolver::from_system();
+    crate::paths::credentials_path(None, &paths, &crate::SystemEnv)
 }
