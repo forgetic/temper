@@ -5,11 +5,11 @@
 //! never downloads a Forgejo binary or opens a socket. Run with:
 //!
 //! ```sh
-//! cargo test -p temper-forgejo-provision --test existing_repo_access -- --ignored
+//! cargo test -p temper-provision-forgejo-cli --test existing_repo_access -- --ignored
 //! ```
 //!
 //! Each test boots a throwaway [`ForgejoServer`], bootstraps an admin token, and
-//! drives the **production** [`provision_world`] (not the testing-crate copy) so
+//! drives the demo operator [`provision_world`] (not the testing-crate copy) so
 //! the `--existing-repo` and `--access repo-collaborator` paths are exercised
 //! end to end against a real Forgejo:
 //!
@@ -21,7 +21,7 @@
 //! - `--existing-repo` against a missing repo errors clearly.
 
 use serde_json::Value;
-use temper_forgejo_provision::provision::{
+use temper_provision_forgejo_cli::provision::{
     AccessScope, BOT_USER, ProvisionOptions, provision_and_seed, provision_world,
 };
 use temper_testing::forgejo_server::ForgejoServer;

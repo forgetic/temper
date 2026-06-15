@@ -43,7 +43,11 @@ temper-trigger-forgejo = ["temper-forge", "temper-runner", "temper-wake"]
 # Backend-agnostic provisioning orchestration: depends ONLY on the Forge traits,
 # the runner (for RoleBinding), and the workflow model. No backend crate.
 temper-provision = ["temper-forge", "temper-runner", "temper-workflow"]
-temper-forgejo-provision = ["temper-forge", "temper-forge-forgejo", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
+# Reference-delivery demo / operator CLI for `temper provision-forgejo`: builds a
+# ForgejoForge and runs the backend-agnostic temper-provision orchestration. The
+# only provider-specific code is constructing the ForgejoForge + the demo
+# CI/secrets/intake bits (the latter live in temper-reference-delivery).
+temper-provision-forgejo-cli = ["temper-forge", "temper-forge-forgejo", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
 temper-engine = ["temper-forge", "temper-engine-io", "temper-runner", "temper-worker-protocol", "temper-worker-registry", "temper-workflow"]
@@ -108,13 +112,13 @@ temper-cli-config = ["temper-cli-common", "temper-config"]
 temper-cli-daemon = ["temper-config", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-agent-protocol", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-reference-delivery", "temper-worker", "temper-worker-protocol", "temper-workflow"]
 
 # `temper init`: interactive first-run. Orchestration only — config writing in
-# temper-config, provisioning in temper-provision/temper-forgejo-provision.
-temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "temper-forgejo-provision", "temper-forge", "temper-forge-forgejo", "temper-engine-io", "temper-workflow", "temper-reference-delivery"]
+# temper-config, provisioning inlined directly via temper-provision.
+temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "temper-forge", "temper-forge-forgejo", "temper-engine-io", "temper-workflow", "temper-reference-delivery"]
 
 # The thin dispatcher: routes argv to the per-subcommand crates and the hidden
 # operator/responder tools. Re-exports the in-process transport from
 # temper-cli-daemon. Much slimmer than the old monolith.
-temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-forgejo-provision", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo"]
+temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo"]
 
 # The unified `temper` binary is now a one-line shim over temper-cli.
 temper = ["temper-cli"]

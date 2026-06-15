@@ -28,7 +28,7 @@ members = [
     "crates/temper-provision",
     "crates/temper-interaction-service",
     "crates/temper-trigger-forgejo",
-    "crates/temper-forgejo-provision",
+    "crates/temper-provision-forgejo-cli",
     "crates/temper-reference-delivery-validator",
     "crates/temper-sim",
     # Merged from smith (the orchestration worker):

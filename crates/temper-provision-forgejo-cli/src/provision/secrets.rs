@@ -1,4 +1,8 @@
 //! Writing and reading the live-credentials secrets file (`--out`).
+//!
+//! This is the pre-`credentials.toml` output format used only by the demo
+//! provision-forgejo CLI; `temper init` writes `credentials.toml` and never
+//! touches this.
 
 use std::path::Path;
 
@@ -139,4 +143,87 @@ fn sh_unquote(value: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use temper_forge::RepositoryId;
+    use temper_forge_forgejo::ROLE_PASSWORD;
+    use temper_provision::{BOT_USER, Provisioned, RoleIdentity};
+    use temper_workflow::RoleId;
+
+    use super::*;
+
+    #[test]
+    fn role_token_round_trips_through_secrets_file() {
+        let mut roles = BTreeMap::new();
+        roles.insert(
+            RoleId::new("code-reviewer"),
+            RoleIdentity {
+                user: "reviewer".into(),
+                email: "reviewer@example.invalid".into(),
+                token: "tok-with-'-quote".into(),
+                password: ROLE_PASSWORD.into(),
+            },
+        );
+        let env = format_secrets_env(&Provisioned {
+            owner: "acme".into(),
+            name: "service".into(),
+            repository: RepositoryId::new("r"),
+            roles,
+            automation: RoleIdentity {
+                user: BOT_USER.into(),
+                email: "bot@example.invalid".into(),
+                token: "bot-tok".into(),
+                password: "bot-pw".into(),
+            },
+        });
+        let dir = std::env::temp_dir().join(format!("temper-seed-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("roles.env");
+        write_secrets_file(&path, &env).expect("write secrets file");
+
+        let token = role_token_from_secrets_file(&path, &RoleId::new("code-reviewer"))
+            .expect("recovers the role token");
+        assert_eq!(token, "tok-with-'-quote");
+
+        let missing = role_token_from_secrets_file(&path, &RoleId::new("architect"))
+            .expect_err("absent role errors");
+        assert!(matches!(missing, ProvisionError::Shape { .. }));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn secrets_env_escapes_single_quotes() {
+        let mut roles = BTreeMap::new();
+        roles.insert(
+            RoleId::new("code-reviewer"),
+            RoleIdentity {
+                user: "reviewer".into(),
+                email: "reviewer@example.invalid".into(),
+                token: "tok".into(),
+                password: "pw-with-'-quote".into(),
+            },
+        );
+        let env = format_secrets_env(&Provisioned {
+            owner: "acme".into(),
+            name: "service".into(),
+            repository: RepositoryId::new("r"),
+            roles,
+            automation: RoleIdentity {
+                user: BOT_USER.into(),
+                email: "bot@example.invalid".into(),
+                token: "bot-tok".into(),
+                password: "bot-pw".into(),
+            },
+        });
+        assert!(env.contains("TEMPER_FORGEJO_TOKEN_CODE_REVIEWER='tok'"));
+        assert!(env.contains(r"TEMPER_FORGEJO_PASSWORD_CODE_REVIEWER='pw-with-'\''-quote'"));
+        assert!(env.contains("TEMPER_FORGEJO_BOT_USER='bot'"));
+        assert!(env.contains("TEMPER_FORGEJO_BOT_TOKEN='bot-tok'"));
+        assert!(env.contains("TEMPER_FORGEJO_BOT_PASSWORD='bot-pw'"));
+    }
 }

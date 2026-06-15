@@ -1429,9 +1429,9 @@ dependencies = [
  "temper-cli-daemon",
  "temper-cli-init",
  "temper-config",
- "temper-forgejo-provision",
  "temper-interaction-service",
  "temper-process-protocol",
+ "temper-provision-forgejo-cli",
  "temper-reference-delivery-validator",
  "temper-trigger-forgejo",
 ]
@@ -1483,7 +1483,6 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-forge-forgejo",
- "temper-forgejo-provision",
  "temper-provision",
  "temper-reference-delivery",
  "temper-workflow",
@@ -1609,23 +1608,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-forgejo-provision"
-version = "0.1.0"
-dependencies = [
- "base64",
- "serde_json",
- "skein",
- "temper-engine-io",
- "temper-forge",
- "temper-forge-forgejo",
- "temper-provision",
- "temper-reference-delivery",
- "temper-runner",
- "temper-testing",
- "temper-workflow",
-]
-
-[[package]]
 name = "temper-interaction"
 version = "0.1.0"
 dependencies = [
@@ -1673,6 +1655,23 @@ dependencies = [
  "temper-forge-memory",
  "temper-reference-delivery",
  "temper-runner",
+ "temper-workflow",
+]
+
+[[package]]
+name = "temper-provision-forgejo-cli"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde_json",
+ "skein",
+ "temper-engine-io",
+ "temper-forge",
+ "temper-forge-forgejo",
+ "temper-provision",
+ "temper-reference-delivery",
+ "temper-runner",
+ "temper-testing",
  "temper-workflow",
 ]
 

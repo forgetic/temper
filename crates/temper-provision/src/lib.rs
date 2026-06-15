@@ -11,10 +11,11 @@
 //! provisioning surface — the in-memory and filesystem reference backends as
 //! well as Forgejo.
 //!
-//! A concrete backend adapter (e.g. `temper-forgejo-provision`) supplies the
-//! host-specific bits — the CI workflow file and CI sentinel to seed, the
-//! webhook event preset, the role password — by building a [`ProvisionPlan`]
-//! and calling [`provision`].
+//! A caller (e.g. `temper-cli-init` for `temper init`, or the
+//! `temper-provision-forgejo-cli` demo operator) supplies the host-specific
+//! bits — the CI workflow file and CI sentinel to seed, the webhook event
+//! preset, the role password — by building a [`ProvisionPlan`] and calling
+//! [`provision`].
 
 mod error;
 mod intake;

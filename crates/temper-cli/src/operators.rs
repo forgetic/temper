@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 /// `temper provision-forgejo` — provision a Forgejo instance for a workflow.
 pub fn provision_forgejo(args: std::env::Args) -> ExitCode {
-    use temper_forgejo_provision::provision_args::{self, ParseOutcome};
+    use temper_provision_forgejo_cli::provision_args::{self, ParseOutcome};
     match provision_args::parse(args) {
         Ok(ParseOutcome::Help) => {
             println!("usage: {}", provision_args::USAGE);
