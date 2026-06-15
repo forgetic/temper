@@ -6,16 +6,23 @@
 //!   problems (and advisory notes) without starting anything.
 //! - `show` — print the effective resolved deployment, with secrets redacted.
 //! - `init` — write starter `config.toml` + `credentials.toml` templates.
+//!
+//! This crate owns only argv parsing, terminal output, and exit codes; the
+//! config schema, resolution, and writing all live in [`temper_config`], and the
+//! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use temper_cli_common::{
+    EX_USAGE, LoadOptions, WriteOutcome, resolve_targets, restrict_600, run, write_new_file,
+};
 use temper_config::{
-    EX_USAGE, Finding, LoadOptions, ProviderCredential, Resolved, WebUiCreds, config_path,
-    config_template, credentials_path, credentials_template, lint, load,
+    Finding, ProviderCredential, Resolved, WebUiCreds, config_template, credentials_template, lint,
+    load,
 };
 
-const USAGE: &str = "\
+pub const USAGE: &str = "\
 Guided or programmatic configuration.
 
 Usage: temper config <COMMAND> [OPTIONS]
@@ -42,22 +49,12 @@ pub fn main(args: std::env::Args) -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        "validate" => run(validate(rest)),
-        "show" => run(show(rest)),
-        "init" => run(init(rest)),
+        "validate" => run("temper config", validate(rest)),
+        "show" => run("temper config", show(rest)),
+        "init" => run("temper config", init(rest)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(EX_USAGE)
-        }
-    }
-}
-
-fn run(result: Result<ExitCode, String>) -> ExitCode {
-    match result {
-        Ok(code) => code,
-        Err(error) => {
-            eprintln!("temper config: {error}");
-            ExitCode::FAILURE
         }
     }
 }
@@ -70,21 +67,22 @@ fn parse_options(args: &[String], allow_force: bool) -> Result<(LoadOptions, boo
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--config" => options.config = Some(PathBuf::from(next(&mut iter, "--config")?)),
+            "--config" => {
+                options.config = Some(PathBuf::from(temper_cli_common::next_value(
+                    &mut iter, "--config",
+                )?))
+            }
             "--credentials" => {
-                options.credentials = Some(PathBuf::from(next(&mut iter, "--credentials")?))
+                options.credentials = Some(PathBuf::from(temper_cli_common::next_value(
+                    &mut iter,
+                    "--credentials",
+                )?))
             }
             "--force" if allow_force => force = true,
             other => return Err(format!("unexpected argument `{other}`")),
         }
     }
     Ok((options, force))
-}
-
-fn next<'a>(iter: &mut impl Iterator<Item = &'a String>, flag: &str) -> Result<String, String> {
-    iter.next()
-        .cloned()
-        .ok_or_else(|| format!("{flag} requires a value"))
 }
 
 fn validate(args: &[String]) -> Result<ExitCode, String> {
@@ -132,47 +130,17 @@ fn show(args: &[String]) -> Result<ExitCode, String> {
 
 fn init(args: &[String]) -> Result<ExitCode, String> {
     let (options, force) = parse_options(args, true)?;
-    let config_target = config_path(options.config).ok_or_else(|| {
-        "cannot determine a default config path (no HOME); pass --config".to_string()
-    })?;
-    let credentials_target = credentials_path(options.credentials).ok_or_else(|| {
-        "cannot determine a default credentials path (no HOME); pass --credentials".to_string()
-    })?;
+    let targets = resolve_targets(&options)?;
 
-    write_file(&config_target, &config_template(), force)?;
-    write_file(&credentials_target, &credentials_template(), force)?;
-    restrict(&credentials_target)?;
+    let _ = write_new_file(&targets.config, &config_template(), force)?;
+    match write_new_file(&targets.credentials, &credentials_template(), force)? {
+        WriteOutcome::Created | WriteOutcome::Overwritten => restrict_600(&targets.credentials)?,
+    }
 
-    println!("Wrote {}", config_target.display());
-    println!("Wrote {} (chmod 600)", credentials_target.display());
+    println!("Wrote {}", targets.config.display());
+    println!("Wrote {} (chmod 600)", targets.credentials.display());
     println!("\nEdit both, then run `temper config validate`.");
     Ok(ExitCode::SUCCESS)
-}
-
-fn write_file(path: &std::path::Path, contents: &str, force: bool) -> Result<(), String> {
-    if path.exists() && !force {
-        return Err(format!(
-            "{} already exists (pass --force to overwrite)",
-            path.display()
-        ));
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("create {}: {error}", parent.display()))?;
-    }
-    std::fs::write(path, contents).map_err(|error| format!("write {}: {error}", path.display()))
-}
-
-#[cfg(unix)]
-fn restrict(path: &std::path::Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("chmod {}: {error}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn restrict(_path: &std::path::Path) -> Result<(), String> {
-    Ok(())
 }
 
 /// Renders the resolved deployment for `config show`, redacting every secret.

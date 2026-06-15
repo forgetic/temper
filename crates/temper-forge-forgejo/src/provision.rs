@@ -25,7 +25,7 @@
 //! and the shared role password.
 
 use crate::ids::{format_repository_id, parse_repository_id};
-use crate::{ForgejoForge, HttpClient, HttpMethod, HttpRequest, HttpResponse};
+use crate::{EngineHttpClient, ForgejoForge, HttpClient, HttpMethod, HttpRequest, HttpResponse};
 use base64::Engine;
 use serde_json::{Value, json};
 use temper_forge::{
@@ -40,6 +40,85 @@ use temper_forge::{
 /// `temper-forgejo-provision` adapter): both [`ForgeAdmin::ensure_user`]'s
 /// default and [`ForgeAdmin::mint_token`]'s Basic-auth fall back to it.
 pub const ROLE_PASSWORD: &str = "R0le-Phase2-e2e!";
+
+/// Exchanges a Forgejo **admin** user's login + password for an `all`-scoped
+/// REST API token, authenticating with HTTP Basic auth.
+///
+/// `temper init` collects the admin user/password interactively but the
+/// provisioner needs a *token* (the backend authenticates every privileged call
+/// with `Authorization: token <token>`). Forgejo's token endpoint authenticates
+/// as the *target user* over Basic auth, so this mints the admin's own token the
+/// same way [`ForgeAdmin::mint_token`] mints a role user's — but with the
+/// caller-supplied password (not the shared [`ROLE_PASSWORD`]) and the broad
+/// `all` scope an admin needs for provisioning.
+///
+/// Token names are unique per process + nanosecond so re-running `temper init`
+/// against the same instance does not collide on a duplicate-token conflict.
+pub async fn admin_token_via_basic_auth(
+    base_url: &str,
+    user: &str,
+    password: &str,
+) -> ForgeResult<String> {
+    let client = EngineHttpClient::new(base_url.to_string());
+    mint_token_via_basic_auth(&client, user, password, &["all"]).await
+}
+
+/// Mints a token for `login` over HTTP Basic auth (`login:password`), returning
+/// the raw `sha1`. Shared by [`admin_token_via_basic_auth`] and
+/// [`ForgeAdmin::mint_token`] so the exact request shape stays in one place.
+async fn mint_token_via_basic_auth<C: HttpClient>(
+    client: &C,
+    login: &str,
+    password: &str,
+    scopes: &[&str],
+) -> ForgeResult<String> {
+    // Forgejo token names are user-unique; a unique, non-secret name keeps a
+    // repeated mint from failing with a duplicate-token conflict.
+    let token_name = format!(
+        "temper-{login}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    );
+    let credentials =
+        base64::engine::general_purpose::STANDARD.encode(format!("{login}:{password}"));
+    let request = HttpRequest {
+        method: HttpMethod::Post,
+        path: format!("/api/v1/users/{login}/tokens"),
+        query: Vec::new(),
+        headers: vec![
+            ("Authorization".to_string(), format!("Basic {credentials}")),
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "application/json".to_string()),
+        ],
+        body: Some(
+            json!({
+                "name": token_name,
+                "scopes": scopes,
+            })
+            .to_string(),
+        ),
+    };
+    let response = client
+        .execute(request)
+        .await
+        .map_err(crate::error::map_transport_error)?;
+    if !response.is_success() {
+        return Err(crate::error::map_status_error("mint user token", &response));
+    }
+    let body: Value = serde_json::from_str(&response.body).map_err(|err| {
+        ForgeError::Backend(format!("mint user token: failed to decode response: {err}"))
+    })?;
+    body["sha1"]
+        .as_str()
+        .map(str::to_string)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            ForgeError::Backend("mint user token: no non-empty sha1 in token response".into())
+        })
+}
 
 /// Token scopes role workers need for the reference-delivery demo, in the same
 /// order the previous `temper-forgejo-ops` helper emitted them.
@@ -223,18 +302,6 @@ impl<C: HttpClient> ForgeAdmin for ForgejoForge<C> {
     }
 
     async fn mint_token(&self, login: &str, scopes: &[TokenScope]) -> ForgeResult<String> {
-        // Forgejo token names are user-unique. The reference demo may run the
-        // provisioner once per configured repository, reusing the same role
-        // users; give each minted token a unique, non-secret name so repeated
-        // provisioning does not fail with a duplicate-token conflict.
-        let token_name = format!(
-            "temper-{login}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
-        );
         // An empty requested scope set falls back to the role-worker default set
         // (the only set the previous `forgejo_rest` helper ever sent).
         let scope_strs: Vec<&str> = if scopes.is_empty() {
@@ -245,43 +312,7 @@ impl<C: HttpClient> ForgeAdmin for ForgejoForge<C> {
         // Forgejo's token endpoint authenticates as the *target user*, not the
         // admin: HTTP Basic auth with the user's login and the shared role
         // password. This bypasses the token-auth `build_request` path.
-        let credentials =
-            base64::engine::general_purpose::STANDARD.encode(format!("{login}:{ROLE_PASSWORD}"));
-        let request = HttpRequest {
-            method: HttpMethod::Post,
-            path: format!("/api/v1/users/{login}/tokens"),
-            query: Vec::new(),
-            headers: vec![
-                ("Authorization".to_string(), format!("Basic {credentials}")),
-                ("Content-Type".to_string(), "application/json".to_string()),
-                ("Accept".to_string(), "application/json".to_string()),
-            ],
-            body: Some(
-                json!({
-                    "name": token_name,
-                    "scopes": scope_strs,
-                })
-                .to_string(),
-            ),
-        };
-        let response = self
-            .http_client()
-            .execute(request)
-            .await
-            .map_err(crate::error::map_transport_error)?;
-        if !response.is_success() {
-            return Err(crate::error::map_status_error("mint user token", &response));
-        }
-        let body: Value = serde_json::from_str(&response.body).map_err(|err| {
-            ForgeError::Backend(format!("mint user token: failed to decode response: {err}"))
-        })?;
-        body["sha1"]
-            .as_str()
-            .map(str::to_string)
-            .filter(|token| !token.is_empty())
-            .ok_or_else(|| {
-                ForgeError::Backend("mint user token: no non-empty sha1 in token response".into())
-            })
+        mint_token_via_basic_auth(self.http_client(), login, ROLE_PASSWORD, &scope_strs).await
     }
 
     async fn grant_access(&self, grant: AccessGrant) -> ForgeResult<()> {

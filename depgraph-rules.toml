@@ -86,10 +86,35 @@ temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "
 temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io"]
 temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-agent-protocol"]
 
-# The CLI composition root: the config/daemon/agent dispatcher, the standalone
-# (in-process all-in-one), and the operator tools. Spans tiers by design (it
-# reuses the three service crates and wires the in-process glue).
-temper-cli = ["temper-config", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-agent-protocol", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-forgejo-provision", "temper-interaction-service", "temper-process-protocol", "temper-reference-delivery", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-worker", "temper-worker-protocol", "temper-workflow"]
+# ---------------------------------------------------------------------------
+# CLI crates. The monolithic composition root is split into a thin dispatcher
+# (`temper-cli`) plus per-subcommand crates, so building one subcommand does not
+# pull in another's deps. CLI crates own ONLY argv parsing, terminal I/O, exit
+# codes, and orchestration — all real logic lives in the library crates.
+# ---------------------------------------------------------------------------
+
+# The lightest CLI crate: the Prompter terminal-I/O seam + argv/file helpers.
+# Config + std + rpassword only (rpassword is the one new external dep, confined
+# here). No internal deps beyond temper-config.
+temper-cli-common = ["temper-config"]
+
+# `temper config` (validate/show/init-template). Thin over temper-config; carries
+# no engine/worker/agent deps.
+temper-cli-config = ["temper-cli-common", "temper-config"]
+
+# `temper daemon`: the standalone all-in-one + per-service runners. Inherits the
+# heavy engine/worker/agent wiring the monolithic CLI used to carry (the
+# in-process transport + agent runner live here).
+temper-cli-daemon = ["temper-config", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-agent-protocol", "temper-engine", "temper-engine-io", "temper-forge", "temper-forge-forgejo", "temper-reference-delivery", "temper-worker", "temper-worker-protocol", "temper-workflow"]
+
+# `temper init`: interactive first-run. Orchestration only — config writing in
+# temper-config, provisioning in temper-provision/temper-forgejo-provision.
+temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "temper-forgejo-provision", "temper-forge", "temper-forge-forgejo", "temper-engine-io", "temper-workflow", "temper-reference-delivery"]
+
+# The thin dispatcher: routes argv to the per-subcommand crates and the hidden
+# operator/responder tools. Re-exports the in-process transport from
+# temper-cli-daemon. Much slimmer than the old monolith.
+temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-forgejo-provision", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo"]
 
 # The unified `temper` binary is now a one-line shim over temper-cli.
 temper = ["temper-cli"]

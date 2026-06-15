@@ -35,7 +35,7 @@ mod version;
 
 pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
 pub use config::{CasMode, ConfigError, DEFAULT_PAGE_LIMIT, ForgejoConfig, WebUiCredentials};
-pub use provision::ROLE_PASSWORD;
+pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
 
 use std::sync::Arc;
 use version::VersionCache;
