@@ -7,11 +7,28 @@
 
 use crate::ids::repository_id;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use temper_forge::{
     CiJob, Comment, ForgeError, ForgeResult, Issue, IssueId, PullRequest, PullRequestId,
-    Repository, RepositoryId, RepositoryPath, User, UserId,
+    RepoPermission, Repository, RepositoryId, RepositoryPath, User, UserId, WebhookSpec,
 };
+
+/// A provisioned user account recorded by the in-memory backend.
+///
+/// This mirrors [`NewUser`](temper_forge::NewUser) but is a plain, cloneable
+/// record used by the test-only read-back surface
+/// ([`MemoryForge::provisioned_users`](crate::MemoryForge::provisioned_users)).
+/// `password` is retained verbatim so tests can assert it; production backends
+/// never expose stored passwords.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemUser {
+    /// Login/username for the account.
+    pub login: String,
+    /// Email address for the account.
+    pub email: String,
+    /// Initial account password recorded at creation.
+    pub password: String,
+}
 
 const DEFAULT_USER_ID: &str = "user-1";
 const DEFAULT_USER_HANDLE: &str = "local";
@@ -31,6 +48,15 @@ pub(crate) struct State {
     pull_request_comments: BTreeMap<String, Vec<Comment>>,
     pull_request_reviews: BTreeMap<String, Vec<temper_forge::PullRequestReview>>,
     ci_jobs: BTreeMap<String, Vec<CiJob>>,
+    provisioned_users: BTreeMap<String, MemUser>,
+    tokens: BTreeMap<String, Vec<String>>,
+    token_counters: BTreeMap<String, u64>,
+    grants: BTreeMap<String, BTreeMap<String, RepoPermission>>,
+    owners_team: BTreeMap<String, BTreeSet<String>>,
+    webhooks: BTreeMap<String, Vec<WebhookSpec>>,
+    ci_enabled: BTreeSet<String>,
+    branches: BTreeMap<String, BTreeSet<String>>,
+    files: BTreeMap<(String, String), BTreeMap<String, Vec<u8>>>,
 }
 
 impl State {
@@ -48,6 +74,15 @@ impl State {
             pull_request_comments: BTreeMap::new(),
             pull_request_reviews: BTreeMap::new(),
             ci_jobs: BTreeMap::new(),
+            provisioned_users: BTreeMap::new(),
+            tokens: BTreeMap::new(),
+            token_counters: BTreeMap::new(),
+            grants: BTreeMap::new(),
+            owners_team: BTreeMap::new(),
+            webhooks: BTreeMap::new(),
+            ci_enabled: BTreeSet::new(),
+            branches: BTreeMap::new(),
+            files: BTreeMap::new(),
         }
     }
 
@@ -243,6 +278,147 @@ impl State {
             .values()
             .flat_map(|jobs| jobs.iter())
             .find(|job| &job.id == id)
+            .cloned()
+    }
+
+    // --- Provisioning state (ForgeContent + ForgeAdmin) ---
+
+    /// Idempotently records a provisioned user; an existing login is left as-is.
+    pub(crate) fn ensure_user(&mut self, user: MemUser) {
+        self.provisioned_users
+            .entry(user.login.clone())
+            .or_insert(user);
+    }
+
+    /// Returns every provisioned user ordered by login.
+    pub(crate) fn provisioned_users(&self) -> Vec<MemUser> {
+        self.provisioned_users.values().cloned().collect()
+    }
+
+    /// Mints the next deterministic token name for `login` and records it.
+    pub(crate) fn mint_token(&mut self, login: &str) -> ForgeResult<String> {
+        let counter = self
+            .token_counters
+            .entry(login.to_string())
+            .or_insert(0_u64);
+        *counter = counter
+            .checked_add(1)
+            .ok_or_else(|| ForgeError::Backend("token counter overflowed".into()))?;
+        let token = format!("mem-token-{login}-{counter}");
+        self.tokens
+            .entry(login.to_string())
+            .or_default()
+            .push(token.clone());
+        Ok(token)
+    }
+
+    /// Returns every token minted for `login` in mint order.
+    pub(crate) fn minted_tokens(&self, login: &str) -> Vec<String> {
+        self.tokens.get(login).cloned().unwrap_or_default()
+    }
+
+    /// Records org Owners-team membership for `owner`/`login`.
+    pub(crate) fn add_owner_member(&mut self, owner: &str, login: &str) {
+        self.owners_team
+            .entry(owner.to_string())
+            .or_default()
+            .insert(login.to_string());
+    }
+
+    /// Ensures an owner exists, creating an empty Owners team if needed.
+    pub(crate) fn ensure_owner(&mut self, owner: &str) {
+        self.owners_team.entry(owner.to_string()).or_default();
+    }
+
+    /// Records a repo-scoped collaborator grant.
+    pub(crate) fn grant_repo(&mut self, repo_id: &RepositoryId, login: &str, perm: RepoPermission) {
+        self.grants
+            .entry(repo_id.as_str().to_string())
+            .or_default()
+            .insert(login.to_string(), perm);
+    }
+
+    /// Returns the repo-scoped collaborator grants for `repo_id`.
+    pub(crate) fn grants(&self, repo_id: &RepositoryId) -> BTreeMap<String, RepoPermission> {
+        self.grants
+            .get(repo_id.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Idempotently registers a webhook on `repo_id`, deduplicating on URL.
+    pub(crate) fn ensure_webhook(&mut self, repo_id: &RepositoryId, spec: WebhookSpec) {
+        let hooks = self
+            .webhooks
+            .entry(repo_id.as_str().to_string())
+            .or_default();
+        if hooks.iter().any(|hook| hook.url == spec.url) {
+            return;
+        }
+        hooks.push(spec);
+    }
+
+    /// Returns the webhooks registered on `repo_id`.
+    pub(crate) fn webhooks(&self, repo_id: &RepositoryId) -> Vec<WebhookSpec> {
+        self.webhooks
+            .get(repo_id.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Marks CI as enabled on `repo_id`.
+    pub(crate) fn enable_ci(&mut self, repo_id: &RepositoryId) {
+        self.ci_enabled.insert(repo_id.as_str().to_string());
+    }
+
+    /// Reports whether CI is enabled on `repo_id`.
+    pub(crate) fn ci_enabled(&self, repo_id: &RepositoryId) -> bool {
+        self.ci_enabled.contains(repo_id.as_str())
+    }
+
+    /// Idempotently records a branch on `repo_id`.
+    pub(crate) fn create_branch(&mut self, repo_id: &RepositoryId, branch: &str) {
+        self.branches
+            .entry(repo_id.as_str().to_string())
+            .or_default()
+            .insert(branch.to_string());
+    }
+
+    /// Reports whether `branch` is recorded on `repo_id`.
+    pub(crate) fn branch_exists(&self, repo_id: &RepositoryId, branch: &str) -> bool {
+        self.branches
+            .get(repo_id.as_str())
+            .is_some_and(|branches| branches.contains(branch))
+    }
+
+    /// Upserts a committed file at `(repo_id, branch, path)`.
+    pub(crate) fn commit_file(
+        &mut self,
+        repo_id: &RepositoryId,
+        branch: &str,
+        path: &str,
+        contents: Vec<u8>,
+    ) {
+        self.files
+            .entry((repo_id.as_str().to_string(), branch.to_string()))
+            .or_default()
+            .insert(path.to_string(), contents);
+        self.branches
+            .entry(repo_id.as_str().to_string())
+            .or_default()
+            .insert(branch.to_string());
+    }
+
+    /// Returns the committed file contents at `(repo_id, branch, path)`.
+    pub(crate) fn committed_file(
+        &self,
+        repo_id: &RepositoryId,
+        branch: &str,
+        path: &str,
+    ) -> Option<Vec<u8>> {
+        self.files
+            .get(&(repo_id.as_str().to_string(), branch.to_string()))
+            .and_then(|files| files.get(path))
             .cloned()
     }
 }

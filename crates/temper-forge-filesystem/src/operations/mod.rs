@@ -9,6 +9,7 @@
 
 mod ci_jobs;
 mod issues;
+mod provisioning;
 mod pull_request_reviews;
 mod pull_requests;
 mod repositories;
