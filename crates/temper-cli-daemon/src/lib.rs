@@ -6,12 +6,26 @@
 //! process). `--service engine` and `--service worker` run a single service for
 //! a distributed topology, sharing the exact code the slim `temper-engine` /
 //! `temper-worker` binaries run.
+//!
+//! This crate carries the heavy engine/worker/agent wiring; the slimmer
+//! `temper-cli` dispatcher delegates `temper daemon` here and re-exports the
+//! in-process transport + agent runner from this crate so the root integration
+//! test keeps the same `temper_cli::{InProcessTransport, InProcessAgentRunner}`
+//! path.
+
+mod provider;
+mod standalone;
 
 use std::process::ExitCode;
 
 use temper_config::{EX_USAGE, load, parse_common_args};
 
-const USAGE: &str = "\
+// Exposed (re-exported up through `temper-cli`) for the root package's
+// in-process-transport integration test, which proves the standalone
+// worker→daemon carrier in isolation.
+pub use standalone::{InProcessAgentRunner, InProcessTransport};
+
+pub const USAGE: &str = "\
 Run the temper daemon.
 
 The temper daemon can be run as:
@@ -78,8 +92,6 @@ pub fn main(args: std::env::Args) -> ExitCode {
         }
     }
 }
-
-use crate::standalone;
 
 /// Pulls an optional `--service <name>` out of the leftover args, rejecting any
 /// other stray argument.

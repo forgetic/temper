@@ -1,0 +1,18 @@
+[package]
+name = "temper-cli-common"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared CLI plumbing for the temper subcommand crates: the Prompter terminal-I/O seam, argv helpers, exit-code/run wrappers, and on-disk file-target resolution. The lightest CLI crate — config + std + rpassword only."
+
+[dependencies]
+temper-config = { path = "../temper-config" }
+# The ONLY new dependency in the CLI split, and confined to this crate: rpassword
+# localizes the termios no-echo concern (the workspace forbids `unsafe`, which a
+# hand-rolled hidden-input reader would need). Both the output sink and the
+# hidden-input reader are injectable so `ScriptedPrompter` never touches a tty.
+rpassword = "7"
+
+[lints]
+workspace = true

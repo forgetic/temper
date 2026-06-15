@@ -1,0 +1,14 @@
+[package]
+name = "temper-cli-config"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The `temper config` subcommand: validate / show / init-template. Thin argv + terminal-I/O over temper-config; carries no engine/worker/agent deps."
+
+[dependencies]
+temper-cli-common = { path = "../temper-cli-common" }
+temper-config = { path = "../temper-config" }
+
+[lints]
+workspace = true

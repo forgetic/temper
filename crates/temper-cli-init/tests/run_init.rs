@@ -1,0 +1,202 @@
+// SPDX-License-Identifier: MPL-2.0
+
+//! Full-flow unit test of `temper init`'s testable core, `run_init`, EXCEPT the
+//! live forge call.
+//!
+//! The provisioning step is the only one that touches a network; `run_init`
+//! takes a `&mut dyn Provisioner`, so this test passes a [`StubProvisioner`]
+//! that returns a canned [`Provisioned`] without a forge. Everything else —
+//! collecting answers (including defaults-on-empty), building the documents,
+//! writing config.toml / workflow.json / webhook-secret / credentials.toml, and
+//! the 0600 mode on the two secret files — runs for real against a temp dir.
+//!
+//! Issue #183's e2e reuses this exact seam: `run_init` + `ScriptedPrompter` +
+//! `InitOptions`, but with a real `ForgejoProvisioner` instead of the stub.
+
+use std::collections::BTreeMap;
+
+use temper_cli_common::{LoadOptions, ScriptedPrompter};
+use temper_cli_init::{InitOptions, ProvisionOutcome, ProvisionRequest, Provisioner, run_init};
+use temper_forge::RepositoryId;
+use temper_provision::{Provisioned, RoleIdentity};
+use temper_workflow::RoleId;
+
+/// Returns a canned `Provisioned` for `acme/service` with two role identities
+/// (architect, engineer) + a `bot` automation identity, and records the request
+/// it was handed so the test can assert the wiring.
+struct StubProvisioner {
+    seen: Option<ProvisionRequest>,
+}
+
+impl Provisioner for StubProvisioner {
+    fn provision(&mut self, request: &ProvisionRequest) -> Result<ProvisionOutcome, String> {
+        self.seen = Some(request.clone());
+        let identity = |user: &str| RoleIdentity {
+            user: user.to_string(),
+            email: format!("{user}@example.invalid"),
+            token: format!("token-{user}"),
+            password: format!("pw-{user}"),
+        };
+        let mut roles = BTreeMap::new();
+        roles.insert(RoleId::new("architect"), identity("architect"));
+        roles.insert(RoleId::new("engineer"), identity("engineer"));
+        let provisioned = Provisioned {
+            owner: request.owner.clone(),
+            name: request.name.clone(),
+            repository: RepositoryId::new(format!("{}/{}", request.owner, request.name)),
+            roles,
+            automation: identity("bot"),
+        };
+        Ok(ProvisionOutcome {
+            provisioned,
+            // The admin token the live ForgejoProvisioner would mint from the
+            // Q4 password; the stub returns a deterministic stand-in.
+            admin_token: "admin-rest-token".to_string(),
+        })
+    }
+}
+
+#[test]
+fn run_init_collects_writes_and_provisions_offline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+
+    // Scripted answers in prompt order. Empty strings exercise defaults-on-empty
+    // for the workflow and webhook-address questions.
+    let mut prompter = ScriptedPrompter::new([
+        "http://localhost:3000".to_string(), // Q1 forge URL
+        "".to_string(),                      // Q2 workflow (default basic-delivery)
+        "".to_string(),                      // Q3 webhook addr (default)
+        "root".to_string(),                  // Q4 admin user
+        "admin-pass".to_string(),            // Q4 admin password (secret)
+        "sk-deepseek-xyz".to_string(),       // Q5 DeepSeek API key (secret)
+    ]);
+
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        force: false,
+        existing_repo: false,
+        workspace: None,
+    };
+
+    let mut provisioner = StubProvisioner { seen: None };
+    run_init(&mut prompter, &mut provisioner, &opts).expect("run_init succeeds offline");
+
+    // ── config.toml ──────────────────────────────────────────────────────────
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(
+        config.contains("url = \"http://localhost:3000\""),
+        "{config}"
+    );
+    assert!(config.contains("type = \"forgejo\""), "{config}");
+    assert!(config.contains("admin = \"root\""), "{config}");
+    // CI reader points at the automation bot.
+    assert!(config.contains("ci_user = \"bot\""), "{config}");
+    // Repo + roles derived from the embedded basic-delivery workflow.
+    assert!(config.contains("acme/service"), "{config}");
+    assert!(config.contains("architect"), "{config}");
+    assert!(config.contains("engineer"), "{config}");
+    // Webhook bind address scheme-stripped to host:port.
+    assert!(config.contains("bind = \"localhost:8314\""), "{config}");
+    // Provider profile + webhook secret + workflow file wired.
+    assert!(config.contains("provider = \"deepseek\""), "{config}");
+    assert!(config.contains("workflow.json"), "{config}");
+    assert!(config.contains("webhook-secret"), "{config}");
+
+    // ── workflow.json ─────────────────────────────────────────────────────────
+    let workflow_path = dir.path().join("workflow.json");
+    let workflow = std::fs::read_to_string(&workflow_path).expect("workflow.json written");
+    assert_eq!(
+        workflow,
+        temper_reference_delivery::basic_delivery_workflow_json(),
+        "workflow.json is the embedded basic-delivery bytes verbatim"
+    );
+
+    // ── credentials.toml ──────────────────────────────────────────────────────
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
+    // Admin identity: token is the minted admin REST token, password is Q4.
+    assert!(creds.contains("token = \"admin-rest-token\""), "{creds}");
+    assert!(creds.contains("password = \"admin-pass\""), "{creds}");
+    // Minted role identities folded in.
+    assert!(creds.contains("token-architect"), "{creds}");
+    assert!(creds.contains("token-engineer"), "{creds}");
+    // Automation bot identity.
+    assert!(creds.contains("token-bot"), "{creds}");
+    // Provider key under [agent.providers.deepseek] as an api-key.
+    assert!(creds.contains("sk-deepseek-xyz"), "{creds}");
+    assert!(creds.contains("api-key"), "{creds}");
+
+    // ── 0600 on the two secret files ─────────────────────────────────────────
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let secret_path = dir.path().join("webhook-secret");
+        for path in [&credentials_path, &secret_path] {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode,
+                0o600,
+                "{} should be 0600, got {mode:o}",
+                path.display()
+            );
+        }
+    }
+
+    // ── the provisioner was handed the right request ─────────────────────────
+    let seen = provisioner.seen.expect("provisioner was called");
+    assert_eq!(seen.base_url, "http://localhost:3000");
+    assert_eq!(seen.admin_user, "root");
+    assert_eq!(seen.admin_password, "admin-pass");
+    assert_eq!(seen.owner, "acme");
+    assert_eq!(seen.name, "service");
+    assert_eq!(seen.webhook_url, "http://localhost:8314/webhook");
+    assert!(!seen.existing_repo);
+    // The webhook secret file the adapter reads back is the one we wrote.
+    assert!(seen.webhook_secret_file.ends_with("webhook-secret"));
+
+    // ── a final summary was emitted ──────────────────────────────────────────
+    assert!(
+        prompter.notes.iter().any(|n| n.contains("temper daemon")),
+        "summary should point at `temper daemon`: {:?}",
+        prompter.notes
+    );
+}
+
+#[test]
+fn run_init_refuses_to_clobber_without_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+    // Pre-create config.toml so preflight trips.
+    std::fs::write(&config_path, "schema_version = 1\n").expect("seed config");
+
+    let mut prompter = ScriptedPrompter::new([
+        "http://localhost:3000".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "root".to_string(),
+        "admin-pass".to_string(),
+        "sk-deepseek-xyz".to_string(),
+    ]);
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path),
+            credentials: Some(credentials_path),
+        },
+        force: false,
+        existing_repo: false,
+        workspace: None,
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+    let err = run_init(&mut prompter, &mut provisioner, &opts).expect_err("clobber refused");
+    assert!(err.to_string().contains("already exist"), "{err}");
+    // Preflight runs before provisioning, so the stub was never called.
+    assert!(
+        provisioner.seen.is_none(),
+        "provisioner must not run on clobber"
+    );
+}

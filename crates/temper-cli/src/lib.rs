@@ -1,27 +1,25 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The unified `temper` command line.
+//! The unified `temper` command line — a thin dispatcher.
 //!
-//! [`run`] dispatches `argv[1]` to the three headline subcommands — `config`,
-//! `daemon`, `agent` — and to the hidden operator tools. The daemon subcommand
-//! runs the whole stack standalone or one service at a time (`--service
-//! engine|worker`); the slim per-service binaries (`temper-engine`,
-//! `temper-worker`, `temper-agent`) run the same code with no extra plumbing.
+//! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `config`,
+//! `daemon`, `agent` — and to the hidden operator/responder tools. Each
+//! subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
+//! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
+//! dispatch table and the operator/responder wrappers, so the heavy
+//! engine/worker/agent wiring (under `temper-cli-daemon`) is pulled in only when
+//! the daemon path is built.
 
-mod config_cmd;
-mod daemon;
 mod operators;
-mod provider;
 mod responders;
-mod standalone;
 
 use std::process::ExitCode;
 
 use temper_config::EX_USAGE;
 
-// Exposed for the root package's in-process-transport integration test, which
-// proves the standalone worker→daemon carrier in isolation.
-pub use standalone::{InProcessAgentRunner, InProcessTransport};
+// Re-exported from `temper-cli-daemon` so the root package's in-process-transport
+// integration test and `src/bin/temper.rs` keep the same `temper_cli::*` paths.
+pub use temper_cli_daemon::{InProcessAgentRunner, InProcessTransport};
 
 /// Top-level usage, shown for `temper`, `temper --help`, and unknown commands.
 pub const USAGE: &str = "\
@@ -35,6 +33,7 @@ the source of truth.
 Usage: temper [COMMAND]
 
 Commands:
+  init    Interactively configure and provision a deployment
   config  Guided or programmatic configuration
   daemon  Run a full standalone daemon or one of its components (engine, worker)
   agent   Run an agent session (usually invoked by the daemon)
@@ -59,8 +58,9 @@ pub fn run() -> ExitCode {
 /// Dispatch a command + its remaining args. Separated from [`run`] for testing.
 pub fn dispatch(command: &str, args: std::env::Args) -> ExitCode {
     match command {
-        "config" => config_cmd::main(args),
-        "daemon" => daemon::main(args),
+        "init" => temper_cli_init::main(args),
+        "config" => temper_cli_config::main(args),
+        "daemon" => temper_cli_daemon::main(args),
         "agent" => temper_agent_session::main(args),
 
         // Hidden operator/responder tools — not in the headline help, but kept

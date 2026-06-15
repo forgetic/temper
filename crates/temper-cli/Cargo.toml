@@ -4,33 +4,22 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The unified `temper` command line: the config/daemon/agent dispatcher, the standalone (all-in-one) daemon, the config subcommand, and the operator tools. The composition root that wires every tier together."
+description = "The unified `temper` command line: a thin dispatcher over the per-subcommand crates (init/config/daemon/agent) plus the hidden operator/responder tools."
 
 [dependencies]
-chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-skein = { workspace = true }
 
-# Config + the three per-service crates (reused so standalone composes the same
-# engine/worker the slim binaries run).
+# Config (for EX_USAGE) + the per-subcommand crates the dispatcher delegates to.
 temper-config = { path = "../temper-config" }
-temper-engine-service = { path = "../temper-engine-service" }
-temper-worker-service = { path = "../temper-worker-service" }
+temper-cli-init = { path = "../temper-cli-init" }
+temper-cli-config = { path = "../temper-cli-config" }
+temper-cli-daemon = { path = "../temper-cli-daemon" }
 temper-agent-session = { path = "../temper-agent-session" }
 
-# In-process all-in-one glue spans all three tiers (composition root).
-temper-engine = { path = "../temper-engine" }
-temper-engine-io = { path = "../temper-engine-io" }
-temper-forge = { path = "../temper-forge" }
-temper-forge-forgejo = { path = "../temper-forge-forgejo" }
-temper-workflow = { path = "../temper-workflow" }
-temper-reference-delivery = { path = "../temper-reference-delivery" }
-temper-worker = { path = "../temper-worker" }
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+# Responder subcommands run the agent's external process-responders in-process.
 temper-agent = { path = "../temper-agent" }
 temper-agent-io = { path = "../temper-agent-io" }
-temper-agent-protocol = { path = "../temper-agent-protocol" }
 temper-process-protocol = { path = "../temper-process-protocol" }
 
 # Operator tools.
