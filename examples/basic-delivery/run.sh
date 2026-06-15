@@ -319,8 +319,8 @@ load_config() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    # One unified binary provides everything this example needs: `temper run`
-    # (daemon + worker + agent) and the `temper provision-forgejo` subcommand.
+    # One unified binary provides everything this example needs: `temper daemon`
+    # (engine + worker + agent) and the `temper provision-forgejo` subcommand.
     RUN_BIN=${TEMPER_RUN_BIN:-$WORKSPACE_ROOT/target/debug/temper}
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
@@ -335,17 +335,17 @@ resolve_binaries() {
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
 
     # This example requires the runtime workflow provisioner subcommand and the
-    # unified `temper run` command (daemon + worker + agent in one process).
-    # Refuse to run against a stale development binary.
+    # config-driven `temper daemon` command (engine + worker + agent in one
+    # process). Refuse to run against a stale development binary.
     _provision_help=$("$RUN_BIN" provision-forgejo --help 2>&1 || true)
     case "$_provision_help" in
         *--workflow*--seed-intake*--seed-only*) ;;
         *) die "temper binary is stale or incompatible: $RUN_BIN 'provision-forgejo' does not advertise --workflow/--seed-intake/--seed-only. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
-    _run_help=$("$RUN_BIN" run --help 2>&1 || true)
-    case "$_run_help" in
-        *--worker-id*) ;;
-        *) die "temper binary is stale or incompatible: $RUN_BIN 'run' does not advertise --worker-id. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+    _daemon_help=$("$RUN_BIN" daemon --help 2>&1 || true)
+    case "$_daemon_help" in
+        *--config*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'daemon' does not advertise --config. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
 
     # Pinned Forgejo + runner: env override, else the cached pinned path.
@@ -358,7 +358,7 @@ resolve_binaries() {
        Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/
        with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
 
-    log "coding agent: in-process (temper run; --auth $TEMPER_RUN_AUTH)"
+    log "coding agent: in-process (temper daemon; provider from TEMPER_RUN_AUTH=$TEMPER_RUN_AUTH)"
 }
 
 # --- Forgejo server -----------------------------------------------------------
