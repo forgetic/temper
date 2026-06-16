@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Process-wide logging init for the temper binaries: env-aware tracing-subscriber setup (RUST_LOG, journald under systemd, ANSI-on-TTY stderr fmt)."
 
 [dependencies]
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # The journald sink is Linux-only — `tracing-journald` does not build on other

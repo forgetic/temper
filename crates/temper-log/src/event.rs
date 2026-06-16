@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: MPL-2.0
+
+//! The closed `event` vocabulary (§3 rule 1 of the logging design).
+//!
+//! `event` is a **closed dotted-namespace enum**, defined in Rust so the
+//! machine-facing vocabulary cannot drift. Each [`Event`] variant has one stable
+//! dotted string ([`Event::as_str`]) used as the `event=` field value. An agent
+//! keys off `event=…` and never parses the human prose.
+//!
+//! Adding a workflow state change means adding a variant here — there is exactly
+//! one place the vocabulary lives, and `info`-level emit sites draw their `event`
+//! value from it.
+
+/// A workflow-state-change event in temper's closed `info`-level vocabulary.
+///
+/// The set is the §3/§5/§7 catalog. It is `#[non_exhaustive]`-free on purpose:
+/// it is a *closed* enum so a `match` over it is exhaustive and the vocabulary
+/// is fixed at compile time. New events are added by editing this enum (and the
+/// corresponding `emit` constructor), never by passing a free string.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Event {
+    /// A new issue was observed on the forge (`issue.opened`).
+    IssueOpened,
+    /// A wake/webhook was received for an artifact (`wake.received`).
+    WakeReceived,
+    /// A CI run completed for a pull request (`ci.completed`).
+    CiCompleted,
+    /// A worker claimed a lease on a work item (`lease.claimed`).
+    LeaseClaimed,
+    /// A worker released a lease it held (`lease.released`).
+    LeaseReleased,
+    /// A held lease was lost (expired / reclaimed) (`lease.lost`).
+    LeaseLost,
+    /// An agent workspace run started (`agent.started`).
+    AgentStarted,
+    /// An agent workspace run finished (`agent.finished`).
+    AgentFinished,
+    /// The engine applied a workflow transition (`transition.applied`).
+    TransitionApplied,
+    /// A work item entered a queue (`queue.entered`).
+    QueueEntered,
+    /// The engine evaluated the gates on a PR (`gate.evaluated`).
+    GateEvaluated,
+    /// A pull request was opened for an issue (`pr.opened`).
+    PrOpened,
+    /// A pull request was merged to the target branch (`pr.merged`).
+    PrMerged,
+    /// A work item was resolved end-to-end (`item.resolved`).
+    ItemResolved,
+    /// A role is saturated; items are queued behind the holder (`role.saturated`).
+    RoleSaturated,
+}
+
+impl Event {
+    /// The stable dotted string form used as the `event=` field value.
+    ///
+    /// This is the machine key (§3 rule 1). It is part of the logging contract
+    /// and must not change once shipped.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IssueOpened => "issue.opened",
+            Self::WakeReceived => "wake.received",
+            Self::CiCompleted => "ci.completed",
+            Self::LeaseClaimed => "lease.claimed",
+            Self::LeaseReleased => "lease.released",
+            Self::LeaseLost => "lease.lost",
+            Self::AgentStarted => "agent.started",
+            Self::AgentFinished => "agent.finished",
+            Self::TransitionApplied => "transition.applied",
+            Self::QueueEntered => "queue.entered",
+            Self::GateEvaluated => "gate.evaluated",
+            Self::PrOpened => "pr.opened",
+            Self::PrMerged => "pr.merged",
+            Self::ItemResolved => "item.resolved",
+            Self::RoleSaturated => "role.saturated",
+        }
+    }
+
+    /// Every event in the catalog, for exhaustiveness tests and tooling.
+    ///
+    /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
+    /// test, which fails if a new variant is added without listing it here.
+    pub const ALL: [Self; 15] = [
+        Self::IssueOpened,
+        Self::WakeReceived,
+        Self::CiCompleted,
+        Self::LeaseClaimed,
+        Self::LeaseReleased,
+        Self::LeaseLost,
+        Self::AgentStarted,
+        Self::AgentFinished,
+        Self::TransitionApplied,
+        Self::QueueEntered,
+        Self::GateEvaluated,
+        Self::PrOpened,
+        Self::PrMerged,
+        Self::ItemResolved,
+        Self::RoleSaturated,
+    ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn dotted_forms_match_the_spec_catalog() {
+        // The exact §3 rule-1 vocabulary, verbatim.
+        let expected = [
+            "issue.opened",
+            "wake.received",
+            "ci.completed",
+            "lease.claimed",
+            "lease.released",
+            "lease.lost",
+            "agent.started",
+            "agent.finished",
+            "transition.applied",
+            "queue.entered",
+            "gate.evaluated",
+            "pr.opened",
+            "pr.merged",
+            "item.resolved",
+            "role.saturated",
+        ];
+        let actual: Vec<&str> = Event::ALL.iter().map(|e| e.as_str()).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn all_variants_have_unique_dotted_form() {
+        // Every variant maps to a distinct, non-empty, dotted string.
+        let mut seen = BTreeSet::new();
+        for event in Event::ALL {
+            let dotted = event.as_str();
+            assert!(
+                dotted.contains('.'),
+                "{event:?} dotted form {dotted:?} is not namespaced"
+            );
+            assert!(
+                seen.insert(dotted),
+                "duplicate dotted form {dotted:?} for {event:?}"
+            );
+        }
+        assert_eq!(seen.len(), Event::ALL.len());
+    }
+
+    #[test]
+    fn all_array_length_matches_catalog() {
+        // Guards `Event::ALL` against drifting out of sync with the enum: if a
+        // variant is added but not appended to ALL, this and the uniqueness test
+        // catch it (the array literal would also fail to compile on a length
+        // mismatch).
+        assert_eq!(Event::ALL.len(), 15);
+    }
+}

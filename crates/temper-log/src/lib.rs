@@ -1,11 +1,38 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Process-wide logging initialization for the temper binaries.
+//! Process-wide logging init **and** the structured event model for temper.
 //!
-//! Every temper binary calls [`init_logging`] once at startup to install a
+//! This crate is the single source of temper's logging schema (the
+//! [logging & observability design][design]). It owns two things:
+//!
+//! 1. **The event model** — the vocabulary every emit site draws from:
+//!    - [`Service`] — the plane that produced an event (`engine` / `worker` /
+//!      `agent` / `trigger`): its `service=` token, its `tracing` target, and its
+//!      aligned human prefix.
+//!    - [`Event`] — the closed dotted-namespace catalog (`transition.applied`,
+//!      `lease.claimed`, …); the machine `event=` key, defined in Rust so it
+//!      cannot drift.
+//!    - [`WorkItemRef`] — the repo-qualified `artifact.ref` join key
+//!      (`acme/widgets#42` / `acme/api PR#19`) shared by the human tag and the
+//!      machine field.
+//!    - [`format_duration_ms`] / [`format_duration`] — the `1m13s` human
+//!      duration renderer (machine fields stay numeric).
+//!    - [`redact`] — bounded, secret-scrubbing previews for free-text fields.
+//!    - the [`emit`] constructors — one `info`-level site per [`Event`] that
+//!      expands to real structured fields plus the generated §7 human line.
+//!    - [`work_item_span`] / [`agent_run_span`] — the two span layers that
+//!      auto-thread `artifact.ref` onto every child (including debug) line.
+//!
+//! 2. **The sink wiring** — [`init_logging`], below, unchanged: an
+//!    environment-aware global [`tracing`] subscriber (journald under systemd,
+//!    ANSI-on-TTY stderr fmt otherwise, `RUST_LOG` filtering).
+//!
+//! Every temper binary calls [`init_logging`] once at startup to install the
 //! global [`tracing`] subscriber. The setup is environment-aware so the same
 //! call does the right thing whether the process runs in a terminal, under
 //! systemd, or in CI:
+//!
+//! [design]: https://example.invalid/docs/explanation/logging-and-observability.md
 //!
 //! - **Level / filtering.** The filter is read from the `RUST_LOG` environment
 //!   variable (standard [`EnvFilter`] syntax, e.g. `RUST_LOG=debug` or
@@ -31,6 +58,20 @@
 //! [`tracing_journald`]: https://docs.rs/tracing-journald
 //! [`EnvFilter`]: tracing_subscriber::EnvFilter
 //! [`IsTerminal`]: std::io::IsTerminal
+
+pub mod duration;
+pub mod emit;
+pub mod event;
+pub mod redact;
+pub mod service;
+pub mod span;
+pub mod work_item;
+
+pub use duration::{format_duration, format_duration_ms};
+pub use event::Event;
+pub use service::Service;
+pub use span::{agent_run_span, work_item_span};
+pub use work_item::{ArtifactKind, WorkItemRef, strip_provider_scheme};
 
 use std::io::IsTerminal;
 
