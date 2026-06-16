@@ -90,7 +90,7 @@ impl EventSink for UsageLogger {
         match event {
             AgentEvent::TurnUsage { turn, usage } => {
                 self.totals.add_turn(&self.scope, &usage);
-                tracing::info!(
+                tracing::debug!(
                     target: "temper_agent",
                     "{}",
                     StructuredEvent::new("turn_usage")
@@ -103,22 +103,36 @@ impl EventSink for UsageLogger {
                         .render()
                 );
             }
-            AgentEvent::ToolStart { name, .. } => {
+            AgentEvent::ToolStart { id, name } => {
                 self.totals.tool_calls.fetch_add(1, Ordering::Relaxed);
-                tracing::info!(
+                tracing::debug!(
                     target: "temper_agent",
                     "{}",
                     StructuredEvent::new("tool_start")
                         .str("scope", &self.scope)
+                        .str("id", &id)
                         .str("tool", &name)
                         .render()
                 );
             }
-            AgentEvent::ToolEnd { id, is_error } if is_error => {
+            AgentEvent::ToolEnd { id, is_error: true } => {
                 tracing::info!(
                     target: "temper_agent",
                     "{}",
                     StructuredEvent::new("tool_error")
+                        .str("scope", &self.scope)
+                        .str("id", &id)
+                        .render()
+                );
+            }
+            AgentEvent::ToolEnd {
+                id,
+                is_error: false,
+            } => {
+                tracing::debug!(
+                    target: "temper_agent",
+                    "{}",
+                    StructuredEvent::new("tool_end")
                         .str("scope", &self.scope)
                         .str("id", &id)
                         .render()
