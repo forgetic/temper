@@ -20,7 +20,7 @@ type = \"forgejo\"
 url = \"http://localhost:3000\"
 # The admin/default user: the key into [forge.users.<admin>] in the credentials
 # file whose token becomes the daemon's default forge identity.
-admin = \"agent\"
+admin = \"bot\"
 # The user whose web-UI password authenticates CI status reads (ADR 0019).
 ci_user = \"bot\"
 
