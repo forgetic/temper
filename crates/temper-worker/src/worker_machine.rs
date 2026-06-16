@@ -170,9 +170,7 @@ impl WorkerMachine {
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
             Err(error) => {
-                requests.push(WorkerRequest::Log(format!(
-                    "worker: poll failed: {error}"
-                )));
+                requests.push(WorkerRequest::Log(format!("worker: poll failed: {error}")));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
         }
