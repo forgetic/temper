@@ -17,6 +17,10 @@ Long-polls the engine for coding jobs and runs each by spawning the out-of-proce
 `temper daemon`. Equivalent to `temper daemon --service worker`.";
 
 fn main() -> ExitCode {
+    // Install the global tracing subscriber before arg parsing or the runtime
+    // starts, so startup output flows through the env-aware subscriber.
+    temper_log::init_logging();
+
     temper_config::service_main(
         "temper-worker",
         USAGE,

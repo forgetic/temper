@@ -132,9 +132,9 @@ temper-log = []
 # ships its slim binary (temper-engine / temper-worker / temper-agent). These
 # allowlists ARE the proof of tier isolation. The engine service builds its forge
 # through the facade factory — no concrete backend dep.
-temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-workflow", "temper-reference-delivery"]
-temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io"]
-temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-agent-protocol"]
+temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-workflow", "temper-reference-delivery", "temper-log"]
+temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io", "temper-log"]
+temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-agent-protocol", "temper-log"]
 
 # ---------------------------------------------------------------------------
 # CLI crates. The monolithic composition root is split into a thin dispatcher
@@ -166,7 +166,7 @@ temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "te
 # The thin dispatcher: routes argv to the per-subcommand crates and the hidden
 # operator/responder tools. Re-exports the in-process transport from
 # temper-cli-daemon. Much slimmer than the old monolith.
-temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo"]
+temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
 
 # The unified `temper` binary is now a one-line shim over temper-cli.
 temper = ["temper-cli"]

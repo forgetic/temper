@@ -18,6 +18,10 @@ only the engine, and serves until SIGINT/SIGTERM. Equivalent to
 `temper daemon --service engine`.";
 
 fn main() -> ExitCode {
+    // Install the global tracing subscriber before arg parsing or the runtime
+    // starts, so startup output flows through the env-aware subscriber.
+    temper_log::init_logging();
+
     temper_config::service_main(
         "temper-engine",
         USAGE,
