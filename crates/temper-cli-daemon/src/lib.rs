@@ -184,9 +184,9 @@ fn extract_service(rest: &[String]) -> Result<Option<Service>, String> {
 /// `~/.config/temper` discovery (see [`load_for`]), so the global credentials
 /// file never layers in behind an explicit deployment.
 pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
-    let (resolved, _paths) = load_for(&inputs).map_err(DaemonError::Load)?;
+    let (resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
     let result = match inputs.service {
-        None => standalone::run(&resolved),
+        None => standalone::run(&resolved, loaded_paths.config.as_deref()),
         Some(Service::Engine) => temper_engine_service::run(&resolved),
         Some(Service::Worker) => {
             temper_worker_service::run(&resolved, temper_worker_service::self_subcommand("agent"))

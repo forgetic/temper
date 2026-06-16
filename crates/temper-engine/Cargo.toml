@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 temper-forge = { path = "../temper-forge" }
 temper-engine-io = { path = "../temper-engine-io" }
+temper-log = { path = "../temper-log" }
 temper-runner = { path = "../temper-runner" }
 temper-worker-protocol = { path = "../temper-worker-protocol" }
 temper-worker-registry = { path = "../temper-worker-registry" }

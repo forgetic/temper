@@ -2,6 +2,8 @@
 
 //! Library-only Forgejo/Gitea webhook intake helpers for daemon wake scans.
 
+mod trigger_facts;
+
 use std::{collections::BTreeMap, fmt};
 
 use chrono::{DateTime, Utc};
@@ -12,6 +14,7 @@ use temper_forge::{ChangeHint, ChangeKind, Forge, ItemNumber, RepositoryPath};
 use temper_workflow::{CompiledWorkflow, ValidatedWorkflow};
 
 use crate::{Daemon, RoleFeedMode, RoleFeedTarget};
+use trigger_facts::{parse_trigger_facts, wake_artifact_kind, wake_queue};
 
 /// Errors returned while verifying or parsing a webhook delivery.
 #[derive(Debug, Eq, PartialEq)]
@@ -150,8 +153,32 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
     body: &[u8],
 ) -> Result<usize, WebhookError> {
     let hint = parse_verified_webhook(headers, body, &config.secret)?;
+    // Per-delivery accounting stays at debug; the operator-facing facts below are
+    // the §7 `trigger:` info events.
     let line = webhook_accepted_log_line(&hint);
-    tracing::info!("{line}");
+    tracing::debug!("{line}");
+
+    let repo =
+        temper_log::strip_provider_scheme(&format!("{}/{}", hint.repo.owner, hint.repo.name))
+            .to_string();
+    let facts = parse_trigger_facts(body, webhook_event(headers), &hint);
+    if let Some(issue) = facts.issue_opened.as_ref() {
+        let item = temper_log::WorkItemRef::issue(repo.clone(), issue.number);
+        temper_log::emit::emit_issue_opened(temper_log::emit::IssueOpened {
+            item: &item,
+            author: &issue.author,
+            title: &issue.title,
+        });
+    }
+    if let Some(ci) = facts.ci_completed.as_ref() {
+        let item = temper_log::WorkItemRef::pull_request(repo.clone(), ci.pr_number);
+        temper_log::emit::emit_ci_completed(temper_log::emit::CiCompleted {
+            item: &item,
+            conclusion: &ci.conclusion,
+            duration_ms: ci.duration_ms,
+        });
+    }
+
     Ok(run_wake_scan(daemon, forge, workflow, compiled, now, config, &hint).await)
 }
 
@@ -216,8 +243,29 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
     }
 
     if matched_target {
+        // The §7 `wake | artifact=… queue=…` info line, emitted once per accepted
+        // delivery that names an item and matched a configured target. The
+        // per-scan enqueue accounting drops to debug.
+        if let Some(item_number) = hint.item {
+            let repo = temper_log::strip_provider_scheme(&format!(
+                "{}/{}",
+                hint.repo.owner, hint.repo.name
+            ))
+            .to_string();
+            let item = match hint.kind {
+                ChangeKind::PullRequest => {
+                    temper_log::WorkItemRef::pull_request(repo, item_number.get())
+                }
+                _ => temper_log::WorkItemRef::issue(repo, item_number.get()),
+            };
+            temper_log::emit::emit_wake_received(temper_log::emit::WakeReceived {
+                item: &item,
+                artifact_kind: wake_artifact_kind(hint.kind),
+                queue: wake_queue(hint.kind),
+            });
+        }
         let line = webhook_wake_scan_log_line(&hint.repo, total);
-        tracing::info!("{line}");
+        tracing::debug!("{line}");
     }
 
     total

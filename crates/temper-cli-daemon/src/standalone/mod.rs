@@ -12,11 +12,13 @@
 //! in-process, vs. HTTP + subprocess).
 
 mod agent_runner;
+mod banner;
 mod transport;
 
 pub use agent_runner::InProcessAgentRunner;
 pub use transport::InProcessTransport;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +32,7 @@ use temper_engine_service::{
     engine_config, ensure_workflow_labels, resolve_repositories, result_applier, role_feed_targets,
 };
 use temper_forge::RepositoryId;
+use temper_log::emit::{emit_engine_status, emit_trigger_status, emit_worker_status};
 use temper_worker::{
     CapabilitySpec, CodingExecutor, CodingExecutorConfig, ExecutorSelection, WorkerConfig,
     run_worker_with_transport,
@@ -37,15 +40,33 @@ use temper_worker::{
 use temper_workflow::LeasePolicy;
 
 /// Runs the standalone daemon on the skein runtime until SIGINT/SIGTERM.
-pub fn run(resolved: &Resolved) -> Result<(), String> {
+///
+/// `config_path` is the on-disk config the deployment loaded from (for the §7
+/// `config loaded from <path>` startup line), or `None` when the deployment was
+/// assembled from env/defaults only.
+pub fn run(resolved: &Resolved, config_path: Option<&Path>) -> Result<(), String> {
     let resolved = resolved.clone();
-    temper_engine_io::block_on_with(
-        move |_cx, handle| async move { run_async(handle, &resolved).await },
-    )
+    let config_path = config_path.map(Path::to_path_buf);
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        run_async(handle, &resolved, config_path.as_deref()).await
+    })
 }
 
-async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), String> {
+async fn run_async(
+    handle: RuntimeHandle,
+    resolved: &Resolved,
+    config_path: Option<&Path>,
+) -> Result<(), String> {
     let spawner: Arc<dyn temper_engine_io::Spawner> = Arc::new(handle.clone());
+
+    // §7 startup/health banner — first two lines: who we are and where the
+    // config came from. Pure ASCII bodies via the temper-log status helpers; the
+    // helper sets the `service=engine` machine field.
+    emit_engine_status(banner::starting(
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+    ));
+    emit_engine_status(banner::config_loaded(config_path));
 
     // --- Forge + workflow + repositories (the engine half, reusing the engine
     //     service's adapters + wiring) ---
@@ -57,11 +78,30 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
     let forge_base_url = forge_config.base_url.clone();
     let forge = temper_forge::factory::new_forgejo(forge_config);
 
+    // §7 forge line, emitted after a connectivity/auth probe (current_user is the
+    // forge's whoami). A failed probe is reported but not fatal — the daemon's
+    // existing per-call error handling already surfaces real outages, and a slow
+    // boot probe should not block the standalone loop from coming up.
+    emit_engine_status(forge_banner_line(forge.as_ref(), &forge_base_url).await);
+
     let workflow = Arc::new(
         temper_reference_delivery::resolve_workflow(daemon_config.workflow_file.as_ref())
             .map_err(|error| format!("failed to resolve workflow: {error}"))?,
     );
     let compiled = Arc::new(workflow.compile());
+
+    // §7 workflow line: name, the configured roles, and the queue count.
+    let role_names: Vec<String> = daemon_config
+        .roles
+        .iter()
+        .map(|role| role.as_str().to_string())
+        .collect();
+    emit_engine_status(banner::workflow(
+        workflow.name(),
+        &role_names,
+        workflow.queues().len(),
+    ));
+
     let repositories = resolve_repositories(forge.as_ref(), &daemon_config.repos).await?;
     let repo_ids: Vec<RepositoryId> = repositories
         .repositories()
@@ -76,6 +116,10 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
         .iter()
         .map(|repository| repository.display_path())
         .collect();
+
+    // §7 watching line: the repos this daemon orchestrates.
+    emit_engine_status(banner::watching(&repo_paths));
+
     let lease_ttl = chrono::Duration::from_std(daemon_config.lease_ttl)
         .map_err(|error| format!("invalid lease ttl: {error}"))?;
 
@@ -103,9 +147,31 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
         temper_engine::system_clock(),
     );
 
+    // §7 poll-backstop line: cadence, the roles whose feeds it scans (the
+    // configured roles drive the normal-mode poll backstop), and the repo span.
+    emit_engine_status(banner::poll_backstop(
+        daemon_config.poll_cadence,
+        &role_names,
+        repo_ids.len(),
+    ));
+
     let mut mechanical_trigger: Option<Arc<dyn HintedMechanical>> = None;
     if let Some(cadence) = daemon_config.mechanical_cadence {
         ensure_workflow_labels(forge.as_ref(), &repositories, compiled.as_ref()).await?;
+
+        // §7 per-repo label-verification lines, hooked to the existing
+        // `ensure_workflow_labels` bootstrap. The labels come from the compiled
+        // workflow (the exact set just upserted on every repo).
+        let label_names: Vec<String> = compiled
+            .labels()
+            .labels()
+            .iter()
+            .map(|label| label.id.to_string())
+            .collect();
+        for repo in &repo_paths {
+            emit_engine_status(banner::repo_labels(repo, &label_names));
+        }
+
         let trigger = spawn_mechanical_backstop(
             &spawner,
             forge.clone(),
@@ -118,6 +184,9 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
             temper_engine::system_clock(),
         );
         mechanical_trigger = Some(Arc::new(trigger));
+
+        // §7 mechanical-backstop line: cadence and the repo span it covers.
+        emit_engine_status(banner::mechanical_backstop(cadence, repo_paths.len()));
     }
 
     // --- In-process worker + agent on the same loop ---
@@ -147,6 +216,11 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
         heartbeat_interval: Duration::from_secs(10),
         executor: ExecutorSelection::Stub, // not consulted: the executor is built directly
     };
+
+    // Per-role concurrency for the §7 `capacity:` line — the standalone worker
+    // runs `max_concurrent_jobs` per role, shared across all repos. Captured
+    // before `worker_config` is moved into the worker task.
+    let per_role_capacity = worker_config.max_concurrent_jobs as u64;
 
     let runner = Arc::new(InProcessAgentRunner::new(
         handle.clone(),
@@ -179,6 +253,11 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
         let _ = run_worker_with_transport(worker_handle, worker_config, executor, transport).await;
     });
 
+    // §7 planes-up line (engine + worker + agent all on this loop) and the
+    // worker capacity line (per-role concurrency, shared across all repos).
+    emit_engine_status(banner::planes_up());
+    emit_worker_status(banner::capacity(&role_names, per_role_capacity));
+
     // --- Webhook route (optional) ---
     let daemon = if let Some(path) = daemon_config.webhook_secret_file.as_ref() {
         let secret = std::fs::read_to_string(path).map_err(|error| {
@@ -191,6 +270,12 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
             secret: secret.trim().to_string(),
             targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Wake),
         });
+
+        // §7 trigger line: the in-process webhook receiver is up (the standalone
+        // assembly runs engine+worker+agent in one process, so this listener is
+        // co-resident and these events fire on the `temper daemon` path).
+        emit_trigger_status(banner::webhook_listener(&daemon_config.bind.to_string()));
+
         daemon.with_webhook_and_mechanical(
             forge,
             workflow,
@@ -211,6 +296,10 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
     // subscriber (structured `addr` field) rather than a bare stderr line.
     tracing::info!(addr = %server.local_addr(), "serving");
 
+    // §7 readiness line: everything is up and the daemon is idle, watching its
+    // repos. This is the operator-facing "ready" the boot block closes on.
+    emit_engine_status(banner::ready(&repo_paths));
+
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
     let mut sigterm = skein::signal::sigterm()
@@ -225,6 +314,22 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
     .await;
     server.begin_drain(std::time::Duration::from_secs(5));
     Ok(())
+}
+
+/// Builds the §7 forge banner line after a `current_user` connectivity/auth
+/// probe.
+///
+/// `current_user` is the forge's whoami: a successful call proves both
+/// reachability and that the configured token authenticates, and yields the bot
+/// login for the line. A failed probe is non-fatal — the line degrades to an
+/// `unreachable/auth failed` note rather than aborting boot, because the daemon's
+/// per-request error handling already surfaces real outages, and a slow boot
+/// probe should not gate the standalone loop from coming up.
+async fn forge_banner_line(forge: &dyn temper_forge::Forge, url: &str) -> String {
+    match forge.current_user().await {
+        Ok(user) => banner::forge_reachable(url, &user.handle),
+        Err(error) => format!("forge: forgejo @ {url} (unreachable or auth failed: {error})"),
+    }
 }
 
 /// Relay agent step-progress to the co-resident daemon in-process (no HTTP).

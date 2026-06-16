@@ -12,6 +12,7 @@ skein = { workspace = true }
 tracing = { workspace = true }
 
 temper-config = { path = "../temper-config" }
+temper-log = { path = "../temper-log" }
 # Config + the three per-service crates (reused so standalone composes the same
 # engine/worker the slim binaries run).
 temper-engine-service = { path = "../temper-engine-service" }
