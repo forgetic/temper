@@ -8,6 +8,7 @@ description = "The orchestration-worker service: wires a Resolved config into a 
 
 [dependencies]
 skein = { workspace = true }
+temper-log = { path = "../temper-log" }
 temper-config = { path = "../temper-config" }
 temper-worker = { path = "../temper-worker" }
 temper-worker-io = { path = "../temper-worker-io" }

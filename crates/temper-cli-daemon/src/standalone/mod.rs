@@ -207,10 +207,9 @@ async fn run_async(handle: RuntimeHandle, resolved: &Resolved) -> Result<(), Str
     let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
-    // The component log prefix is `temper-daemon:` (matching the engine's webhook
-    // / mechanical lines and `temper-worker:`), independent of the `temper daemon`
-    // command name.
-    eprintln!("temper-daemon: serving on {}", server.local_addr());
+    // Readiness signal operators wait for, emitted through the global tracing
+    // subscriber (structured `addr` field) rather than a bare stderr line.
+    tracing::info!(addr = %server.local_addr(), "serving");
 
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
