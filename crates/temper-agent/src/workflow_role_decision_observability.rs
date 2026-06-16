@@ -233,7 +233,7 @@ pub(crate) fn capture_write_failed_event(
 }
 
 pub(crate) fn emit(event: StructuredEvent) {
-    eprintln!("{}", event.render());
+    tracing::info!(target: "temper_agent", "{}", event.render());
 }
 
 fn nested_scalar(context: &Value, path: &[&str]) -> Option<String> {

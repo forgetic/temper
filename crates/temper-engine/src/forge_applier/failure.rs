@@ -45,9 +45,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 }
             }
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier could not list failed job audit comments for job_id={} repo={} issue={} failure_class={}: {error}",
-                    job.job_id, job.repo, issue.number, class
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %issue.number,
+                    failure_class = %class,
+                    %error,
+                    "forge applier could not list failed job audit comments"
                 );
                 return;
             }
@@ -64,9 +69,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             )
             .await
         {
-            eprintln!(
-                "temper-daemon: forge applier could not label failed job source issue for job_id={} repo={} issue={} failure_class={}: {error}",
-                job.job_id, job.repo, issue.number, class
+            tracing::error!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                issue = %issue.number,
+                failure_class = %class,
+                %error,
+                "forge applier could not label failed job source issue"
             );
             return;
         }
@@ -77,9 +87,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .add_issue_comment(&issue.id, CreateComment { body })
             .await
         {
-            eprintln!(
-                "temper-daemon: forge applier could not add failed job audit comment for job_id={} repo={} issue={} failure_class={}: {error}",
-                job.job_id, job.repo, issue.number, class
+            tracing::error!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                issue = %issue.number,
+                failure_class = %class,
+                %error,
+                "forge applier could not add failed job audit comment"
             );
         }
     }

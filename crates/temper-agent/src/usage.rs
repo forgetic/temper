@@ -47,7 +47,8 @@ impl UsageTotals {
 
     /// Emits the end-of-run `usage_total` line on stderr.
     pub fn emit_summary(&self) {
-        eprintln!(
+        tracing::info!(
+            target: "temper_agent",
             "{}",
             StructuredEvent::new("usage_total")
                 .u64("input", self.input.load(Ordering::Relaxed))
@@ -89,7 +90,8 @@ impl EventSink for UsageLogger {
         match event {
             AgentEvent::TurnUsage { turn, usage } => {
                 self.totals.add_turn(&self.scope, &usage);
-                eprintln!(
+                tracing::info!(
+                    target: "temper_agent",
                     "{}",
                     StructuredEvent::new("turn_usage")
                         .str("scope", &self.scope)
@@ -103,7 +105,8 @@ impl EventSink for UsageLogger {
             }
             AgentEvent::ToolStart { name, .. } => {
                 self.totals.tool_calls.fetch_add(1, Ordering::Relaxed);
-                eprintln!(
+                tracing::info!(
+                    target: "temper_agent",
                     "{}",
                     StructuredEvent::new("tool_start")
                         .str("scope", &self.scope)
@@ -112,7 +115,8 @@ impl EventSink for UsageLogger {
                 );
             }
             AgentEvent::ToolEnd { id, is_error } if is_error => {
-                eprintln!(
+                tracing::info!(
+                    target: "temper_agent",
                     "{}",
                     StructuredEvent::new("tool_error")
                         .str("scope", &self.scope)
@@ -121,7 +125,8 @@ impl EventSink for UsageLogger {
                 );
             }
             AgentEvent::ModelCallFailed { reason, will_retry } => {
-                eprintln!(
+                tracing::info!(
+                    target: "temper_agent",
                     "{}",
                     StructuredEvent::new("model_call_failed")
                         .str("scope", &self.scope)
@@ -134,7 +139,8 @@ impl EventSink for UsageLogger {
                 );
             }
             AgentEvent::AgentEnd { reason } => {
-                eprintln!(
+                tracing::info!(
+                    target: "temper_agent",
                     "{}",
                     StructuredEvent::new("agent_end")
                         .str("scope", &self.scope)

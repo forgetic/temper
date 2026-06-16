@@ -90,17 +90,17 @@ pub fn run_with_listener(args: &TriggerArgs, listener: TcpListener) -> Result<()
         .map(|path| read_secret(path))
         .transpose()?;
     let addr = listener.local_addr()?;
-    eprintln!("temper-trigger-forgejo: listening on {addr}");
+    tracing::info!(target: "temper_trigger_forgejo", %addr, "listening");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 if let Err(error) =
                     handle_connection(stream, args, &webhook_secret, wake_secret.as_deref())
                 {
-                    eprintln!("temper-trigger-forgejo: {error}");
+                    tracing::error!(target: "temper_trigger_forgejo", %error, "connection handling failed");
                 }
             }
-            Err(error) => eprintln!("temper-trigger-forgejo: accept failed: {error}"),
+            Err(error) => tracing::warn!(target: "temper_trigger_forgejo", %error, "accept failed"),
         }
     }
     Ok(())
@@ -130,26 +130,23 @@ fn handle_request(
     match accept_webhook(request, webhook_secret) {
         Ok(hint) => {
             let delivery = deliver_wakes(args, wake_secret, &hint);
-            eprintln!(
-                concat!(
-                    "temper-trigger-forgejo: webhook accepted event={} kind={:?} ",
-                    "repo={}/{} item={:?} wake_outcome={} targets={} sent={} ",
-                    "failed={}"
-                ),
-                event,
-                hint.kind,
-                hint.repo.owner,
-                hint.repo.name,
-                hint.item.map(ItemNumber::get),
-                delivery.outcome(),
-                delivery.targets,
-                delivery.sent,
-                delivery.failed
+            tracing::info!(
+                target: "temper_trigger_forgejo",
+                event = %event,
+                kind = ?hint.kind,
+                repo_owner = %hint.repo.owner,
+                repo_name = %hint.repo.name,
+                item = ?hint.item.map(ItemNumber::get),
+                wake_outcome = %delivery.outcome(),
+                targets = delivery.targets,
+                sent = delivery.sent,
+                failed = delivery.failed,
+                "webhook accepted"
             );
             HttpResponse::new(202, "accepted\n")
         }
         Err(error) => {
-            eprintln!("temper-trigger-forgejo: webhook rejected reason={error}");
+            tracing::warn!(target: "temper_trigger_forgejo", reason = %error, "webhook rejected");
             HttpResponse::new(401, "rejected\n")
         }
     }
@@ -166,8 +163,13 @@ fn deliver_wakes(
         ..WakeDeliveryReport::default()
     };
     if sockets.is_empty() {
-        eprintln!(
-            "temper-trigger-forgejo: wake_delivery outcome=no_sockets targets=0 sent=0 failed=0"
+        tracing::info!(
+            target: "temper_trigger_forgejo",
+            outcome = "no_sockets",
+            targets = 0,
+            sent = 0,
+            failed = 0,
+            "wake_delivery"
         );
         return report;
     }
@@ -178,12 +180,12 @@ fn deliver_wakes(
                 report.failed = report.failed.saturating_add(1);
                 let path_text = path.display().to_string();
                 let error_text = error.to_string();
-                eprintln!(
-                    concat!(
-                        "temper-trigger-forgejo: wake_send_failed target={} ",
-                        "path={} error={}"
-                    ),
-                    target, path_text, error_text
+                tracing::warn!(
+                    target: "temper_trigger_forgejo",
+                    wake_target = %target,
+                    path = %path_text,
+                    error = %error_text,
+                    "wake_send_failed"
                 );
                 report.failures.push(WakeDeliveryFailure {
                     target,
@@ -193,12 +195,13 @@ fn deliver_wakes(
             }
         }
     }
-    eprintln!(
-        "temper-trigger-forgejo: wake_delivery outcome={} targets={} sent={} failed={}",
-        report.outcome(),
-        report.targets,
-        report.sent,
-        report.failed
+    tracing::info!(
+        target: "temper_trigger_forgejo",
+        outcome = %report.outcome(),
+        targets = report.targets,
+        sent = report.sent,
+        failed = report.failed,
+        "wake_delivery"
     );
     report
 }

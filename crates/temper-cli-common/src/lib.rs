@@ -49,7 +49,7 @@ pub fn run(prefix: &str, result: Result<ExitCode, String>) -> ExitCode {
     match result {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("{prefix}: {error}");
+            tracing::error!(target: "temper_cli", prefix = %prefix, %error, "command failed");
             ExitCode::FAILURE
         }
     }

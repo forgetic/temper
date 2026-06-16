@@ -256,15 +256,17 @@ fn log_web_ui_ci_read(diagnostics: bool, repo: &RepoCoord, target: &Target, oper
     if !diagnostics {
         return;
     }
-    eprintln!(
-        "temper-forge-forgejo: {operation} repo={}/{} pr={} head_ref={} commit={}",
-        repo.owner,
-        repo.name,
-        target
+    tracing::debug!(
+        target: "temper_forge_forgejo",
+        operation = %operation,
+        repo_owner = %repo.owner,
+        repo_name = %repo.name,
+        pr = %target
             .pr_number
             .map(|number| number.to_string())
             .unwrap_or_else(|| "-".to_string()),
-        target.pr_head_ref.as_deref().unwrap_or("-"),
-        target.commit_sha.as_deref().unwrap_or("-")
+        head_ref = %target.pr_head_ref.as_deref().unwrap_or("-"),
+        commit = %target.commit_sha.as_deref().unwrap_or("-"),
+        "ci read"
     );
 }

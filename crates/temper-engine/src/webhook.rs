@@ -151,7 +151,7 @@ pub async fn handle_webhook<F: Forge + ?Sized>(
 ) -> Result<usize, WebhookError> {
     let hint = parse_verified_webhook(headers, body, &config.secret)?;
     let line = webhook_accepted_log_line(&hint);
-    eprintln!("{line}");
+    tracing::info!("{line}");
     Ok(run_wake_scan(daemon, forge, workflow, compiled, now, config, &hint).await)
 }
 
@@ -173,9 +173,12 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
         Ok(Some(repository)) => repository,
         Ok(None) => return 0,
         Err(error) => {
-            eprintln!(
-                "temper-daemon: webhook repository lookup failed for repo={}/{}: {error}",
-                hint.repo.owner, hint.repo.name
+            tracing::warn!(
+                target: "temper_daemon",
+                repo_owner = %hint.repo.owner,
+                repo_name = %hint.repo.name,
+                %error,
+                "webhook repository lookup failed"
             );
             return 0;
         }
@@ -202,17 +205,19 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
             .await
         {
             Ok(count) => total += count,
-            Err(error) => eprintln!(
-                "temper-daemon: webhook wake scan failed for repo={} role={}: {error}",
-                target.repo,
-                target.role.as_str()
+            Err(error) => tracing::warn!(
+                target: "temper_daemon",
+                repo = %target.repo,
+                role = %target.role.as_str(),
+                %error,
+                "webhook wake scan failed"
             ),
         }
     }
 
     if matched_target {
         let line = webhook_wake_scan_log_line(&hint.repo, total);
-        eprintln!("{line}");
+        tracing::info!("{line}");
     }
 
     total

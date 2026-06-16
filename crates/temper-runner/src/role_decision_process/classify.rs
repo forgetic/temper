@@ -100,7 +100,8 @@ pub(super) fn log_decision_request(
         .iter()
         .map(|tool| tool.id.to_string())
         .collect::<Vec<_>>();
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_role_decision_request_event(&RoleDecisionRequestEvent {
             identity,
@@ -121,7 +122,8 @@ pub(super) fn log_decision_reply(
     latency: Duration,
     error: Option<&str>,
 ) {
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_role_decision_reply_event(&RoleDecisionReplyEvent {
             identity,

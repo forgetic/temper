@@ -63,7 +63,7 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     }
                 }
             }
-            DaemonRequest::Log(line) => eprintln!("{line}"),
+            DaemonRequest::Log(line) => tracing::info!("{line}"),
             #[cfg(test)]
             DaemonRequest::QueuedJobsReply(reply, jobs) => reply.send(jobs),
         }

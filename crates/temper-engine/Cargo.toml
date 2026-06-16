@@ -9,6 +9,7 @@ description = "Standalone async daemon serving the Worker/Daemon wire protocol o
 [dependencies]
 async-trait = { workspace = true }
 skein = { workspace = true }
+tracing = { workspace = true }
 chrono = { workspace = true }
 hmac = "0.12"
 secrecy = { workspace = true }

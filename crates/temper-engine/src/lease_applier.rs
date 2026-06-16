@@ -67,9 +67,13 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
 
     async fn apply(&self, job: InFlightJob, result: JobResult) {
         let Some((repo_id, target)) = resolve_target(self.forge.as_ref(), &job).await else {
-            eprintln!(
-                "temper-daemon: lease applier could not resolve target for job_id={} repo={} artifact.kind={} artifact.item={}",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                "lease applier could not resolve target"
             );
             return;
         };
@@ -88,9 +92,14 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             Ok(_) => {}
             Err(LeaseError::Conflict(_) | LeaseError::Contended { .. }) => return,
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: lease applier could not acquire lease for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
-                    job.job_id, job.repo, job.artifact.kind, job.artifact.item
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    %error,
+                    "lease applier could not acquire lease"
                 );
                 return;
             }
@@ -99,9 +108,14 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         self.inner.apply(job.clone(), result).await;
 
         if let Err(error) = manager.release(&repo_id, target, &self.owner).await {
-            eprintln!(
-                "temper-daemon: lease applier could not release lease for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            tracing::error!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                %error,
+                "lease applier could not release lease"
             );
         }
     }
@@ -120,9 +134,12 @@ async fn resolve_target<F: Forge + ?Sized>(
         Ok(Some(repository)) => repository,
         Ok(None) => return None,
         Err(error) => {
-            eprintln!(
-                "temper-daemon: lease applier repository lookup failed for job_id={} repo={}: {error}",
-                job.job_id, job.repo
+            tracing::error!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                %error,
+                "lease applier repository lookup failed"
             );
             return None;
         }

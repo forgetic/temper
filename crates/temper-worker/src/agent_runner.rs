@@ -50,7 +50,7 @@ pub struct LoggingProgressSink;
 
 impl ProgressSink for LoggingProgressSink {
     fn report(&self, progress: StepProgress) {
-        println!("{}", crate::observability::step_progress_line(&progress));
+        tracing::info!(target: "temper_worker", "{}", crate::observability::step_progress_line(&progress));
     }
 }
 

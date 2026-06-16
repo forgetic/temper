@@ -9,6 +9,7 @@ description = "Forgejo webhook receiver that emits authenticated Temper wake hin
 [dependencies]
 hmac = "0.12"
 serde_json.workspace = true
+tracing = { workspace = true }
 sha2 = "0.10"
 temper-forge = { path = "../temper-forge" }
 temper-runner = { path = "../temper-runner" }

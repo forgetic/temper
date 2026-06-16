@@ -36,9 +36,10 @@ pub async fn run(
                 error.code, error.message
             ));
         }
-        _ => eprintln!(
-            "temper-testing-daemon-worker: registered worker_id={}",
-            config.worker_id
+        _ => tracing::info!(
+            target: "temper_testing_daemon_worker",
+            worker_id = %config.worker_id,
+            "registered worker"
         ),
     }
 
@@ -52,53 +53,72 @@ pub async fn run(
         let response = match send(&client, &endpoint, &poll).await {
             Ok(response) => response,
             Err(error) => {
-                eprintln!("temper-testing-daemon-worker: poll failed: {error}");
+                tracing::warn!(
+                    target: "temper_testing_daemon_worker",
+                    %error,
+                    "poll failed"
+                );
                 temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(200)).await;
                 continue;
             }
         };
         match response {
             Some(WorkerProtocolMessage::Assign(assign)) => {
-                eprintln!(
-                    "temper-testing-daemon-worker: assigned job_id={} repo={} role={} artifact={}/{}",
-                    assign.job_id,
-                    assign.repo,
-                    assign.role,
-                    assign.artifact.kind,
-                    assign.artifact.item
+                tracing::info!(
+                    target: "temper_testing_daemon_worker",
+                    job_id = %assign.job_id,
+                    repo = %assign.repo,
+                    role = %assign.role,
+                    artifact_kind = %assign.artifact.kind,
+                    artifact_item = %assign.artifact.item,
+                    "assigned job"
                 );
                 let result = execute_job(cx, config, identity, &assign).await;
-                eprintln!(
-                    "temper-testing-daemon-worker: job_id={} finished status={:?} failure={:?}",
-                    assign.job_id,
-                    result.status,
-                    result.failure.as_ref().map(|failure| failure.class)
+                tracing::info!(
+                    target: "temper_testing_daemon_worker",
+                    job_id = %assign.job_id,
+                    status = ?result.status,
+                    failure = ?result.failure.as_ref().map(|failure| failure.class),
+                    "job finished"
                 );
                 let message = WorkerProtocolMessage::Result(result);
                 match send(&client, &endpoint, &message).await {
-                    Ok(Some(WorkerProtocolMessage::Release(release))) => eprintln!(
-                        "temper-testing-daemon-worker: job_id={} released disposition={:?}",
-                        release.job_id, release.disposition
+                    Ok(Some(WorkerProtocolMessage::Release(release))) => tracing::info!(
+                        target: "temper_testing_daemon_worker",
+                        job_id = %release.job_id,
+                        disposition = ?release.disposition,
+                        "job released"
                     ),
-                    Ok(other) => eprintln!(
-                        "temper-testing-daemon-worker: unexpected result response: {other:?}"
+                    Ok(other) => tracing::warn!(
+                        target: "temper_testing_daemon_worker",
+                        response = ?other,
+                        "unexpected result response"
                     ),
                     Err(error) => {
-                        eprintln!("temper-testing-daemon-worker: result send failed: {error}")
+                        tracing::error!(
+                            target: "temper_testing_daemon_worker",
+                            %error,
+                            "result send failed"
+                        )
                     }
                 }
             }
             Some(WorkerProtocolMessage::Error(error)) if error.code == ErrorCode::PollTimeout => {}
             Some(other) => {
-                eprintln!("temper-testing-daemon-worker: unexpected poll response: {other:?}")
+                tracing::warn!(
+                    target: "temper_testing_daemon_worker",
+                    response = ?other,
+                    "unexpected poll response"
+                )
             }
             None => {}
         }
     }
 
-    eprintln!(
-        "temper-testing-daemon-worker: stop file {} present; exiting",
-        config.stop_file.display()
+    tracing::info!(
+        target: "temper_testing_daemon_worker",
+        stop_file = %config.stop_file.display(),
+        "stop file present; exiting"
     );
     Ok(())
 }

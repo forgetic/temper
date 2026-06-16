@@ -201,7 +201,8 @@ fn log_role_scan<F: Forge + ?Sized>(
     if items.is_empty() {
         return;
     }
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_scan_summary_event(&ScanSummaryEvent {
             tick_id: Some(tick_id),
@@ -215,7 +216,8 @@ fn log_role_scan<F: Forge + ?Sized>(
     );
     for item in items {
         let identity = tools.work_item_identity(item);
-        eprintln!(
+        tracing::info!(
+            target: "temper_runner",
             "{}",
             render_work_item_selected_event(&WorkItemSelectedEvent {
                 identity: &identity,

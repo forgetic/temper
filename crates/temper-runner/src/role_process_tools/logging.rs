@@ -16,7 +16,8 @@ pub(super) fn log_verdict_route(
     verdict: Option<&VerdictId>,
 ) {
     let verdict = verdict.map(VerdictId::as_str).unwrap_or("");
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_action_dispatch_event(&ActionDispatchEvent {
             identity,
@@ -40,7 +41,8 @@ pub(super) fn log_action_dispatch(
     outcome: &str,
     no_op_reason: Option<&str>,
 ) {
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_action_dispatch_event(&ActionDispatchEvent {
             identity,
@@ -56,7 +58,8 @@ pub(super) fn log_action_dispatch(
 }
 
 pub(super) fn log_transition_success(identity: &WorkItemIdentity, report: &ExecutionReport) {
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_transition_execution_event(&TransitionExecutionEvent {
             identity,
@@ -78,7 +81,8 @@ pub(super) fn log_transition_error(
     stale_work: bool,
 ) {
     let failure_class = execution_error_failure_class(error);
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_transition_execution_event(&TransitionExecutionEvent {
             identity,
@@ -101,7 +105,8 @@ pub(super) fn log_transition_custom(
     failure_class: Option<&str>,
     postcondition_outcome: &str,
 ) {
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         render_transition_execution_event(&TransitionExecutionEvent {
             identity,

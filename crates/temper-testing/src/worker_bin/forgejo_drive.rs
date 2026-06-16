@@ -276,17 +276,18 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
                     &mut next_poll_due,
                     &mut next_audit_due,
                 );
-                eprintln!(
-                    "temper-testing-worker: worker '{}' completed tick trigger={} actions={} scanned_repositories={} scanned_repository_paths={} next_poll_ms={} idle_no_action_ticks={}",
-                    worker.name(),
-                    tick_reason.as_str(),
-                    tick.progress.actions,
-                    tick.scanned_repository_count,
-                    render_repo_paths(&tick.scanned_repository_paths),
-                    next_poll_delay.as_millis(),
-                    idle_backoff
+                tracing::info!(
+                    target: "temper_testing_worker",
+                    worker = %worker.name(),
+                    trigger = %tick_reason.as_str(),
+                    actions = tick.progress.actions,
+                    scanned_repositories = tick.scanned_repository_count,
+                    scanned_repository_paths = %render_repo_paths(&tick.scanned_repository_paths),
+                    next_poll_ms = next_poll_delay.as_millis(),
+                    idle_no_action_ticks = idle_backoff
                         .as_ref()
-                        .map_or(0, IdlePollBackoff::consecutive_idle_ticks)
+                        .map_or(0, IdlePollBackoff::consecutive_idle_ticks),
+                    "worker completed tick"
                 );
             }
             Err(error) => {
@@ -300,11 +301,14 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
                     &mut next_poll_due,
                     &mut next_audit_due,
                 );
-                eprintln!(
-                    "temper-testing-worker: worker '{}' tick failed trigger={} \
-                     ({consecutive_failures}/{MAX_CONSECUTIVE_TICK_FAILURES}), retrying: {error}",
-                    worker.name(),
-                    tick_reason.as_str()
+                tracing::warn!(
+                    target: "temper_testing_worker",
+                    worker = %worker.name(),
+                    trigger = %tick_reason.as_str(),
+                    consecutive_failures,
+                    max_consecutive_failures = MAX_CONSECUTIVE_TICK_FAILURES,
+                    %error,
+                    "worker tick failed, retrying"
                 );
                 if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES {
                     return Err(RunError::Drive(Box::new(error)));
@@ -332,9 +336,11 @@ pub(super) async fn drive_async<W: ForgejoDriveWorker>(
             WakeWaitOutcome::Wake(hints) => {
                 let wake_count = hints.len();
                 pending_hints.extend(hints);
-                eprintln!(
-                    "temper-testing-worker: worker '{}' consumed authenticated wake batch hints={wake_count}; ticking immediately",
-                    worker.name()
+                tracing::info!(
+                    target: "temper_testing_worker",
+                    worker = %worker.name(),
+                    hints = wake_count,
+                    "worker consumed authenticated wake batch; ticking immediately"
                 );
                 next_tick_reason = TickReason::Wake;
             }

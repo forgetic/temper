@@ -44,9 +44,13 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
                 }
             }
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier could not list comments for progress on job_id={} repo={} issue={}: {error}",
-                    job.job_id, job.repo, number
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %number,
+                    %error,
+                    "forge applier could not list comments for progress"
                 );
                 return;
             }
@@ -58,9 +62,13 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
             .add_issue_comment(&issue_id, CreateComment { body })
             .await
         {
-            eprintln!(
-                "temper-daemon: forge applier could not record progress for job_id={} repo={} issue={}: {error}",
-                job.job_id, job.repo, number
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                issue = %number,
+                %error,
+                "forge applier could not record progress"
             );
         }
         let _ = repository;

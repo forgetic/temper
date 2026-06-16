@@ -170,12 +170,10 @@ fn drain_wake_batch(
     let mut drained = 0usize;
     loop {
         if drained >= MAX_WAKE_DRAIN {
-            eprintln!(
-                concat!(
-                    "temper-wake: wake drain hit cap ({}); ",
-                    "remaining queued wakes will form a later batch"
-                ),
-                MAX_WAKE_DRAIN
+            tracing::warn!(
+                target: "temper_wake",
+                cap = MAX_WAKE_DRAIN,
+                "wake drain hit cap; remaining queued wakes will form a later batch"
             );
             break;
         }
@@ -190,7 +188,7 @@ fn drain_wake_batch(
             }
             Ok(None) => break,
             Err(WakeError::Unauthorized) => {
-                eprintln!("temper-wake: ignored unauthorized wake message");
+                tracing::warn!(target: "temper_wake", "ignored unauthorized wake message");
                 drained += 1;
             }
             Err(error) => return Err(error),
@@ -236,7 +234,7 @@ pub async fn wait_for_wake_or_poll(
                         return drain_wake_batch(listener, hint).map(WakeWaitOutcome::Wake);
                     }
                     Ok(Err(WakeError::Unauthorized)) => {
-                        eprintln!("temper-wake: ignored unauthorized wake message");
+                        tracing::warn!(target: "temper_wake", "ignored unauthorized wake message");
                     }
                     Ok(Err(error)) => return Err(error),
                 }
