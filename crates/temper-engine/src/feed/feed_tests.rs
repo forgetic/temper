@@ -51,7 +51,7 @@ fn skip_log_line_includes_existing_pull_request_reason() {
             &item,
             EnrichOutcome::SkipExistingPullRequest
         ),
-        "temper-daemon: skipped role work for existing implementation pull request repo=ai/temper role=engineer queue=code_ready artifact_kind=code target=Issue { number: ItemNumber(153) }"
+        "engine: skipped role work for existing implementation pull request repo=ai/temper role=engineer queue=code_ready artifact_kind=code target=Issue { number: ItemNumber(153) }"
     );
 }
 

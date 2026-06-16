@@ -13,12 +13,12 @@ fn main() {
         }
         Ok(ParseOutcome::Run(config)) => {
             if let Err(error) = run(config) {
-                eprintln!("temper-worker: {error}");
+                eprintln!("worker: {error}");
                 std::process::exit(2);
             }
         }
         Err(error) => {
-            eprintln!("temper-worker: {error}\nusage: {USAGE}");
+            eprintln!("worker: {error}\nusage: {USAGE}");
             std::process::exit(2);
         }
     }

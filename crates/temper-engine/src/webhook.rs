@@ -120,14 +120,14 @@ pub(crate) fn webhook_accepted_log_line(hint: &ChangeHint) -> String {
         .unwrap_or_else(|| "-".to_string());
 
     format!(
-        "temper-daemon: webhook accepted repo={}/{} kind={:?} item={}",
+        "engine: webhook accepted repo={}/{} kind={:?} item={}",
         hint.repo.owner, hint.repo.name, hint.kind, item
     )
 }
 
 fn webhook_wake_scan_log_line(repo: &RepositoryPath, enqueued: usize) -> String {
     format!(
-        "temper-daemon: webhook wake scan repo={}/{} enqueued={enqueued}",
+        "engine: webhook wake scan repo={}/{} enqueued={enqueued}",
         repo.owner, repo.name
     )
 }
@@ -174,7 +174,7 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
         Ok(None) => return 0,
         Err(error) => {
             tracing::warn!(
-                target: "temper_daemon",
+                target: "engine",
                 repo_owner = %hint.repo.owner,
                 repo_name = %hint.repo.name,
                 %error,
@@ -206,7 +206,7 @@ pub async fn run_wake_scan<F: Forge + ?Sized>(
         {
             Ok(count) => total += count,
             Err(error) => tracing::warn!(
-                target: "temper_daemon",
+                target: "engine",
                 repo = %target.repo,
                 role = %target.role.as_str(),
                 %error,
@@ -305,7 +305,7 @@ mod tests {
 
         assert_eq!(
             webhook_accepted_log_line(&hint),
-            "temper-daemon: webhook accepted repo=ai/temper kind=PullRequest item=147"
+            "engine: webhook accepted repo=ai/temper kind=PullRequest item=147"
         );
     }
 
@@ -315,7 +315,7 @@ mod tests {
 
         assert_eq!(
             webhook_accepted_log_line(&hint),
-            "temper-daemon: webhook accepted repo=ai/temper kind=Push item=-"
+            "engine: webhook accepted repo=ai/temper kind=Push item=-"
         );
     }
 
@@ -325,7 +325,7 @@ mod tests {
 
         assert_eq!(
             webhook_wake_scan_log_line(&repo, 3),
-            "temper-daemon: webhook wake scan repo=ai/temper enqueued=3"
+            "engine: webhook wake scan repo=ai/temper enqueued=3"
         );
     }
 }

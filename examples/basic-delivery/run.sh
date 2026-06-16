@@ -743,8 +743,8 @@ EOF
     # Readiness: the HTTP listener must be up before the seed-last webhook can be
     # delivered, and the in-process worker must have registered before any job can
     # be assigned. Wait for both, in order.
-    wait_for_log_line "$LOG_DIR/run.log" 'temper-daemon: serving on' "$RUN_PID" 'temper daemon'
-    wait_for_log_line "$LOG_DIR/run.log" 'temper-worker: registered' "$RUN_PID" 'temper daemon'
+    wait_for_log_line "$LOG_DIR/run.log" 'engine: serving on' "$RUN_PID" 'temper daemon'
+    wait_for_log_line "$LOG_DIR/run.log" 'worker: registered' "$RUN_PID" 'temper daemon'
     log "temper daemon up (pid $RUN_PID; logs/run.log)"
 }
 
@@ -833,7 +833,7 @@ cmd_validate_webhooks() {
 
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
-    validate_contains "$_run_log" 'temper-daemon: serving on' \
+    validate_contains "$_run_log" 'engine: serving on' \
         'temper daemon reached serving readiness' || _ok=1
     validate_contains "$_run_log" 'webhook accepted' \
         'Forgejo delivered at least one accepted webhook' || _ok=1
@@ -850,11 +850,11 @@ cmd_validate_webhooks() {
     validate_contains "$_run_log" 'result received' \
         'daemon received at least one job result' || _ok=1
 
-    validate_contains "$_run_log" 'temper-worker: registered' \
+    validate_contains "$_run_log" 'worker: registered' \
         'in-process worker registered with the daemon' || _ok=1
-    validate_contains "$_run_log" 'temper-worker: assigned job_id=' \
+    validate_contains "$_run_log" 'worker: assigned job_id=' \
         'in-process worker accepted at least one assignment' || _ok=1
-    validate_contains "$_run_log" 'temper-worker: result sent' \
+    validate_contains "$_run_log" 'worker: result sent' \
         'in-process worker sent at least one result' || _ok=1
 
     _accepted=$(count_matches 'webhook accepted' "$_run_log")
@@ -864,9 +864,9 @@ cmd_validate_webhooks() {
     _results=$(count_matches 'result received' "$_run_log")
     log "daemon summary: accepted=$_accepted wake_scans=$_wake_scans wake_enqueued=$_wake_enqueued assigned=$_assigned result_received=$_results"
 
-    _registered=$(count_matches 'temper-worker: registered' "$_run_log")
-    _worker_assigned=$(count_matches 'temper-worker: assigned job_id=' "$_run_log")
-    _worker_results=$(count_matches 'temper-worker: result sent' "$_run_log")
+    _registered=$(count_matches 'worker: registered' "$_run_log")
+    _worker_assigned=$(count_matches 'worker: assigned job_id=' "$_run_log")
+    _worker_results=$(count_matches 'worker: result sent' "$_run_log")
     log "worker summary: registered=$_registered assigned=$_worker_assigned result_sent=$_worker_results"
 
     if [ "$_ok" -eq 0 ]; then

@@ -155,7 +155,7 @@ state.
 
 It checks provisioning logs (webhook registration, the site-admin intake URL),
 the single `logs/run.log` (serving readiness, webhook delivery + wake scan, daemon
-assignments and results, the in-process worker's `temper-worker:` register /
+assignments and results, the in-process worker's `worker:` register /
 assign / result lines), and mechanical CI-read diagnostics. A PR stuck with
 `implementation` and never `landed` usually lacks current-head CI; if
 `logs/run.log` mentions missing web-UI credentials for the CI read fallback, the
