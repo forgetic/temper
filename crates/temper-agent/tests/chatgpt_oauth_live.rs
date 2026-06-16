@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use serde::Deserialize;
 use serde_json::Value;
-use temper_agent::{AuthChoice, ProviderConfig, default_auth_path, run_decision};
+use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv, default_auth_path, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;
@@ -75,8 +75,9 @@ fn chatgpt_oauth_validation() {
     // Step 1 — end-to-end proof: build the provider against the *real* auth file
     // (default path, no override) and run one trivial decision. `from_auth` runs
     // the credential preflight, so a missing login fails here with a clear error.
-    let provider = ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, None, None)
-        .expect("ChatGPT OAuth provider builds (run `pi /login openai-codex` first)");
+    let provider =
+        ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, None, None, &ProviderEnv::empty())
+            .expect("ChatGPT OAuth provider builds (run `pi /login openai-codex` first)");
     eprintln!("[a3] codex model id: {}", provider.model_id());
 
     let smoke_start = Instant::now();

@@ -4,6 +4,8 @@
 //! credential-carrying variant the config stores; [`ProviderIdentity`] is the
 //! non-secret triple logged for observability.
 
+use secrecy::SecretString;
+
 use super::anthropic_oauth;
 use super::oauth;
 
@@ -28,7 +30,7 @@ pub enum AuthChoice {
 #[derive(Clone)]
 pub(super) enum AuthMode {
     /// A static API key carried as the per-request bearer (DeepSeek default).
-    ApiKey { api_key: String },
+    ApiKey { api_key: SecretString },
     /// ChatGPT (OpenAI Codex) OAuth: the bearer is resolved fresh per decision
     /// from the shared auth file (load → refresh → access token).
     ChatGptOAuth { settings: oauth::OAuthSettings },

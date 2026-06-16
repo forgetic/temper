@@ -9,6 +9,7 @@ description = "The `temper daemon` subcommand: run the full standalone (all-in-o
 [dependencies]
 chrono = { workspace = true }
 skein = { workspace = true }
+tracing = { workspace = true }
 
 temper-config = { path = "../temper-config" }
 # Config + the three per-service crates (reused so standalone composes the same

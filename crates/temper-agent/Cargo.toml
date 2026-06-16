@@ -12,6 +12,7 @@ async-trait.workspace = true
 tracing = { workspace = true }
 temper-agent-protocol = { path = "../temper-agent-protocol" }
 tongs.workspace = true
+secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 temper-agent-core = { path = "../temper-agent-core" }

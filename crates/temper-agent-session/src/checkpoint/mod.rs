@@ -22,10 +22,12 @@ mod sync;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
+use secrecy::ExposeSecret;
 use temper_agent_protocol::{StepProgress, StepState, WorkspaceContext};
 
+use crate::config::RoleIdentity;
 use crate::progress::emit;
 
 use backstop::{CHECKPOINT_DEADLINE_MARGIN, backstop_decision};
@@ -41,25 +43,23 @@ struct CheckpointRepo {
     base_branch: String,
 }
 
-/// Fallback backstop cadence when no deadline is supplied, so crash-recovery is
-/// still bounded.
-const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(300);
-
 pub(crate) struct Checkpointer {
     cwd: PathBuf,
     /// The writable repos to checkpoint, in manifest order (the first is the
     /// primary — home of the coordinating artifact).
     repos: Vec<CheckpointRepo>,
     correlation_key: String,
-    /// Per-role git identity + push token from the worker-provided env
-    /// (`TEMPER_FORGEJO_{USER,EMAIL,TOKEN}_<ROLE>`); absent values degrade
-    /// gracefully (generic identity, credential-less push).
+    /// Per-role git identity + push token, threaded in from [`AgentConfig`]
+    /// (read by `entry` from `TEMPER_FORGEJO_{USER,EMAIL,TOKEN}_<ROLE>`); absent
+    /// values degrade gracefully (generic identity, credential-less push).
+    ///
+    /// [`AgentConfig`]: crate::AgentConfig
     user: Option<String>,
     email: Option<String>,
     token: Option<String>,
-    /// Wall-clock job deadline (lease expiry) from `TEMPER_AGENT_DEADLINE` (unix
-    /// seconds), if the host supplied one. The backstop fires within
-    /// [`CHECKPOINT_DEADLINE_MARGIN`] of it.
+    /// Wall-clock job deadline (lease expiry) from `TEMPER_AGENT_DEADLINE`, if the
+    /// host supplied one. The backstop fires within [`CHECKPOINT_DEADLINE_MARGIN`]
+    /// of it.
     deadline: Option<SystemTime>,
     /// Fallback backstop cadence used when there is no deadline (or between
     /// deadline checks).
@@ -71,14 +71,19 @@ pub(crate) struct Checkpointer {
 }
 
 impl Checkpointer {
-    pub(crate) fn new(cwd: &Path, context: &WorkspaceContext) -> Self {
-        let role_key = context.work_item.role.to_uppercase().replace('-', "_");
-        let env = |prefix: &str| {
-            std::env::var(format!("{prefix}_{role_key}"))
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        };
+    /// Builds the checkpointer from the prepared checkout `cwd`, the workspace
+    /// `context` (for the repos + correlation key), and the host-derived
+    /// `role_identity`/`deadline`/`interval` from [`AgentConfig`] — all read in
+    /// `entry`, never here.
+    ///
+    /// [`AgentConfig`]: crate::AgentConfig
+    pub(crate) fn new(
+        cwd: &Path,
+        context: &WorkspaceContext,
+        role_identity: &RoleIdentity,
+        deadline: Option<SystemTime>,
+        interval: Duration,
+    ) -> Self {
         let repos = context
             .repos
             .iter()
@@ -89,25 +94,17 @@ impl Checkpointer {
                 base_branch: repo.base_branch.clone(),
             })
             .collect();
-        // The host (worker/daemon, which owns the lease) may pass the job
-        // deadline as a unix timestamp; absent it, the backstop falls back to a
-        // fixed interval.
-        let deadline = std::env::var("TEMPER_AGENT_DEADLINE")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
-        let interval = std::env::var("TEMPER_AGENT_CHECKPOINT_INTERVAL_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL);
         Self {
             cwd: cwd.to_path_buf(),
             repos,
             correlation_key: context.correlation_key.clone(),
-            user: env("TEMPER_FORGEJO_USER"),
-            email: env("TEMPER_FORGEJO_EMAIL"),
-            token: env("TEMPER_FORGEJO_TOKEN"),
+            user: role_identity.user.clone(),
+            email: role_identity.email.clone(),
+            // I/O boundary: the push token is held for the git credential helper.
+            token: role_identity
+                .token
+                .as_ref()
+                .map(|token| token.expose_secret().to_string()),
             deadline,
             interval,
             last_checkpoint: Mutex::new(Instant::now()),

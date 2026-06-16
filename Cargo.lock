@@ -1377,6 +1377,7 @@ dependencies = [
  "jig-record",
  "jig-runtime",
  "jig-server",
+ "secrecy",
  "serde",
  "serde_json",
  "skein",
@@ -1427,12 +1428,14 @@ name = "temper-agent-session"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "secrecy",
  "serde_json",
  "skein",
  "temper-agent",
  "temper-agent-core",
  "temper-agent-io",
  "temper-agent-protocol",
+ "temper-log",
  "tracing",
 ]
 
@@ -1450,6 +1453,7 @@ dependencies = [
  "temper-cli-init",
  "temper-config",
  "temper-interaction-service",
+ "temper-log",
  "temper-process-protocol",
  "temper-provision-forgejo-cli",
  "temper-reference-delivery-validator",
@@ -1492,6 +1496,7 @@ dependencies = [
  "temper-worker-protocol",
  "temper-worker-service",
  "temper-workflow",
+ "tracing",
 ]
 
 [[package]]
@@ -1561,6 +1566,7 @@ dependencies = [
  "temper-engine",
  "temper-engine-io",
  "temper-forge",
+ "temper-log",
  "temper-reference-delivery",
  "temper-workflow",
  "tracing",
@@ -1873,6 +1879,7 @@ version = "0.1.0"
 dependencies = [
  "skein",
  "temper-config",
+ "temper-log",
  "temper-worker",
  "temper-worker-io",
 ]

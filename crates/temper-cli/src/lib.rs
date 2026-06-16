@@ -46,6 +46,13 @@ Run `temper <command> --help` for subcommand usage.";
 
 /// The unified binary's entry point: parse `argv[1]` and dispatch.
 pub fn run() -> ExitCode {
+    // Install the global tracing subscriber before any work (or log output)
+    // happens, so early CLI errors and startup spans/events are captured. This
+    // is the single install point for the unified binary — it covers every
+    // subcommand, so individual subcommands must not call it again. Idempotent,
+    // so chaining is safe regardless.
+    temper_log::init_logging();
+
     let mut args = std::env::args();
     let _program = args.next();
     let Some(command) = args.next() else {

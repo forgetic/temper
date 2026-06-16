@@ -10,6 +10,9 @@ description = "The unified `temper` command line: a thin dispatcher over the per
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# Process-wide logging init, installed once at the top of `run`.
+temper-log = { path = "../temper-log" }
+
 # Config (for EX_USAGE) + the per-subcommand crates the dispatcher delegates to.
 temper-config = { path = "../temper-config" }
 temper-cli-init = { path = "../temper-cli-init" }

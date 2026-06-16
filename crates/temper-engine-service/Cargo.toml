@@ -10,6 +10,7 @@ description = "The engine (orchestrator) service: wires a Resolved config into a
 skein = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
+temper-log = { path = "../temper-log" }
 temper-config = { path = "../temper-config" }
 temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }

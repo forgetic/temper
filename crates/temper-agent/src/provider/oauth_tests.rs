@@ -27,7 +27,10 @@ fn write_fixture(contents: &str) -> Fixture {
     ));
     std::fs::write(&path, contents).expect("write fixture");
     Fixture {
-        settings: OAuthSettings { auth_file: path },
+        settings: OAuthSettings {
+            auth_file: path,
+            token_url: None,
+        },
     }
 }
 

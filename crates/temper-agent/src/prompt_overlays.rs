@@ -41,10 +41,13 @@ use std::path::{Path, PathBuf};
 
 use crate::coding_agent::Capability;
 
-/// Env var that overrides the config dir outright.
+/// Env var that overrides the config dir outright. The name lives here so the
+/// agent's `entry` (the sole env reader) and this module agree; nothing in this
+/// crate reads it.
 pub const CONFIG_DIR_ENV: &str = "ANVIL_CONFIG_DIR";
-/// Standard XDG config-home env var consulted before `~/.config`.
-const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
+/// Standard XDG config-home env var consulted before `~/.config`. Read only by
+/// the agent's `entry`.
+pub const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 /// Subdirectory under the config dir holding operator prompt overlays.
 const PROMPTS_SUBDIR: &str = "prompts";
 /// Shared overlay applied to every coding-agent role, if present.
@@ -52,34 +55,19 @@ const SHARED_OVERLAY_FILE: &str = "coding-agent.md";
 /// Root `AGENTS.md` filename, read relative to the checkout cwd.
 const AGENTS_MD_FILE: &str = "AGENTS.md";
 
-/// Resolves the operator config directory from the process environment.
-///
-/// Precedence: an explicit `--config-dir` override (`explicit`), then the
-/// `ANVIL_CONFIG_DIR` env var, then `$XDG_CONFIG_HOME/anvil`, then
-/// `~/.config/anvil`. Returns `None` only when none of those can be determined
-/// (no override, no env, and no home directory) — a missing *directory* is not
-/// an error here; it is handled as a clean no-op when overlays are loaded.
-///
-/// This is the thin wrapper that reads the live environment; the pure
-/// precedence logic lives in [`resolve_config_dir_from`] so it can be tested
-/// without mutating process-global env vars.
-pub fn resolve_config_dir(explicit: Option<&Path>) -> Option<PathBuf> {
-    resolve_config_dir_from(
-        explicit,
-        env_path(CONFIG_DIR_ENV),
-        env_path(XDG_CONFIG_HOME_ENV),
-        env_path("HOME"),
-    )
-}
-
 /// Pure config-dir precedence resolution over already-read env values.
 ///
-/// `config_env` is `ANVIL_CONFIG_DIR`, `xdg_env` is `XDG_CONFIG_HOME`, and
-/// `home` is `HOME` — each `None` when unset or empty (empty is treated as unset
-/// per the XDG convention). Kept separate from the env read so it is testable
-/// without `std::env::set_var` (which is `unsafe` on edition 2024 and rejected
-/// by the repo's lints).
-fn resolve_config_dir_from(
+/// Precedence: an explicit `--config-dir` override (`explicit`), then
+/// `config_env` (`ANVIL_CONFIG_DIR`), then `$xdg_env/anvil` (`XDG_CONFIG_HOME`),
+/// then `$home/.config/anvil` (`HOME`). Each env value is `None` when unset or
+/// empty (empty is treated as unset per the XDG convention). Returns `None` only
+/// when none of those can be determined — a missing *directory* is not an error
+/// here; it is a clean no-op when overlays are loaded.
+///
+/// Takes the env values as parameters rather than reading them so the agent's
+/// `entry` owns the env reads (and so it is testable without `std::env::set_var`,
+/// which is `unsafe` on edition 2024 and rejected by the repo's lints).
+pub fn resolve_config_dir_from(
     explicit: Option<&Path>,
     config_env: Option<PathBuf>,
     xdg_env: Option<PathBuf>,
@@ -95,15 +83,6 @@ fn resolve_config_dir_from(
         return Some(xdg.join("anvil"));
     }
     home.map(|home| home.join(".config").join("anvil"))
-}
-
-/// Returns the value of `var` as a `PathBuf`, treating an empty value as unset
-/// (matching the XDG convention that an empty `XDG_CONFIG_HOME` means "use the
-/// default").
-fn env_path(var: &str) -> Option<PathBuf> {
-    std::env::var_os(var)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
 }
 
 /// The per-role operator overlay filename for a capability.

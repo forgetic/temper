@@ -47,11 +47,25 @@ pub struct WorkflowRoleDecisionResponder {
 }
 
 impl WorkflowRoleDecisionResponder {
-    /// Builds a responder using anvil's provider config.
+    /// Builds a responder using anvil's provider config, with redacted decision
+    /// capture disabled.
+    ///
+    /// The capture dir is host config, not something this library reads from the
+    /// environment: use [`with_capture_dir`](Self::with_capture_dir) to enable it.
     pub fn new(provider: ProviderConfig) -> Self {
+        Self::with_capture_dir(provider, None::<std::path::PathBuf>)
+    }
+
+    /// Builds a responder, enabling redacted decision capture to `capture_dir`
+    /// when supplied (the host-read `ANVIL_WORKFLOW_ROLE_DECISION_CAPTURE_DIR`).
+    /// `None` (or an empty path) leaves capture disabled.
+    pub fn with_capture_dir(
+        provider: ProviderConfig,
+        capture_dir: Option<impl Into<std::path::PathBuf>>,
+    ) -> Self {
         Self {
             provider,
-            capture: WorkflowRoleDecisionCapture::from_env(),
+            capture: WorkflowRoleDecisionCapture::from_optional_dir(capture_dir),
         }
     }
 
