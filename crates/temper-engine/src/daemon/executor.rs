@@ -74,7 +74,12 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     waiting: &waiting,
                 });
             }
-            DaemonRequest::Log(line) => tracing::info!("{line}"),
+            // Per-job daemon-protocol traces (`engine: assigned`, `engine:
+            // progress`, `engine: result received`, webhook/enqueue book-keeping).
+            // These are between-step chatter, NOT the closed §7 info catalog (§5),
+            // so they sit at debug; `RUST_LOG=info` shows only the §7 events +
+            // startup banner. The §7 events go through `emit_*`, not this sink.
+            DaemonRequest::Log(line) => tracing::debug!("{line}"),
             #[cfg(test)]
             DaemonRequest::QueuedJobsReply(reply, jobs) => reply.send(jobs),
         }

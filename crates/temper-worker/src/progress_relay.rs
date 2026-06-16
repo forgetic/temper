@@ -66,7 +66,8 @@ impl DaemonRelayProgressSink {
 
 impl ProgressSink for DaemonRelayProgressSink {
     fn report(&self, progress: StepProgress) {
-        tracing::info!(target: "temper_worker", "{}", crate::observability::step_progress_line(&progress));
+        // Per-step progress trace, not a §7 catalog line (§5): keep it at debug.
+        tracing::debug!(target: "temper_worker", "{}", crate::observability::step_progress_line(&progress));
 
         let message = progress_message(&self.worker_id, &progress);
         let call = HttpCall {

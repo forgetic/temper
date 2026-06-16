@@ -183,8 +183,10 @@ fn applied_transition_emits_join_key_label_delta_and_human_line() {
         .cloned()
         .expect("human message present");
     assert!(
-        message.starts_with(&format!("[{join_key_string}] triage_to_code applied")),
-        "human line carries the subject tag and transition: {message}"
+        message.starts_with(&format!(
+            "engine:  [{join_key_string}] triage_to_code applied"
+        )),
+        "human line carries the padded service prefix, subject tag, and transition: {message}"
     );
     assert!(
         !message.contains("Coordinate greeting"),
@@ -268,7 +270,7 @@ fn applied_transition_derives_queue_entered_destination_and_role() {
     let message = ev.fields.get("message").cloned().expect("message present");
     assert_eq!(
         message,
-        "[acme/service#1] -> queue 'code_ready' | awaiting engineer"
+        "engine:  [acme/service#1] -> queue 'code_ready' | awaiting engineer"
     );
 }
 
@@ -301,7 +303,7 @@ fn gate_evaluated_renders_summary_and_note_from_signals() {
     );
     assert_eq!(
         ev.fields.get("message").cloned().unwrap(),
-        "[acme/service PR#44] gates: ci_gate=pending dependency_gate=ok | waiting on CI"
+        "engine:  [acme/service PR#44] gates: ci_gate=pending dependency_gate=ok | waiting on CI"
     );
     drop(captured);
 

@@ -292,9 +292,11 @@ async fn run_async(
     let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
-    // Readiness signal operators wait for, emitted through the global tracing
-    // subscriber (structured `addr` field) rather than a bare stderr line.
-    tracing::info!(addr = %server.local_addr(), "serving");
+    // Bound-address detail for operators who need the listener socket; the
+    // operator-facing readiness banner is the §7 `trigger: webhook listener up
+    // …` line (WI-3), so this stays at debug to keep `RUST_LOG=info` to the §7
+    // catalog. (The analogous line in the engine daemon handle is already debug.)
+    tracing::debug!(addr = %server.local_addr(), "serving");
 
     // §7 readiness line: everything is up and the daemon is idle, watching its
     // repos. This is the operator-facing "ready" the boot block closes on.

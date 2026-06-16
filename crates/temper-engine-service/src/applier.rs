@@ -59,7 +59,9 @@ pub fn result_applier(
         }
     }
 
-    tracing::info!(
+    // Per-role applier routing is setup detail, not a §7 state change; keep it at
+    // debug so `RUST_LOG=info` stays the §7 catalog + startup banner.
+    tracing::debug!(
         target: "temper_engine",
         routed = %role_list(&routed),
         fallback = %role_list(&fallback),

@@ -112,12 +112,14 @@ fn transition_applied_emits_fields_and_human_message() {
         Some("-untriaged +code +ready")
     );
 
-    // The human message is the exact §7 body (sans service prefix), generated
-    // from the same inputs as the fields.
+    // The human message is the §7 line: the padded `engine:  ` service prefix
+    // followed by the exact §7 body, generated from the same inputs as the
+    // fields. The prefix is an emit-site concern (the `human::*` body stays
+    // prefix-less); the structured fields above carry NO prefix.
     assert_eq!(
         ev.fields.get("message").map(String::as_str),
         Some(
-            "[acme/widgets#42] triage_intake_to_code applied | body rewritten as code spec | -untriaged +code +ready"
+            "engine:  [acme/widgets#42] triage_intake_to_code applied | body rewritten as code spec | -untriaged +code +ready"
         )
     );
 }
@@ -155,7 +157,7 @@ fn lease_claimed_emits_worker_target_and_join_key() {
     );
     assert_eq!(
         ev.fields.get("message").map(String::as_str),
-        Some("[acme/api#7] mechanical claimed lease (ttl 10m) | running mark_untriaged")
+        Some("worker:  [acme/api#7] mechanical claimed lease (ttl 10m) | running mark_untriaged")
     );
 }
 
@@ -187,6 +189,91 @@ fn ci_completed_carries_pr_ref_and_numeric_duration() {
     );
     assert_eq!(
         ev.fields.get("message").map(String::as_str),
-        Some("[acme/widgets PR#44] CI completed: success (4m40s)")
+        Some("trigger: [acme/widgets PR#44] CI completed: success (4m40s)")
     );
+}
+
+/// §7's "service prefix on every line, padded so the message column aligns":
+/// the human MESSAGE carries the padded `engine:  ` / `worker:  ` / `agent:   `
+/// / `trigger: ` prefix, while the structured `service=` field stays the bare
+/// token. The prefix column width is identical across services so the message
+/// text lines up in `journalctl`.
+#[test]
+fn every_emit_message_carries_the_padded_service_prefix() {
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    let subscriber = registry().with(layer);
+
+    with_default(subscriber, || {
+        let issue = WorkItemRef::issue("acme/widgets", 42);
+        let pr = WorkItemRef::pull_request("acme/widgets", 44);
+        // One event per plane, plus a startup-status line.
+        emit::emit_transition_applied(TransitionApplied {
+            item: &issue,
+            transition: "mark_untriaged",
+            detail: "",
+            labels_delta: "+untriaged",
+        });
+        emit::emit_lease_released(emit::LeaseReleased {
+            item: &issue,
+            role: "architect",
+        });
+        emit::emit_agent_started(emit::AgentStarted {
+            item: &issue,
+            role: "architect",
+            kind: "triage",
+            detail: "reading issue + repo context",
+        });
+        emit::emit_ci_completed(emit::CiCompleted {
+            item: &pr,
+            conclusion: "success",
+            duration_ms: 280_000,
+        });
+        emit::emit_engine_status("ready -- watching acme/widgets, idle");
+    });
+
+    let captured = events.lock().unwrap();
+    let message_of = |service: &str| -> String {
+        captured
+            .iter()
+            .find(|ev| ev.fields.get("service").map(String::as_str) == Some(service))
+            .and_then(|ev| ev.fields.get("message").cloned())
+            .unwrap_or_else(|| panic!("no captured event for service {service}"))
+    };
+
+    // The exact §7 lines, prefix included, for each plane.
+    assert_eq!(
+        message_of("engine"),
+        "engine:  [acme/widgets#42] mark_untriaged applied | +untriaged"
+    );
+    assert_eq!(
+        message_of("worker"),
+        "worker:  [acme/widgets#42] architect lease released"
+    );
+    assert_eq!(
+        message_of("agent"),
+        "agent:   [acme/widgets#42] architect/triage start | reading issue + repo context"
+    );
+    assert_eq!(
+        message_of("trigger"),
+        "trigger: [acme/widgets PR#44] CI completed: success (4m40s)"
+    );
+
+    // Every message starts with `<service>:` and the prefix column is the same
+    // width across planes (the alignment rule), while `service=` is the bare
+    // token (the prefix never leaks into the machine field).
+    let prefix_width = "trigger: ".len();
+    for ev in captured.iter() {
+        let service = ev.fields.get("service").map(String::as_str).unwrap();
+        let message = ev.fields.get("message").unwrap();
+        assert!(
+            message.starts_with(&format!("{service}:")),
+            "message for {service} must start with its prefix: {message:?}"
+        );
+        assert_eq!(
+            &message[..prefix_width],
+            &format!("{service}:{}", " ".repeat(prefix_width - service.len() - 1)),
+            "{service} prefix is not padded to the aligned column width"
+        );
+    }
 }

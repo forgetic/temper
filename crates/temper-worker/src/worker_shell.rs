@@ -135,7 +135,11 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport> temper_worker_io::Exe
                 });
             }
             WorkerRequest::Log(line) => {
-                tracing::info!(target: "temper_worker", "{line}");
+                // Worker-side protocol traces (`worker: registered`, `worker:
+                // assigned`, `worker: result sent`, refusals/failures). These are
+                // per-job chatter, not the §7 info catalog (§5), so they sit at
+                // debug to keep the default operator view to the §7 lines.
+                tracing::debug!(target: "temper_worker", "{line}");
             }
         }
     }

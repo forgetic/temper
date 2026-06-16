@@ -232,9 +232,24 @@ pub struct RoleSaturated<'a> {
 // tests.
 // ---------------------------------------------------------------------------
 
+/// Prepends the service's fixed-width human prefix to a rendered body line.
+///
+/// The `human::*` renderers intentionally return the prefix-less §7 body so they
+/// stay unit-testable string-by-string; the `engine:  ` / `worker:  ` /
+/// `agent:   ` / `trigger: ` prefix is an emit-site concern (§2/§7's "service
+/// prefix on every line, padded so the message column aligns"). Only the
+/// positional human MESSAGE gets the prefix — the structured `service=` field
+/// stays the bare token.
+fn prefixed(service: Service, body: String) -> String {
+    format!("{}{body}", service.human_prefix())
+}
+
 /// Emits `trigger` / `issue.opened`.
 pub fn emit_issue_opened(ev: IssueOpened<'_>) {
-    let message = human::issue_opened(ev.item, ev.author, ev.title);
+    let message = prefixed(
+        Service::Trigger,
+        human::issue_opened(ev.item, ev.author, ev.title),
+    );
     tracing::info!(
         target: "temper::trigger",
         service = Service::Trigger.as_str(),
@@ -249,7 +264,10 @@ pub fn emit_issue_opened(ev: IssueOpened<'_>) {
 
 /// Emits `trigger` / `wake.received`.
 pub fn emit_wake_received(ev: WakeReceived<'_>) {
-    let message = human::wake_received(ev.item, ev.artifact_kind, ev.queue);
+    let message = prefixed(
+        Service::Trigger,
+        human::wake_received(ev.item, ev.artifact_kind, ev.queue),
+    );
     tracing::info!(
         target: "temper::trigger",
         service = Service::Trigger.as_str(),
@@ -264,7 +282,10 @@ pub fn emit_wake_received(ev: WakeReceived<'_>) {
 
 /// Emits `trigger` / `ci.completed`.
 pub fn emit_ci_completed(ev: CiCompleted<'_>) {
-    let message = human::ci_completed(ev.item, ev.conclusion, ev.duration_ms);
+    let message = prefixed(
+        Service::Trigger,
+        human::ci_completed(ev.item, ev.conclusion, ev.duration_ms),
+    );
     tracing::info!(
         target: "temper::trigger",
         service = Service::Trigger.as_str(),
@@ -280,7 +301,10 @@ pub fn emit_ci_completed(ev: CiCompleted<'_>) {
 
 /// Emits `worker` / `lease.claimed`.
 pub fn emit_lease_claimed(ev: LeaseClaimed<'_>) {
-    let message = human::lease_claimed(ev.item, ev.role, ev.ttl_human, ev.running);
+    let message = prefixed(
+        Service::Worker,
+        human::lease_claimed(ev.item, ev.role, ev.ttl_human, ev.running),
+    );
     tracing::info!(
         target: "temper::worker",
         service = Service::Worker.as_str(),
@@ -296,7 +320,7 @@ pub fn emit_lease_claimed(ev: LeaseClaimed<'_>) {
 
 /// Emits `worker` / `lease.released`.
 pub fn emit_lease_released(ev: LeaseReleased<'_>) {
-    let message = human::lease_released(ev.item, ev.role);
+    let message = prefixed(Service::Worker, human::lease_released(ev.item, ev.role));
     tracing::info!(
         target: "temper::worker",
         service = Service::Worker.as_str(),
@@ -310,7 +334,10 @@ pub fn emit_lease_released(ev: LeaseReleased<'_>) {
 
 /// Emits `worker` / `lease.lost`.
 pub fn emit_lease_lost(ev: LeaseLost<'_>) {
-    let message = human::lease_lost(ev.item, ev.role, ev.reason);
+    let message = prefixed(
+        Service::Worker,
+        human::lease_lost(ev.item, ev.role, ev.reason),
+    );
     tracing::info!(
         target: "temper::worker",
         service = Service::Worker.as_str(),
@@ -325,7 +352,10 @@ pub fn emit_lease_lost(ev: LeaseLost<'_>) {
 
 /// Emits `agent` / `agent.started`.
 pub fn emit_agent_started(ev: AgentStarted<'_>) {
-    let message = human::agent_started(ev.item, ev.role, ev.kind, ev.detail);
+    let message = prefixed(
+        Service::Agent,
+        human::agent_started(ev.item, ev.role, ev.kind, ev.detail),
+    );
     tracing::info!(
         target: "temper::agent",
         service = Service::Agent.as_str(),
@@ -340,7 +370,10 @@ pub fn emit_agent_started(ev: AgentStarted<'_>) {
 
 /// Emits `agent` / `agent.finished`.
 pub fn emit_agent_finished(ev: AgentFinished<'_>) {
-    let message = human::agent_finished(ev.item, ev.role, ev.kind, ev.duration_ms, ev.summary);
+    let message = prefixed(
+        Service::Agent,
+        human::agent_finished(ev.item, ev.role, ev.kind, ev.duration_ms, ev.summary),
+    );
     tracing::info!(
         target: "temper::agent",
         service = Service::Agent.as_str(),
@@ -356,7 +389,10 @@ pub fn emit_agent_finished(ev: AgentFinished<'_>) {
 
 /// Emits `engine` / `transition.applied`.
 pub fn emit_transition_applied(ev: TransitionApplied<'_>) {
-    let message = human::transition_applied(ev.item, ev.transition, ev.detail, ev.labels_delta);
+    let message = prefixed(
+        Service::Engine,
+        human::transition_applied(ev.item, ev.transition, ev.detail, ev.labels_delta),
+    );
     tracing::info!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
@@ -371,7 +407,10 @@ pub fn emit_transition_applied(ev: TransitionApplied<'_>) {
 
 /// Emits `engine` / `queue.entered`.
 pub fn emit_queue_entered(ev: QueueEntered<'_>) {
-    let message = human::queue_entered(ev.item, ev.queue_to, ev.note);
+    let message = prefixed(
+        Service::Engine,
+        human::queue_entered(ev.item, ev.queue_to, ev.note),
+    );
     tracing::info!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
@@ -385,7 +424,10 @@ pub fn emit_queue_entered(ev: QueueEntered<'_>) {
 
 /// Emits `engine` / `gate.evaluated`.
 pub fn emit_gate_evaluated(ev: GateEvaluated<'_>) {
-    let message = human::gate_evaluated(ev.item, ev.gates, ev.note);
+    let message = prefixed(
+        Service::Engine,
+        human::gate_evaluated(ev.item, ev.gates, ev.note),
+    );
     tracing::info!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
@@ -400,7 +442,10 @@ pub fn emit_gate_evaluated(ev: GateEvaluated<'_>) {
 
 /// Emits `engine` / `pr.opened`.
 pub fn emit_pr_opened(ev: PrOpened<'_>) {
-    let message = human::pr_opened(ev.item, ev.title, ev.kind, ev.for_issue);
+    let message = prefixed(
+        Service::Engine,
+        human::pr_opened(ev.item, ev.title, ev.kind, ev.for_issue),
+    );
     tracing::info!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
@@ -416,12 +461,15 @@ pub fn emit_pr_opened(ev: PrOpened<'_>) {
 
 /// Emits `engine` / `pr.merged`.
 pub fn emit_pr_merged(ev: PrMerged<'_>) {
-    let message = human::pr_merged(
-        ev.item,
-        ev.target_branch,
-        ev.merge_method,
-        ev.commit,
-        ev.labels_delta,
+    let message = prefixed(
+        Service::Engine,
+        human::pr_merged(
+            ev.item,
+            ev.target_branch,
+            ev.merge_method,
+            ev.commit,
+            ev.labels_delta,
+        ),
     );
     tracing::info!(
         target: "temper::engine",
@@ -440,12 +488,15 @@ pub fn emit_pr_merged(ev: PrMerged<'_>) {
 
 /// Emits `engine` / `item.resolved`.
 pub fn emit_item_resolved(ev: ItemResolved<'_>) {
-    let message = human::item_resolved(
-        ev.item,
-        ev.resolution,
-        ev.from_state,
-        ev.to_state,
-        ev.duration_ms,
+    let message = prefixed(
+        Service::Engine,
+        human::item_resolved(
+            ev.item,
+            ev.resolution,
+            ev.from_state,
+            ev.to_state,
+            ev.duration_ms,
+        ),
     );
     tracing::info!(
         target: "temper::engine",
@@ -461,7 +512,10 @@ pub fn emit_item_resolved(ev: ItemResolved<'_>) {
 
 /// Emits `worker` / `role.saturated` (a global line, no subject tag).
 pub fn emit_role_saturated(ev: RoleSaturated<'_>) {
-    let message = human::role_saturated(ev.role, ev.concurrency, ev.waiting);
+    let message = prefixed(
+        Service::Worker,
+        human::role_saturated(ev.role, ev.concurrency, ev.waiting),
+    );
     let queued = ev.waiting.join(",");
     tracing::info!(
         target: "temper::worker",
@@ -487,31 +541,31 @@ pub fn emit_role_saturated(ev: RoleSaturated<'_>) {
 /// `watching 2 repos: …`, `ready -- watching …, idle`). The `message` should
 /// already carry the human body *without* the `engine:  ` prefix.
 pub fn emit_engine_status(message: impl AsRef<str>) {
+    let message = prefixed(Service::Engine, message.as_ref().to_string());
     tracing::info!(
         target: "temper::engine",
         service = Service::Engine.as_str(),
-        "{}",
-        message.as_ref(),
+        "{message}",
     );
 }
 
 /// Emits a `worker` startup/health line (e.g. the `capacity:` line).
 pub fn emit_worker_status(message: impl AsRef<str>) {
+    let message = prefixed(Service::Worker, message.as_ref().to_string());
     tracing::info!(
         target: "temper::worker",
         service = Service::Worker.as_str(),
-        "{}",
-        message.as_ref(),
+        "{message}",
     );
 }
 
 /// Emits a `trigger` startup/health line (e.g. the webhook-listener line).
 pub fn emit_trigger_status(message: impl AsRef<str>) {
+    let message = prefixed(Service::Trigger, message.as_ref().to_string());
     tracing::info!(
         target: "temper::trigger",
         service = Service::Trigger.as_str(),
-        "{}",
-        message.as_ref(),
+        "{message}",
     );
 }
 
