@@ -125,7 +125,10 @@ impl EventSink for UsageLogger {
                         .render()
                 );
             }
-            AgentEvent::ToolEnd { id, is_error: false } => {
+            AgentEvent::ToolEnd {
+                id,
+                is_error: false,
+            } => {
                 tracing::debug!(
                     target: "temper_agent",
                     "{}",
