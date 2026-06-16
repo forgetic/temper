@@ -10,7 +10,7 @@ use crate::InitError;
 
 /// The default webhook bind/advertise address written into `[engine] bind` and
 /// registered on the forge.
-pub const DEFAULT_WEBHOOK_ADDR: &str = "http://localhost:8314";
+pub const DEFAULT_WEBHOOK_ADDR: &str = "http://127.0.0.1:8314";
 
 /// The only workflow `temper init` offers today (the embedded basic-delivery
 /// reference shape).
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(a.repo_name, "service");
         // The webhook URL is the *daemon's* address (where the forge POSTs
         // events), not the forge URL.
-        assert_eq!(a.webhook_url(), "http://localhost:8314/webhook");
+        assert_eq!(a.webhook_url(), "http://127.0.0.1:8314/webhook");
     }
 
     #[test]
