@@ -6,9 +6,24 @@ license.workspace = true
 rust-version.workspace = true
 description = "Process-wide logging init for the temper binaries: env-aware tracing-subscriber setup (RUST_LOG, journald under systemd, ANSI-on-TTY stderr fmt)."
 
+[features]
+# OpenTelemetry export seam — DISABLED by default. With the feature off nothing
+# changes: no OTel layer is installed and the optional deps below are not built.
+# Turning it on (`cargo build -p temper-log --features otel`) compiles the
+# cfg-gated `otel` module and installs an OTel tracing layer next to journald.
+# No exporter/collector is wired (see lib.rs `otel` module + the §6 posture in
+# docs/explanation/logging-and-observability.md); flipping it on is one added
+# layer with zero emit-site changes.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+
 [dependencies]
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# OpenTelemetry seam, optional and only built under the `otel` feature above.
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 # The journald sink is Linux-only — `tracing-journald` does not build on other
 # platforms. Gating the dependency per-target (paired with `#[cfg]` around the

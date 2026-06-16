@@ -196,14 +196,27 @@ Decided: **journald + JSON toggle now, OTel-shaped, exporter deferred.**
   `intake -> landed in 9m15s`). Switching `-o short-iso`→`-o short-monotonic`
   changes the time column with nothing redundant in the text. (Already
   implemented in `temper-log`.)
-- **Machine:** `journalctl -o json` exposes every §3 field as a JSON key today.
-  Add an explicit `TEMPER_LOG_FORMAT=json` toggle selecting a `fmt().json()`
-  layer for non-journald deployments. **Zero new emit sites.**
+- **Machine:** `journalctl -o json` exposes every §3 field as a JSON key today,
+  so under systemd journald already *is* the machine sink. The explicit
+  `TEMPER_LOG_FORMAT=json` toggle (implemented in `temper-log`) is for the
+  **non-journald** case: it selects a `fmt().json()` layer that writes structured
+  JSON lines to stderr regardless of TTY, with span fields included so the
+  `artifact.ref` join key threads onto every line. **Zero new emit sites.**
+
+  **Sink precedence** (one sink wins, in order): (1) `TEMPER_LOG_FORMAT=json` →
+  JSON on stderr, **even under systemd** — an explicit operator request for
+  machine output beats auto-detection; (2) else journald when `JOURNAL_STREAM`
+  is set and reachable (the systemd default — and already machine-readable via
+  `-o json`); (3) else the human stderr fmt fallback. `RUST_LOG` filtering
+  applies to all three.
 - **OTel:** adopt the *semantic model* now (spans, dotted attributes, `event`
   enum, `duration_ms`). Do **not** wire an exporter/collector — a single-process
-  standalone daemon writing to journald does not need one. Leave
-  `tracing-opentelemetry` behind a disabled feature; shipping to a collector
-  (Tempo/Jaeger/Honeycomb) later is *adding one layer next to journald*, no
+  standalone daemon writing to journald does not need one. `tracing-opentelemetry`
+  is present but optional, behind `temper-log`'s **disabled-by-default `otel`
+  cargo feature** (`--features otel`); the feature compiles a cfg-gated seam that
+  installs an exporter-less OTel layer next to the chosen sink. Shipping to a
+  collector (Tempo/Jaeger/Honeycomb) later is *adding one layer next to journald*
+  — swap the empty tracer provider for one with a batch/OTLP exporter, no
   emit-site changes. Flip it the day temper goes multi-process/multi-host, which
   is when cross-boundary trace propagation actually pays.
 

@@ -154,12 +154,22 @@ thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
 tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "de509a589cfe01970d406e0430237be9e206ab0d" }
 # Structured logging stack (see crates/temper-log). `tracing` is the facade;
-# `tracing-subscriber` provides the registry + EnvFilter (RUST_LOG) + fmt layer;
+# `tracing-subscriber` provides the registry + EnvFilter (RUST_LOG) + fmt layer
+# + the `json` fmt layer behind the `TEMPER_LOG_FORMAT=json` toggle;
 # `tracing-journald` is the systemd journal sink (Linux-only — gated per-target
 # in temper-log's Cargo.toml).
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 tracing-journald = "0.3"
+# OpenTelemetry seam (see crates/temper-log §6 "OTel posture"). These are wired
+# into temper-log as OPTIONAL deps behind its disabled-by-default `otel` feature:
+# the semantic model (dotted attributes, spans, the `event` enum) is adopted now,
+# but no exporter/collector is wired — flipping the feature on adds one OTel layer
+# next to journald with zero emit-site changes. Versions move in lockstep:
+# tracing-opentelemetry 0.33 tracks the opentelemetry 0.32 line.
+opentelemetry = "0.32"
+opentelemetry_sdk = "0.32"
+tracing-opentelemetry = "0.33"
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 tempfile = "3"

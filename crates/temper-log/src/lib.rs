@@ -23,9 +23,10 @@
 //!    - [`work_item_span`] / [`agent_run_span`] — the two span layers that
 //!      auto-thread `artifact.ref` onto every child (including debug) line.
 //!
-//! 2. **The sink wiring** — [`init_logging`], below, unchanged: an
-//!    environment-aware global [`tracing`] subscriber (journald under systemd,
-//!    ANSI-on-TTY stderr fmt otherwise, `RUST_LOG` filtering).
+//! 2. **The sink wiring** — [`init_logging`], below: an environment-aware global
+//!    [`tracing`] subscriber (journald under systemd, an explicit JSON fmt layer
+//!    under `TEMPER_LOG_FORMAT=json`, ANSI-on-TTY stderr fmt otherwise, `RUST_LOG`
+//!    filtering throughout).
 //!
 //! Every temper binary calls [`init_logging`] once at startup to install the
 //! global [`tracing`] subscriber. The setup is environment-aware so the same
@@ -38,16 +39,50 @@
 //!   variable (standard [`EnvFilter`] syntax, e.g. `RUST_LOG=debug` or
 //!   `RUST_LOG=temper_engine=trace,info`). When `RUST_LOG` is unset or invalid,
 //!   it defaults to `info`.
-//! - **journald (systemd).** systemd sets `JOURNAL_STREAM` when the unit's
-//!   stderr is connected to the journal. When that variable is present and the
-//!   journal socket is reachable, logs go to journald via [`tracing_journald`]
-//!   (Linux only). The journal records its own timestamps, so the journald path
-//!   stays minimal and does not configure a redundant fmt timer.
-//! - **stderr fallback.** Otherwise (no `JOURNAL_STREAM`, the journal socket is
-//!   unavailable, or off Linux) logs are written to stderr with a human-readable
-//!   fmt layer that keeps timestamps. ANSI colors are enabled only when stderr
-//!   is a real TTY ([`IsTerminal`]); under systemd or a pipe, stderr is not a
-//!   terminal, so colors are correctly suppressed.
+//!
+//! ## Sink precedence
+//!
+//! Exactly one sink is chosen, in this order:
+//!
+//! 1. **Explicit JSON (`TEMPER_LOG_FORMAT=json`).** When the operator sets this,
+//!    a [`fmt().json()`][json] layer writes structured JSON lines to stderr
+//!    **regardless of TTY or systemd**. This is the highest-precedence choice
+//!    *on purpose*: it is the machine sink for **non-journald** deployments
+//!    (containers, log shippers) that still want field-level JSON without a
+//!    journal, and an explicit operator request wins over auto-detection. Span
+//!    fields are included (`.with_current_span(true).with_span_list(true)`) so
+//!    the `artifact.ref` join key set on the [`work_item_span`] threads onto
+//!    every JSON line, exactly as it does for the human projection.
+//! 2. **journald (systemd), when JSON is *not* forced.** systemd sets
+//!    `JOURNAL_STREAM` when the unit's stderr is connected to the journal. When
+//!    that variable is present and the journal socket is reachable, logs go to
+//!    journald via [`tracing_journald`] (Linux only). journald already gives
+//!    machine output — `journalctl -o json` exposes every §3 field as a JSON key
+//!    — so the explicit `TEMPER_LOG_FORMAT=json` toggle exists for the
+//!    *non*-journald case, and journald stays the default under systemd. The
+//!    journal records its own timestamps, so this path stays minimal and does
+//!    not configure a redundant fmt timer.
+//! 3. **stderr human fallback.** Otherwise (no JSON toggle, no `JOURNAL_STREAM`,
+//!    the journal socket is unavailable, or off Linux) logs are written to
+//!    stderr with a human-readable fmt layer that keeps timestamps. ANSI colors
+//!    are enabled only when stderr is a real TTY ([`IsTerminal`]); under systemd
+//!    or a pipe, stderr is not a terminal, so colors are correctly suppressed.
+//!
+//! The format choice is computed by the pure [`select_format`] helper from the
+//! `TEMPER_LOG_FORMAT` value, so the toggle is unit-tested without mutating the
+//! process environment.
+//!
+//! ## OpenTelemetry (`otel` feature, disabled by default)
+//!
+//! temper adopts the OTel *semantic model* now (spans, dotted attributes, the
+//! `event` enum, numeric `duration_ms`) but ships **no exporter**: a
+//! single-process daemon writing to journald does not need one. The
+//! [`tracing-opentelemetry`][otel] layer therefore lives behind the
+//! disabled-by-default `otel` cargo feature (see the [`otel`](crate::otel)
+//! module). With the feature off nothing changes; with it on, an exporter-less
+//! OTel layer is installed next to the chosen sink — the seam a real collector
+//! (Tempo / Jaeger / Honeycomb) is wired into later, with **zero emit-site
+//! changes**.
 //!
 //! [`init_logging`] is idempotent: it installs the subscriber with `try_init`
 //! and ignores the "a global default has already been set" error, so calling it
@@ -58,10 +93,14 @@
 //! [`tracing_journald`]: https://docs.rs/tracing-journald
 //! [`EnvFilter`]: tracing_subscriber::EnvFilter
 //! [`IsTerminal`]: std::io::IsTerminal
+//! [json]: tracing_subscriber::fmt::Layer::json
+//! [otel]: https://docs.rs/tracing-opentelemetry
 
 pub mod duration;
 pub mod emit;
 pub mod event;
+#[cfg(feature = "otel")]
+pub mod otel;
 pub mod redact;
 pub mod service;
 pub mod span;
@@ -100,6 +139,37 @@ fn filter_from(value: Option<&str>) -> EnvFilter {
     }
 }
 
+/// The output format `init_logging` selects from the `TEMPER_LOG_FORMAT` value.
+///
+/// This only distinguishes the **explicit** JSON request from "decide normally"
+/// — the journald-vs-stderr choice for [`LogFormat::Auto`] is environment
+/// detection (`JOURNAL_STREAM`, `is_terminal`) done inside [`init_logging`], not
+/// something the operator sets here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogFormat {
+    /// Default: pick journald under systemd, else the human stderr fmt layer.
+    Auto,
+    /// `TEMPER_LOG_FORMAT=json`: force a `fmt().json()` layer on stderr, taking
+    /// precedence over journald (the operator explicitly asked for JSON; see the
+    /// crate-level "Sink precedence" docs).
+    Json,
+}
+
+/// Pure format selection: map the `TEMPER_LOG_FORMAT` value to a [`LogFormat`].
+///
+/// Only the exact token `json` (case-insensitive, surrounding whitespace
+/// trimmed) selects [`LogFormat::Json`]; everything else — unset, empty, or an
+/// unrecognized value — falls back to [`LogFormat::Auto`] so a typo never
+/// silently disables logging. Factored out (like [`filter_from`]) so the toggle
+/// is unit-testable without mutating the process environment (the workspace
+/// forbids `unsafe`, and edition-2024 `set_var` is `unsafe`).
+fn select_format(value: Option<&str>) -> LogFormat {
+    match value {
+        Some(v) if v.trim().eq_ignore_ascii_case("json") => LogFormat::Json,
+        _ => LogFormat::Auto,
+    }
+}
+
 /// Install the global [`tracing`] subscriber for this process.
 ///
 /// See the [crate-level docs](crate) for the env detection rules
@@ -110,6 +180,28 @@ fn filter_from(value: Option<&str>) -> EnvFilter {
 ///
 /// [`tracing`]: https://docs.rs/tracing
 pub fn init_logging() {
+    // Explicit JSON wins over everything (including journald): an operator who
+    // sets TEMPER_LOG_FORMAT=json is asking for machine output on a non-journald
+    // deployment. See the crate-level "Sink precedence" docs.
+    if select_format(std::env::var("TEMPER_LOG_FORMAT").ok().as_deref()) == LogFormat::Json {
+        // `with_current_span` + `with_span_list` carry span fields (notably the
+        // `artifact.ref` set on the work_item span) onto every JSON line, so the
+        // join key threads through the machine projection just as it does the
+        // human one.
+        let json_layer = fmt::layer()
+            .json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(std::io::stderr);
+
+        let _ = tracing_subscriber::registry()
+            .with(env_filter())
+            .with(maybe_otel_layer())
+            .with(json_layer)
+            .try_init();
+        return;
+    }
+
     // systemd sets JOURNAL_STREAM when our stderr is the journal. Prefer the
     // journal sink there; fall through to the stderr fmt layer if it is absent
     // or the socket cannot be opened. The journal adds its own timestamps, so
@@ -120,6 +212,7 @@ pub fn init_logging() {
     {
         let _ = tracing_subscriber::registry()
             .with(env_filter())
+            .with(maybe_otel_layer())
             .with(journald)
             .try_init();
         return;
@@ -131,8 +224,33 @@ pub fn init_logging() {
 
     let _ = tracing_subscriber::registry()
         .with(env_filter())
+        .with(maybe_otel_layer())
         .with(fmt_layer)
         .try_init();
+}
+
+/// The optional OpenTelemetry layer for [`init_logging`] to chain next to the
+/// chosen sink.
+///
+/// Returns `Some(layer)` only under the `otel` feature; otherwise `None`. An
+/// `Option<Layer>` is itself a [`Layer`](tracing_subscriber::Layer) (a `None`
+/// is a no-op), so the call site chains it uniformly with `.with(...)` whether
+/// or not the feature is enabled — keeping the OTel seam out of the default
+/// build entirely while leaving exactly one wiring point.
+fn maybe_otel_layer<S>() -> Option<impl tracing_subscriber::Layer<S>>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    #[cfg(feature = "otel")]
+    {
+        Some(otel::otel_layer())
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        // `None` still needs a concrete `Layer` type to satisfy `impl Layer`;
+        // an identity fmt layer that is never constructed serves as the witness.
+        None::<tracing_subscriber::fmt::Layer<S>>
+    }
 }
 
 #[cfg(test)]
@@ -168,5 +286,34 @@ mod tests {
             filter_from(Some("not a valid =@= filter")).to_string(),
             "info"
         );
+    }
+
+    #[test]
+    fn format_defaults_to_auto_when_toggle_unset() {
+        // No TEMPER_LOG_FORMAT -> environment auto-detection (journald/stderr).
+        assert_eq!(select_format(None), LogFormat::Auto);
+    }
+
+    #[test]
+    fn format_selects_json_on_exact_token() {
+        assert_eq!(select_format(Some("json")), LogFormat::Json);
+    }
+
+    #[test]
+    fn format_json_token_is_case_and_whitespace_insensitive() {
+        // Operators are forgiving with case/whitespace; the toggle should be too.
+        assert_eq!(select_format(Some("JSON")), LogFormat::Json);
+        assert_eq!(select_format(Some("Json")), LogFormat::Json);
+        assert_eq!(select_format(Some("  json  ")), LogFormat::Json);
+    }
+
+    #[test]
+    fn format_falls_back_to_auto_on_unknown_or_empty_value() {
+        // A typo or unrelated value must NOT silently disable logging — it falls
+        // back to Auto so journald/stderr still installs.
+        assert_eq!(select_format(Some("")), LogFormat::Auto);
+        assert_eq!(select_format(Some("human")), LogFormat::Auto);
+        assert_eq!(select_format(Some("jsonl")), LogFormat::Auto);
+        assert_eq!(select_format(Some("text")), LogFormat::Auto);
     }
 }
