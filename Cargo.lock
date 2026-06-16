@@ -1783,6 +1783,7 @@ version = "0.1.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
+ "serde_json",
  "tracing",
  "tracing-journald",
  "tracing-opentelemetry",

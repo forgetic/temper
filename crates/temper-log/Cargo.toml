@@ -31,5 +31,8 @@ tracing-opentelemetry = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 tracing-journald = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true
