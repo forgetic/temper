@@ -70,3 +70,53 @@ systemctl --user daemon-reload && systemctl --user start temper-daemon.service
 
 Use `systemctl --user enable temper-daemon.service` separately if the unit should
 start automatically for the user session.
+
+## Logging
+
+The daemon's tracing init is environment-aware: under systemd the unit sets
+`StandardOutput=journal`/`StandardError=journal`, so `JOURNAL_STREAM` is present
+in the daemon's environment and logs are emitted as structured entries through
+`tracing-journald` (native journal priorities, no ANSI escapes). Running the same
+binary by hand in a terminal instead writes colored, human-readable lines to
+stderr. Same binary, no flags — the destination is detected automatically.
+
+### Level control: `RUST_LOG`
+
+`RUST_LOG` is the single verbosity knob. The unit ships a default of
+`RUST_LOG=info`. To change it, set `RUST_LOG` in the optional drop-in env file
+`~/.config/temper/daemon.env` (the unit loads it via
+`EnvironmentFile=-%h/.config/temper/daemon.env`; the `-` prefix makes it
+optional), then restart:
+
+```sh
+echo 'RUST_LOG=debug' >> ~/.config/temper/daemon.env
+systemctl --user restart temper-daemon.service
+```
+
+`RUST_LOG` accepts the standard `EnvFilter` syntax, so per-target levels work too
+(e.g. `RUST_LOG=info,temper_engine=debug`). Omitting it falls back to `info`.
+
+### Reading the journal
+
+```sh
+# Follow all daemon entries.
+journalctl --user -u temper-daemon -f
+
+# Errors only. tracing levels map to journal priorities, so priority filtering
+# works: -p err shows ERROR, -p warning shows WARN and above.
+journalctl --user -p err -u temper-daemon
+
+# Query by syslog identifier (set via SyslogIdentifier=temper-daemon in the
+# unit), useful for cross-unit or structured queries.
+journalctl --user SYSLOG_IDENTIFIER=temper-daemon
+```
+
+Drop `--user` when inspecting a system-scope deployment.
+
+### Readiness
+
+The unit is `Type=simple`: systemd treats the service as started once the process
+is forked, and the daemon logs a readiness line after it binds. A future
+`Type=notify` would let the daemon call `sd_notify(READY=1)` after binding so
+systemd tracks readiness precisely; that is not wired up yet (see the TODO in
+`systemd/temper-daemon.service`).
