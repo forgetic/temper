@@ -15,12 +15,46 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_cli_common::{
-    EX_USAGE, LoadOptions, WriteOutcome, resolve_targets, restrict_600, run, write_new_file,
+    EX_USAGE, EnvMap, LoadOptions, PathResolver, WriteOutcome, resolve_targets, restrict_600, run,
+    write_new_file,
 };
 use temper_config::{
-    Finding, ProviderCredential, Resolved, WebUiCreds, config_template, credentials_template, lint,
-    load,
+    ConfigError, Finding, LoadInputs, LoadedPaths, ProviderCredential, Resolved, WebUiCreds,
+    config_template, credentials_template, lint, load_explicit,
 };
+
+/// Everything `temper config` needs, with no ambient environment access.
+///
+/// `env` / `paths` are the snapshot the composition root (`src/bin`) captured;
+/// nothing in this crate reads `std::env`.
+pub struct ConfigInputs<'a> {
+    /// The program arguments after `config` (the subcommand + its flags).
+    pub args: Vec<String>,
+    /// The injected environment snapshot (incl. `TEMPER_CONFIG` / `TEMPER_CREDENTIALS`).
+    pub env: &'a EnvMap,
+    /// The injected base directories (HOME / XDG_*) for default-location discovery.
+    pub paths: &'a PathResolver,
+}
+
+/// Loads + resolves a deployment for `validate` / `show`, honoring the same
+/// hermeticity rule the daemon uses: an explicit `--config` / `--credentials`
+/// suppresses default `~/.config/temper` discovery, so the operator's global
+/// credentials never ambiently layer in behind an explicit deployment.
+fn load_for(
+    options: &LoadOptions,
+    env: &EnvMap,
+    paths: &PathResolver,
+) -> Result<(Resolved, LoadedPaths), ConfigError> {
+    let explicit = options.config.is_some() || options.credentials.is_some();
+    let empty = PathResolver::default();
+    let paths: &PathResolver = if explicit { &empty } else { paths };
+    load_explicit(&LoadInputs {
+        explicit_config: options.config.clone(),
+        explicit_credentials: options.credentials.clone(),
+        env,
+        paths,
+    })
+}
 
 pub const USAGE: &str = "\
 Guided or programmatic configuration.
@@ -38,8 +72,8 @@ Options:
   --force               (init) overwrite existing files
   -h, --help            Print help";
 
-pub fn main(args: std::env::Args) -> ExitCode {
-    let args: Vec<String> = args.collect();
+pub fn main(inputs: ConfigInputs) -> ExitCode {
+    let ConfigInputs { args, env, paths } = inputs;
     let Some((action, rest)) = args.split_first() else {
         println!("{USAGE}");
         return ExitCode::from(EX_USAGE);
@@ -49,9 +83,9 @@ pub fn main(args: std::env::Args) -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        "validate" => run("temper config", validate(rest)),
-        "show" => run("temper config", show(rest)),
-        "init" => run("temper config", init(rest)),
+        "validate" => run("temper config", validate(rest, env, paths)),
+        "show" => run("temper config", show(rest, env, paths)),
+        "init" => run("temper config", init(rest, env, paths)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(EX_USAGE)
@@ -85,15 +119,15 @@ fn parse_options(args: &[String], allow_force: bool) -> Result<(LoadOptions, boo
     Ok((options, force))
 }
 
-fn validate(args: &[String]) -> Result<ExitCode, String> {
+fn validate(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitCode, String> {
     let (options, _) = parse_options(args, false)?;
-    let (resolved, paths) = load(&options).map_err(|error| error.to_string())?;
-    if let Some(path) = &paths.config {
+    let (resolved, loaded) = load_for(&options, env, paths).map_err(|error| error.to_string())?;
+    if let Some(path) = &loaded.config {
         println!("config:      {}", path.display());
     } else {
         println!("config:      (none — defaults + environment)");
     }
-    if let Some(path) = &paths.credentials {
+    if let Some(path) = &loaded.credentials {
         println!("credentials: {}", path.display());
     } else {
         println!("credentials: (none — environment)");
@@ -121,16 +155,16 @@ fn validate(args: &[String]) -> Result<ExitCode, String> {
     }
 }
 
-fn show(args: &[String]) -> Result<ExitCode, String> {
+fn show(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitCode, String> {
     let (options, _) = parse_options(args, false)?;
-    let (resolved, _paths) = load(&options).map_err(|error| error.to_string())?;
+    let (resolved, _loaded) = load_for(&options, env, paths).map_err(|error| error.to_string())?;
     print!("{}", render(&resolved));
     Ok(ExitCode::SUCCESS)
 }
 
-fn init(args: &[String]) -> Result<ExitCode, String> {
+fn init(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitCode, String> {
     let (options, force) = parse_options(args, true)?;
-    let targets = resolve_targets(&options)?;
+    let targets = resolve_targets(&options, env, paths)?;
 
     let _ = write_new_file(&targets.config, &config_template(), force)?;
     match write_new_file(&targets.credentials, &credentials_template(), force)? {

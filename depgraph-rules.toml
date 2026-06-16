@@ -166,10 +166,12 @@ temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "te
 # The thin dispatcher: routes argv to the per-subcommand crates and the hidden
 # operator/responder tools. Re-exports the in-process transport from
 # temper-cli-daemon. Much slimmer than the old monolith.
-temper-cli = ["temper-config", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
+temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
 
-# The unified `temper` binary is now a one-line shim over temper-cli.
-temper = ["temper-cli"]
+# The unified `temper` binary's composition root (`src/bin/temper.rs`'s `boot()`)
+# snapshots the real environment into a CliEnv via temper-config's env shims, so
+# it depends on temper-config in addition to the temper-cli dispatcher.
+temper = ["temper-cli", "temper-config"]
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-engine", "temper-engine-io", "temper-worker-protocol"]
 # Shared non-production test machinery (engine-side). THE SOLE EXCEPTION to the

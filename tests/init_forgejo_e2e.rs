@@ -114,6 +114,7 @@ fn init_forgejo_drives_a_working_setup() {
         force: false,
         existing_repo: false,
         workspace: Some(workspace_dir.path().to_path_buf()),
+        ..Default::default()
     };
 
     // --- Drive run_init end to end against the live forge. ---

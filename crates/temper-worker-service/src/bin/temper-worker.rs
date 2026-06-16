@@ -21,10 +21,16 @@ fn main() -> ExitCode {
     // starts, so startup output flows through the env-aware subscriber.
     temper_log::init_logging();
 
+    // Composition root: snapshot the real environment once (the sanctioned
+    // `std::env` boundary), then hand plain data to the hermetic loader.
+    let env = temper_config::EnvMap::from_system();
+    let paths = temper_config::PathResolver::from_system();
     temper_config::service_main(
         "temper-worker",
         USAGE,
         std::env::args().skip(1),
+        &env,
+        &paths,
         |resolved| {
             temper_worker_service::run(
                 resolved,

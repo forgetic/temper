@@ -47,7 +47,8 @@ pub struct InitArtifacts {
 /// `repos`/`roles` come from the embedded basic-delivery workflow's
 /// queue-subscribing roles + the default repo — they are not asked.
 pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArtifacts, InitError> {
-    let targets: FileTargets = resolve_targets(&opts.options).map_err(InitError::Path)?;
+    let targets: FileTargets =
+        resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
 
     // Place workflow.json + webhook-secret beside config.toml.
     let config_dir = targets

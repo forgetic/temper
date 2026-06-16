@@ -17,6 +17,10 @@ use std::process::ExitCode;
 
 use temper_config::EX_USAGE;
 
+// Re-exported so `src/bin/*` and tests construct the CLI's injected environment
+// snapshot with `temper_cli::CliEnv`.
+pub use temper_cli_common::CliEnv;
+
 // Re-exported from `temper-cli-daemon` so the root package's in-process-transport
 // integration test and `src/bin/temper.rs` keep the same `temper_cli::*` paths.
 pub use temper_cli_daemon::{InProcessAgentRunner, InProcessTransport};
@@ -44,8 +48,14 @@ Options:
 
 Run `temper <command> --help` for subcommand usage.";
 
-/// The unified binary's entry point: parse `argv[1]` and dispatch.
-pub fn run() -> ExitCode {
+/// The unified binary's entry point: dispatch `argv[1]` off an injected
+/// environment snapshot.
+///
+/// The snapshot ([`CliEnv`]) is captured once at the composition root
+/// (`src/bin/temper.rs`'s `boot()`); no library code reads `std::env`. The
+/// per-subcommand crates take the snapshot's `env` / `paths` so a load is
+/// hermetic with respect to whatever was captured.
+pub fn run(cli: CliEnv) -> ExitCode {
     // Install the global tracing subscriber before any work (or log output)
     // happens, so early CLI errors and startup spans/events are captured. This
     // is the single install point for the unified binary — it covers every
@@ -53,26 +63,42 @@ pub fn run() -> ExitCode {
     // so chaining is safe regardless.
     temper_log::init_logging();
 
-    let mut args = std::env::args();
-    let _program = args.next();
-    let Some(command) = args.next() else {
+    let CliEnv {
+        args,
+        env,
+        paths,
+        cwd: _cwd,
+    } = cli;
+    let mut iter = args.into_iter();
+    let Some(command) = iter.next() else {
         println!("{USAGE}");
         return ExitCode::from(EX_USAGE);
     };
-    dispatch(&command, args)
+    let rest: Vec<String> = iter.collect();
+    dispatch(&command, rest, &env, &paths)
 }
 
-/// Dispatch a command + its remaining args. Separated from [`run`] for testing.
-pub fn dispatch(command: &str, args: std::env::Args) -> ExitCode {
+/// Dispatch a command + its remaining args over the injected `env` / `paths`
+/// snapshot. Separated from [`run`] for testing.
+pub fn dispatch(
+    command: &str,
+    args: Vec<String>,
+    env: &temper_cli_common::EnvMap,
+    paths: &temper_cli_common::PathResolver,
+) -> ExitCode {
     match command {
-        "init" => temper_cli_init::main(args),
-        "config" => temper_cli_config::main(args),
-        "daemon" => temper_cli_daemon::main(args),
-        "agent" => temper_agent_session::main(args),
+        "init" => temper_cli_init::main(args, env, paths),
+        "config" => temper_cli_config::main(temper_cli_config::ConfigInputs { args, env, paths }),
+        "daemon" => temper_cli_daemon::main(args, env, paths),
+        // The agent is its own process entry point and reads the worker-injected
+        // env through its sanctioned `entry` module (issue #201); it needs no
+        // snapshot from here.
+        "agent" => temper_agent_session::main(args.into_iter()),
 
         // Hidden operator/responder tools — not in the headline help, but kept
         // dispatchable for tests, provisioning, and the agent's responder
-        // subprocesses.
+        // subprocesses. These are process entry points that read their own
+        // (allowlisted) env, so they take only their args.
         "provision-forgejo" => operators::provision_forgejo(args),
         "trigger-forgejo" => operators::trigger_forgejo(args),
         "validate-reference-delivery" => operators::validate_reference_delivery(args),

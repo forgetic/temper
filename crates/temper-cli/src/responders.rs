@@ -19,19 +19,13 @@ use temper_agent::{
 use temper_process_protocol::ConversationRequest;
 
 /// `temper product-manager-responder`.
-pub fn product_manager(args: std::env::Args) -> ExitCode {
-    finish(
-        "product-manager-responder",
-        run_product_manager(args.collect()),
-    )
+pub fn product_manager(args: Vec<String>) -> ExitCode {
+    finish("product-manager-responder", run_product_manager(args))
 }
 
 /// `temper workflow-role-decision`.
-pub fn workflow_role_decision(args: std::env::Args) -> ExitCode {
-    finish(
-        "workflow-role-decision",
-        run_workflow_role_decision(args.collect()),
-    )
+pub fn workflow_role_decision(args: Vec<String>) -> ExitCode {
+    finish("workflow-role-decision", run_workflow_role_decision(args))
 }
 
 fn finish(name: &str, result: Result<(), String>) -> ExitCode {

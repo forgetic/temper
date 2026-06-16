@@ -59,6 +59,9 @@ rust-version.workspace = true
 # their own tier — built with `cargo build -p temper-{engine-service,
 # worker-service,agent-session}`.
 temper-cli = { path = "crates/temper-cli" }
+# The composition root (`src/bin/temper.rs`'s `boot()`) snapshots the real
+# environment into a CliEnv via temper-config's `EnvMap`/`PathResolver` shims.
+temper-config = { path = "crates/temper-config" }
 
 [dev-dependencies]
 # Daemon-topology e2e (`tests/daemon_forgejo_e2e.rs`): real Forgejo fixture,
@@ -89,7 +92,6 @@ temper-worker-protocol = { path = "crates/temper-worker-protocol" }
 # the forge state matches.
 temper-cli-init = { path = "crates/temper-cli-init" }
 temper-cli-common = { path = "crates/temper-cli-common" }
-temper-config = { path = "crates/temper-config" }
 temper-provision = { path = "crates/temper-provision" }
 temper-reference-delivery = { path = "crates/temper-reference-delivery" }
 toml = { workspace = true }

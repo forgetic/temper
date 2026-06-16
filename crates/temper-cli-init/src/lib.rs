@@ -35,7 +35,9 @@ mod write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_cli_common::{EX_USAGE, LoadOptions, TerminalPrompter, parse_common_args};
+use temper_cli_common::{
+    EX_USAGE, EnvMap, LoadOptions, PathResolver, TerminalPrompter, parse_common_args,
+};
 
 pub use collect::{Answers, collect_answers};
 pub use provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
@@ -74,6 +76,11 @@ pub struct InitOptions {
     /// `None` lets the daemon's default (`~/.local/state/temper/workspace`)
     /// apply by omitting the key.
     pub workspace: Option<PathBuf>,
+    /// The injected environment snapshot used to resolve default file targets
+    /// (the snapshot `src/bin` captured; no `std::env` is read here).
+    pub env: EnvMap,
+    /// The injected base directories (HOME / XDG_*) for default-target discovery.
+    pub paths: PathResolver,
 }
 
 /// A failure in the `temper init` flow.
@@ -126,7 +133,10 @@ impl From<std::io::Error> for InitError {
 
 /// The unified binary's `temper init` entry point: parse args, build a
 /// [`TerminalPrompter`] + the real [`ForgejoProvisioner`], and run the flow.
-pub fn main(args: std::env::Args) -> ExitCode {
+///
+/// `env` / `paths` are the snapshot the composition root (`src/bin`) captured;
+/// this reads no `std::env`.
+pub fn main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
     let parsed = match parse_common_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -156,6 +166,8 @@ pub fn main(args: std::env::Args) -> ExitCode {
         force,
         existing_repo,
         workspace: None,
+        env: env.clone(),
+        paths: paths.clone(),
     };
     let mut prompter = TerminalPrompter::stdio();
     let mut provisioner = ForgejoProvisioner;

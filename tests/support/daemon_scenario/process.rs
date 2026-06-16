@@ -60,6 +60,17 @@ pub(super) fn spawn_daemon(
     );
     std::fs::write(&config_path, config).expect("write daemon config");
 
+    // Hermeticity: point HOME / XDG_* at an isolated, empty dir beside the config
+    // so the spawned daemon can never discover a global
+    // ~/.config/temper/credentials.toml. The explicit --config already suppresses
+    // default discovery (issue #202); isolating HOME makes the test independent
+    // of the box it runs on.
+    let fake_home = config_path
+        .parent()
+        .expect("config has a parent dir")
+        .join("home");
+    std::fs::create_dir_all(fake_home.join(".config")).expect("fake home creates");
+
     let log_file = log_file(log);
     let child = Command::new(env!("CARGO_BIN_EXE_temper"))
         .arg("daemon")
@@ -67,6 +78,9 @@ pub(super) fn spawn_daemon(
         .arg("engine")
         .arg("--config")
         .arg(&config_path)
+        .env("HOME", &fake_home)
+        .env("XDG_CONFIG_HOME", fake_home.join(".config"))
+        .env("XDG_STATE_HOME", fake_home.join(".local/state"))
         .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
         // ADR 0019 web-UI CI-read fallback used by the mechanical backstop.
         .env("FORGEJO_USERNAME", &engineer.user)
