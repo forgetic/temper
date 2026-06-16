@@ -17,6 +17,7 @@ members = [
     "crates/temper-worker-protocol",
     "crates/temper-worker-registry",
     "crates/temper-interaction",
+    "crates/temper-log",
     "crates/temper-engine-io",
     "crates/temper-forge-filesystem",
     "crates/temper-forge-memory",
@@ -150,6 +151,13 @@ toml = "0.8"
 thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
 tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "de509a589cfe01970d406e0430237be9e206ab0d" }
+# Structured logging stack (see crates/temper-log). `tracing` is the facade;
+# `tracing-subscriber` provides the registry + EnvFilter (RUST_LOG) + fmt layer;
+# `tracing-journald` is the systemd journal sink (Linux-only — gated per-target
+# in temper-log's Cargo.toml).
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+tracing-journald = "0.3"
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 tempfile = "3"

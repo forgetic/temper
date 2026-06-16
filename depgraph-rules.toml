@@ -123,6 +123,11 @@ temper-agent = ["temper-agent-core", "temper-agent-protocol", "temper-process-pr
 # (like the protocol crates) every binary can read config without linking a tier.
 temper-config = []
 
+# Process-wide logging init (tracing-subscriber setup). A shared leaf with no
+# internal deps that every binary calls once at startup; like temper-config it
+# crosses no tier.
+temper-log = []
+
 # Per-tier service crates. Each links ONLY its own tier + temper-config, and
 # ships its slim binary (temper-engine / temper-worker / temper-agent). These
 # allowlists ARE the proof of tier isolation. The engine service builds its forge
