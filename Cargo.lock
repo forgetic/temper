@@ -1377,6 +1377,7 @@ dependencies = [
  "jig-record",
  "jig-runtime",
  "jig-server",
+ "secrecy",
  "serde",
  "serde_json",
  "skein",
@@ -1426,6 +1427,7 @@ name = "temper-agent-session"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "secrecy",
  "serde_json",
  "skein",
  "temper-agent",

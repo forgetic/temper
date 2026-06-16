@@ -45,19 +45,24 @@
 
 mod checkpoint;
 mod config;
+mod entry;
 mod options;
 mod progress;
 mod run;
 
 use std::process::ExitCode;
 
-pub use config::{AgentConfig, DEFAULT_CHECKPOINT_INTERVAL};
+pub use config::{AgentConfig, DEFAULT_CHECKPOINT_INTERVAL, RoleIdentity};
 
+/// The agent binary's entry point: the **single place** this crate (and the
+/// `temper-agent` core it drives) reads `std::env`. It parses the injected
+/// environment + CLI flags into an [`AgentConfig`] plus the context/result paths,
+/// then drives the protocol run; nothing deeper touches `std::env`.
 pub fn main<I>(args: I) -> ExitCode
 where
     I: Iterator<Item = String>,
 {
-    match run::run(args) {
+    match entry::run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             // stderr carries diagnostics; stdout is reserved for the framed

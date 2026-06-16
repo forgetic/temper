@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use secrecy::ExposeSecret;
 use tongs::model::ThinkingLevel;
 
 use super::auth::AuthMode;
@@ -20,7 +21,8 @@ impl ProviderConfig {
     /// called **each time** a decision runs. Callers must not log the result.
     pub(crate) async fn resolve_bearer(&self) -> Result<String, ProviderError> {
         match self.auth() {
-            AuthMode::ApiKey { api_key } => Ok(api_key.clone()),
+            // I/O boundary: the static key becomes the per-request bearer.
+            AuthMode::ApiKey { api_key } => Ok(api_key.expose_secret().to_string()),
             AuthMode::ChatGptOAuth { settings } => settings.resolve_bearer().await,
             AuthMode::AnthropicOAuth { settings } => settings.resolve_bearer().await,
         }

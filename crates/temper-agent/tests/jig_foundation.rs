@@ -1,6 +1,6 @@
 use jig_core::{Reply, Script};
 use jig_server::FakeLlm;
-use temper_agent::{AuthChoice, ProviderConfig};
+use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv};
 
 fn jig_auth_fixture() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jig_auth.json")
@@ -14,8 +14,13 @@ fn fake_llm_base_url_can_back_oauth_provider_config() {
         .with_base_url_override(fake.base_url());
 
     assert!(
-        ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, Some(jig_auth_fixture()))
-            .is_ok()
+        ProviderConfig::from_auth(
+            AuthChoice::AnthropicOAuth,
+            None,
+            Some(jig_auth_fixture()),
+            &ProviderEnv::empty()
+        )
+        .is_ok()
     );
     assert!(config.build_provider().is_ok());
 }

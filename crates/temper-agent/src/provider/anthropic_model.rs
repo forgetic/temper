@@ -12,10 +12,13 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-/// Env var overriding the Anthropic model id.
+/// Env var overriding the Anthropic model id. The name lives here so the agent's
+/// `entry` (the sole env reader) and the worker's env-injection map agree;
+/// nothing in this crate reads it.
 pub const ANTHROPIC_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_MODEL";
 /// Env var overriding the Anthropic model id used for *sub-agents* (the
-/// read-only `investigate` fan-out). Defaults to [`DEFAULT_ANTHROPIC_SUBAGENT_MODEL`].
+/// read-only `investigate` fan-out). Defaults to
+/// [`DEFAULT_ANTHROPIC_SUBAGENT_MODEL`]. Read only by the agent's `entry`.
 pub const ANTHROPIC_SUBAGENT_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_SUBAGENT_MODEL";
 
 /// Default Anthropic model targeted by the OAuth mode (overridable).
@@ -88,10 +91,12 @@ fn anthropic_beta_for(model_id: &str) -> String {
     }
 }
 
-/// Resolves the configured Anthropic model id (env override or default).
-pub fn anthropic_model_from_env() -> String {
-    std::env::var(ANTHROPIC_MODEL_ENV)
-        .ok()
+/// Resolves the Anthropic model id from the supplied override or the default.
+///
+/// `override_id` is the [`ANTHROPIC_MODEL_ENV`] value the host read (`None` when
+/// unset); an empty/whitespace value is treated as unset. Reads no environment.
+pub fn resolve_anthropic_model(override_id: Option<String>) -> String {
+    override_id
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string())
@@ -125,10 +130,14 @@ pub fn context_window_for(model_id: &str) -> usize {
     }
 }
 
-/// Resolves the Anthropic model id for sub-agents (env override or default).
-pub fn anthropic_subagent_model_from_env() -> String {
-    std::env::var(ANTHROPIC_SUBAGENT_MODEL_ENV)
-        .ok()
+/// Resolves the Anthropic sub-agent model id from the supplied override or the
+/// default.
+///
+/// `override_id` is the [`ANTHROPIC_SUBAGENT_MODEL_ENV`] value the host read
+/// (`None` when unset); an empty/whitespace value is treated as unset. Reads no
+/// environment.
+pub fn resolve_anthropic_subagent_model(override_id: Option<String>) -> String {
+    override_id
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_ANTHROPIC_SUBAGENT_MODEL.to_string())
