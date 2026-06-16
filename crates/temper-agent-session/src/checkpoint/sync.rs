@@ -10,7 +10,9 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicU32;
 use std::time::Instant;
 
-use super::{CheckpointRepo, Checkpointer, DEFAULT_CHECKPOINT_INTERVAL};
+use crate::config::DEFAULT_CHECKPOINT_INTERVAL;
+
+use super::{CheckpointRepo, Checkpointer};
 
 /// The owned snapshot a blocking checkpoint runs from.
 pub(super) struct CheckpointJob {

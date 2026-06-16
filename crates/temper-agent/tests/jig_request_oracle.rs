@@ -33,7 +33,7 @@ use jig_core::conform::grammar::{GrammarFinding, grammar_findings};
 use jig_record::{bind, proxy_once};
 use serde::Deserialize;
 use serde_json::Value;
-use temper_agent::{AuthChoice, ProviderConfig, run_decision};
+use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;
@@ -74,16 +74,17 @@ fn run_deepseek_openai_leg() {
         return;
     }
 
-    let provider = match ProviderConfig::from_auth(AuthChoice::DeepSeek, None, None) {
-        Ok(provider) => provider,
-        Err(error) => {
-            eprintln!(
-                "skipping DeepSeek/OpenAI request oracle: no DeepSeek key available ({error}); \
+    let provider =
+        match ProviderConfig::from_auth(AuthChoice::DeepSeek, None, None, &ProviderEnv::empty()) {
+            Ok(provider) => provider,
+            Err(error) => {
+                eprintln!(
+                    "skipping DeepSeek/OpenAI request oracle: no DeepSeek key available ({error}); \
                  set TEMPER_DEEPSEEK_API_KEY or TEMPER_DEEPSEEK_API_KEY_PATH"
-            );
-            return;
-        }
-    };
+                );
+                return;
+            }
+        };
     run_leg(
         "deepseek/openai",
         "openai",
@@ -99,7 +100,12 @@ fn run_anthropic_oauth_leg() {
         );
         return;
     }
-    let provider = match ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, None) {
+    let provider = match ProviderConfig::from_auth(
+        AuthChoice::AnthropicOAuth,
+        None,
+        None,
+        &ProviderEnv::empty(),
+    ) {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!(
@@ -118,7 +124,12 @@ fn run_chatgpt_codex_oauth_leg() {
         );
         return;
     }
-    let provider = match ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, None, None) {
+    let provider = match ProviderConfig::from_auth(
+        AuthChoice::ChatGptOAuth,
+        None,
+        None,
+        &ProviderEnv::empty(),
+    ) {
         Ok(provider) => provider,
         Err(error) => {
             eprintln!(

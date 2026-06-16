@@ -28,7 +28,10 @@ fn write_fixture(contents: &str) -> Fixture {
     ));
     std::fs::write(&path, contents).expect("write fixture");
     Fixture {
-        settings: AnthropicOAuthSettings { auth_file: path },
+        settings: AnthropicOAuthSettings {
+            auth_file: path,
+            token_url: None,
+        },
     }
 }
 

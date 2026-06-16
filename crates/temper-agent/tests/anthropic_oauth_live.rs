@@ -13,7 +13,7 @@
 use std::time::Instant;
 
 use serde::Deserialize;
-use temper_agent::{AuthChoice, ProviderConfig, run_decision};
+use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv, run_decision};
 
 #[path = "support/workflow_role_fixture.rs"]
 mod workflow_role_fixture;
@@ -39,8 +39,13 @@ fn anthropic_oauth_validation() {
         return;
     }
 
-    let provider = ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, None)
-        .expect("Anthropic OAuth provider builds (run `pi /login anthropic` first)");
+    let provider = ProviderConfig::from_auth(
+        AuthChoice::AnthropicOAuth,
+        None,
+        None,
+        &ProviderEnv::empty(),
+    )
+    .expect("Anthropic OAuth provider builds (run `pi /login anthropic` first)");
     eprintln!("[anthropic] model id: {}", provider.model_id());
 
     let role = role_manifest(

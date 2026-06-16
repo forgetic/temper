@@ -1,34 +1,38 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The worker ↔ agent protocol driver: read the context, run the native coding
-//! loop in cwd (checkpointing on writable jobs), write the result.
+//! The worker ↔ agent protocol driver: drive the native coding loop in cwd
+//! (checkpointing on writable jobs) and write the result.
+//!
+//! Every input — the [`AgentConfig`], the [`WorkspaceContext`], the cwd, and the
+//! result-file path — is supplied by [`crate::entry`], the single env-reading
+//! module. Nothing here touches `std::env`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use temper_agent::{CodingAgentError, ProviderConfig, run_coding_agent_native_with_hooks};
+use temper_agent::{CodingAgentError, run_coding_agent_native_with_hooks};
 use temper_agent_protocol::{
-    CONTEXT_ENV, PROTOCOL_VERSION, RESULT_ENV, StepProgress, StepState, WorkspaceContext,
-    WorkspaceResult,
+    PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext, WorkspaceResult,
 };
 
 use crate::checkpoint::Checkpointer;
 use crate::config::AgentConfig;
-use crate::options::Options;
 use crate::progress::emit;
 
-pub(crate) fn run<I>(args: I) -> Result<(), String>
-where
-    I: Iterator<Item = String>,
-{
-    let options = Options::parse(args)?;
-
-    let result_path = std::env::var(RESULT_ENV)
-        .map_err(|_| format!("missing required env var {RESULT_ENV} (result file path)"))?;
-    let context = read_context()?;
-
-    // Emit the Started checkpoint before any preamble (auth, cwd) so the worker
-    // sees the correlation/start even if credential preflight fails.
+/// Drives one protocol run from fully-resolved inputs.
+///
+/// `config` carries the provider wiring + the host-derived session knobs;
+/// `context` is the already-parsed workspace context; `cwd` is the prepared
+/// checkout the worker handed us; `result_path` is the file the result is written
+/// to. All four are resolved (and the env read) in [`crate::entry`].
+pub(crate) fn drive(
+    config: AgentConfig,
+    context: WorkspaceContext,
+    cwd: PathBuf,
+    result_path: String,
+) -> Result<(), String> {
+    // Emit the Started checkpoint before any preamble so the worker sees the
+    // correlation/start even if the coding loop fails early.
     emit(&StepProgress {
         correlation_key: context.correlation_key.clone(),
         step: 1,
@@ -38,48 +42,11 @@ where
         note: Some(format!("protocol v{PROTOCOL_VERSION}")),
     });
 
-    let config = agent_config(options)?;
-
-    // The checkout is our cwd: the worker runs us there, exactly as the legacy
-    // file-protocol coder was run.
-    let cwd = std::env::current_dir().map_err(|error| format!("resolve cwd: {error}"))?;
-
-    let (checkpointer, resume_note) = prepare_checkpointer(&cwd, &context);
+    let (checkpointer, resume_note) = prepare_checkpointer(&cwd, &context, &config);
     let result = drive_coding_loop(&config, &context, &cwd, checkpointer.clone(), resume_note)
         .map_err(|error| describe_agent_error(&error))?;
 
     finalize(&result_path, &context, checkpointer.as_deref(), &result)
-}
-
-/// Assembles the agent's per-subsystem config from the parsed options.
-///
-/// Provider/model/credential wiring comes from flags (`--auth`, …) and the
-/// worker-injected environment (model ids, base-URL override, the materialized
-/// OAuth `auth.json` path). `apply_base_url_override_from_env` honors the
-/// config-file `[agent.providers.*] url` the worker forwards. The host-supplied
-/// deadline/capture/checkpoint-cadence fields keep their existing read sites for
-/// now (issue #201 relocates them onto the config), so they default here.
-fn agent_config(options: Options) -> Result<AgentConfig, String> {
-    let provider = ProviderConfig::from_auth(options.auth, options.codex_model, options.auth_file)
-        .map_err(|error| format!("provider preflight: {error}"))?
-        .apply_base_url_override_from_env();
-    Ok(AgentConfig::new(
-        provider,
-        options.max_iterations,
-        options.enable_subagents,
-        options.config_dir,
-    ))
-}
-
-/// Reads and parses the [`WorkspaceContext`] from the file named by
-/// [`CONTEXT_ENV`].
-fn read_context() -> Result<WorkspaceContext, String> {
-    let context_path = std::env::var(CONTEXT_ENV)
-        .map_err(|_| format!("missing required env var {CONTEXT_ENV} (context file path)"))?;
-    let context_bytes = std::fs::read(&context_path)
-        .map_err(|error| format!("read context file {context_path}: {error}"))?;
-    serde_json::from_slice(&context_bytes)
-        .map_err(|error| format!("parse context file {context_path}: {error}"))
 }
 
 /// Builds the checkpointer for writable jobs, recovers any prior pushed
@@ -88,6 +55,7 @@ fn read_context() -> Result<WorkspaceContext, String> {
 fn prepare_checkpointer(
     cwd: &Path,
     context: &WorkspaceContext,
+    config: &AgentConfig,
 ) -> (Option<Arc<Checkpointer>>, Option<String>) {
     // Writable jobs checkpoint: commit + push at turn boundaries, resume from
     // prior checkpoints found on the prepared branch. Read-only jobs never
@@ -97,7 +65,15 @@ fn prepare_checkpointer(
         .as_deref()
         .map(|capability| capability == "writable")
         .unwrap_or(true);
-    let checkpointer = writable.then(|| Arc::new(Checkpointer::new(cwd, context)));
+    let checkpointer = writable.then(|| {
+        Arc::new(Checkpointer::new(
+            cwd,
+            context,
+            &config.role_identity,
+            config.deadline,
+            config.checkpoint_interval,
+        ))
+    });
     let resume = checkpointer
         .as_deref()
         .and_then(Checkpointer::detect_resume);
