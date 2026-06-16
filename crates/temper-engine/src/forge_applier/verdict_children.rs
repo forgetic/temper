@@ -24,13 +24,14 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     ) -> bool {
         let Some(effect_index) = create_issues_effect_index(self.workflow.as_ref(), binding.routed)
         else {
-            eprintln!(
-                "temper-daemon: forge applier ignored verdict children without create_issues effect for job_id={} repo={} issue={} routed={} children={}",
-                binding.job.job_id,
-                binding.job.repo,
-                binding.number,
-                binding.routed,
-                binding.children.len()
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %binding.job.job_id,
+                repo = %binding.job.repo,
+                issue = %binding.number,
+                routed = %binding.routed,
+                children = binding.children.len(),
+                "forge applier ignored verdict children without create_issues effect"
             );
             return true;
         };
@@ -110,9 +111,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         target_repo: &str,
     ) -> Option<Repository> {
         let Some(path) = parse_child_target_repo(target_repo) else {
-            eprintln!(
-                "temper-daemon: forge applier dropped verdict apply with malformed child target_repo for job_id={} repo={} issue={} target_repo={}",
-                job.job_id, job.repo, number, target_repo
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                issue = %number,
+                child_target_repo = %target_repo,
+                "forge applier dropped verdict apply with malformed child target_repo"
             );
             return None;
         };
@@ -120,16 +125,27 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         match self.forge.get_repository_by_path(&path).await {
             Ok(Some(repository)) => Some(repository),
             Ok(None) => {
-                eprintln!(
-                    "temper-daemon: forge applier dropped verdict apply with unknown child target_repo for job_id={} repo={} issue={} source_repo={} target_repo={}",
-                    job.job_id, job.repo, number, source_repo, target_repo
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %number,
+                    source_repo = %source_repo,
+                    child_target_repo = %target_repo,
+                    "forge applier dropped verdict apply with unknown child target_repo"
                 );
                 None
             }
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier dropped verdict apply after child target_repo lookup failed for job_id={} repo={} issue={} source_repo={} target_repo={}: {error}",
-                    job.job_id, job.repo, number, source_repo, target_repo
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %number,
+                    source_repo = %source_repo,
+                    child_target_repo = %target_repo,
+                    %error,
+                    "forge applier dropped verdict apply after child target_repo lookup failed"
                 );
                 None
             }

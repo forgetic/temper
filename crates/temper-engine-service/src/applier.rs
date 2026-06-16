@@ -59,10 +59,11 @@ pub fn result_applier(
         }
     }
 
-    eprintln!(
-        "temper-engine: role identities routed={} fallback={}",
-        role_list(&routed),
-        role_list(&fallback)
+    tracing::info!(
+        target: "temper_engine",
+        routed = %role_list(&routed),
+        fallback = %role_list(&fallback),
+        "role identities"
     );
 
     Arc::new(routing)

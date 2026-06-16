@@ -8,6 +8,7 @@ description = "Shared CLI plumbing for the temper subcommand crates: the Prompte
 
 [dependencies]
 temper-config = { path = "../temper-config" }
+tracing = { workspace = true }
 # The ONLY new dependency in the CLI split, and confined to this crate: rpassword
 # localizes the termios no-echo concern (the workspace forbids `unsafe`, which a
 # hand-rolled hidden-input reader would need). Both the output sink and the

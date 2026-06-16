@@ -115,16 +115,16 @@ pub fn run_http(
     runtime: &temper_engine_io::EngineRuntime,
 ) -> Result<(), InteractionServiceError> {
     let listener = TcpListener::bind(bind)?;
-    eprintln!("temper-interaction: serving on {bind}");
+    tracing::info!(target: "temper_interaction", %bind, "serving");
     let app = std::sync::Arc::new(app);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 if let Err(error) = handle_connection(stream, &app, runtime) {
-                    eprintln!("temper-interaction: {error}");
+                    tracing::warn!(target: "temper_interaction", %error, "request handling failed");
                 }
             }
-            Err(error) => eprintln!("temper-interaction: accept failed: {error}"),
+            Err(error) => tracing::warn!(target: "temper_interaction", %error, "accept failed"),
         }
     }
     Ok(())

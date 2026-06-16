@@ -29,9 +29,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
 
         if result.repos.is_empty() {
-            eprintln!(
-                "temper-daemon: forge applier ignored success result with no repo outcomes for job_id={} repo={} artifact.kind={} artifact.item={}",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                "forge applier ignored success result with no repo outcomes"
             );
             return;
         }
@@ -46,9 +50,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let context = match serde_json::from_value::<JobContext>(job.job_payload.clone()) {
             Ok(context) => context,
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier could not parse JobContext for job_id={} repo={} issue={}: {error}",
-                    job.job_id, job.repo, number
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    issue = %number,
+                    %error,
+                    "forge applier could not parse JobContext"
                 );
                 return;
             }
@@ -102,9 +110,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         opened: &mut BTreeMap<String, (RepositoryId, ItemNumber)>,
     ) {
         if outcome.branch.name.trim().is_empty() {
-            eprintln!(
-                "temper-daemon: forge applier ignored blank branch in repo outcome for job_id={} repo={} outcome_repo={}",
-                set.job.job_id, set.job.repo, outcome.repo
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %set.job.job_id,
+                repo = %set.job.repo,
+                outcome_repo = %outcome.repo,
+                "forge applier ignored blank branch in repo outcome"
             );
             return;
         }
@@ -149,9 +160,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                     (target_repository.id.clone(), ensured.artifact().number),
                 );
             }
-            Err(error) => eprintln!(
-                "temper-daemon: forge applier ensure_pull_request failed for job_id={} repo={} issue={} target_repo={} coordination_key={}: {error}",
-                set.job.job_id, set.job.repo, set.number, outcome.repo, set.coordination_key
+            Err(error) => tracing::error!(
+                target: "temper_daemon",
+                job_id = %set.job.job_id,
+                repo = %set.job.repo,
+                issue = %set.number,
+                target_repo = %outcome.repo,
+                coordination_key = %set.coordination_key,
+                %error,
+                "forge applier ensure_pull_request failed"
             ),
         }
     }
@@ -165,9 +182,11 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         path: &str,
     ) -> Option<Repository> {
         let Some((owner, name)) = path.split_once('/') else {
-            eprintln!(
-                "temper-daemon: forge applier ignored malformed repo outcome path for job_id={} outcome_repo={path}",
-                job.job_id
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                outcome_repo = %path,
+                "forge applier ignored malformed repo outcome path"
             );
             return None;
         };
@@ -178,16 +197,21 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         {
             Ok(Some(repository)) => Some(repository),
             Ok(None) => {
-                eprintln!(
-                    "temper-daemon: forge applier repo outcome repository not found for job_id={} outcome_repo={path}",
-                    job.job_id
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    outcome_repo = %path,
+                    "forge applier repo outcome repository not found"
                 );
                 None
             }
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier repo outcome lookup failed for job_id={} outcome_repo={path}: {error}",
-                    job.job_id
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    outcome_repo = %path,
+                    %error,
+                    "forge applier repo outcome lookup failed"
                 );
                 None
             }

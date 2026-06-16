@@ -313,9 +313,9 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
                 skip @ (EnrichOutcome::SkipTerminalArtifact
                 | EnrichOutcome::SkipExistingPullRequest),
             ) => {
-                eprintln!("{}", skip_log_line(&repo_label, role, item, skip));
+                tracing::debug!("{}", skip_log_line(&repo_label, role, item, skip));
             }
-            Err(error) => eprintln!(
+            Err(error) => tracing::debug!(
                 "{}",
                 enrichment_failure_log_line(&repo_label, role, item, &error)
             ),

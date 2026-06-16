@@ -17,6 +17,7 @@ path = "src/bin/temper-testing-daemon-worker.rs"
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+tracing = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 temper-forge-model = { path = "../temper-forge-model" }

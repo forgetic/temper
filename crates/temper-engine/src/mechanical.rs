@@ -61,7 +61,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
             config.repositories.repositories().len(),
             journals.len()
         ));
-        eprintln!("temper-daemon: mechanical backstop tick failed: {error}");
+        tracing::warn!(target: "temper_daemon", %error, "mechanical backstop tick failed");
         return Err(error);
     }
 
@@ -85,7 +85,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
         Ok(worker) => worker,
         Err(error) => {
             let error = setup_error(format!("mechanical backstop setup failed: {error}"));
-            eprintln!("temper-daemon: mechanical backstop tick failed: {error}");
+            tracing::warn!(target: "temper_daemon", %error, "mechanical backstop tick failed");
             return Err(error);
         }
     };
@@ -97,7 +97,7 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
     match report.into_worker_result() {
         Ok(progress) => Ok(progress),
         Err(error) => {
-            eprintln!("temper-daemon: mechanical backstop tick failed: {error}");
+            tracing::warn!(target: "temper_daemon", %error, "mechanical backstop tick failed");
             Err(error)
         }
     }

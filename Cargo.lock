@@ -1386,6 +1386,7 @@ dependencies = [
  "temper-agent-protocol",
  "temper-process-protocol",
  "tongs",
+ "tracing",
  "uuid",
 ]
 
@@ -1435,6 +1436,7 @@ dependencies = [
  "temper-agent-io",
  "temper-agent-protocol",
  "temper-log",
+ "tracing",
 ]
 
 [[package]]
@@ -1464,6 +1466,7 @@ version = "0.1.0"
 dependencies = [
  "rpassword",
  "temper-config",
+ "tracing",
 ]
 
 [[package]]
@@ -1541,6 +1544,7 @@ dependencies = [
  "temper-worker-protocol",
  "temper-worker-registry",
  "temper-workflow",
+ "tracing",
 ]
 
 [[package]]
@@ -1565,6 +1569,7 @@ dependencies = [
  "temper-log",
  "temper-reference-delivery",
  "temper-workflow",
+ "tracing",
 ]
 
 [[package]]
@@ -1605,6 +1610,7 @@ dependencies = [
  "temper-forge-model",
  "temper-workflow",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -1667,6 +1673,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-memory",
  "temper-interaction",
+ "tracing",
 ]
 
 [[package]]
@@ -1751,6 +1758,7 @@ dependencies = [
  "temper-process-protocol",
  "temper-testing",
  "temper-workflow",
+ "tracing",
 ]
 
 [[package]]
@@ -1795,6 +1803,7 @@ dependencies = [
  "temper-wake",
  "temper-worker-protocol",
  "temper-workflow",
+ "tracing",
 ]
 
 [[package]]
@@ -1808,6 +1817,7 @@ dependencies = [
  "temper-forge",
  "temper-runner",
  "temper-wake",
+ "tracing",
 ]
 
 [[package]]
@@ -1819,6 +1829,7 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-runner",
+ "tracing",
 ]
 
 [[package]]
@@ -1835,6 +1846,7 @@ dependencies = [
  "temper-worker-protocol",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

@@ -413,7 +413,7 @@ fn log_automation_item(
             .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
             .string_array("diagnostic_classes", diagnostic_classes);
     }
-    eprintln!("{}", event.render());
+    tracing::info!(target: "temper_runner", "{}", event.render());
 }
 
 fn log_merge_conflict_route(
@@ -448,7 +448,7 @@ fn log_merge_conflict_route(
             .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
             .string_array("diagnostic_classes", diagnostic_classes);
     }
-    eprintln!("{}", event.render());
+    tracing::info!(target: "temper_runner", "{}", event.render());
 }
 
 fn log_workspace_item(
@@ -487,7 +487,7 @@ fn log_workspace_item(
             .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
             .string_array("diagnostic_classes", diagnostic_classes);
     }
-    eprintln!("{}", event.render());
+    tracing::info!(target: "temper_runner", "{}", event.render());
 }
 
 fn provider_message_summary(message: &str) -> String {
@@ -511,7 +511,8 @@ fn log_automation_summary(
     counts: &AutomationCounts,
     progress: Progress,
 ) {
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         StructuredEvent::new("mechanical_automation_summary")
             .string("worker_kind", "mechanical")

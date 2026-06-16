@@ -66,15 +66,17 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
             .await
         {
             Ok(count) => total += count,
-            Err(error) => eprintln!(
-                "temper-daemon: poll backstop scan failed for repo={} role={}: {error}",
-                target.repo,
-                target.role.as_str()
+            Err(error) => tracing::warn!(
+                target: "temper_daemon",
+                repo = %target.repo,
+                role = %target.role.as_str(),
+                %error,
+                "poll backstop scan failed"
             ),
         }
     }
     if total > 0 {
-        eprintln!("{}", poll_backstop_log_line(total));
+        tracing::debug!(target: "temper_daemon", "{}", poll_backstop_log_line(total));
     }
     total
 }

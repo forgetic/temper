@@ -91,9 +91,11 @@ pub(super) fn known_hints_for(
             .matching_hints(std::slice::from_ref(hint))
             .is_empty()
         {
-            eprintln!(
-                "temper-testing-worker: wake hint for unconfigured repo {}/{}; treating wake as broad scan if no configured hints remain",
-                hint.repo.owner, hint.repo.name
+            tracing::warn!(
+                target: "temper_testing_worker",
+                repo_owner = %hint.repo.owner,
+                repo_name = %hint.repo.name,
+                "wake hint for unconfigured repo; treating wake as broad scan if no configured hints remain"
             );
         } else {
             known.push(hint.clone());

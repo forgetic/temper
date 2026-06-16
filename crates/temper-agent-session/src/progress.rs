@@ -18,6 +18,8 @@ pub(crate) fn emit(progress: &StepProgress) {
             let _ = writeln!(stdout, "{line}");
             let _ = stdout.flush();
         }
-        Err(error) => eprintln!("temper-agent: serialize step-progress: {error}"),
+        Err(error) => {
+            tracing::warn!(target: "temper_agent", %error, "serialize step-progress")
+        }
     }
 }

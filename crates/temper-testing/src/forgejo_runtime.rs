@@ -127,7 +127,7 @@ impl TriggerServer {
         std::thread::spawn(move || {
             if let Err(error) = temper_trigger_forgejo::trigger::run_with_listener(&args, listener)
             {
-                eprintln!("Forgejo test trigger exited: {error}");
+                tracing::warn!(%error, "Forgejo test trigger exited");
             }
         });
         Self { addr }

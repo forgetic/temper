@@ -135,7 +135,7 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport> temper_worker_io::Exe
                 });
             }
             WorkerRequest::Log(line) => {
-                eprintln!("{line}");
+                tracing::info!(target: "temper_worker", "{line}");
             }
         }
     }

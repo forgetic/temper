@@ -53,17 +53,28 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         ) {
             Ok(context) => context,
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier could not parse JobContext for job_id={} repo={} artifact.kind={} artifact.item={}: {error}",
-                    job.job_id, job.repo, job.artifact.kind, job.artifact.item
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    %error,
+                    "forge applier could not parse JobContext"
                 );
                 return;
             }
         };
         let Some(action) = job_context.action.as_deref() else {
-            eprintln!(
-                "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} verdict={}: missing action in JobContext",
-                job.job_id, job.repo, job.artifact.kind, job.artifact.item, job.role, verdict
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                role = %job.role,
+                verdict = %verdict,
+                "forge applier could not route verdict: missing action in JobContext"
             );
             return;
         };
@@ -71,41 +82,44 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let role_id = RoleId::new(job.role.as_str());
         let verdict_id = VerdictId::new(verdict.as_str());
         let Some(role) = self.compiled.role(&role_id) else {
-            eprintln!(
-                "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: role not found in compiled workflow",
-                job.job_id,
-                job.repo,
-                job.artifact.kind,
-                job.artifact.item,
-                job.role,
-                action,
-                verdict
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                role = %job.role,
+                action = %action,
+                verdict = %verdict,
+                "forge applier could not route verdict: role not found in compiled workflow"
             );
             return;
         };
         let Some(tool) = role.tools.iter().find(|tool| tool.name == action) else {
-            eprintln!(
-                "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: action not found in compiled workflow",
-                job.job_id,
-                job.repo,
-                job.artifact.kind,
-                job.artifact.item,
-                job.role,
-                action,
-                verdict
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                role = %job.role,
+                action = %action,
+                verdict = %verdict,
+                "forge applier could not route verdict: action not found in compiled workflow"
             );
             return;
         };
         let Some(routed) = tool.outcomes.get(&verdict_id).cloned() else {
-            eprintln!(
-                "temper-daemon: forge applier could not route verdict for job_id={} repo={} artifact.kind={} artifact.item={} role={} action={} verdict={}: verdict is not declared for action",
-                job.job_id,
-                job.repo,
-                job.artifact.kind,
-                job.artifact.item,
-                job.role,
-                action,
-                verdict
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                role = %job.role,
+                action = %action,
+                verdict = %verdict,
+                "forge applier could not route verdict: verdict is not declared for action"
             );
             return;
         };
@@ -136,9 +150,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 .await;
             }
             _ => {
-                eprintln!(
-                    "temper-daemon: forge applier ignored unsupported verdict job for job_id={} repo={} artifact.kind={} artifact.item={}",
-                    job.job_id, job.repo, job.artifact.kind, job.artifact.item
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    artifact_kind = %job.artifact.kind,
+                    artifact_item = %job.artifact.item,
+                    "forge applier ignored unsupported verdict job"
                 );
             }
         }
@@ -262,16 +280,18 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             Ok(_) => {}
             Err(error) if is_stale(&error) => {}
             Err(error) => {
-                eprintln!(
-                    "temper-daemon: forge applier could not apply routed verdict transition for job_id={} repo={} {}={} role={} action={} verdict={} routed={}: {error}",
-                    apply.job.job_id,
-                    apply.job.repo,
-                    apply.artifact_label,
-                    apply.number,
-                    apply.job.role,
-                    apply.action,
-                    apply.verdict,
-                    apply.routed
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %apply.job.job_id,
+                    repo = %apply.job.repo,
+                    artifact_label = %apply.artifact_label,
+                    number = %apply.number,
+                    role = %apply.job.role,
+                    action = %apply.action,
+                    verdict = %apply.verdict,
+                    routed = %apply.routed,
+                    %error,
+                    "forge applier could not apply routed verdict transition"
                 );
             }
         }

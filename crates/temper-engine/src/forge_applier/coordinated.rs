@@ -44,8 +44,11 @@ impl CoordinatedSet<'_> {
                             *prereq_number,
                         ));
                     }
-                    None => eprintln!(
-                        "temper-daemon: coordinated landing prerequisite {prerequisite} for {repo} opened no pull request (no diff); not gating on it"
+                    None => tracing::warn!(
+                        target: "temper_daemon",
+                        prerequisite = %prerequisite,
+                        repo = %repo,
+                        "coordinated landing prerequisite opened no pull request (no diff); not gating on it"
                     ),
                 }
             }

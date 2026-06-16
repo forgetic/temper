@@ -330,7 +330,8 @@ fn log_mechanical_reconciliation(
     report: &temper_workflow::ReconcileReport,
 ) {
     for (finding, action) in report.findings.iter().zip(report.actions.iter()) {
-        eprintln!(
+        tracing::info!(
+            target: "temper_runner",
             "{}",
             render_mechanical_reconciliation_event(&MechanicalReconciliationEvent {
                 worker,
@@ -350,7 +351,8 @@ fn log_mechanical_reconciliation_summary(
     outcome: &ApplyOutcome,
     progress: Progress,
 ) {
-    eprintln!(
+    tracing::info!(
+        target: "temper_runner",
         "{}",
         StructuredEvent::new("mechanical_reconciliation_summary")
             .string("worker_kind", "mechanical")

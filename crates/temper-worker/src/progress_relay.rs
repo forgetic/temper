@@ -66,7 +66,7 @@ impl DaemonRelayProgressSink {
 
 impl ProgressSink for DaemonRelayProgressSink {
     fn report(&self, progress: StepProgress) {
-        println!("{}", crate::observability::step_progress_line(&progress));
+        tracing::info!(target: "temper_worker", "{}", crate::observability::step_progress_line(&progress));
 
         let message = progress_message(&self.worker_id, &progress);
         let call = HttpCall {
@@ -85,14 +85,21 @@ impl ProgressSink for DaemonRelayProgressSink {
             match http_call(&cx, &http, call).await {
                 Ok(response) if (200..300).contains(&response.status) => {}
                 Ok(response) => {
-                    eprintln!(
-                        "temper-worker: progress relay dropped (daemon HTTP {}) correlation={correlation} step={step}",
+                    tracing::warn!(
+                        target: "temper_worker",
+                        correlation = %correlation,
+                        step = %step,
+                        status = response.status,
+                        "progress relay dropped (daemon HTTP {})",
                         response.status
                     );
                 }
                 Err(error) => {
-                    eprintln!(
-                        "temper-worker: progress relay dropped ({error}) correlation={correlation} step={step}"
+                    tracing::warn!(
+                        target: "temper_worker",
+                        correlation = %correlation,
+                        step = %step,
+                        "progress relay dropped ({error})"
                     );
                 }
             }
