@@ -83,24 +83,6 @@ pub struct LoadedPaths {
     pub credentials: Option<PathBuf>,
 }
 
-/// Loads + resolves the deployment from the **real** process environment.
-///
-/// Binary-only shim: it snapshots `std::env` (via [`PathResolver::from_system`]
-/// and [`SystemEnv`]) and delegates to the hermetic [`load_explicit`]. Its only
-/// callers are the binaries' composition roots (`src/bin/*`, [`service_main`]);
-/// everything else builds [`LoadInputs`] explicitly so it never discovers the
-/// operator's global config. See [`inputs`] for the hermeticity contract.
-#[doc(hidden)]
-pub fn load(options: &LoadOptions) -> Result<(Resolved, LoadedPaths), ConfigError> {
-    let paths = PathResolver::from_system();
-    load_explicit(&LoadInputs {
-        explicit_config: options.config.clone(),
-        explicit_credentials: options.credentials.clone(),
-        env: &SystemEnv,
-        paths: &paths,
-    })
-}
-
 /// Loads + resolves with an explicit environment source (testable seam).
 ///
 /// Default-location discovery follows the **injected** `env`: the
@@ -203,14 +185,22 @@ pub const EX_USAGE: u8 = 64;
 /// The shared entry point for a slim per-service binary.
 ///
 /// Parses the common `--config` / `--credentials` / `--help` / `--version`
-/// flags, loads + resolves the deployment from the process environment, and
+/// flags, loads + resolves the deployment from the **injected** environment
+/// snapshot (`env` / `paths`, captured by the binary's composition root), and
 /// hands the [`Resolved`] to `run`. This is the *entire* body of each slim
 /// binary's `main` — the proof that a per-service binary needs no plumbing
-/// beyond naming its service and its runner.
+/// beyond naming its service, snapshotting its env, and naming its runner.
+///
+/// Hermeticity: an explicit `--config` / `--credentials` suppresses default
+/// `~/.config/temper` discovery (an empty [`PathResolver`] is used), so the
+/// operator's global credentials never ambiently layer in behind an explicit
+/// deployment — matching the unified `temper daemon` path.
 pub fn service_main(
     name: &str,
     usage: &str,
     args: impl IntoIterator<Item = String>,
+    env: &impl EnvLookup,
+    paths: &PathResolver,
     run: impl FnOnce(&Resolved) -> Result<(), String>,
 ) -> std::process::ExitCode {
     use std::process::ExitCode;
@@ -234,7 +224,16 @@ pub fn service_main(
         eprintln!("{name}: unexpected argument `{unknown}`\n\n{usage}");
         return ExitCode::from(EX_USAGE);
     }
-    let (resolved, _paths) = match load(&parsed.options) {
+    let explicit = parsed.options.config.is_some() || parsed.options.credentials.is_some();
+    let empty = PathResolver::default();
+    let discovery: &PathResolver = if explicit { &empty } else { paths };
+    let loaded = load_explicit(&LoadInputs {
+        explicit_config: parsed.options.config.clone(),
+        explicit_credentials: parsed.options.credentials.clone(),
+        env,
+        paths: discovery,
+    });
+    let (resolved, _paths) = match loaded {
         Ok(loaded) => loaded,
         Err(error) => {
             eprintln!("{name}: {error}");

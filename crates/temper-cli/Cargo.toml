@@ -15,6 +15,8 @@ temper-log = { path = "../temper-log" }
 
 # Config (for EX_USAGE) + the per-subcommand crates the dispatcher delegates to.
 temper-config = { path = "../temper-config" }
+# Shared CLI plumbing: the CliEnv snapshot + env/paths re-exports.
+temper-cli-common = { path = "../temper-cli-common" }
 temper-cli-init = { path = "../temper-cli-init" }
 temper-cli-config = { path = "../temper-cli-config" }
 temper-cli-daemon = { path = "../temper-cli-daemon" }

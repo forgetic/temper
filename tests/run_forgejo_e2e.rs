@@ -256,12 +256,23 @@ fn spawn_temper_run(
     );
     std::fs::write(&config_path, config).expect("write run config");
 
+    // Hermeticity: point HOME / XDG_* at an isolated, empty dir under the temp
+    // workspace so the spawned daemon can never discover the developer's or CI
+    // user's global ~/.config/temper/credentials.toml. With the explicit
+    // --config the daemon already suppresses default discovery (issue #202), but
+    // isolating HOME makes the test independent of the box it runs on.
+    let fake_home = workspace.join("home");
+    std::fs::create_dir_all(fake_home.join(".config")).expect("fake home creates");
+
     let log_file = log_file(log);
     let engineer_upper = ENGINEER.to_uppercase();
     let child = Command::new(env!("CARGO_BIN_EXE_temper"))
         .arg("daemon")
         .arg("--config")
         .arg(&config_path)
+        .env("HOME", &fake_home)
+        .env("XDG_CONFIG_HOME", fake_home.join(".config"))
+        .env("XDG_STATE_HOME", fake_home.join(".local/state"))
         // Forge connection (token is secret -> env).
         .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
         .env("FORGEJO_USERNAME", &engineer.user)

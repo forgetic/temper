@@ -7,7 +7,7 @@
 use std::process::ExitCode;
 
 /// `temper provision-forgejo` — provision a Forgejo instance for a workflow.
-pub fn provision_forgejo(args: std::env::Args) -> ExitCode {
+pub fn provision_forgejo(args: Vec<String>) -> ExitCode {
     use temper_provision_forgejo_cli::provision_args::{self, ParseOutcome};
     match provision_args::parse(args) {
         Ok(ParseOutcome::Help) => {
@@ -32,7 +32,7 @@ pub fn provision_forgejo(args: std::env::Args) -> ExitCode {
 }
 
 /// `temper trigger-forgejo` — trigger a Forgejo role feed.
-pub fn trigger_forgejo(args: std::env::Args) -> ExitCode {
+pub fn trigger_forgejo(args: Vec<String>) -> ExitCode {
     use temper_trigger_forgejo::trigger_args::{self, ParseOutcome};
     match trigger_args::parse(args) {
         Ok(ParseOutcome::Help) => {
@@ -54,7 +54,7 @@ pub fn trigger_forgejo(args: std::env::Args) -> ExitCode {
 }
 
 /// `temper validate-reference-delivery` — validate a reference-delivery run.
-pub fn validate_reference_delivery(args: std::env::Args) -> ExitCode {
+pub fn validate_reference_delivery(args: Vec<String>) -> ExitCode {
     use temper_reference_delivery_validator::reference_delivery_validator::{
         self, ParseOutcome, RunError,
     };
@@ -85,7 +85,7 @@ pub fn validate_reference_delivery(args: std::env::Args) -> ExitCode {
 }
 
 /// `temper interaction` — interactive responder (REPL or serve).
-pub fn interaction(args: std::env::Args) -> ExitCode {
+pub fn interaction(args: Vec<String>) -> ExitCode {
     use temper_interaction_service::interaction_args::{self, ParseOutcome};
     match interaction_args::parse(args) {
         Ok(ParseOutcome::Help) => {

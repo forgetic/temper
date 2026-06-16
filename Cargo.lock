@@ -1448,6 +1448,7 @@ dependencies = [
  "temper-agent",
  "temper-agent-io",
  "temper-agent-session",
+ "temper-cli-common",
  "temper-cli-config",
  "temper-cli-daemon",
  "temper-cli-init",

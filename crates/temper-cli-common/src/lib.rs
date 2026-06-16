@@ -27,7 +27,28 @@ pub use prompt::{Prompter, ScriptedPrompter, TerminalPrompter};
 
 // Re-exported from `temper-config` so subcommand crates parse the common flags
 // the same way without each depending on `temper-config` directly.
-pub use temper_config::{CommonArgs, EX_USAGE, LoadOptions, parse_common_args};
+pub use temper_config::{
+    CommonArgs, EX_USAGE, EnvLookup, EnvMap, LoadOptions, PathResolver, parse_common_args,
+};
+
+/// The environment snapshot every CLI subcommand is dispatched with.
+///
+/// Built once at the binary boundary by `boot()` in `src/bin/temper.rs`
+/// (`std::env::args` / [`EnvMap::from_system`] / [`PathResolver::from_system`] /
+/// `current_dir`), then threaded down through dispatch. No library code reads
+/// the real environment: it takes the snapshot from here. This is the whole
+/// point of the config-centralization epic — `./src/bin/*` is the sole reader of
+/// real env/args, and everything below works off this plain-data snapshot.
+pub struct CliEnv {
+    /// The program arguments *after* `argv[0]` (`std::env::args().skip(1)`).
+    pub args: Vec<String>,
+    /// A snapshot of the process environment.
+    pub env: EnvMap,
+    /// The base directories (HOME / XDG_*) resolved once from `env`.
+    pub paths: PathResolver,
+    /// The process's current working directory.
+    pub cwd: PathBuf,
+}
 
 /// Pulls the value following a flag out of an iterator, erroring with the flag
 /// name when it is missing.
@@ -142,17 +163,18 @@ pub struct FileTargets {
 ///
 /// This is the single place a CLI turns "where should I read/write?" into
 /// concrete paths, honoring the same `--config` / `--credentials` / env /
-/// default precedence the loader uses.
-pub fn resolve_targets(options: &LoadOptions) -> Result<FileTargets, String> {
-    // Binary-facing helper: snapshot the real environment at this boundary.
-    // Full migration to injected inputs is issue #202.
-    let paths = temper_config::PathResolver::from_system();
-    let env = temper_config::SystemEnv;
+/// default precedence the loader uses. The environment is injected (the snapshot
+/// `src/bin` took): this helper never reads `std::env`.
+pub fn resolve_targets(
+    options: &LoadOptions,
+    env: &dyn EnvLookup,
+    paths: &PathResolver,
+) -> Result<FileTargets, String> {
     let config =
-        temper_config::config_path(options.config.clone(), &paths, &env).ok_or_else(|| {
+        temper_config::config_path(options.config.clone(), paths, env).ok_or_else(|| {
             "cannot determine a default config path (no HOME); pass --config".to_string()
         })?;
-    let credentials = temper_config::credentials_path(options.credentials.clone(), &paths, &env)
+    let credentials = temper_config::credentials_path(options.credentials.clone(), paths, env)
         .ok_or_else(|| {
             "cannot determine a default credentials path (no HOME); pass --credentials".to_string()
         })?;

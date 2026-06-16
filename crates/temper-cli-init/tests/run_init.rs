@@ -81,6 +81,7 @@ fn run_init_collects_writes_and_provisions_offline() {
         force: false,
         existing_repo: false,
         workspace: None,
+        ..Default::default()
     };
 
     let mut provisioner = StubProvisioner { seen: None };
@@ -190,6 +191,7 @@ fn run_init_refuses_to_clobber_without_force() {
         force: false,
         existing_repo: false,
         workspace: None,
+        ..Default::default()
     };
     let mut provisioner = StubProvisioner { seen: None };
     let err = run_init(&mut prompter, &mut provisioner, &opts).expect_err("clobber refused");
