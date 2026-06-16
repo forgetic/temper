@@ -81,6 +81,41 @@ fn parse_result_rejects_unparseable_prose() {
 }
 
 #[test]
+fn parse_result_skips_stray_prose_brace_before_result() {
+    // Regression for the #226 architect failure: the model narrated the change
+    // with an inline `tracing::info!{…}`-style brace span ahead of the real
+    // result envelope. The first balanced `{…}` is not the result, so a
+    // first-object parse fails at "key must be a string"; we must pick the last
+    // object that matches the result shape instead.
+    let text = "The change replaces info!{event: \"x\"} with debug!{event: \"x\"}. \
+                Result:\n{\"verdict\":\"ready_code\",\"body\":\"spec\"}";
+    let result = parse_result(text).expect("parses the real result, not the prose brace");
+    assert_eq!(result.verdict.as_deref(), Some("ready_code"));
+    assert_eq!(result.body.as_deref(), Some("spec"));
+}
+
+#[test]
+fn parse_result_prefers_last_matching_object() {
+    // Two schema-valid objects: the last one wins (the result is emitted last).
+    let text = "{\"summary\":\"draft\"}\nfinal:\n{\"verdict\":\"approve\",\"summary\":\"final\"}";
+    let result = parse_result(text).expect("parses");
+    assert_eq!(result.verdict.as_deref(), Some("approve"));
+    assert_eq!(result.summary.as_deref(), Some("final"));
+}
+
+#[test]
+fn parse_result_keeps_children_object_intact() {
+    // A nested object (children[]) must stay a single candidate, not be split
+    // into the inner child brace.
+    let text = "{\"verdict\":\"needs_breakdown\",\"children\":\
+                [{\"slug\":\"api\",\"title\":\"Add API\",\"body\":\"b\"}]}";
+    let result = parse_result(text).expect("parses nested object as one candidate");
+    assert_eq!(result.verdict.as_deref(), Some("needs_breakdown"));
+    assert_eq!(result.children.len(), 1);
+    assert_eq!(result.children[0].slug, "api");
+}
+
+#[test]
 fn validate_contract_engineer_requires_diff_or_verdict() {
     // No diff, no verdict ⇒ NoProduct. Use a temp dir that is not a git repo so
     // `git status` fails and `working_tree_has_changes` returns false.
