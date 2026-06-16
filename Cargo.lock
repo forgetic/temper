@@ -1767,6 +1767,8 @@ dependencies = [
  "temper-forge-memory",
  "temper-worker-protocol",
  "temper-workflow",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

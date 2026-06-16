@@ -20,6 +20,9 @@ temper-worker-protocol = { path = "../temper-worker-protocol" }
 temper-forge = { path = "../temper-forge" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 temper-workflow = { path = "../temper-workflow" }
+# Logging tests (issue #212) install a capturing subscriber via with_default.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
