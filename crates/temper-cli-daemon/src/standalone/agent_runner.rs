@@ -14,10 +14,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
 use temper_agent::{CodingAgentError, ProviderConfig, run_coding_agent_native_with_hooks};
 use temper_agent_protocol::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
+use temper_log::WorkItemRef;
+use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
 use temper_worker::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.
@@ -70,6 +73,23 @@ impl AgentRunner for InProcessAgentRunner {
             note: Some(format!("protocol v{PROTOCOL_VERSION} (in-process)")),
         });
 
+        // §7 agent boundary events. The `item` ref is the work-item subject tag
+        // (`[repo#n]` / `[repo PR#n]`); `kind` is the role's activity verb
+        // (architect→triage, engineer→coding). We emit `agent.started` here,
+        // up-front and synchronously — *before* the async block / model call —
+        // so the start line appears even if the run later stalls on the model.
+        let item = work_item_ref(context);
+        let kind = run_kind(&role);
+        let started = Instant::now();
+        if let Some(item) = item.as_ref() {
+            emit_agent_started(AgentStarted {
+                item,
+                role: &role,
+                kind,
+                detail: started_detail(kind),
+            });
+        }
+
         let handle = self.handle.clone();
         let provider = self.provider.clone();
         let max_iterations = self.max_iterations;
@@ -79,7 +99,7 @@ impl AgentRunner for InProcessAgentRunner {
         let cwd = cwd.to_path_buf();
 
         async move {
-            let result = run_coding_agent_native_with_hooks(
+            let outcome = run_coding_agent_native_with_hooks(
                 handle,
                 &provider,
                 &context,
@@ -94,7 +114,29 @@ impl AgentRunner for InProcessAgentRunner {
                 None,
             )
             .await
-            .map_err(classify_coding_agent_error)?;
+            .map_err(classify_coding_agent_error);
+
+            // §7 `agent.finished` on BOTH paths: a stalled/failed run still
+            // gets a `done in <dur> | <summary>` line so the agent plane never
+            // shows a dangling `start` with no terminus. The summary carries
+            // the verdict on success (e.g. `verdict=ready_code`) or the error
+            // classification on failure.
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if let Some(item) = item.as_ref() {
+                let summary = match &outcome {
+                    Ok(result) => result.summary.clone().unwrap_or_else(|| "done".to_string()),
+                    Err(error) => format!("failed: {}", error.message),
+                };
+                emit_agent_finished(AgentFinished {
+                    item,
+                    role: &role,
+                    kind,
+                    duration_ms,
+                    summary: &summary,
+                });
+            }
+
+            let result = outcome?;
 
             progress.report(StepProgress {
                 correlation_key: correlation,
@@ -108,6 +150,68 @@ impl AgentRunner for InProcessAgentRunner {
             Ok(result)
         }
     }
+}
+
+/// The §7 run-kind (`role/kind`) for a worker role.
+///
+/// The human renderer formats `role/kind` (e.g. `architect/triage`,
+/// `engineer/coding`). We map the role's *activity verb* here: architect
+/// triages, the engineer codes, the reviewer reviews. Unknown roles fall back
+/// to a neutral `run` so the line still reads sensibly.
+fn run_kind(role: &str) -> &'static str {
+    match role {
+        "architect" => "triage",
+        "engineer" => "coding",
+        "reviewer" => "review",
+        _ => "run",
+    }
+}
+
+/// The one-line `detail` for the `agent.started` line, per §7's examples.
+fn started_detail(kind: &str) -> &'static str {
+    match kind {
+        "triage" => "reading issue + repo context",
+        "coding" => "preparing workspace, implementing",
+        "review" => "reviewing changes",
+        _ => "running",
+    }
+}
+
+/// Builds the §7 work-item subject reference from the workspace context.
+///
+/// `repo` is the primary repository's bare `owner/name` path; the number and
+/// issue-vs-PR kind come from the work item. Returns `None` when there is no
+/// primary repo or the target number cannot be parsed — in that case the agent
+/// events are skipped rather than logged against a bogus `#0` ref.
+fn work_item_ref(context: &WorkspaceContext) -> Option<WorkItemRef> {
+    let repo = context.primary()?;
+    let repo_path = format!("{}/{}", repo.owner, repo.name);
+    let number = parse_target_number(&context.work_item.target)?;
+    let is_pr = context.work_item.kind == "pull_request";
+    Some(if is_pr {
+        WorkItemRef::pull_request(repo_path, number)
+    } else {
+        WorkItemRef::issue(repo_path, number)
+    })
+}
+
+/// Extracts the artifact number from a Debug-formatted target string.
+///
+/// The worker builds `target` as e.g. `Issue { number: ItemNumber(7) }` or
+/// `PullRequest { number: ItemNumber(44) }`
+/// ([`temper_worker`]'s context assembly). For robustness this also accepts the
+/// bare `number: 7` form some fixtures use. Returns `None` if no `number:`
+/// segment with a parseable integer is found, so the caller can skip the emit.
+fn parse_target_number(target: &str) -> Option<u64> {
+    // Find the `number:` key, then take the first run of ASCII digits after it
+    // (skipping the `ItemNumber(` wrapper if present).
+    let after_key = target.split("number:").nth(1)?;
+    let digits: String = after_key
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 /// Map an agent-core error to the worker's transient/permanent classification.
@@ -148,5 +252,96 @@ mod tests {
             error: "no JSON object".into(),
         });
         assert_eq!(err.class, FailureClass::Transient);
+    }
+
+    #[test]
+    fn parses_issue_target_number() {
+        assert_eq!(
+            parse_target_number("Issue { number: ItemNumber(7) }"),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn parses_pull_request_target_number() {
+        assert_eq!(
+            parse_target_number("PullRequest { number: ItemNumber(44) }"),
+            Some(44)
+        );
+    }
+
+    #[test]
+    fn parses_bare_number_form() {
+        // Some fixtures format the target without the `ItemNumber(..)` wrapper.
+        assert_eq!(parse_target_number("Issue { number: 7 }"), Some(7));
+    }
+
+    #[test]
+    fn malformed_target_yields_none() {
+        assert_eq!(parse_target_number(""), None);
+        assert_eq!(parse_target_number("Issue { }"), None);
+        assert_eq!(parse_target_number("number: ItemNumber()"), None);
+        assert_eq!(parse_target_number("garbage with no marker"), None);
+    }
+
+    #[test]
+    fn run_kind_maps_roles_to_activities() {
+        assert_eq!(run_kind("architect"), "triage");
+        assert_eq!(run_kind("engineer"), "coding");
+        assert_eq!(run_kind("reviewer"), "review");
+        assert_eq!(run_kind("mechanical"), "run");
+    }
+
+    fn ctx(owner: &str, name: &str, kind: &str, target: &str) -> WorkspaceContext {
+        use temper_agent_protocol::{WorkspaceRepository, WorkspaceWorkItem};
+        WorkspaceContext {
+            repos: vec![WorkspaceRepository {
+                id: format!("forgejo:{owner}/{name}"),
+                owner: owner.to_string(),
+                name: name.to_string(),
+                default_branch: "main".to_string(),
+                dir: name.to_string(),
+                access: "writable".to_string(),
+                base_branch: "main".to_string(),
+                branch_hint: None,
+            }],
+            work_item: WorkspaceWorkItem {
+                role: "architect".to_string(),
+                queue: "intake".to_string(),
+                kind: kind.to_string(),
+                target: target.to_string(),
+                context: "{}".to_string(),
+            },
+            correlation_key: "k".to_string(),
+            checkout: None,
+            allowed_verdicts: Vec::new(),
+            guidance: Default::default(),
+        }
+    }
+
+    #[test]
+    fn builds_issue_ref_from_context() {
+        let context = ctx("ai", "temper", "issue", "Issue { number: ItemNumber(42) }");
+        let item = work_item_ref(&context).expect("issue ref");
+        assert_eq!(item.repo(), "ai/temper");
+        assert_eq!(item.to_string(), "ai/temper#42");
+    }
+
+    #[test]
+    fn builds_pull_request_ref_from_context() {
+        let context = ctx(
+            "ai",
+            "temper",
+            "pull_request",
+            "PullRequest { number: ItemNumber(44) }",
+        );
+        let item = work_item_ref(&context).expect("pr ref");
+        assert_eq!(item.to_string(), "ai/temper PR#44");
+    }
+
+    #[test]
+    fn work_item_ref_is_none_on_unparseable_target() {
+        let context = ctx("ai", "temper", "issue", "Issue { }");
+        assert!(work_item_ref(&context).is_none());
     }
 }
