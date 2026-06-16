@@ -6,6 +6,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryPath};
+use temper_log::emit::{
+    LeaseClaimed, LeaseLost, LeaseReleased, emit_lease_claimed, emit_lease_lost,
+    emit_lease_released,
+};
+use temper_log::{WorkItemRef, format_duration, strip_provider_scheme};
 use temper_worker_protocol::JobProgress;
 use temper_worker_protocol::JobResult;
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
@@ -78,6 +83,13 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             return;
         };
 
+        // §7 work-item ref for the lease lifecycle lines; the bare owner/repo is
+        // already scheme-free, but strip defensively to share the helper.
+        let item = lease_item_ref(&job.repo, target);
+        let ttl = self.policy.ttl();
+        let ttl_human = format_duration(ttl.to_std().unwrap_or_default());
+        let ttl_ms = u64::try_from(ttl.num_milliseconds()).unwrap_or(0);
+
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
         match manager
             .acquire(
@@ -89,9 +101,29 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
             )
             .await
         {
-            Ok(_) => {}
-            Err(LeaseError::Conflict(_) | LeaseError::Contended { .. }) => return,
+            Ok(_) => {
+                emit_lease_claimed(LeaseClaimed {
+                    item: &item,
+                    role: &job.role,
+                    ttl_human: &ttl_human,
+                    ttl_ms,
+                    running: "apply result",
+                });
+            }
+            Err(LeaseError::Conflict(_) | LeaseError::Contended { .. }) => {
+                emit_lease_lost(LeaseLost {
+                    item: &item,
+                    role: &job.role,
+                    reason: "contended by peer owner",
+                });
+                return;
+            }
             Err(error) => {
+                emit_lease_lost(LeaseLost {
+                    item: &item,
+                    role: &job.role,
+                    reason: "acquire failed",
+                });
                 tracing::error!(
                     target: "temper_daemon",
                     job_id = %job.job_id,
@@ -118,6 +150,23 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 "lease applier could not release lease"
             );
         }
+        emit_lease_released(LeaseReleased {
+            item: &item,
+            role: &job.role,
+        });
+    }
+}
+
+/// Builds the §7 `artifact.ref` join key for a lease lifecycle line.
+///
+/// `repo` is the job's bare `owner/repo` path (the daemon already split it from
+/// the provider id); [`strip_provider_scheme`] is a defensive no-op on that
+/// shape and keeps the conversion identical to the runner's.
+fn lease_item_ref(repo: &str, target: ArtifactSource) -> WorkItemRef {
+    let repo = strip_provider_scheme(repo);
+    match target {
+        ArtifactSource::Issue { number } => WorkItemRef::issue(repo, number.get()),
+        ArtifactSource::PullRequest { number } => WorkItemRef::pull_request(repo, number.get()),
     }
 }
 

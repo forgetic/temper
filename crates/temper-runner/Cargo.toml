@@ -14,6 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 temper-forge = { path = "../temper-forge" }
 temper-engine-io = { path = "../temper-engine-io" }
+temper-log = { path = "../temper-log" }
 temper-process-protocol = { path = "../temper-process-protocol" }
 temper-workflow = { path = "../temper-workflow" }
 

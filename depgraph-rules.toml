@@ -71,7 +71,7 @@ temper-forge-github = ["temper-forge-model", "temper-engine-io"]
 temper-forge = ["temper-forge-model", "temper-forge-forgejo", "temper-forge-github", "temper-forge-memory", "temper-forge-filesystem"]
 temper-workflow = ["temper-forge"]
 temper-interaction = ["temper-forge", "temper-engine-io", "temper-process-protocol"]
-temper-runner = ["temper-forge", "temper-engine-io", "temper-process-protocol", "temper-workflow"]
+temper-runner = ["temper-forge", "temper-engine-io", "temper-log", "temper-process-protocol", "temper-workflow"]
 temper-wake = ["temper-engine-io", "temper-runner"]
 temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
 # Validates live forge state. Builds its forge through the facade factory; no

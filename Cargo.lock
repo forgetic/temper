@@ -1860,6 +1860,7 @@ dependencies = [
  "temper-forge",
  "temper-forge-filesystem",
  "temper-forge-memory",
+ "temper-log",
  "temper-process-protocol",
  "temper-testing",
  "temper-workflow",
@@ -1902,6 +1903,7 @@ dependencies = [
  "temper-forge-forgejo",
  "temper-forge-memory",
  "temper-forge-model",
+ "temper-log",
  "temper-reference-delivery",
  "temper-runner",
  "temper-trigger-forgejo",
@@ -1909,6 +1911,7 @@ dependencies = [
  "temper-worker-protocol",
  "temper-workflow",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

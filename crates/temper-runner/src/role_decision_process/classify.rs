@@ -1,13 +1,23 @@
 //! Reply/error classification and structured logging for the decision adapter.
+//!
+//! The two `log_*` helpers map the role-decision process round-trip onto the
+//! §7 `agent` events: a request becomes `agent.started`, the reply (or the
+//! process error) becomes `agent.finished`. The runner-side decision process is
+//! the daemon's `agent` plane, so its run `kind` is `decision`; the role comes
+//! from the work-item identity and the duration from the measured latency.
 
 use std::time::Duration;
 
+use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
+
 use super::error::WorkflowRoleDecisionProcessError;
+use crate::observability::work_item_ref;
 use crate::{
-    RoleDecisionReplyEvent, RoleDecisionRequestEvent, WorkflowRoleDecisionProtocolError,
-    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, render_role_decision_reply_event,
-    render_role_decision_request_event,
+    WorkflowRoleDecisionProtocolError, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
+
+/// Run `kind` for the role-decision process agent (the daemon's `agent` plane).
+const DECISION_RUN_KIND: &str = "decision";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DecisionDisposition {
@@ -86,53 +96,71 @@ pub(super) fn classify_process_error(
     }
 }
 
+/// Emits `agent.started` for a role-decision request (§7 `agent` plane).
 pub(super) fn log_decision_request(
     identity: &crate::WorkItemIdentity,
     request: &WorkflowRoleDecisionRequest,
 ) {
-    let authorized_actions = request
-        .authorized_actions
-        .iter()
-        .map(|action| action.action.clone())
-        .collect::<Vec<_>>();
-    let available_external_tools = request
-        .available_external_tools
-        .iter()
-        .map(|tool| tool.id.to_string())
-        .collect::<Vec<_>>();
-    tracing::info!(
-        target: "temper_runner",
-        "{}",
-        render_role_decision_request_event(&RoleDecisionRequestEvent {
-            identity,
-            workflow_id: &request.workflow_id,
-            authorized_actions: &authorized_actions,
-            available_external_tools: &available_external_tools,
-        })
+    let item = work_item_ref(identity);
+    let detail = format!(
+        "deciding {} ({} actions authorized)",
+        request.workflow_id,
+        request.authorized_actions.len()
     );
+    emit_agent_started(AgentStarted {
+        item: &item,
+        role: identity.role.as_str(),
+        kind: DECISION_RUN_KIND,
+        detail: &detail,
+    });
 }
 
+/// Emits `agent.finished` for a role-decision reply or process error.
+///
+/// The numeric `duration_ms` carries the measured round-trip latency; the
+/// summary is the verdict/outcome, the reply reason, or the error preview.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn log_decision_reply(
     identity: &crate::WorkItemIdentity,
     selected_action: Option<&str>,
     validation_outcome: &str,
-    action_kind: &str,
+    _action_kind: &str,
     reason: Option<&str>,
     latency: Duration,
     error: Option<&str>,
 ) {
-    tracing::info!(
-        target: "temper_runner",
-        "{}",
-        render_role_decision_reply_event(&RoleDecisionReplyEvent {
-            identity,
-            selected_action,
-            validation_outcome,
-            action_kind,
-            reason,
-            latency,
-            error,
-        })
-    );
+    let item = work_item_ref(identity);
+    let summary = decision_summary(selected_action, validation_outcome, reason, error);
+    emit_agent_finished(AgentFinished {
+        item: &item,
+        role: identity.role.as_str(),
+        kind: DECISION_RUN_KIND,
+        duration_ms: duration_millis(latency),
+        summary: &summary,
+    });
+}
+
+/// Builds the one-line `agent.finished` summary from the decision outcome.
+///
+/// Errors win (they are the operator's concern); otherwise the chosen action
+/// and reply reason are named, falling back to the validation outcome. The
+/// human renderer redacts this free text.
+fn decision_summary(
+    selected_action: Option<&str>,
+    validation_outcome: &str,
+    reason: Option<&str>,
+    error: Option<&str>,
+) -> String {
+    if let Some(error) = error {
+        return format!("error={error}");
+    }
+    let action = selected_action.unwrap_or("no_action");
+    match reason {
+        Some(reason) if !reason.is_empty() => format!("action={action} | {reason}"),
+        _ => format!("action={action} verdict={validation_outcome}"),
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

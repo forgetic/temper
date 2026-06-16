@@ -6,7 +6,8 @@ use super::*;
 use std::fs;
 use std::time::Duration;
 
-use crate::{Agent, REDACTED, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION};
+use crate::{Agent, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION};
+use temper_log::redact::REDACTED;
 
 #[test]
 fn process_agent_sends_request_filters_environment_and_executes_action() {

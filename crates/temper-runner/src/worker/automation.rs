@@ -1,12 +1,14 @@
 use super::{Progress, WorkerError, saturating_u64};
 use crate::ExternalToolExecutors;
 use crate::observability::{
-    StructuredEvent, execution_error_diagnostic_classes, execution_error_failure_class,
+    artifact_ref, execution_error_diagnostic_classes, execution_error_failure_class, labels_delta,
 };
 use crate::scan::{AutomatedWorkItem, scan_automated_queues};
 use crate::workspace_automation::{WorkspaceAutomationOutcome, execute_workspace_automation};
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ItemNumber, RepositoryId};
+use temper_log::emit::{TransitionApplied, emit_transition_applied};
+use temper_workflow::WorkflowEffect;
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, ExecutionError, Executor, PlanDiagnostic, TransitionId,
     ValidatedWorkflow, VerdictId,
@@ -108,9 +110,10 @@ pub(crate) async fn execute_automated_items<F: Forge + ?Sized>(
             .execute(repo, item.target, &item.transition, &item.actor)
             .await
         {
-            Ok(_) => {
+            Ok(report) => {
                 counts.applied = counts.applied.saturating_add(1);
                 progress.record(true);
+                emit_automation_transition_applied(&context, &item, &report.applied);
                 log_automation_item(
                     context.worker,
                     context.repo,
@@ -195,6 +198,15 @@ async fn run_workspace_item<F: Forge + ?Sized>(
             counts.applied = counts.applied.saturating_add(1);
             counts.workspace_routed = counts.workspace_routed.saturating_add(1);
             progress.record(true);
+            // The workspace routes through a transition but does not surface the
+            // applied effects here, so the §7 `transition.applied` line carries
+            // the routed transition id with an empty label delta.
+            emit_transition_applied(TransitionApplied {
+                item: &artifact_ref(context.repo, item.target),
+                transition: routed.as_str(),
+                detail: "",
+                labels_delta: "",
+            });
             log_workspace_item(context, item, &routed, "routed", None, Vec::new());
             Ok(())
         }
@@ -265,10 +277,16 @@ async fn route_verdict<F: Forge + ?Sized>(
         .execute(context.repo, *target, fallback, &item.actor)
         .await
     {
-        Ok(_) => {
+        Ok(report) => {
             counts.applied = counts.applied.saturating_add(1);
             counts.merge_conflicts_routed = counts.merge_conflicts_routed.saturating_add(1);
             progress.record(true);
+            emit_transition_applied(TransitionApplied {
+                item: &artifact_ref(context.repo, *target),
+                transition: fallback.as_str(),
+                detail: "merge conflict routed to fallback",
+                labels_delta: &labels_delta(&report.applied),
+            });
             log_merge_conflict_route(
                 context,
                 item,
@@ -383,6 +401,25 @@ fn is_expected_precondition(diagnostic: &PlanDiagnostic) -> bool {
     )
 }
 
+/// Emits the §7 `engine` / `transition.applied` line for a directly applied
+/// mechanical automation transition.
+///
+/// The label delta is derived from the applied effects; the human renderer adds
+/// the subject tag and formats the delta. Non-label effects (merges, comments)
+/// do not contribute to the delta but still appear under the transition id.
+fn emit_automation_transition_applied(
+    context: &AutomationContext<'_>,
+    item: &AutomatedWorkItem,
+    applied: &[WorkflowEffect],
+) {
+    emit_transition_applied(TransitionApplied {
+        item: &artifact_ref(context.repo, item.target),
+        transition: item.transition.as_str(),
+        detail: "",
+        labels_delta: &labels_delta(applied),
+    });
+}
+
 fn log_automation_item(
     worker: &str,
     repo: &RepositoryId,
@@ -393,27 +430,24 @@ fn log_automation_item(
     diagnostic_classes: Vec<String>,
 ) {
     let (artifact_type, artifact_number) = source_parts(item.target);
-    let mut event = StructuredEvent::new("mechanical_automation_execution")
-        .string("worker_kind", "mechanical")
-        .string("worker", worker)
-        .string("repo", repo.to_string())
-        .string("workflow_id", workflow_id)
-        .string("queue", item.queue.to_string())
-        .string("transition", item.transition.to_string())
-        .string("actor", item.actor.to_string())
-        .string("artifact_type", artifact_type)
-        .number("artifact_number", artifact_number.get())
-        .string("artifact_kind", item.kind.to_string())
-        .string("outcome", outcome);
-    if let Some(failure_class) = failure_class {
-        event = event.string("failure_class", failure_class);
-    }
-    if !diagnostic_classes.is_empty() {
-        event = event
-            .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
-            .string_array("diagnostic_classes", diagnostic_classes);
-    }
-    tracing::info!(target: "temper_runner", "{}", event.render());
+    tracing::debug!(
+        target: "temper::engine",
+        worker_kind = "mechanical",
+        worker,
+        repo = repo.as_str(),
+        workflow_id,
+        queue = %item.queue,
+        transition = %item.transition,
+        actor = %item.actor,
+        artifact_type,
+        artifact_number = artifact_number.get(),
+        artifact_kind = %item.kind,
+        failure_class,
+        diagnostic_classes = diagnostic_classes.join(",").as_str(),
+        outcome,
+        "automation: {} {outcome}",
+        item.transition,
+    );
 }
 
 fn log_merge_conflict_route(
@@ -426,29 +460,26 @@ fn log_merge_conflict_route(
     provider_message_summary: &str,
 ) {
     let (artifact_type, artifact_number) = source_parts(item.target);
-    let mut event = StructuredEvent::new("mechanical_automation_merge_conflict_route")
-        .string("worker_kind", "mechanical")
-        .string("worker", context.worker)
-        .string("repo", context.repo.to_string())
-        .string("workflow_id", context.workflow_id)
-        .string("queue", item.queue.to_string())
-        .string("original_transition", item.transition.to_string())
-        .string("fallback_transition", fallback.to_string())
-        .string("actor", item.actor.to_string())
-        .string("artifact_type", artifact_type)
-        .number("artifact_number", artifact_number.get())
-        .string("artifact_kind", item.kind.to_string())
-        .string("provider_message_summary", provider_message_summary)
-        .string("outcome", outcome);
-    if let Some(failure_class) = failure_class {
-        event = event.string("failure_class", failure_class);
-    }
-    if !diagnostic_classes.is_empty() {
-        event = event
-            .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
-            .string_array("diagnostic_classes", diagnostic_classes);
-    }
-    tracing::info!(target: "temper_runner", "{}", event.render());
+    tracing::debug!(
+        target: "temper::engine",
+        worker_kind = "mechanical",
+        worker = context.worker,
+        repo = context.repo.as_str(),
+        workflow_id = context.workflow_id,
+        queue = %item.queue,
+        original_transition = %item.transition,
+        fallback_transition = %fallback,
+        actor = %item.actor,
+        artifact_type,
+        artifact_number = artifact_number.get(),
+        artifact_kind = %item.kind,
+        provider_message_summary,
+        failure_class,
+        diagnostic_classes = diagnostic_classes.join(",").as_str(),
+        outcome,
+        "automation: merge-conflict route {} -> {fallback} ({outcome})",
+        item.transition,
+    );
 }
 
 fn log_workspace_item(
@@ -465,29 +496,26 @@ fn log_workspace_item(
         .as_ref()
         .map(|id| id.as_str())
         .unwrap_or_default();
-    let mut event = StructuredEvent::new("mechanical_automation_workspace_execution")
-        .string("worker_kind", "mechanical")
-        .string("worker", context.worker)
-        .string("repo", context.repo.to_string())
-        .string("workflow_id", context.workflow_id)
-        .string("queue", item.queue.to_string())
-        .string("executor", executor)
-        .string("primary_transition", item.transition.to_string())
-        .string("routed_transition", routed.to_string())
-        .string("actor", item.actor.to_string())
-        .string("artifact_type", artifact_type)
-        .number("artifact_number", artifact_number.get())
-        .string("artifact_kind", item.kind.to_string())
-        .string("outcome", outcome);
-    if let Some(failure_class) = failure_class {
-        event = event.string("failure_class", failure_class);
-    }
-    if !diagnostic_classes.is_empty() {
-        event = event
-            .number("diagnostic_count", saturating_u64(diagnostic_classes.len()))
-            .string_array("diagnostic_classes", diagnostic_classes);
-    }
-    tracing::info!(target: "temper_runner", "{}", event.render());
+    tracing::debug!(
+        target: "temper::engine",
+        worker_kind = "mechanical",
+        worker = context.worker,
+        repo = context.repo.as_str(),
+        workflow_id = context.workflow_id,
+        queue = %item.queue,
+        executor,
+        primary_transition = %item.transition,
+        routed_transition = %routed,
+        actor = %item.actor,
+        artifact_type,
+        artifact_number = artifact_number.get(),
+        artifact_kind = %item.kind,
+        failure_class,
+        diagnostic_classes = diagnostic_classes.join(",").as_str(),
+        outcome,
+        "automation: workspace {} -> {routed} ({outcome})",
+        item.transition,
+    );
 }
 
 fn provider_message_summary(message: &str) -> String {
@@ -511,34 +539,26 @@ fn log_automation_summary(
     counts: &AutomationCounts,
     progress: Progress,
 ) {
-    tracing::info!(
-        target: "temper_runner",
-        "{}",
-        StructuredEvent::new("mechanical_automation_summary")
-            .string("worker_kind", "mechanical")
-            .string("worker", worker)
-            .string("repo", repo.to_string())
-            .string("workflow_id", workflow_id)
-            .number("candidate_count", saturating_u64(counts.candidates))
-            .number("applied_count", saturating_u64(counts.applied))
-            .number(
-                "merge_conflict_routed_count",
-                saturating_u64(counts.merge_conflicts_routed),
-            )
-            .number(
-                "workspace_routed_count",
-                saturating_u64(counts.workspace_routed),
-            )
-            .number("unchanged_count", saturating_u64(counts.unchanged_total()))
-            .number("stale_unchanged_count", saturating_u64(counts.unchanged))
-            .number(
-                "gate_not_satisfied_count",
-                saturating_u64(counts.gate_not_satisfied),
-            )
-            .number("error_count", saturating_u64(counts.errors))
-            .boolean("changed", progress.changed)
-            .number("progress_actions", u64::from(progress.actions))
-            .render()
+    tracing::debug!(
+        target: "temper::engine",
+        worker_kind = "mechanical",
+        worker,
+        repo = repo.as_str(),
+        workflow_id,
+        candidate_count = saturating_u64(counts.candidates),
+        applied_count = saturating_u64(counts.applied),
+        merge_conflict_routed_count = saturating_u64(counts.merge_conflicts_routed),
+        workspace_routed_count = saturating_u64(counts.workspace_routed),
+        unchanged_count = saturating_u64(counts.unchanged_total()),
+        stale_unchanged_count = saturating_u64(counts.unchanged),
+        gate_not_satisfied_count = saturating_u64(counts.gate_not_satisfied),
+        error_count = saturating_u64(counts.errors),
+        changed = progress.changed,
+        progress_actions = u64::from(progress.actions),
+        "automation pass: {} candidate(s), {} applied, {} error(s)",
+        counts.candidates,
+        counts.applied,
+        counts.errors,
     );
 }
 

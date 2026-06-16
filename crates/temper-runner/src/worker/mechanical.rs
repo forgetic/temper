@@ -3,9 +3,6 @@
 use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
-use crate::observability::{
-    MechanicalReconciliationEvent, StructuredEvent, render_mechanical_reconciliation_event,
-};
 use crate::scan::targeted_automated_work_items;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -324,21 +321,28 @@ where
     }
 }
 
+/// Logs mechanical recovery findings/actions at debug.
+///
+/// Reconciliation recovery is a §5 "between" cause (lease requeues, drift
+/// repairs, advisory diagnoses), not a §7 workflow state change, so it stays at
+/// debug under the worker target. The names are the same compact, body-free
+/// tokens the old structured event used.
 fn log_mechanical_reconciliation(
     worker: &str,
     repo: &RepositoryId,
     report: &temper_workflow::ReconcileReport,
 ) {
     for (finding, action) in report.findings.iter().zip(report.actions.iter()) {
-        tracing::info!(
-            target: "temper_runner",
-            "{}",
-            render_mechanical_reconciliation_event(&MechanicalReconciliationEvent {
-                worker,
-                repo,
-                finding,
-                action,
-            })
+        tracing::debug!(
+            target: "temper::worker",
+            worker_kind = "mechanical",
+            worker,
+            repo = repo.as_str(),
+            finding = finding_name(finding),
+            action = action_name(action),
+            "reconcile: {} -> {}",
+            finding_name(finding),
+            action_name(action),
         );
     }
 }
@@ -351,32 +355,49 @@ fn log_mechanical_reconciliation_summary(
     outcome: &ApplyOutcome,
     progress: Progress,
 ) {
-    tracing::info!(
-        target: "temper_runner",
-        "{}",
-        StructuredEvent::new("mechanical_reconciliation_summary")
-            .string("worker_kind", "mechanical")
-            .string("worker", worker)
-            .string("repo", repo.to_string())
-            .string("mode", reconciliation_mode_name(mode))
-            .number("snapshot_count", saturating_u64(report.snapshot_count))
-            .number("finding_count", saturating_u64(report.findings.len()))
-            .number(
-                "recovery_action_count",
-                saturating_u64(report.actions.len())
-            )
-            .number(
-                "applied_action_count",
-                saturating_u64(outcome.applied.len())
-            )
-            .number(
-                "advisory_action_count",
-                saturating_u64(outcome.advisory.len())
-            )
-            .boolean("changed", progress.changed)
-            .number("progress_actions", u64::from(progress.actions))
-            .render()
+    tracing::debug!(
+        target: "temper::worker",
+        worker_kind = "mechanical",
+        worker,
+        repo = repo.as_str(),
+        mode = reconciliation_mode_name(mode),
+        snapshot_count = saturating_u64(report.snapshot_count),
+        finding_count = saturating_u64(report.findings.len()),
+        recovery_action_count = saturating_u64(report.actions.len()),
+        applied_action_count = saturating_u64(outcome.applied.len()),
+        advisory_action_count = saturating_u64(outcome.advisory.len()),
+        changed = progress.changed,
+        progress_actions = u64::from(progress.actions),
+        "reconcile {} pass: {} finding(s), {} applied",
+        reconciliation_mode_name(mode),
+        report.findings.len(),
+        outcome.applied.len(),
     );
+}
+
+fn finding_name(finding: &temper_workflow::ReconcileFinding) -> &'static str {
+    use temper_workflow::ReconcileFinding;
+    match finding {
+        ReconcileFinding::ExpiredLease { .. } => "expired_lease",
+        ReconcileFinding::ImpossibleState { .. } => "impossible_state",
+        ReconcileFinding::ClassificationDrift { .. } => "classification_drift",
+        ReconcileFinding::BlockedWithoutDependencies { .. } => "blocked_without_dependencies",
+        ReconcileFinding::PartialTransition { .. } => "partial_transition",
+        ReconcileFinding::StaleCommand { .. } => "stale_command",
+        ReconcileFinding::DependenciesResolved { .. } => "dependencies_resolved",
+    }
+}
+
+fn action_name(action: &temper_workflow::RecoveryAction) -> &'static str {
+    use temper_workflow::RecoveryAction;
+    match action {
+        RecoveryAction::RequeueLease { .. } => "requeue_lease",
+        RecoveryAction::Escalate { .. } => "escalate",
+        RecoveryAction::Repair { .. } => "repair",
+        RecoveryAction::MarkReconciled { .. } => "mark_reconciled",
+        RecoveryAction::Unblock { .. } => "unblock",
+        RecoveryAction::Diagnose { .. } => "diagnose",
+    }
 }
 
 fn reconciliation_mode_name(mode: ReconciliationMode) -> &'static str {

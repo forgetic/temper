@@ -20,8 +20,9 @@ use crate::role_decision::workflow_role_manifest_from_runtime;
 use crate::role_process_tools::{build_work_item_context, run_process_action};
 use crate::{
     Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleTools, WorkItem,
-    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest, redacted_lossy_preview,
+    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
+use temper_log::redact::redacted_lossy_preview;
 
 use classify::{
     DecisionDisposition, classify_decision_reply, classify_process_error, log_decision_reply,

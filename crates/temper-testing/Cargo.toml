@@ -55,6 +55,10 @@ temper-engine-io = { path = "../temper-engine-io" }
 # The hermetic daemon-worker contract test boots an in-process daemon transport
 # and serves it on an ephemeral local port.
 temper-engine = { path = "../temper-engine" }
+# The observability smoke test captures the runner's `temper-log` emit sites with
+# a custom in-process layer and asserts on the structured fields + human message.
+temper-log = { path = "../temper-log" }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

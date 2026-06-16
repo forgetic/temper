@@ -1,6 +1,12 @@
 //! Stable, provider-neutral observability identities for work items.
+//!
+//! [`WorkItemIdentity`] survives the move to `temper-log` as the runner-internal
+//! carrier of a work item's role/queue/decision-id correlation (used for
+//! role-decision routing and for building the design's `artifact.ref` join key
+//! via [`work_item_ref`](crate::observability::work_item_ref)). Its old
+//! JSON-rendering (`to_json`) is gone — the machine projection is now real
+//! `tracing` fields emitted by `temper_log::emit::*`.
 
-use serde_json::Value;
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RoleId};
 
@@ -97,38 +103,6 @@ impl WorkItemIdentity {
         self.tick_id = Some(tick_id);
         self
     }
-
-    /// Serializes the identity as authority-neutral JSON context.
-    pub fn to_json(&self) -> Value {
-        let mut object = serde_json::Map::new();
-        object.insert(
-            "work_item_id".to_string(),
-            Value::String(self.work_item_id.clone()),
-        );
-        object.insert(
-            "decision_id".to_string(),
-            Value::String(self.decision_id.clone()),
-        );
-        if let Some(tick_id) = &self.tick_id {
-            object.insert("tick_id".to_string(), Value::String(tick_id.clone()));
-        }
-        object.insert("repo".to_string(), Value::String(self.repo.to_string()));
-        object.insert("role".to_string(), Value::String(self.role.to_string()));
-        object.insert("queue".to_string(), Value::String(self.queue.to_string()));
-        object.insert(
-            "artifact_type".to_string(),
-            Value::String(self.artifact_type.as_str().to_string()),
-        );
-        object.insert(
-            "artifact_number".to_string(),
-            Value::Number(self.artifact_number.get().into()),
-        );
-        object.insert(
-            "artifact_kind".to_string(),
-            Value::String(self.artifact_kind.to_string()),
-        );
-        Value::Object(object)
-    }
 }
 
 fn artifact_number(source: ArtifactSource) -> ItemNumber {
@@ -191,6 +165,7 @@ mod tests {
         );
 
         assert_eq!(identity.artifact_type.as_str(), "issue");
+        assert_eq!(identity.artifact_number.get(), 7);
         assert_eq!(
             identity.work_item_id,
             "work-item/repo:20:forgejo:acme/service/artifact:issue:7/kind:4:task/queue:4:todo/role:6:banana"
@@ -199,14 +174,7 @@ mod tests {
             identity.decision_id,
             "decision/work-item/repo:20:forgejo:acme/service/artifact:issue:7/kind:4:task/queue:4:todo/role:6:banana"
         );
-        let json = identity.to_json();
-        assert_eq!(json["repo"], "forgejo:acme/service");
-        assert_eq!(json["role"], "banana");
-        assert_eq!(json["queue"], "todo");
-        assert_eq!(json["artifact_type"], "issue");
-        assert_eq!(json["artifact_number"], 7);
-        assert_eq!(json["artifact_kind"], "task");
-        assert!(json.get("tick_id").is_none());
+        assert!(identity.tick_id.is_none());
     }
 
     #[test]
@@ -222,8 +190,11 @@ mod tests {
         )
         .with_tick_id("tick-42");
 
-        assert_eq!(identity.to_json()["tick_id"], "tick-42");
+        assert_eq!(identity.tick_id.as_deref(), Some("tick-42"));
         assert!(identity.decision_id.contains("tick:7:tick-42"));
-        assert_eq!(identity.to_json()["artifact_type"], "pull_request");
+        assert_eq!(
+            identity.artifact_type,
+            ObservabilityArtifactType::PullRequest
+        );
     }
 }

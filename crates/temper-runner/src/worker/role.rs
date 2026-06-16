@@ -2,10 +2,7 @@
 
 use super::{Progress, Worker, WorkerError};
 use crate::agent::{Agent, RoleTools};
-use crate::observability::{
-    ScanSummaryEvent, WorkItemSelectedEvent, render_scan_summary_event,
-    render_work_item_selected_event,
-};
+use crate::observability::work_item_ref;
 use crate::scan::{WorkItem, scan_role, scan_role_audit, scan_role_wake};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -201,29 +198,33 @@ fn log_role_scan<F: Forge + ?Sized>(
     if items.is_empty() {
         return;
     }
-    tracing::info!(
-        target: "temper_runner",
-        "{}",
-        render_scan_summary_event(&ScanSummaryEvent {
-            tick_id: Some(tick_id),
-            worker_kind: "role",
-            worker,
-            repo,
-            workflow_id,
-            role: Some(role.as_str()),
-            work_item_count: items.len(),
-        })
+    // Raw scan results are a §5 "between" debug event: there is no §7 info
+    // catalog entry for a feed/queue scan, so this stays at debug under the
+    // worker target with structured fields.
+    tracing::debug!(
+        target: "temper::worker",
+        tick_id,
+        worker_kind = "role",
+        worker,
+        repo = repo.as_str(),
+        workflow_id,
+        role = role.as_str(),
+        work_item_count = items.len(),
+        "scan: {} candidate(s) for role {role}",
+        items.len(),
     );
     for item in items {
         let identity = tools.work_item_identity(item);
-        tracing::info!(
-            target: "temper_runner",
-            "{}",
-            render_work_item_selected_event(&WorkItemSelectedEvent {
-                identity: &identity,
-                workflow_id,
-                worker,
-            })
+        tracing::debug!(
+            target: "temper::worker",
+            tick_id,
+            worker,
+            workflow_id,
+            artifact.ref = %work_item_ref(&identity),
+            queue = identity.queue.as_str(),
+            role = identity.role.as_str(),
+            decision_id = identity.decision_id.as_str(),
+            "scan: selected work item",
         );
     }
 }

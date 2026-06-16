@@ -61,8 +61,58 @@ pub(crate) async fn build_work_item_context<F: Forge + ?Sized>(
         "queue": item.queue.as_str(),
         "kind": item.kind.as_str(),
         "artifact": artifact,
-        "observability": identity.to_json(),
+        "observability": observability_context(&identity),
     }))
+}
+
+/// Builds the provider-neutral correlation context the decision process sees in
+/// its `work_item_context` request payload.
+///
+/// This is request *payload* serialization (the decision process joins on
+/// `work_item_id` / `decision_id`), not a log message — the JSON-in-log path the
+/// observability redesign removed. It carries the stable ids and coordinates the
+/// responder may key off, with no Forge secrets or mutation handles.
+fn observability_context(identity: &WorkItemIdentity) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "work_item_id".to_string(),
+        serde_json::Value::String(identity.work_item_id.clone()),
+    );
+    object.insert(
+        "decision_id".to_string(),
+        serde_json::Value::String(identity.decision_id.clone()),
+    );
+    if let Some(tick_id) = &identity.tick_id {
+        object.insert(
+            "tick_id".to_string(),
+            serde_json::Value::String(tick_id.clone()),
+        );
+    }
+    object.insert(
+        "repo".to_string(),
+        serde_json::Value::String(identity.repo.to_string()),
+    );
+    object.insert(
+        "role".to_string(),
+        serde_json::Value::String(identity.role.to_string()),
+    );
+    object.insert(
+        "queue".to_string(),
+        serde_json::Value::String(identity.queue.to_string()),
+    );
+    object.insert(
+        "artifact_type".to_string(),
+        serde_json::Value::String(identity.artifact_type.as_str().to_string()),
+    );
+    object.insert(
+        "artifact_number".to_string(),
+        serde_json::Value::Number(identity.artifact_number.get().into()),
+    );
+    object.insert(
+        "artifact_kind".to_string(),
+        serde_json::Value::String(identity.artifact_kind.to_string()),
+    );
+    serde_json::Value::Object(object)
 }
 
 pub(crate) async fn run_process_action<F: Forge + ?Sized>(
