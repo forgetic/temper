@@ -116,10 +116,11 @@ fn classify_coding_agent_error(error: CodingAgentError) -> AgentRunError {
         CodingAgentError::Provider(_)
         | CodingAgentError::Run(_)
         | CodingAgentError::AgentStopped(_)
-        | CodingAgentError::ModelUnavailable { .. } => AgentRunError::transient(error.to_string()),
-        CodingAgentError::Parse { .. }
-        | CodingAgentError::NoProduct
-        | CodingAgentError::UndeclaredVerdict { .. } => AgentRunError::permanent(error.to_string()),
+        | CodingAgentError::ModelUnavailable { .. }
+        | CodingAgentError::Parse { .. } => AgentRunError::transient(error.to_string()),
+        CodingAgentError::NoProduct | CodingAgentError::UndeclaredVerdict { .. } => {
+            AgentRunError::permanent(error.to_string())
+        }
     }
 }
 
@@ -138,5 +139,14 @@ mod tests {
     fn no_product_is_permanent() {
         let err = classify_coding_agent_error(CodingAgentError::NoProduct);
         assert_eq!(err.class, FailureClass::Permanent);
+    }
+
+    #[test]
+    fn parse_failure_is_transient() {
+        let err = classify_coding_agent_error(CodingAgentError::Parse {
+            snippet: "some text".into(),
+            error: "no JSON object".into(),
+        });
+        assert_eq!(err.class, FailureClass::Transient);
     }
 }

@@ -27,8 +27,10 @@ fn system_prompt_is_role_specific() {
     assert!(reviewer.contains("git log origin/<base_branch>..HEAD"));
     assert!(reviewer.contains("escalate"));
 
-    // Every role must be told to emit a single final JSON object.
+    // Every role must have the top-level reminder and the final-message format.
     for prompt in [engineer, architect, reviewer] {
+        assert!(prompt.contains("FINAL message after all tool use"));
+        assert!(prompt.contains("FINAL MESSAGE FORMAT (mandatory)"));
         assert!(prompt.contains("single JSON object"));
         assert!(prompt.contains("children"));
     }
