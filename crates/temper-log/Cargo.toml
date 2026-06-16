@@ -1,0 +1,19 @@
+[package]
+name = "temper-log"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Process-wide logging init for the temper binaries: env-aware tracing-subscriber setup (RUST_LOG, journald under systemd, ANSI-on-TTY stderr fmt)."
+
+[dependencies]
+tracing-subscriber = { workspace = true }
+
+# The journald sink is Linux-only — `tracing-journald` does not build on other
+# platforms. Gating the dependency per-target (paired with `#[cfg]` around the
+# journald branch in lib.rs) keeps the crate compiling and warning-free off Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+tracing-journald = { workspace = true }
+
+[lints]
+workspace = true
