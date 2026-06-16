@@ -185,8 +185,8 @@ fn validators_and_config_cover_forgejo_ci_fallback() {
     assert!(script.contains("no web-UI credentials configured for the CI read fallback"));
 
     // Webhooks are the wake path: the validator inspects the unified run log.
-    assert!(script.contains("temper-daemon: serving on"));
-    assert!(script.contains("temper-worker: registered"));
+    assert!(script.contains("engine: serving on"));
+    assert!(script.contains("worker: registered"));
     assert!(script.contains("webhook wake scan"));
 
     // The cross-repo Forge-state validator is still wired in, as a subcommand of

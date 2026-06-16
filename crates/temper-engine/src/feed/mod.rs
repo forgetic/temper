@@ -194,7 +194,7 @@ pub(crate) fn skip_log_line(
     reason: EnrichOutcome,
 ) -> String {
     format!(
-        "temper-daemon: skipped role work for {} repo={} role={} queue={} artifact_kind={} target={:?}",
+        "engine: skipped role work for {} repo={} role={} queue={} artifact_kind={} target={:?}",
         skip_log_reason(reason),
         repo_label,
         role.as_str(),
@@ -211,7 +211,7 @@ pub(crate) fn enrichment_failure_log_line(
     error: &ScanError,
 ) -> String {
     format!(
-        "temper-daemon: skipped scanned work item after enrichment failed for repo={} role={} queue={} artifact_kind={} target={:?}: {error}",
+        "engine: skipped scanned work item after enrichment failed for repo={} role={} queue={} artifact_kind={} target={:?}: {error}",
         repo_label,
         role.as_str(),
         item.queue.as_str(),

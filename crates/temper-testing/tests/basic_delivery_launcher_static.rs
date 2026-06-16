@@ -213,8 +213,8 @@ fn validators_and_config_cover_forgejo_ci_fallback() {
     // Webhooks are the wake path: the validator inspects the unified run log for
     // the daemon serving line, accepted deliveries, wake scans, and the
     // in-process worker lifecycle.
-    assert!(script.contains("temper-daemon: serving on"));
-    assert!(script.contains("temper-worker: registered"));
+    assert!(script.contains("engine: serving on"));
+    assert!(script.contains("worker: registered"));
     assert!(script.contains("webhook wake scan"));
 }
 

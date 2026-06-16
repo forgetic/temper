@@ -203,7 +203,7 @@ pub async fn serve(
         |request, responder| DaemonCompletion::Http { request, responder },
     )
     .await?;
-    tracing::info!(target: "temper_daemon", addr = %server.local_addr(), "serving");
+    tracing::info!(target: "engine", addr = %server.local_addr(), "serving");
     Ok(server)
 }
 

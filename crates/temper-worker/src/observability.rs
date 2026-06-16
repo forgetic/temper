@@ -9,7 +9,7 @@ use temper_agent_protocol::StepProgress;
 use temper_worker_protocol::{Assign, FailureClass, JobResult, ResultStatus};
 
 pub fn registered_worker_line(worker_id: &str, capability_count: usize) -> String {
-    format!("temper-worker: registered worker_id={worker_id} capabilities={capability_count}")
+    format!("worker: registered worker_id={worker_id} capabilities={capability_count}")
 }
 
 /// One operational line per agent step-progress checkpoint the worker relays.
@@ -18,21 +18,21 @@ pub fn registered_worker_line(worker_id: &str, capability_count: usize) -> Strin
 pub fn step_progress_line(progress: &StepProgress) -> String {
     let sha = progress.pushed_sha.as_deref().unwrap_or("-");
     format!(
-        "temper-worker: step-progress correlation={} step={} status={:?} sha={} :: {}",
+        "worker: step-progress correlation={} step={} status={:?} sha={} :: {}",
         progress.correlation_key, progress.step, progress.state, sha, progress.status
     )
 }
 
 pub fn assigned_job_line(assign: &Assign) -> String {
     format!(
-        "temper-worker: assigned job_id={} role={} repo={}",
+        "worker: assigned job_id={} role={} repo={}",
         assign.job_id, assign.role, assign.repo
     )
 }
 
 pub fn result_sent_line(result: &JobResult) -> String {
     format!(
-        "temper-worker: result sent job_id={} status={}",
+        "worker: result sent job_id={} status={}",
         result.job_id,
         result_status_display(result)
     )
@@ -82,7 +82,7 @@ mod tests {
     fn registered_worker_line_matches_observability_contract() {
         assert_eq!(
             registered_worker_line("basic-delivery-1", 2),
-            "temper-worker: registered worker_id=basic-delivery-1 capabilities=2"
+            "worker: registered worker_id=basic-delivery-1 capabilities=2"
         );
     }
 
@@ -90,7 +90,7 @@ mod tests {
     fn assigned_job_line_matches_observability_contract() {
         assert_eq!(
             assigned_job_line(&assign()),
-            "temper-worker: assigned job_id=job-123 role=engineer repo=acme/service"
+            "worker: assigned job_id=job-123 role=engineer repo=acme/service"
         );
     }
 
@@ -114,7 +114,7 @@ mod tests {
 
         assert_eq!(
             result_sent_line(&result),
-            "temper-worker: result sent job_id=job-123 status=success"
+            "worker: result sent job_id=job-123 status=success"
         );
     }
 
@@ -138,7 +138,7 @@ mod tests {
 
         assert_eq!(
             result_sent_line(&result),
-            "temper-worker: result sent job_id=job-456 status=failure(permanent)"
+            "worker: result sent job_id=job-456 status=failure(permanent)"
         );
     }
 
@@ -159,7 +159,7 @@ mod tests {
 
         assert_eq!(
             result_sent_line(&result),
-            "temper-worker: result sent job_id=job-789 status=failure(unknown)"
+            "worker: result sent job_id=job-789 status=failure(unknown)"
         );
     }
 

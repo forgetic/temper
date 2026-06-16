@@ -6,8 +6,8 @@ teardown. Logs stay under `logs/` for later inspection.
 
 The whole topology is **one process** (`temper run`), so the daemon, the
 in-process worker, and the coding agent all write to a **single log**:
-`logs/run.log`. Daemon lines are prefixed `temper-daemon:`; worker lines
-`temper-worker:`.
+`logs/run.log`. Daemon lines are prefixed `engine:`; worker lines
+`worker:`.
 
 ## Where to look
 
@@ -26,17 +26,17 @@ in-process worker, and the coding agent all write to a **single log**:
 For the default single-repo run, expect (interleaved) in `logs/run.log`:
 
 ```text
-temper-daemon: serving on 127.0.0.1:38100
-temper-worker: registered worker_id=basic-delivery-1 capabilities=2
-temper-daemon: webhook accepted repo=acme/service kind=Issue item=<n>
-temper-daemon: webhook wake scan repo=acme/service enqueued=1
-temper-daemon: assigned job_id=... role=architect repo=acme/service worker=basic-delivery-1
-temper-worker: assigned job_id=... role=architect repo=acme/service
-temper-worker: result sent job_id=... status=success         # ready_code + rewritten body
-temper-daemon: result received job_id=... status=success disposition=...
-temper-daemon: assigned job_id=... role=engineer repo=acme/service worker=basic-delivery-1
-temper-worker: result sent job_id=... status=success         # opens the implementation PR
-temper-daemon: ... mechanical landing ...                    # lands the CI-green PR as bot
+engine: serving on 127.0.0.1:38100
+worker: registered worker_id=basic-delivery-1 capabilities=2
+engine: webhook accepted repo=acme/service kind=Issue item=<n>
+engine: webhook wake scan repo=acme/service enqueued=1
+engine: assigned job_id=... role=architect repo=acme/service worker=basic-delivery-1
+worker: assigned job_id=... role=architect repo=acme/service
+worker: result sent job_id=... status=success         # ready_code + rewritten body
+engine: result received job_id=... status=success disposition=...
+engine: assigned job_id=... role=engineer repo=acme/service worker=basic-delivery-1
+worker: result sent job_id=... status=success         # opens the implementation PR
+engine: ... mechanical landing ...                    # lands the CI-green PR as bot
 ```
 
 The seed-last webhook-wake proof is the `webhook accepted` → `webhook wake scan …

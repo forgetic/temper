@@ -67,7 +67,7 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
         {
             Ok(count) => total += count,
             Err(error) => tracing::warn!(
-                target: "temper_daemon",
+                target: "engine",
                 repo = %target.repo,
                 role = %target.role.as_str(),
                 %error,
@@ -76,13 +76,13 @@ pub async fn run_poll_backstop_tick<F: Forge + ?Sized>(
         }
     }
     if total > 0 {
-        tracing::debug!(target: "temper_daemon", "{}", poll_backstop_log_line(total));
+        tracing::debug!(target: "engine", "{}", poll_backstop_log_line(total));
     }
     total
 }
 
 fn poll_backstop_log_line(enqueued: usize) -> String {
-    format!("temper-daemon: poll backstop enqueued={enqueued}")
+    format!("engine: poll backstop enqueued={enqueued}")
 }
 
 /// Spawns a machine-driven fixed-delay poll backstop onto the engine runtime.
@@ -128,7 +128,7 @@ mod tests {
     fn poll_backstop_log_line_includes_enqueued_count() {
         assert_eq!(
             poll_backstop_log_line(5),
-            "temper-daemon: poll backstop enqueued=5"
+            "engine: poll backstop enqueued=5"
         );
     }
 }

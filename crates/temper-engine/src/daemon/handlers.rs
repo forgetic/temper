@@ -152,7 +152,7 @@ impl DaemonMachine {
             }
             None => {
                 requests.push(DaemonRequest::Log(format!(
-                    "temper-daemon: dropped progress for unknown correlation_key={} step={}",
+                    "engine: dropped progress for unknown correlation_key={} step={}",
                     progress.correlation_key, progress.step
                 )));
             }
@@ -209,7 +209,7 @@ impl DaemonMachine {
         self.recently_applied.retain(|_, deadline| *deadline > now);
         if self.applying.contains(&job_id) {
             requests.push(DaemonRequest::Log(format!(
-                "temper-daemon: skipped enqueue for job in apply window job_id={job_id}"
+                "engine: skipped enqueue for job in apply window job_id={job_id}"
             )));
             return requests;
         }
@@ -219,7 +219,7 @@ impl DaemonMachine {
             .is_some_and(|deadline| *deadline > now)
         {
             requests.push(DaemonRequest::Log(format!(
-                "temper-daemon: skipped enqueue for recently applied job job_id={job_id}"
+                "engine: skipped enqueue for recently applied job job_id={job_id}"
             )));
             return requests;
         }

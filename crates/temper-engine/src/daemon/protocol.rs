@@ -48,14 +48,14 @@ pub(super) fn decode_in_process_reply(
 
 pub(super) fn assignment_log_line(assign: &Assign, worker_id: &str) -> String {
     format!(
-        "temper-daemon: assigned job_id={} role={} repo={} worker={}",
+        "engine: assigned job_id={} role={} repo={} worker={}",
         assign.job_id, assign.role, assign.repo, worker_id
     )
 }
 
 pub(super) fn result_received_log_line(result: &JobResult, disposition: &str) -> String {
     format!(
-        "temper-daemon: result received job_id={} worker={} status={} disposition={}",
+        "engine: result received job_id={} worker={} status={} disposition={}",
         result.job_id,
         result.worker_id,
         result_status_log_value(result),
@@ -117,7 +117,7 @@ pub(super) fn result_disposition(result: &JobResult) -> ResultDisposition {
 /// One structured log line per accepted progress checkpoint.
 pub(super) fn progress_log_line(job: &InFlightJob, progress: &JobProgress) -> String {
     format!(
-        "temper-daemon: progress job_id={} correlation_key={} step={} state={} sha={}{} :: {}",
+        "engine: progress job_id={} correlation_key={} step={} state={} sha={}{} :: {}",
         job.job_id,
         progress.correlation_key,
         progress.step,
@@ -190,7 +190,7 @@ mod tests {
     fn assignment_log_line_includes_worker_from_poll() {
         assert_eq!(
             assignment_log_line(&assign_for_log_line(), "worker-a"),
-            "temper-daemon: assigned job_id=ai/temper/issue-147/engineer/code_ready role=engineer repo=ai/temper worker=worker-a"
+            "engine: assigned job_id=ai/temper/issue-147/engineer/code_ready role=engineer repo=ai/temper worker=worker-a"
         );
     }
 
@@ -200,7 +200,7 @@ mod tests {
 
         assert_eq!(
             result_received_log_line(&result, "apply"),
-            "temper-daemon: result received job_id=job-1 worker=worker-a status=success disposition=apply"
+            "engine: result received job_id=job-1 worker=worker-a status=success disposition=apply"
         );
     }
 
@@ -219,7 +219,7 @@ mod tests {
             assert_eq!(
                 result_received_log_line(&result, disposition),
                 format!(
-                    "temper-daemon: result received job_id=job-1 worker=worker-a status=failure({expected_class}) disposition={disposition}"
+                    "engine: result received job_id=job-1 worker=worker-a status=failure({expected_class}) disposition={disposition}"
                 )
             );
         }

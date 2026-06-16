@@ -133,7 +133,7 @@ impl WorkerMachine {
                 // on the next poll.
                 if self.free_capacity == 0 || self.in_flight.contains(&assign.job_id) {
                     requests.push(WorkerRequest::Log(format!(
-                        "temper-worker: refusing assignment job_id={} (free_capacity={}, already_in_flight={})",
+                        "worker: refusing assignment job_id={} (free_capacity={}, already_in_flight={})",
                         assign.job_id,
                         self.free_capacity,
                         self.in_flight.contains(&assign.job_id)
@@ -159,20 +159,18 @@ impl WorkerMachine {
             }
             Ok(Some(other)) => {
                 requests.push(WorkerRequest::Log(format!(
-                    "temper-worker: unexpected poll reply from daemon: {other:?}"
+                    "worker: unexpected poll reply from daemon: {other:?}"
                 )));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
             Ok(None) => {
                 requests.push(WorkerRequest::Log(
-                    "temper-worker: empty poll reply from daemon".to_string(),
+                    "worker: empty poll reply from daemon".to_string(),
                 ));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
             Err(error) => {
-                requests.push(WorkerRequest::Log(format!(
-                    "temper-worker: poll failed: {error}"
-                )));
+                requests.push(WorkerRequest::Log(format!("worker: poll failed: {error}")));
                 requests.push(WorkerRequest::ArmPollTimer(self.params.poll_backoff));
             }
         }
@@ -211,7 +209,7 @@ impl Machine for WorkerMachine {
             WorkerCompletion::Registered(Err(error)) => {
                 // Registration is required before work; back off and retry.
                 vec![
-                    WorkerRequest::Log(format!("temper-worker: register failed: {error}")),
+                    WorkerRequest::Log(format!("worker: register failed: {error}")),
                     WorkerRequest::ArmPollTimer(self.params.poll_backoff),
                 ]
             }
@@ -246,7 +244,7 @@ impl Machine for WorkerMachine {
             WorkerCompletion::ResultDelivered { job_id, outcome } => match outcome {
                 Ok(()) => Vec::new(),
                 Err(error) => vec![WorkerRequest::Log(format!(
-                    "temper-worker: result delivery failed for job {job_id}: {error}"
+                    "worker: result delivery failed for job {job_id}: {error}"
                 ))],
             },
             WorkerCompletion::HeartbeatTimer => {
@@ -269,7 +267,7 @@ impl Machine for WorkerMachine {
             }
             WorkerCompletion::HeartbeatDelivered(Err(error)) => {
                 vec![WorkerRequest::Log(format!(
-                    "temper-worker: heartbeat failed: {error}"
+                    "worker: heartbeat failed: {error}"
                 ))]
             }
             WorkerCompletion::HeartbeatDelivered(Ok(())) => Vec::new(),

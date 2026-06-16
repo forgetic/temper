@@ -6,8 +6,8 @@ teardown. Logs stay under `logs/` for later inspection.
 
 The whole topology is **one process** (`temper run`), so the daemon, the
 in-process worker, and the coding agent all write to a **single log**:
-`logs/run.log`. Daemon lines are prefixed `temper-daemon:`; worker lines
-`temper-worker:`.
+`logs/run.log`. Daemon lines are prefixed `engine:`; worker lines
+`worker:`.
 
 ## Where to look
 
@@ -27,18 +27,18 @@ in-process worker, and the coding agent all write to a **single log**:
 For the default two-repo cross-repo run, expect (interleaved) in `logs/run.log`:
 
 ```text
-temper-daemon: serving on 127.0.0.1:38200
-temper-worker: registered worker_id=reference-delivery-1 capabilities=6
-temper-daemon: webhook accepted repo=acme/service kind=Issue item=<n>
-temper-daemon: webhook wake scan repo=acme/service enqueued=1
-temper-daemon: assigned job_id=... role=architect repo=acme/service worker=reference-delivery-1
-temper-worker: result sent job_id=... status=success     # fans the parent into per-repo children
-temper-daemon: assigned job_id=... role=engineer repo=acme/service ...
-temper-daemon: assigned job_id=... role=engineer repo=acme/service-canary ...
-temper-worker: result sent job_id=... status=success     # opens each implementation PR
-temper-daemon: assigned job_id=... role=reviewer repo=... worker=reference-delivery-1
-temper-worker: result sent job_id=... status=success     # reviewer approves
-temper-daemon: ... mechanical landing ...                # bot merges each CI-green, approved PR
+engine: serving on 127.0.0.1:38200
+worker: registered worker_id=reference-delivery-1 capabilities=6
+engine: webhook accepted repo=acme/service kind=Issue item=<n>
+engine: webhook wake scan repo=acme/service enqueued=1
+engine: assigned job_id=... role=architect repo=acme/service worker=reference-delivery-1
+worker: result sent job_id=... status=success     # fans the parent into per-repo children
+engine: assigned job_id=... role=engineer repo=acme/service ...
+engine: assigned job_id=... role=engineer repo=acme/service-canary ...
+worker: result sent job_id=... status=success     # opens each implementation PR
+engine: assigned job_id=... role=reviewer repo=... worker=reference-delivery-1
+worker: result sent job_id=... status=success     # reviewer approves
+engine: ... mechanical landing ...                # bot merges each CI-green, approved PR
 ```
 
 The seed-last webhook-wake proof is the `webhook accepted` → `webhook wake scan …
