@@ -63,6 +63,17 @@ impl EngineExecutor<DaemonMachine> for DaemonExecutor {
                     }
                 }
             }
+            DaemonRequest::RoleSaturated {
+                role,
+                concurrency,
+                waiting,
+            } => {
+                temper_log::emit::emit_role_saturated(temper_log::emit::RoleSaturated {
+                    role: &role,
+                    concurrency,
+                    waiting: &waiting,
+                });
+            }
             DaemonRequest::Log(line) => tracing::info!("{line}"),
             #[cfg(test)]
             DaemonRequest::QueuedJobsReply(reply, jobs) => reply.send(jobs),

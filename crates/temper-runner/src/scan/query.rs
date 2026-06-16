@@ -1,8 +1,11 @@
 //! Read-only artifact querying and work-item assembly for scans.
 
+use crate::observability::gate_summary;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use temper_forge::{Forge, Issue, PullRequest, RepositoryId};
+use temper_log::emit::{GateEvaluated, emit_gate_evaluated};
+use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
 use temper_workflow::{
     ArtifactSource, ClassifiedArtifact, Classifier, CompiledWorkflow, ExecutionError, GateSignals,
@@ -147,11 +150,51 @@ async fn push_candidate<F: Forge + ?Sized>(
             Err(error) => return Err(error.into()),
         }
     };
+    emit_pr_gate_evaluated(repo, &classified, &signals, needs);
     artifacts.push(ScannedArtifact {
         classified,
         signals,
     });
     Ok(())
+}
+
+/// Emits the §7 `engine` / `gate.evaluated` line for a CI-gated pull-request
+/// candidate whose gates were just read freshly from the forge.
+///
+/// Only pull requests on a CI-gated track (`needs.ci`) produce this line — these
+/// are the landing-track PRs §7 shows: while CI is pending the note is
+/// `waiting on CI`; once CI passes it becomes
+/// `-> queue 'landing' eligible to land`. The gate summary itself is rendered
+/// from the same fresh [`GateSignals`] by [`gate_summary`]. Issues and ungated
+/// PRs emit nothing.
+///
+/// This fires per scan pass that re-reads a gated PR's signals, so an idle PR
+/// awaiting CI re-emits on each backstop tick; deduping that to state changes is
+/// a debug-level concern left to a later pass.
+fn emit_pr_gate_evaluated(
+    repo: &RepositoryId,
+    classified: &ClassifiedArtifact,
+    signals: &GateSignals,
+    needs: SignalNeeds,
+) {
+    if !needs.ci {
+        return;
+    }
+    let ArtifactSource::PullRequest { number } = classified.source else {
+        return;
+    };
+    let item = WorkItemRef::pull_request(strip_provider_scheme(repo.as_str()), number.get());
+    let gates = gate_summary(signals);
+    let note = if signals.ci().is_passed() {
+        "-> queue 'landing' eligible to land"
+    } else {
+        "waiting on CI"
+    };
+    emit_gate_evaluated(GateEvaluated {
+        item: &item,
+        gates: &gates,
+        note,
+    });
 }
 
 fn signal_needs_for_candidate(

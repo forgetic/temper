@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
+use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_worker_protocol::{Artifact, JobProgress, JobResult, Poll, WorkerProtocolMessage};
 
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
@@ -223,10 +224,43 @@ impl DaemonMachine {
             )));
             return requests;
         }
+        let role_for_saturation = role.clone();
         self.core
             .enqueue_job(job_id, role, repo, artifact, job_payload);
+        if let Some(request) = self.role_saturation_request(&role_for_saturation) {
+            requests.push(request);
+        }
         requests.extend(self.fulfil_waiters());
         requests
+    }
+
+    /// Builds the §7 `role.saturated` request when the just-enqueued role is at
+    /// its concurrency limit with same-role work now queued behind the holder.
+    ///
+    /// The pending wait list and the busy/idle decision come from the pure
+    /// dispatch core ([`DaemonCore::role_saturation`]); the per-role concurrency
+    /// figure is the number of in-flight slots the role currently holds (the
+    /// limit it is hitting — `1` for the standalone single-slot roles). The
+    /// `artifact.ref` strings are built here from each waiting job's repo and
+    /// artifact coordinates. Returns `None` when the role is not saturated.
+    fn role_saturation_request(&self, role: &str) -> Option<DaemonRequest> {
+        let waiting_jobs = self.core.role_saturation(role);
+        if waiting_jobs.is_empty() {
+            return None;
+        }
+        let concurrency = self.core.in_flight_role_count(role).max(1);
+        let waiting = waiting_jobs
+            .iter()
+            .filter_map(|(repo, artifact)| artifact_ref_string(repo, artifact))
+            .collect::<Vec<_>>();
+        if waiting.is_empty() {
+            return None;
+        }
+        Some(DaemonRequest::RoleSaturated {
+            role: role.to_string(),
+            concurrency: u64::try_from(concurrency).unwrap_or(1),
+            waiting,
+        })
     }
 
     fn fulfil_waiters(&mut self) -> Vec<DaemonRequest> {
@@ -264,4 +298,22 @@ impl DaemonMachine {
         }
         requests
     }
+}
+
+/// Builds the canonical `artifact.ref` join key for a waiting job.
+///
+/// `repo` is the job's bare `owner/repo` path; the artifact's JSON `item` is a
+/// numeric id and `kind` selects the issue (`owner/repo#n`) vs pull-request
+/// (`owner/repo PR#n`) shape. Returns `None` for a non-numeric item or an
+/// unrecognized kind, so the saturated-role wait list silently drops a malformed
+/// entry rather than rendering a broken tag.
+fn artifact_ref_string(repo: &str, artifact: &Artifact) -> Option<String> {
+    let number = artifact.item.as_u64()?;
+    let repo = strip_provider_scheme(repo);
+    let item = match artifact.kind.as_str() {
+        "issue" => WorkItemRef::issue(repo, number),
+        "pull_request" => WorkItemRef::pull_request(repo, number),
+        _ => return None,
+    };
+    Some(item.to_string())
 }

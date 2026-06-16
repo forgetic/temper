@@ -92,6 +92,50 @@ impl DaemonCore {
             .collect()
     }
 
+    /// Reports whether a role is saturated and, if so, what is queued behind it.
+    ///
+    /// A role is *saturated* when it has at least one in-flight (assigned) job
+    /// and at least one job still pending in the same role's queue — i.e. work
+    /// is waiting because the role's worker(s) are busy. The returned vector
+    /// holds the `(repo, artifact)` coordinates of the pending same-role jobs in
+    /// queue order, which the observability layer renders into the §7
+    /// `role.saturated` wait list. An empty result means the role is not
+    /// saturated (idle, or pending work but no in-flight holder).
+    ///
+    /// This is a pure read over the dispatch coordinator's pending/assigned
+    /// sets; the caller owns the structured-event emission (this crate has no
+    /// logging dependency).
+    pub fn role_saturation(&self, role: &str) -> Vec<(String, Artifact)> {
+        let coordinator = &self.coordinator;
+        let role_busy = coordinator
+            .assigned_work_items()
+            .any(|item| item.role == role);
+        if !role_busy {
+            return Vec::new();
+        }
+        coordinator
+            .pending()
+            .iter()
+            .filter(|item| item.role == role)
+            .filter_map(|item| {
+                let (artifact, _payload) = self.job_context.get(&item.job_id)?;
+                Some((item.repo.clone(), artifact.clone()))
+            })
+            .collect()
+    }
+
+    /// Number of in-flight (assigned, not yet completed) jobs for a role.
+    ///
+    /// For the single-slot standalone roles this is the role's effective
+    /// concurrency limit while it is busy (the `(concurrency=N)` figure of the
+    /// §7 `role.saturated` line).
+    pub fn in_flight_role_count(&self, role: &str) -> usize {
+        self.coordinator
+            .assigned_work_items()
+            .filter(|item| item.role == role)
+            .count()
+    }
+
     /// Full context of a currently in-flight (assigned, not yet completed) job,
     /// recoverable until `handle(Result)` completes it. `None` if the job is
     /// pending (not yet dispatched), unknown, or already completed.

@@ -78,6 +78,14 @@ pub(super) enum DaemonRequest {
         token: u64,
         hint: temper_runner::ChangeHint,
     },
+    /// A role is at its concurrency limit with same-role work queued behind it.
+    /// Carries the per-role concurrency figure and the `artifact.ref` strings of
+    /// the waiting items, ready for the §7 `worker` / `role.saturated` line.
+    RoleSaturated {
+        role: String,
+        concurrency: u64,
+        waiting: Vec<String>,
+    },
     Log(String),
     #[cfg(test)]
     QueuedJobsReply(

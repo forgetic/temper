@@ -103,8 +103,8 @@ pub use multi_repo::{
 };
 pub use observability::{
     ObservabilityArtifactType, WorkItemIdentity, artifact_ref, execution_error_diagnostic_classes,
-    execution_error_failure_class, labels_delta, postcondition_outcome_for_error, work_item_ref,
-    workflow_effect_summary,
+    execution_error_failure_class, gate_summary, labels_delta, postcondition_outcome_for_error,
+    queue_after_transition, work_item_ref, workflow_effect_summary,
 };
 pub use role_decision::{
     AuthorizedWorkflowAction, BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION,

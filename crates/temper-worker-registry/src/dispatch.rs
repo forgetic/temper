@@ -199,6 +199,14 @@ impl DispatchCoordinator {
         self.assigned.get(job_id).map(|(_worker_id, item)| item)
     }
 
+    /// All currently in-flight (assigned, not yet completed) work items.
+    ///
+    /// Used by concurrency observability to tell whether a role already holds a
+    /// worker slot (and so further same-role pending work is queued behind it).
+    pub fn assigned_work_items(&self) -> impl Iterator<Item = &WorkItem> {
+        self.assigned.values().map(|(_worker_id, item)| item)
+    }
+
     pub fn in_flight_len(&self) -> usize {
         self.assigned.len()
     }

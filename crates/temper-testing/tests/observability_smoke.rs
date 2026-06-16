@@ -13,10 +13,16 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
-use temper_log::emit::{TransitionApplied, emit_transition_applied};
-use temper_runner::{WorkItemIdentity, labels_delta, scan_role, work_item_ref};
+use temper_log::WorkItemRef;
+use temper_log::emit::{
+    GateEvaluated, QueueEntered, TransitionApplied, emit_gate_evaluated, emit_queue_entered,
+    emit_transition_applied,
+};
+use temper_runner::{
+    WorkItemIdentity, gate_summary, labels_delta, queue_after_transition, scan_role, work_item_ref,
+};
 use temper_testing::{block_on, workflow};
-use temper_workflow::{ArtifactSource, RoleId, TransitionId};
+use temper_workflow::{ArtifactSource, CiStatus, GateSignals, RoleId, TransitionId};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
 use tracing_subscriber::Layer;
@@ -193,6 +199,115 @@ fn applied_transition_emits_join_key_label_delta_and_human_line() {
             && issue.labels.iter().any(|label| label == "code")
             && issue.labels.iter().any(|label| label == "ready")
     }));
+}
+
+#[test]
+fn applied_transition_derives_queue_entered_destination_and_role() {
+    let workflow = workflow();
+    let compiled = workflow.compile();
+
+    // `triage_to_code` flips the issue into the `ready`-gated `code_ready`
+    // queue, which the `engineer` role subscribes to — exactly §7's
+    // `-> queue 'code_ready' | awaiting engineer`.
+    let report = {
+        let forge = MemoryForge::new();
+        let repo = create_repo(&forge);
+        let role = RoleId::new("architect");
+        let intake = block_on(forge.create_issue(
+            &repo,
+            CreateIssue {
+                title: "Queue move".to_string(),
+                body: String::new(),
+                labels: vec!["untriaged".to_string()],
+                assignees: Vec::new(),
+            },
+        ))
+        .expect("intake issue");
+        block_on(workflow.executor(&forge).execute(
+            &repo,
+            ArtifactSource::Issue {
+                number: intake.number,
+            },
+            &TransitionId::new("triage_to_code"),
+            &role,
+        ))
+        .expect("transition executes")
+    };
+
+    let (queue, role) =
+        queue_after_transition(&compiled, &report.applied).expect("a destination queue matches");
+    assert_eq!(queue.id.as_str(), "code_ready");
+    let note = role
+        .map(|role| format!("awaiting {role}"))
+        .unwrap_or_default();
+    assert_eq!(note, "awaiting engineer");
+
+    let item = WorkItemRef::issue("acme/service", 1);
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    with_default(registry().with(layer), || {
+        emit_queue_entered(QueueEntered {
+            item: &item,
+            queue_to: queue.id.as_str(),
+            note: &note,
+        });
+    });
+
+    let captured = events.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    let ev = &captured[0];
+    assert_eq!(ev.target, "temper::engine");
+    assert_eq!(
+        ev.fields.get("event").map(String::as_str),
+        Some("queue.entered")
+    );
+    assert_eq!(
+        ev.fields.get("queue.to").map(String::as_str),
+        Some("code_ready")
+    );
+    let message = ev.fields.get("message").cloned().expect("message present");
+    assert_eq!(
+        message,
+        "[acme/service#1] -> queue 'code_ready' | awaiting engineer"
+    );
+}
+
+#[test]
+fn gate_evaluated_renders_summary_and_note_from_signals() {
+    let pr = WorkItemRef::pull_request("acme/service", 44);
+
+    // Pending CI -> `waiting on CI`.
+    let pending = GateSignals::new();
+    let pending_summary = gate_summary(&pending);
+    let layer = CaptureLayer::default();
+    let events = layer.events.clone();
+    with_default(registry().with(layer), || {
+        emit_gate_evaluated(GateEvaluated {
+            item: &pr,
+            gates: &pending_summary,
+            note: "waiting on CI",
+        });
+    });
+    let captured = events.lock().unwrap();
+    let ev = &captured[0];
+    assert_eq!(ev.target, "temper::engine");
+    assert_eq!(
+        ev.fields.get("event").map(String::as_str),
+        Some("gate.evaluated")
+    );
+    assert_eq!(
+        ev.fields.get("gates").map(String::as_str),
+        Some("ci_gate=pending dependency_gate=ok")
+    );
+    assert_eq!(
+        ev.fields.get("message").cloned().unwrap(),
+        "[acme/service PR#44] gates: ci_gate=pending dependency_gate=ok | waiting on CI"
+    );
+    drop(captured);
+
+    // Passed CI -> eligible to land.
+    let passed = GateSignals::new().with_ci(CiStatus::passed());
+    assert_eq!(gate_summary(&passed), "ci_gate=ok dependency_gate=ok");
 }
 
 fn create_repo(forge: &MemoryForge) -> RepositoryId {

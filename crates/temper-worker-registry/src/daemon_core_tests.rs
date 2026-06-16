@@ -89,6 +89,44 @@ fn pending_job_is_not_in_flight() {
 }
 
 #[test]
+fn role_saturation_names_same_role_pending_behind_a_busy_holder() {
+    let mut core = DaemonCore::new();
+    core.coordinator_mut().register(&register_multi(
+        "architect-1",
+        "architect",
+        &["acme/api", "acme/widgets"],
+        1,
+    ));
+    // Two architect jobs across two repos; the single architect slot serializes
+    // them, so the second queues behind the first.
+    core.enqueue_job("job-a", "architect", "acme/api", artifact(), json!({"k":1}));
+    core.enqueue_job(
+        "job-b",
+        "architect",
+        "acme/widgets",
+        artifact(),
+        json!({"k":2}),
+    );
+
+    // Nothing is in flight yet -> the role is not saturated.
+    assert!(core.role_saturation("architect").is_empty());
+    assert_eq!(core.in_flight_role_count("architect"), 0);
+
+    // Claiming the slot for job-a makes the role busy with job-b queued behind.
+    match core.handle(poll("architect-1")) {
+        Some(WorkerProtocolMessage::Assign(assign)) => assert_eq!(assign.job_id, "job-a"),
+        other => panic!("expected assign, got {other:?}"),
+    }
+    assert_eq!(core.in_flight_role_count("architect"), 1);
+    let waiting = core.role_saturation("architect");
+    assert_eq!(waiting.len(), 1, "only job-b is queued behind");
+    assert_eq!(waiting[0].0, "acme/widgets");
+
+    // A different idle role is never reported saturated.
+    assert!(core.role_saturation("engineer").is_empty());
+}
+
+#[test]
 fn completed_job_is_no_longer_in_flight() {
     let mut core = DaemonCore::new();
     core.coordinator_mut()

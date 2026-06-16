@@ -6,10 +6,11 @@
 use std::collections::BTreeMap;
 
 use temper_forge::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
+use temper_log::emit::{PrOpened, emit_pr_opened};
 use temper_worker_protocol::{JobContext, JobResult, RepoOutcome};
-use temper_workflow::{ArtifactKindId, Executor};
+use temper_workflow::{ArtifactKindId, ArtifactSource, Executor};
 
-use temper_runner::pr_correlation_key;
+use temper_runner::{artifact_ref, pr_correlation_key};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
@@ -176,6 +177,23 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .await
         {
             Ok(ensured) => {
+                if ensured.was_created() {
+                    // §7 `engine` / `pr.opened`: a brand-new implementation PR.
+                    // The PR title is the coordinating issue's title; `for #n`
+                    // names that issue so the issue<->PR alias is greppable.
+                    let pr_ref = artifact_ref(
+                        &target_repository.id,
+                        ArtifactSource::PullRequest {
+                            number: ensured.artifact().number,
+                        },
+                    );
+                    emit_pr_opened(PrOpened {
+                        item: &pr_ref,
+                        title: set.issue_title,
+                        kind: "implementation",
+                        for_issue: set.number.get(),
+                    });
+                }
                 opened.insert(
                     outcome.repo.clone(),
                     (target_repository.id.clone(), ensured.artifact().number),

@@ -11,7 +11,8 @@ use temper_workflow::{
     RoleId, TransitionId, ValidatedWorkflow, VerdictId,
 };
 
-use temper_runner::workspace_content_key;
+use temper_log::emit::{QueueEntered, emit_queue_entered};
+use temper_runner::{artifact_ref, queue_after_transition, workspace_content_key};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
@@ -268,16 +269,17 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     }
 
     pub(super) async fn execute_routed_verdict(&self, apply: RoutedVerdictApply<'_>) {
+        // Capture the coordinates the observability emit needs before the
+        // execution context is moved into the executor below.
+        let repository_id = apply.repository_id;
+        let source = apply.source;
         match Executor::with_context(self.workflow.as_ref(), self.forge.as_ref(), apply.context)
-            .execute(
-                apply.repository_id,
-                apply.source,
-                apply.routed,
-                apply.role_id,
-            )
+            .execute(repository_id, source, apply.routed, apply.role_id)
             .await
         {
-            Ok(_) => {}
+            Ok(report) => {
+                self.emit_routed_verdict_observability(repository_id, source, &report);
+            }
             Err(error) if is_stale(&error) => {}
             Err(error) => {
                 tracing::error!(
@@ -295,6 +297,35 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 );
             }
         }
+    }
+
+    /// Emits the §7 `engine` / `queue.entered` line after a routed verdict
+    /// transition applies on the daemon path.
+    ///
+    /// A routed verdict such as `triage_intake_to_code` flips identifying labels
+    /// and so moves the artifact into a new workflow queue; §7 renders that as
+    /// `-> queue '<queue>' | awaiting <role>`. The destination queue and waiting
+    /// role are derived purely from the applied label effects and the compiled
+    /// workflow (see [`queue_after_transition`]). Transitions that enter no
+    /// labelled queue emit no line.
+    fn emit_routed_verdict_observability(
+        &self,
+        repository_id: &RepositoryId,
+        source: ArtifactSource,
+        report: &temper_workflow::ExecutionReport,
+    ) {
+        let Some((queue, role)) = queue_after_transition(&self.compiled, &report.applied) else {
+            return;
+        };
+        let item = artifact_ref(repository_id, source);
+        let note = role
+            .map(|role| format!("awaiting {role}"))
+            .unwrap_or_default();
+        emit_queue_entered(QueueEntered {
+            item: &item,
+            queue_to: queue.id.as_str(),
+            note: &note,
+        });
     }
 }
 
