@@ -42,11 +42,14 @@ pub use product_manager::{
     ProductManagerRequest, ProductManagerResponder, ProductManagerResponse,
 };
 pub use prompt_overlays::{
-    CONFIG_DIR_ENV, ComposedTurns, PromptOverlays, RenderedOverlays, resolve_config_dir,
+    CONFIG_DIR_ENV, ComposedTurns, PromptOverlays, RenderedOverlays, XDG_CONFIG_HOME_ENV,
+    resolve_config_dir_from,
 };
 pub use provider::{
-    ANTHROPIC_MODEL_ENV, AUTH_FILE_ENV, AuthChoice, CODEX_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL,
-    DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig, ProviderError, default_auth_path,
+    ANTHROPIC_MODEL_ENV, ANTHROPIC_SUBAGENT_MODEL_ENV, ANTHROPIC_TOKEN_URL_ENV, API_KEY_ENV,
+    API_KEY_PATH_ENV, AUTH_FILE_ENV, AuthChoice, CODEX_MODEL_ENV, CODEX_TOKEN_URL_ENV,
+    DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig,
+    ProviderEnv, ProviderError, default_auth_path,
 };
 pub use temper_process_protocol::{
     ConversationReply, ConversationRequest, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,

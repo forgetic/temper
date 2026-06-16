@@ -141,11 +141,22 @@ fn base_url_override_changes_oauth_model_entries() {
 #[test]
 fn fixture_preflights_for_both_oauth_modes() {
     assert!(
-        ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, Some(jig_auth_fixture()))
-            .is_ok()
+        ProviderConfig::from_auth(
+            AuthChoice::AnthropicOAuth,
+            None,
+            Some(jig_auth_fixture()),
+            &ProviderEnv::empty()
+        )
+        .is_ok()
     );
     assert!(
-        ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, None, Some(jig_auth_fixture())).is_ok()
+        ProviderConfig::from_auth(
+            AuthChoice::ChatGptOAuth,
+            None,
+            Some(jig_auth_fixture()),
+            &ProviderEnv::empty()
+        )
+        .is_ok()
     );
 }
 
@@ -157,14 +168,22 @@ fn fixture_resolves_bearers_offline_for_both_oauth_modes() {
 }
 
 async fn fixture_resolves_bearers_offline_for_both_oauth_modes_inner() {
-    let anthropic =
-        ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, Some(jig_auth_fixture()))
-            .expect("anthropic fixture should preflight");
+    let anthropic = ProviderConfig::from_auth(
+        AuthChoice::AnthropicOAuth,
+        None,
+        Some(jig_auth_fixture()),
+        &ProviderEnv::empty(),
+    )
+    .expect("anthropic fixture should preflight");
     assert_eq!(anthropic.resolve_bearer().await.unwrap(), "jig-dummy");
 
-    let chatgpt =
-        ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, None, Some(jig_auth_fixture()))
-            .expect("chatgpt fixture should preflight");
+    let chatgpt = ProviderConfig::from_auth(
+        AuthChoice::ChatGptOAuth,
+        None,
+        Some(jig_auth_fixture()),
+        &ProviderEnv::empty(),
+    )
+    .expect("chatgpt fixture should preflight");
     assert_eq!(
         chatgpt.resolve_bearer().await.unwrap(),
         "eyJhbGciOiAibm9uZSJ9.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOiB7ImNoYXRncHRfYWNjb3VudF9pZCI6ICJhY2N0X2ppZyJ9fQ."
@@ -179,8 +198,13 @@ fn from_auth_oauth_preflights_missing_login() {
         "from-auth"
     ));
     let _ = std::fs::remove_file(&missing);
-    let error = ProviderConfig::from_auth(AuthChoice::ChatGptOAuth, None, Some(missing))
-        .expect_err("missing login must fail the preflight");
+    let error = ProviderConfig::from_auth(
+        AuthChoice::ChatGptOAuth,
+        None,
+        Some(missing),
+        &ProviderEnv::empty(),
+    )
+    .expect_err("missing login must fail the preflight");
     assert!(matches!(error, ProviderError::OAuthUnavailable(_)));
     assert!(format!("{error}").contains("openai-codex"));
 }
@@ -193,8 +217,13 @@ fn from_auth_anthropic_oauth_preflights_missing_login() {
         "from-auth-anthropic"
     ));
     let _ = std::fs::remove_file(&missing);
-    let error = ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, Some(missing))
-        .expect_err("missing Anthropic login must fail the preflight");
+    let error = ProviderConfig::from_auth(
+        AuthChoice::AnthropicOAuth,
+        None,
+        Some(missing),
+        &ProviderEnv::empty(),
+    )
+    .expect_err("missing Anthropic login must fail the preflight");
     assert!(matches!(error, ProviderError::AnthropicOAuthUnavailable(_)));
     assert!(format!("{error}").contains("pi /login anthropic"));
 }
@@ -216,7 +245,12 @@ fn from_auth_anthropic_oauth_preflights_present_login() {
     })
     .to_string();
     std::fs::write(&path, contents).expect("write auth fixture");
-    let result = ProviderConfig::from_auth(AuthChoice::AnthropicOAuth, None, Some(path.clone()));
+    let result = ProviderConfig::from_auth(
+        AuthChoice::AnthropicOAuth,
+        None,
+        Some(path.clone()),
+        &ProviderEnv::empty(),
+    );
     let _ = std::fs::remove_file(&path);
     assert!(result.is_ok(), "present Anthropic login should preflight");
 }

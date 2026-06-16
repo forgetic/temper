@@ -24,12 +24,15 @@ use serde_json::{Map, Value};
 
 use super::ProviderError;
 
-/// Env var overriding the auth-file path (used by tests).
+/// Env var overriding the auth-file path. The name lives here so the agent's
+/// `entry` (the sole env reader) and the worker's env-injection map agree;
+/// nothing in this crate reads it.
 pub const AUTH_FILE_ENV: &str = "TEMPER_AGENTS_AUTH_FILE";
-/// Env var overriding the codex model id.
+/// Env var overriding the codex model id. Read only by the agent's `entry`.
 pub const CODEX_MODEL_ENV: &str = "TEMPER_AGENTS_CODEX_MODEL";
-/// Env var overriding the codex OAuth token endpoint (used by tests).
-const TOKEN_URL_ENV: &str = "TEMPER_AGENTS_CODEX_TOKEN_URL";
+/// Env var overriding the codex OAuth token endpoint (used by tests). Read only
+/// by the agent's `entry`, which forwards the value into [`OAuthSettings`].
+pub const CODEX_TOKEN_URL_ENV: &str = "TEMPER_AGENTS_CODEX_TOKEN_URL";
 
 /// Default codex model the ChatGPT subscription serves (overridable). Listed by
 /// the SDK's `openai-codex` route; the route ignores `model.api`.
@@ -58,48 +61,49 @@ pub fn default_auth_path() -> PathBuf {
     tongs::config::Config::auth_path()
 }
 
-/// Resolves the configured codex model id (env override or default).
-pub fn codex_model_from_env() -> String {
-    std::env::var(CODEX_MODEL_ENV)
-        .ok()
+/// Resolves the codex model id from the CLI override then the env value.
+///
+/// Precedence: the `override_id` (the CLI `--codex-model` value), else
+/// `env_value` (the [`CODEX_MODEL_ENV`] value the host read), else
+/// [`DEFAULT_CODEX_MODEL`]. Reads no environment itself — both inputs are passed.
+pub fn resolve_codex_model(override_id: Option<String>, env_value: Option<String>) -> String {
+    override_id
+        .or(env_value)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string())
 }
 
-/// Resolves the codex model id with an explicit override taking precedence.
-///
-/// Precedence: the `override_id` (the CLI value), else [`CODEX_MODEL_ENV`], else
-/// [`DEFAULT_CODEX_MODEL`].
-pub fn resolve_codex_model(override_id: Option<String>) -> String {
-    override_id
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(codex_model_from_env)
-}
-
-/// Where the codex OAuth credential is read from.
+/// Where the codex OAuth credential is read from, plus the token endpoint to
+/// refresh against.
 #[derive(Clone)]
 pub struct OAuthSettings {
     auth_file: PathBuf,
+    /// The refresh token endpoint; `None` uses the compiled-in [`CODEX_TOKEN_URL`]
+    /// (tests override it via [`CODEX_TOKEN_URL_ENV`], resolved in the agent's
+    /// `entry`).
+    token_url: Option<String>,
 }
 
 impl OAuthSettings {
-    /// Resolves the auth-file path with an explicit override taking precedence.
+    /// Resolves the auth-file path with the supplied override taking precedence.
     ///
-    /// Precedence: the `auth_file` override (the CLI value), else
-    /// [`AUTH_FILE_ENV`], else the SDK default (`~/.pi/agent/auth.json`).
-    pub fn new(auth_file: Option<PathBuf>) -> Self {
+    /// Precedence: the `auth_file` override (the CLI value, with any
+    /// [`AUTH_FILE_ENV`] value already folded in by the host), else the SDK
+    /// default (`~/.pi/agent/auth.json`). The `token_url` override (the
+    /// [`CODEX_TOKEN_URL_ENV`] value the host read) redirects token refresh; `None`
+    /// keeps the compiled-in endpoint. Reads no environment.
+    pub fn new(auth_file: Option<PathBuf>, token_url: Option<String>) -> Self {
         let auth_file = auth_file
             .filter(|path| !path.as_os_str().is_empty())
-            .or_else(|| {
-                std::env::var(AUTH_FILE_ENV)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(PathBuf::from)
-            })
             .unwrap_or_else(tongs::config::Config::auth_path);
-        Self { auth_file }
+        let token_url = token_url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Self {
+            auth_file,
+            token_url,
+        }
     }
 
     /// Eagerly confirms the codex OAuth entry is present and parseable — without
@@ -113,7 +117,7 @@ impl OAuthSettings {
     pub async fn resolve_bearer(&self) -> Result<String, ProviderError> {
         let mut entry = CodexEntry::read(&self.auth_file)?;
         if entry.is_expiring(now_ms()) {
-            entry.refresh().await?;
+            entry.refresh(self.token_url.as_deref()).await?;
             entry.write_back(&self.auth_file)?;
         }
         Ok(entry.access)
@@ -200,16 +204,15 @@ impl CodexEntry {
     }
 
     /// Refreshes the token against the OpenAI Codex token endpoint using the
-    /// stored refresh token, updating the in-memory entry in place.
-    async fn refresh(&mut self) -> Result<(), ProviderError> {
-        let token_url = std::env::var(TOKEN_URL_ENV)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| CODEX_TOKEN_URL.to_string());
+    /// stored refresh token, updating the in-memory entry in place. `token_url`
+    /// overrides the endpoint when supplied (a test-only redirect resolved in the
+    /// agent's `entry`); otherwise the compiled-in [`CODEX_TOKEN_URL`] is used.
+    async fn refresh(&mut self, token_url: Option<&str>) -> Result<(), ProviderError> {
+        let token_url = token_url.unwrap_or(CODEX_TOKEN_URL);
 
         let client = tongs::http::client::Client::new();
         let request = client
-            .post(&token_url)
+            .post(token_url)
             .json(&serde_json::json!({
                 "grant_type": "refresh_token",
                 "client_id": CODEX_CLIENT_ID,

@@ -7,13 +7,17 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Env var that overrides the DeepSeek API-key file path.
+use secrecy::{ExposeSecret, SecretString};
+
+/// Env var that overrides the DeepSeek API-key file path. The name lives here so
+/// the agent's `entry` (the sole env reader) and the worker's env-injection map
+/// agree; nothing in this crate reads it.
 pub const API_KEY_PATH_ENV: &str = "TEMPER_DEEPSEEK_API_KEY_PATH";
 /// Env var that supplies the DeepSeek API key directly (takes precedence over
-/// the file path).
+/// the file path). Read only by the agent's `entry`; see [`API_KEY_PATH_ENV`].
 pub const API_KEY_ENV: &str = "TEMPER_DEEPSEEK_API_KEY";
 
-/// Default file the key is read from when no env override is set.
+/// Default file the key is read from when no override is supplied.
 const DEFAULT_KEY_PATH: &str = ".cache/deepseek-api-key";
 
 /// Failure building provider wiring or resolving a credential.
@@ -50,23 +54,32 @@ impl fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// Reads the API key from env or the configured file, redacting the value on
-/// error (only the path is ever surfaced).
-pub(super) fn load_api_key() -> Result<String, ProviderError> {
-    if let Ok(key) = std::env::var(API_KEY_ENV) {
-        let trimmed = key.trim();
+/// Resolves the API key from the supplied direct key or the configured file,
+/// redacting the value on error (only the path is ever surfaced).
+///
+/// `direct_key` is the host-supplied key ([`API_KEY_ENV`], read by the agent's
+/// `entry`); when present and non-empty it takes precedence over the file.
+/// `path_override` is the optional file-path override ([`API_KEY_PATH_ENV`]);
+/// when absent the default `.cache/deepseek-api-key` file is read. The function
+/// itself reads no environment — the host passes both inputs.
+pub(super) fn load_api_key(
+    direct_key: Option<&SecretString>,
+    path_override: Option<&Path>,
+) -> Result<SecretString, ProviderError> {
+    if let Some(key) = direct_key {
+        let trimmed = key.expose_secret().trim();
         if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
+            return Ok(SecretString::from(trimmed.to_string()));
         }
     }
 
-    let path = std::env::var(API_KEY_PATH_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_KEY_PATH));
+    let path = path_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_KEY_PATH));
     read_key_file(&path)
 }
 
-fn read_key_file(path: &Path) -> Result<String, ProviderError> {
+fn read_key_file(path: &Path) -> Result<SecretString, ProviderError> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         ProviderError::KeyUnavailable(format!("reading {}: {error}", path.display()))
     })?;
@@ -77,5 +90,5 @@ fn read_key_file(path: &Path) -> Result<String, ProviderError> {
             path.display()
         )));
     }
-    Ok(trimmed.to_string())
+    Ok(SecretString::from(trimmed.to_string()))
 }

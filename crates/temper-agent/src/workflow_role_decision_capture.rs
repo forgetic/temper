@@ -29,6 +29,8 @@ use paths::{capture_file_path, capture_file_path_with_local_suffix, primary_stem
 use record::DecisionCaptureFile;
 
 /// Environment variable that enables redacted workflow-role decision captures.
+/// The name lives here so the agent's `entry` / the CLI responder (the env
+/// readers) and this module agree; nothing in this crate reads it.
 pub const WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV: &str = "ANVIL_WORKFLOW_ROLE_DECISION_CAPTURE_DIR";
 
 /// Disabled-by-default capture configuration.
@@ -38,10 +40,6 @@ pub(crate) struct WorkflowRoleDecisionCapture {
 }
 
 impl WorkflowRoleDecisionCapture {
-    pub(crate) fn from_env() -> Self {
-        Self::from_optional_dir(std::env::var_os(WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV))
-    }
-
     pub(crate) fn from_optional_dir(dir: Option<impl Into<PathBuf>>) -> Self {
         let dir = dir.and_then(|dir| {
             let dir = dir.into();

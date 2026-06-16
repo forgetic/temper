@@ -12,7 +12,8 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 use temper_agent::{
-    AuthChoice, ProductManagerResponder, ProviderConfig, WorkflowRoleDecisionRequest,
+    AuthChoice, PROVIDER_BASE_URL_ENV, ProductManagerResponder, ProviderConfig, ProviderEnv,
+    WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV, WorkflowRoleDecisionRequest,
     WorkflowRoleDecisionResponder,
 };
 use temper_process_protocol::ConversationRequest;
@@ -67,7 +68,9 @@ fn run_workflow_role_decision(args: Vec<String>) -> Result<(), String> {
     }
     let request: WorkflowRoleDecisionRequest = read_request("WorkflowRoleDecisionRequest")?;
     let provider = options.provider()?;
-    let responder = WorkflowRoleDecisionResponder::new(provider);
+    // Redacted decision capture is host config (env), enabled here at the
+    // responder's process entry point rather than read inside the library.
+    let responder = WorkflowRoleDecisionResponder::with_capture_dir(provider, capture_dir());
     let reply = temper_agent_io::block_on_with(move |_cx, handle| async move {
         responder.respond(handle, &request).await
     })
@@ -142,10 +145,54 @@ impl ResponderOptions {
     }
 
     fn provider(&self) -> Result<ProviderConfig, String> {
-        ProviderConfig::from_auth(self.auth, self.codex_model.clone(), self.auth_file.clone())
-            .map_err(|error| error.to_string())
-            .map(ProviderConfig::apply_base_url_override_from_env)
+        // The responder is its own process entry point, so it reads the provider
+        // env here (the legitimate analogue of the out-of-process agent's
+        // `entry`) and threads it into the value-taking provider factory.
+        let env = read_provider_env();
+        ProviderConfig::from_auth(
+            self.auth,
+            self.codex_model.clone(),
+            self.auth_file.clone(),
+            &env,
+        )
+        .map_err(|error| error.to_string())
+        .map(|config| config.apply_base_url_override(env.base_url_override.as_deref()))
     }
+}
+
+/// Reads the provider env for the responder (its own process entry point).
+fn read_provider_env() -> ProviderEnv {
+    ProviderEnv {
+        deepseek_api_key: env_var(temper_agent::API_KEY_ENV).map(temper_config::Secret::from),
+        deepseek_api_key_path: env_path(temper_agent::API_KEY_PATH_ENV),
+        auth_file: env_path(temper_agent::AUTH_FILE_ENV),
+        codex_model: env_var(temper_agent::CODEX_MODEL_ENV),
+        codex_token_url: env_var(temper_agent::CODEX_TOKEN_URL_ENV),
+        anthropic_model: env_var(temper_agent::ANTHROPIC_MODEL_ENV),
+        anthropic_subagent_model: env_var(temper_agent::ANTHROPIC_SUBAGENT_MODEL_ENV),
+        anthropic_token_url: env_var(temper_agent::ANTHROPIC_TOKEN_URL_ENV),
+        base_url_override: env_var(PROVIDER_BASE_URL_ENV),
+    }
+}
+
+/// The redacted-capture directory from the host environment, if enabled.
+fn capture_dir() -> Option<PathBuf> {
+    env_path(WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV)
+}
+
+/// Reads an env var, trimming and treating empty as unset.
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Reads an env var as a path, treating empty as unset.
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn parse_auth_choice(value: &str) -> Result<AuthChoice, String> {
