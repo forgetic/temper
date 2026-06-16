@@ -28,8 +28,17 @@ pub(super) fn collect_text(content: &[ContentBlock]) -> String {
 /// or prose-wrapped JSON object. An empty / no-object reply is treated as an
 /// empty head-path result (no verdict, no diff claim) so the contract check is
 /// the single authority on whether that is acceptable.
+///
+/// A reply may contain several balanced `{...}` objects — prose the model wrote
+/// while narrating the change (a `tracing::info!{…}` snippet, an example body)
+/// can sit ahead of the real result envelope, which is emitted last. We try the
+/// candidates last-first and accept the last one that deserializes into a
+/// [`WorkspaceResult`], so a stray brace in the narration no longer hijacks the
+/// parse. If none deserialize we surface the error from the last candidate (the
+/// one most likely to have been the intended result).
 pub(crate) fn parse_result(text: &str) -> Result<WorkspaceResult, CodingAgentError> {
-    let Some(candidate) = extract_json_object(text) else {
+    let candidates = extract_json_objects(text);
+    if candidates.is_empty() {
         if text.trim().is_empty() {
             return Ok(WorkspaceResult::default());
         }
@@ -37,10 +46,17 @@ pub(crate) fn parse_result(text: &str) -> Result<WorkspaceResult, CodingAgentErr
             snippet: snippet(text),
             error: "no JSON object found in reply".to_string(),
         });
-    };
-    serde_json::from_str::<WorkspaceResult>(&candidate).map_err(|error| CodingAgentError::Parse {
+    }
+    let mut last_error = None;
+    for candidate in candidates.iter().rev() {
+        match serde_json::from_str::<WorkspaceResult>(candidate) {
+            Ok(result) => return Ok(result),
+            Err(error) => last_error.get_or_insert_with(|| error.to_string()),
+        };
+    }
+    Err(CodingAgentError::Parse {
         snippet: snippet(text),
-        error: error.to_string(),
+        error: last_error.unwrap_or_else(|| "no JSON object matched the result shape".to_string()),
     })
 }
 
@@ -161,15 +177,19 @@ fn working_tree_has_changes(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Returns the first balanced top-level `{...}` substring, if any. Shares the
-/// brace-matching logic with [`crate::decision`] but is kept local to avoid a
-/// cross-module dependency on a private helper.
-fn extract_json_object(text: &str) -> Option<String> {
-    let start = text.find('{')?;
+/// Returns every balanced top-level `{...}` substring, in source order. Nested
+/// objects are folded into their enclosing top-level object (we only emit a
+/// candidate when depth returns to zero), so a `WorkspaceResult` with `children`
+/// stays a single candidate. Shares the brace-matching logic with
+/// [`crate::decision`] but is kept local to avoid a cross-module dependency on a
+/// private helper.
+fn extract_json_objects(text: &str) -> Vec<String> {
+    let mut objects = Vec::new();
     let mut depth = 0usize;
+    let mut start = None;
     let mut in_string = false;
     let mut escaped = false;
-    for (offset, ch) in text[start..].char_indices() {
+    for (offset, ch) in text.char_indices() {
         if in_string {
             if escaped {
                 escaped = false;
@@ -182,17 +202,24 @@ fn extract_json_object(text: &str) -> Option<String> {
         }
         match ch {
             '"' => in_string = true,
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
+            '{' => {
                 if depth == 0 {
-                    return Some(text[start..=start + offset].to_string());
+                    start = Some(offset);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0
+                    && let Some(start) = start.take()
+                {
+                    objects.push(text[start..=offset].to_string());
                 }
             }
             _ => {}
         }
     }
-    None
+    objects
 }
 
 /// A short, single-line snippet of the model reply for error messages.
