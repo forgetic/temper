@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Run `kind` for the role-decision process agent (the daemon's `agent` plane).
-const DECISION_RUN_KIND: &str = "decision";
+pub(crate) const DECISION_RUN_KIND: &str = "decision";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DecisionDisposition {

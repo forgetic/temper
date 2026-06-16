@@ -22,11 +22,13 @@ use crate::{
     Agent, AgentError, BoundExternalTool, ExternalToolExecutors, RoleTools, WorkItem,
     WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
+use temper_log::agent_run_span;
 use temper_log::redact::redacted_lossy_preview;
+use tracing::Instrument;
 
 use classify::{
-    DecisionDisposition, classify_decision_reply, classify_process_error, log_decision_reply,
-    log_decision_request,
+    DECISION_RUN_KIND, DecisionDisposition, classify_decision_reply, classify_process_error,
+    log_decision_reply, log_decision_request,
 };
 pub use config::WorkflowRoleDecisionProcessConfig;
 pub use error::WorkflowRoleDecisionProcessError;
@@ -199,7 +201,15 @@ impl<F: Forge + ?Sized> Agent<F> for WorkflowRoleDecisionProcessAgent {
         let identity = tools.work_item_identity(item);
         log_decision_request(&identity, &request);
         let started = Instant::now();
-        let reply = match self.invoke_unvalidated(&request).await {
+        // §4b per-agent-run span around the LLM run, nested inside the engine's
+        // `work_item` span when one is current so the run inherits `artifact.ref`
+        // and adds `agent_run.kind`. Instrumenting the future keeps the span
+        // scoped across the await rather than holding a guard across it.
+        let reply = match self
+            .invoke_unvalidated(&request)
+            .instrument(agent_run_span(DECISION_RUN_KIND))
+            .await
+        {
             Ok(reply) => reply,
             Err(error) => {
                 let (validation_outcome, action_kind) = classify_process_error(&error);

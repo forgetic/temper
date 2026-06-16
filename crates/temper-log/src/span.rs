@@ -70,6 +70,7 @@ pub fn agent_run_span(kind: &str) -> Span {
 mod tests {
     use super::*;
     use std::io;
+    use std::sync::{Arc, Mutex};
     use tracing::subscriber::with_default;
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -140,5 +141,64 @@ mod tests {
             let fields: Vec<&str> = meta.fields().iter().map(|f| f.name()).collect();
             assert!(fields.contains(&"kind"));
         });
+    }
+
+    /// A `MakeWriter` over a shared buffer, so a test can read back exactly what
+    /// the JSON fmt layer rendered.
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedBuf {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The §4 payoff: a child `debug` event emitted while the `work_item` span is
+    /// current inherits the span's `artifact.ref` (and `repo`/`role`) without any
+    /// per-call ceremony. This is what turns debug from a flat flood into a
+    /// per-item tree. The JSON fmt layer threads span fields onto every line, so
+    /// the rendered event line carries the join key set once on the span.
+    #[test]
+    fn child_debug_event_inherits_artifact_ref_from_work_item_span() {
+        let buf = SharedBuf::default();
+        let sink = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(sink)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+
+        with_default(subscriber, || {
+            let item = WorkItemRef::issue("acme/widgets", 42);
+            let span = work_item_span(&item, "architect", Some("triage_intake"));
+            let _guard = span.enter();
+            // A bare debug line with no correlation fields of its own.
+            tracing::debug!("forge GET issue");
+        });
+
+        let rendered = String::from_utf8(buf.0.lock().unwrap().clone()).expect("utf8 log output");
+        // The join key set once on the span appears on the child debug line.
+        assert!(
+            rendered.contains("acme/widgets#42"),
+            "child debug event inherits artifact.ref from the work_item span: {rendered}"
+        );
+        assert!(
+            rendered.contains("forge GET issue"),
+            "the child debug event itself was rendered: {rendered}"
+        );
     }
 }

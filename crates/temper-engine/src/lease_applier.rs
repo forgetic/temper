@@ -10,10 +10,11 @@ use temper_log::emit::{
     LeaseClaimed, LeaseLost, LeaseReleased, emit_lease_claimed, emit_lease_lost,
     emit_lease_released,
 };
-use temper_log::{WorkItemRef, format_duration, strip_provider_scheme};
+use temper_log::{WorkItemRef, format_duration, strip_provider_scheme, work_item_span};
 use temper_worker_protocol::JobProgress;
 use temper_worker_protocol::JobResult;
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
+use tracing::Instrument;
 
 use crate::InFlightJob;
 use crate::applier::ResultApplier;
@@ -91,39 +92,65 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         let ttl_ms = u64::try_from(ttl.num_milliseconds()).unwrap_or(0);
 
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
-        match manager
-            .acquire(
-                &repo_id,
-                target,
-                RoleId::new(job.role.clone()),
-                self.owner.clone(),
-                (self.clock)(),
-            )
-            .await
-        {
-            Ok(_) => {
-                emit_lease_claimed(LeaseClaimed {
-                    item: &item,
-                    role: &job.role,
-                    ttl_human: &ttl_human,
-                    ttl_ms,
-                    running: "apply result",
-                });
+
+        // §4a per-work-item span: opened on lease claim and closed on completion,
+        // so the acquire → inner apply → release sequence (and every event the
+        // inner applier emits in between) inherits `artifact.ref`/`repo`/`role`.
+        // The "apply result" running label is the only transition-like name at
+        // this seam, matching the lease-claimed line. Instrumenting the future
+        // (rather than holding an `.entered()` guard across the awaits below)
+        // keeps the span correctly scoped across await points.
+        let span = work_item_span(&item, &job.role, Some("apply result"));
+        async move {
+            match manager
+                .acquire(
+                    &repo_id,
+                    target,
+                    RoleId::new(job.role.clone()),
+                    self.owner.clone(),
+                    (self.clock)(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    emit_lease_claimed(LeaseClaimed {
+                        item: &item,
+                        role: &job.role,
+                        ttl_human: &ttl_human,
+                        ttl_ms,
+                        running: "apply result",
+                    });
+                }
+                Err(LeaseError::Conflict(_) | LeaseError::Contended { .. }) => {
+                    emit_lease_lost(LeaseLost {
+                        item: &item,
+                        role: &job.role,
+                        reason: "contended by peer owner",
+                    });
+                    return;
+                }
+                Err(error) => {
+                    emit_lease_lost(LeaseLost {
+                        item: &item,
+                        role: &job.role,
+                        reason: "acquire failed",
+                    });
+                    tracing::error!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        repo = %job.repo,
+                        artifact_kind = %job.artifact.kind,
+                        artifact_item = %job.artifact.item,
+                        %error,
+                        "lease applier could not acquire lease"
+                    );
+                    return;
+                }
             }
-            Err(LeaseError::Conflict(_) | LeaseError::Contended { .. }) => {
-                emit_lease_lost(LeaseLost {
-                    item: &item,
-                    role: &job.role,
-                    reason: "contended by peer owner",
-                });
-                return;
-            }
-            Err(error) => {
-                emit_lease_lost(LeaseLost {
-                    item: &item,
-                    role: &job.role,
-                    reason: "acquire failed",
-                });
+
+            self.inner.apply(job.clone(), result).await;
+
+            if let Err(error) = manager.release(&repo_id, target, &self.owner).await {
                 tracing::error!(
                     target: "temper_daemon",
                     job_id = %job.job_id,
@@ -131,29 +158,16 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                     artifact_kind = %job.artifact.kind,
                     artifact_item = %job.artifact.item,
                     %error,
-                    "lease applier could not acquire lease"
+                    "lease applier could not release lease"
                 );
-                return;
             }
+            emit_lease_released(LeaseReleased {
+                item: &item,
+                role: &job.role,
+            });
         }
-
-        self.inner.apply(job.clone(), result).await;
-
-        if let Err(error) = manager.release(&repo_id, target, &self.owner).await {
-            tracing::error!(
-                target: "temper_daemon",
-                job_id = %job.job_id,
-                repo = %job.repo,
-                artifact_kind = %job.artifact.kind,
-                artifact_item = %job.artifact.item,
-                %error,
-                "lease applier could not release lease"
-            );
-        }
-        emit_lease_released(LeaseReleased {
-            item: &item,
-            role: &job.role,
-        });
+        .instrument(span)
+        .await;
     }
 }
 

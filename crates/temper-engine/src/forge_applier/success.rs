@@ -47,7 +47,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         // so the success-path PR-opening below (which keys on a coordinating
         // *issue*) does not apply.
         if job.artifact.kind == "pull_request" {
-            tracing::info!(
+            // §5: a between-cause detail (the push that re-triggers CI), not a
+            // §7 catalog state change — belongs at debug.
+            tracing::debug!(
                 target: "temper_daemon",
                 job_id = %job.job_id,
                 repo = %job.repo,
