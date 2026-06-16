@@ -48,8 +48,8 @@ pub struct JobContext {
     pub action: Option<String>,
 
     /// Checkout capability the worker should prepare for the *primary* repo:
-    /// `"writable"`, `"read_only"`, or `"pull_request_read_only"`. Absent means
-    /// writable.
+    /// `"writable"`, `"read_only"`, `"pull_request_read_only"`, or
+    /// `"pull_request_writable"`. Absent means writable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_capability: Option<String>,
 
@@ -57,4 +57,10 @@ pub struct JobContext {
     /// keys). Empty for a plain coding job.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_verdicts: Vec<String>,
+
+    /// Extra free-text guidance surfaced to the agent's prompt for this job,
+    /// e.g. the concrete CI failure to fix on a `pull_request_writable` job.
+    /// Absent for ordinary jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
 }

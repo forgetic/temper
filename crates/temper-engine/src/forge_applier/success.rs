@@ -40,6 +40,27 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         }
 
+        // A pull-request job (e.g. a CI-failure fix) pushes its diff straight to
+        // the existing PR head branch; that push itself re-triggers CI and the
+        // landing queue takes over once CI is green. There is no new PR to open,
+        // so the success-path PR-opening below (which keys on a coordinating
+        // *issue*) does not apply.
+        if job.artifact.kind == "pull_request" {
+            tracing::info!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                artifact_item = %job.artifact.item,
+                head_branch = %result
+                    .repos
+                    .first()
+                    .map(|repo| repo.branch.name.as_str())
+                    .unwrap_or("-"),
+                "forge applier pushed pull-request fix to head; awaiting fresh CI"
+            );
+            return;
+        }
+
         // The coordinating issue lives in the primary repo; every PR in the set
         // links back to it with a repo-qualified ref (ADR 0023).
         let Some((primary_repository, issue)) = self.resolve_issue(&job).await else {

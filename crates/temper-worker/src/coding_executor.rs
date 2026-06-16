@@ -99,6 +99,7 @@ async fn execute<R: AgentRunner>(
         action: _action,
         checkout_capability,
         allowed_verdicts,
+        guidance,
     } = context;
 
     let manifest = match require_enriched_field(manifest, "workspace") {
@@ -162,6 +163,7 @@ async fn execute<R: AgentRunner>(
         assign.artifact.kind.as_str(),
         &checkout,
         &allowed_verdicts,
+        guidance.as_deref(),
     );
 
     // Run one agent turn with the cwd set to the workspace root (not a single
@@ -179,13 +181,14 @@ async fn execute<R: AgentRunner>(
     };
 
     match mode {
-        JobMode::Writable => {
+        JobMode::Writable | JobMode::PullRequestWritable => {
             writable_outcome(
                 &prepared,
                 result,
                 &allowed_verdicts,
                 &coordination_key,
                 &artifact_item,
+                mode == JobMode::PullRequestWritable,
             )
             .await
         }
@@ -224,8 +227,12 @@ async fn prepare_repos(request: PrepareRequest<'_>) -> Result<Vec<PreparedRepo>,
     for repo_spec in &request.manifest.repos {
         prepared.push(prepare_repo(&request, repo_spec).await?);
 
-        // Review acts on the single PR head; don't assemble siblings for it.
-        if request.mode == JobMode::PullRequestReadOnly {
+        // PR-scoped jobs (review or in-place fix) act on the single PR head;
+        // don't assemble siblings for them.
+        if matches!(
+            request.mode,
+            JobMode::PullRequestReadOnly | JobMode::PullRequestWritable
+        ) {
             break;
         }
     }
@@ -274,6 +281,13 @@ async fn prepare_workspace(
             workspace
                 .prepare_pull_request_head(request.artifact_number, &branch_hint)
                 .await
+        }
+        // In-place PR fix: check out the PR's own head branch as a writable work
+        // branch (the feed sets `branch_hint` to the PR head ref). `prepare`
+        // resumes from the existing remote branch, so the agent's fix commits on
+        // top of the PR head and the success path pushes it back, re-running CI.
+        JobMode::PullRequestWritable => {
+            return prepare_writable(workspace, repo_spec).await;
         }
         JobMode::Writable if repo_spec.is_writable() => {
             return prepare_writable(workspace, repo_spec).await;
@@ -382,6 +396,11 @@ enum JobMode {
     Writable,
     ReadOnly,
     PullRequestReadOnly,
+    /// Writable checkout of an existing pull request's head branch: the agent
+    /// fixes the PR in place (e.g. a failed CI gate) and the fix is pushed back
+    /// to that same head branch, re-running CI. Distinct from `Writable`, which
+    /// opens a new PR from a synthetic branch.
+    PullRequestWritable,
 }
 
 impl JobMode {
@@ -390,6 +409,7 @@ impl JobMode {
             "writable" => Ok(Self::Writable),
             "read_only" => Ok(Self::ReadOnly),
             "pull_request_read_only" => Ok(Self::PullRequestReadOnly),
+            "pull_request_writable" => Ok(Self::PullRequestWritable),
             other => Err(failure(
                 FailureClass::Protocol,
                 format!("unsupported checkout capability `{other}`"),
