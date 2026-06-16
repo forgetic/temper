@@ -21,6 +21,7 @@ pub(super) fn build_workspace_context(
     artifact_wire_kind: &str,
     checkout: &str,
     allowed_verdicts: &[String],
+    guidance: Option<&str>,
 ) -> WorkspaceContext {
     let (artifact_type, target_kind) = match artifact_wire_kind {
         "pull_request" => ("pull_request", "PullRequest"),
@@ -87,6 +88,9 @@ pub(super) fn build_workspace_context(
         correlation_key: manifest.coordination_key.clone(),
         checkout: Some(checkout.to_string()),
         allowed_verdicts: allowed_verdicts.to_vec(),
-        guidance: WorkspaceGuidance::default(),
+        guidance: WorkspaceGuidance {
+            role_guidance: guidance.map(str::to_string),
+            ..WorkspaceGuidance::default()
+        },
     }
 }

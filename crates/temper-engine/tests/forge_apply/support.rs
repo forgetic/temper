@@ -308,6 +308,7 @@ pub(crate) fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob 
             action: None,
             checkout_capability: None,
             allowed_verdicts: Vec::new(),
+            guidance: None,
         },
     )
 }
@@ -348,6 +349,7 @@ pub(crate) fn coordinated_in_flight_job(
             action: None,
             checkout_capability: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),
+            guidance: None,
         },
     )
 }
@@ -371,6 +373,7 @@ pub(crate) fn triage_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
                 "needs_design".to_string(),
                 "needs_breakdown".to_string(),
             ],
+            guidance: None,
         },
     )
 }
@@ -394,6 +397,7 @@ pub(crate) fn review_in_flight_job(repo_path: &str, number: ItemNumber) -> InFli
                 "changes".to_string(),
                 "escalate".to_string(),
             ],
+            guidance: None,
         },
     )
 }

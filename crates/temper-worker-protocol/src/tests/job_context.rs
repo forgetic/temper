@@ -22,6 +22,7 @@ fn full_job_context_round_trips_without_loss() {
         action: Some("open_pr".to_string()),
         checkout_capability: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string()],
+        guidance: Some("fix CI".to_string()),
     };
 
     let value = serde_json::to_value(&context).expect("job context serializes");
@@ -54,12 +55,14 @@ fn job_context_omits_empty_optional_fields() {
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
+        guidance: None,
     };
 
     let value = serde_json::to_value(&context).expect("job context serializes");
     assert_eq!(value.get("action"), None);
     assert_eq!(value.get("checkout_capability"), None);
     assert_eq!(value.get("allowed_verdicts"), None);
+    assert_eq!(value.get("guidance"), None);
 }
 
 #[test]
@@ -76,6 +79,7 @@ fn thin_pre_enrichment_job_context_omits_artifact_and_workspace() {
         action: None,
         checkout_capability: None,
         allowed_verdicts: Vec::new(),
+        guidance: None,
     };
 
     let value = serde_json::to_value(&context).expect("job context serializes");

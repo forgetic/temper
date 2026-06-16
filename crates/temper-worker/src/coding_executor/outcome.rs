@@ -11,6 +11,7 @@ pub(super) async fn writable_outcome(
     allowed_verdicts: &[String],
     coordination_key: &str,
     artifact_item: &serde_json::Value,
+    pull_request_fix: bool,
 ) -> JobOutcome {
     if let Some(verdict) = result.verdict.clone() {
         return writable_verdict_outcome(
@@ -23,15 +24,27 @@ pub(super) async fn writable_outcome(
         .await;
     }
 
-    let outcomes = match push_writable_repos(prepared, coordination_key, artifact_item).await {
+    let outcomes = match push_writable_repos(
+        prepared,
+        coordination_key,
+        artifact_item,
+        pull_request_fix,
+    )
+    .await
+    {
         Ok(outcomes) => outcomes,
         Err(outcome) => return outcome,
     };
     if outcomes.is_empty() {
-        return failure(
-            FailureClass::Permanent,
-            "agent produced no diff in any writable repo".to_string(),
-        );
+        // A PR-fix job that changes nothing leaves CI red — surface it as a
+        // failure so it does not read as "addressed". An ordinary writable job
+        // with no diff is likewise nothing to apply.
+        let message = if pull_request_fix {
+            "agent made no change to the pull request head; CI stays red".to_string()
+        } else {
+            "agent produced no diff in any writable repo".to_string()
+        };
+        return failure(FailureClass::Permanent, message);
     }
 
     JobOutcome::Success {
@@ -75,11 +88,18 @@ async fn push_writable_repos(
     prepared: &[PreparedRepo],
     coordination_key: &str,
     artifact_item: &serde_json::Value,
+    pull_request_fix: bool,
 ) -> Result<Vec<RepoOutcome>, JobOutcome> {
     let mut outcomes = Vec::new();
     for (index, prepared) in prepared.iter().enumerate() {
-        if let Some(outcome) =
-            push_writable_repo(prepared, index, coordination_key, artifact_item).await?
+        if let Some(outcome) = push_writable_repo(
+            prepared,
+            index,
+            coordination_key,
+            artifact_item,
+            pull_request_fix,
+        )
+        .await?
         {
             outcomes.push(outcome);
         }
@@ -92,6 +112,7 @@ async fn push_writable_repo(
     index: usize,
     coordination_key: &str,
     artifact_item: &serde_json::Value,
+    pull_request_fix: bool,
 ) -> Result<Option<RepoOutcome>, JobOutcome> {
     if !prepared.writable {
         return Ok(None);
@@ -105,7 +126,11 @@ async fn push_writable_repo(
         return Ok(None);
     }
     if has_tree_changes {
-        let message = commit_message(coordination_key, artifact_item, index == 0);
+        let message = if pull_request_fix {
+            ci_fix_commit_message(coordination_key)
+        } else {
+            commit_message(coordination_key, artifact_item, index == 0)
+        };
         prepared
             .workspace
             .commit_all(&message)
@@ -164,4 +189,11 @@ fn commit_message(
         (true, Some(number)) => format!("Implement {coordination_key}\n\nCloses #{number}"),
         _ => format!("Implement {coordination_key}"),
     }
+}
+
+/// Commit message for an in-place CI-failure fix pushed to an existing PR head.
+/// No `Closes #` trailer: the artifact number is the PR itself, not an issue,
+/// and the PR's own coordinating issue is retired when the PR merges.
+fn ci_fix_commit_message(coordination_key: &str) -> String {
+    format!("Fix CI for {coordination_key}")
 }
