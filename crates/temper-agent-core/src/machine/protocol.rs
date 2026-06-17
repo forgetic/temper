@@ -34,7 +34,15 @@ pub enum AgentEvent {
         usage: tongs::model::Usage,
     },
     /// A tool is about to run.
-    ToolStart { id: String, name: String },
+    ToolStart {
+        id: String,
+        name: String,
+        /// An optional one-line preview of the call's salient argument (e.g.
+        /// the path read, the command run), filled in by the shell-side logger
+        /// (see the agent-log-cleanup plan, pieces B/D). Left `None` here so the
+        /// pure machine core need not compute it.
+        arg_preview: Option<String>,
+    },
     /// A tool finished.
     ToolEnd { id: String, is_error: bool },
     /// Steering messages were injected at a turn boundary.
@@ -104,4 +112,46 @@ pub enum AgentRequest {
         final_message: AssistantMessage,
         messages: Vec<Message>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_start_can_carry_arg_preview() {
+        let event = AgentEvent::ToolStart {
+            id: "call_1".to_string(),
+            name: "read".to_string(),
+            arg_preview: Some("src/main.rs".to_string()),
+        };
+        match event {
+            AgentEvent::ToolStart {
+                id,
+                name,
+                arg_preview,
+            } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "read");
+                assert_eq!(arg_preview.as_deref(), Some("src/main.rs"));
+            }
+            _ => panic!("expected ToolStart"),
+        }
+    }
+
+    #[test]
+    fn tool_start_arg_preview_defaults_to_none() {
+        let event = AgentEvent::ToolStart {
+            id: "call_2".to_string(),
+            name: "bash".to_string(),
+            arg_preview: None,
+        };
+        assert!(matches!(
+            event,
+            AgentEvent::ToolStart {
+                arg_preview: None,
+                ..
+            }
+        ));
+    }
 }

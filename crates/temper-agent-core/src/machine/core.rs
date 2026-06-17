@@ -181,6 +181,9 @@ impl AgentMachine {
             requests.push(AgentRequest::Emit(AgentEvent::ToolStart {
                 id: pending.call.id.clone(),
                 name: pending.call.name.clone(),
+                // The pure core does not compute previews; the shell-side
+                // logger fills this in (agent-log-cleanup plan, piece D).
+                arg_preview: None,
             }));
             requests.push(AgentRequest::RunTool(pending.call.clone()));
         }

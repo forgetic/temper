@@ -129,7 +129,11 @@ impl EventSink for UsageLogger {
                         .render()
                 );
             }
-            AgentEvent::ToolStart { id, name } => {
+            AgentEvent::ToolStart {
+                id,
+                name,
+                arg_preview: _,
+            } => {
                 self.totals.tool_calls.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!(
                     target: "temper_agent",
