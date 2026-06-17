@@ -1,5 +1,5 @@
 use super::*;
-use temper_process_protocol::{
+use temper_protocol_interaction::{
     ConversationId, ConversationProfileId, ConversationTurn, Participant, ProposalKind,
 };
 
@@ -105,8 +105,9 @@ fn product_manager_maps_generic_interaction_request_and_reply() {
 
 #[test]
 fn product_manager_reads_temper_process_request_fixture() {
-    let fixture =
-        include_str!("../../temper-process-protocol/fixtures/interactive-responder-request.json");
+    let fixture = include_str!(
+        "../../temper-protocol-interaction/fixtures/interactive-responder-request.json"
+    );
     let request: ConversationRequest = serde_json::from_str(fixture).expect("fixture parses");
     let mapped = ProductManagerRequest::from_conversation_request(&request).unwrap();
 
@@ -119,7 +120,7 @@ fn product_manager_reads_temper_process_request_fixture() {
 #[test]
 fn product_manager_reads_temper_process_reply_fixture_and_issue_payload_contract() {
     let fixture =
-        include_str!("../../temper-process-protocol/fixtures/interactive-responder-reply.json");
+        include_str!("../../temper-protocol-interaction/fixtures/interactive-responder-reply.json");
     let reply: ConversationReply = serde_json::from_str(fixture).expect("fixture parses");
     reply.validate().expect("fixture reply validates");
 
@@ -159,7 +160,7 @@ fn product_manager_reads_temper_process_reply_fixture_and_issue_payload_contract
 // (it pulls `temper-forge` + `temper-engine-io`), and anvil depends on
 // temper only through the pure serde DTO crates. anvil's own
 // ConversationRequest/Reply parsing stays covered by the
-// `temper-process-protocol` fixture tests above.
+// `temper-protocol-interaction` fixture tests above.
 
 #[test]
 fn product_manager_responder_rejects_other_profiles_without_provider_call() {

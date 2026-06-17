@@ -4,7 +4,7 @@
 //! validation/compilation, Forge-backed transcript sessions, durable proposal
 //! snapshots, manifest-driven acceptance, and a provider-neutral process
 //! responder adapter. It consumes and re-exports the conversation ids,
-//! request/reply DTOs, and inert proposal DTOs from `temper-process-protocol` so
+//! request/reply DTOs, and inert proposal DTOs from `temper-protocol-interaction` so
 //! responder processes can depend on the wire contract without this runtime
 //! crate. This crate has no workflow, runner, production, or LLM-provider
 //! dependencies.
@@ -66,7 +66,7 @@ pub use spec::{
     RawResponderDeclaration, RawTranscriptPolicy, RawTransportCommandAction,
     RawTransportCommandDeclaration,
 };
-pub use temper_process_protocol::interaction::InteractionProtocolError;
+pub use temper_protocol_interaction::InteractionProtocolError;
 pub use transcript::{
     DEFAULT_RECENT_TURN_LIMIT, ForgeTranscript, ForgeTranscriptConfig, ForgeTranscriptOpenOptions,
     append_marker, issue_url, parse_marker_value, parse_transcript_session_key,

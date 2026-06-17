@@ -1,6 +1,6 @@
 use temper_forge::{CreateIssue, Forge, Issue, IssueQuery, Repository};
 
-pub use temper_process_protocol::interaction::{
+pub use temper_protocol_interaction::{
     IssueProposal, Proposal, validate_proposal_ids, validate_proposals,
 };
 

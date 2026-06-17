@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use temper_process_protocol::{
+use temper_protocol_interaction::{
     ConversationId, ConversationProfileId, ConversationReply, ConversationRequest,
     ConversationTurn, InteractionProtocolError, ProposalPayloadValidator,
 };

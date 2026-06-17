@@ -1,3 +1,10 @@
+//! Minimal JSON workflow-role decision protocol for Temper external responders.
+//!
+//! This crate contains serialization-oriented data transfer objects and
+//! validation helpers for workflow-role decision processes that communicate with
+//! Temper only through stdin/stdout JSON. It intentionally has no dependency on
+//! Temper runtime, workflow, Forge, backend, or deployment crates.
+
 use std::error::Error;
 use std::fmt;
 

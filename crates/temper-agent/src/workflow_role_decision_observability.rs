@@ -1,7 +1,7 @@
 //! Workflow-role decision event construction and trace extraction.
 
 use serde_json::Value;
-use temper_process_protocol::{
+use temper_protocol_decision::{
     WORKFLOW_ROLE_DECISION_NO_ACTION, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
 

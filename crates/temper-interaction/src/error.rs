@@ -3,7 +3,7 @@ use std::io;
 use std::time::Duration;
 
 use temper_forge::ForgeError;
-use temper_process_protocol::interaction::InteractionProtocolError;
+use temper_protocol_interaction::InteractionProtocolError;
 use thiserror::Error;
 
 use crate::types::{ProposalId, ProposalKind};

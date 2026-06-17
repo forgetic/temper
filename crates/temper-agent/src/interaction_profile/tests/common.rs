@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use serde_json::json;
-use temper_process_protocol::{
+use temper_protocol_interaction::{
     ConversationId, ConversationProfileId, ConversationReply, ConversationRequest,
     ConversationTurn, Participant, Proposal, ProposalId, ProposalKind,
 };

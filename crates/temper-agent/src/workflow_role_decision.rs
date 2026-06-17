@@ -9,7 +9,7 @@
 use std::time::Instant;
 
 use serde::Deserialize;
-use temper_process_protocol::{
+use temper_protocol_decision::{
     WORKFLOW_ROLE_DECISION_NO_ACTION, WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION,
     WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };

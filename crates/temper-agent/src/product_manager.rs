@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use temper_process_protocol::{
+use temper_protocol_interaction::{
     ConversationReply, ConversationRequest, InteractionProtocolError, IssueProposal,
     ParticipantKind, Proposal, ProposalId,
 };
@@ -220,7 +220,7 @@ impl ProductManagerDraftIssue {
 /// hyphen. This validates the stable shape; the prompt is responsible for
 /// avoiding random IDs, dates, or timestamps.
 pub fn is_valid_draft_slug(slug: &str) -> bool {
-    temper_process_protocol::is_valid_deterministic_slug(slug)
+    temper_protocol_interaction::is_valid_deterministic_slug(slug)
 }
 
 /// Product-manager profile responder failure.

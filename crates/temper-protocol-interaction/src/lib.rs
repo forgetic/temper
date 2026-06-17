@@ -1,3 +1,10 @@
+//! Minimal JSON conversation/proposal protocol for Temper interactive responders.
+//!
+//! This crate contains serialization-oriented data transfer objects and
+//! validation helpers for interactive responder processes that communicate with
+//! Temper only through stdin/stdout JSON. It intentionally has no dependency on
+//! Temper runtime, workflow, Forge, backend, or deployment crates.
+
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;

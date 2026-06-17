@@ -25,7 +25,7 @@ temper-agent-session = { path = "../temper-agent-session" }
 # Responder subcommands run the agent's external process-responders in-process.
 temper-agent = { path = "../temper-agent" }
 temper-agent-io = { path = "../temper-agent-io" }
-temper-process-protocol = { path = "../temper-process-protocol" }
+temper-protocol-interaction = { path = "../temper-protocol-interaction" }
 
 # Operator tools.
 temper-provision-forgejo-cli = { path = "../temper-provision-forgejo-cli" }
