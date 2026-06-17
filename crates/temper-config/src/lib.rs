@@ -7,9 +7,9 @@
 //! - the **config** file ([`Config`]) — non-secret deployment settings;
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
-//! [`load`] reads both (honoring `--config` / `--credentials` overrides, the
-//! `TEMPER_CONFIG` / `TEMPER_CREDENTIALS` environment, and default
-//! `~/.config/temper` locations), validates each file's `schema_version`, then
+//! [`load`] reads both (honoring `--config` / `--credentials` overrides and
+//! default `~/.config/temper` locations — no environment variable selects the
+//! files), validates each file's `schema_version`, then
 //! [`resolve`](resolve::resolve)s everything — file, environment, and built-in
 //! defaults — into a [`Resolved`] the binary's adapters turn into runtime types.
 //!
@@ -65,8 +65,8 @@ pub use schema::{
 };
 pub use template::{config_template, credentials_template};
 
-/// Where to find the two files. `None` fields fall back to `TEMPER_CONFIG` /
-/// `TEMPER_CREDENTIALS` and then the default `~/.config/temper` locations.
+/// Where to find the two files. `None` fields fall back to the default
+/// `~/.config/temper` locations (no environment variable selects the files).
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
     /// Explicit `--config` path.
@@ -281,13 +281,14 @@ pub fn lint(resolved: &Resolved) -> Vec<Finding> {
 
     if resolved.forge.url.is_none() {
         findings.push(Finding::error(
-            "forge URL is unset (`[forge] url` or TEMPER_FORGE_URL / FORGEJO_URL)",
+            "forge URL is unset (set `[forge] url` in temper.toml)",
         ));
     }
     if resolved.forge.admin_token.is_none() {
         findings.push(Finding::error(
-            "forge admin token is unset (`[forge.users.<admin>] token` or \
-             TEMPER_FORGE_TOKEN / FORGEJO_ACCESS_TOKEN)",
+            "forge admin token is unset (set a `token` under \
+             `[forge.users.<admin>]` in credentials.toml, and name the admin \
+             via `[forge] admin`)",
         ));
     }
     if resolved.engine.repos.is_empty() {

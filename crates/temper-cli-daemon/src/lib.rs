@@ -18,11 +18,10 @@
 //! [`run`] takes a [`DaemonInputs`] — explicit `--config` / `--credentials`
 //! paths, the `--service`, and the injected env snapshot + base directories the
 //! composition root captured. It loads via [`temper_config::load_explicit`]; when
-//! an explicit `--config` *or* `--credentials` is given and the env snapshot does
-//! not set `TEMPER_CONFIG` / `TEMPER_CREDENTIALS`, default-location discovery is
-//! suppressed, so the operator's global `~/.config/temper/credentials.toml` can
-//! never ambiently layer in behind an explicit deployment. That layering was the
-//! original incident this fixes.
+//! an explicit `--config` *or* `--credentials` is given, default-location
+//! discovery is suppressed, so the operator's global
+//! `~/.config/temper/credentials.toml` can never ambiently layer in behind an
+//! explicit deployment. That layering was the original incident this fixes.
 
 mod provider;
 mod standalone;
@@ -93,7 +92,8 @@ pub struct DaemonInputs<'a> {
     pub credentials: Option<PathBuf>,
     /// Which single service to run, or `None` for the all-in-one standalone.
     pub service: Option<Service>,
-    /// The injected environment snapshot (incl. `TEMPER_CONFIG` / `TEMPER_CREDENTIALS`).
+    /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
+    /// path expansion; no environment variable selects the config files).
     pub env: &'a dyn EnvLookup,
     /// The injected base directories (HOME / XDG_*) for default-location discovery.
     pub paths: &'a PathResolver,
@@ -199,9 +199,8 @@ pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
 ///
 /// When an explicit `--config` *or* `--credentials` is given, default-location
 /// discovery is suppressed by handing the loader an *empty* [`PathResolver`]:
-/// only the explicit paths and any `TEMPER_CONFIG` / `TEMPER_CREDENTIALS` in the
-/// env snapshot can load. With no explicit path at all, the captured `paths` are
-/// used so a plain `temper daemon` still finds `~/.config/temper`.
+/// only the explicit paths can load. With no explicit path at all, the captured
+/// `paths` are used so a plain `temper daemon` still finds `~/.config/temper`.
 fn load_for(inputs: &DaemonInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
     let explicit = inputs.config.is_some() || inputs.credentials.is_some();
     let empty = PathResolver::default();

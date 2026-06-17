@@ -30,7 +30,8 @@ use temper_config::{
 pub struct ConfigInputs<'a> {
     /// The program arguments after `config` (the subcommand + its flags).
     pub args: Vec<String>,
-    /// The injected environment snapshot (incl. `TEMPER_CONFIG` / `TEMPER_CREDENTIALS`).
+    /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
+    /// path expansion; no environment variable selects the config files).
     pub env: &'a EnvMap,
     /// The injected base directories (HOME / XDG_*) for default-location discovery.
     pub paths: &'a PathResolver,
