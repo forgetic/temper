@@ -57,36 +57,61 @@ the engine adapter does not consume the resolved values.
 
 ## Agent, worker, and provider process boundaries
 
-These variables are used when the worker spawns `temper-agent` or another
-protocol-speaking coding agent, and by hidden responder processes.
+The worker spawns `temper agent` (the hidden, function-call-like coding agent)
+once per job. Every **non-secret** input is a command-line flag; exactly **one**
+secret crosses as an environment variable, the provider credential.
 
-| Variable or pattern | Purpose | Precedence / default | Recommendation |
-| --- | --- | --- | --- |
-| `TEMPER_CODING_WORKSPACE_CONTEXT` | Agent file-protocol input path (`WorkspaceContext` JSON). | Worker always sets it for spawned agents; required for standalone `temper-agent`. | Keep env (process protocol). |
-| `TEMPER_CODING_WORKSPACE_RESULT` | Agent file-protocol output path (`WorkspaceResult` JSON). | Worker always sets it for spawned agents; required for standalone `temper-agent`. | Keep env (process protocol). |
-| `TEMPER_DEEPSEEK_API_KEY` | Direct DeepSeek/OpenAI-compatible API key. | Direct key > `TEMPER_DEEPSEEK_API_KEY_PATH` > default `.cache/deepseek-api-key`. | Keep env for secrets; prefer credentials/secret manager. |
-| `TEMPER_DEEPSEEK_API_KEY_PATH` | DeepSeek API-key file override. | Used only when direct key is absent. | Move to config/CLI for normal use; okay as secret-path escape hatch. |
-| `TEMPER_AGENTS_AUTH_FILE` | OAuth `auth.json` path for ChatGPT/Codex and Anthropic. | CLI/config/materialized auth file > env > SDK default `~/.pi/agent/auth.json`. | Keep env for worker-to-agent protocol; prefer config/CLI for operators. |
-| `TEMPER_AGENTS_CODEX_MODEL` | ChatGPT/Codex model id. | `--codex-model` where available > env/config-injected value > default `gpt-5.5`. | Move to config/CLI. |
-| `TEMPER_AGENTS_CODEX_TOKEN_URL` | Codex OAuth refresh endpoint override. | Optional; default compiled endpoint. | Test-only. |
-| `TEMPER_AGENTS_ANTHROPIC_MODEL` | Anthropic main model id. | Env/config-injected value > default `claude-opus-4-8`. | Move to config/CLI. |
-| `TEMPER_AGENTS_ANTHROPIC_SUBAGENT_MODEL` | Anthropic investigate/subagent model id. | Env/config-injected value > default `claude-haiku-4-5`. | Move to config. |
-| `TEMPER_AGENTS_ANTHROPIC_TOKEN_URL` | Anthropic OAuth refresh endpoint override. | Optional; default compiled endpoint. | Test-only. |
-| `ANVIL_TEST_PROVIDER_BASE_URL` | Provider base URL redirect / fake LLM endpoint. Also used as the env key for configured provider base URLs passed to child agents. | Applied last in provider construction; can override configured provider URL when ambiently set. | Test/demo only unless renamed or documented as public provider-base-url config. |
-| `ANVIL_CONFIG_DIR` | Agent prompt-overlay config dir. | `--config-dir` > `ANVIL_CONFIG_DIR` > `$XDG_CONFIG_HOME/anvil` > `$HOME/.config/anvil`. | Move to CLI/config; keep env as compatibility. |
-| `ANVIL_WORKFLOW_ROLE_DECISION_CAPTURE_DIR` | Legacy hidden role-selector capture directory used by responder/debug tests. | Optional; unset disables capture. | Test/diagnostic only; slated for removal with the legacy adapter. |
-| `TEMPER_FORGEJO_USER_<ROLE>` | Agent checkpoint git author name. | Passed by worker to agent; agent defaults to `temper-agent` if absent. | Keep env (worker-to-agent protocol) until protocol carries identity explicitly. |
-| `TEMPER_FORGEJO_EMAIL_<ROLE>` | Agent checkpoint git author email. | Passed by worker to agent; agent defaults to `temper-agent@localhost` if absent. | Keep env (worker-to-agent protocol) until protocol carries identity explicitly. |
-| `TEMPER_FORGEJO_TOKEN_<ROLE>` | Agent checkpoint push token. | Optional; if present, agent passes it to git via `http.extraheader`. | Keep env (secret/protocol) until protocol carries secrets explicitly. |
-| `TEMPER_AGENT_DEADLINE` | Agent job deadline as unix seconds. | Optional; invalid values are ignored. | Move into `WorkspaceContext`/protocol field when possible. |
-| `TEMPER_AGENT_CHECKPOINT_INTERVAL_SECS` | Agent checkpoint backstop cadence. | Optional; invalid/unset falls back to 300s. | Move to config/CLI/protocol. |
-| `GIT_TERMINAL_PROMPT` | Disable interactive git prompts. | Worker and daemon test worker set `GIT_TERMINAL_PROMPT=0` for git children. | Keep internal child env. |
-| `PATH` | Resolves bare `git`, `temper-agent`, and external agent commands. | Implicit process behavior; sibling executable is preferred for slim worker agent where possible. | Document as deployment prerequisite; prefer absolute paths for hermetic services. |
+### `temper agent` command-line flags (non-secret)
 
-Current worker-spawn behavior inherits the parent process environment and then
-overlays explicit protocol/provider/role env vars. If strict hermeticity is
-required, use `env_clear`/allowlists at child-process boundaries and re-add only
-`PATH`, `HOME`, and explicitly required variables.
+The worker sets these when it spawns the agent; an operator can pass them by hand
+for debugging. The worker reads model/provider/iteration knobs from the resolved
+deployment config and renders them onto the command line.
+
+| Flag | Purpose | Default |
+| --- | --- | --- |
+| `--context <FILE>` | Worker-written `WorkspaceContext` JSON path (required). | — (set per job by the worker) |
+| `--result <FILE>` | `WorkspaceResult` JSON path the agent must write (required). | — (set per job by the worker) |
+| `--workspace <DIR>` | Prepared checkout / workspace root. | process cwd |
+| `--provider <anthropic\|chatgpt\|deepseek>` | Provider adapter to use. | `chatgpt` |
+| `--model <ID>` | Main model id. | provider built-in default |
+| `--investigate-model <ID>` | Cheaper read-only subagent model id. | provider built-in default |
+| `--provider-url <URL>` | Provider base-URL override (e.g. a local fake LLM). | provider built-in URL |
+| `--max-iterations <N>` | Maximum model/tool iterations. | compiled default |
+| `--subagents <on\|off>` | Enable investigate/read-only subagents. | `off` |
+| `--deadline-unix-seconds <N>` | Job deadline / lease-expiry hint for the checkpoint backstop. | unset |
+| `--checkpoint-interval <DURATION>` | Checkpoint backstop cadence, e.g. `60s`, `5m`. | `300s` |
+| `--capture-dir <DIR>` | Optional prompt-overlay / debug-capture dir (was `ANVIL_CONFIG_DIR`). | `$XDG_CONFIG_HOME/anvil`, else `$HOME/.config/anvil` |
+
+### Secret env var consumed by `temper agent`
+
+| Variable | Purpose | Shape |
+| --- | --- | --- |
+| `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON` | The provider credential, the agent's **only** environment input. The worker builds it from the resolved provider credential (api-key, or OAuth tokens) and injects it into the spawned agent process. | `{"type":"api-key","api_key":"…"}` or `{"type":"oauth","access_token":"…","refresh_token":"…","expires_at_unix_seconds":N}` |
+
+For an OAuth credential the agent materializes the tokens into a temporary
+pi-format `auth.json` its OAuth loader reads (and refreshes) for the run; no
+worker-written auth file or `TEMPER_AGENTS_*` model/url env crosses the boundary
+anymore.
+
+### Git checkpoint identity (no env)
+
+The agent commits + pushes checkpoints against the prepared checkout. The worker
+configures the git author identity (`user.name`/`user.email`) and the push
+credential (`http.extraheader`) in each writable repo's **local `.git/config`**
+before spawning the agent, so the agent needs no `TEMPER_FORGEJO_*_<ROLE>` env
+and the push token never reaches the agent's argv or environment.
+
+### Still-internal child env
+
+| Variable | Purpose | Recommendation |
+| --- | --- | --- |
+| `GIT_TERMINAL_PROMPT` | Disable interactive git prompts for child git processes. | Keep internal child env. |
+| `PATH` | Resolves bare `git`, `temper-agent`, and external agent commands. | Document as deployment prerequisite; prefer absolute paths for hermetic services. |
+
+The agent inherits the parent process environment and then has the one secret
+provider-credential var overlaid. If strict hermeticity is required, use
+`env_clear`/allowlists at the child-process boundary and re-add only `PATH`,
+`HOME`, and `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
 
 ## Interaction service and process responders
 

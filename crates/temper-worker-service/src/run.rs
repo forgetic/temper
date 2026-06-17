@@ -31,9 +31,8 @@ async fn run_async(
     let worker_config = adapt::worker_config(resolved)?;
     let git_base_url = adapt::git_base_url(resolved)?;
     let workspace_root = resolved.worker.workspace_root.clone();
-    let auth_dir = workspace_root.join(".temper-auth");
 
-    let invocation = adapt::agent_invocation(resolved, agent_program, &auth_dir)?;
+    let invocation = adapt::agent_invocation(resolved, agent_program)?;
     let runner = Arc::new(OutOfProcessRunner::new(invocation.command).with_env(invocation.env));
 
     // The coding executor's identities come from the worker config — the worker

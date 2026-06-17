@@ -35,5 +35,5 @@ fn model_unavailable_message_points_at_overrides() {
     }
     .to_string();
     assert!(rendered.contains("claude-fable-5"));
-    assert!(rendered.contains("TEMPER_AGENTS_ANTHROPIC_MODEL"));
+    assert!(rendered.contains("--model"));
 }

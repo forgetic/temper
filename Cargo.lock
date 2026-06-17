@@ -1519,7 +1519,6 @@ name = "temper-agent-session"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "secrecy",
  "serde_json",
  "skein",
  "temper-agent",
@@ -1527,6 +1526,7 @@ dependencies = [
  "temper-agent-io",
  "temper-log",
  "temper-protocol-agent",
+ "tempfile",
  "tracing",
 ]
 

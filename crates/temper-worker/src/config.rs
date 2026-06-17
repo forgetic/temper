@@ -18,6 +18,6 @@ pub use agent::TEMPER_AGENT_PROGRAM;
 pub use parse::{USAGE, parse};
 pub use roles::role_identities_from_env;
 pub use types::{
-    AgentAuthChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
+    AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
     DEFAULT_POLL_BACKOFF, ExecutorSelection, ParseOutcome, WorkerConfig, WorkerParams,
 };

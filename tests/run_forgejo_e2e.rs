@@ -14,8 +14,9 @@
 //! which `daemon_forgejo_e2e` already covers. This test's job is the new
 //! single-process path — agent → diff → PR — end to end.
 //!
-//! Sets `ANVIL_TEST_PROVIDER_BASE_URL` so `temper run` points the agent at the
-//! fake LLM. Run with:
+//! The fake-LLM base URL and a dummy DeepSeek api-key credential are supplied
+//! through the config/credentials files (the agent reads no provider env). Run
+//! with:
 //!   cargo test --test run_forgejo_e2e -- --ignored
 
 #![cfg(unix)]
@@ -226,9 +227,10 @@ fn spawn_temper_run(
     // The new CLI is config-file driven: standalone `temper daemon` (no
     // --service) runs engine + worker + agent in one process. Deployment
     // settings go in the config file; secrets (forge admin token, the engineer's
-    // role identity, the dummy LLM key) go in a companion `credentials.toml`
-    // passed via `--credentials`. The fake-LLM redirect and dummy DeepSeek key
-    // remain in the env (those are not deployment-config overrides).
+    // role identity, the dummy LLM api-key) go in a companion `credentials.toml`
+    // passed via `--credentials`. The fake-LLM base URL is a provider profile
+    // (`[agent.providers.deepseek] url`) and the dummy DeepSeek key is its
+    // api-key credential — the agent reads no LLM env.
     let config_path = workspace.join("run-config.toml");
     let config = format!(
         "schema_version = 1\n\
@@ -250,12 +252,15 @@ fn spawn_temper_run(
          git_base_url = \"{base_url}\"\n\
          [agent]\n\
          provider = \"deepseek\"\n\
-         max_iterations = 6\n",
+         max_iterations = 6\n\
+         [agent.providers.deepseek]\n\
+         url = \"{fake_llm_url}\"\n",
         base_url = server.base_url(),
         owner = provisioned.owner,
         name = provisioned.name,
         workflow = workflow_file.display(),
         workspace_root = workspace.join("run/agent-workspaces").display(),
+        fake_llm_url = fake_llm_url,
     );
     std::fs::write(&config_path, config).expect("write run config");
 
@@ -272,7 +277,10 @@ fn spawn_temper_run(
          user = \"{eng_user}\"\n\
          email = \"{eng_email}\"\n\
          password = \"{eng_password}\"\n\
-         token = \"{eng_token}\"\n",
+         token = \"{eng_token}\"\n\
+         [agent.providers.deepseek]\n\
+         type = \"api-key\"\n\
+         key = \"sk-jig-test\"\n",
         admin_token = provisioned.admin_token,
         eng_user = engineer.user,
         eng_email = engineer.email,
@@ -299,10 +307,9 @@ fn spawn_temper_run(
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))
-        // Agent LLM: dummy DeepSeek key (preflight is a no-op for ApiKey mode)
-        // redirected to the local fake LLM.
-        .env("TEMPER_DEEPSEEK_API_KEY", "sk-jig-test")
-        .env("ANVIL_TEST_PROVIDER_BASE_URL", fake_llm_url)
+        // Agent LLM: the dummy DeepSeek api-key credential and the fake-LLM base
+        // URL now live in the config/credentials files (the agent reads no
+        // provider env), so nothing LLM-related is injected here.
         .env_remove("FORGEJO_URL")
         .env_remove("FORGEJO_DEFAULT_REPO")
         .stdout(Stdio::from(log_file.try_clone().expect("log clones")))
