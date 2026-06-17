@@ -1,20 +1,16 @@
-//! Bounded, redacted field-rendering helpers for agent observability lines,
-//! plus the `StructuredEvent` JSON builder still used by the
-//! workflow-role-decision capture path.
+//! Bounded, redacted field-rendering helpers for agent observability lines.
 //!
-//! `preview` / `redacted_preview` are temper-agent's local copy of the
-//! redaction rule (the depgraph forbids depending on `temper-log`, where the
-//! same idea lives): they bound free-form model/operator text to a single,
-//! length-limited line and mask secret-like keys/values.
+//! `preview` / `redacted_preview` / `scalar_preview` are temper-agent's local
+//! copy of the redaction rule (the depgraph forbids depending on `temper-log`,
+//! where the same idea lives): they bound free-form model/operator text to a
+//! single, length-limited line and mask secret-like keys/values.
 //!
-//! NOTE (agent-log-cleanup, §8): the `UsageLogger` path no longer uses
-//! `StructuredEvent` — it emits **real `tracing` fields** on `target:
-//! "temper::agent"` (see `usage.rs`). `StructuredEvent` is retained only for the
-//! `workflow_role_decision_observability` path, which has a wide field
-//! vocabulary and is out of scope for that cleanup pass; it should be migrated
-//! to real fields in a follow-up.
-
-use std::collections::BTreeMap;
+//! NOTE (agent-log-cleanup, §8): both agent observability paths now emit **real
+//! `tracing` fields** on `target: "temper::agent"` rather than a JSON string in
+//! the message body — the `UsageLogger` path (see `usage.rs`) and the
+//! workflow-role-decision path (see `workflow_role_decision_observability.rs`).
+//! The old `StructuredEvent` JSON-string builder has been deleted; only the
+//! bounded/redaction helpers below survive, feeding both paths' field values.
 
 use serde_json::Value;
 
@@ -24,84 +20,6 @@ pub(crate) const FIELD_PREVIEW_CHARS: usize = 200;
 pub(crate) const REASON_PREVIEW_CHARS: usize = 200;
 
 pub(crate) const REDACTED: &str = "<redacted>";
-
-/// A stable JSON event renderer for anvil stderr logs (workflow-role-decision
-/// capture path only; see the module note).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StructuredEvent {
-    fields: BTreeMap<String, Value>,
-}
-
-impl StructuredEvent {
-    /// Starts a new event with the stable `event` field.
-    pub(crate) fn new(event: impl AsRef<str>) -> Self {
-        let mut fields = BTreeMap::new();
-        fields.insert(
-            "event".to_string(),
-            Value::String(preview(event.as_ref(), FIELD_PREVIEW_CHARS)),
-        );
-        Self { fields }
-    }
-
-    /// Adds a bounded string field.
-    pub(crate) fn str(mut self, key: &str, value: impl AsRef<str>) -> Self {
-        self.fields.insert(
-            key.to_string(),
-            Value::String(preview(value.as_ref(), FIELD_PREVIEW_CHARS)),
-        );
-        self
-    }
-
-    /// Adds a bounded string field when the value is present.
-    pub(crate) fn opt_str(mut self, key: &str, value: Option<&str>) -> Self {
-        if let Some(value) = value {
-            self.fields.insert(
-                key.to_string(),
-                Value::String(preview(value, FIELD_PREVIEW_CHARS)),
-            );
-        }
-        self
-    }
-
-    /// Adds a boolean field.
-    pub(crate) fn bool(mut self, key: &str, value: bool) -> Self {
-        self.fields.insert(key.to_string(), Value::Bool(value));
-        self
-    }
-
-    /// Adds a `usize` field.
-    pub(crate) fn usize(mut self, key: &str, value: usize) -> Self {
-        self.fields
-            .insert(key.to_string(), serde_json::json!(value));
-        self
-    }
-
-    /// Adds a `u64` field.
-    pub(crate) fn u64(mut self, key: &str, value: u64) -> Self {
-        self.fields
-            .insert(key.to_string(), serde_json::json!(value));
-        self
-    }
-
-    /// Adds a bounded string-array field.
-    pub(crate) fn strings<I, S>(mut self, key: &str, values: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let values = values
-            .into_iter()
-            .map(|value| Value::String(preview(value.as_ref(), FIELD_PREVIEW_CHARS)))
-            .collect();
-        self.fields.insert(key.to_string(), Value::Array(values));
-        self
-    }
-
-    /// Renders the event as one compact JSON object.
-    pub(crate) fn render(&self) -> String {
-        serde_json::to_string(&self.fields).expect("structured event fields serialize")
-    }
-}
 
 /// Returns a single-line preview bounded by `max_chars` Unicode scalar values.
 pub(crate) fn preview(input: &str, max_chars: usize) -> String {
@@ -292,20 +210,6 @@ pub(crate) fn scalar_preview(value: Option<&Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn renders_stable_json_with_sorted_keys() {
-        let rendered = StructuredEvent::new("anvil.test")
-            .str("zeta", "last")
-            .usize("count", 2)
-            .strings("ids", ["one", "two"])
-            .render();
-
-        assert_eq!(
-            rendered,
-            r#"{"count":2,"event":"anvil.test","ids":["one","two"],"zeta":"last"}"#
-        );
-    }
 
     #[test]
     fn preview_collapses_whitespace_and_truncates_on_char_boundary() {

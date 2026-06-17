@@ -20,9 +20,9 @@ use crate::workflow_role_decision_capture::{
     CaptureWriteResult, WorkflowRoleDecisionCapture, WorkflowRoleDecisionCaptureInput,
 };
 use crate::workflow_role_decision_observability::{
-    ProviderCallLogOutcome, ReplyLogMetadata, WorkflowRoleTrace, capture_write_failed_event,
-    capture_written_event, emit, provider_call_finish_event, provider_call_start_event,
-    reply_event, request_event,
+    ProviderCallLogOutcome, ReplyLogMetadata, WorkflowRoleTrace, emit_capture_write_failed,
+    emit_capture_written, emit_provider_call_finish, emit_provider_call_start, emit_reply,
+    emit_request,
 };
 use crate::workflow_role_decision_prompt::{
     no_action_for_request, validated_reply_for_model_decision,
@@ -113,14 +113,14 @@ impl WorkflowRoleDecisionResponder {
             return Err(error);
         }
 
-        emit(request_event(
+        emit_request(
             request,
             &trace,
             &self.provider,
             system_prompt.chars().count(),
             user_context.chars().count(),
-        ));
-        emit(provider_call_start_event(request, &trace, &self.provider));
+        );
+        emit_provider_call_start(request, &trace, &self.provider);
 
         let provider_call_started = Instant::now();
         let decision_result = run_decision::<WorkflowRoleModelDecision>(
@@ -154,7 +154,7 @@ impl WorkflowRoleDecisionResponder {
         decision: WorkflowRoleModelDecision,
     ) -> WorkflowRoleDecisionReply {
         let model_action = decision.action.trim().to_string();
-        emit(provider_call_finish_event(
+        emit_provider_call_finish(
             context.request,
             context.trace,
             &self.provider,
@@ -162,16 +162,16 @@ impl WorkflowRoleDecisionResponder {
             ProviderCallLogOutcome::Model {
                 action: &model_action,
             },
-        ));
+        );
         let model_decision = decision.clone();
         let validated = validated_reply_for_model_decision(context.request, decision);
-        emit(reply_event(
+        emit_reply(
             context.request,
             context.trace,
             &self.provider,
             &validated.reply,
             &validated.log_metadata,
-        ));
+        );
         self.write_capture(context.capture_args(
             Some(&model_decision),
             Some(&validated.reply),
@@ -189,13 +189,13 @@ impl WorkflowRoleDecisionResponder {
         error: ProviderError,
     ) -> WorkflowRoleDecisionError {
         let error = DecisionError::Provider(error);
-        emit(provider_call_finish_event(
+        emit_provider_call_finish(
             context.request,
             context.trace,
             &self.provider,
             context.latency_ms,
             ProviderCallLogOutcome::Error(&error),
-        ));
+        );
         self.write_capture(context.capture_args(
             None,
             None,
@@ -212,22 +212,22 @@ impl WorkflowRoleDecisionResponder {
         context: &DecisionLogContext<'_>,
         error: &DecisionError,
     ) -> WorkflowRoleDecisionReply {
-        emit(provider_call_finish_event(
+        emit_provider_call_finish(
             context.request,
             context.trace,
             &self.provider,
             context.latency_ms,
             ProviderCallLogOutcome::Error(error),
-        ));
+        );
         let reply = no_action_for_request(context.request, "decision failed");
         let log_metadata = ReplyLogMetadata::decision_error_no_action();
-        emit(reply_event(
+        emit_reply(
             context.request,
             context.trace,
             &self.provider,
             &reply,
             &log_metadata,
-        ));
+        );
         self.write_capture(context.capture_args(
             None,
             Some(&reply),
@@ -253,19 +253,16 @@ impl WorkflowRoleDecisionResponder {
 
         match result {
             CaptureWriteResult::Disabled => {}
-            CaptureWriteResult::Written(path) => emit(capture_written_event(
-                args.request,
-                args.trace,
-                &self.provider,
-                &path,
-            )),
-            CaptureWriteResult::Failed(error) => emit(capture_write_failed_event(
+            CaptureWriteResult::Written(path) => {
+                emit_capture_written(args.request, args.trace, &self.provider, &path)
+            }
+            CaptureWriteResult::Failed(error) => emit_capture_write_failed(
                 args.request,
                 args.trace,
                 &self.provider,
                 error.class(),
                 error.message(),
-            )),
+            ),
         }
     }
 }
