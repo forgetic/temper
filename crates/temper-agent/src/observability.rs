@@ -1,23 +1,14 @@
 //! Bounded, redacted field-rendering helpers for agent observability lines.
 //!
-//! `preview` / `redacted_preview` / `scalar_preview` are temper-agent's local
-//! copy of the redaction rule (the depgraph forbids depending on `temper-log`,
-//! where the same idea lives): they bound free-form model/operator text to a
-//! single, length-limited line and mask secret-like keys/values.
+//! `preview` / `redacted_preview` are temper-agent's local copy of the
+//! redaction rule (the depgraph forbids depending on `temper-log`, where the
+//! same idea lives): they bound free-form model/operator text to a single,
+//! length-limited line and mask secret-like keys/values.
 //!
-//! NOTE (agent-log-cleanup, §8): both agent observability paths now emit **real
-//! `tracing` fields** on `target: "temper::agent"` rather than a JSON string in
-//! the message body — the `UsageLogger` path (see `usage.rs`) and the
-//! workflow-role-decision path (see `workflow_role_decision_observability.rs`).
-//! The old `StructuredEvent` JSON-string builder has been deleted; only the
-//! bounded/redaction helpers below survive, feeding both paths' field values.
-
-use serde_json::Value;
-
-/// Default bound for scalar event fields that originate outside anvil.
-pub(crate) const FIELD_PREVIEW_CHARS: usize = 200;
-/// Default bound for free-form model/operator text in events.
-pub(crate) const REASON_PREVIEW_CHARS: usize = 200;
+//! NOTE (agent-log-cleanup, §8): agent observability emits **real `tracing`
+//! fields** on `target: "temper::agent"` rather than a JSON string in the
+//! message body. The old `StructuredEvent` JSON-string builder has been
+//! deleted; only the bounded/redaction helpers below survive.
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
@@ -37,12 +28,6 @@ pub(crate) fn preview(input: &str, max_chars: usize) -> String {
 /// preview for free-form model/operator text.
 pub(crate) fn redacted_preview(input: &str, max_chars: usize) -> String {
     preview(&redact_secret_like_text(input), max_chars)
-}
-
-/// Returns true when the central redactor would mask some part of the text.
-pub(crate) fn contains_secret_like_text(input: &str) -> bool {
-    let collapsed = input.split_whitespace().collect::<Vec<_>>().join(" ");
-    redact_secret_like_text(input) != collapsed
 }
 
 fn redact_secret_like_text(input: &str) -> String {
@@ -191,22 +176,6 @@ fn secret_value_wrapper(ch: char) -> bool {
         )
 }
 
-/// Extracts a scalar JSON value as a bounded event string.
-pub(crate) fn scalar_preview(value: Option<&Value>) -> Option<String> {
-    let raw = match value? {
-        Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Null | Value::Array(_) | Value::Object(_) => return None,
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(preview(trimmed, FIELD_PREVIEW_CHARS))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,21 +184,6 @@ mod tests {
     fn preview_collapses_whitespace_and_truncates_on_char_boundary() {
         let text = "first\nsecond\t🙂 third";
         assert_eq!(preview(text, 14), "first second 🙂…");
-    }
-
-    #[test]
-    fn scalar_preview_tolerates_missing_or_non_scalar_json() {
-        let value = serde_json::json!({"nested": true});
-        assert_eq!(
-            scalar_preview(Some(&serde_json::json!(42))).as_deref(),
-            Some("42")
-        );
-        assert_eq!(
-            scalar_preview(Some(&serde_json::json!("  id-1  "))).as_deref(),
-            Some("id-1")
-        );
-        assert_eq!(scalar_preview(Some(&value)), None);
-        assert_eq!(scalar_preview(None), None);
     }
 
     #[test]
@@ -263,16 +217,5 @@ mod tests {
         assert!(preview.ends_with('…'));
         assert!(!preview.contains("hunter2"));
         assert!(!preview.contains("TAIL"));
-    }
-
-    #[test]
-    fn contains_secret_like_text_reports_redactor_matches() {
-        assert!(contains_secret_like_text(
-            "Authorization: Bearer sk-secret-value"
-        ));
-        assert!(contains_secret_like_text("github_pat_secretvalue"));
-        assert!(!contains_secret_like_text(
-            "decision/work-item/repo:20/acme"
-        ));
     }
 }

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Hidden responder subcommands — the agent's external process-responders.
+//! Hidden responder subcommands — external process responders hosted by the CLI.
 //!
 //! Each reads one request JSON value on stdin and writes one reply JSON value on
-//! stdout, driving anvil's native agent loop on a skein engine task. They share
-//! the same provider option parsing.
+//! stdout, driving anvil's native agent loop on a skein engine task.
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -13,19 +12,12 @@ use std::process::ExitCode;
 use serde::Serialize;
 use temper_agent::{
     AuthChoice, PROVIDER_BASE_URL_ENV, ProductManagerResponder, ProviderConfig, ProviderEnv,
-    WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV, WorkflowRoleDecisionRequest,
-    WorkflowRoleDecisionResponder,
 };
 use temper_protocol_interaction::ConversationRequest;
 
 /// `temper product-manager-responder`.
 pub fn product_manager(args: Vec<String>) -> ExitCode {
     finish("product-manager-responder", run_product_manager(args))
-}
-
-/// `temper workflow-role-decision`.
-pub fn workflow_role_decision(args: Vec<String>) -> ExitCode {
-    finish("workflow-role-decision", run_workflow_role_decision(args))
 }
 
 fn finish(name: &str, result: Result<(), String>) -> ExitCode {
@@ -47,24 +39,6 @@ fn run_product_manager(args: Vec<String>) -> Result<(), String> {
     let request: ConversationRequest = read_request("ConversationRequest")?;
     let provider = options.provider()?;
     let responder = ProductManagerResponder::new(provider);
-    let reply = temper_agent_io::block_on_with(move |_cx, handle| async move {
-        responder.respond(handle, &request).await
-    })
-    .map_err(|error| error.to_string())?;
-    write_reply(&reply)
-}
-
-fn run_workflow_role_decision(args: Vec<String>) -> Result<(), String> {
-    let options = ResponderOptions::parse(args)?;
-    if options.help {
-        println!("{WORKFLOW_ROLE_DECISION_USAGE}");
-        return Ok(());
-    }
-    let request: WorkflowRoleDecisionRequest = read_request("WorkflowRoleDecisionRequest")?;
-    let provider = options.provider()?;
-    // Redacted decision capture is host config (env), enabled here at the
-    // responder's process entry point rather than read inside the library.
-    let responder = WorkflowRoleDecisionResponder::with_capture_dir(provider, capture_dir());
     let reply = temper_agent_io::block_on_with(move |_cx, handle| async move {
         responder.respond(handle, &request).await
     })
@@ -169,11 +143,6 @@ fn read_provider_env() -> ProviderEnv {
     }
 }
 
-/// The redacted-capture directory from the host environment, if enabled.
-fn capture_dir() -> Option<PathBuf> {
-    env_path(WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV)
-}
-
 /// Reads an env var, trimming and treating empty as unset.
 fn env_var(name: &str) -> Option<String> {
     std::env::var(name)
@@ -206,14 +175,6 @@ temper product-manager-responder [--auth deepseek|chatgpt-oauth|anthropic-oauth]
 
 Reads one ConversationRequest JSON value on stdin and writes one
 ConversationReply JSON value on stdout. Logs and errors go to stderr.";
-
-const WORKFLOW_ROLE_DECISION_USAGE: &str = "\
-temper workflow-role-decision [--auth deepseek|chatgpt-oauth|anthropic-oauth] \
-[--codex-model MODEL] [--auth-file PATH] < request.json > reply.json
-
-Reads one WorkflowRoleDecisionRequest JSON value on stdin and writes one
-WorkflowRoleDecisionReply JSON value on stdout. The process receives no Forge
-handle, token, or workflow mutation tool.";
 
 #[cfg(test)]
 mod tests {

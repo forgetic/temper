@@ -1,6 +1,6 @@
 //! Phase A3 live validation: prove the ChatGPT (OpenAI Codex) OAuth path
 //! actually talks to the Codex endpoint, refreshes a near-expiry token in place,
-//! and drives a generic compiled-role decision — all against the human's real
+//! and drives a generic structured decision — all against the human's real
 //! subscription.
 //!
 //! Per the plan's cost policy, this runs on **ChatGPT OAuth** (a flat
@@ -27,9 +27,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv, default_auth_path, run_decision};
 
-#[path = "support/workflow_role_fixture.rs"]
-mod workflow_role_fixture;
-use workflow_role_fixture::{role_context, role_manifest};
+#[path = "support/decision_fixture.rs"]
+mod decision_fixture;
+use decision_fixture::{role_context, role_prompt};
 
 /// The minimal decision shape the trivial smoke prompt asks the model to emit.
 #[derive(Debug, Deserialize)]
@@ -91,20 +91,20 @@ fn chatgpt_oauth_validation() {
     assert_eq!(pong.reply.trim().to_lowercase(), "pong");
     eprintln!("[a3] smoke decision latency: {smoke_latency:?}");
 
-    // Step 2 — a real generic workflow-role decision: drive a compiled fixture
-    // role prompt through anvil's one-turn decision parser. This proves the
+    // Step 2 — a real generic structured decision: drive a fixture role prompt
+    // through anvil's one-turn decision parser. This proves the
     // OAuth path handles user-defined role prompts without importing any
     // checked-in reference-delivery prompt constant.
-    let role = role_manifest(
+    let prompt = role_prompt(
         "oauth-generic-role-smoke",
         "When the work item is a task in the todo queue with the todo label, choose the advance action.",
     );
-    let role_context = role_context(&role);
+    let context = role_context();
     let role_start = Instant::now();
-    let decision: RoleDecision = block_on_decision(&provider, &role.prompt.render(), &role_context)
-        .expect("ChatGPT OAuth generic role decision succeeds and parses");
+    let decision: RoleDecision = block_on_decision(&provider, &prompt, &context)
+        .expect("ChatGPT OAuth generic structured decision succeeds and parses");
     let role_latency = role_start.elapsed();
-    eprintln!("[a3] generic role decision: {decision:?} (latency: {role_latency:?})");
+    eprintln!("[a3] generic structured decision: {decision:?} (latency: {role_latency:?})");
     assert_eq!(decision.action, "advance");
 
     // Step 3 — refresh path: copy the real auth file, force its codex entry to

@@ -1,5 +1,0 @@
-{
-  "protocol_version": 1,
-  "action": "advance",
-  "reason": "The issue is a task in the todo queue and the advance action is authorized."
-}

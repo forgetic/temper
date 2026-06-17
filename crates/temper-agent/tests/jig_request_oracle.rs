@@ -35,8 +35,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv, run_decision};
 
-#[path = "support/workflow_role_fixture.rs"]
-mod workflow_role_fixture;
+#[path = "support/decision_fixture.rs"]
+mod decision_fixture;
 
 #[derive(Debug, Deserialize)]
 struct RoleDecision {
@@ -159,14 +159,13 @@ fn run_leg(
     let recorder = start_recorder(upstream_host_override).expect("start jig recorder");
     let provider = provider.with_base_url_override(recorder.base_url.clone());
 
-    let role = workflow_role_fixture::role_manifest(
+    let prompt = decision_fixture::role_prompt(
         "jig-request-oracle-role-smoke",
         "When the work item is a task in the todo queue with the todo label, choose the advance action. Reply with one JSON object.",
     );
-    let context = workflow_role_fixture::role_context(&role);
+    let context = decision_fixture::role_context();
     let decision: RoleDecision = {
         let provider = provider.clone();
-        let prompt = role.prompt.render();
         temper_agent_io::block_on_with(move |_cx, handle| async move {
             run_decision(handle, &provider, &prompt, &context).await
         })

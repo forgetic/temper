@@ -12,10 +12,8 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use temper_forge::{CreatePullRequest, CreateRepository, User};
-use temper_protocol_decision::BoundExternalTool;
 use temper_workflow::{
-    CompiledWorkflow, ExecutionContext, ExternalToolId, ExternalToolManifest, RoleId, RoleManifest,
-    TransitionId,
+    CompiledWorkflow, ExecutionContext, ExternalToolId, RoleId, RoleManifest, TransitionId,
 };
 
 /// A workflow role and the Forge user that acts for it.
@@ -49,20 +47,6 @@ pub struct ExternalToolBinding {
     pub tool: ExternalToolId,
     /// Provider/binding name selected by the runner, such as `workspace-local`.
     pub provider: String,
-}
-
-fn bound_external_tool_from_manifest(
-    manifest: &ExternalToolManifest,
-    binding: &ExternalToolBinding,
-) -> BoundExternalTool {
-    BoundExternalTool {
-        id: manifest.id.to_string(),
-        description: manifest.description.clone(),
-        required: manifest.required,
-        constraints: manifest.constraints.clone(),
-        guidance: manifest.guidance.clone(),
-        provider: binding.provider.clone(),
-    }
 }
 
 /// Error returned when runner external-tool bindings exceed workflow authority.
@@ -228,14 +212,11 @@ impl RunnerConfig {
             .any(|binding| &binding.role == role && &binding.tool == tool)
     }
 
-    /// Validates and returns bound external tools for one role manifest.
-    ///
-    /// Results follow the workflow declaration order. Optional unbound tools are
-    /// omitted; required unbound tools fail fast before a real worker starts.
-    pub fn bound_external_tools_for(
+    /// Validates external-tool bindings for one role manifest.
+    pub fn validate_role_external_tool_bindings(
         &self,
         role: &RoleManifest,
-    ) -> Result<Vec<BoundExternalTool>, ExternalToolBindingError> {
+    ) -> Result<(), ExternalToolBindingError> {
         let role_bindings = self
             .external_tools
             .iter()
@@ -261,23 +242,19 @@ impl RunnerConfig {
             }
         }
 
-        role.external_tools
-            .iter()
-            .filter_map(|manifest| {
-                role_bindings
+        for manifest in &role.external_tools {
+            if manifest.required
+                && !role_bindings
                     .iter()
-                    .find(|binding| binding.tool == manifest.id)
-                    .map(|binding| Ok(bound_external_tool_from_manifest(manifest, binding)))
-                    .or_else(|| {
-                        manifest.required.then(|| {
-                            Err(ExternalToolBindingError::MissingRequired {
-                                role: role.id.clone(),
-                                tool: manifest.id.clone(),
-                            })
-                        })
-                    })
-            })
-            .collect()
+                    .any(|binding| binding.tool == manifest.id)
+            {
+                return Err(ExternalToolBindingError::MissingRequired {
+                    role: role.id.clone(),
+                    tool: manifest.id.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Validates all external tool bindings against a compiled workflow.
@@ -293,7 +270,7 @@ impl RunnerConfig {
             }
         }
         for role in compiled.roles() {
-            self.bound_external_tools_for(role)?;
+            self.validate_role_external_tool_bindings(role)?;
         }
         Ok(())
     }

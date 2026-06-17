@@ -1,12 +1,9 @@
 //! Path-agnostic helpers for invoking a workspace executor from an action.
 //!
-//! Both the LLM role-decision path ([`crate::role_process_tools`]) and the
-//! queue-automation path ([`crate::worker::automation`]) build a
-//! [`CodingWorkspaceRequest`], invoke a bound workspace, and route on the
-//! returned verdict through the action's `outcomes` map. The deterministic
-//! correlation keys, branch hints, and the pull-request input projected from a
-//! workspace head are shared here so both paths produce identical, idempotent
-//! Forge writes for the same work item.
+//! Workspace-backed queue automation and daemon worker-result application both
+//! need deterministic correlation keys, branch hints, and pull-request inputs
+//! projected from workspace heads. Those path-agnostic helpers live here so each
+//! caller produces identical, idempotent Forge writes for the same work item.
 
 use temper_forge::{BranchRef, CreatePullRequest, ItemNumber, RepositoryId};
 use temper_workflow::{

@@ -15,14 +15,6 @@
 //! (`turn.usage`, `tool.start`, `tool.end`, `tool.error`, `model.call_failed`,
 //! `agent.end`, `usage.total`) do **not** appear at `info` at all — they belong
 //! at `debug`/`trace` per §5.
-//!
-//! The SECOND agent emitter — the workflow-role **decision** path
-//! (`workflow_role_decision_observability.rs`) — is guarded by the same
-//! invariant, but its `emit_*` fns are `pub(crate)` and so unreachable from this
-//! external integration test; its regression guard lives in-crate as
-//! `no_decision_line_is_info_level_json_in_message`
-//! (`workflow_role_decision_observability_tests.rs`). Between the two, both agent
-//! emitters are covered.
 
 use std::sync::{Arc, Mutex};
 

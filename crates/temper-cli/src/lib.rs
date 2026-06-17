@@ -104,7 +104,6 @@ pub fn dispatch(
         "validate-reference-delivery" => operators::validate_reference_delivery(args),
         "interaction" => operators::interaction(args),
         "product-manager-responder" => responders::product_manager(args),
-        "workflow-role-decision" => responders::workflow_role_decision(args),
 
         "-h" | "--help" | "help" => {
             println!("{USAGE}");

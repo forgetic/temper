@@ -2,10 +2,9 @@
 //!
 //! This module models the first executable non-workflow external tool. A coding
 //! workspace may prepare a git/workspace checkout, delegate edits, commit a PR
-//! head, and report that head back to an agent adapter. It does **not** receive a
+//! head, and report that head back to the runner. It does **not** receive a
 //! [`RoleTools`](crate::RoleTools) handle and therefore cannot mutate workflow or
-//! Forge state; agents still open PRs and run transitions only through
-//! [`RoleTools`](crate::RoleTools).
+//! Forge state; workflow changes stay inside runner/daemon authority.
 
 use std::error::Error;
 use std::fmt;
@@ -75,7 +74,7 @@ pub struct CodingWorkspaceWorkItem {
     pub queue: QueueId,
     pub kind: ArtifactKindId,
     pub target: ArtifactSource,
-    /// The same JSON context sent to the LLM role decision engine.
+    /// Serialized artifact and queue context for the workspace invocation.
     pub context_json: String,
 }
 

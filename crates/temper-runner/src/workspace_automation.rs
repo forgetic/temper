@@ -1,23 +1,20 @@
 //! Workspace-backed queue automation (ADR 0022 §D).
 //!
-//! The LLM role-decision path can bind a workspace executor to an action, run
-//! it, and route on its verdict. This module gives the queue-automation path the
-//! same ability without an upfront LLM classification: when a queue automation
-//! declares an `executor`, the mechanical worker invokes the workspace bound for
-//! the automation's actor, then routes the returned verdict through the
-//! automation's `outcomes` map and applies the routed transition under the
-//! actor's authority. The real work and any escalation stay inside the
-//! workspace; the engine still owns transition legality and effect application.
+//! Queue automation can bind a workspace executor to an action, run it, and
+//! route on its verdict. When a queue automation declares an `executor`, the
+//! mechanical worker invokes the workspace bound for the automation's actor,
+//! then routes the returned verdict through the automation's `outcomes` map and
+//! applies the routed transition under the actor's authority. The real work and
+//! any escalation stay inside the workspace; the engine still owns transition
+//! legality and effect application.
 //!
-//! Leasing differs from the decision-driven path on purpose. A role worker
-//! leases the artifact before invoking its workspace so two role workers do not
-//! pick up the same item. The mechanical worker holds no per-item lease here:
-//! idempotency comes from workflow state. The primary transition (or the routed
-//! outcome) removes the queue's activating label, so a completed item no longer
-//! matches on the next scan, and the deterministic correlation keys make a
-//! repeated PR-create or content write a no-op. A workspace that is mid-flight
-//! when the next tick fires is re-invoked; providers keep `produce_head`
-//! idempotent for the same correlation key, exactly as on the decision path.
+//! The mechanical worker holds no per-item lease here: idempotency comes from
+//! workflow state. The primary transition (or the routed outcome) removes the
+//! queue's activating label, so a completed item no longer matches on the next
+//! scan, and the deterministic correlation keys make a repeated PR-create or
+//! content write a no-op. A workspace that is mid-flight when the next tick fires
+//! is re-invoked; providers keep `produce_head` idempotent for the same
+//! correlation key.
 
 mod helpers;
 #[cfg(test)]
@@ -74,8 +71,7 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
     let Some(workspace) = executors.workspace_for(&item.actor, executor_id) else {
         // The automation declares a workspace executor but the runner bound
         // none (e.g. the coding-workspace env is unset). Stay quiet and let a
-        // later tick retry once a binding exists, mirroring the role path's
-        // no-op when a required executor is unavailable.
+        // later tick retry once a binding exists.
         return Ok(WorkspaceAutomationOutcome::Skipped {
             reason: "executor_unavailable",
         });
@@ -196,10 +192,10 @@ pub(crate) async fn execute_workspace_automation<F: Forge + ?Sized>(
 
     // A verdict routed to a non-PR-create outcome transition (escalation, a
     // content-bearing rewrite, or an issue breakdown). The head is discarded;
-    // any authored body / review body / children is bound through the same keyed
-    // runtime seam the role path uses, so the routed transition's `set_body` /
-    // `attach_review` / `create_issues` effects can consume the work product. An
-    // empty diff here is the escalation signal, not an error.
+    // any authored body / review body / children is bound through the keyed
+    // runtime seam, so the routed transition's `set_body` / `attach_review` /
+    // `create_issues` effects can consume the work product. An empty diff here
+    // is the escalation signal, not an error.
     let mut context = ExecutionContext::new();
     let routed_create_issues_index = create_issues_effect_index(workflow, &routed);
     if !output.children.is_empty() {

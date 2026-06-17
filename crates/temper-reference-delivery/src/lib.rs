@@ -161,8 +161,7 @@ pub fn actor_user(role: &str) -> User {
 /// Role bindings are derived from workflow roles that subscribe to queues, so
 /// adding a user-defined process role to the spec does not require another Rust
 /// hard-coded id. Automation-only authorities such as `mechanical` have no role
-/// worker or role-decision process. The demo provisioning convention keeps Forge
-/// user id == role id.
+/// worker. The demo provisioning convention keeps Forge user id == role id.
 pub fn runner_config() -> RunnerConfig {
     runner_config_for(&workflow(), repo_input())
 }

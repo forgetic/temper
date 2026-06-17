@@ -5,9 +5,9 @@ use jig_server::FakeLlm;
 use serde::Deserialize;
 use temper_agent::{ProviderConfig, run_decision};
 
-#[path = "support/workflow_role_fixture.rs"]
-mod workflow_role_fixture;
-use workflow_role_fixture::{role_context, role_manifest};
+#[path = "support/decision_fixture.rs"]
+mod decision_fixture;
+use decision_fixture::{role_context, role_prompt};
 
 #[derive(Debug, Deserialize)]
 struct RoleDecision {
@@ -54,16 +54,16 @@ fn fixed_decision_fake() -> FakeLlm {
 }
 
 fn run_fixture_decision(provider: &ProviderConfig) -> RoleDecision {
-    let role = role_manifest(
+    let prompt = role_prompt(
         "jig-generic-role-smoke",
         "When the work item is a task in the todo queue with the todo label, choose the advance action.",
     );
-    let context = role_context(&role);
+    let context = role_context();
     let provider = provider.clone();
     temper_agent_io::block_on_with(move |_cx, handle| async move {
-        run_decision::<RoleDecision>(handle, &provider, &role.prompt.render(), &context).await
+        run_decision::<RoleDecision>(handle, &provider, &prompt, &context).await
     })
-    .expect("jig-backed workflow-role decision succeeds and parses")
+    .expect("jig-backed structured decision succeeds and parses")
 }
 
 fn jig_auth_fixture() -> PathBuf {

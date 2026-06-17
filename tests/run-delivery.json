@@ -28,7 +28,7 @@
     },
     {
       "id": "mechanical",
-      "charter": "Automation authority used by the mechanical worker to stamp raw intake ready for the engineer and to land CI-green PRs; do not bind this role to an LLM or role-decision process.",
+      "charter": "Automation authority used by the mechanical worker to stamp raw intake ready for the engineer and to land CI-green PRs; do not bind this role to an LLM.",
       "prompt": {
         "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
       },

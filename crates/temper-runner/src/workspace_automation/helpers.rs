@@ -56,7 +56,7 @@ pub(super) async fn run_routed<F: Forge + ?Sized>(
 
 /// Builds the guidance a workspace receives for an automation run from the
 /// actor role's charter/prompt and the declared external tool's guidance and
-/// constraints, mirroring the role-decision path's guidance assembly.
+/// constraints.
 pub(super) fn automation_guidance(
     actor: &RoleManifest,
     executor_id: &str,

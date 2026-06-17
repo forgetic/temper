@@ -141,8 +141,8 @@ pub(super) fn check_default_artifact_kinds(
     }
 }
 
-/// Checks semantic consistency of per-transition outcome routing (the
-/// workspace-verdict path for role-decision actions).
+/// Checks semantic consistency of per-transition outcome routing for declared
+/// workspace verdicts.
 pub(super) fn check_transition_outcome_contract(
     spec: &RawWorkflowSpec,
     diagnostics: &mut Vec<Diagnostic>,
@@ -217,10 +217,8 @@ fn check_queue_automation_artifact(
 }
 
 /// Checks that a workspace-backed automation's `executor` id is declared on the
-/// actor role's external tools, mirroring the role-decision contract that an
-/// executor must be a declared external tool of the role that invokes it. The
-/// check is skipped when the actor role itself is undeclared (already
-/// diagnosed) so a single missing role does not cascade.
+/// actor role's external tools. The check is skipped when the actor role itself
+/// is undeclared (already diagnosed) so a single missing role does not cascade.
 fn check_queue_automation_executor(
     spec: &RawWorkflowSpec,
     queue: &str,

@@ -1482,7 +1482,6 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io",
  "temper-protocol-agent",
- "temper-protocol-decision",
  "temper-protocol-interaction",
  "tongs",
  "tracing",
@@ -1793,14 +1792,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-protocol-decision"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "temper-protocol-interaction"
 version = "0.1.0"
 dependencies = [
@@ -1883,7 +1874,6 @@ dependencies = [
  "temper-forge-filesystem",
  "temper-forge-memory",
  "temper-log",
- "temper-protocol-decision",
  "temper-testing",
  "temper-workflow",
  "tracing",

@@ -1,11 +1,11 @@
 //! Stable, provider-neutral observability identities for work items.
 //!
 //! [`WorkItemIdentity`] survives the move to `temper-log` as the runner-internal
-//! carrier of a work item's role/queue/decision-id correlation (used for
-//! role-decision routing and for building the design's `artifact.ref` join key
-//! via [`work_item_ref`](crate::observability::work_item_ref)). Its old
-//! JSON-rendering (`to_json`) is gone — the machine projection is now real
-//! `tracing` fields emitted by `temper_log::emit::*`.
+//! carrier of a work item's role/queue/correlation ids and for building the
+//! design's `artifact.ref` join key via
+//! [`work_item_ref`](crate::observability::work_item_ref). Its old JSON-rendering
+//! (`to_json`) is gone — the machine projection is now real `tracing` fields
+//! emitted by `temper_log::emit::*`.
 
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RoleId};
@@ -36,12 +36,12 @@ impl ObservabilityArtifactType {
     }
 }
 
-/// Stable identity for one workflow work item or role-decision request.
+/// Stable identity for one workflow work item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkItemIdentity {
     /// Deterministic id derived only from provider-neutral coordinates.
     pub work_item_id: String,
-    /// Deterministic decision id for correlating role responders with Temper.
+    /// Deterministic correlation id for worker-side attempts.
     pub decision_id: String,
     /// Optional tick id when a caller has one available.
     pub tick_id: Option<String>,
