@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use temper_forge::{CreatePullRequest, ItemNumber, RepositoryId};
 use temper_protocol_worker::{JobContext, RepoOutcome};
+use temper_runner::implementation_pr_body;
 use temper_workflow::ArtifactKindId;
 
 use crate::InFlightJob;
@@ -22,6 +23,7 @@ pub(super) struct CoordinatedSet<'a> {
     pub(super) coordination_key: &'a str,
     pub(super) lookup_labels: &'a [String],
     pub(super) create_labels: &'a [String],
+    pub(super) plan_phases: &'a [String],
     pub(super) depends_on: &'a BTreeMap<String, Vec<String>>,
 }
 
@@ -133,6 +135,7 @@ pub(super) fn coordinated_pr_pull_request_input(
     labels: Vec<String>,
     coordination_key: &str,
     dependencies: Vec<temper_workflow::ArtifactRef>,
+    plan_phases: &[String],
 ) -> CreatePullRequest {
     let gated = !dependencies.is_empty();
     let metadata = temper_workflow::WorkflowMetadata {
@@ -151,15 +154,10 @@ pub(super) fn coordinated_pr_pull_request_input(
     } else {
         ""
     };
-    let body = format!(
-        "Coordinated implementation for issue #{coordinating_number} (set `{coordination_key}`).{landing_note}\n\nSummary: {}\n\n{}",
-        if summary.is_empty() {
-            "(none)"
-        } else {
-            summary
-        },
-        temper_workflow::render_metadata_block(&metadata)
+    let intro = format!(
+        "Coordinated implementation for issue #{coordinating_number} (set `{coordination_key}`).{landing_note}"
     );
+    let body = implementation_pr_body(&intro, summary, plan_phases, &metadata);
     CreatePullRequest {
         title: format!("Implement #{coordinating_number}: {issue_title}"),
         body,

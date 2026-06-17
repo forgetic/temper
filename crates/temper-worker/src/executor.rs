@@ -1,3 +1,4 @@
+use serde_json::Value;
 use temper_protocol_worker::{
     Assign, Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION,
@@ -11,6 +12,10 @@ pub enum JobOutcome {
         /// to a single repo produces exactly one outcome.
         repos: Vec<RepoOutcome>,
         summary: Option<String>,
+        /// Optional structured metadata for daemon-side application. The
+        /// implementation plan from the agent protocol is carried here as JSON
+        /// so the worker still exposes no Forge mutation authority.
+        details: Option<Value>,
     },
     Verdict {
         verdict: String,
@@ -73,6 +78,7 @@ impl JobExecutor for StubExecutor {
                         },
                     }],
                     summary: Some("stub executor completed without doing IO".to_string()),
+                    details: None,
                 },
                 StubMode::Failure { class, message } => JobOutcome::Failure { class, message },
             }
@@ -95,10 +101,15 @@ pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResu
         details: None,
     };
     match outcome {
-        JobOutcome::Success { repos, summary } => JobResult {
+        JobOutcome::Success {
+            repos,
+            summary,
+            details,
+        } => JobResult {
             status: ResultStatus::Success,
             repos,
             summary,
+            details,
             ..base
         },
         JobOutcome::Verdict {
@@ -154,6 +165,7 @@ mod tests {
             assert_eq!(result.job_id, "job-123");
             assert_eq!(result.status, ResultStatus::Success);
             assert_eq!(result.failure, None);
+            assert_eq!(result.details, None);
             assert_eq!(
                 result.summary.as_deref(),
                 Some("stub executor completed without doing IO")
@@ -169,6 +181,24 @@ mod tests {
                 }]
             );
         });
+    }
+
+    #[test]
+    fn success_outcome_maps_structured_details_to_result() {
+        let details = json!({"plan":{"phases":["Write test","Implement fix"]}});
+        let result = job_result(
+            "worker-1",
+            "job-123",
+            JobOutcome::Success {
+                repos: Vec::new(),
+                summary: Some("implemented".to_string()),
+                details: Some(details.clone()),
+            },
+        );
+
+        assert_eq!(result.status, ResultStatus::Success);
+        assert_eq!(result.summary.as_deref(), Some("implemented"));
+        assert_eq!(result.details, Some(details));
     }
 
     #[test]

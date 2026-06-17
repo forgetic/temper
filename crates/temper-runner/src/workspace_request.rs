@@ -11,6 +11,10 @@ use temper_workflow::{
     render_metadata_block,
 };
 
+/// Minimum number of structured implementation phases that should produce PR
+/// checklist ceremony. Zero or one phase remains a plain PR body.
+pub const IMPLEMENTATION_PLAN_CHECKLIST_PHASE_COUNT: usize = 2;
+
 use crate::CodingWorkspaceOutput;
 
 /// Deterministic correlation key for the pull request a workspace head opens,
@@ -79,21 +83,37 @@ pub fn implementation_pr_pull_request_input(
     summary: &str,
     labels: Vec<String>,
 ) -> CreatePullRequest {
+    implementation_pr_pull_request_input_with_plan(
+        repo,
+        code_number,
+        issue_title,
+        head_branch,
+        base_branch,
+        summary,
+        labels,
+        &[],
+    )
+}
+
+/// Projects implementation-PR fields with optional structured plan phases into
+/// the pull-request creation input.
+pub fn implementation_pr_pull_request_input_with_plan(
+    repo: RepositoryId,
+    code_number: ItemNumber,
+    issue_title: &str,
+    head_branch: String,
+    base_branch: String,
+    summary: &str,
+    labels: Vec<String>,
+    plan_phases: &[String],
+) -> CreatePullRequest {
     let metadata = WorkflowMetadata {
         kind: Some(ArtifactKindId::new("implementation_pr")),
         parents: vec![ArtifactRef::same_repo(code_number)],
         ..WorkflowMetadata::default()
     };
-    let summary = summary.trim();
-    let body = format!(
-        "Workspace-produced implementation for issue #{code_number}.\n\nSummary: {}\n\n{}",
-        if summary.is_empty() {
-            "(none)"
-        } else {
-            summary
-        },
-        render_metadata_block(&metadata)
-    );
+    let intro = format!("Workspace-produced implementation for issue #{code_number}.");
+    let body = implementation_pr_body(&intro, summary, plan_phases, &metadata);
     CreatePullRequest {
         title: format!("Implement #{code_number}: {issue_title}"),
         body,
@@ -110,6 +130,56 @@ pub fn implementation_pr_pull_request_input(
     }
 }
 
+/// Renders the shared implementation PR body, adding a plan checklist only when
+/// structured plan phases are non-trivial.
+pub fn implementation_pr_body(
+    intro: &str,
+    summary: &str,
+    plan_phases: &[String],
+    metadata: &WorkflowMetadata,
+) -> String {
+    let summary = summary.trim();
+    let plan_section = render_implementation_plan_checklist(plan_phases)
+        .map(|section| format!("\n\n{section}"))
+        .unwrap_or_default();
+    format!(
+        "{}\n\nSummary: {}{}\n\n{}",
+        intro.trim(),
+        if summary.is_empty() {
+            "(none)"
+        } else {
+            summary
+        },
+        plan_section,
+        render_metadata_block(metadata)
+    )
+}
+
+/// Renders a Markdown checklist for non-trivial implementation plans.
+pub fn render_implementation_plan_checklist(plan_phases: &[String]) -> Option<String> {
+    let phases = checklist_phases(plan_phases);
+    if phases.len() < IMPLEMENTATION_PLAN_CHECKLIST_PHASE_COUNT {
+        return None;
+    }
+
+    let mut checklist = String::from("Implementation plan:\n\n");
+    for phase in phases {
+        checklist.push_str("- [ ] ");
+        checklist.push_str(&phase);
+        checklist.push('\n');
+    }
+    checklist.pop();
+    Some(checklist)
+}
+
+fn checklist_phases(plan_phases: &[String]) -> Vec<String> {
+    plan_phases
+        .iter()
+        .map(|phase| phase.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|phase| !phase.is_empty())
+        .collect()
+}
+
 /// Projects a workspace head into the pull-request creation input for an
 /// implementation PR parented to the originating code issue.
 pub(crate) fn workspace_pull_request_input(
@@ -124,7 +194,7 @@ pub(crate) fn workspace_pull_request_input(
     } else {
         output.base_branch
     };
-    implementation_pr_pull_request_input(
+    implementation_pr_pull_request_input_with_plan(
         repo,
         code_number,
         issue_title,
@@ -132,6 +202,7 @@ pub(crate) fn workspace_pull_request_input(
         base_branch,
         &output.summary,
         output.labels,
+        &output.plan_phases,
     )
 }
 
@@ -187,5 +258,67 @@ mod tests {
     #[test]
     fn workspace_pull_request_input_delegates_with_explicit_base_branch() {
         assert_parity("release/1.2", "release/1.2");
+    }
+
+    #[test]
+    fn implementation_pr_body_renders_multi_phase_plan_checklist() {
+        let repo = RepositoryId::new("repo-1");
+        let number = ItemNumber::new(120);
+        let phases = vec![
+            "Write failing test".to_string(),
+            "Implement fix\nwith docs".to_string(),
+        ];
+
+        let input = implementation_pr_pull_request_input_with_plan(
+            repo,
+            number,
+            "daemon worker apply",
+            "agent/pr-for-code-120".to_string(),
+            "main".to_string(),
+            "implemented the thing",
+            vec!["implementation".to_string()],
+            &phases,
+        );
+
+        assert!(input.body.contains("Summary: implemented the thing"));
+        assert!(input.body.contains(
+            "Implementation plan:\n\n- [ ] Write failing test\n- [ ] Implement fix with docs"
+        ));
+        assert!(input.body.contains("<!-- temper:workflow-metadata"));
+    }
+
+    #[test]
+    fn implementation_pr_body_keeps_trivial_or_absent_plan_plain() {
+        for phases in [Vec::new(), vec!["Single obvious edit".to_string()]] {
+            let input = implementation_pr_pull_request_input_with_plan(
+                RepositoryId::new("repo-1"),
+                ItemNumber::new(120),
+                "daemon worker apply",
+                "agent/pr-for-code-120".to_string(),
+                "main".to_string(),
+                "implemented the thing",
+                vec!["implementation".to_string()],
+                &phases,
+            );
+
+            assert!(input.body.contains("Summary: implemented the thing"));
+            assert!(!input.body.contains("Implementation plan"));
+            assert!(!input.body.contains("- [ ]"));
+        }
+    }
+
+    #[test]
+    fn workspace_pull_request_input_carries_output_plan_phases() {
+        let repo = RepositoryId::new("repo-1");
+        let input = workspace_pull_request_input(
+            repo,
+            ItemNumber::new(120),
+            "daemon worker apply",
+            output("main").with_plan_phases(["Design API", "Wire caller"]),
+            "main".to_string(),
+        );
+
+        assert!(input.body.contains("- [ ] Design API"));
+        assert!(input.body.contains("- [ ] Wire caller"));
     }
 }

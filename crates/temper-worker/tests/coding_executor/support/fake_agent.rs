@@ -10,6 +10,8 @@ use super::*;
 pub enum AgentBehavior {
     /// Engineer head path: write a product diff, return a summary-only result.
     Success,
+    /// Engineer head path: write a product diff and return a structured plan.
+    SuccessWithPlan,
     /// A transient provider error (the in-process analog of the old non-zero
     /// subprocess exit).
     TransientError,
@@ -106,6 +108,16 @@ impl AgentRunner for FakeAgentRunner {
                 Self::write_diff(&repo_cwd);
                 Ok(WorkspaceResult {
                     summary: Some("did the work".to_string()),
+                    ..WorkspaceResult::default()
+                })
+            }
+            AgentBehavior::SuccessWithPlan => {
+                Self::write_diff(&repo_cwd);
+                Ok(WorkspaceResult {
+                    summary: Some("did the planned work".to_string()),
+                    plan: Some(ImplementationPlan {
+                        phases: vec!["Write test".to_string(), "Implement fix".to_string()],
+                    }),
                     ..WorkspaceResult::default()
                 })
             }

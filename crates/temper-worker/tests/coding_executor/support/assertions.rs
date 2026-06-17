@@ -4,7 +4,11 @@ use super::*;
 
 pub fn expect_success(outcome: JobOutcome) -> (String, String, Option<String>) {
     match outcome {
-        JobOutcome::Success { repos, summary } => {
+        JobOutcome::Success {
+            repos,
+            summary,
+            details: _,
+        } => {
             assert_eq!(
                 repos.len(),
                 1,
@@ -37,9 +41,11 @@ pub fn expect_verdict(
             summary,
             children,
         } => (verdict, body, summary, children),
-        JobOutcome::Success { repos, summary } => {
-            panic!("expected verdict, got success {repos:?} {summary:?}")
-        }
+        JobOutcome::Success {
+            repos,
+            summary,
+            details: _,
+        } => panic!("expected verdict, got success {repos:?} {summary:?}"),
         JobOutcome::Failure { class, message } => {
             panic!("expected verdict, got {class:?}: {message}")
         }
@@ -52,9 +58,11 @@ pub fn expect_failure_class(outcome: JobOutcome, expected: FailureClass) -> Stri
             assert_eq!(class, expected, "unexpected failure message: {message}");
             message
         }
-        JobOutcome::Success { repos, summary } => {
-            panic!("expected {expected:?} failure, got success {repos:?} {summary:?}")
-        }
+        JobOutcome::Success {
+            repos,
+            summary,
+            details: _,
+        } => panic!("expected {expected:?} failure, got success {repos:?} {summary:?}"),
         JobOutcome::Verdict {
             verdict,
             body,
