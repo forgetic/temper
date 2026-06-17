@@ -49,10 +49,11 @@ Two ignored tests; each owns the live world for one scenario:
   scenario with Actions enabled, plus one real host-mode `forgejo-runner`
   (`--labels host:host`, no containers) — the genuine CI producer.
 - **Daemon**: the real root-package `temper-daemon` binary on an ephemeral
-  port. It is the only component holding Forge API credentials: admin/bot
-  token via `FORGEJO_URL`/`FORGEJO_ACCESS_TOKEN`, web-UI credentials for the
-  ADR 0019 CI reads, and the provisioned engineer token via
-  `TEMPER_FORGEJO_TOKEN_ENGINEER` for role-attributed applies.
+  port. It is the only component holding Forge API credentials: forge URL and
+  admin/bot token from its config/credentials files (`[forge] url` and the
+  `[forge.users.<admin>]` token), web-UI credentials for the ADR 0019 CI reads,
+  and the provisioned engineer token via `TEMPER_FORGEJO_TOKEN_ENGINEER` for
+  role-attributed applies.
 - **Worker**: `temper-testing-daemon-worker`, a deterministic Worker/Daemon
   Wire Protocol v1 client that stands in for `smith-worker`. It long-polls the
   daemon, and on assignment clones/fetches the repo over the real git remote,

@@ -65,8 +65,9 @@
 //! 3. **stderr human fallback.** Otherwise (no JSON toggle, no `JOURNAL_STREAM`,
 //!    the journal socket is unavailable, or off Linux) logs are written to
 //!    stderr with a human-readable fmt layer that keeps timestamps. ANSI colors
-//!    are enabled only when stderr is a real TTY ([`IsTerminal`]); under systemd
-//!    or a pipe, stderr is not a terminal, so colors are correctly suppressed.
+//!    are enabled only when stderr is a real TTY ([`IsTerminal`]) and `NO_COLOR`
+//!    is unset/empty (<https://no-color.org>); under systemd or a pipe stderr is
+//!    not a terminal, so colors are correctly suppressed.
 //!
 //! The format choice is computed by the pure [`select_format`] helper from the
 //! `TEMPER_LOG_FORMAT` value, so the toggle is unit-tested without mutating the
@@ -170,6 +171,20 @@ fn select_format(value: Option<&str>) -> LogFormat {
     }
 }
 
+/// Pure ANSI-color decision for the human stderr layer.
+///
+/// Honors the `NO_COLOR` convention (<https://no-color.org>): when `no_color`
+/// is set to any non-empty value, ANSI color is disabled regardless of whether
+/// stderr is a TTY. Otherwise color is enabled only when stderr is a real
+/// terminal (`is_terminal`). Factored out (like [`select_format`]) so the toggle
+/// is unit-testable without mutating the process environment.
+fn use_ansi(no_color: Option<&str>, stderr_is_terminal: bool) -> bool {
+    match no_color {
+        Some(v) if !v.is_empty() => false,
+        _ => stderr_is_terminal,
+    }
+}
+
 /// Install the global [`tracing`] subscriber for this process.
 ///
 /// See the [crate-level docs](crate) for the env detection rules
@@ -218,9 +233,12 @@ pub fn init_logging() {
         return;
     }
 
-    let fmt_layer = fmt::layer()
-        .with_ansi(std::io::stderr().is_terminal()) // colors only on a real TTY
-        .with_writer(std::io::stderr);
+    // Colors only on a real TTY, and never when NO_COLOR is set (no-color.org).
+    let ansi = use_ansi(
+        std::env::var("NO_COLOR").ok().as_deref(),
+        std::io::stderr().is_terminal(),
+    );
+    let fmt_layer = fmt::layer().with_ansi(ansi).with_writer(std::io::stderr);
 
     let _ = tracing_subscriber::registry()
         .with(env_filter())
@@ -315,5 +333,22 @@ mod tests {
         assert_eq!(select_format(Some("human")), LogFormat::Auto);
         assert_eq!(select_format(Some("jsonl")), LogFormat::Auto);
         assert_eq!(select_format(Some("text")), LogFormat::Auto);
+    }
+
+    #[test]
+    fn ansi_follows_tty_when_no_color_unset_or_empty() {
+        // No NO_COLOR (or empty) -> color tracks whether stderr is a terminal.
+        assert!(use_ansi(None, true));
+        assert!(!use_ansi(None, false));
+        assert!(use_ansi(Some(""), true));
+        assert!(!use_ansi(Some(""), false));
+    }
+
+    #[test]
+    fn ansi_disabled_when_no_color_set() {
+        // Any non-empty NO_COLOR disables color even on a TTY (no-color.org).
+        assert!(!use_ansi(Some("1"), true));
+        assert!(!use_ansi(Some("anything"), true));
+        assert!(!use_ansi(Some("1"), false));
     }
 }
