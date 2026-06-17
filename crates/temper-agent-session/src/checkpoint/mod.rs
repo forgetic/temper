@@ -203,7 +203,7 @@ impl temper_agent_core::TurnHook for Checkpointer {
             return;
         }
         if let Err(error) = self.do_checkpoint(None).await {
-            tracing::warn!(target: "temper_agent", %error, "backstop checkpoint skipped");
+            tracing::warn!(target: "temper::agent", %error, "backstop checkpoint skipped");
         }
     }
 }

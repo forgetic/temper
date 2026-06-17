@@ -201,7 +201,7 @@ pub async fn run_coding_agent_native_with_hooks(
     let text = collect_text(&outcome.final_message.content);
     let result = parse_result(&text).inspect_err(|_err| {
         tracing::warn!(
-            target: "temper_agent",
+            target: "temper::agent",
             "agent final message contained no parseable WorkspaceResult envelope; \
              first 200 chars: {}",
             &text.chars().take(200).collect::<String>()
