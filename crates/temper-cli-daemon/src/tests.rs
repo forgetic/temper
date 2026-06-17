@@ -141,9 +141,49 @@ fn explicit_config_and_credentials_ignore_poisoned_global() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An explicit config directory is a local bundle root: the daemon loads
+/// `<root>/config.toml` and, when no `--credentials` / `--secrets` is supplied,
+/// the sibling `<root>/credentials.toml` instead of any global credentials file.
+#[test]
+fn explicit_config_directory_uses_sibling_credentials_not_global() {
+    let dir = scratch("config-dir-bundle");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).expect("home creates");
+    let env = poison_home(&home);
+
+    let bundle = dir.join("deploy");
+    let config = bundle.join("config.toml");
+    write_config(&config);
+    let credentials = bundle.join("credentials.toml");
+    write_credentials(&credentials, EXPLICIT_TOKEN);
+
+    let paths = PathResolver::from_env(&env);
+    let inputs = DaemonInputs {
+        config: Some(bundle.clone()),
+        credentials: None,
+        service: None,
+        env: &env,
+        paths: &paths,
+    };
+    let (resolved, loaded) = load_for(&inputs).expect("load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(config.as_path()));
+    assert_eq!(loaded.credentials.as_deref(), Some(credentials.as_path()));
+    assert_eq!(
+        resolved
+            .forge
+            .admin_token
+            .as_ref()
+            .map(|token| token.expose_secret().to_string()),
+        Some(EXPLICIT_TOKEN.to_string())
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The narrower, exact-incident case: explicit `--config` only, no
-/// `--credentials`. The poisoned global credentials must NOT layer in — with an
-/// explicit config and no env override, default `~/.config/temper` discovery is
+/// `--credentials` / `--secrets`, and no sibling credentials file. The poisoned
+/// global credentials must NOT layer in — default `~/.config/temper` discovery is
 /// suppressed, so no credentials are discovered at all (the poisoned token is
 /// absent from the result).
 #[test]

@@ -16,7 +16,8 @@
 //!   [`expand_tilde`], [`resolve_targets`]/[`FileTargets`]).
 //!
 //! The common config-flag types are re-exported so a subcommand crate need not
-//! also depend on `temper-config` just for `--config`/`--credentials` parsing.
+//! also depend on `temper-config` just for `--config`/`--credentials`/`--secrets`
+//! parsing.
 
 mod prompt;
 
@@ -158,13 +159,13 @@ pub struct FileTargets {
 }
 
 /// Resolves both file targets from [`LoadOptions`], failing when a default path
-/// cannot be determined (no `--config`/`--credentials`, no env override, no
-/// `HOME`/`XDG_CONFIG_HOME`).
+/// cannot be determined (no `--config`/`--credentials`/`--secrets`, no env
+/// override, no `HOME`/`XDG_CONFIG_HOME`).
 ///
 /// This is the single place a CLI turns "where should I read/write?" into
-/// concrete paths, honoring the same `--config` / `--credentials` / env /
-/// default precedence the loader uses. The environment is injected (the snapshot
-/// `src/bin` took): this helper never reads `std::env`.
+/// concrete paths, honoring the same `--config` / `--credentials` / `--secrets`
+/// / env / default precedence the loader uses. The environment is injected (the
+/// snapshot `src/bin` took): this helper never reads `std::env`.
 pub fn resolve_targets(
     options: &LoadOptions,
     env: &dyn EnvLookup,
@@ -174,10 +175,15 @@ pub fn resolve_targets(
         temper_config::config_path(options.config.clone(), paths, env).ok_or_else(|| {
             "cannot determine a default config path (no HOME); pass --config".to_string()
         })?;
-    let credentials = temper_config::credentials_path(options.credentials.clone(), paths, env)
-        .ok_or_else(|| {
-            "cannot determine a default credentials path (no HOME); pass --credentials".to_string()
-        })?;
+    let credentials = temper_config::paired_credentials_path(
+        options.credentials.clone(),
+        options.config.clone(),
+        paths,
+        env,
+    )
+    .ok_or_else(|| {
+        "cannot determine a default credentials path (no HOME); pass --secrets".to_string()
+    })?;
     Ok(FileTargets {
         config,
         credentials,
@@ -246,5 +252,72 @@ mod tests {
             expand_tilde("~/.config/temper", None),
             PathBuf::from("~/.config/temper")
         );
+    }
+
+    #[test]
+    fn resolve_targets_treats_explicit_config_dir_as_bundle_root() {
+        let bundle = temp_dir().join(format!("temper-cli-common-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bundle);
+
+        let targets = resolve_targets(
+            &LoadOptions {
+                config: Some(bundle.clone()),
+                credentials: None,
+            },
+            &temper_config::NoEnv,
+            &PathResolver::default(),
+        )
+        .expect("explicit config root supplies both targets");
+
+        assert_eq!(targets.config, bundle.join("config.toml"));
+        assert_eq!(targets.credentials, bundle.join("credentials.toml"));
+    }
+
+    #[test]
+    fn resolve_targets_treats_explicit_credentials_dir_as_credentials_toml() {
+        let root = temp_dir().join(format!(
+            "temper-cli-common-secrets-dir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = root.join("deploy.toml");
+        let secrets = root.join("secrets");
+
+        let targets = resolve_targets(
+            &LoadOptions {
+                config: Some(config.clone()),
+                credentials: Some(secrets.clone()),
+            },
+            &temper_config::NoEnv,
+            &PathResolver::default(),
+        )
+        .expect("explicit paths supply both targets");
+
+        assert_eq!(targets.config, config);
+        assert_eq!(targets.credentials, secrets.join("credentials.toml"));
+    }
+
+    #[test]
+    fn resolve_targets_preserves_explicit_toml_files() {
+        let root = temp_dir().join(format!(
+            "temper-cli-common-explicit-files-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = root.join("deploy.toml");
+        let credentials = root.join("secret-values.toml");
+
+        let targets = resolve_targets(
+            &LoadOptions {
+                config: Some(config.clone()),
+                credentials: Some(credentials.clone()),
+            },
+            &temper_config::NoEnv,
+            &PathResolver::default(),
+        )
+        .expect("explicit toml files supply both targets");
+
+        assert_eq!(targets.config, config);
+        assert_eq!(targets.credentials, credentials);
     }
 }

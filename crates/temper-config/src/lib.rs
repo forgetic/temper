@@ -7,9 +7,9 @@
 //! - the **config** file ([`Config`]) — non-secret deployment settings;
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
-//! [`load`] reads both (honoring `--config` / `--credentials` overrides and
-//! default `~/.config/temper` locations — no environment variable selects the
-//! files), validates each file's `schema_version`, then
+//! [`load`] reads both (honoring `--config` / `--secrets` / `--credentials`
+//! overrides and default `~/.config/temper` locations — no environment variable
+//! selects the files), validates each file's `schema_version`, then
 //! [`resolve`](resolve::resolve)s everything — file, environment, and built-in
 //! defaults — into a [`Resolved`] the binary's adapters turn into runtime types.
 //!
@@ -51,7 +51,10 @@ pub use cli::{CommonArgs, parse_common_args};
 pub use env::{EnvLookup, EnvMap, NoEnv, SystemEnv};
 pub use error::{ConfigError, FileKind};
 pub use inputs::{LoadInputs, PathResolver, load_explicit};
-pub use paths::{config_dir, config_path, credentials_path, default_workspace_root, state_dir};
+pub use paths::{
+    config_dir, config_path, credentials_path, default_workspace_root, paired_credentials_path,
+    state_dir,
+};
 pub use resolve::{env_role_key, resolve};
 pub use resolved::{
     AgentSettings, Capability, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
@@ -66,12 +69,13 @@ pub use schema::{
 pub use template::{config_template, credentials_template};
 
 /// Where to find the two files. `None` fields fall back to the default
-/// `~/.config/temper` locations (no environment variable selects the files).
+/// `~/.config/temper` locations (no environment variable selects the files),
+/// except that an explicit config root pairs with a sibling credentials file.
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
     /// Explicit `--config` path.
     pub config: Option<PathBuf>,
-    /// Explicit `--credentials` path.
+    /// Explicit `--credentials` / `--secrets` path.
     pub credentials: Option<PathBuf>,
 }
 
@@ -184,15 +188,16 @@ pub const EX_USAGE: u8 = 64;
 
 /// The shared entry point for a slim per-service binary.
 ///
-/// Parses the common `--config` / `--credentials` / `--help` / `--version`
-/// flags, loads + resolves the deployment from the **injected** environment
+/// Parses the common `--config` / `--credentials` / `--secrets` / `--help` /
+/// `--version` flags, loads + resolves the deployment from the **injected** environment
 /// snapshot (`env` / `paths`, captured by the binary's composition root), and
 /// hands the [`Resolved`] to `run`. This is the *entire* body of each slim
 /// binary's `main` — the proof that a per-service binary needs no plumbing
 /// beyond naming its service, snapshotting its env, and naming its runner.
 ///
-/// Hermeticity: an explicit `--config` / `--credentials` suppresses default
-/// `~/.config/temper` discovery (an empty [`PathResolver`] is used), so the
+/// Hermeticity: an explicit `--config` / `--credentials` / `--secrets`
+/// suppresses default `~/.config/temper` discovery (an empty [`PathResolver`] is
+/// used). An explicit config root may load sibling `credentials.toml`, but the
 /// operator's global credentials never ambiently layer in behind an explicit
 /// deployment — matching the unified `temper daemon` path.
 pub fn service_main(

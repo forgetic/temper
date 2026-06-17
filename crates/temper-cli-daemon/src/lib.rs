@@ -17,11 +17,12 @@
 //!
 //! ## Hermeticity
 //!
-//! [`run`] takes a [`DaemonInputs`] — explicit `--config` / `--credentials`
-//! paths, the `--service`, and the injected env snapshot + base directories the
-//! composition root captured. It loads via [`temper_config::load_explicit`]; when
-//! an explicit `--config` *or* `--credentials` is given, default-location
-//! discovery is suppressed, so the operator's global
+//! [`run`] takes a [`DaemonInputs`] — explicit `--config` / `--credentials` /
+//! `--secrets` paths, the `--service`, and the injected env snapshot + base
+//! directories the composition root captured. It loads via
+//! [`temper_config::load_explicit`]; when an explicit `--config` *or* secret path
+//! is given, default-location discovery is suppressed. An explicit config root
+//! may load its sibling `credentials.toml`, but the operator's global
 //! `~/.config/temper/credentials.toml` can never ambiently layer in behind an
 //! explicit deployment. That layering was the original incident this fixes.
 
@@ -55,8 +56,9 @@ override defaults.
 Usage: temper daemon [OPTIONS]
 
 Options:
-  --config      <FILE>  Path to configuration file
-  --credentials <FILE>  Secrets for external services (Forgejo, LLM providers, ...)
+  --config      <PATH>  Path to configuration file or bundle directory
+  --secrets     <PATH>  Secrets file or directory (preferred)
+  --credentials <PATH>  Backwards-compatible alias for --secrets
   --service     <NAME>  Which individual service to run (engine, worker). If not
                         given, run as standalone.
   -h, --help            Print help";
@@ -127,7 +129,7 @@ impl Service {
 pub struct DaemonInputs<'a> {
     /// Explicit `--config` path.
     pub config: Option<PathBuf>,
-    /// Explicit `--credentials` path.
+    /// Explicit `--credentials` / `--secrets` path.
     pub credentials: Option<PathBuf>,
     /// Which single service to run, or `None` for the all-in-one standalone.
     pub service: Option<Service>,
@@ -286,9 +288,10 @@ fn extract_service(rest: &[String]) -> Result<Option<Service>, String> {
 
 /// Loads the deployment from [`DaemonInputs`] and runs the selected service.
 ///
-/// Hermeticity: an explicit `--config` / `--credentials` suppresses default
-/// `~/.config/temper` discovery (see [`load_for`]), so the global credentials
-/// file never layers in behind an explicit deployment.
+/// Hermeticity: an explicit `--config` / `--credentials` / `--secrets`
+/// suppresses default `~/.config/temper` discovery (see [`load_for`]). An
+/// explicit config root may load its sibling `credentials.toml`, but the global
+/// credentials file never layers in behind an explicit deployment.
 pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
     let (resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;
     let result = match inputs.service {
@@ -303,10 +306,11 @@ pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
 
 /// Loads + resolves the deployment from the injected inputs.
 ///
-/// When an explicit `--config` *or* `--credentials` is given, default-location
+/// When an explicit `--config` *or* secret path is given, default-location
 /// discovery is suppressed by handing the loader an *empty* [`PathResolver`]:
-/// only the explicit paths can load. With no explicit path at all, the captured
-/// `paths` are used so a plain `temper daemon` still finds `~/.config/temper`.
+/// only explicit paths plus explicit-config sibling credentials can load. With
+/// no explicit path at all, the captured `paths` are used so a plain
+/// `temper daemon` still finds `~/.config/temper`.
 fn load_for(inputs: &DaemonInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
     let explicit = inputs.config.is_some() || inputs.credentials.is_some();
     let empty = PathResolver::default();

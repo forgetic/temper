@@ -54,8 +54,9 @@ writes config.toml + workflow.json + a webhook secret, provisions the forge
 Usage: temper init [OPTIONS]
 
 Options:
-  --config        <FILE>  Where to write config.toml
-  --credentials   <FILE>  Where to write credentials.toml
+  --config        <PATH>  Where to write config.toml, or bundle directory
+  --secrets       <PATH>  Where to write credentials.toml, or secrets directory
+  --credentials   <PATH>  Backwards-compatible alias for --secrets
   --force                 Overwrite existing local files
   --existing-repo         Provision onto a repo that already exists
   -h, --help              Print help";

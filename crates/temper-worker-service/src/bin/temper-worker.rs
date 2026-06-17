@@ -10,7 +10,7 @@ use std::process::ExitCode;
 const USAGE: &str = "\
 temper-worker — run only the orchestration-worker service
 
-usage: temper-worker [--config <FILE>] [--credentials <FILE>]
+usage: temper-worker [--config <PATH>] [--secrets <PATH>|--credentials <PATH>]
 
 Long-polls the engine for coding jobs and runs each by spawning the out-of-process
 `temper-agent`. Reads the same config + credentials files as the unified

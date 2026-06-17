@@ -12,14 +12,14 @@
 //!
 //! - [`PathResolver`] — the home / XDG base directories, normally a snapshot of
 //!   the real environment built at the binary boundary ([`PathResolver::from_system`]);
-//! - [`LoadInputs`] — the explicit `--config` / `--credentials` overrides plus
-//!   an injected [`EnvLookup`] and the [`PathResolver`].
+//! - [`LoadInputs`] — the explicit `--config` / `--credentials` / `--secrets`
+//!   overrides plus an injected [`EnvLookup`] and the [`PathResolver`].
 //!
 //! [`load_explicit`] takes only [`LoadInputs`] and never touches `std::env`. The
 //! **hermeticity contract** is: a `PathResolver` with every field `None` and an
 //! empty [`EnvLookup`] discovers nothing — only explicit `--config` /
-//! `--credentials` paths load. Construct an empty `PathResolver` in-memory (its
-//! `Default`) for fully isolated loads.
+//! `--credentials` paths and explicit-config sibling credentials load. Construct
+//! an empty `PathResolver` in-memory (its `Default`) for fully isolated loads.
 
 use std::path::{Path, PathBuf};
 
@@ -83,7 +83,7 @@ impl PathResolver {
 pub struct LoadInputs<'a> {
     /// Explicit `--config` path (wins over env + defaults).
     pub explicit_config: Option<PathBuf>,
-    /// Explicit `--credentials` path (wins over env + defaults).
+    /// Explicit `--credentials` / `--secrets` path (wins over env + defaults).
     pub explicit_credentials: Option<PathBuf>,
     /// Injected environment snapshot. Used only for `$HOME` / `$XDG_*` path
     /// expansion during resolution; no environment variable selects which files
@@ -100,21 +100,45 @@ pub struct LoadInputs<'a> {
 /// errors); a default-location file is *optional* (absent means built-in
 /// defaults supply everything). No environment variable selects the files.
 ///
+/// When `explicit_config` is set and `explicit_credentials` is not, the loader
+/// reads sibling `<config-root>/credentials.toml` if it exists. That local-bundle
+/// pairing is still hermetic: it does not fall through to the user's default
+/// `~/.config/temper/credentials.toml` behind an explicit config.
+///
 /// Hermeticity: with `inputs.paths` empty (every field `None`), only explicit
-/// paths can load — nothing is discovered from the real environment.
+/// paths and explicit-config sibling credentials can load — nothing is
+/// discovered from the real environment.
 pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
-    let (config, config_file) = load_optional(
-        inputs.explicit_config.clone(),
-        |dir| dir.join("config.toml"),
-        FileKind::Config,
-        inputs,
-        Config::parse,
-    )?;
+    let explicit_config = inputs
+        .explicit_config
+        .clone()
+        .map(paths::explicit_config_location);
+    let config_source = explicit_config
+        .as_ref()
+        .map(|location| LocatedFile::required(location.path.clone()))
+        .or_else(|| {
+            paths::config_dir(inputs.paths)
+                .map(|dir| LocatedFile::optional(dir.join(paths::CONFIG_FILE_NAME)))
+        });
+    let credentials_source = inputs
+        .explicit_credentials
+        .clone()
+        .map(paths::explicit_credentials_path)
+        .map(LocatedFile::required)
+        .or_else(|| {
+            explicit_config.as_ref().map(|location| {
+                LocatedFile::optional(location.root.join(paths::CREDENTIALS_FILE_NAME))
+            })
+        })
+        .or_else(|| {
+            paths::config_dir(inputs.paths)
+                .map(|dir| LocatedFile::optional(dir.join(paths::CREDENTIALS_FILE_NAME)))
+        });
+
+    let (config, config_file) = load_optional(config_source, FileKind::Config, Config::parse)?;
     let (credentials, credentials_file) = load_optional(
-        inputs.explicit_credentials.clone(),
-        |dir| dir.join("credentials.toml"),
+        credentials_source,
         FileKind::Credentials,
-        inputs,
         Credentials::parse,
     )?;
 
@@ -128,25 +152,41 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
     ))
 }
 
-/// Locates a file (explicit override = required; default location = optional),
-/// reads + parses it, or returns a defaulted value when an optional file is
-/// absent. The only sources are `inputs`: no `std::env` access, and no
+#[derive(Debug, Clone)]
+struct LocatedFile {
+    path: PathBuf,
+    required: bool,
+}
+
+impl LocatedFile {
+    fn required(path: PathBuf) -> Self {
+        Self {
+            path,
+            required: true,
+        }
+    }
+
+    fn optional(path: PathBuf) -> Self {
+        Self {
+            path,
+            required: false,
+        }
+    }
+}
+
+/// Reads + parses a located file, or returns a defaulted value when an optional
+/// file is absent. The only sources are `inputs`: no `std::env` access, and no
 /// environment variable overrides the file location.
 fn load_optional<T: Default>(
-    explicit: Option<PathBuf>,
-    default_name: impl Fn(&Path) -> PathBuf,
+    source: Option<LocatedFile>,
     kind: FileKind,
-    inputs: &LoadInputs,
     parse: impl Fn(&str, &Path, FileKind) -> Result<T, ConfigError>,
 ) -> Result<(T, Option<PathBuf>), ConfigError> {
     // An explicit override is *required*: a missing file is an error. A
-    // default-location file is *optional*: absent means built-in defaults.
-    let (path, required) = match explicit {
-        Some(path) => (path, true),
-        None => match paths::config_dir(inputs.paths) {
-            Some(dir) => (default_name(&dir), false),
-            None => return Ok((T::default(), None)),
-        },
+    // default-location or explicit-config sibling file is *optional*: absent
+    // means built-in defaults.
+    let Some(LocatedFile { path, required }) = source else {
+        return Ok((T::default(), None));
     };
 
     match std::fs::read_to_string(&path) {

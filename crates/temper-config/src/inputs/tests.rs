@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 
+use crate::ExposeSecret;
 use crate::env::{EnvMap, NoEnv};
 use crate::inputs::{LoadInputs, PathResolver, load_explicit};
 
@@ -26,6 +27,23 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 const MINIMAL_CONFIG: &str =
     "schema_version = 1\n[engine]\nrepos = [\"a/b\"]\nroles = [\"engineer\"]\n";
+
+const CONFIG_WITH_ADMIN: &str = "schema_version = 1\n\
+     [forge]\n\
+     type = \"forgejo\"\n\
+     url = \"http://localhost:3000\"\n\
+     admin = \"agent\"\n\
+     [engine]\n\
+     repos = [\"a/b\"]\n\
+     roles = [\"engineer\"]\n";
+
+fn credentials_with_agent_token(token: &str) -> String {
+    format!(
+        "schema_version = 1\n\
+         [forge.users.agent]\n\
+         token = \"{token}\"\n"
+    )
+}
 
 #[test]
 fn empty_inputs_discover_nothing() {
@@ -74,6 +92,172 @@ fn explicit_paths_load_with_empty_resolver() {
 
     assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
     assert_eq!(resolved.engine.roles, vec!["engineer"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_config_directory_loads_config_toml_and_sibling_credentials() {
+    let dir = temp_dir("explicit-config-dir");
+    let bundle = dir.join("bundle");
+    std::fs::create_dir_all(&bundle).expect("create bundle dir");
+    let config_path = bundle.join("config.toml");
+    let credentials_path = bundle.join("credentials.toml");
+    std::fs::write(&config_path, CONFIG_WITH_ADMIN).expect("write config");
+    std::fs::write(
+        &credentials_path,
+        credentials_with_agent_token("sibling-token"),
+    )
+    .expect("write credentials");
+
+    let inputs = LoadInputs {
+        explicit_config: Some(bundle.clone()),
+        explicit_credentials: None,
+        env: &NoEnv,
+        paths: &PathResolver::default(),
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("bundle load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert_eq!(
+        loaded.credentials.as_deref(),
+        Some(credentials_path.as_path())
+    );
+    assert_eq!(
+        resolved
+            .forge
+            .admin_token
+            .as_ref()
+            .map(|token| token.expose_secret()),
+        Some("sibling-token")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_config_file_uses_sibling_credentials_without_ambient_default() {
+    let dir = temp_dir("explicit-config-file-sibling");
+    let home = dir.join("home");
+    let global = home.join(".config").join("temper");
+    std::fs::create_dir_all(&global).expect("create global config dir");
+    std::fs::write(
+        global.join("credentials.toml"),
+        credentials_with_agent_token("poisoned-global-token"),
+    )
+    .expect("write global credentials");
+
+    let bundle = dir.join("bundle");
+    std::fs::create_dir_all(&bundle).expect("create bundle dir");
+    let config_path = bundle.join("local-dev.toml");
+    let credentials_path = bundle.join("credentials.toml");
+    std::fs::write(&config_path, CONFIG_WITH_ADMIN).expect("write config");
+    std::fs::write(
+        &credentials_path,
+        credentials_with_agent_token("sibling-token"),
+    )
+    .expect("write credentials");
+
+    let mut env = EnvMap::new();
+    env.insert("HOME", home.to_string_lossy().into_owned());
+    let paths = PathResolver::from_env(&env);
+    let inputs = LoadInputs {
+        explicit_config: Some(config_path.clone()),
+        explicit_credentials: None,
+        env: &env,
+        paths: &paths,
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("explicit file load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert_eq!(
+        loaded.credentials.as_deref(),
+        Some(credentials_path.as_path())
+    );
+    assert_eq!(
+        resolved
+            .forge
+            .admin_token
+            .as_ref()
+            .map(|token| token.expose_secret()),
+        Some("sibling-token")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_config_file_without_sibling_does_not_discover_default_credentials() {
+    let dir = temp_dir("explicit-config-file-no-sibling");
+    let home = dir.join("home");
+    let global = home.join(".config").join("temper");
+    std::fs::create_dir_all(&global).expect("create global config dir");
+    std::fs::write(
+        global.join("credentials.toml"),
+        credentials_with_agent_token("poisoned-global-token"),
+    )
+    .expect("write global credentials");
+
+    let config_path = dir.join("bundle").join("local-dev.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).expect("create bundle dir");
+    std::fs::write(&config_path, CONFIG_WITH_ADMIN).expect("write config");
+
+    let mut env = EnvMap::new();
+    env.insert("HOME", home.to_string_lossy().into_owned());
+    let paths = PathResolver::from_env(&env);
+    let inputs = LoadInputs {
+        explicit_config: Some(config_path.clone()),
+        explicit_credentials: None,
+        env: &env,
+        paths: &paths,
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("explicit file load succeeds");
+
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert!(
+        loaded.credentials.is_none(),
+        "global credentials must not load behind explicit config: {:?}",
+        loaded.credentials
+    );
+    assert!(
+        resolved.forge.admin_token.is_none(),
+        "poisoned global token must not resolve"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_credentials_directory_loads_credentials_toml() {
+    let dir = temp_dir("explicit-credentials-dir");
+    let config_path = dir.join("config.toml");
+    let credentials_dir = dir.join("secrets");
+    let credentials_path = credentials_dir.join("credentials.toml");
+    std::fs::write(&config_path, CONFIG_WITH_ADMIN).expect("write config");
+    std::fs::create_dir_all(&credentials_dir).expect("create credentials dir");
+    std::fs::write(
+        &credentials_path,
+        credentials_with_agent_token("explicit-token"),
+    )
+    .expect("write credentials");
+
+    let inputs = LoadInputs {
+        explicit_config: Some(config_path.clone()),
+        explicit_credentials: Some(credentials_dir),
+        env: &NoEnv,
+        paths: &PathResolver::default(),
+    };
+    let (resolved, loaded) = load_explicit(&inputs).expect("explicit credentials dir loads");
+
+    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
+    assert_eq!(
+        loaded.credentials.as_deref(),
+        Some(credentials_path.as_path())
+    );
+    assert_eq!(
+        resolved
+            .forge
+            .admin_token
+            .as_ref()
+            .map(|token| token.expose_secret()),
+        Some("explicit-token")
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

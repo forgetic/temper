@@ -5,7 +5,7 @@
 //!
 //! Deployment shape comes only from the config file (with built-in defaults as
 //! the fallback): the new CLI exposes no per-field flags (the daemon takes only
-//! `--config`, `--credentials`, and `--service`), and no environment variable
+//! `--config`, `--secrets`/`--credentials`, and `--service`), and no environment variable
 //! overrides deployment config. The injected [`EnvLookup`] is consulted solely
 //! for `$HOME` / `$XDG_*` when expanding a leading `~` in a path value.
 //!

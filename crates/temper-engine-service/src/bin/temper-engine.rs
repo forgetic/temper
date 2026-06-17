@@ -3,15 +3,15 @@
 //! `temper-engine` — the slim, engine-only binary.
 //!
 //! It links the engine tier and `temper-config` and nothing else (no worker or
-//! agent code). The whole program is: parse `--config`/`--credentials`, resolve
-//! the deployment, run the engine.
+//! agent code). The whole program is: parse `--config`/`--secrets`, resolve the
+//! deployment, run the engine.
 
 use std::process::ExitCode;
 
 const USAGE: &str = "\
 temper-engine — run only the orchestrator (engine) service
 
-usage: temper-engine [--config <FILE>] [--credentials <FILE>]
+usage: temper-engine [--config <PATH>] [--secrets <PATH>|--credentials <PATH>]
 
 Reads the same config + credentials files as the unified `temper daemon`, runs
 only the engine, and serves until SIGINT/SIGTERM. Equivalent to
