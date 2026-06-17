@@ -15,6 +15,7 @@ use temper_protocol_worker::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest}
 pub(super) fn build_workspace_context(
     role: &str,
     queue: &str,
+    action: &str,
     artifact_kind: &str,
     manifest: &WorkspaceManifest,
     artifact: &JobArtifactSnapshot,
@@ -36,6 +37,7 @@ pub(super) fn build_workspace_context(
         "repository": primary_repo,
         "role": role,
         "queue": queue,
+        "action": action,
         "kind": artifact_kind,
         "artifact": {
             "type": artifact_type,
@@ -85,6 +87,7 @@ pub(super) fn build_workspace_context(
             ),
             context: work_item_context,
         },
+        action: action.to_string(),
         correlation_key: manifest.coordination_key.clone(),
         checkout: Some(checkout.to_string()),
         allowed_verdicts: allowed_verdicts.to_vec(),

@@ -239,6 +239,32 @@ pub struct RawQueue {
     /// service already-matched active queue members.
     #[serde(default)]
     pub automation: Option<RawQueueAutomation>,
+    /// Role-worker action assignments for matched active queue members. Each
+    /// entry binds a subscribed role (and optionally one artifact kind in a
+    /// multi-kind queue) to the workflow transition/action the worker should run.
+    #[serde(default)]
+    pub actions: Vec<RawQueueAction>,
+}
+
+/// Role-worker action assignment metadata for a queue.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawQueueAction {
+    /// Role id whose worker should receive this assignment.
+    pub role: String,
+    /// Optional artifact-kind discriminator for multi-kind queues.
+    #[serde(default)]
+    pub artifact: Option<String>,
+    /// Workflow transition/action id assigned to the role worker.
+    pub action: String,
+    /// Optional checkout capability override for this action assignment:
+    /// `writable`, `read_only`, `pull_request_read_only`, or
+    /// `pull_request_writable`.
+    #[serde(default)]
+    pub checkout: Option<String>,
+    /// Optional job-specific guidance appended to generated guidance.
+    #[serde(default)]
+    pub guidance: Option<String>,
 }
 
 /// Mechanical servicing metadata for a queue.

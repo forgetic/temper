@@ -28,6 +28,7 @@ pub(super) const CONTEXT_FIXTURE: &str = r#"{
     "target": "Issue { number: ItemNumber(7) }",
     "context": "{\"artifact\":{\"title\":\"Implement docs\"}}"
   },
+  "action": "open_pr",
   "correlation_key": "pr-for-code-7",
   "checkout": "writable",
   "allowed_verdicts": ["needs_architect"],
@@ -63,6 +64,7 @@ pub(super) fn context_with_writable_dir(dir: &str) -> WorkspaceContext {
             target: "Issue { number: ItemNumber(1) }".to_string(),
             context: "{}".to_string(),
         },
+        action: "open_pr".to_string(),
         correlation_key: "x".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: Vec::new(),

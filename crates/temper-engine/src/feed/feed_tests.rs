@@ -20,6 +20,11 @@ use crate::Daemon;
 
 const BASIC_DELIVERY_FIXTURE: &str =
     include_str!("../../../temper-workflow/fixtures/basic-delivery.json");
+const REFERENCE_DELIVERY_FIXTURE: &str =
+    include_str!("../../../temper-workflow/fixtures/reference-delivery.json");
+
+#[path = "feed_tests/action_assignment.rs"]
+mod action_assignment;
 
 fn work_item(target: ArtifactSource) -> WorkItem {
     WorkItem {
@@ -447,6 +452,7 @@ fn enrich_ci_failed_pull_request_becomes_writable_head_fix_with_guidance() {
 
         let context: JobContext =
             serde_json::from_value(job.job_payload).expect("enriched JobContext parses");
+        assert_eq!(context.action.as_deref(), Some("address_ci_failure"));
         // Writable checkout of the PR's REAL head branch (not a synthetic one).
         assert_eq!(
             context.checkout_capability.as_deref(),

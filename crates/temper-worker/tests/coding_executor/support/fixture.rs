@@ -108,7 +108,7 @@ pub struct TestJobContext {
     branch_hint: String,
     correlation_key: String,
     pub artifact: Option<TestJobArtifactSnapshot>,
-    action: Option<String>,
+    pub action: Option<String>,
     checkout_capability: Option<String>,
     pub allowed_verdicts: Vec<String>,
 }
@@ -168,8 +168,8 @@ pub fn job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
             labels: vec!["code".to_string(), "ready".to_string()],
             state: "Open".to_string(),
         }),
-        action: None,
-        checkout_capability: None,
+        action: Some("open_pr".to_string()),
+        checkout_capability: Some("writable".to_string()),
         allowed_verdicts: vec![],
     }
 }
@@ -179,7 +179,7 @@ pub fn read_only_job_context(branch_hint: &str, correlation_key: &str) -> TestJo
     context.role = "architect".to_string();
     context.queue = "design_review".to_string();
     context.artifact_kind = "triage".to_string();
-    context.action = Some("triage_to_code".to_string());
+    context.action = Some("triage_intake".to_string());
     context.checkout_capability = Some("read_only".to_string());
     context.allowed_verdicts = vec!["ready_code".to_string(), "needs_design".to_string()];
     context

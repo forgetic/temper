@@ -184,6 +184,39 @@ fn check_queue_references(
                 );
             }
         }
+        for action in &queue.actions {
+            check_reference(
+                declared.roles,
+                &action.role,
+                SymbolKind::Role,
+                ReferenceSite::QueueActionRole {
+                    queue: queue.id.clone(),
+                },
+                diagnostics,
+            );
+            if let Some(artifact) = &action.artifact {
+                check_reference(
+                    declared.artifacts,
+                    artifact,
+                    SymbolKind::ArtifactKind,
+                    ReferenceSite::QueueActionArtifact {
+                        queue: queue.id.clone(),
+                        role: action.role.clone(),
+                    },
+                    diagnostics,
+                );
+            }
+            check_reference(
+                declared.transitions,
+                &action.action,
+                SymbolKind::Transition,
+                ReferenceSite::QueueActionTransition {
+                    queue: queue.id.clone(),
+                    role: action.role.clone(),
+                },
+                diagnostics,
+            );
+        }
     }
 }
 

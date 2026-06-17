@@ -96,7 +96,7 @@ async fn execute<R: AgentRunner>(
         artifact_kind,
         artifact,
         workspace: manifest,
-        action: _action,
+        action,
         checkout_capability,
         allowed_verdicts,
         guidance,
@@ -114,6 +114,10 @@ async fn execute<R: AgentRunner>(
     }
     let artifact = match require_enriched_field(artifact, "artifact") {
         Ok(artifact) => artifact,
+        Err(outcome) => return outcome,
+    };
+    let action = match require_enriched_field(action, "action") {
+        Ok(action) => action,
         Err(outcome) => return outcome,
     };
     let checkout = checkout_capability.unwrap_or_else(|| "writable".to_string());
@@ -157,6 +161,7 @@ async fn execute<R: AgentRunner>(
     let workspace_context = build_workspace_context(
         &role,
         &queue,
+        &action,
         &artifact_kind,
         &manifest,
         &artifact,

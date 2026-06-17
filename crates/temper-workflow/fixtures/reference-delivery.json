@@ -356,6 +356,12 @@
       "artifact": "intake",
       "labels": [
         "untriaged"
+      ],
+      "actions": [
+        {
+          "role": "architect",
+          "action": "triage_intake"
+        }
       ]
     },
     {
@@ -363,6 +369,12 @@
       "artifact": "code",
       "labels": [
         "ready"
+      ],
+      "actions": [
+        {
+          "role": "engineer",
+          "action": "open_pr"
+        }
       ]
     },
     {
@@ -370,6 +382,12 @@
       "artifact": "implementation_pr",
       "labels": [
         "needs-reviewer"
+      ],
+      "actions": [
+        {
+          "role": "reviewer",
+          "action": "review_pr"
+        }
       ]
     },
     {
@@ -377,20 +395,41 @@
       "artifact": "implementation_pr",
       "condition": {
         "kind": "review_changes_requested"
-      }
+      },
+      "actions": [
+        {
+          "role": "engineer",
+          "action": "address_review_changes",
+          "checkout": "pull_request_writable"
+        }
+      ]
     },
     {
       "id": "pr_ci_failed",
       "artifact": "implementation_pr",
       "condition": {
         "kind": "ci_failed"
-      }
+      },
+      "actions": [
+        {
+          "role": "engineer",
+          "action": "address_ci_failure",
+          "checkout": "pull_request_writable"
+        }
+      ]
     },
     {
       "id": "pr_merge_conflict",
       "artifact": "implementation_pr",
       "labels": [
         "merge-conflict"
+      ],
+      "actions": [
+        {
+          "role": "engineer",
+          "action": "resolve_merge_conflict",
+          "checkout": "pull_request_writable"
+        }
       ]
     },
     {

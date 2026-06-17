@@ -84,6 +84,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     contracts::check_role_external_tools(spec, &mut diagnostics);
     contracts::check_default_artifact_kinds(spec, &mut diagnostics);
     contracts::check_queue_automation_contract(spec, &roles, &mut diagnostics);
+    contracts::check_queue_action_contract(spec, &roles, &mut diagnostics);
     contracts::check_transition_outcome_contract(spec, &mut diagnostics);
 
     if diagnostics.is_empty() {

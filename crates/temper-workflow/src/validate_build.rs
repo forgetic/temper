@@ -5,12 +5,14 @@ use crate::ids::{
     TransitionId, VerdictId,
 };
 use crate::spec::{
-    RawEffect, RawGateCondition, RawIntakeAuthor, RawQueueAutomation, RawWorkflowSpec,
+    RawEffect, RawGateCondition, RawIntakeAuthor, RawQueueAction, RawQueueAutomation,
+    RawWorkflowSpec,
 };
 use crate::validated::{
-    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAutomation, QueueLabelSet,
-    RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
-    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAction, QueueAutomation,
+    QueueLabelSet, RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
+    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
+    ValidatedWorkflow,
 };
 use chrono::Duration;
 use std::collections::BTreeMap;
@@ -133,6 +135,17 @@ fn build_queue(queue: &crate::spec::RawQueue) -> ValidatedQueue {
             .map(|seconds| Duration::seconds(i64::from(seconds))),
         condition: queue.condition.as_ref().map(build_gate_condition),
         automation: queue.automation.as_ref().map(build_queue_automation),
+        actions: queue.actions.iter().map(build_queue_action).collect(),
+    }
+}
+
+fn build_queue_action(action: &RawQueueAction) -> QueueAction {
+    QueueAction {
+        role: RoleId::new(&action.role),
+        artifact: action.artifact.as_deref().map(ArtifactKindId::new),
+        action: TransitionId::new(&action.action),
+        checkout: action.checkout.clone(),
+        guidance: action.guidance.clone(),
     }
 }
 

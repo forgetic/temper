@@ -409,6 +409,7 @@ mod tests {
                 target: target.to_string(),
                 context: "{}".to_string(),
             },
+            action: "triage_intake".to_string(),
             correlation_key: "k".to_string(),
             checkout: None,
             allowed_verdicts: Vec::new(),

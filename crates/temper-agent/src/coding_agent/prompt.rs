@@ -161,8 +161,8 @@ pub fn user_context(context: &WorkspaceContext) -> String {
         ));
     }
     text.push_str(&format!(
-        "Role: {}  Queue: {}  Kind: {}\n",
-        context.work_item.role, context.work_item.queue, context.work_item.kind
+        "Role: {}  Queue: {}  Action: {}  Kind: {}\n",
+        context.work_item.role, context.work_item.queue, context.action, context.work_item.kind
     ));
     text.push_str(&format!("Target: {}\n", context.work_item.target));
     text.push_str(&format!("Correlation key: {}\n", context.correlation_key));

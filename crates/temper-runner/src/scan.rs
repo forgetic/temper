@@ -64,6 +64,8 @@ pub enum ScanError {
     Forge(ForgeError),
     /// Reading runtime gate signals failed.
     Execution(ExecutionError),
+    /// Workflow declarations did not identify a safe role-worker action.
+    InvalidWorkflow(String),
 }
 
 impl fmt::Display for ScanError {
@@ -71,6 +73,9 @@ impl fmt::Display for ScanError {
         match self {
             ScanError::Forge(error) => write!(formatter, "forge scan failed: {error}"),
             ScanError::Execution(error) => write!(formatter, "signal read failed: {error}"),
+            ScanError::InvalidWorkflow(error) => {
+                write!(formatter, "invalid workflow scan: {error}")
+            }
         }
     }
 }
@@ -80,6 +85,7 @@ impl Error for ScanError {
         match self {
             ScanError::Forge(error) => Some(error),
             ScanError::Execution(error) => Some(error),
+            ScanError::InvalidWorkflow(_) => None,
         }
     }
 }

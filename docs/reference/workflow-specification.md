@@ -25,7 +25,7 @@ issues in one pass. Ids are typed (`RoleId`, `QueueId`, `TransitionId`,
 | `role` | Actor authority, subscribed queues, concurrency hint, prompt guidance, and declared non-workflow external tools. |
 | `artifact_kind` | Logical item mapped to a Forge target (`issue` or `pull_request`) plus identifying labels and optional initial creation labels. |
 | `state_dimension` | Named state group projected as labels. Dimensions are exclusive by default; states may restrict legal artifact kinds. |
-| `queue` | Query over artifact kind(s), labels, optional disjunctive label branches, optional runtime/projected condition, activation policy, and optional automation metadata. |
+| `queue` | Query over artifact kind(s), labels, optional disjunctive label branches, optional runtime/projected condition, activation policy, optional role-worker action assignments, and optional automation metadata. |
 | `transition` | Guarded action authorized for roles. Effects may update labels/assignees, create comments, create PRs, request reviewers, submit reviews, or merge PRs. |
 | `gate` | Condition that unlocks a transition from projected labels/state, sibling transition outcomes, or runtime signals such as dependencies, CI, and reviews. |
 | `relation` | Typed link between artifacts: `parent`, `dependency`, or `produced_pr`. |
@@ -73,6 +73,34 @@ The conventional `coding_workspace` provider prepares a checkout and branch for
 engineering work. It feeds `CreatePullRequest` runtime context, but workflow
 state and Forge mutation still happen through `RoleTools` and the executor.
 
+## Queue role-worker actions
+
+A queue may declare `actions` entries that bind matched role work to a concrete
+workflow transition/action:
+
+```json
+{
+  "id": "pr_ci_failed",
+  "artifact": "implementation_pr",
+  "condition": { "kind": "ci_failed" },
+  "actions": [
+    {
+      "role": "engineer",
+      "action": "address_ci_failure",
+      "checkout": "pull_request_writable"
+    }
+  ]
+}
+```
+
+`role` names the subscribed worker role, `action` names an authorized transition,
+and optional `artifact` disambiguates multi-kind queues. Optional `checkout`
+selects the worker checkout capability when the transition shape alone is not
+enough (notably PR-head fix queues). Optional `guidance` is appended to generated
+job guidance. Temper validates that the referenced role/action/artifact exist,
+that the action authorizes the role and operates on a queue-selected artifact,
+and that checkout capability tokens are supported.
+
 ## Static validation
 
 Validation rejects or diagnoses:
@@ -82,6 +110,9 @@ Validation rejects or diagnoses:
 - references to undeclared roles, labels, artifact kinds, states, queues,
   transitions, gates, relations, or external tools;
 - artifact/state mismatches, including labels illegal for an artifact kind;
+- queue role-worker actions whose role/action/artifact is missing, unauthorized,
+  incompatible with the queue's artifact kinds, or declares an unsupported
+  checkout capability;
 - queue automation whose actor/transition/fallback is missing, unauthorized, or
   incompatible with the queue's artifact kinds.
 
@@ -98,8 +129,8 @@ consume a validated workflow. The compiled model contains:
 - `RoleManifest` per role, with prompt sections, concurrency, subscribed queues,
   transition authority, declared external tools, and workflow tools;
 - `ToolManifest` entries, one intent-level operation per authorized transition;
-- `QueueManifest` entries with subscribers, filters, activation policy, and
-  optional automation metadata;
+- `QueueManifest` entries with subscribers, filters, activation policy,
+  role-worker action assignments, and optional automation metadata;
 - `TransitionManifest` entries forming the runtime transition table;
 - `LabelManifest` / `LabelSpec` / `LabelUsage` for Forge label provisioning.
 

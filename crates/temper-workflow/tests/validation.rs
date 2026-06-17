@@ -2,9 +2,9 @@
 
 use temper_workflow::{
     ArtifactTarget, Diagnostic, IntakeAuthor, RawArtifactKind, RawEffect, RawGate,
-    RawGateCondition, RawIntakeAuthor, RawLabel, RawQueue, RawQueueLabelSet, RawRelation, RawRole,
-    RawState, RawStateDimension, RawTransition, RawWorkflowSpec, ReferenceSite, RelationKind,
-    Severity, SymbolKind, ValidatedWorkflow,
+    RawGateCondition, RawIntakeAuthor, RawLabel, RawQueue, RawQueueAction, RawQueueLabelSet,
+    RawRelation, RawRole, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
+    ReferenceSite, RelationKind, Severity, SymbolKind, ValidatedWorkflow,
 };
 
 #[path = "validation/basics.rs"]
@@ -114,6 +114,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 max_age: None,
                 condition: None,
                 automation: None,
+                actions: Vec::new(),
             },
             RawQueue {
                 id: "needs_review".to_string(),
@@ -124,6 +125,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 max_age: None,
                 condition: None,
                 automation: None,
+                actions: Vec::new(),
             },
         ],
         transitions: vec![

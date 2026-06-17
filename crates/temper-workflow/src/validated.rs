@@ -231,6 +231,18 @@ pub struct ValidatedQueue {
     /// Optional mechanical servicing declaration. Matching and activation stay
     /// pure; this only describes which actor/transition may service members.
     pub automation: Option<QueueAutomation>,
+    /// Role-worker action assignments for matched active queue members.
+    pub actions: Vec<QueueAction>,
+}
+
+/// Role-worker action assignment metadata for a validated or compiled queue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueueAction {
+    pub role: RoleId,
+    pub artifact: Option<ArtifactKindId>,
+    pub action: TransitionId,
+    pub checkout: Option<String>,
+    pub guidance: Option<String>,
 }
 
 /// Mechanical servicing metadata for a validated or compiled queue.

@@ -115,6 +115,7 @@ fn workspace_context() -> WorkspaceContext {
             })
             .to_string(),
         },
+        action: "open_pr".to_string(),
         correlation_key: "pr-for-code-25".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string()],
@@ -248,6 +249,7 @@ fn multi_repo_context() -> WorkspaceContext {
             })
             .to_string(),
         },
+        action: "open_pr".to_string(),
         correlation_key: "coord-for-code-7".to_string(),
         checkout: Some("writable".to_string()),
         allowed_verdicts: vec!["needs_architect".to_string()],

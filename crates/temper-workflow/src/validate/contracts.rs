@@ -7,7 +7,7 @@
 //! source-size budget.
 
 use crate::diagnostics::Diagnostic;
-use crate::spec::{RawQueueAutomation, RawTransition, RawWorkflowSpec};
+use crate::spec::{RawQueueAction, RawQueueAutomation, RawTransition, RawWorkflowSpec};
 use std::collections::{HashMap, HashSet};
 
 /// Checks duplicate external tool ids within each role declaration.
@@ -112,6 +112,102 @@ pub(super) fn automation_outcome_references(
         }
     }
     references
+}
+
+/// Checks semantic consistency of queue role-worker action assignments once
+/// simple undeclared-reference diagnostics have been collected.
+pub(super) fn check_queue_action_contract(
+    spec: &RawWorkflowSpec,
+    roles: &HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let transitions: HashMap<&str, &RawTransition> = spec
+        .transitions
+        .iter()
+        .map(|transition| (transition.id.as_str(), transition))
+        .collect();
+
+    for queue in &spec.queues {
+        for action in &queue.actions {
+            let Some(transition) = transitions.get(action.action.as_str()).copied() else {
+                continue;
+            };
+            check_queue_action_authority(&queue.id, action, transition, roles, diagnostics);
+            check_queue_action_artifact(
+                &queue.id,
+                &queue.artifacts,
+                action,
+                transition,
+                diagnostics,
+            );
+            check_queue_action_checkout(&queue.id, action, diagnostics);
+        }
+    }
+}
+
+fn check_queue_action_authority(
+    queue: &str,
+    action: &RawQueueAction,
+    transition: &RawTransition,
+    roles: &HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if roles.contains(&action.role) && !transition.roles.iter().any(|role| role == &action.role) {
+        diagnostics.push(Diagnostic::QueueActionUnauthorized {
+            queue: queue.to_string(),
+            role: action.role.clone(),
+            action: transition.id.clone(),
+        });
+    }
+}
+
+fn check_queue_action_artifact(
+    queue: &str,
+    queue_artifacts: &[String],
+    action: &RawQueueAction,
+    transition: &RawTransition,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !queue_artifacts.contains(&transition.artifact) {
+        diagnostics.push(Diagnostic::QueueActionArtifactMismatch {
+            queue: queue.to_string(),
+            action: transition.id.clone(),
+            artifact: transition.artifact.clone(),
+            queue_artifacts: queue_artifacts.to_vec(),
+        });
+    }
+    if let Some(artifact) = &action.artifact
+        && artifact != &transition.artifact
+    {
+        diagnostics.push(Diagnostic::QueueActionFilterArtifactMismatch {
+            queue: queue.to_string(),
+            role: action.role.clone(),
+            action: transition.id.clone(),
+            declared_artifact: artifact.clone(),
+            action_artifact: transition.artifact.clone(),
+        });
+    }
+}
+
+fn check_queue_action_checkout(
+    queue: &str,
+    action: &RawQueueAction,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(checkout) = &action.checkout else {
+        return;
+    };
+    if !matches!(
+        checkout.as_str(),
+        "writable" | "read_only" | "pull_request_read_only" | "pull_request_writable"
+    ) {
+        diagnostics.push(Diagnostic::QueueActionInvalidCheckout {
+            queue: queue.to_string(),
+            role: action.role.clone(),
+            action: action.action.clone(),
+            checkout: checkout.clone(),
+        });
+    }
 }
 
 /// Checks that each Forge target declares at most one default (catch-all)

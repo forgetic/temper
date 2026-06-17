@@ -260,7 +260,8 @@
        "enum": [
         "writable",
         "read_only",
-        "pull_request_read_only"
+        "pull_request_read_only",
+        "pull_request_writable"
        ]
       },
       "allowed_verdicts": {

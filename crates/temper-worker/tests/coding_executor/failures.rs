@@ -41,6 +41,29 @@ fn missing_enriched_artifact_maps_to_protocol_failure() {
 }
 
 #[test]
+fn missing_assigned_action_maps_to_protocol_failure() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::NoDiff.runner(), true);
+        let mut context = job_context("agent/pr-for-code-7", "pr-for-code-7");
+        context.action = None;
+
+        let outcome = executor
+            .execute(Assign {
+                job_payload: context.to_payload(),
+                ..assign("agent/pr-for-code-7", "pr-for-code-7")
+            })
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Protocol);
+        assert!(
+            message.contains("action"),
+            "message should name missing action: {message}"
+        );
+    });
+}
+
+#[test]
 fn missing_role_identity_maps_to_permanent_failure() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

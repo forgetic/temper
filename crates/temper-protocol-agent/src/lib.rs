@@ -12,7 +12,7 @@
 //! The exchange is deliberately narrow:
 //!
 //! - **Inbound (worker → agent), one-shot:** a [`WorkspaceContext`] — the
-//!   repository, role, branch, verdict vocabulary, and work item the worker
+//!   repository, role, assigned action, branch, verdict vocabulary, and work item the worker
 //!   assembled, carrying the [`WorkspaceContext::correlation_key`] that is the
 //!   *only* bridge to the out-of-band control/observability plane. The worker
 //!   writes it to a file named by [`CONTEXT_ENV`] and runs the agent in the
@@ -63,6 +63,8 @@ pub struct WorkspaceContext {
     /// a one-element list.
     pub repos: Vec<WorkspaceRepository>,
     pub work_item: WorkspaceWorkItem,
+    /// Workflow action/transition this workspace turn is assigned to perform.
+    pub action: String,
     /// Per-job correlation id (the coordination key). Minted in the
     /// orchestration world, carried here, and stamped by the agent onto every
     /// [`StepProgress`] and onto everything it emits to the out-of-band
@@ -72,8 +74,8 @@ pub struct WorkspaceContext {
     /// Checkout mode token: `writable`, `read_only`, or `pull_request_read_only`.
     #[serde(default)]
     pub checkout: Option<String>,
-    /// The verdict vocabulary the bound action declares. Empty ⇒ the agent
-    /// falls back to its built-in per-role verdict menu.
+    /// The verdict vocabulary the assigned action declares. Empty means this
+    /// action has no verdict branch and should produce a branch/diff result.
     #[serde(default)]
     pub allowed_verdicts: Vec<String>,
     #[serde(default)]
@@ -282,9 +284,11 @@ mod tests {
                        "dir":"svc","access":"writable","base_branch":"main",
                        "branch_hint":"smith/engineer/issue-7"}],
             "work_item": {"role":"engineer","queue":"code","kind":"issue","target":"Issue { number: 7 }","context":"{}"},
+            "action": "open_pr",
             "correlation_key": "pr-for-code-7"
         }"#;
         let context: WorkspaceContext = serde_json::from_str(json).expect("parse");
+        assert_eq!(context.action, "open_pr");
         assert_eq!(context.correlation_key, "pr-for-code-7");
         assert_eq!(context.allowed_verdicts, Vec::<String>::new());
         assert_eq!(context.checkout, None);
@@ -305,9 +309,11 @@ mod tests {
                  "dir":"skein","access":"read_only","base_branch":"main"}
             ],
             "work_item": {"role":"engineer","queue":"code","kind":"issue","target":"Issue { number: 42 }","context":"{}"},
+            "action": "open_pr",
             "correlation_key": "coord-for-code-42"
         }"#;
         let context: WorkspaceContext = serde_json::from_str(json).expect("parse");
+        assert_eq!(context.action, "open_pr");
         assert_eq!(context.repos.len(), 2);
         assert!(context.repos[0].is_writable());
         assert!(!context.repos[1].is_writable());

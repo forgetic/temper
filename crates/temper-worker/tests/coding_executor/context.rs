@@ -19,6 +19,7 @@ fn context_shape_matches_temper_coding_agent_contract() {
             ExpectedWorkspaceContext {
                 role: "engineer",
                 queue: "code_ready",
+                action: "open_pr",
                 kind: "code",
                 checkout: "writable",
                 allowed_verdicts: &[],
@@ -53,6 +54,7 @@ fn context_shape_passes_through_read_only_capability_and_verdicts() {
             ExpectedWorkspaceContext {
                 role: "architect",
                 queue: "design_review",
+                action: "triage_intake",
                 kind: "triage",
                 checkout: "read_only",
                 allowed_verdicts: &["ready_code", "needs_design"],
@@ -84,6 +86,7 @@ fn review_context_shape_carries_pull_request_target() {
             ExpectedWorkspaceContext {
                 role: "reviewer",
                 queue: "pr_needs_review",
+                action: "review_pr",
                 kind: "implementation_pr",
                 checkout: "pull_request_read_only",
                 allowed_verdicts: &["approve", "changes", "escalate"],
@@ -99,6 +102,7 @@ fn review_context_shape_carries_pull_request_target() {
 struct ExpectedWorkspaceContext<'a> {
     role: &'a str,
     queue: &'a str,
+    action: &'a str,
     kind: &'a str,
     checkout: &'a str,
     allowed_verdicts: &'a [&'a str],
@@ -118,6 +122,7 @@ fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorksp
     assert!(primary.is_writable());
     assert_eq!(context.work_item.role, expected.role);
     assert_eq!(context.work_item.queue, expected.queue);
+    assert_eq!(context.action, expected.action);
     assert_eq!(context.work_item.kind, expected.kind);
     assert_eq!(context.work_item.target, expected.target);
     assert_eq!(primary.base_branch, "main");
@@ -141,6 +146,7 @@ fn assert_workspace_context(context: &WorkspaceContext, expected: ExpectedWorksp
     assert_eq!(inner["repository"], "acme/service");
     assert_eq!(inner["role"], expected.role);
     assert_eq!(inner["queue"], expected.queue);
+    assert_eq!(inner["action"], expected.action);
     assert_eq!(inner["kind"], expected.kind);
     assert_eq!(inner["artifact"]["type"], expected.artifact_type);
     assert_eq!(inner["artifact"]["number"], 7);

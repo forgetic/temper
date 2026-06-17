@@ -148,12 +148,13 @@ pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
     RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawIntakeAuthor,
-    RawLabel, RawQueue, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole, RawRolePrompt,
-    RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
+    RawLabel, RawQueue, RawQueueAction, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole,
+    RawRolePrompt, RawState, RawStateDimension, RawTransition, RawWorkflowSpec,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAutomation, QueueLabelSet,
-    RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue, ValidatedRelation,
-    ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition, ValidatedWorkflow,
+    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAction, QueueAutomation,
+    QueueLabelSet, RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
+    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
+    ValidatedWorkflow,
 };

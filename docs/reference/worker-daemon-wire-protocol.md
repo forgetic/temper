@@ -131,7 +131,7 @@ workflow jobs so Smith-style workers can run without Forge API access:
 | `artifact.labels` | array of strings | yes when `artifact` is present | Issue labels at enqueue time. |
 | `artifact.state` | string | yes when `artifact` is present | Debug-formatted issue state, for example `Open`. |
 | `action` | string | no | Workflow action (intent-level tool / transition id) this job services, for example `open_pr` or `triage_intake`. |
-| `checkout_capability` | string | no | Checkout capability the worker should prepare: `writable`, `read_only`, or `pull_request_read_only`. Absent means writable, preserving v1's original behavior. |
+| `checkout_capability` | string | no | Checkout capability the worker should prepare: `writable`, `read_only`, `pull_request_read_only`, or `pull_request_writable`. Absent means writable, preserving v1's original behavior. |
 | `allowed_verdicts` | array of strings | no | Verdict vocabulary declared by `action`'s `outcomes` keys, in deterministic order. Empty or absent for a plain coding job. |
 
 For compatibility, old minimal payloads containing only `role`, `repo`, `queue`,

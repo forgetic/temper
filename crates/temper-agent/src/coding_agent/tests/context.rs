@@ -23,6 +23,7 @@ fn parses_full_context_fixture() {
     );
     assert_eq!(primary.base_branch, "main");
     assert_eq!(primary.branch_hint.as_deref(), Some("agent/pr-for-code-7"));
+    assert_eq!(context.action, "open_pr");
     assert_eq!(context.correlation_key, "pr-for-code-7");
     assert_eq!(context.checkout.as_deref(), Some("writable"));
     assert_eq!(
@@ -48,10 +49,12 @@ fn parses_context_without_optional_guidance_and_checkout() {
     let minimal = r#"{
       "repos": [{ "id": "r", "owner": "o", "name": "n", "default_branch": "main", "dir": "n", "access": "writable", "base_branch": "main", "branch_hint": "agent/x" }],
       "work_item": { "role": "architect", "queue": "triage", "kind": "code", "target": "Issue { number: ItemNumber(1) }", "context": "{}" },
+      "action": "triage_intake",
       "correlation_key": "x",
       "guidance": {}
     }"#;
     let context: WorkspaceContext = serde_json::from_str(minimal).expect("minimal context parses");
+    assert_eq!(context.action, "triage_intake");
     assert_eq!(context.checkout, None);
     // A context without `allowed_verdicts` defaults to empty (back-compat with an
     // older temper that does not surface the vocabulary).

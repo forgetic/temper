@@ -50,32 +50,35 @@ this provider, deduped per `(role, id)`. Non-workspace external tools are left
 unbound for a different provider. When the env above is set but no role declares
 any workspace id, the worker logs a diagnostic and binds nothing.
 
-The command runs in the checkout. It receives the work item and user guidance in
-`TEMPER_CODING_WORKSPACE_CONTEXT` (JSON), plus branch/base/correlation env vars.
-The LLM does not receive shell or file tools; it can only choose the authorized
-workflow action, after which the runner invokes this configured provider.
+The command runs in the checkout. It receives the work item, assigned workflow
+action, and user guidance in `TEMPER_CODING_WORKSPACE_CONTEXT` (JSON), plus
+branch/base/correlation env vars. The LLM does not receive Forge mutation tools;
+it must perform the assigned action and return a branch/diff, declared verdict,
+or structured failure for Temper to validate and apply.
 
-The context JSON includes an `allowed_verdicts` array: the verdict vocabulary the
-action declares (the keys of its compiled `outcomes` map). This is the **only**
-set of verdicts the command may write to the result file (§3) — emitting anything
+The context JSON includes an `action` string and an `allowed_verdicts` array: the
+verdict vocabulary the action declares (the keys of its compiled `outcomes` map).
+This is the **only** set of verdicts the command may write to the result file (§3) — emitting anything
 else fails the tick. A bound agent should read `allowed_verdicts` and constrain
 itself to that set rather than guessing a verdict, so the workflow stays the
 single source of truth for the action's options. The array is empty for a pure
 head action that declares no `outcomes` (the engineer `open_pr` default), where
 no verdict is expected at all.
 
-### Per-tool checkout capability
+### Assigned-action checkout capability
 
-Different workspace ids need different checkouts, so the worker grants each id a
-checkout capability keyed off the tool id (never the role — the engine stays
-role-agnostic). The provider receives the capability per invocation and exposes
-it to the command as `TEMPER_CODING_WORKSPACE_CHECKOUT`:
+Different assigned actions need different checkouts, so the worker receives a
+checkout capability derived from the selected action and, when necessary, the
+queue's explicit action assignment (never from a hard-coded role id). The
+provider receives the capability per invocation and exposes it to the command as
+`TEMPER_CODING_WORKSPACE_CHECKOUT`:
 
-| Tool id (convention) | Capability | `…CHECKOUT` | Checkout behavior |
-| --- | --- | --- | --- |
-| `coding_workspace` (and any other `*_workspace`) | writable | `writable` | Writable checkout at `base`; the head path commits and pushes a branch. |
-| `triage_workspace` | read-only | `read_only` | Read-only checkout at `base`; the command must route a verdict and never commits. |
-| `review_workspace` | PR read-only | `pull_request_read_only` | Read-only checkout with the PR head fetched (`TEMPER_CODING_WORKSPACE_PR_HEAD_REF`) **and** base so the command can compute `git diff <base> <pr-head-ref>`; never commits. |
+| Capability | `…CHECKOUT` | Checkout behavior |
+| --- | --- | --- |
+| Writable issue implementation | `writable` | Writable checkout at `base`; the head path commits and pushes a branch for a new PR. |
+| Read-only issue verdict | `read_only` | Read-only checkout at `base`; the command must route a verdict and never commits. |
+| Read-only PR verdict/review | `pull_request_read_only` | Read-only checkout with the PR head fetched (`TEMPER_CODING_WORKSPACE_PR_HEAD_REF`) **and** base so the command can compute `git diff <base> <pr-head-ref>`; never commits. |
+| Writable PR-head fix | `pull_request_writable` | Writable checkout on the existing PR head branch; the worker pushes fixes back to that branch so CI/review gates can re-evaluate. |
 
 A read-only command (`read_only` or `pull_request_read_only`) **must** write a
 `verdict` to the result file (§3): producing a diff without a verdict in a

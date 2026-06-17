@@ -274,6 +274,7 @@ mod tests {
                 target: "Issue { number: ItemNumber(7) }".to_string(),
                 context: "{}".to_string(),
             },
+            action: "open_pr".to_string(),
             correlation_key: "pr-for-code-7".to_string(),
             checkout: Some("writable".to_string()),
             allowed_verdicts: Vec::new(),

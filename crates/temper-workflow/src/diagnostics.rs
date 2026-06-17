@@ -79,6 +79,12 @@ pub enum ReferenceSite {
     QueueAutomationTransition { queue: String },
     /// A queue automation outcome referenced a transition for a verdict.
     QueueAutomationOutcome { queue: String, verdict: String },
+    /// A queue action assignment referenced a worker role.
+    QueueActionRole { queue: String },
+    /// A queue action assignment referenced an artifact kind discriminator.
+    QueueActionArtifact { queue: String, role: String },
+    /// A queue action assignment referenced its assigned transition/action.
+    QueueActionTransition { queue: String, role: String },
     /// A transition outcome referenced a transition for a verdict.
     TransitionOutcome { transition: String, verdict: String },
     /// An artifact kind's `labels` list referenced a label.
@@ -127,6 +133,16 @@ impl fmt::Display for ReferenceSite {
                 write!(
                     formatter,
                     "outcome `{verdict}` of automation for queue `{queue}`"
+                )
+            }
+            ReferenceSite::QueueActionRole { queue } => {
+                write!(formatter, "an action assignment for queue `{queue}`")
+            }
+            ReferenceSite::QueueActionArtifact { queue, role }
+            | ReferenceSite::QueueActionTransition { queue, role } => {
+                write!(
+                    formatter,
+                    "an action assignment for role `{role}` on queue `{queue}`"
                 )
             }
             ReferenceSite::TransitionOutcome {
@@ -211,6 +227,34 @@ pub enum Diagnostic {
         expected: String,
         actual: String,
     },
+    /// A queue action assignment uses a transition that does not authorize its role.
+    QueueActionUnauthorized {
+        queue: String,
+        role: String,
+        action: String,
+    },
+    /// A queue action assignment uses a transition on an artifact outside the queue.
+    QueueActionArtifactMismatch {
+        queue: String,
+        action: String,
+        artifact: String,
+        queue_artifacts: Vec<String>,
+    },
+    /// A queue action assignment's artifact discriminator disagrees with its transition.
+    QueueActionFilterArtifactMismatch {
+        queue: String,
+        role: String,
+        action: String,
+        declared_artifact: String,
+        action_artifact: String,
+    },
+    /// A queue action assignment declares an unknown checkout capability.
+    QueueActionInvalidCheckout {
+        queue: String,
+        role: String,
+        action: String,
+        checkout: String,
+    },
     /// A transition outcome routes to a transition that does not authorize the
     /// primary transition's roles.
     TransitionOutcomeUnauthorized {
@@ -247,6 +291,10 @@ impl Diagnostic {
             | Diagnostic::QueueAutomationExecutorUndeclared { .. }
             | Diagnostic::QueueAutomationOutcomeUnauthorized { .. }
             | Diagnostic::QueueAutomationOutcomeArtifactMismatch { .. }
+            | Diagnostic::QueueActionUnauthorized { .. }
+            | Diagnostic::QueueActionArtifactMismatch { .. }
+            | Diagnostic::QueueActionFilterArtifactMismatch { .. }
+            | Diagnostic::QueueActionInvalidCheckout { .. }
             | Diagnostic::TransitionOutcomeUnauthorized { .. }
             | Diagnostic::TransitionOutcomeArtifactMismatch { .. }
             | Diagnostic::MultipleDefaultArtifactKinds { .. } => Severity::Error,
@@ -318,6 +366,43 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 formatter,
                 "automation for queue `{queue}` routes verdict `{verdict}` to transition `{transition}` on artifact `{actual}`, but the primary transition acts on `{expected}`"
+            ),
+            Diagnostic::QueueActionUnauthorized {
+                queue,
+                role,
+                action,
+            } => write!(
+                formatter,
+                "action assignment for queue `{queue}` uses role `{role}`, but action `{action}` does not authorize that role"
+            ),
+            Diagnostic::QueueActionArtifactMismatch {
+                queue,
+                action,
+                artifact,
+                queue_artifacts,
+            } => write!(
+                formatter,
+                "action assignment for queue `{queue}` uses action `{action}` on artifact `{artifact}`, which is not selected by the queue ({})",
+                queue_artifacts.join(", ")
+            ),
+            Diagnostic::QueueActionFilterArtifactMismatch {
+                queue,
+                role,
+                action,
+                declared_artifact,
+                action_artifact,
+            } => write!(
+                formatter,
+                "action assignment for role `{role}` on queue `{queue}` declares artifact `{declared_artifact}`, but action `{action}` operates on `{action_artifact}`"
+            ),
+            Diagnostic::QueueActionInvalidCheckout {
+                queue,
+                role,
+                action,
+                checkout,
+            } => write!(
+                formatter,
+                "action assignment for role `{role}` on queue `{queue}` uses action `{action}` with unsupported checkout capability `{checkout}`"
             ),
             Diagnostic::TransitionOutcomeUnauthorized {
                 transition,

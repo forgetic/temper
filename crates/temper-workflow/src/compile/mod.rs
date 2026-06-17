@@ -25,8 +25,8 @@ use crate::ids::{
 use crate::plan::SignalNeeds;
 use crate::prompt::build_prompt;
 use crate::validated::{
-    Effect, GateCondition, QueueAutomation, QueueLabelSet, RolePromptExtension, ValidatedRole,
-    ValidatedTransition, ValidatedWorkflow,
+    Effect, GateCondition, QueueAction, QueueAutomation, QueueLabelSet, RolePromptExtension,
+    ValidatedRole, ValidatedTransition, ValidatedWorkflow,
 };
 use chrono::Duration;
 use labels::compile_labels;
@@ -167,6 +167,8 @@ pub struct QueueManifest {
     /// Optional mechanical servicing metadata. It is separate from subscribers
     /// so an automation actor does not become an LLM/process queue worker.
     pub automation: Option<QueueAutomation>,
+    /// Role-worker action assignments for matched active queue members.
+    pub actions: Vec<QueueAction>,
     /// Roles that draw work from this queue, in role declaration order.
     pub subscribers: Vec<RoleId>,
 }
@@ -244,6 +246,7 @@ fn compile_queues(workflow: &ValidatedWorkflow) -> Vec<QueueManifest> {
             max_age: queue.max_age,
             condition: queue.condition.clone(),
             automation: queue.automation.clone(),
+            actions: queue.actions.clone(),
             subscribers: workflow
                 .roles()
                 .iter()

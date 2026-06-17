@@ -19,6 +19,7 @@ fn multi_artifact_disjunctive_queue_validates() {
         max_age: None,
         condition: None,
         automation: None,
+        actions: Vec::new(),
     });
 
     let workflow = spec.validate().expect("multi-kind OR queue validates");
@@ -42,6 +43,40 @@ fn empty_queue_artifacts_are_diagnosed() {
             .diagnostics()
             .contains(&Diagnostic::EmptyQueueArtifacts {
                 queue: "code_ready".to_string(),
+            })
+    );
+}
+
+#[test]
+fn queue_action_contract_is_validated() {
+    let mut spec = valid_spec();
+    spec.queues[0].actions.push(RawQueueAction {
+        role: "reviewer".to_string(),
+        action: "claim_code".to_string(),
+        checkout: Some("sideways".to_string()),
+        ..RawQueueAction::default()
+    });
+
+    let errors = spec
+        .validate()
+        .expect_err("unauthorized action assignment must fail");
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueActionUnauthorized {
+                queue: "code_ready".to_string(),
+                role: "reviewer".to_string(),
+                action: "claim_code".to_string(),
+            })
+    );
+    assert!(
+        errors
+            .diagnostics()
+            .contains(&Diagnostic::QueueActionInvalidCheckout {
+                queue: "code_ready".to_string(),
+                role: "reviewer".to_string(),
+                action: "claim_code".to_string(),
+                checkout: "sideways".to_string(),
             })
     );
 }

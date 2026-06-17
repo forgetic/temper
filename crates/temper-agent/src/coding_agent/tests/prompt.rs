@@ -88,6 +88,7 @@ fn user_context_includes_work_item_and_guidance() {
     assert!(rendered.contains("dir: service/"));
     assert!(rendered.contains("access: writable"));
     assert!(rendered.contains("Role: engineer"));
+    assert!(rendered.contains("Action: open_pr"));
     assert!(rendered.contains("Target: Issue { number: ItemNumber(7) }"));
     assert!(rendered.contains("base branch: main"));
     assert!(rendered.contains("work branch: agent/pr-for-code-7"));
