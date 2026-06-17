@@ -21,6 +21,7 @@ use temper_workflow::{ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, 
 
 const REFERENCE_FIXTURE: &str =
     include_str!("../../temper-workflow/fixtures/reference-delivery.json");
+const BASIC_FIXTURE: &str = include_str!("../../temper-workflow/fixtures/basic-delivery.json");
 
 const PLANNER_FIXTURE: &str = r#"
 {

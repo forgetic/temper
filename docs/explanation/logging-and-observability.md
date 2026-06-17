@@ -237,8 +237,8 @@ $ journalctl -u temper -o short-iso
 2026-06-16T09:00:01+0000 temper[4821]: engine:  forge: forgejo @ https://git.example.com (reachable, auth ok as temper-bot)
 2026-06-16T09:00:01+0000 temper[4821]: engine:  workflow: basic-delivery | roles=architect,engineer,mechanical | queues=5
 2026-06-16T09:00:01+0000 temper[4821]: engine:  watching 2 repos: acme/widgets, acme/api
-2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/widgets: labels verified (untriaged,code,ready,in-progress,implementation,landed)
-2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/api:     labels verified (untriaged,code,ready,in-progress,implementation,landed)
+2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/widgets: labels verified (untriaged,code,ready,in-progress,implementation)
+2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/api:     labels verified (untriaged,code,ready,in-progress,implementation)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  planes up: engine + worker + agent on one loop
 2026-06-16T09:00:02+0000 temper[4821]: trigger: webhook listener up on :8080/forgejo (issue, PR, CI events)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  poll backstop every 60s (architect, engineer feeds across 2 repos)
@@ -310,7 +310,7 @@ $ journalctl -u temper -o short-iso
 2026-06-16T10:23:50+0000 temper[4821]: trigger: [acme/widgets PR#44] CI completed: success (4m40s)
 2026-06-16T10:23:50+0000 temper[4821]: engine:  [acme/widgets PR#44] gates: ci_gate=ok dependency_gate=ok | -> queue 'landing' eligible to land
 2026-06-16T10:23:51+0000 temper[4821]: worker:  [acme/widgets PR#44] mechanical claimed lease (ttl 10m) | running land_pr
-2026-06-16T10:23:52+0000 temper[4821]: engine:  [acme/widgets PR#44] merged -> main (squash e3f9a1c) | +landed
+2026-06-16T10:23:52+0000 temper[4821]: engine:  [acme/widgets PR#44] merged -> main (squash e3f9a1c)
 2026-06-16T10:23:52+0000 temper[4821]: engine:  [acme/widgets#42] resolved -- implemented by PR#44 | intake -> landed in 9m19s
 2026-06-16T10:23:52+0000 temper[4821]: worker:  [acme/widgets PR#44] mechanical lease released
 
@@ -323,14 +323,14 @@ $ journalctl -u temper -o short-iso
 2026-06-16T10:26:58+0000 temper[4821]: trigger: [acme/api PR#19] CI completed: success (4m24s)
 2026-06-16T10:26:58+0000 temper[4821]: engine:  [acme/api PR#19] gates: ci_gate=ok dependency_gate=ok | -> queue 'landing' eligible to land
 2026-06-16T10:26:59+0000 temper[4821]: worker:  [acme/api PR#19] mechanical claimed lease (ttl 10m) | running land_pr
-2026-06-16T10:27:00+0000 temper[4821]: engine:  [acme/api PR#19] merged -> main (squash 7b2c004) | +landed
+2026-06-16T10:27:00+0000 temper[4821]: engine:  [acme/api PR#19] merged -> main (squash 7b2c004)
 2026-06-16T10:27:00+0000 temper[4821]: engine:  [acme/api#7] resolved -- implemented by PR#19 | intake -> landed in 12m24s
 2026-06-16T10:27:00+0000 temper[4821]: worker:  [acme/api PR#19] mechanical lease released
 
 2026-06-16T10:30:12+0000 temper[4821]: trigger: [acme/widgets PR#45] CI completed: success (4m23s)
 2026-06-16T10:30:12+0000 temper[4821]: engine:  [acme/widgets PR#45] gates: ci_gate=ok dependency_gate=ok | -> queue 'landing' eligible to land
 2026-06-16T10:30:13+0000 temper[4821]: worker:  [acme/widgets PR#45] mechanical claimed lease (ttl 10m) | running land_pr
-2026-06-16T10:30:14+0000 temper[4821]: engine:  [acme/widgets PR#45] merged -> main (squash 9d1ef52) | +landed
+2026-06-16T10:30:14+0000 temper[4821]: engine:  [acme/widgets PR#45] merged -> main (squash 9d1ef52)
 2026-06-16T10:30:14+0000 temper[4821]: engine:  [acme/widgets#43] resolved -- implemented by PR#45 | intake -> landed in 15m33s
 2026-06-16T10:30:14+0000 temper[4821]: worker:  [acme/widgets PR#45] mechanical lease released
 

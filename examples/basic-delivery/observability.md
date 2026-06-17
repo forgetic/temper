@@ -66,7 +66,7 @@ It confirms that:
 - the daemon assigned at least one job and received at least one result;
 - the in-process worker registered, accepted an assignment, and sent a result.
 
-If the PR remains labelled `implementation` and is never `landed`, inspect
+If the PR remains labelled `implementation` and stays open, inspect
 `logs/run.log`. The ADR-0019 error:
 
 ```text

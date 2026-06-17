@@ -54,8 +54,8 @@ The run converges through the unified daemon/worker topology with a single
    straight into the `landing` queue.
 8. The real **`forgejo-runner`** runs CI on the PR head and it goes green.
 9. The **bot** (the mechanical backstop) sees the green PR and **auto-merges** it
-   (the `landing` queue's `land_pr` automation, gated on `ci_gate` only), then
-   marks it `landed`. Forgejo closes the source issue via the merge trailer.
+   (the `landing` queue's `land_pr` automation, with no review gate). Forgejo
+   closes the source issue via the merge trailer.
 
 No reviewer approves; no owner or human acts. The bot is the **sole landing
 authority** and lands purely on CI.
@@ -156,9 +156,9 @@ state.
 It checks provisioning logs (webhook registration, the site-admin intake URL),
 the single `logs/run.log` (serving readiness, webhook delivery + wake scan, daemon
 assignments and results, the in-process worker's `worker:` register /
-assign / result lines), and mechanical CI-read diagnostics. A PR stuck with
-`implementation` and never `landed` usually lacks current-head CI; if
-`logs/run.log` mentions missing web-UI credentials for the CI read fallback, the
+assign / result lines), and mechanical CI-read diagnostics. A PR stuck open with
+`implementation` usually lacks current-head CI; if `logs/run.log` mentions
+missing web-UI credentials for the CI read fallback, the
 run was not launched with the provisioned `bot` username/password (ADR 0019).
 
 If a run is force-killed, clean up possible orphans:
@@ -173,7 +173,7 @@ rm -rf examples/basic-delivery/run
 ## Point it at your own Forgejo
 
 Set `BASE_URL` to your instance and provide tokens, then drop the bundled
-server/runner + provisioning steps. The workflow spec, the CI-only landing gate,
-and the single-outcome triage are unchanged. A real project replaces
+server/runner + provisioning steps. The workflow spec, the no-review landing
+track, and the single-outcome triage are unchanged. A real project replaces
 `config/ci.yml` with its real CI (build, test, lint); the engineer agent produces
 diffs that pass it.

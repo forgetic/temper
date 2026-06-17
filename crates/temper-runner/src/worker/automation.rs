@@ -461,13 +461,14 @@ fn emit_queue_entered_after(
 /// Emits the §7 `engine` / `pr.merged` line when a mechanical landing transition
 /// merged the pull request.
 ///
-/// `land_pr` carries a `merge_pull_request` effect alongside its `+landed` label
-/// add. The merge commit sha is not on the [`ExecutionReport`], so we reload the
-/// merged pull request once to read its [`MergeRecord`] (commit sha + method) and
-/// the base branch it landed on. The label delta comes from the same applied
-/// effects the `transition.applied` line used. When the effects carry no merge,
-/// or the reload/merge-record is unavailable, no line is emitted (the smallest
-/// correct reduction — we never fabricate a commit sha).
+/// `land_pr` carries a `merge_pull_request` effect and may carry post-merge
+/// label effects such as `+landed`. The merge commit sha is not on the
+/// [`ExecutionReport`], so we reload the merged pull request once to read its
+/// [`MergeRecord`] (commit sha + method) and the base branch it landed on. The
+/// label delta comes from the same applied effects the `transition.applied` line
+/// used. When the effects carry no merge, or the reload/merge-record is
+/// unavailable, no line is emitted (the smallest correct reduction — we never
+/// fabricate a commit sha).
 async fn emit_pr_merged_if_landed<F: Forge + ?Sized>(
     context: &AutomationContext<'_>,
     forge: &F,

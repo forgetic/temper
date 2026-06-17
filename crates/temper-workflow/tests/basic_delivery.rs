@@ -363,12 +363,16 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
         "landing requires CI + dependency gates — but no review gate"
     );
 
-    // The `landing` queue is mechanically serviced once CI passes.
+    // The `landing` queue is mechanically serviced once CI passes. It carries no
+    // label filter: the artifact kind already identifies implementation PRs, and
+    // adding the `implementation` label to this terminal queue would make
+    // terminal recovery scans revisit already-merged implementation PRs.
     let landing = workflow
         .queues()
         .iter()
         .find(|queue| queue.id.as_str() == "landing")
         .expect("landing queue is declared");
+    assert!(landing.labels.is_empty());
     assert_eq!(landing.condition.as_ref(), Some(&GateCondition::CiPassed));
     let automation = landing
         .automation
@@ -389,13 +393,7 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
             &ci_only,
         )
         .expect("mechanical automation can land a PR on CI alone");
-    assert_eq!(
-        plan.effects,
-        vec![
-            WorkflowEffect::MergePullRequest,
-            WorkflowEffect::AddLabel(LabelId::new("landed")),
-        ]
-    );
+    assert_eq!(plan.effects, vec![WorkflowEffect::MergePullRequest]);
 
     // Without CI, landing is gated even though no review is ever required.
     let no_ci = GateSignals::new();
@@ -474,11 +472,5 @@ fn review_status_unused_keeps_landing_unblocked() {
             &ci_and_stray_review,
         )
         .expect("landing depends on CI only; an unapproved review does not block it");
-    assert_eq!(
-        plan.effects,
-        vec![
-            WorkflowEffect::MergePullRequest,
-            WorkflowEffect::AddLabel(LabelId::new("landed")),
-        ]
-    );
+    assert_eq!(plan.effects, vec![WorkflowEffect::MergePullRequest]);
 }

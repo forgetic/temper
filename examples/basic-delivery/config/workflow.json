@@ -79,10 +79,6 @@
     {
       "id": "implementation",
       "description": "identifies an implementation pull request"
-    },
-    {
-      "id": "landed",
-      "description": "merged PR"
     }
   ],
   "artifact_kinds": [
@@ -138,16 +134,6 @@
           ]
         }
       ]
-    },
-    {
-      "id": "post_merge",
-      "exclusive": false,
-      "states": [
-        {
-          "id": "landed",
-          "label": "landed"
-        }
-      ]
     }
   ],
   "queues": [
@@ -183,9 +169,6 @@
     {
       "id": "landing",
       "artifact": "implementation_pr",
-      "labels": [
-        "implementation"
-      ],
       "condition": {
         "kind": "ci_passed"
       },
@@ -300,10 +283,6 @@
       "effects": [
         {
           "kind": "merge_pull_request"
-        },
-        {
-          "kind": "add_label",
-          "label": "landed"
         }
       ]
     }
