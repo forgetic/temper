@@ -7,11 +7,19 @@
 //! it applies lives in [`super::batching`].
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
 };
 use tongs::tools::{ToolEffects, ToolOutput};
+
+/// Computes the one-line salient-argument preview shown in `ToolStart`
+/// observability events. Supplied by the shell-side caller (it lives above this
+/// tier, where the workspace `cwd` and per-tool rendering rules are known); the
+/// pure core just calls it with each call's name + parsed arguments. See the
+/// agent-log-cleanup plan (pieces B/D).
+pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync>;
 
 use super::batching::{PendingTool, plan_batches};
 use super::protocol::{AgentCompletion, AgentEvent, AgentRequest, AgentStop};
@@ -50,6 +58,10 @@ pub struct AgentMachine {
     /// Steering messages to inject at the next turn boundary.
     queued_steering: Vec<Message>,
     aborted: bool,
+    /// Optional shell-supplied preview function used to fill
+    /// `ToolStart.arg_preview` from each call's name + arguments. `None` leaves
+    /// the field unset (the pure default).
+    arg_preview: Option<ArgPreviewFn>,
 }
 
 impl AgentMachine {
@@ -83,7 +95,15 @@ impl AgentMachine {
             last_assistant: None,
             queued_steering: Vec::new(),
             aborted: false,
+            arg_preview: None,
         }
+    }
+
+    /// Installs the shell-supplied [`ArgPreviewFn`] used to fill
+    /// `ToolStart.arg_preview`. Without it the field stays `None`.
+    pub fn with_arg_preview(mut self, arg_preview: ArgPreviewFn) -> Self {
+        self.arg_preview = Some(arg_preview);
+        self
     }
 
     /// The current conversation (test/observability accessor).
@@ -178,12 +198,17 @@ impl AgentMachine {
         };
         let mut requests = Vec::new();
         for pending in batch {
+            // The pure core does not know the per-tool rendering rules; the
+            // shell supplies an optional preview fn (agent-log-cleanup plan,
+            // pieces B/D). Absent it, the field stays `None`.
+            let arg_preview = self
+                .arg_preview
+                .as_ref()
+                .and_then(|render| render(&pending.call.name, &pending.call.arguments));
             requests.push(AgentRequest::Emit(AgentEvent::ToolStart {
                 id: pending.call.id.clone(),
                 name: pending.call.name.clone(),
-                // The pure core does not compute previews; the shell-side
-                // logger fills this in (agent-log-cleanup plan, piece D).
-                arg_preview: None,
+                arg_preview,
             }));
             requests.push(AgentRequest::RunTool(pending.call.clone()));
         }

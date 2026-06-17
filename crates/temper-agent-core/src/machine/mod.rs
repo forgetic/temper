@@ -28,7 +28,7 @@ mod batching;
 mod core;
 mod protocol;
 
-pub use core::AgentMachine;
+pub use core::{AgentMachine, ArgPreviewFn};
 pub use protocol::{AgentCompletion, AgentEvent, AgentRequest, AgentStop, StreamDelta};
 
 #[cfg(test)]

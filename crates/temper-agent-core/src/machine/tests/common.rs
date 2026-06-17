@@ -13,7 +13,7 @@ use tongs::model::{
 };
 use tongs::tools::{ToolEffects, ToolOutput};
 
-use crate::machine::{AgentCompletion, AgentMachine, AgentRequest, AgentStop};
+use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
 
 /// A machine whose named tools are all read-only (parallel-safe), so adjacent
 /// tool calls batch together and run concurrently.
@@ -68,6 +68,42 @@ pub(super) fn assistant_tool_calls(calls: &[(&str, &str)]) -> AssistantMessage {
         error_message: None,
         timestamp: 0,
     }
+}
+
+/// An assistant turn requesting a single tool call with explicit JSON arguments
+/// (the `assistant_tool_calls` helper always uses empty `{}` args).
+pub(super) fn assistant_tool_call_with_args(
+    id: &str,
+    name: &str,
+    arguments: serde_json::Value,
+) -> AssistantMessage {
+    AssistantMessage {
+        content: vec![ContentBlock::ToolCall(ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments,
+        })],
+        api: "test".to_string(),
+        provider: "test".to_string(),
+        model: "test".to_string(),
+        usage: Usage::default(),
+        stop_reason: StopReason::ToolUse,
+        error_message: None,
+        timestamp: 0,
+    }
+}
+
+/// The `arg_preview` of every emitted `ToolStart`, in order.
+pub(super) fn tool_start_previews(requests: &[AgentRequest]) -> Vec<Option<String>> {
+    requests
+        .iter()
+        .filter_map(|r| match r {
+            AgentRequest::Emit(AgentEvent::ToolStart { arg_preview, .. }) => {
+                Some(arg_preview.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 pub(super) fn assistant_error() -> AssistantMessage {

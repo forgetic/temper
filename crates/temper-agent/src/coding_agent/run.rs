@@ -169,13 +169,18 @@ pub async fn run_coding_agent_native_with_hooks(
         provider,
         stream_options,
     };
+    // Salient-arg preview for ToolStart human lines: computed in the pure core
+    // (where the raw call args live) via this shell-supplied closure, which owns
+    // the workspace `cwd` for repo-relative paths (agent-log-cleanup plan, B/D).
+    let arg_preview = crate::usage::tool_arg_preview_hook(cwd.to_path_buf());
     let model_id = provider_config.model_id().to_string();
     let outcome = async {
-        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_hook(
+        let (_control, run) = temper_agent_core::run_sub_agent_controllable_with_hooks(
             handle.clone(),
             sub_agent,
             events,
             turn_hook,
+            Some(arg_preview),
         )?;
         run.await
     }

@@ -1,4 +1,18 @@
-//! Small helpers for bounded structured stderr events.
+//! Bounded, redacted field-rendering helpers for agent observability lines,
+//! plus the `StructuredEvent` JSON builder still used by the
+//! workflow-role-decision capture path.
+//!
+//! `preview` / `redacted_preview` are temper-agent's local copy of the
+//! redaction rule (the depgraph forbids depending on `temper-log`, where the
+//! same idea lives): they bound free-form model/operator text to a single,
+//! length-limited line and mask secret-like keys/values.
+//!
+//! NOTE (agent-log-cleanup, §8): the `UsageLogger` path no longer uses
+//! `StructuredEvent` — it emits **real `tracing` fields** on `target:
+//! "temper::agent"` (see `usage.rs`). `StructuredEvent` is retained only for the
+//! `workflow_role_decision_observability` path, which has a wide field
+//! vocabulary and is out of scope for that cleanup pass; it should be migrated
+//! to real fields in a follow-up.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +25,8 @@ pub(crate) const REASON_PREVIEW_CHARS: usize = 200;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
-/// A stable JSON event renderer for anvil stderr logs.
+/// A stable JSON event renderer for anvil stderr logs (workflow-role-decision
+/// capture path only; see the module note).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StructuredEvent {
     fields: BTreeMap<String, Value>,

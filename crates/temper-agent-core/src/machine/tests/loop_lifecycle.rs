@@ -4,9 +4,11 @@
 
 use temper_agent_io::{EngineTime, Machine};
 
+use std::sync::Arc;
+
 use super::common::{
-    assistant_error, assistant_text, assistant_tool_calls, calls_llm, final_stop, machine, run,
-    run_tools, tool_output, user,
+    assistant_error, assistant_text, assistant_tool_call_with_args, assistant_tool_calls,
+    calls_llm, final_stop, machine, run, run_tools, tool_output, tool_start_previews, user,
 };
 use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
 
@@ -183,4 +185,52 @@ fn steering_is_injected_at_the_next_turn_boundary() {
         after.len()
     );
     assert_eq!(calls_llm(&after), 1);
+}
+
+#[test]
+fn arg_preview_hook_fills_tool_start_field_from_call_args() {
+    let mut m = AgentMachine::new(vec![user("inspect")], 10).with_arg_preview(Arc::new(
+        |name: &str, args: &serde_json::Value| {
+            // A trivial stand-in for the shell's real per-tool renderer: echo
+            // "<name>:<path>" when a `path` arg is present.
+            args.get("path")
+                .and_then(|p| p.as_str())
+                .map(|path| format!("{name}:{path}"))
+        },
+    ));
+    let requests = run(
+        &mut m,
+        vec![AgentCompletion::LlmResponded(
+            assistant_tool_call_with_args(
+                "call-1",
+                "read",
+                serde_json::json!({"path": "src/main.rs"}),
+            ),
+        )],
+    );
+    assert_eq!(
+        tool_start_previews(&requests),
+        vec![Some("read:src/main.rs".to_string())],
+        "the preview hook should populate ToolStart.arg_preview",
+    );
+}
+
+#[test]
+fn tool_start_arg_preview_is_none_without_a_hook() {
+    let mut m = machine();
+    let requests = run(
+        &mut m,
+        vec![AgentCompletion::LlmResponded(
+            assistant_tool_call_with_args(
+                "call-1",
+                "read",
+                serde_json::json!({"path": "src/main.rs"}),
+            ),
+        )],
+    );
+    assert_eq!(
+        tool_start_previews(&requests),
+        vec![None],
+        "without a preview hook the field stays None (the pure default)",
+    );
 }

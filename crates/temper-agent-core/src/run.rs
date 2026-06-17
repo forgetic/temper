@@ -20,7 +20,7 @@ use tongs::provider::{Provider, StreamOptions, ToolDef};
 use tongs::tools::ToolRegistry;
 use tongs::tools::tool_to_definition;
 
-use crate::machine::{AgentCompletion, AgentMachine};
+use crate::machine::{AgentCompletion, AgentMachine, ArgPreviewFn};
 use crate::shell::{AgentOutcome, AgentShell, EventSink, NullEventSink, TurnHook};
 
 /// A live control handle for a running sub-agent: inject steering messages or
@@ -178,6 +178,27 @@ pub fn run_sub_agent_controllable_with_hook(
     ),
     SubAgentError,
 > {
+    run_sub_agent_controllable_with_hooks(handle, sub_agent, events, turn_hook, None)
+}
+
+/// [`run_sub_agent_controllable_with_hook`] with an additional optional
+/// [`ArgPreviewFn`] used to fill `ToolStart.arg_preview` from each call's name +
+/// arguments. The preview function lives above the core tier (it knows the
+/// workspace `cwd` and per-tool rendering rules); the pure machine just calls
+/// it. See the agent-log-cleanup plan (pieces B/D).
+pub fn run_sub_agent_controllable_with_hooks(
+    handle: RuntimeHandle,
+    sub_agent: SubAgent,
+    events: Arc<dyn EventSink>,
+    turn_hook: Option<Arc<dyn TurnHook>>,
+    arg_preview: Option<ArgPreviewFn>,
+) -> Result<
+    (
+        SubAgentControl,
+        impl std::future::Future<Output = Result<AgentOutcome, SubAgentError>>,
+    ),
+    SubAgentError,
+> {
     let tool_defs: Vec<ToolDef> = sub_agent
         .tools
         .tools()
@@ -220,7 +241,10 @@ pub fn run_sub_agent_controllable_with_hook(
     if let Some(turn_hook) = turn_hook {
         shell = shell.with_turn_hook(turn_hook);
     }
-    let machine = AgentMachine::with_effects(initial, sub_agent.max_iterations, effects);
+    let mut machine = AgentMachine::with_effects(initial, sub_agent.max_iterations, effects);
+    if let Some(arg_preview) = arg_preview {
+        machine = machine.with_arg_preview(arg_preview);
+    }
 
     let run = async move {
         // Drive to completion. The machine stops itself on `Finished`, which

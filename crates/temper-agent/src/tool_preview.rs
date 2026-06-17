@@ -7,11 +7,10 @@
 //! result is intended to slot into the `agent: [repo#n] tool <name> <preview>`
 //! human projection (see `docs/explanation/logging-and-observability.md` §3).
 //!
-//! This module is exercised by its own unit tests today; the production call
-//! site lives in `usage.rs` and is wired up by piece D of the agent-log-cleanup
-//! plan (`docs/plans/agent-log-cleanup.md`). Until then the helpers have no
-//! non-test caller, hence the crate-internal `dead_code` allowance.
-#![allow(dead_code)]
+//! The production call site lives in `usage.rs`: the coding agent builds an
+//! `ArgPreviewFn` (capturing the workspace `cwd`) that the pure agent core calls
+//! to fill `ToolStart.arg_preview` (piece D of the agent-log-cleanup plan,
+//! `docs/plans/agent-log-cleanup.md`).
 
 use std::path::Path;
 
