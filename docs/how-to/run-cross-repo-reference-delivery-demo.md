@@ -79,6 +79,6 @@ For event/log names, see `examples/reference-delivery/observability.md`.
 
 ## Smith-backed examples
 
-Smith/provider-backed role decisions and the dogfood/product-chat launchers live
-in the sibling Smith checkout under `~/src/rust/smith/examples/`. Temper's
+Smith/provider-backed role-job workers and the dogfood/product-chat launchers
+live in the sibling Smith checkout under `~/src/rust/smith/examples/`. Temper's
 `examples/reference-delivery/` intentionally stays fake-agent-only.

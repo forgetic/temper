@@ -74,7 +74,7 @@ protocol-speaking coding agent, and by hidden responder processes.
 | `TEMPER_AGENTS_ANTHROPIC_TOKEN_URL` | Anthropic OAuth refresh endpoint override. | Optional; default compiled endpoint. | Test-only. |
 | `ANVIL_TEST_PROVIDER_BASE_URL` | Provider base URL redirect / fake LLM endpoint. Also used as the env key for configured provider base URLs passed to child agents. | Applied last in provider construction; can override configured provider URL when ambiently set. | Test/demo only unless renamed or documented as public provider-base-url config. |
 | `ANVIL_CONFIG_DIR` | Agent prompt-overlay config dir. | `--config-dir` > `ANVIL_CONFIG_DIR` > `$XDG_CONFIG_HOME/anvil` > `$HOME/.config/anvil`. | Move to CLI/config; keep env as compatibility. |
-| `ANVIL_WORKFLOW_ROLE_DECISION_CAPTURE_DIR` | Redacted workflow-role-decision capture directory for hidden responder/debugging. | Optional; unset disables capture. | Test/diagnostic only; prefer explicit CLI/config. |
+| `ANVIL_WORKFLOW_ROLE_DECISION_CAPTURE_DIR` | Legacy hidden role-selector capture directory used by responder/debug tests. | Optional; unset disables capture. | Test/diagnostic only; slated for removal with the legacy adapter. |
 | `TEMPER_FORGEJO_USER_<ROLE>` | Agent checkpoint git author name. | Passed by worker to agent; agent defaults to `temper-agent` if absent. | Keep env (worker-to-agent protocol) until protocol carries identity explicitly. |
 | `TEMPER_FORGEJO_EMAIL_<ROLE>` | Agent checkpoint git author email. | Passed by worker to agent; agent defaults to `temper-agent@localhost` if absent. | Keep env (worker-to-agent protocol) until protocol carries identity explicitly. |
 | `TEMPER_FORGEJO_TOKEN_<ROLE>` | Agent checkpoint push token. | Optional; if present, agent passes it to git via `http.extraheader`. | Keep env (secret/protocol) until protocol carries secrets explicitly. |
@@ -167,7 +167,7 @@ The checked-in demo CI files also echo/use `GITHUB_SHA`.
 | `TEMPER_ANTHROPIC_OAUTH`, `TEMPER_CHATGPT_OAUTH`, `TEMPER_DEEPSEEK_REQUEST_ORACLE` | Opt-in gates for ignored live provider/request-oracle tests. |
 | `TEMPER_SIM_SEED_BASE` | Base seed for simulation fresh-seed batch; invalid/unset uses default. |
 | `TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_ALLOWED`, `TEMPER_INTERACTION_PROCESS_RESPONDER_TEST_BLOCKED` | Interaction process-responder env filtering tests. |
-| `TEMPER_RUNNER_ROLE_DECISION_ALLOWED`, `TEMPER_RUNNER_ROLE_DECISION_BLOCKED` | Workflow role-decision process env filtering tests. |
+| `TEMPER_RUNNER_ROLE_DECISION_ALLOWED`, `TEMPER_RUNNER_ROLE_DECISION_BLOCKED` | Legacy role-selector process env filtering tests; not a production role-agent interface. |
 | `SMITH_FAKE_AGENT_VERDICT`, `SMITH_FAKE_AGENT_FILE`, `SMITH_FAKE_AGENT_CONTENT`, `SMITH_FAKE_AGENT_BODY` | `temper-worker` fake-agent test controls. |
 | `TEMPER_FORGEJO_BINARY`, `TEMPER_FORGEJO_RUNNER_BINARY` | Ignored Forgejo fixture/demo binary override paths. |
 | `FORGEJO_DEFAULT_REPO` | Scrubbed by e2es for hermeticity; no current production reader found in this repository. |

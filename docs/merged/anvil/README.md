@@ -27,9 +27,11 @@ Library crates live under `crates/`; the project binaries are minimal glue in
 - `src/bin/anvil-agent.rs` — **`anvil-agent`**, the out-of-process coding agent
   the worker spawns (the process-protocol boundary).
 - `src/bin/anvil.rs` — **`anvil`**, the project CLI (`preflight`, `version`).
-- `src/bin/anvil-product-manager-responder.rs`,
-  `src/bin/anvil-workflow-role-decision.rs` — stdin/stdout responder binaries
+- `src/bin/anvil-product-manager-responder.rs` — stdin/stdout responder binary
   for temper's interaction protocol.
+- Legacy workflow selector binaries, when present in old Anvil checkouts, are
+  retained only for migration tests; new role work uses assigned worker jobs and
+  structured agent results.
 
 ## Crates
 

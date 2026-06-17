@@ -229,7 +229,7 @@ fn prompt_sections_are_deterministic() {
             "Subscribed queues",
             "Authorized workflow actions",
             "User-declared external tools",
-            "Decision output",
+            "Assigned job result",
             "User guidance"
         ]
     );
@@ -264,15 +264,16 @@ fn prompt_sections_are_deterministic() {
             .any(|line| line.starts_with("claim_code: acts on code"))
     );
 
-    let decision_output = prompt
-        .section("Decision output")
-        .expect("Decision output section");
+    let job_result = prompt
+        .section("Assigned job result")
+        .expect("Assigned job result section");
     assert!(
-        decision_output
+        job_result
             .lines
             .iter()
-            .any(|line| { line.contains("no_action") && line.contains("claim_code") })
+            .any(|line| { line.contains("assigned job") && line.contains("structured failure") })
     );
+    assert!(!prompt.render().contains("Return exactly one JSON object"));
 
     let user_guidance = prompt
         .section("User guidance")
@@ -310,13 +311,17 @@ fn role_with_no_authority_renders_empty_action_section() {
             .lines
             .contains(&"(no user-declared external tools)".to_string())
     );
-    let decision_output = watcher
+    let job_result = watcher
         .prompt
-        .section("Decision output")
-        .expect("decision-output section present");
-    assert!(decision_output.lines.iter().any(|line| {
-        line == "Schema: {\"action\":\"<one of: no_action>\",\"reason\":\"short rationale\"}"
-    }));
+        .section("Assigned job result")
+        .expect("assigned-job-result section present");
+    assert!(
+        job_result
+            .lines
+            .iter()
+            .any(|line| line.contains("worker/agent protocol"))
+    );
+    assert!(!watcher.prompt.render().contains("Schema:"));
     let actions = watcher
         .prompt
         .section("Authorized workflow actions")
@@ -395,7 +400,7 @@ fn user_prompt_extension_renders_in_dedicated_sections() {
             "Subscribed queues",
             "Authorized workflow actions",
             "User-declared external tools",
-            "Decision output",
+            "Assigned job result",
             "User guidance",
             "User tool guidance"
         ]

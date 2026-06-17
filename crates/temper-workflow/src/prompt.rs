@@ -66,7 +66,7 @@ pub(crate) fn build_prompt(
         subscribed_queues(role, queues),
         authorized_actions(tools),
         declared_external_tools(external_tools),
-        decision_output(tools),
+        job_result_contract(),
         user_guidance(role),
     ];
 
@@ -104,7 +104,7 @@ fn work_item_context() -> PromptSection {
         lines: vec![
             "The runner supplies the current work item separately from this prompt.".to_string(),
             "Use the supplied artifact, queue match, labels, metadata, relations, CI, reviews, and comments as context.".to_string(),
-            "If the context is stale or insufficient, decline to take a workflow action rather than inventing state.".to_string(),
+            "If the context is stale or insufficient for the assigned job, report a structured failure or declared verdict rather than inventing state.".to_string(),
         ],
     }
 }
@@ -148,6 +148,7 @@ fn declared_external_tools(external_tools: &[ExternalToolManifest]) -> PromptSec
         "External tools are non-workflow capabilities declared by the user.".to_string(),
         "A declaration is not executable unless the runner binds a matching provider.".to_string(),
         "The runtime context lists the external tools available for this run; undeclared or unbound tools are unavailable.".to_string(),
+        "If an assigned job depends on an unavailable binding, report a structured failure rather than silently skipping.".to_string(),
     ];
     if external_tools.is_empty() {
         lines.push("(no user-declared external tools)".to_string());
@@ -172,26 +173,17 @@ fn declared_external_tools(external_tools: &[ExternalToolManifest]) -> PromptSec
     }
 }
 
-fn decision_output(tools: &[ToolManifest]) -> PromptSection {
-    let allowed = allowed_actions(tools);
+fn job_result_contract() -> PromptSection {
     PromptSection {
-        heading: "Decision output".to_string(),
+        heading: "Assigned job result".to_string(),
         lines: vec![
-            "Return exactly one JSON object and no surrounding prose.".to_string(),
-            format!(
-                "Schema: {{\"action\":\"<one of: {allowed}>\",\"reason\":\"short rationale\"}}"
-            ),
-            "Use `no_action` when no authorized workflow action is safe for the current work item."
-                .to_string(),
+            "The worker receives one concrete workflow action/job in runtime context; do not run a separate selector round.".to_string(),
+            "Complete that assigned job and report the result through the worker/agent protocol, not as a standalone selector reply.".to_string(),
+            "Writable implementation work returns a branch/head diff plus a short summary for Temper to open or update the PR.".to_string(),
+            "Judgment work may return one of the assigned action's declared verdicts, with authored body, review text, or child issues when those outputs are declared.".to_string(),
+            "If the assigned job cannot be completed, return a structured failure or rejection with a clear reason; do not silently no-op.".to_string(),
         ],
     }
-}
-
-fn allowed_actions(tools: &[ToolManifest]) -> String {
-    std::iter::once("no_action")
-        .chain(tools.iter().map(|tool| tool.name.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 fn user_guidance(role: &ValidatedRole) -> PromptSection {
@@ -264,7 +256,21 @@ fn describe_tool(tool: &ToolManifest) -> String {
     } else {
         join_strs(tool.requires_gates.iter().map(GateId::as_str))
     };
-    format!("{}: acts on {} ({})", tool.name, tool.artifact, gates)
+    let outcomes = if tool.outcomes.is_empty() {
+        String::new()
+    } else {
+        let routes = tool
+            .outcomes
+            .iter()
+            .map(|(verdict, transition)| format!("{verdict} -> {transition}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("; declared verdicts: {routes}")
+    };
+    format!(
+        "{}: acts on {} ({gates}{outcomes})",
+        tool.name, tool.artifact
+    )
 }
 
 fn describe_external_tool(tool: &ExternalToolManifest) -> String {
