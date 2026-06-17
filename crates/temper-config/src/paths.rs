@@ -3,14 +3,14 @@
 //! Default on-disk locations for the config and credentials files.
 //!
 //! Resolution order for each: an explicit path (the `--config` / `--credentials`
-//! flag) wins; then the `TEMPER_CONFIG` / `TEMPER_CREDENTIALS` environment
-//! variable; then `<config-dir>/temper/{config,credentials}.toml`, where the
-//! config dir is `$XDG_CONFIG_HOME` or `~/.config`.
+//! flag) wins; then `<config-dir>/temper/{config,credentials}.toml`, where the
+//! config dir is `$XDG_CONFIG_HOME` or `~/.config`. No environment variable
+//! overrides these file locations.
 //!
 //! Every function here takes its inputs explicitly — a [`PathResolver`] for the
-//! base directories and an [`EnvLookup`] for `TEMPER_CONFIG` / `TEMPER_CREDENTIALS`
-//! — so this module reads no ambient process environment. The binary boundary
-//! snapshots the real environment via [`PathResolver::from_system`].
+//! base directories and an injected [`EnvLookup`] seam — so this module reads no
+//! ambient process environment. The binary boundary snapshots the real
+//! environment via [`PathResolver::from_system`].
 
 use std::path::PathBuf;
 
@@ -29,28 +29,31 @@ pub fn config_dir(paths: &PathResolver) -> Option<PathBuf> {
         .map(|home| home.join(".config").join("temper"))
 }
 
-/// Resolves the config-file path: explicit override, else `TEMPER_CONFIG` from
-/// `env`, else `<config-dir>/config.toml`.
+/// Resolves the config-file path: explicit override (the `--config` flag), else
+/// `<config-dir>/config.toml`.
+///
+/// `env` is threaded only so the path layer keeps a uniform injected-environment
+/// seam (for `$HOME` / `$XDG_*` base-dir derivation upstream); no environment
+/// variable overrides the config-file location.
 pub fn config_path(
     explicit: Option<PathBuf>,
     paths: &PathResolver,
-    env: &dyn EnvLookup,
+    _env: &dyn EnvLookup,
 ) -> Option<PathBuf> {
-    explicit
-        .or_else(|| env.non_empty("TEMPER_CONFIG").map(PathBuf::from))
-        .or_else(|| config_dir(paths).map(|dir| dir.join("config.toml")))
+    explicit.or_else(|| config_dir(paths).map(|dir| dir.join("config.toml")))
 }
 
-/// Resolves the credentials-file path: explicit override, else
-/// `TEMPER_CREDENTIALS` from `env`, else `<config-dir>/credentials.toml`.
+/// Resolves the credentials-file path: explicit override (the `--credentials`
+/// flag), else `<config-dir>/credentials.toml`.
+///
+/// As with [`config_path`], `env` is threaded only to keep the injected-environment
+/// seam; no environment variable overrides the credentials-file location.
 pub fn credentials_path(
     explicit: Option<PathBuf>,
     paths: &PathResolver,
-    env: &dyn EnvLookup,
+    _env: &dyn EnvLookup,
 ) -> Option<PathBuf> {
-    explicit
-        .or_else(|| env.non_empty("TEMPER_CREDENTIALS").map(PathBuf::from))
-        .or_else(|| config_dir(paths).map(|dir| dir.join("credentials.toml")))
+    explicit.or_else(|| config_dir(paths).map(|dir| dir.join("credentials.toml")))
 }
 
 /// The base `…/temper` **state** directory (`$XDG_STATE_HOME/temper` or

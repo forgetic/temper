@@ -252,36 +252,66 @@ mechanical_cadence_secs = 0
 }
 
 #[test]
-fn env_overrides_file() {
+fn deployment_env_vars_are_ignored() {
+    // Deployment shape comes only from the config/credentials files: the former
+    // `FORGEJO_URL` / `FORGEJO_ACCESS_TOKEN` / `TEMPER_ENGINE_PORT` /
+    // `TEMPER_WORKFLOW` / `TEMPER_DAEMON_URL` / `TEMPER_WORKSPACE` overrides have
+    // been removed, so setting them must have NO effect — the TOML values win.
     let config = parse_config(FULL_CONFIG);
     let credentials = parse_credentials(FULL_CREDENTIALS);
     let env: BTreeMap<String, String> = BTreeMap::from([
+        (
+            "TEMPER_FORGE_URL".to_string(),
+            "http://env-forge:9000".to_string(),
+        ),
         (
             "FORGEJO_URL".to_string(),
             "http://env-forge:9000".to_string(),
         ),
         (
+            "TEMPER_FORGE_TOKEN".to_string(),
+            "env-admin-tok".to_string(),
+        ),
+        (
             "FORGEJO_ACCESS_TOKEN".to_string(),
             "env-admin-tok".to_string(),
         ),
+        ("FORGEJO_USERNAME".to_string(), "env-ci-user".to_string()),
+        ("FORGEJO_PASSWORD".to_string(), "env-ci-pw".to_string()),
+        ("TEMPER_ENGINE_BIND".to_string(), "0.0.0.0:5555".to_string()),
         ("TEMPER_ENGINE_PORT".to_string(), "5555".to_string()),
         ("TEMPER_WORKFLOW".to_string(), "/env-wf.json".to_string()),
+        (
+            "TEMPER_DAEMON_URL".to_string(),
+            "http://env-daemon:1234".to_string(),
+        ),
+        ("TEMPER_WORKSPACE".to_string(), "/env-ws".to_string()),
     ]);
     let resolved = resolve(&config, &credentials, &env).expect("resolves");
-    assert_eq!(resolved.forge.url.as_deref(), Some("http://env-forge:9000"));
-    assert_eq!(exposed(&resolved.forge.admin_token), Some("env-admin-tok"));
-    assert_eq!(resolved.engine.bind.to_string(), "127.0.0.1:5555");
-    assert_eq!(resolved.worker.daemon_url, "http://127.0.0.1:5555");
+    // forge url + admin token come from the files, not the env.
+    assert_eq!(resolved.forge.url.as_deref(), Some("http://localhost:3000"));
+    assert_eq!(exposed(&resolved.forge.admin_token), Some("agent-tok"));
+    // web-ui creds come from the `bot` credentials user, not FORGEJO_USERNAME/PASSWORD.
+    let web = resolved.forge.web_ui.as_ref().expect("web ui");
+    assert_eq!(web.username, "bot");
+    assert_eq!(web.password.expose_secret(), "bot-pw");
+    // engine bind/port + workflow come from the file (`port = 4000`, `workflow = /wf.json`).
+    assert_eq!(resolved.engine.bind.to_string(), "127.0.0.1:4000");
     assert_eq!(
         resolved.engine.workflow_file.as_deref(),
-        Some(std::path::Path::new("/env-wf.json"))
+        Some(std::path::Path::new("/wf.json"))
     );
+    // worker daemon_url defaults off the engine bind (no `[worker] daemon_url` in
+    // FULL_CONFIG); workspace comes from `[worker] workspace = /ws`.
+    assert_eq!(resolved.worker.daemon_url, "http://127.0.0.1:4000");
+    assert_eq!(resolved.worker.workspace_root, std::path::Path::new("/ws"));
 }
 
 #[test]
-fn legacy_role_env_fallback() {
-    // No engineer block in the credentials file: the legacy roles.env vars supply
-    // the identity, so existing provisioned deployments keep working.
+fn role_identity_has_no_env_fallback() {
+    // Per-role identity comes ONLY from `[forge.users.<role>]` in the credentials
+    // file. With no engineer block, the legacy `TEMPER_FORGEJO_*_ENGINEER` vars
+    // are now ignored, so no token resolves and the role gets no identity.
     let config = parse_config(FULL_CONFIG);
     let credentials = parse_credentials(
         r#"
@@ -299,16 +329,55 @@ token = "agent-tok"
             "TEMPER_FORGEJO_TOKEN_ENGINEER".to_string(),
             "eng-env-tok".to_string(),
         ),
+        (
+            "TEMPER_FORGEJO_EMAIL_ENGINEER".to_string(),
+            "eng@env.test".to_string(),
+        ),
+    ]);
+    let resolved = resolve(&config, &credentials, &env).expect("resolves");
+    // No engineer token in credentials and the env fallback is gone => no identity.
+    assert!(
+        !resolved.forge.role_identities.contains_key("engineer"),
+        "role identity must not be sourced from the env"
+    );
+    assert!(!resolved.forge.role_tokens.contains_key("engineer"));
+}
+
+#[test]
+fn role_identity_from_credentials_only() {
+    // The positive case: the credentials file alone supplies the role identity,
+    // even with conflicting legacy env vars set (which must be ignored).
+    let config = parse_config(FULL_CONFIG);
+    let credentials = parse_credentials(
+        r#"
+schema_version = 1
+[forge.users.agent]
+token = "agent-tok"
+[forge.users.engineer]
+user = "eng-file"
+token = "eng-file-tok"
+email = "eng@file.test"
+"#,
+    );
+    let env: BTreeMap<String, String> = BTreeMap::from([
+        (
+            "TEMPER_FORGEJO_USER_ENGINEER".to_string(),
+            "eng-env".to_string(),
+        ),
+        (
+            "TEMPER_FORGEJO_TOKEN_ENGINEER".to_string(),
+            "eng-env-tok".to_string(),
+        ),
     ]);
     let resolved = resolve(&config, &credentials, &env).expect("resolves");
     let eng = resolved
         .forge
         .role_identities
         .get("engineer")
-        .expect("engineer identity");
-    assert_eq!(eng.user, "eng-login");
-    assert_eq!(eng.email, "eng-login@noreply.localhost");
-    assert_eq!(eng.token.expose_secret(), "eng-env-tok");
+        .expect("engineer identity from credentials");
+    assert_eq!(eng.user, "eng-file");
+    assert_eq!(eng.email, "eng@file.test");
+    assert_eq!(eng.token.expose_secret(), "eng-file-tok");
 }
 
 #[test]
