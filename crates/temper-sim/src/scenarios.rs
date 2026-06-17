@@ -10,7 +10,7 @@ use serde_json::json;
 use skein::lab::LabConfig;
 use skein::lab::chaos::ChaosConfig;
 use temper_engine::Daemon;
-use temper_worker_protocol::Artifact;
+use temper_protocol_worker::Artifact;
 
 use crate::model::{ModelApplier, ModelState, SimModel};
 use crate::worker::{DoneGuard, WorkerProfile, run_worker};

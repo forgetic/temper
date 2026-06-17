@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use skein::http::h1::http_client::HttpClient;
 use skein::runtime::RuntimeHandle;
-use temper_agent_protocol::{StepProgress, StepState};
+use temper_protocol_agent::{StepProgress, StepState};
+use temper_protocol_worker::{JobProgress, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 use temper_worker_io::{HttpCall, build_http_client, http_call};
-use temper_worker_protocol::{JobProgress, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 
 use crate::agent_runner::ProgressSink;
 

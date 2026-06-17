@@ -6,7 +6,7 @@ pub(crate) use std::{
 };
 
 pub(crate) use serde_json::json;
-pub(crate) use temper_worker_protocol::{
+pub(crate) use temper_protocol_worker::{
     Artifact, Branch, Capability, Capacity, ErrorCode, Failure, FailureClass, JobResult, Poll,
     Register, ReleaseDisposition, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
     WorkerProtocolMessage,

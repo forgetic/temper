@@ -5,7 +5,7 @@
 
 use std::io::Write;
 
-use temper_agent_protocol::StepProgress;
+use temper_protocol_agent::StepProgress;
 
 /// Writes one step-progress record as a single JSON line to stdout and flushes,
 /// so the worker sees checkpoints live rather than buffered to process exit.

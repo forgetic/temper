@@ -1,5 +1,5 @@
-use temper_agent_protocol::WorkspaceResult;
-use temper_worker_protocol::{Branch, FailureClass, RepoOutcome};
+use temper_protocol_agent::WorkspaceResult;
+use temper_protocol_worker::{Branch, FailureClass, RepoOutcome};
 
 use crate::executor::JobOutcome;
 

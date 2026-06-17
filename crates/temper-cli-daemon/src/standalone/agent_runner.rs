@@ -20,9 +20,9 @@ use skein::runtime::RuntimeHandle;
 use temper_agent::{
     CodingAgentError, ProviderConfig, RunTotals, run_coding_agent_native_with_hooks,
 };
-use temper_agent_protocol::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
+use temper_protocol_agent::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
 use temper_worker::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
 /// Runs coding/triage/review turns in-process on the host loop.
@@ -285,7 +285,7 @@ fn classify_coding_agent_error(error: CodingAgentError) -> AgentRunError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_worker_protocol::FailureClass;
+    use temper_protocol_worker::FailureClass;
 
     #[test]
     fn run_failure_is_transient() {
@@ -390,7 +390,7 @@ mod tests {
     }
 
     fn ctx(owner: &str, name: &str, kind: &str, target: &str) -> WorkspaceContext {
-        use temper_agent_protocol::{WorkspaceRepository, WorkspaceWorkItem};
+        use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
         WorkspaceContext {
             repos: vec![WorkspaceRepository {
                 id: format!("forgejo:{owner}/{name}"),

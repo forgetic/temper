@@ -4,7 +4,7 @@
 //! daemon machine and its handlers.
 
 use temper_engine_io::http::HttpResponseData;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Assign, ErrorCode, FailureClass, JobProgress, JobResult, ResultStatus, WorkerProtocolMessage,
 };
 
@@ -148,7 +148,7 @@ pub(super) fn protocol_response(message: Option<WorkerProtocolMessage>) -> HttpR
 mod tests {
     use super::*;
     use serde_json::json;
-    use temper_worker_protocol::{Artifact, Failure, WORKER_PROTOCOL_VERSION};
+    use temper_protocol_worker::{Artifact, Failure, WORKER_PROTOCOL_VERSION};
 
     fn result_for_disposition(
         status: ResultStatus,

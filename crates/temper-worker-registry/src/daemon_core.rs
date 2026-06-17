@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Artifact, Assign, ErrorCode, Heartbeat, JobResult, LeaseAck, Poll, ProtocolError, Register,
     Release, ReleaseDisposition, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

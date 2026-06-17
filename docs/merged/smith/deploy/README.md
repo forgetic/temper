@@ -45,7 +45,7 @@ deploy/
   `WORKER_CAPABILITIES` (`smith.env`), e.g.
   `ai/smith:engineer ai/temper:engineer`;
 - **long-polls the daemon** (`WORKER_DAEMON_URL`) for assigned work over the
-  versioned `temper-worker-protocol` wire contract — pull, not push; the Forge
+  versioned `temper-protocol-worker` wire contract — pull, not push; the Forge
   lease held by the daemon is the real arbiter;
 - **runs coding jobs** with `--executor coding`: each enriched job lands in a
   persistent per-`(repo, role)` git workspace under `WORKER_WORKSPACE_ROOT`

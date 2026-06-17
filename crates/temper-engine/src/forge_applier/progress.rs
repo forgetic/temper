@@ -4,7 +4,7 @@
 //! checkpoint comments it records.
 
 use temper_forge::{CreateComment, Forge};
-use temper_worker_protocol::{JobProgress, JobResult, ResultStatus};
+use temper_protocol_worker::{JobProgress, JobResult, ResultStatus};
 
 use crate::InFlightJob;
 use crate::applier::ResultApplier;

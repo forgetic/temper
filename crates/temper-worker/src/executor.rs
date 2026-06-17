@@ -1,4 +1,4 @@
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Assign, Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION,
 };
@@ -125,7 +125,7 @@ pub fn job_result(worker_id: &str, job_id: &str, outcome: JobOutcome) -> JobResu
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use temper_worker_protocol::Artifact;
+    use temper_protocol_worker::Artifact;
 
     use super::*;
 

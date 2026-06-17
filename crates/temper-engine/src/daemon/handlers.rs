@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use temper_engine_io::http::{HttpRequestData, HttpResponder, HttpResponseData};
 use temper_log::{WorkItemRef, strip_provider_scheme};
-use temper_worker_protocol::{Artifact, JobProgress, JobResult, Poll, WorkerProtocolMessage};
+use temper_protocol_worker::{Artifact, JobProgress, JobResult, Poll, WorkerProtocolMessage};
 
 use crate::webhook::{WebhookError, parse_verified_webhook, webhook_accepted_log_line};
 

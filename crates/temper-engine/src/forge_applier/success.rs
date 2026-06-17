@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use temper_forge::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
 use temper_log::emit::{PrOpened, emit_pr_opened};
-use temper_worker_protocol::{JobContext, JobResult, RepoOutcome};
+use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
 use temper_workflow::{ArtifactKindId, ArtifactSource, Executor};
 
 use temper_runner::{artifact_ref, pr_correlation_key};

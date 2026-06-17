@@ -10,7 +10,7 @@ use temper_forge::{
     UpdatePullRequest,
 };
 use temper_forge_memory::MemoryForge;
-use temper_worker_protocol::{Artifact, JobContext};
+use temper_protocol_worker::{Artifact, JobContext};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, QueueId, RawWorkflowSpec, RoleId, WorkflowMetadata,
     render_metadata_block,

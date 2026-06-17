@@ -16,10 +16,10 @@ use temper_engine::{
 };
 use temper_forge::{CreateIssue, CreateRepository, Forge, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
-use temper_sim::{Sim, SimProtocolClient};
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
+use temper_sim::{Sim, SimProtocolClient};
 use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");

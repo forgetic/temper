@@ -12,7 +12,7 @@
 //!
 //! The env-var *names* live next to the code that consumes their values (the
 //! provider constants in `temper-agent`, the protocol path constants in
-//! `temper-agent-protocol`, and the checkpoint constants below), so this module
+//! `temper-protocol-agent`, and the checkpoint constants below), so this module
 //! reads them by their canonical names rather than re-spelling the strings.
 
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ use temper_agent::{
     PROVIDER_BASE_URL_ENV, ProviderConfig, ProviderEnv, XDG_CONFIG_HOME_ENV,
     resolve_config_dir_from,
 };
-use temper_agent_protocol::{CONTEXT_ENV, RESULT_ENV, WorkspaceContext};
+use temper_protocol_agent::{CONTEXT_ENV, RESULT_ENV, WorkspaceContext};
 
 use crate::config::{AgentConfig, RoleIdentity};
 use crate::options::Options;

@@ -1,7 +1,7 @@
 //! Role system-prompt and user-turn context construction.
 
 use super::Capability;
-use temper_agent_protocol::WorkspaceContext;
+use temper_protocol_agent::WorkspaceContext;
 
 /// Builds the role system prompt for a capability.
 ///

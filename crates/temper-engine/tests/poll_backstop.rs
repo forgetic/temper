@@ -8,7 +8,7 @@ use temper_engine::{
 };
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId};
 use temper_forge_memory::MemoryForge;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};

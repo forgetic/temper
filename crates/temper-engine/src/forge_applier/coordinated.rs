@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_forge::{CreatePullRequest, ItemNumber, RepositoryId};
-use temper_worker_protocol::{JobContext, RepoOutcome};
+use temper_protocol_worker::{JobContext, RepoOutcome};
 use temper_workflow::ArtifactKindId;
 
 use crate::InFlightJob;

@@ -9,7 +9,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use temper_worker_protocol::{JobProgress, JobResult};
+use temper_protocol_worker::{JobProgress, JobResult};
 
 use crate::InFlightJob;
 

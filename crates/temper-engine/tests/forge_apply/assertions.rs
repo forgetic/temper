@@ -293,7 +293,7 @@ pub(crate) async fn assign_review_job(
 ) -> (
     temper_engine_io::http::JsonClient,
     String,
-    temper_worker_protocol::Assign,
+    temper_protocol_worker::Assign,
 ) {
     let workflow = Arc::new(workflow());
     let compiled = workflow.compile();

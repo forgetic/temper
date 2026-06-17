@@ -6,7 +6,7 @@ use serde_json::json;
 use temper_engine::{LeaseApplier, ResultApplier};
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Artifact, Branch, JobResult, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
 };
 use temper_worker_registry::InFlightJob;

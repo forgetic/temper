@@ -15,7 +15,7 @@ members = [
     "crates/temper-forge",
     "crates/temper-protocol-interaction",
     "crates/temper-protocol-decision",
-    "crates/temper-worker-protocol",
+    "crates/temper-protocol-worker",
     "crates/temper-worker-registry",
     "crates/temper-interaction",
     "crates/temper-log",
@@ -35,7 +35,7 @@ members = [
     "crates/temper-reference-delivery-validator",
     "crates/temper-sim",
     # Merged from smith (the orchestration worker):
-    "crates/temper-agent-protocol",
+    "crates/temper-protocol-agent",
     "crates/temper-worker-io",
     "crates/temper-worker",
     # Merged from anvil (the coding/decision agent):
@@ -86,7 +86,7 @@ jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2
 # `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
 # through the daemon's apply_progress against an in-memory forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }
-temper-worker-protocol = { path = "crates/temper-worker-protocol" }
+temper-protocol-worker = { path = "crates/temper-protocol-worker" }
 # `temper init` e2e (`tests/init_forgejo_e2e.rs`): drives the `run_init` library
 # entry point with the real `ForgejoProvisioner` against the bench Forgejo
 # fixture, then asserts the produced config/credentials resolve + lint clean and

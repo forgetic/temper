@@ -26,9 +26,9 @@ temper-forge = { path = "../temper-forge" }
 temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 temper-worker = { path = "../temper-worker" }
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-agent = { path = "../temper-agent" }
-temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
 
 [lints]
 workspace = true

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use temper_agent::{CodingAgentError, run_coding_agent_native_with_hooks};
-use temper_agent_protocol::{
+use temper_protocol_agent::{
     PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext, WorkspaceResult,
 };
 

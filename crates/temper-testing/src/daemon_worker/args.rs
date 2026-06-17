@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use temper_worker_protocol::Capability;
+use temper_protocol_worker::Capability;
 
 /// Default long-poll wait. Short enough that the stop-file is honored promptly.
 const DEFAULT_POLL_WAIT_MS: u64 = 2_000;

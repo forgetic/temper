@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use temper_agent_protocol::{WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 use tongs::model::ContentBlock;
 
 use super::{Capability, CodingAgentError};

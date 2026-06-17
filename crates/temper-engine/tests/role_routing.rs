@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use temper_engine::{ResultApplier, RoleRoutingApplier};
-use temper_worker_protocol::{Artifact, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION};
+use temper_protocol_worker::{Artifact, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION};
 use temper_worker_registry::InFlightJob;
 
 struct RecordingApplier {

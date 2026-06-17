@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use temper_worker_protocol::Register;
+use temper_protocol_worker::Register;
 
 use crate::{RegistryError, WorkerRegistry};
 

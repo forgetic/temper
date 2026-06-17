@@ -10,7 +10,7 @@ pub(crate) use temper_forge::{
     UpdatePullRequest,
 };
 pub(crate) use temper_forge_memory::{FaultOp, MemoryForge};
-pub(crate) use temper_worker_protocol::{
+pub(crate) use temper_protocol_worker::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
     RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

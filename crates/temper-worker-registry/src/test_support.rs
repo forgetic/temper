@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use serde_json::json;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register, ResultStatus,
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

@@ -10,7 +10,7 @@ description = "Temper-specific provider/auth/decision core for the temper agent.
 skein.workspace = true
 async-trait.workspace = true
 tracing = { workspace = true }
-temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
 tongs.workspace = true
 secrecy.workspace = true
 serde.workspace = true

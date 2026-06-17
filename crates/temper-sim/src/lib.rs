@@ -33,7 +33,7 @@ use skein::lab::{LabConfig, LabRunReport, LabRuntime, LabSpawner};
 use skein::net::tcp::virtual_tcp::VirtualTcpStream;
 use temper_engine_io::Spawner;
 use temper_engine_io::http::H1CompletionHandler;
-use temper_worker_protocol::WorkerProtocolMessage;
+use temper_protocol_worker::WorkerProtocolMessage;
 
 /// One deterministic simulation world.
 pub struct Sim {

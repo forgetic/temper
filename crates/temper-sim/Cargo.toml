@@ -14,7 +14,7 @@ skein.workspace = true
 serde_json.workspace = true
 temper-engine-io = { path = "../temper-engine-io" }
 temper-engine = { path = "../temper-engine" }
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
 
 [dev-dependencies]
 temper-forge = { path = "../temper-forge" }

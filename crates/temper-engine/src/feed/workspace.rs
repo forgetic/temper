@@ -12,8 +12,8 @@ use temper_forge::{
     Forge, ForgeError, Issue, IssueState, ItemNumber, PullRequest, PullRequestState, Repository,
     RepositoryId, RepositoryPath,
 };
+use temper_protocol_worker::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest, WorkspaceRepo};
 use temper_runner::ScanError;
-use temper_worker_protocol::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest, WorkspaceRepo};
 use temper_workflow::ArtifactSource;
 
 use crate::workflow_meta::default_base_branch;

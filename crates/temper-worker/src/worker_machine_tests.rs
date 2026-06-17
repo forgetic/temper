@@ -8,11 +8,11 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use serde_json::json;
-use temper_worker_io::{EngineTime, Machine, drive_sync};
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Artifact, Assign, ErrorCode, ProtocolError, ResultStatus, WORKER_PROTOCOL_VERSION,
     WorkerProtocolMessage,
 };
+use temper_worker_io::{EngineTime, Machine, drive_sync};
 
 use super::{WorkerCompletion, WorkerMachine, WorkerRequest};
 use crate::config::{CapabilitySpec, WorkerParams};
@@ -249,7 +249,7 @@ fn job_finished_reports_result_frees_capacity_and_repolls() {
         "worker-1",
         "job-1",
         JobOutcome::Failure {
-            class: temper_worker_protocol::FailureClass::Permanent,
+            class: temper_protocol_worker::FailureClass::Permanent,
             message: "nope".to_string(),
         },
     );

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use temper_agent_protocol::WorkspaceResult;
-use temper_worker_protocol::{
+use temper_protocol_agent::WorkspaceResult;
+use temper_protocol_worker::{
     Assign, FailureClass, JobChild, JobContext, WorkspaceManifest, WorkspaceRepo,
 };
 

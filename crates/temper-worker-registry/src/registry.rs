@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_worker_protocol::{Capability, Register};
+use temper_protocol_worker::{Capability, Register};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {

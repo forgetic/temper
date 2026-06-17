@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use skein::cx::Cx;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

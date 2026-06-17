@@ -23,10 +23,10 @@
 
 use std::path::Path;
 
-use temper_agent_protocol::{StepProgress, WorkspaceContext};
-use temper_worker_protocol::FailureClass;
+use temper_protocol_agent::{StepProgress, WorkspaceContext};
+use temper_protocol_worker::FailureClass;
 
-pub use temper_agent_protocol::WorkspaceResult;
+pub use temper_protocol_agent::WorkspaceResult;
 
 /// Where an [`AgentRunner`] reports step-progress checkpoints during a turn.
 ///

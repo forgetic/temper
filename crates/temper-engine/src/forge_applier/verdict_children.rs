@@ -5,7 +5,7 @@
 //! targets) and stamping the deterministic content correlation key.
 
 use temper_forge::{Forge, ItemNumber, Repository, RepositoryId};
-use temper_worker_protocol::JobChild;
+use temper_protocol_worker::JobChild;
 use temper_workflow::{ArtifactKindId, CreateIssuesChild};
 
 use temper_runner::workspace_content_key;

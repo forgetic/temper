@@ -26,14 +26,14 @@
 use std::collections::BTreeSet;
 
 use serde_json::json;
+use temper_protocol_worker::{
+    Artifact, Assign, ErrorCode, FailureClass, ProtocolError, ResultStatus,
+    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
+};
 use temper_worker::config::{CapabilitySpec, WorkerParams};
 use temper_worker::executor::{JobOutcome, job_result};
 use temper_worker::worker_machine::{WorkerCompletion, WorkerMachine, WorkerRequest};
 use temper_worker_io::{EngineTime, Machine};
-use temper_worker_protocol::{
-    Artifact, Assign, ErrorCode, FailureClass, ProtocolError, ResultStatus,
-    WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
-};
 
 /// A tiny deterministic PRNG (SplitMix64) so the fuzzer needs no external crate
 /// and every seed reproduces an exact sequence.

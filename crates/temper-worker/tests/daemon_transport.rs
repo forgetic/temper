@@ -10,12 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
+use temper_protocol_worker::{
+    Artifact, Assign, FailureClass, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION,
+};
 use temper_worker::config::CapabilitySpec;
 use temper_worker::{
     ExecutorSelection, JobExecutor, StubExecutor, WorkerConfig, run_worker_with_transport,
-};
-use temper_worker_protocol::{
-    Artifact, Assign, FailureClass, JobResult, ResultStatus, WORKER_PROTOCOL_VERSION,
 };
 
 #[path = "support/real_daemon.rs"]

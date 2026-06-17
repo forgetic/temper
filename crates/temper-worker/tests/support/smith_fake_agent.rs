@@ -18,7 +18,7 @@
 
 use std::io::Write;
 
-use temper_agent_protocol::{
+use temper_protocol_agent::{
     CONTEXT_ENV, RESULT_ENV, StepProgress, StepState, WorkspaceContext, WorkspaceResult,
 };
 

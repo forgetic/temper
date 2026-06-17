@@ -18,11 +18,11 @@ use std::time::Duration;
 
 use serde_json::json;
 use temper_engine::{Daemon, InFlightJob, ResultApplier};
-use temper_testing::daemon_worker::{CI_PASS_MARKER, GIT_TOKEN_ENV, GIT_USER_ENV};
-use temper_testing::forgejo_runtime::RunWorkspace;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Artifact, JobArtifactSnapshot, JobContext, JobResult, ResultStatus, WorkspaceManifest,
 };
+use temper_testing::daemon_worker::{CI_PASS_MARKER, GIT_TOKEN_ENV, GIT_USER_ENV};
+use temper_testing::forgejo_runtime::RunWorkspace;
 
 const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 

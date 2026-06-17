@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Assign, Branch, Failure, FailureClass, JobContext, JobResult, RepoOutcome, ResultStatus,
     WORKER_PROTOCOL_VERSION,
 };

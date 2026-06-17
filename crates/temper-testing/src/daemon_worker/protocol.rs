@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
 

@@ -1,7 +1,7 @@
-use temper_agent_protocol::{
+use temper_protocol_agent::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
 };
-use temper_worker_protocol::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest};
+use temper_protocol_worker::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest};
 
 /// Assembles the typed [`WorkspaceContext`] the agent turn receives, listing
 /// every manifest repo with its sibling dir and access (ADR 0023).
@@ -9,7 +9,7 @@ use temper_worker_protocol::{JobArtifactSnapshot, RepoAccess, WorkspaceManifest}
 /// The [`OutOfProcessRunner`](crate::out_of_process_runner::OutOfProcessRunner)
 /// serializes this to the JSON document the agent reads from
 /// `$TEMPER_CODING_WORKSPACE_CONTEXT`; the struct (and thus the wire shape) is
-/// owned by `temper-agent-protocol`. `work_item.context` stays a pretty-printed
+/// owned by `temper-protocol-agent`. `work_item.context` stays a pretty-printed
 /// JSON *string* of the artifact, surfaced to the model verbatim.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_workspace_context(
