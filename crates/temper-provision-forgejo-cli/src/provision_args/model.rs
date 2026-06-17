@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use crate::provision::{AccessScope, ProvisionError};
 
 pub const ADMIN_TOKEN_ENV: &str = "TEMPER_FORGEJO_ADMIN_TOKEN";
-pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
 
 pub const USAGE: &str = concat!(
     "temper-provision-forgejo --base-url <url> --owner <org> --name <repo> --out <path> ",
@@ -26,8 +25,9 @@ pub const USAGE: &str = concat!(
     "Owners team; repo-collaborator instead grants each a repo-scoped write ",
     "collaborator permission and never touches the Owners team\n",
     "  the admin token comes from TEMPER_FORGEJO_ADMIN_TOKEN (required), never argv; ",
-    "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to the ",
-    "bundled reference-delivery workflow when unset"
+    "the workflow file comes from --workflow, defaulting to the bundled ",
+    "reference-delivery workflow when unset; --out writes a credentials.toml the ",
+    "daemon loads via --credentials"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]

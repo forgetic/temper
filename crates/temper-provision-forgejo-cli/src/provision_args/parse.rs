@@ -4,9 +4,7 @@ use std::path::PathBuf;
 
 use crate::provision::AccessScope;
 
-use super::model::{
-    ADMIN_TOKEN_ENV, ArgsError, ParseOutcome, ProvisionArgs, USAGE, WORKFLOW_FILE_ENV,
-};
+use super::model::{ADMIN_TOKEN_ENV, ArgsError, ParseOutcome, ProvisionArgs, USAGE};
 
 pub fn parse<I>(args: I) -> Result<ParseOutcome, ArgsError>
 where
@@ -81,9 +79,7 @@ where
         seed_only,
         intake_title,
         intake_body_file: intake_body_file.map(PathBuf::from),
-        workflow_file: non_empty(workflow_file)
-            .or_else(|| non_empty(env(WORKFLOW_FILE_ENV)))
-            .map(PathBuf::from),
+        workflow_file: non_empty(workflow_file).map(PathBuf::from),
         existing_repo,
         access,
     }))

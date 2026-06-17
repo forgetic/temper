@@ -65,7 +65,12 @@ STOP_FILE="$RUN_DIR/stop"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
-ROLES_ENV="$SECRETS_DIR/roles.env"
+# The provisioner writes the live forge identities in the runtime's own
+# credentials.toml format ([forge.users.<role>] + a bot user). The daemon loads
+# it via `temper daemon --credentials`; the launcher only reads a couple of
+# fields back (the bot identity for the mechanical backstop and the engineer
+# identity for the demo CI seed) — never on argv.
+CREDENTIALS_FILE="$SECRETS_DIR/credentials.toml"
 WEBHOOK_SECRET_FILE="$SECRETS_DIR/webhook-secret"
 
 # Pinned versions for the bundled throwaway server/runner used by this example.
@@ -494,18 +499,38 @@ repo_slug() {
     repo_name "$1" | tr -c '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]' | sed 's/^-*//;s/-*$//'
 }
 
-# Uppercases a role id and replaces non-alphanumerics with `_` (matching the
-# provision binary's env_role_key), yielding the secrets-file variable suffix.
-role_env_key() {
-    printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_'
+# Reads one `[forge.users.<key>]` field from the credentials.toml the
+# provisioner wrote. `$1` is the user/role key, `$2` the field name
+# (`user`/`token`/`password`/`email`). Prints the unquoted value, or nothing if
+# the section/field is absent (e.g. `user` is omitted when it equals the key).
+# POSIX awk only; values never contain embedded quotes in practice.
+toml_forge_user_field() {
+    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
+    awk -v section="[forge.users.$1]" -v field="$2" '
+        $0 == section { in_section = 1; next }
+        /^\[/ { in_section = 0 }
+        in_section {
+            line = $0
+            sub(/^[ \t]*/, "", line)
+            key = line
+            sub(/[ \t]*=.*/, "", key)
+            if (key == field) {
+                val = line
+                sub(/^[^=]*=[ \t]*/, "", val)
+                gsub(/^"|"$/, "", val)
+                print val
+                exit
+            }
+        }
+    ' "$CREDENTIALS_FILE"
 }
 
-roles_from_roles_env() {
-    [ -f "$ROLES_ENV" ] || die "missing $ROLES_ENV"
-    sed -n \
-        -e "s/^TEMPER_FORGEJO_USER_[A-Z0-9_]*='\(.*\)'\$/\1/p" \
-        -e 's/^TEMPER_FORGEJO_USER_[A-Z0-9_]*=\([^'"'"'"].*\)$/\1/p' \
-        "$ROLES_ENV"
+# Lists the provisioned workflow roles (every `[forge.users.<key>]` except the
+# `bot` automation account).
+roles_from_credentials() {
+    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
+    sed -n 's/^\[forge\.users\.\([^]]*\)\]$/\1/p' "$CREDENTIALS_FILE" |
+        grep -v '^bot$' || true
 }
 
 bootstrap_and_provision() {
@@ -538,7 +563,7 @@ bootstrap_and_provision() {
     # the intake issue back for the post-launch seed_intake pass.
     # shellcheck disable=SC2086
     _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$RUN_BIN" provision-forgejo \
-        --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
+        --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$CREDENTIALS_FILE" \
         --workflow "$WORKFLOW_PATH" --seed-intake no \
         $_webhook_args) \
         || die "provisioning $REPO failed"
@@ -550,9 +575,7 @@ bootstrap_and_provision() {
     log "$_status"
     log "  webhook registered for $REPO ($WEBHOOK_URL)"
 
-    [ -f "$ROLES_ENV" ] || die "provision did not write $ROLES_ENV"
-    # shellcheck disable=SC1090
-    . "$ROLES_ENV"
+    [ -f "$CREDENTIALS_FILE" ] || die "provision did not write $CREDENTIALS_FILE"
 }
 
 # Files the single site-admin intake issue AFTER `temper run` is up. This is a
@@ -566,7 +589,7 @@ seed_intake() {
     _name=$(repo_name "$REPO")
     log 'filing the site-admin intake issue now that temper run is ready ...'
     _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$RUN_BIN" provision-forgejo \
-        --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$ROLES_ENV" \
+        --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$CREDENTIALS_FILE" \
         --workflow "$WORKFLOW_PATH" --seed-only \
         --intake-title "$INTAKE_TITLE" --intake-body-file "$INTAKE_BODY_PATH") \
         || die "seeding intake issue for $REPO failed"
@@ -595,13 +618,13 @@ percent_encode() {
 # the demo marker) clears the landing CI gate. Non-fatal: if this setup fails the
 # rest of the topology still boots, but landing CI may not pass.
 apply_demo_ci() {
-    _key=$(role_env_key engineer)
-    # shellcheck disable=SC1090
-    . "$ROLES_ENV"
-    eval "_eng_user=\${TEMPER_FORGEJO_USER_${_key}:-}"
-    eval "_eng_password=\${TEMPER_FORGEJO_PASSWORD_${_key}:-}"
-    if [ -z "$_eng_user" ] || [ -z "$_eng_password" ]; then
-        log "demo CI seed: no engineer username/password in $ROLES_ENV; landing CI may not pass"
+    # The engineer `user` may be omitted from credentials.toml when it equals the
+    # section key, so fall back to the role name (`engineer`).
+    _eng_user=$(toml_forge_user_field engineer user)
+    [ -n "$_eng_user" ] || _eng_user=engineer
+    _eng_password=$(toml_forge_user_field engineer password)
+    if [ -z "$_eng_password" ]; then
+        log "demo CI seed: no engineer password in $CREDENTIALS_FILE; landing CI may not pass"
         return 0
     fi
 
@@ -649,40 +672,17 @@ apply_demo_ci() {
 # ADR-0019 web-UI CI read fallback. The setup-only site admin never participates
 # in the workflow.
 resolve_bot_identity() {
-    [ -f "$ROLES_ENV" ] || die "missing $ROLES_ENV"
-    # shellcheck disable=SC1090
-    . "$ROLES_ENV"
-    BOT_USER=${TEMPER_FORGEJO_BOT_USER:-}
-    BOT_TOKEN=${TEMPER_FORGEJO_BOT_TOKEN:-}
-    BOT_PASSWORD=${TEMPER_FORGEJO_BOT_PASSWORD:-}
-    [ -n "$BOT_USER" ] || die "automation user 'bot' has no username in $ROLES_ENV"
-    [ "$BOT_USER" = "bot" ] || die "automation user must be 'bot' in $ROLES_ENV, got '$BOT_USER'"
-    [ -n "$BOT_TOKEN" ] || die "automation user 'bot' has no token in $ROLES_ENV"
-    [ -n "$BOT_PASSWORD" ] || die "automation user 'bot' has no password in $ROLES_ENV"
-}
-
-# Exports the per-role identities the single `temper run` process consumes:
-#   - the daemon's per-role apply tokens (TEMPER_FORGEJO_TOKEN_<ROLE>), and
-#   - the in-process worker/agent's git identities
-#     (TEMPER_FORGEJO_{USER,TOKEN,EMAIL}_<ROLE>).
-# Both planes now live in one process, so one export covers both.
-export_run_role_env() {
-    # shellcheck disable=SC1090
-    . "$ROLES_ENV"
-    _roles=$(roles_from_roles_env)
-    [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
-    for _role in $_roles; do
-        _key=$(role_env_key "$_role")
-        eval "_user=\${TEMPER_FORGEJO_USER_${_key}:-}"
-        eval "_token=\${TEMPER_FORGEJO_TOKEN_${_key}:-}"
-        [ -n "$_user" ] || die "no username for role '$_role' in $ROLES_ENV"
-        [ -n "$_token" ] || die "no token for role '$_role' in $ROLES_ENV"
-        export "TEMPER_FORGEJO_USER_${_key}" "TEMPER_FORGEJO_TOKEN_${_key}"
-        eval "_email=\${TEMPER_FORGEJO_EMAIL_${_key}:-}"
-        if [ -n "$_email" ]; then
-            export "TEMPER_FORGEJO_EMAIL_${_key}"
-        fi
-    done
+    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
+    # The bot `user` is omitted from credentials.toml when it equals the section
+    # key, so default it to the literal `bot` automation login.
+    BOT_USER=$(toml_forge_user_field bot user)
+    [ -n "$BOT_USER" ] || BOT_USER=bot
+    BOT_TOKEN=$(toml_forge_user_field bot token)
+    BOT_PASSWORD=$(toml_forge_user_field bot password)
+    [ -n "$BOT_USER" ] || die "automation user 'bot' has no username in $CREDENTIALS_FILE"
+    [ "$BOT_USER" = "bot" ] || die "automation user must be 'bot' in $CREDENTIALS_FILE, got '$BOT_USER'"
+    [ -n "$BOT_TOKEN" ] || die "automation user 'bot' has no token in $CREDENTIALS_FILE"
+    [ -n "$BOT_PASSWORD" ] || die "automation user 'bot' has no password in $CREDENTIALS_FILE"
 }
 
 # Boots one `temper run`: the daemon, one worker, and the in-process coding agent
@@ -691,13 +691,14 @@ export_run_role_env() {
 boot_run() {
     resolve_bot_identity
     ensure_secret_file "$WEBHOOK_SECRET_FILE"
-    _roles=$(roles_from_roles_env)
-    [ -n "$_roles" ] || die "no roles found in $ROLES_ENV"
+    _roles=$(roles_from_credentials)
+    [ -n "$_roles" ] || die "no roles found in $CREDENTIALS_FILE"
     mkdir -p "$RUN_DIR/workspaces"
 
     # The new CLI is config-file driven: standalone `temper daemon` (no
     # --service) runs engine + worker + agent in one process. Write the
-    # deployment to a config file; secrets stay in the environment.
+    # deployment to a config file; the per-role and bot secrets come from the
+    # provisioned credentials.toml via `--credentials` (never on argv).
     _roles_toml=$(printf '"%s", ' $_roles); _roles_toml="[${_roles_toml%, }]"
     case "$TEMPER_RUN_AUTH" in
         chatgpt-oauth) _provider=chatgpt ;;
@@ -732,11 +733,10 @@ EOF
     log "starting temper daemon at $DAEMON_BIND (roles: $_roles; poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=$_provider) ..."
     : >"$LOG_DIR/run.log"
     (
-        export_run_role_env
         FORGEJO_ACCESS_TOKEN="$BOT_TOKEN" \
         FORGEJO_USERNAME="$BOT_USER" \
         FORGEJO_PASSWORD="$BOT_PASSWORD" \
-            "$RUN_BIN" daemon --config "$_config"
+            "$RUN_BIN" daemon --config "$_config" --credentials "$CREDENTIALS_FILE"
     ) >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
@@ -774,18 +774,18 @@ validate_contains() {
 # CI-green PRs and read Forgejo 7.0.x Actions status (ADR 0019).
 validate_mechanical_bot_config() {
     _ok=0
-    if [ ! -f "$ROLES_ENV" ]; then
-        log "missing: $ROLES_ENV not found; cannot confirm bot automation credentials"
+    if [ ! -f "$CREDENTIALS_FILE" ]; then
+        log "missing: $CREDENTIALS_FILE not found; cannot confirm bot automation credentials"
         log 'diagnosis: Forgejo 7.0.x CI reads need web-UI credentials for the mechanical backstop (ADR 0019)'
         return 1
     fi
-    # shellcheck disable=SC1090
-    . "$ROLES_ENV"
-    if [ "${TEMPER_FORGEJO_BOT_USER:-}" = "bot" ] && [ -n "${TEMPER_FORGEJO_BOT_TOKEN:-}" ] \
-        && [ -n "${TEMPER_FORGEJO_BOT_PASSWORD:-}" ]; then
+    _bot_user=$(toml_forge_user_field bot user)
+    [ -n "$_bot_user" ] || _bot_user=bot
+    if [ "$_bot_user" = "bot" ] && [ -n "$(toml_forge_user_field bot token)" ] \
+        && [ -n "$(toml_forge_user_field bot password)" ]; then
         log 'ok: bot automation token + web-UI credentials present for the mechanical backstop'
     else
-        log "missing: bot automation user token/username/password in $ROLES_ENV"
+        log "missing: bot automation user token/username/password in $CREDENTIALS_FILE"
         log 'diagnosis: provision the bot user and launch temper run with its REST token plus FORGEJO_USERNAME/FORGEJO_PASSWORD for landing and the ADR-0019 CI read fallback'
         _ok=1
     fi
@@ -808,7 +808,7 @@ validate_mechanical_ci_log() {
     fi
     if grep -F -q "$CI_FALLBACK_LOGIN_FAILED" "$_run_log" 2>/dev/null; then
         log 'missing: temper run could not log in to Forgejo web UI for CI reads'
-        log 'diagnosis: verify the bot automation credentials in secrets/roles.env'
+        log 'diagnosis: verify the bot automation credentials in secrets/credentials.toml'
         _ok=1
     fi
     if [ "$_ok" -eq 0 ]; then

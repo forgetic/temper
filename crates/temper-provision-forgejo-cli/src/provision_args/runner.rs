@@ -58,12 +58,12 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
             .await
         },
     )?;
-    provision::write_secrets_file(&args.out, &provision::format_secrets_env(&provisioned))?;
+    provision::write_credentials_file(&args.out, &provision::credentials_document(&provisioned))?;
     let intake = issue
         .map(|number| format!("intake issue #{number}"))
         .unwrap_or_else(|| "no intake issue seeded".to_string());
     Ok(format!(
-        "provisioned {}/{}: {} role(s), {}; secrets written to {}",
+        "provisioned {}/{}: {} role(s), {}; credentials written to {}",
         provisioned.owner,
         provisioned.name,
         provisioned.roles.len(),

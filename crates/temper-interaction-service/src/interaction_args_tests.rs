@@ -1,6 +1,4 @@
-use crate::interaction_args::{
-    BINDINGS_PATH_ENV, PROFILE_ENV, ParseOutcome, SPEC_PATH_ENV, USAGE, parse_with_env,
-};
+use crate::interaction_args::{ParseOutcome, USAGE, parse};
 use serde_json::json;
 use temper_interaction::RawInteractionSpec;
 
@@ -9,18 +7,22 @@ use crate::interaction_bindings::{
     ServiceBinding, build_service, service_options,
 };
 
-fn generic_env(key: &str) -> Option<String> {
-    match key {
-        SPEC_PATH_ENV => Some("/etc/temper/interactions.json".into()),
-        BINDINGS_PATH_ENV => Some("/etc/temper/interaction-bindings.json".into()),
-        PROFILE_ENV => Some("support-agent".into()),
-        _ => None,
-    }
+fn argv(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|part| part.to_string()).collect()
 }
 
 #[test]
-fn generic_interaction_args_parse_repl_from_generic_env() {
-    let parsed = parse_with_env(vec!["repl".to_string()], generic_env).unwrap();
+fn generic_interaction_args_parse_repl_from_flags() {
+    let parsed = parse(argv(&[
+        "repl",
+        "--spec",
+        "/etc/temper/interactions.json",
+        "--bindings",
+        "/etc/temper/interaction-bindings.json",
+        "--profile",
+        "support-agent",
+    ]))
+    .unwrap();
     let ParseOutcome::Repl(args) = parsed else {
         panic!("expected repl args")
     };
@@ -39,19 +41,24 @@ fn generic_interaction_args_parse_repl_from_generic_env() {
 }
 
 #[test]
+fn generic_interaction_args_repl_requires_flags() {
+    // No `--spec`/`--bindings`/`--profile` and no env fallback ⇒ a clear error
+    // naming the missing required flag.
+    let error = parse(argv(&["repl"])).unwrap_err().to_string();
+    assert!(error.contains("--spec"), "names the missing flag: {error}");
+}
+
+#[test]
 fn generic_interaction_args_parse_serve_bind_override() {
-    let parsed = parse_with_env(
-        vec![
-            "serve".to_string(),
-            "--spec".to_string(),
-            "spec.json".to_string(),
-            "--bindings".to_string(),
-            "bindings.json".to_string(),
-            "--bind".to_string(),
-            "127.0.0.1:39000".to_string(),
-        ],
-        |_| None,
-    )
+    let parsed = parse(argv(&[
+        "serve",
+        "--spec",
+        "spec.json",
+        "--bindings",
+        "bindings.json",
+        "--bind",
+        "127.0.0.1:39000",
+    ]))
     .unwrap();
     let ParseOutcome::Serve(args) = parsed else {
         panic!("expected serve args")

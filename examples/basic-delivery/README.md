@@ -105,8 +105,9 @@ examples/basic-delivery/
 └── run.sh               # launcher / teardown / validators
 ```
 
-Runtime data goes under gitignored `run/`, `logs/`, and `secrets/roles.env`. The
-single process logs to `logs/run.log`.
+Runtime data goes under gitignored `run/`, `logs/`, and `secrets/credentials.toml`
+(the provisioned forge identities in the runtime's own credentials format, loaded
+via `temper daemon --credentials`). The single process logs to `logs/run.log`.
 
 > **Keeping the spec in sync.** `config/workflow.json` tracks the canonical fixture
 > `crates/temper-workflow/fixtures/basic-delivery.json`. Keep the two identical; do

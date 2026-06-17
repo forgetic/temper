@@ -6,18 +6,15 @@ use std::path::PathBuf;
 
 use temper_interaction::ConversationProfileId;
 
-pub const SPEC_PATH_ENV: &str = "TEMPER_INTERACTION_SPEC";
-pub const BINDINGS_PATH_ENV: &str = "TEMPER_INTERACTION_BINDINGS";
-pub const PROFILE_ENV: &str = "TEMPER_INTERACTION_PROFILE";
-
 pub const USAGE: &str = concat!(
     "temper-interaction repl --spec <path> --bindings <path> --profile <id> ",
     "[--transcript-issue <n>]\n",
     "temper-interaction serve --spec <path> --bindings <path> ",
     "[--bind <addr:port>] [--allow-non-loopback]\n",
-    "  Spec files define profile behavior. Deployment bindings name Forge token ",
-    "environment variables, responder processes, repository, bind address, and ",
-    "optional service token env. Secrets are read from env/config, never argv."
+    "  --spec, --bindings, and --profile are required CLI flags. Spec files define ",
+    "profile behavior. Deployment bindings name Forge token environment variables, ",
+    "responder processes, repository, bind address, and optional service token env. ",
+    "Secrets are read from env/config, never argv."
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,17 +81,13 @@ impl fmt::Display for ArgsError {
 
 impl std::error::Error for ArgsError {}
 
+/// Parses the interaction-service CLI arguments. All inputs come from flags;
+/// `--spec`, `--bindings`, and `--profile` are required (no environment
+/// fallback). Secrets are still resolved from the environment elsewhere via the
+/// env-var names the bindings file declares — never from argv.
 pub fn parse<I>(args: I) -> Result<ParseOutcome, ArgsError>
 where
     I: IntoIterator<Item = String>,
-{
-    parse_with_env(args, |key| std::env::var(key).ok())
-}
-
-pub fn parse_with_env<I, E>(args: I, env: E) -> Result<ParseOutcome, ArgsError>
-where
-    I: IntoIterator<Item = String>,
-    E: Fn(&str) -> Option<String>,
 {
     let mut iter = args.into_iter();
     let Some(command) = iter.next() else {
@@ -109,7 +102,7 @@ where
             if raw.common.help {
                 Ok(ParseOutcome::Help)
             } else {
-                raw.into_args(&env)
+                raw.into_args()
                     .map(|args| ParseOutcome::Repl(Box::new(args)))
             }
         }
@@ -118,7 +111,7 @@ where
             if raw.common.help {
                 Ok(ParseOutcome::Help)
             } else {
-                raw.into_args(&env)
+                raw.into_args()
                     .map(|args| ParseOutcome::Serve(Box::new(args)))
             }
         }
@@ -136,20 +129,11 @@ struct RawCommonArgs {
 }
 
 impl RawCommonArgs {
-    fn into_paths<E>(self, env: &E) -> Result<(PathBuf, PathBuf), ArgsError>
-    where
-        E: Fn(&str) -> Option<String>,
-    {
+    fn into_paths(self) -> Result<(PathBuf, PathBuf), ArgsError> {
         let spec = non_empty(self.spec_path)
-            .or_else(|| non_empty_env(env, SPEC_PATH_ENV))
-            .ok_or_else(|| ArgsError::new(format!("missing required --spec or {SPEC_PATH_ENV}")))?;
+            .ok_or_else(|| ArgsError::new("missing required --spec".to_string()))?;
         let bindings = non_empty(self.bindings_path)
-            .or_else(|| non_empty_env(env, BINDINGS_PATH_ENV))
-            .ok_or_else(|| {
-                ArgsError::new(format!(
-                    "missing required --bindings or {BINDINGS_PATH_ENV}"
-                ))
-            })?;
+            .ok_or_else(|| ArgsError::new("missing required --bindings".to_string()))?;
         Ok((PathBuf::from(spec), PathBuf::from(bindings)))
     }
 }
@@ -185,16 +169,10 @@ impl RawReplArgs {
         Ok(raw)
     }
 
-    fn into_args<E>(self, env: &E) -> Result<InteractionReplArgs, ArgsError>
-    where
-        E: Fn(&str) -> Option<String>,
-    {
-        let (spec_path, bindings_path) = self.common.into_paths(env)?;
+    fn into_args(self) -> Result<InteractionReplArgs, ArgsError> {
+        let (spec_path, bindings_path) = self.common.into_paths()?;
         let profile = non_empty(self.profile_id)
-            .or_else(|| non_empty_env(env, PROFILE_ENV))
-            .ok_or_else(|| {
-                ArgsError::new(format!("missing required --profile or {PROFILE_ENV}"))
-            })?;
+            .ok_or_else(|| ArgsError::new("missing required --profile".to_string()))?;
         Ok(InteractionReplArgs {
             spec_path,
             bindings_path,
@@ -239,11 +217,8 @@ impl RawServeArgs {
         Ok(raw)
     }
 
-    fn into_args<E>(self, env: &E) -> Result<InteractionServeArgs, ArgsError>
-    where
-        E: Fn(&str) -> Option<String>,
-    {
-        let (spec_path, bindings_path) = self.common.into_paths(env)?;
+    fn into_args(self) -> Result<InteractionServeArgs, ArgsError> {
+        let (spec_path, bindings_path) = self.common.into_paths()?;
         Ok(InteractionServeArgs {
             spec_path,
             bindings_path,
@@ -266,13 +241,6 @@ where
 
 fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| (!value.trim().is_empty()).then_some(value))
-}
-
-fn non_empty_env<E>(env: &E, key: &str) -> Option<String>
-where
-    E: Fn(&str) -> Option<String>,
-{
-    env(key).and_then(|value| (!value.trim().is_empty()).then_some(value))
 }
 
 fn parse_bind(raw: &str, flag: &str) -> Result<SocketAddr, ArgsError> {
