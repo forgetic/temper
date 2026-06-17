@@ -296,7 +296,11 @@ async fn run_async(
     // operator-facing readiness banner is the §7 `trigger: webhook listener up
     // …` line (WI-3), so this stays at debug to keep `RUST_LOG=info` to the §7
     // catalog. (The analogous line in the engine daemon handle is already debug.)
-    tracing::debug!(addr = %server.local_addr(), "serving");
+    let local_addr = server.local_addr();
+    tracing::debug!(
+        addr = %local_addr,
+        "engine: serving on {local_addr}"
+    );
 
     // §7 readiness line: everything is up and the daemon is idle, watching its
     // repos. This is the operator-facing "ready" the boot block closes on.

@@ -61,11 +61,13 @@ pub fn result_applier(
 
     // Per-role applier routing is setup detail, not a §7 state change; keep it at
     // debug so `RUST_LOG=info` stays the §7 catalog + startup banner.
+    let routed = role_list(&routed);
+    let fallback = role_list(&fallback);
     tracing::debug!(
         target: "temper_engine",
-        routed = %role_list(&routed),
-        fallback = %role_list(&fallback),
-        "role identities"
+        %routed,
+        %fallback,
+        "engine: role identities routed={routed} fallback={fallback}"
     );
 
     Arc::new(routing)

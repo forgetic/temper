@@ -115,7 +115,11 @@ pub fn run_http(
     runtime: &temper_engine_io::EngineRuntime,
 ) -> Result<(), InteractionServiceError> {
     let listener = TcpListener::bind(bind)?;
-    tracing::info!(target: "temper_interaction", %bind, "serving");
+    tracing::info!(
+        target: "temper_interaction",
+        %bind,
+        "interaction: serving on {bind}"
+    );
     let app = std::sync::Arc::new(app);
     for stream in listener.incoming() {
         match stream {

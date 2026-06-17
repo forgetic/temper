@@ -36,10 +36,10 @@ fn work_item(target: ArtifactSource) -> WorkItem {
 }
 
 #[test]
-fn skip_log_reason_names_existing_pull_request_without_state_qualifier() {
+fn skip_log_reason_names_existing_pull_request_concisely() {
     assert_eq!(
         skip_log_reason(EnrichOutcome::SkipExistingPullRequest),
-        "existing implementation pull request"
+        "existing-pr"
     );
 }
 
@@ -56,7 +56,7 @@ fn skip_log_line_includes_existing_pull_request_reason() {
             &item,
             EnrichOutcome::SkipExistingPullRequest
         ),
-        "engine: skipped role work for existing implementation pull request repo=ai/temper role=engineer queue=code_ready artifact_kind=code target=Issue { number: ItemNumber(153) }"
+        "engine: skip existing-pr ai/temper#153 role=engineer queue=code_ready kind=code"
     );
 }
 
