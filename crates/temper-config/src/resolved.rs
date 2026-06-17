@@ -204,10 +204,7 @@ impl ForgeSettings {
     /// The forge base URL, or a `Missing` error naming what to set.
     pub fn require_url(&self) -> Result<&str, ConfigError> {
         self.url.as_deref().ok_or_else(|| {
-            ConfigError::missing(
-                "forge URL is unset; set `[forge] url` in the config file or \
-                 TEMPER_FORGE_URL / FORGEJO_URL in the environment",
-            )
+            ConfigError::missing("forge URL is unset; set `[forge] url` in temper.toml")
         })
     }
 
@@ -216,9 +213,8 @@ impl ForgeSettings {
         self.admin_token.as_ref().ok_or_else(|| {
             ConfigError::missing(
                 "forge admin token is unset; set a `token` under \
-                 `[forge.users.<admin>]` in the credentials file (and name the \
-                 admin via `[forge] admin`), or TEMPER_FORGE_TOKEN / \
-                 FORGEJO_ACCESS_TOKEN in the environment",
+                 `[forge.users.<admin>]` in credentials.toml (and name the \
+                 admin via `[forge] admin`)",
             )
         })
     }

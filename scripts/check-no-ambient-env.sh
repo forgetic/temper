@@ -62,16 +62,14 @@ set -eu
 #   Operator-tool binary-adjacent entry points -- genuine operator tools
 #   reachable as `temper <subcmd>`, whose parse/run ARE their process entry
 #   points and which expose a `parse_with_env` seam for tests:
-#       crates/temper-interaction-service/src/interaction_args.rs
 #       crates/temper-interaction-service/src/interaction_repl.rs
 #       crates/temper-interaction-service/src/interaction_serve.rs
 #       crates/temper-provision-forgejo-cli/src/provision_args/parse.rs
 #       crates/temper-reference-delivery-validator/src/reference_delivery_validator.rs
 #
-#   Responder / standalone-agent process entry points that read provider env
-#   (the analogue of the agent `entry`):
+#   Responder process entry point that reads provider env (the analogue of the
+#   agent `entry`):
 #       crates/temper-cli/src/responders.rs
-#       crates/temper-cli-daemon/src/provider.rs
 #
 # NOTE: crates/temper-cli/src/lib.rs is deliberately NOT allowlisted -- its
 # `std::env::args` read is being removed by refactor (a `boot()` env reader in
@@ -83,14 +81,12 @@ set -eu
 AMBIENT_ENV_ALLOWLIST='
 crates/temper-config/src/env.rs                                              # #198 env shim
 crates/temper-agent-session/src/entry.rs                                     # #201 agent entry
-crates/temper-log/src/lib.rs                                                 # #208/#209 logging crate boundary
-crates/temper-interaction-service/src/interaction_args.rs                    # operator tool entry
+crates/temper-log/src/lib.rs                                                 # logging crate boundary (RUST_LOG / TEMPER_LOG_FORMAT / JOURNAL_STREAM / NO_COLOR)
 crates/temper-interaction-service/src/interaction_repl.rs                    # operator tool entry
 crates/temper-interaction-service/src/interaction_serve.rs                   # operator tool entry
 crates/temper-provision-forgejo-cli/src/provision_args/parse.rs             # operator tool entry
 crates/temper-reference-delivery-validator/src/reference_delivery_validator.rs  # operator tool entry
 crates/temper-cli/src/responders.rs                                          # responder provider-env entry
-crates/temper-cli-daemon/src/provider.rs                                     # standalone provider-env entry
 '
 
 tmp_allowed="$(mktemp)"
