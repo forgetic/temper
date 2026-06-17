@@ -6,7 +6,7 @@
 
 use temper_cli_common::Prompter;
 
-use crate::InitError;
+use crate::{InitError, InitOverrides, RepoSelection};
 
 /// The default webhook bind/advertise address written into `[engine] bind` and
 /// registered on the forge.
@@ -25,8 +25,9 @@ pub const PROVIDER_DEEPSEEK: &str = "deepseek";
 
 /// The collected, non-secret + secret answers from the interactive flow.
 ///
-/// `repos`/`roles` are not asked: they are derived from the embedded workflow's
-/// queue-subscribing roles and the default repo at [`build_artifacts`] time.
+/// `roles` are not asked: they are derived from the embedded workflow's
+/// queue-subscribing roles at [`build_artifacts`] time. The managed repo uses
+/// [`DEFAULT_REPO`] unless `--repo` supplies an override.
 #[derive(Debug, Clone)]
 pub struct Answers {
     /// The Forgejo base URL (`[forge] url`).
@@ -39,11 +40,13 @@ pub struct Answers {
     pub admin_user: String,
     /// Forge admin password (used to mint the admin REST token). **Secret.**
     pub admin_password: String,
+    /// LLM provider profile (only [`PROVIDER_DEEPSEEK`] today).
+    pub provider: String,
     /// DeepSeek API key. **Secret.**
     pub provider_key: String,
-    /// Repository owner (derived from [`DEFAULT_REPO`]).
+    /// Repository owner (derived from [`DEFAULT_REPO`] or `--repo`).
     pub repo_owner: String,
-    /// Repository name (derived from [`DEFAULT_REPO`]).
+    /// Repository name (derived from [`DEFAULT_REPO`] or `--repo`).
     pub repo_name: String,
 }
 
@@ -64,19 +67,20 @@ impl Answers {
 }
 
 /// Asks the operator the five questions + two secret prompts, validating the
-/// forge URL and rejecting hosted GitHub (unsupported today).
-pub fn collect_answers(p: &mut dyn Prompter) -> Result<Answers, InitError> {
+/// forge URL and rejecting hosted GitHub (unsupported today). `--forge` skips
+/// only the forge URL prompt; the rest of the provisioning flow stays intact.
+pub fn collect_answers(
+    p: &mut dyn Prompter,
+    overrides: &InitOverrides,
+) -> Result<Answers, InitError> {
     // Q1 — Forge URL. The default literal `github` is a deliberate nudge: a real
     // GitHub deployment is not supported yet, so an unchanged default (or any
     // non-URL) is rejected with guidance to enter a Forgejo URL.
-    let forge_url = p.ask("Forge URL", Some("github"))?;
-    if !looks_like_url(&forge_url) {
-        return Err(InitError::Unsupported(
-            "hosted GitHub is not supported yet; enter a Forgejo URL \
-             (e.g. http://localhost:3000)"
-                .to_string(),
-        ));
-    }
+    let forge_url = match &overrides.forge_url {
+        Some(value) => value.clone(),
+        None => p.ask("Forge URL", Some("github"))?,
+    };
+    validate_forge_url(&forge_url)?;
 
     // Q2 — Workflow. Only basic-delivery (embedded) today.
     let workflow = p.ask("Workflow", Some(WORKFLOW_BASIC_DELIVERY))?;
@@ -99,9 +103,10 @@ pub fn collect_answers(p: &mut dyn Prompter) -> Result<Answers, InitError> {
     let admin_password = p.ask_secret("Forge admin password")?;
 
     // Q5 — DeepSeek API key (provider + auth shape are fixed).
+    let provider = provider_from_override(overrides.provider.as_deref())?;
     let provider_key = p.ask_secret("DeepSeek API key")?;
 
-    let (repo_owner, repo_name) = split_repo(DEFAULT_REPO);
+    let repo = overrides.repo.clone().unwrap_or_else(default_repo);
 
     Ok(Answers {
         forge_url,
@@ -109,10 +114,36 @@ pub fn collect_answers(p: &mut dyn Prompter) -> Result<Answers, InitError> {
         webhook_addr,
         admin_user,
         admin_password,
+        provider,
         provider_key,
-        repo_owner,
-        repo_name,
+        repo_owner: repo.owner,
+        repo_name: repo.name,
     })
+}
+
+fn validate_forge_url(forge_url: &str) -> Result<(), InitError> {
+    if looks_like_url(forge_url) {
+        Ok(())
+    } else {
+        Err(InitError::Unsupported(
+            "hosted GitHub is not supported yet; enter a Forgejo URL \
+             (e.g. http://localhost:3000)"
+                .to_string(),
+        ))
+    }
+}
+
+fn provider_from_override(provider: Option<&str>) -> Result<String, InitError> {
+    match provider.unwrap_or(PROVIDER_DEEPSEEK) {
+        PROVIDER_DEEPSEEK => Ok(PROVIDER_DEEPSEEK.to_string()),
+        other => Err(InitError::Unsupported(format!(
+            "unsupported provider `{other}`; only `{PROVIDER_DEEPSEEK}` is supported"
+        ))),
+    }
+}
+
+fn default_repo() -> RepoSelection {
+    RepoSelection::parse(DEFAULT_REPO).expect("DEFAULT_REPO is a valid owner/name repo")
 }
 
 /// A lightweight URL check: an `http`/`https` scheme with a non-empty host.
@@ -124,15 +155,6 @@ fn looks_like_url(value: &str) -> bool {
     match rest {
         Some(host) => !host.is_empty(),
         None => false,
-    }
-}
-
-/// Splits `owner/name`, falling back to the whole string as the name when there
-/// is no slash.
-fn split_repo(value: &str) -> (String, String) {
-    match value.split_once('/') {
-        Some((owner, name)) => (owner.to_string(), name.to_string()),
-        None => (String::new(), value.to_string()),
     }
 }
 
@@ -155,12 +177,13 @@ mod tests {
     #[test]
     fn collects_with_defaults() {
         let mut p = full_answers();
-        let a = collect_answers(&mut p).expect("collect");
+        let a = collect_answers(&mut p, &InitOverrides::default()).expect("collect");
         assert_eq!(a.forge_url, "http://localhost:3000");
         assert_eq!(a.workflow, WORKFLOW_BASIC_DELIVERY);
         assert_eq!(a.webhook_addr, DEFAULT_WEBHOOK_ADDR);
         assert_eq!(a.admin_user, "root");
         assert_eq!(a.admin_password, "admin-pw");
+        assert_eq!(a.provider, PROVIDER_DEEPSEEK);
         assert_eq!(a.provider_key, "sk-deepseek");
         assert_eq!(a.repo_owner, "acme");
         assert_eq!(a.repo_name, "service");
@@ -173,7 +196,7 @@ mod tests {
     fn rejects_github_default() {
         // Unchanged `github` default → not a URL → Unsupported.
         let mut p = ScriptedPrompter::new(["".to_string()]);
-        let err = collect_answers(&mut p).expect_err("github rejected");
+        let err = collect_answers(&mut p, &InitOverrides::default()).expect_err("github rejected");
         assert!(matches!(err, InitError::Unsupported(_)), "{err}");
     }
 
@@ -183,7 +206,41 @@ mod tests {
             "http://localhost:3000".to_string(),
             "fancy-delivery".to_string(),
         ]);
-        let err = collect_answers(&mut p).expect_err("unknown workflow rejected");
+        let err = collect_answers(&mut p, &InitOverrides::default())
+            .expect_err("unknown workflow rejected");
+        assert!(matches!(err, InitError::Unsupported(_)), "{err}");
+    }
+
+    #[test]
+    fn forge_override_skips_forge_prompt_and_is_validated() {
+        let mut p = ScriptedPrompter::new([
+            "".to_string(),            // workflow (default)
+            "".to_string(),            // webhook (default)
+            "root".to_string(),        // admin user
+            "admin-pw".to_string(),    // admin password
+            "sk-deepseek".to_string(), // provider key
+        ]);
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            ..Default::default()
+        };
+
+        let a = collect_answers(&mut p, &overrides).expect("collect");
+
+        assert_eq!(a.forge_url, "http://forge.local:3000");
+        assert!(p.answers.is_empty(), "all non-forge prompts consumed");
+    }
+
+    #[test]
+    fn forge_override_uses_same_validation_as_prompted_forge() {
+        let mut p = ScriptedPrompter::new(Vec::<String>::new());
+        let overrides = InitOverrides {
+            forge_url: Some("github".to_string()),
+            ..Default::default()
+        };
+
+        let err = collect_answers(&mut p, &overrides).expect_err("github rejected");
+
         assert!(matches!(err, InitError::Unsupported(_)), "{err}");
     }
 }

@@ -28,6 +28,7 @@
 //! e2e drives [`run_init`] with [`ScriptedPrompter`](temper_cli_common::ScriptedPrompter)
 //! + a real [`ForgejoProvisioner`].
 
+mod args;
 mod collect;
 mod provisioner;
 mod write;
@@ -35,10 +36,11 @@ mod write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_cli_common::{
-    EX_USAGE, EnvMap, LoadOptions, PathResolver, TerminalPrompter, parse_common_args,
-};
+use temper_cli_common::{EX_USAGE, EnvMap, LoadOptions, PathResolver, TerminalPrompter};
 
+use args::parse_init_args;
+
+pub use args::{InitOverrides, InitTopology, RepoSelection};
 pub use collect::{Answers, collect_answers};
 pub use provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
 pub use write::{InitArtifacts, build_artifacts, preflight_clobber, write_artifacts};
@@ -54,12 +56,16 @@ writes config.toml + workflow.json + a webhook secret, provisions the forge
 Usage: temper init [OPTIONS]
 
 Options:
-  --config        <PATH>  Where to write config.toml, or bundle directory
-  --secrets       <PATH>  Where to write credentials.toml, or secrets directory
-  --credentials   <PATH>  Backwards-compatible alias for --secrets
-  --force                 Overwrite existing local files
-  --existing-repo         Provision onto a repo that already exists
-  -h, --help              Print help";
+  --config        <PATH>        Where to write config.toml, or bundle directory
+  --secrets       <PATH>        Where to write credentials.toml, or secrets directory
+  --credentials   <PATH>        Backwards-compatible alias for --secrets
+  --force                       Overwrite existing local files
+  --existing-repo               Provision onto a repo that already exists
+  --topology      <standalone>  Local topology to initialize (only standalone today)
+  --repo          <owner/name>  Managed repository to provision
+  --forge         <URL>         Forgejo URL; skips the Forge URL prompt
+  --provider      <deepseek>    LLM provider profile (only deepseek today)
+  -h, --help                    Print help";
 
 /// Everything `temper init` needs that is *not* gathered interactively: the
 /// resolved file targets, the clobber flag, the workspace root, and whether the
@@ -73,6 +79,10 @@ pub struct InitOptions {
     pub force: bool,
     /// Provision onto a repo that must already exist (`--existing-repo`).
     pub existing_repo: bool,
+    /// The topology selected by `--topology` (standalone only today).
+    pub topology: InitTopology,
+    /// Non-interactive answers selected by local-dev flags.
+    pub overrides: InitOverrides,
     /// The per-job worker workspace root written into `[worker] workspace`.
     /// `None` lets the daemon's default (`~/.local/state/temper/workspace`)
     /// apply by omitting the key.
@@ -138,7 +148,7 @@ impl From<std::io::Error> for InitError {
 /// `env` / `paths` are the snapshot the composition root (`src/bin`) captured;
 /// this reads no `std::env`.
 pub fn main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
-    let parsed = match parse_common_args(args) {
+    let parsed = match parse_init_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("temper init: {error}\n\n{USAGE}");
@@ -149,23 +159,13 @@ pub fn main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let mut existing_repo = false;
-    let mut force = false;
-    for arg in &parsed.rest {
-        match arg.as_str() {
-            "--force" => force = true,
-            "--existing-repo" => existing_repo = true,
-            other => {
-                eprintln!("temper init: unexpected argument `{other}`\n\n{USAGE}");
-                return ExitCode::from(EX_USAGE);
-            }
-        }
-    }
 
     let opts = InitOptions {
         options: parsed.options,
-        force,
-        existing_repo,
+        force: parsed.force,
+        existing_repo: parsed.existing_repo,
+        topology: parsed.topology,
+        overrides: parsed.overrides,
         workspace: None,
         env: env.clone(),
         paths: paths.clone(),
@@ -193,7 +193,7 @@ pub fn run_init(
     opts: &InitOptions,
 ) -> Result<(), InitError> {
     // 1. Collect answers (prompts only).
-    let answers = collect_answers(p)?;
+    let answers = collect_answers(p, &opts.overrides)?;
 
     // 2. Build the artifacts (pure) and preflight every local target up front.
     let artifacts = build_artifacts(&answers, opts)?;
@@ -239,6 +239,6 @@ pub fn run_init(
         outcome.provisioned.automation.user,
     ));
     p.note("");
-    p.note("Now run `temper daemon` to start the engine, worker, and agent.");
+    p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
     Ok(())
 }

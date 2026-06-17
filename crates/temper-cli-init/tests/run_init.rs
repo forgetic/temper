@@ -16,7 +16,10 @@
 use std::collections::BTreeMap;
 
 use temper_cli_common::{LoadOptions, ScriptedPrompter};
-use temper_cli_init::{InitOptions, ProvisionOutcome, ProvisionRequest, Provisioner, run_init};
+use temper_cli_init::{
+    InitOptions, InitOverrides, InitTopology, ProvisionOutcome, ProvisionRequest, Provisioner,
+    RepoSelection, run_init,
+};
 use temper_forge::RepositoryId;
 use temper_provision::{Provisioned, RoleIdentity};
 use temper_workflow::RoleId;
@@ -161,9 +164,69 @@ fn run_init_collects_writes_and_provisions_offline() {
 
     // ── a final summary was emitted ──────────────────────────────────────────
     assert!(
-        prompter.notes.iter().any(|n| n.contains("temper daemon")),
-        "summary should point at `temper daemon`: {:?}",
+        prompter
+            .notes
+            .iter()
+            .any(|n| n.contains("temper serve standalone")),
+        "summary should point at `temper serve standalone`: {:?}",
         prompter.notes
+    );
+}
+
+#[test]
+fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+
+    // `--forge` skips the first prompt, so this starts at workflow.
+    let mut prompter = ScriptedPrompter::new([
+        "".to_string(),                     // Q2 workflow (default basic-delivery)
+        "".to_string(),                     // Q3 webhook addr (default)
+        "root".to_string(),                 // Q4 admin user
+        "admin-pass".to_string(),           // Q4 admin password (secret)
+        "sk-deepseek-override".to_string(), // Q5 DeepSeek API key (secret)
+    ]);
+
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        topology: InitTopology::Standalone,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            repo: Some(RepoSelection {
+                owner: "widgets".to_string(),
+                name: "service".to_string(),
+            }),
+            provider: Some("deepseek".to_string()),
+        },
+        ..Default::default()
+    };
+
+    let mut provisioner = StubProvisioner { seen: None };
+    run_init(&mut prompter, &mut provisioner, &opts).expect("run_init succeeds offline");
+
+    let config = std::fs::read_to_string(&config_path).expect("config.toml written");
+    assert!(
+        config.contains("url = \"http://forge.local:3000\""),
+        "{config}"
+    );
+    assert!(config.contains("widgets/service"), "{config}");
+    assert!(!config.contains("acme/service"), "{config}");
+    assert!(config.contains("provider = \"deepseek\""), "{config}");
+
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
+    assert!(creds.contains("sk-deepseek-override"), "{creds}");
+
+    let seen = provisioner.seen.expect("provisioner was called");
+    assert_eq!(seen.base_url, "http://forge.local:3000");
+    assert_eq!(seen.owner, "widgets");
+    assert_eq!(seen.name, "service");
+    assert!(
+        prompter.answers.is_empty(),
+        "forge prompt should be skipped"
     );
 }
 

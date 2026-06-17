@@ -14,7 +14,7 @@ use temper_config::{
 };
 use temper_reference_delivery::{basic_delivery_workflow, basic_delivery_workflow_json};
 
-use crate::collect::{Answers, PROVIDER_DEEPSEEK};
+use crate::collect::Answers;
 use crate::provisioner::ProvisionOutcome;
 use crate::{InitError, InitOptions};
 
@@ -44,8 +44,8 @@ pub struct InitArtifacts {
 /// Builds (pure, no I/O) every artifact `temper init` will write: the config
 /// document, the workflow JSON, and a freshly generated webhook secret.
 ///
-/// `repos`/`roles` come from the embedded basic-delivery workflow's
-/// queue-subscribing roles + the default repo — they are not asked.
+/// `roles` come from the embedded basic-delivery workflow's queue-subscribing
+/// roles. The repo/provider come from defaults or local-dev flag overrides.
 pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArtifacts, InitError> {
     let targets: FileTargets =
         resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
@@ -71,7 +71,7 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         webhook_addr: Some(bind_addr(&answers.webhook_addr)),
         admin_user: Some(answers.admin_user.clone()),
         ci_user: Some(temper_provision::BOT_USER.to_string()),
-        provider: Some(PROVIDER_DEEPSEEK.to_string()),
+        provider: Some(answers.provider.clone()),
         workspace: opts
             .workspace
             .as_ref()
@@ -188,7 +188,7 @@ pub fn write_credentials(
     let credentials = build_credentials(&CredentialInputs {
         forge_users,
         provider_key: ProviderKeyInput {
-            provider: PROVIDER_DEEPSEEK.to_string(),
+            provider: answers.provider.clone(),
             secret: ProviderSecretInput::ApiKey(answers.provider_key.clone()),
         },
     });
