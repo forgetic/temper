@@ -1,6 +1,6 @@
 # Domain model
 
-Temper models the collaboration surface that agentic workflows need in order to plan, execute, review, and merge work.
+Temper models the collaboration surface that agentic workflows need to plan, execute, review, and merge work.
 
 ## Design goals
 
