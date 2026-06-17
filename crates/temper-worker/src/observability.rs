@@ -5,8 +5,8 @@
 //! lines as data ([`WorkerRequest::Log`](crate::worker_machine::WorkerRequest))
 //! without doing I/O.
 
-use temper_agent_protocol::StepProgress;
-use temper_worker_protocol::{Assign, FailureClass, JobResult, ResultStatus};
+use temper_protocol_agent::StepProgress;
+use temper_protocol_worker::{Assign, FailureClass, JobResult, ResultStatus};
 
 pub fn registered_worker_line(worker_id: &str, capability_count: usize) -> String {
     format!("worker: registered worker_id={worker_id} capabilities={capability_count}")
@@ -60,7 +60,7 @@ fn result_status_display(result: &JobResult) -> String {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use temper_worker_protocol::{Artifact, Branch, Failure, WORKER_PROTOCOL_VERSION};
+    use temper_protocol_worker::{Artifact, Branch, Failure, WORKER_PROTOCOL_VERSION};
 
     use super::*;
 

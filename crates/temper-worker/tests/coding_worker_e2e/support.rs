@@ -5,11 +5,11 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde_json::json;
+use temper_protocol_worker::{Artifact, Assign, WORKER_PROTOCOL_VERSION};
 use temper_worker::config::CapabilitySpec;
 use temper_worker::{
     ExecutorSelection, JobExecutor, RoleGitIdentity, WorkerConfig, run_worker_with_transport,
 };
-use temper_worker_protocol::{Artifact, Assign, WORKER_PROTOCOL_VERSION};
 
 use super::DaemonHarness;
 
@@ -63,7 +63,7 @@ pub fn run_until_result<E>(
     assign: Assign,
     config: WorkerConfig,
     executor: Arc<E>,
-) -> temper_worker_protocol::JobResult
+) -> temper_protocol_worker::JobResult
 where
     E: JobExecutor + Send + Sync + 'static,
 {

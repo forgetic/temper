@@ -4,7 +4,7 @@
 //!
 //! This is the worker ↔ agent process boundary (plane 1), reachable both as the
 //! slim `temper-agent` binary and as the unified `temper agent` subcommand. It
-//! speaks the `temper-agent-protocol`:
+//! speaks the `temper-protocol-agent`:
 //!
 //! 1. read the [`WorkspaceContext`] JSON from the file named by `CONTEXT_ENV`;
 //! 2. run the native sans-IO coding loop in the current directory (the prepared
@@ -39,9 +39,9 @@
 //! small ones stay as-is. (The env reads that still feed some of these fields move
 //! onto the struct in issue #201 — not here.)
 //!
-//! [`WorkspaceContext`]: temper_agent_protocol::WorkspaceContext
-//! [`StepProgress`]: temper_agent_protocol::StepProgress
-//! [`WorkspaceResult`]: temper_agent_protocol::WorkspaceResult
+//! [`WorkspaceContext`]: temper_protocol_agent::WorkspaceContext
+//! [`StepProgress`]: temper_protocol_agent::StepProgress
+//! [`WorkspaceResult`]: temper_protocol_agent::WorkspaceResult
 
 mod checkpoint;
 mod config;

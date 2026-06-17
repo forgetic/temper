@@ -5,7 +5,7 @@
 //! comment. Transient and canceled failures are not applied here.
 
 use temper_forge::{CreateComment, Forge, UpdateIssue};
-use temper_worker_protocol::{FailureClass, JobResult};
+use temper_protocol_worker::{FailureClass, JobResult};
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;

@@ -1456,11 +1456,11 @@ dependencies = [
  "temper-forge",
  "temper-forge-forgejo",
  "temper-forge-memory",
+ "temper-protocol-worker",
  "temper-provision",
  "temper-reference-delivery",
  "temper-testing",
  "temper-worker",
- "temper-worker-protocol",
  "temper-workflow",
  "tempfile",
  "toml",
@@ -1481,7 +1481,7 @@ dependencies = [
  "skein",
  "temper-agent-core",
  "temper-agent-io",
- "temper-agent-protocol",
+ "temper-protocol-agent",
  "temper-protocol-decision",
  "temper-protocol-interaction",
  "tongs",
@@ -1515,14 +1515,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-agent-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "temper-agent-session"
 version = "0.1.0"
 dependencies = [
@@ -1533,8 +1525,8 @@ dependencies = [
  "temper-agent",
  "temper-agent-core",
  "temper-agent-io",
- "temper-agent-protocol",
  "temper-log",
+ "temper-protocol-agent",
  "tracing",
 ]
 
@@ -1584,7 +1576,6 @@ dependencies = [
  "chrono",
  "skein",
  "temper-agent",
- "temper-agent-protocol",
  "temper-agent-session",
  "temper-config",
  "temper-engine",
@@ -1592,9 +1583,10 @@ dependencies = [
  "temper-engine-service",
  "temper-forge",
  "temper-log",
+ "temper-protocol-agent",
+ "temper-protocol-worker",
  "temper-reference-delivery",
  "temper-worker",
- "temper-worker-protocol",
  "temper-worker-service",
  "temper-workflow",
  "tracing",
@@ -1642,8 +1634,8 @@ dependencies = [
  "temper-forge",
  "temper-forge-memory",
  "temper-log",
+ "temper-protocol-worker",
  "temper-runner",
- "temper-worker-protocol",
  "temper-worker-registry",
  "temper-workflow",
  "tracing",
@@ -1792,6 +1784,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-protocol-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "temper-protocol-decision"
 version = "0.1.0"
 dependencies = [
@@ -1801,6 +1801,15 @@ dependencies = [
 
 [[package]]
 name = "temper-protocol-interaction"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "temper-protocol-worker"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -1889,7 +1898,7 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-forge-memory",
- "temper-worker-protocol",
+ "temper-protocol-worker",
  "temper-workflow",
  "tracing",
  "tracing-subscriber",
@@ -1914,11 +1923,11 @@ dependencies = [
  "temper-forge-memory",
  "temper-forge-model",
  "temper-log",
+ "temper-protocol-worker",
  "temper-reference-delivery",
  "temper-runner",
  "temper-trigger-forgejo",
  "temper-wake",
- "temper-worker-protocol",
  "temper-workflow",
  "tracing",
  "tracing-subscriber",
@@ -1957,11 +1966,11 @@ dependencies = [
  "serde",
  "serde_json",
  "skein",
- "temper-agent-protocol",
  "temper-engine",
  "temper-engine-io",
+ "temper-protocol-agent",
+ "temper-protocol-worker",
  "temper-worker-io",
- "temper-worker-protocol",
  "tempfile",
  "thiserror",
  "tracing",
@@ -1977,20 +1986,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-worker-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "temper-worker-registry"
 version = "0.1.0"
 dependencies = [
  "serde_json",
- "temper-worker-protocol",
+ "temper-protocol-worker",
 ]
 
 [[package]]

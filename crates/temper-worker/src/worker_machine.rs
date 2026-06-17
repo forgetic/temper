@@ -16,8 +16,8 @@
 
 use std::collections::BTreeSet;
 
+use temper_protocol_worker::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
 use temper_worker_io::{EngineTime, Machine};
-use temper_worker_protocol::{Assign, ErrorCode, JobResult, WorkerProtocolMessage};
 
 pub use crate::config::WorkerParams;
 

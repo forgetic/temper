@@ -7,7 +7,7 @@
 //! daemon's reply. The split deployment uses [`HttpTransport`] (POST over the
 //! skein HTTP client); the unified single-process mode supplies an in-process
 //! transport that hands the message straight to a co-resident `DaemonCore` over
-//! an in-memory channel. The protocol (`temper-worker-protocol`) is identical
+//! an in-memory channel. The protocol (`temper-protocol-worker`) is identical
 //! across both — only the carrier under it changes.
 
 use std::future::Future;
@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use skein::cx::Cx;
 use skein::http::h1::http_client::HttpClient;
+use temper_protocol_worker::WorkerProtocolMessage;
 use temper_worker_io::{HttpCall, HttpResponseData, build_http_client, http_call};
-use temper_worker_protocol::WorkerProtocolMessage;
 
 /// Delivers worker→daemon protocol messages and yields the daemon's replies.
 ///
@@ -123,7 +123,7 @@ mod tests {
     fn decode_200_message_parses() {
         let release = serde_json::json!({
             "type": "release",
-            "protocol_version": temper_worker_protocol::WORKER_PROTOCOL_VERSION,
+            "protocol_version": temper_protocol_worker::WORKER_PROTOCOL_VERSION,
             "worker_id": "w1",
             "job_id": "j1",
             "disposition": "accepted",

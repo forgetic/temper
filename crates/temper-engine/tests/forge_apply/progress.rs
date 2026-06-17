@@ -4,7 +4,7 @@ use crate::support::*;
 
 #[test]
 fn progress_checkpoints_are_recorded_once_per_step() {
-    use temper_worker_protocol::JobProgress;
+    use temper_protocol_worker::JobProgress;
 
     temper_engine_io::block_on(async move {
         let forge = Arc::new(MemoryForge::new());

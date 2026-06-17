@@ -18,7 +18,7 @@ That shape is wrong for a whole class of changes: the ones that must be
 **written and validated together** because the repositories are source-coupled.
 In this tree:
 
-- `smith/crates/smith-worker` depends on `temper/crates/temper-worker-protocol`
+- `smith/crates/smith-worker` depends on `temper/crates/temper-protocol-worker`
   by a **path** dependency (`../../../temper/...`).
 - `temper` depends on `skein` by a **path** dependency
   (`../skein/crates/skein`).

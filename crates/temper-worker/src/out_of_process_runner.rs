@@ -24,7 +24,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use temper_agent_protocol::{CONTEXT_ENV, RESULT_ENV, StepProgress, WorkspaceContext};
+use temper_protocol_agent::{CONTEXT_ENV, RESULT_ENV, StepProgress, WorkspaceContext};
 
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
@@ -251,11 +251,11 @@ mod tests {
         let outcome =
             temper_worker_io::block_on(async move { runner.run(&context, &cwd, &sink).await });
         let error = outcome.expect_err("empty command must fail");
-        assert_eq!(error.class, temper_worker_protocol::FailureClass::Permanent);
+        assert_eq!(error.class, temper_protocol_worker::FailureClass::Permanent);
     }
 
     fn test_context() -> WorkspaceContext {
-        use temper_agent_protocol::{WorkspaceRepository, WorkspaceWorkItem};
+        use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
         WorkspaceContext {
             repos: vec![WorkspaceRepository {
                 id: "acme/svc".to_string(),

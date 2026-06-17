@@ -8,10 +8,10 @@ description = "Temper worker process: long-polls a Temper daemon and runs role/c
 
 [dependencies]
 skein.workspace = true
-temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
 tracing = { workspace = true }
 temper-worker-io = { path = "../temper-worker-io" }
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -22,7 +22,7 @@ thiserror.workspace = true
 # non-test builds of this crate — and everything downstream — never pull it in.
 
 [dev-dependencies]
-temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
 # Transport e2e tests drive the real daemon through its in-process carrier on the
 # skein runtime (no fake daemon, no tokio/axum): the daemon now lives in this
 # workspace, so tests run the real thing and tap the worker's posted result.
@@ -30,7 +30,7 @@ temper-engine = { path = "../temper-engine" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-worker-io = { path = "../temper-worker-io" }
 
-# A deterministic, hermetic agent that speaks the temper-agent-protocol: writes
+# A deterministic, hermetic agent that speaks the temper-protocol-agent: writes
 # a product file, emits step-progress, writes a result. Lets the worker e2e drive
 # the real out-of-process boundary without a cross-repo binary path or an LLM, via
 # CARGO_BIN_EXE_temper-fake-agent.

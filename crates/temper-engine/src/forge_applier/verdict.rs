@@ -5,7 +5,7 @@
 //! pull request, binding any `create_issues` children the verdict produced.
 
 use temper_forge::{Forge, ItemNumber, RepositoryId, RepositoryPath};
-use temper_worker_protocol::{JobChild, JobResult};
+use temper_protocol_worker::{JobChild, JobResult};
 use temper_workflow::{
     ArtifactKindId, ArtifactSource, Classifier, Effect, ExecutionContext, ExecutionError, Executor,
     RoleId, TransitionId, ValidatedWorkflow, VerdictId,
@@ -49,7 +49,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         };
 
-        let job_context = match serde_json::from_value::<temper_worker_protocol::JobContext>(
+        let job_context = match serde_json::from_value::<temper_protocol_worker::JobContext>(
             job.job_payload.clone(),
         ) {
             Ok(context) => context,
@@ -167,7 +167,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     async fn apply_issue_verdict(
         &self,
         job: &InFlightJob,
-        job_context: &temper_worker_protocol::JobContext,
+        job_context: &temper_protocol_worker::JobContext,
         role_id: &RoleId,
         action: &str,
         verdict: &str,
@@ -227,7 +227,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     async fn apply_pull_request_verdict(
         &self,
         job: &InFlightJob,
-        job_context: &temper_worker_protocol::JobContext,
+        job_context: &temper_protocol_worker::JobContext,
         role_id: &RoleId,
         action: &str,
         verdict: &str,

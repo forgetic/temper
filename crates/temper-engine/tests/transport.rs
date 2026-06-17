@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use serde_json::json;
 use temper_engine_io::http::{HttpResponseData, JsonClient};
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Artifact, Capability, Capacity, ErrorCode, Heartbeat, JobResult, Poll, Register,
     ReleaseDisposition, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

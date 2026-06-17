@@ -8,8 +8,8 @@ use std::future::Future;
 
 use skein::cx::Cx;
 use temper_engine::Daemon;
+use temper_protocol_worker::WorkerProtocolMessage;
 use temper_worker::Transport;
-use temper_worker_protocol::WorkerProtocolMessage;
 
 /// In-process worker→daemon transport. Wraps a clone of the same [`Daemon`] the
 /// daemon loop owns; `send` calls [`Daemon::deliver_protocol_message`], which

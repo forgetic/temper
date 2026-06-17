@@ -13,7 +13,7 @@ pub(crate) use temper_forge::{
     UpdateIssue, UpdatePullRequest, UserId,
 };
 pub(crate) use temper_forge_memory::MemoryForge;
-pub(crate) use temper_worker_protocol::{
+pub(crate) use temper_protocol_worker::{
     Artifact, Branch, Capability, Capacity, Failure, FailureClass, JobChild, JobResult, Poll,
     Register, ReleaseDisposition, RepoAccess, RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION,
     WorkerProtocolMessage, WorkspaceManifest, WorkspaceRepo,
@@ -469,7 +469,7 @@ pub(crate) async fn poll_assignment_for_role(
     expected_role: &str,
     expected_artifact_kind: &str,
     number: ItemNumber,
-) -> temper_worker_protocol::Assign {
+) -> temper_protocol_worker::Assign {
     match post_json(client, url, &poll(worker_id)).await {
         WorkerProtocolMessage::Assign(assign) => {
             assert_eq!(assign.repo, "acme/service");
@@ -487,7 +487,7 @@ pub(crate) async fn poll_assignment(
     url: &str,
     worker_id: &str,
     issue: ItemNumber,
-) -> temper_worker_protocol::Assign {
+) -> temper_protocol_worker::Assign {
     poll_assignment_for_role(client, url, worker_id, "engineer", "issue", issue).await
 }
 
@@ -496,7 +496,7 @@ pub(crate) async fn poll_review_assignment(
     url: &str,
     worker_id: &str,
     pull_request: ItemNumber,
-) -> temper_worker_protocol::Assign {
+) -> temper_protocol_worker::Assign {
     poll_assignment_for_role(
         client,
         url,

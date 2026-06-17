@@ -16,7 +16,7 @@ temper-log = { path = "../temper-log" }
 temper-agent = { path = "../temper-agent" }
 temper-agent-core = { path = "../temper-agent-core" }
 temper-agent-io = { path = "../temper-agent-io" }
-temper-agent-protocol = { path = "../temper-agent-protocol" }
+temper-protocol-agent = { path = "../temper-protocol-agent" }
 
 [[bin]]
 name = "temper-agent"

@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::prompt_overlays::PromptOverlays;
 use crate::provider::ProviderConfig;
 use crate::usage::RunTotals;
-use temper_agent_protocol::{WorkspaceContext, WorkspaceResult};
+use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 use super::result::{collect_text, parse_result, validate_contract, validate_verdict_vocabulary};
 use super::tools::{

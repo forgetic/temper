@@ -34,7 +34,7 @@ temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
 temper-wake = { path = "../temper-wake" }
 # Wire-protocol DTOs for the deterministic daemon test worker
 # (`daemon_worker` module + the `temper-testing-daemon-worker` bin).
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-workflow = { path = "../temper-workflow" }
 # Forgejo provisioning drives async REST on the engine runtime; a shared
 # fixture crate owns the blocking server/runner lifecycle and cache management.

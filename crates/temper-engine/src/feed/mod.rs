@@ -16,10 +16,10 @@ use serde_json::json;
 use temper_forge::{
     CiJobConclusion, CiJobQuery, Forge, ForgeError, PullRequestState, RepositoryId,
 };
+use temper_protocol_worker::{Artifact, JobContext, RepoAccess};
 use temper_runner::{
     ScanError, WorkItem, pr_branch_hint, pr_correlation_key, scan_role, scan_role_wake,
 };
-use temper_worker_protocol::{Artifact, JobContext, RepoAccess};
 use temper_workflow::{
     ArtifactSource, CompiledWorkflow, Effect, GateCondition, RoleId, ToolManifest,
     ValidatedWorkflow, find_pull_request_by_correlation,

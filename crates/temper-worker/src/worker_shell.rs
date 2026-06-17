@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use skein::runtime::RuntimeHandle;
+use temper_protocol_worker::WorkerProtocolMessage;
 use temper_worker_io::{CqSender, arm_timer};
-use temper_worker_protocol::WorkerProtocolMessage;
 
 use crate::executor::{JobExecutor, job_result};
 use crate::transport::{HttpTransport, Transport};

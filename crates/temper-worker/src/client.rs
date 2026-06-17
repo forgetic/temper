@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Capability, Capacity, Heartbeat, HeartbeatState, JobHeartbeat, Poll, Register,
     WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

@@ -11,8 +11,8 @@ use temper_log::emit::{
     emit_lease_released,
 };
 use temper_log::{WorkItemRef, format_duration, strip_provider_scheme, work_item_span};
-use temper_worker_protocol::JobProgress;
-use temper_worker_protocol::JobResult;
+use temper_protocol_worker::JobProgress;
+use temper_protocol_worker::JobResult;
 use temper_workflow::{ArtifactSource, LeaseError, LeaseManager, LeasePolicy, RoleId};
 use tracing::Instrument;
 

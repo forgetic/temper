@@ -15,10 +15,10 @@ use serde_json::json;
 use temper_engine::{Daemon, RoleFeedMode, RoleFeedTarget, WebhookConfig, webhook_signature};
 use temper_forge::{CreateIssue, CreateRepository, Forge, ItemNumber, RepositoryId, UserId};
 use temper_forge_memory::MemoryForge;
-use temper_sim::{Sim, SimProtocolClient, http_request};
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Capability, Capacity, ErrorCode, Poll, Register, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };
+use temper_sim::{Sim, SimProtocolClient, http_request};
 use temper_workflow::{RawWorkflowSpec, RoleId, ValidatedWorkflow};
 
 const FIXTURE: &str = include_str!("../../temper-workflow/fixtures/reference-delivery.json");

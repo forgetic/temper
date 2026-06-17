@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use skein::cx::Cx;
 use temper_engine::Daemon;
+use temper_protocol_worker::{Assign, JobResult, WorkerProtocolMessage};
 use temper_worker::transport::Transport;
-use temper_worker_protocol::{Assign, JobResult, WorkerProtocolMessage};
 
 /// In-process transport: hands each worker→daemon message to the real daemon's
 /// in-process carrier, and taps the `Result` the worker posts onto `result_tx`.

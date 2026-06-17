@@ -20,7 +20,7 @@ temper-forge = { path = "../temper-forge" }
 temper-engine-io = { path = "../temper-engine-io" }
 temper-log = { path = "../temper-log" }
 temper-runner = { path = "../temper-runner" }
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-worker-registry = { path = "../temper-worker-registry" }
 temper-workflow = { path = "../temper-workflow" }
 

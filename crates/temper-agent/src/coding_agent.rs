@@ -97,7 +97,7 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // `deny_unknown_fields`).
 // ---------------------------------------------------------------------------
 
-pub use temper_agent_protocol::{
+pub use temper_protocol_agent::{
     WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
     WorkspaceResultChild, WorkspaceWorkItem,
 };

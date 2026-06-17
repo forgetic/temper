@@ -32,9 +32,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use temper_agent_protocol::{StepProgress, StepState};
+use temper_protocol_agent::{StepProgress, StepState};
+use temper_protocol_worker::ResultStatus;
 use temper_worker::{CodingExecutor, CodingExecutorConfig, OutOfProcessRunner, ProgressSink};
-use temper_worker_protocol::ResultStatus;
 
 #[path = "support/real_daemon.rs"]
 mod real_daemon;
@@ -233,7 +233,7 @@ fn worker_reports_transient_failure_when_agent_crashes_after_progress() {
     let failure = result.failure.expect("failure carries detail");
     assert_eq!(
         failure.class,
-        temper_worker_protocol::FailureClass::Transient
+        temper_protocol_worker::FailureClass::Transient
     );
 
     // The progress the agent emitted *before* crashing was still relayed — the

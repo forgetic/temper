@@ -354,7 +354,7 @@ impl InProcessProgressSink {
 }
 
 impl temper_worker::ProgressSink for InProcessProgressSink {
-    fn report(&self, progress: temper_agent_protocol::StepProgress) {
+    fn report(&self, progress: temper_protocol_agent::StepProgress) {
         let message = temper_worker::progress_message(&self.worker_id, &progress);
         let daemon = self.daemon.clone();
         self.handle.spawn_with_cx(move |_cx| async move {

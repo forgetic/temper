@@ -8,7 +8,7 @@ description = "In-memory worker scheduling registry (soft hint) for the Temper d
 
 [dependencies]
 serde_json = { workspace = true }
-temper-worker-protocol = { path = "../temper-worker-protocol" }
+temper-protocol-worker = { path = "../temper-protocol-worker" }
 
 [lints]
 workspace = true

@@ -13,7 +13,7 @@ use temper_forge::{
     UserId,
 };
 use temper_forge_memory::MemoryForge;
-use temper_worker_protocol::{
+use temper_protocol_worker::{
     Assign, Branch, Capability, Capacity, ErrorCode, JobResult, Poll, Register, ReleaseDisposition,
     RepoOutcome, ResultStatus, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage,
 };

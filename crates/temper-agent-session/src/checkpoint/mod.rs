@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use secrecy::ExposeSecret;
-use temper_agent_protocol::{StepProgress, StepState, WorkspaceContext};
+use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext};
 
 use crate::config::RoleIdentity;
 use crate::progress::emit;

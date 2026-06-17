@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use temper_engine::{InFlightJob, ResultApplier};
 use temper_engine_io::Spawner;
-use temper_worker_protocol::JobResult;
+use temper_protocol_worker::JobResult;
 
 /// Recorded world state. All maps are ordered so snapshots compare and print
 /// deterministically.
