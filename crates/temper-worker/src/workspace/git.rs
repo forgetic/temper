@@ -5,6 +5,48 @@ use std::process::{Command, ExitStatus, Output};
 use super::{Workspace, WorkspaceError};
 
 impl Workspace {
+    /// Persists this workspace's git author identity and push credential into the
+    /// repo's **local** `.git/config`, so a spawned agent (which holds no token)
+    /// can `git commit`/`git push` against the prepared checkout. The push token
+    /// goes into `http.extraheader`; it lives only in the worker-owned checkout's
+    /// config, never on the agent's argv or env.
+    ///
+    /// Idempotent: re-running overwrites the same keys. Called after the checkout
+    /// is prepared and before the agent is spawned.
+    pub async fn configure_local_identity(&self) -> Result<(), WorkspaceError> {
+        for (key, value) in [
+            ("user.name".to_string(), self.identity.user.clone()),
+            ("user.email".to_string(), self.identity.email.clone()),
+            (
+                "http.extraheader".to_string(),
+                format!("AUTHORIZATION: token {}", self.identity.token),
+            ),
+        ] {
+            // `--local` writes the repo's own `.git/config`; the label is
+            // token-free (the value is passed as a separate arg, so neither the
+            // command label nor git's stderr carries the token).
+            self.run_local_config(&key, value).await?;
+        }
+        Ok(())
+    }
+
+    /// Runs `git config --local <key> <value>` in this checkout, returning a
+    /// token-free error label on failure.
+    async fn run_local_config(&self, key: &str, value: String) -> Result<(), WorkspaceError> {
+        self.run_workspace_git(
+            false,
+            format!("git config --local {key} <value>"),
+            vec![
+                OsString::from("config"),
+                OsString::from("--local"),
+                OsString::from(key),
+                OsString::from(value),
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+
     pub(super) async fn run_workspace_git(
         &self,
         include_remote_header: bool,

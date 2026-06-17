@@ -6,9 +6,9 @@
 //! slim `temper-agent` binary and as the unified `temper agent` subcommand. It
 //! speaks the `temper-protocol-agent`:
 //!
-//! 1. read the [`WorkspaceContext`] JSON from the file named by `CONTEXT_ENV`;
-//! 2. run the native sans-IO coding loop in the current directory (the prepared
-//!    checkout the worker handed us as cwd);
+//! 1. read the [`WorkspaceContext`] JSON from the file named by `--context`;
+//! 2. run the native sans-IO coding loop in `--workspace` (default cwd — the
+//!    prepared checkout the worker handed us);
 //! 3. emit [`StepProgress`] records as line-delimited JSON on **stdout** — each
 //!    a crash-recovery checkpoint the worker relays to the forge. On writable
 //!    jobs the run **checkpoints**: before each model turn it commits + pushes
@@ -16,28 +16,30 @@
 //!    pushed sha (the marker never claims more than the branch holds). A
 //!    re-dispatched agent finds those commits on the prepared branch, resumes
 //!    its step numbering from them, and tells the model what already landed;
-//! 4. write the [`WorkspaceResult`] JSON to the file named by `RESULT_ENV`.
+//! 4. write the [`WorkspaceResult`] JSON to the file named by `--result`.
 //!
-//! The agent has git credentials only via the prepared checkout (to push), and
-//! never talks to the forge API — the worker owns that. Anything real-time
-//! (token deltas, steering) belongs to the out-of-band control plane, not this
-//! binary's stdout.
+//! The agent has git credentials only via the prepared checkout (the worker
+//! configures `user.name`/`user.email` and a push `http.extraheader` in each
+//! writable repo's local `.git/config` before spawning), and never talks to the
+//! forge API — the worker owns that. Anything real-time (token deltas, steering)
+//! belongs to the out-of-band control plane, not this binary's stdout.
 //!
-//! Auth/iteration knobs come from flags, mirroring the former in-process runner:
-//! `--auth <deepseek|chatgpt-oauth|anthropic-oauth>` `--auth-file <path>`
-//! `--codex-model <id>` `--max-iterations <n>` `--config-dir <path>`
-//! `--enable-subagents`.
+//! Every non-secret input is a flag: `--provider <anthropic|chatgpt|deepseek>`,
+//! `--model <id>`, `--investigate-model <id>`, `--provider-url <url>`,
+//! `--max-iterations <n>`, `--subagents <on|off>`, `--deadline-unix-seconds <n>`,
+//! `--checkpoint-interval <dur>`, `--capture-dir <dir>`, plus the required
+//! `--context`/`--result` paths and the optional `--workspace`. The **one**
+//! secret, the provider credential, arrives via
+//! `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`.
 //!
 //! ## Config objects
 //!
 //! The agent session is configured by one struct, [`AgentConfig`], which the
 //! coding-loop factory accepts. It bundles the provider wiring plus every
-//! loop/session knob (iterations, sub-agents, config dir, deadline, checkpoint
-//! cadence, capture dir, test base URL) so the factory takes a single struct
-//! rather than a growing parameter list. It is constructible in memory for tests.
-//! Per the per-subsystem config-object rule, big factories take a config object;
-//! small ones stay as-is. (The env reads that still feed some of these fields move
-//! onto the struct in issue #201 — not here.)
+//! loop/session knob (iterations, sub-agents, capture dir, deadline, checkpoint
+//! cadence) so the factory takes a single struct rather than a growing parameter
+//! list. It is constructible in memory for tests. Per the per-subsystem
+//! config-object rule, big factories take a config object; small ones stay as-is.
 //!
 //! [`WorkspaceContext`]: temper_protocol_agent::WorkspaceContext
 //! [`StepProgress`]: temper_protocol_agent::StepProgress
@@ -52,12 +54,13 @@ mod run;
 
 use std::process::ExitCode;
 
-pub use config::{AgentConfig, DEFAULT_CHECKPOINT_INTERVAL, RoleIdentity};
+pub use config::{AgentConfig, DEFAULT_CHECKPOINT_INTERVAL};
 
 /// The agent binary's entry point: the **single place** this crate (and the
-/// `temper-agent` core it drives) reads `std::env`. It parses the injected
-/// environment + CLI flags into an [`AgentConfig`] plus the context/result paths,
-/// then drives the protocol run; nothing deeper touches `std::env`.
+/// `temper-agent` core it drives) reads `std::env`. It reads the one secret env
+/// var (the provider credential) and parses the CLI flags into an [`AgentConfig`]
+/// plus the context/result/workspace paths, then drives the protocol run;
+/// nothing deeper touches `std::env`.
 pub fn main<I>(args: I) -> ExitCode
 where
     I: Iterator<Item = String>,
