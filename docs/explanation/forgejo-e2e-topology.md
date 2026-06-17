@@ -2,7 +2,7 @@
 
 This explains the durable design of the daemon-topology end-to-end suite
 (`tests/daemon_forgejo_e2e.rs`) — the real-backend proof of the consolidated
-daemon/worker split. The how-to to run it is
+daemon/worker split. The how-to for running it is
 [run-daemon-e2e.md](../how-to/run-daemon-e2e.md); the CI-read decision is
 [ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md); the worker/daemon
 boundary is [worker-daemon-wire-protocol.md](../reference/worker-daemon-wire-protocol.md).
