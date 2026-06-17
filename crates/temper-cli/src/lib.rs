@@ -3,7 +3,7 @@
 //! The unified `temper` command line — a thin dispatcher.
 //!
 //! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `config`,
-//! `daemon`, `agent` — and to the hidden operator/responder tools. Each
+//! `serve`, `daemon`, `agent` — and to the hidden operator/responder tools. Each
 //! subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
 //! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
 //! dispatch table and the operator/responder wrappers, so the heavy
@@ -38,6 +38,7 @@ Usage: temper [COMMAND]
 
 Commands:
   init    Interactively configure and provision a deployment
+  serve   Run a long-lived Temper process (standalone supported)
   config  Guided or programmatic configuration
   daemon  Run a full standalone daemon or one of its components (engine, worker)
   agent   Run an agent session (usually invoked by the daemon)
@@ -88,6 +89,7 @@ pub fn dispatch(
 ) -> ExitCode {
     match command {
         "init" => temper_cli_init::main(args, env, paths),
+        "serve" => temper_cli_daemon::serve_main(args, env, paths),
         "config" => temper_cli_config::main(temper_cli_config::ConfigInputs { args, env, paths }),
         "daemon" => temper_cli_daemon::main(args, env, paths),
         // The agent is its own process entry point and reads the worker-injected
@@ -117,5 +119,16 @@ pub fn dispatch(
             eprintln!("temper: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(EX_USAGE)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::USAGE;
+
+    #[test]
+    fn top_level_usage_lists_serve_command() {
+        assert!(USAGE.contains("serve"));
+        assert!(USAGE.contains("standalone supported"));
     }
 }

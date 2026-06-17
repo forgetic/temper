@@ -14,7 +14,10 @@ use std::path::{Path, PathBuf};
 
 use temper_config::{EnvMap, ExposeSecret, PathResolver};
 
-use super::{DaemonInputs, load_for};
+use super::{
+    DaemonInputs, SERVE_STANDALONE_USAGE, SERVE_USAGE, ServeInvocation, load_for,
+    parse_serve_invocation,
+};
 
 const POISONED_TOKEN: &str = "POISONED-GLOBAL-TOKEN-DO-NOT-USE";
 const EXPLICIT_TOKEN: &str = "explicit-deployment-token";
@@ -215,4 +218,77 @@ fn without_explicit_paths_global_is_discovered() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn serve_usage_documents_supported_local_dev_path() {
+    assert!(
+        SERVE_USAGE.contains("standalone"),
+        "serve help should advertise the supported component"
+    );
+    assert!(
+        SERVE_USAGE.contains("Not implemented"),
+        "serve help should make unsupported distributed components explicit"
+    );
+    assert!(SERVE_STANDALONE_USAGE.contains("temper serve standalone"));
+    assert!(
+        SERVE_STANDALONE_USAGE.contains("temper daemon"),
+        "standalone help should identify the compatibility wrapper"
+    );
+}
+
+#[test]
+fn serve_help_forms_are_parsed_without_starting_daemon() {
+    assert_eq!(
+        parse_serve_invocation(vec!["--help".to_string()]).expect("serve help parses"),
+        ServeInvocation::Help
+    );
+    assert_eq!(
+        parse_serve_invocation(vec!["standalone".to_string(), "--help".to_string()])
+            .expect("standalone help parses"),
+        ServeInvocation::StandaloneHelp
+    );
+}
+
+#[test]
+fn serve_standalone_maps_to_daemon_standalone_args() {
+    assert_eq!(
+        parse_serve_invocation(vec!["standalone".to_string()]).expect("standalone command parses"),
+        ServeInvocation::Standalone(Vec::new())
+    );
+
+    let args = vec![
+        "standalone".to_string(),
+        "--config".to_string(),
+        "deploy/config.toml".to_string(),
+        "--credentials".to_string(),
+        "deploy/credentials.toml".to_string(),
+    ];
+    assert_eq!(
+        parse_serve_invocation(args.clone()).expect("standalone command parses"),
+        ServeInvocation::Standalone(args[1..].to_vec())
+    );
+}
+
+#[test]
+fn serve_standalone_rejects_service_escape_hatch() {
+    let error = parse_serve_invocation(vec![
+        "standalone".to_string(),
+        "--service".to_string(),
+        "engine".to_string(),
+    ])
+    .expect_err("--service must not be accepted under serve standalone");
+
+    assert!(error.contains("--service"));
+    assert!(error.contains("standalone path"));
+}
+
+#[test]
+fn serve_rejects_distributed_components_in_this_shim() {
+    for component in ["engine", "worker", "trigger"] {
+        let error = parse_serve_invocation(vec![component.to_string()])
+            .expect_err("distributed serve component should be rejected");
+        assert!(error.contains("not implemented"));
+        assert!(error.contains("temper serve standalone"));
+    }
 }

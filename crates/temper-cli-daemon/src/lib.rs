@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! `temper daemon` — run the full standalone daemon, or one service of it.
+//! `temper daemon` / `temper serve standalone` — run the full standalone daemon,
+//! or one service of it.
 //!
-//! With no `--service`, runs the all-in-one (engine + worker + agent in one
-//! process). `--service engine` and `--service worker` run a single service for
-//! a distributed topology, sharing the exact code the slim `temper-engine` /
+//! `temper daemon` with no `--service` and `temper serve standalone` both run the
+//! all-in-one (engine + worker + agent in one process). `temper daemon --service
+//! engine` and `temper daemon --service worker` run a single service for a
+//! distributed topology, sharing the exact code the slim `temper-engine` /
 //! `temper-worker` binaries run.
 //!
 //! This crate carries the heavy engine/worker/agent wiring; the slimmer
@@ -58,6 +60,43 @@ Options:
   --service     <NAME>  Which individual service to run (engine, worker). If not
                         given, run as standalone.
   -h, --help            Print help";
+
+pub const SERVE_USAGE: &str = "\
+Run a Temper process.
+
+Usage: temper serve <COMPONENT> [OPTIONS]
+
+Components:
+  standalone  Run all Temper planes in one local process
+  engine      Not implemented for `temper serve` in this UX shim
+  worker      Not implemented for `temper serve` in this UX shim
+  trigger     Not implemented for `temper serve` in this UX shim
+
+Options:
+  -h, --help  Print help
+
+Run `temper serve standalone --help` for the supported local-dev path.";
+
+pub const SERVE_STANDALONE_USAGE: &str = "\
+Run Temper in standalone mode.
+
+This is a compatibility wrapper for the existing all-in-one `temper daemon` path
+without `--service`: engine, worker, and agent execution run in one process.
+
+Usage: temper serve standalone [OPTIONS]
+
+Options:
+  --config      <FILE>  Path to configuration file
+  --credentials <FILE>  Secrets for external services (Forgejo, LLM providers, ...)
+  -h, --help            Print help";
+
+#[derive(Debug, Eq, PartialEq)]
+enum ServeInvocation {
+    Help,
+    Version,
+    StandaloneHelp,
+    Standalone(Vec<String>),
+}
 
 /// Which individual daemon service to run (`temper daemon --service <name>`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -118,6 +157,73 @@ impl std::fmt::Display for DaemonError {
 }
 
 impl std::error::Error for DaemonError {}
+
+/// `temper serve` entry point.
+///
+/// This UX shim intentionally implements only `temper serve standalone`, mapping
+/// it to the existing standalone daemon path while keeping `temper daemon`
+/// unchanged for compatibility. Distributed `serve engine|worker|trigger` modes
+/// are rejected here instead of growing new topology semantics in this PR.
+pub fn serve_main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> ExitCode {
+    match parse_serve_invocation(args) {
+        Ok(ServeInvocation::Help) => {
+            println!("{SERVE_USAGE}");
+            ExitCode::SUCCESS
+        }
+        Ok(ServeInvocation::Version) => {
+            println!("temper {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(ServeInvocation::StandaloneHelp) => {
+            println!("{SERVE_STANDALONE_USAGE}");
+            ExitCode::SUCCESS
+        }
+        Ok(ServeInvocation::Standalone(daemon_args)) => main(daemon_args, env, paths),
+        Err(error) => {
+            eprintln!("temper serve: {error}\n\n{SERVE_USAGE}");
+            ExitCode::from(EX_USAGE)
+        }
+    }
+}
+
+fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocation, String> {
+    let mut iter = args.into_iter();
+    let Some(component) = iter.next() else {
+        return Err("missing component (expected `standalone`)".to_string());
+    };
+    match component.as_str() {
+        "-h" | "--help" | "help" => Ok(ServeInvocation::Help),
+        "-V" | "--version" => Ok(ServeInvocation::Version),
+        "standalone" => parse_serve_standalone(iter.collect()),
+        "engine" | "worker" | "trigger" => Err(format!(
+            "`temper serve {component}` is not implemented in this UX shim; use `temper serve standalone` for local development"
+        )),
+        other => Err(format!(
+            "unknown serve component `{other}` (expected `standalone`)"
+        )),
+    }
+}
+
+fn parse_serve_standalone(daemon_args: Vec<String>) -> Result<ServeInvocation, String> {
+    if daemon_args.iter().any(|arg| arg == "--service") {
+        return Err(
+            "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
+                .to_string(),
+        );
+    }
+
+    let parsed = parse_common_args(daemon_args.clone())?;
+    if parsed.help {
+        return Ok(ServeInvocation::StandaloneHelp);
+    }
+    if parsed.version {
+        return Ok(ServeInvocation::Version);
+    }
+    if let Some(unexpected) = parsed.rest.first() {
+        return Err(format!("unexpected argument `{unexpected}`"));
+    }
+    Ok(ServeInvocation::Standalone(daemon_args))
+}
 
 /// `temper daemon` entry point: parse the common flags + `--service` from
 /// `args`, build [`DaemonInputs`] over the injected `env` / `paths` snapshot, and
