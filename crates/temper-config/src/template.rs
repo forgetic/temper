@@ -32,7 +32,7 @@ port = 4000
 # workflow = \"/path/to/my-workflow.json\"
 repos = [\"acme/widgets\"]
 roles = [\"architect\", \"engineer\", \"code-reviewer\"]
-poll_cadence_secs = 30
+poll_cadence_secs = 300
 # Mechanical backstop (label transitions / PR landing). On by default;
 # webhooks are the primary reaction path and this is the level-triggered
 # safety net. Omit for the default cadence; set 0 to disable.

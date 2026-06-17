@@ -158,6 +158,60 @@ fn resolves_full_deployment() {
 }
 
 #[test]
+fn poll_cadence_defaults_to_300_when_omitted() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["architect", "engineer"]
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    assert_eq!(
+        resolved.engine.poll_cadence,
+        std::time::Duration::from_secs(300),
+        "omitted poll cadence should use the default backstop interval"
+    );
+}
+
+#[test]
+fn explicit_poll_cadence_is_honored() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["architect", "engineer"]
+poll_cadence_secs = 2
+"#,
+    );
+    let resolved = resolve(&config, &Credentials::default(), &NoEnv).expect("resolves");
+    assert_eq!(
+        resolved.engine.poll_cadence,
+        std::time::Duration::from_secs(2)
+    );
+}
+
+#[test]
+fn zero_poll_cadence_is_invalid() {
+    let config = parse_config(
+        r#"
+schema_version = 1
+[engine]
+repos = ["a/b"]
+roles = ["architect", "engineer"]
+poll_cadence_secs = 0
+"#,
+    );
+    let err = resolve(&config, &Credentials::default(), &NoEnv).expect_err("rejects zero");
+    assert!(
+        format!("{err}").contains("engine.poll_cadence_secs"),
+        "error should identify the invalid field: {err}"
+    );
+}
+
+#[test]
 fn mechanical_backstop_on_by_default_when_omitted() {
     // Omitting `mechanical_cadence_secs` must leave the backstop enabled: it is
     // the level-triggered safety net that stamps intake and lands PRs. A
