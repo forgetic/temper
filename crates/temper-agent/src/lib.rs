@@ -17,6 +17,7 @@ mod observability;
 pub mod product_manager;
 pub mod prompt_overlays;
 pub mod provider;
+mod tool_preview;
 pub mod usage;
 pub mod workflow_role_decision;
 mod workflow_role_decision_capture;
