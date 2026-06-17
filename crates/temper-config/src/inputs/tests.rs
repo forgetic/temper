@@ -131,10 +131,12 @@ fn xdg_config_home_wins_over_home() {
 }
 
 #[test]
-fn temper_config_env_honored_from_injected_env() {
-    // TEMPER_CONFIG / TEMPER_CREDENTIALS come from the INJECTED env, not the
-    // real process environment, and override the (empty) default discovery.
-    let dir = temp_dir("env-config");
+fn temper_config_env_is_ignored() {
+    // `TEMPER_CONFIG` / `TEMPER_CREDENTIALS` no longer select the files: the path
+    // comes only from `--config` / `--credentials` and the XDG/HOME default
+    // location. With those env vars set but no explicit path and an empty
+    // PathResolver, discovery still finds NOTHING — the env files are ignored.
+    let dir = temp_dir("env-config-ignored");
     let config_path = dir.join("custom-config.toml");
     let credentials_path = dir.join("custom-credentials.toml");
     std::fs::write(&config_path, MINIMAL_CONFIG).expect("write config");
@@ -157,14 +159,20 @@ fn temper_config_env_honored_from_injected_env() {
         env: &env,
         paths: &PathResolver::default(),
     };
-    let (resolved, loaded) = load_explicit(&inputs).expect("env-pointed files load");
+    let (resolved, loaded) = load_explicit(&inputs).expect("load resolves to defaults");
 
-    assert_eq!(loaded.config.as_deref(), Some(config_path.as_path()));
-    assert_eq!(
-        loaded.credentials.as_deref(),
-        Some(credentials_path.as_path())
+    // The env-pointed files were ignored: nothing discovered, defaults only.
+    assert!(
+        loaded.config.is_none(),
+        "TEMPER_CONFIG must not select a file, got {:?}",
+        loaded.config
     );
-    assert_eq!(resolved.engine.roles, vec!["engineer"]);
+    assert!(
+        loaded.credentials.is_none(),
+        "TEMPER_CREDENTIALS must not select a file, got {:?}",
+        loaded.credentials
+    );
+    assert!(resolved.engine.roles.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -218,15 +226,13 @@ fn from_env_with_empty_env_discovers_nothing() {
 }
 
 #[test]
-fn missing_env_pointed_file_is_an_error() {
-    // An env-var path is *required*: a missing file errors (it is not silently
-    // treated as absent like a default-location file).
-    let mut env = EnvMap::new();
-    env.insert("TEMPER_CONFIG", "/nonexistent/temper/config.toml");
+fn missing_explicit_file_is_an_error() {
+    // An explicit `--config` path is *required*: a missing file errors (it is not
+    // silently treated as absent like a default-location file).
     let inputs = LoadInputs {
-        explicit_config: None,
+        explicit_config: Some(PathBuf::from("/nonexistent/temper/config.toml")),
         explicit_credentials: None,
-        env: &env,
+        env: &NoEnv,
         paths: &PathResolver::default(),
     };
     let err = load_explicit(&inputs).expect_err("missing required file errors");

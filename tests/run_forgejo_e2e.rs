@@ -225,15 +225,18 @@ fn spawn_temper_run(
 ) -> ChildGuard {
     // The new CLI is config-file driven: standalone `temper daemon` (no
     // --service) runs engine + worker + agent in one process. Deployment
-    // settings go in the config file; secrets (forge token, the engineer's
-    // role identity, the dummy LLM key) and the fake-LLM redirect come from the
-    // environment, which the resolver layers over the file.
+    // settings go in the config file; secrets (forge admin token, the engineer's
+    // role identity, the dummy LLM key) go in a companion `credentials.toml`
+    // passed via `--credentials`. The fake-LLM redirect and dummy DeepSeek key
+    // remain in the env (those are not deployment-config overrides).
     let config_path = workspace.join("run-config.toml");
     let config = format!(
         "schema_version = 1\n\
          [forge]\n\
          type = \"forgejo\"\n\
          url = \"{base_url}\"\n\
+         admin = \"admin\"\n\
+         ci_user = \"{ENGINEER}\"\n\
          [engine]\n\
          repos = [\"{owner}/{name}\"]\n\
          roles = [\"{ENGINEER}\"]\n\
@@ -256,6 +259,28 @@ fn spawn_temper_run(
     );
     std::fs::write(&config_path, config).expect("write run config");
 
+    // Credentials file replacing the removed FORGEJO_* / TEMPER_FORGEJO_*_ENGINEER
+    // env injection: the forge admin token (keyed by `[forge] admin`), the web-UI
+    // CI-read pair (keyed by `[forge] ci_user`), and the engineer's per-role
+    // identity (keyed by the role name).
+    let credentials_path = workspace.join("run-credentials.toml");
+    let credentials = format!(
+        "schema_version = 1\n\
+         [forge.users.admin]\n\
+         token = \"{admin_token}\"\n\
+         [forge.users.{ENGINEER}]\n\
+         user = \"{eng_user}\"\n\
+         email = \"{eng_email}\"\n\
+         password = \"{eng_password}\"\n\
+         token = \"{eng_token}\"\n",
+        admin_token = provisioned.admin_token,
+        eng_user = engineer.user,
+        eng_email = engineer.email,
+        eng_password = engineer.password,
+        eng_token = engineer.token,
+    );
+    std::fs::write(&credentials_path, credentials).expect("write run credentials");
+
     // Hermeticity: point HOME / XDG_* at an isolated, empty dir under the temp
     // workspace so the spawned daemon can never discover the developer's or CI
     // user's global ~/.config/temper/credentials.toml. With the explicit
@@ -265,32 +290,15 @@ fn spawn_temper_run(
     std::fs::create_dir_all(fake_home.join(".config")).expect("fake home creates");
 
     let log_file = log_file(log);
-    let engineer_upper = ENGINEER.to_uppercase();
     let child = Command::new(env!("CARGO_BIN_EXE_temper"))
         .arg("daemon")
         .arg("--config")
         .arg(&config_path)
+        .arg("--credentials")
+        .arg(&credentials_path)
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))
-        // Forge connection (token is secret -> env).
-        .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
-        .env("FORGEJO_USERNAME", &engineer.user)
-        .env("FORGEJO_PASSWORD", &engineer.password)
-        // Per-role Forge API token routing.
-        .env(
-            format!("TEMPER_FORGEJO_TOKEN_{engineer_upper}"),
-            &engineer.token,
-        )
-        // Per-role git identity the agent pushes with.
-        .env(
-            format!("TEMPER_FORGEJO_USER_{engineer_upper}"),
-            &engineer.user,
-        )
-        .env(
-            format!("TEMPER_FORGEJO_EMAIL_{engineer_upper}"),
-            &engineer.email,
-        )
         // Agent LLM: dummy DeepSeek key (preflight is a no-op for ApiKey mode)
         // redirected to the local fake LLM.
         .env("TEMPER_DEEPSEEK_API_KEY", "sk-jig-test")

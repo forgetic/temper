@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Collapse the config file, credentials file, environment, and built-in
-//! defaults into a [`Resolved`] deployment.
+//! Collapse the config file, credentials file, and built-in defaults into a
+//! [`Resolved`] deployment.
 //!
-//! Precedence is **environment override > file value > built-in default**, and
-//! the new CLI exposes no per-field flags (the daemon takes only `--config`,
-//! `--credentials`, and `--service`), so the file is the primary source.
+//! Deployment shape comes only from the config file (with built-in defaults as
+//! the fallback): the new CLI exposes no per-field flags (the daemon takes only
+//! `--config`, `--credentials`, and `--service`), and no environment variable
+//! overrides deployment config. The injected [`EnvLookup`] is consulted solely
+//! for `$HOME` / `$XDG_*` when expanding a leading `~` in a path value.
 //!
 //! Per-role forge credentials resolve from `[forge.users.<role>]` in the
-//! credentials file, falling back to the legacy `TEMPER_FORGEJO_{USER,EMAIL,
-//! TOKEN}_<ROLE>` environment so existing provisioned `roles.env` files keep
-//! working through the transition.
+//! credentials file; there is no per-role environment fallback.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
@@ -52,7 +52,9 @@ const DEFAULT_CI_USER: &str = "bot";
 /// agree.
 const DEFAULT_MAX_ITERATIONS: usize = 250;
 
-/// Resolves a full deployment from the two files plus the environment.
+/// Resolves a full deployment from the config and credentials files. The
+/// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,
+/// never to override a deployment value.
 pub fn resolve(
     config: &Config,
     credentials: &Credentials,
@@ -61,7 +63,7 @@ pub fn resolve(
     let engine = resolve_engine(config, env)?;
     let worker = resolve_worker(config, env, &engine)?;
     let roles = referenced_roles(&engine, &worker);
-    let forge = resolve_forge(config, credentials, env, &roles);
+    let forge = resolve_forge(config, credentials, &roles);
     let agent = resolve_agent(config, credentials, env)?;
     Ok(Resolved {
         forge,
@@ -76,37 +78,27 @@ pub fn resolve(
 fn resolve_forge(
     config: &Config,
     credentials: &Credentials,
-    env: &impl EnvLookup,
     roles: &BTreeSet<String>,
 ) -> ForgeSettings {
-    let url = env
-        .non_empty("TEMPER_FORGE_URL")
-        .or_else(|| env.non_empty("FORGEJO_URL"))
-        .or_else(|| trimmed(config.forge.url.as_deref()))
-        .map(|url| url.trim_end_matches('/').to_string());
+    let url = trimmed(config.forge.url.as_deref()).map(|url| url.trim_end_matches('/').to_string());
 
     let admin = trimmed(config.forge.admin.as_deref());
-    let admin_token = env
-        .non_empty("TEMPER_FORGE_TOKEN")
-        .or_else(|| env.non_empty("FORGEJO_ACCESS_TOKEN"))
-        .or_else(|| {
-            admin
-                .as_deref()
-                .and_then(|name| credentials.forge.users.get(name))
-                .and_then(|user| trimmed(user.token.as_deref()))
-        })
+    let admin_token = admin
+        .as_deref()
+        .and_then(|name| credentials.forge.users.get(name))
+        .and_then(|user| trimmed(user.token.as_deref()))
         .map(SecretString::from);
 
     let ci_user =
         trimmed(config.forge.ci_user.as_deref()).unwrap_or_else(|| DEFAULT_CI_USER.to_string());
-    let web_ui = resolve_web_ui(credentials, env, &ci_user);
+    let web_ui = resolve_web_ui(credentials, &ci_user);
 
     let mut role_tokens = BTreeMap::new();
     let mut role_identities = BTreeMap::new();
     for role in roles {
-        if let Some(token) = role_token(credentials, env, role) {
-            let user = role_user(credentials, env, role);
-            let email = role_email(credentials, env, role, &user);
+        if let Some(token) = role_token(credentials, role) {
+            let user = role_user(credentials, role);
+            let email = role_email(credentials, role, &user);
             role_tokens.insert(role.clone(), SecretString::from(token.clone()));
             role_identities.insert(
                 role.clone(),
@@ -129,51 +121,41 @@ fn resolve_forge(
     }
 }
 
-fn resolve_web_ui(
-    credentials: &Credentials,
-    env: &impl EnvLookup,
-    ci_user: &str,
-) -> Option<WebUiCreds> {
+fn resolve_web_ui(credentials: &Credentials, ci_user: &str) -> Option<WebUiCreds> {
     let user = credentials.forge.users.get(ci_user);
-    let username = env
-        .non_empty("FORGEJO_USERNAME")
-        .or_else(|| user.and_then(|u| trimmed(u.user.as_deref())))
+    let username = user
+        .and_then(|u| trimmed(u.user.as_deref()))
         .unwrap_or_else(|| ci_user.to_string());
-    let password = env
-        .non_empty("FORGEJO_PASSWORD")
-        .or_else(|| user.and_then(|u| trimmed(u.password.as_deref())))?;
+    let password = user.and_then(|u| trimmed(u.password.as_deref()))?;
     Some(WebUiCreds {
         username,
         password: SecretString::from(password),
     })
 }
 
-fn role_token(credentials: &Credentials, env: &impl EnvLookup, role: &str) -> Option<String> {
+fn role_token(credentials: &Credentials, role: &str) -> Option<String> {
     credentials
         .forge
         .users
         .get(role)
         .and_then(|user| trimmed(user.token.as_deref()))
-        .or_else(|| env.non_empty(&format!("TEMPER_FORGEJO_TOKEN_{}", env_role_key(role))))
 }
 
-fn role_user(credentials: &Credentials, env: &impl EnvLookup, role: &str) -> String {
+fn role_user(credentials: &Credentials, role: &str) -> String {
     credentials
         .forge
         .users
         .get(role)
         .and_then(|user| trimmed(user.user.as_deref()))
-        .or_else(|| env.non_empty(&format!("TEMPER_FORGEJO_USER_{}", env_role_key(role))))
         .unwrap_or_else(|| role.to_string())
 }
 
-fn role_email(credentials: &Credentials, env: &impl EnvLookup, role: &str, user: &str) -> String {
+fn role_email(credentials: &Credentials, role: &str, user: &str) -> String {
     credentials
         .forge
         .users
         .get(role)
         .and_then(|u| trimmed(u.email.as_deref()))
-        .or_else(|| env.non_empty(&format!("TEMPER_FORGEJO_EMAIL_{}", env_role_key(role))))
         .unwrap_or_else(|| format!("{user}@noreply.localhost"))
 }
 
@@ -195,7 +177,7 @@ pub fn env_role_key(role: &str) -> String {
 // ── engine ──────────────────────────────────────────────────────────────────
 
 fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSettings, ConfigError> {
-    let bind = resolve_bind(config, env)?;
+    let bind = resolve_bind(config)?;
 
     let repos = config
         .engine
@@ -218,10 +200,8 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
             .filter(|role| !role.is_empty()),
     );
 
-    let workflow_file = env
-        .non_empty("TEMPER_WORKFLOW")
-        .or_else(|| trimmed(config.engine.workflow.as_deref()))
-        .map(|value| expand_tilde(&value, env));
+    let workflow_file =
+        trimmed(config.engine.workflow.as_deref()).map(|value| expand_tilde(&value, env));
 
     let poll_cadence = positive_duration_secs(
         config
@@ -271,13 +251,7 @@ fn resolve_engine(config: &Config, env: &impl EnvLookup) -> Result<EngineSetting
     })
 }
 
-fn resolve_bind(config: &Config, env: &impl EnvLookup) -> Result<SocketAddr, ConfigError> {
-    if let Some(bind) = env.non_empty("TEMPER_ENGINE_BIND") {
-        return parse_bind(&bind);
-    }
-    if let Some(port) = env.non_empty("TEMPER_ENGINE_PORT") {
-        return parse_port(&port);
-    }
+fn resolve_bind(config: &Config) -> Result<SocketAddr, ConfigError> {
     if let Some(bind) = trimmed(config.engine.bind.as_deref()) {
         return parse_bind(&bind);
     }
@@ -292,13 +266,6 @@ fn parse_bind(raw: &str) -> Result<SocketAddr, ConfigError> {
         .map_err(|error| ConfigError::invalid(format!("invalid engine bind `{raw}`: {error}")))
 }
 
-fn parse_port(raw: &str) -> Result<SocketAddr, ConfigError> {
-    let port: u16 = raw
-        .parse()
-        .map_err(|error| ConfigError::invalid(format!("invalid engine port `{raw}`: {error}")))?;
-    parse_bind(&format!("127.0.0.1:{port}"))
-}
-
 // ── worker ──────────────────────────────────────────────────────────────────
 
 fn resolve_worker(
@@ -309,14 +276,10 @@ fn resolve_worker(
     let worker_id = trimmed(config.worker.worker_id.as_deref())
         .unwrap_or_else(|| DEFAULT_WORKER_ID.to_string());
 
-    let daemon_url = env
-        .non_empty("TEMPER_DAEMON_URL")
-        .or_else(|| trimmed(config.worker.daemon_url.as_deref()))
+    let daemon_url = trimmed(config.worker.daemon_url.as_deref())
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", engine.bind.port()));
 
-    let workspace_root = env
-        .non_empty("TEMPER_WORKSPACE")
-        .or_else(|| trimmed(config.worker.workspace.as_deref()))
+    let workspace_root = trimmed(config.worker.workspace.as_deref())
         .map(|value| expand_tilde(&value, env))
         .unwrap_or_else(|| {
             default_workspace_root(env)

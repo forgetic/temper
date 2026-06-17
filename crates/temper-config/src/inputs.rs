@@ -85,7 +85,9 @@ pub struct LoadInputs<'a> {
     pub explicit_config: Option<PathBuf>,
     /// Explicit `--credentials` path (wins over env + defaults).
     pub explicit_credentials: Option<PathBuf>,
-    /// Injected environment snapshot (incl. `TEMPER_CONFIG`, `TEMPER_CREDENTIALS`).
+    /// Injected environment snapshot. Used only for `$HOME` / `$XDG_*` path
+    /// expansion during resolution; no environment variable selects which files
+    /// load or overrides their resolved deployment values.
     pub env: &'a dyn EnvLookup,
     /// Injected base directories for default-location discovery.
     pub paths: &'a PathResolver,
@@ -93,19 +95,16 @@ pub struct LoadInputs<'a> {
 
 /// Loads + resolves the deployment from fully injected inputs.
 ///
-/// Resolution per file: explicit override → `TEMPER_CONFIG` /
-/// `TEMPER_CREDENTIALS` from `inputs.env` → `<config-dir>/{config,credentials}.toml`
-/// derived from `inputs.paths`. An explicit/env path is *required* (a missing
-/// file errors); a default-location file is *optional* (absent means
-/// env + built-in defaults supply everything).
+/// Resolution per file: explicit override → `<config-dir>/{config,credentials}.toml`
+/// derived from `inputs.paths`. An explicit path is *required* (a missing file
+/// errors); a default-location file is *optional* (absent means built-in
+/// defaults supply everything). No environment variable selects the files.
 ///
-/// Hermeticity: with `inputs.paths` empty (every field `None`) and an empty
-/// `inputs.env`, only explicit paths can load — nothing is discovered from the
-/// real environment.
+/// Hermeticity: with `inputs.paths` empty (every field `None`), only explicit
+/// paths can load — nothing is discovered from the real environment.
 pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), ConfigError> {
     let (config, config_file) = load_optional(
         inputs.explicit_config.clone(),
-        "TEMPER_CONFIG",
         |dir| dir.join("config.toml"),
         FileKind::Config,
         inputs,
@@ -113,7 +112,6 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
     )?;
     let (credentials, credentials_file) = load_optional(
         inputs.explicit_credentials.clone(),
-        "TEMPER_CREDENTIALS",
         |dir| dir.join("credentials.toml"),
         FileKind::Credentials,
         inputs,
@@ -130,27 +128,24 @@ pub fn load_explicit(inputs: &LoadInputs) -> Result<(Resolved, LoadedPaths), Con
     ))
 }
 
-/// Locates a file (explicit override / env var = required; default location =
-/// optional), reads + parses it, or returns a defaulted value when an optional
-/// file is absent. The only sources are `inputs`: no `std::env` access.
+/// Locates a file (explicit override = required; default location = optional),
+/// reads + parses it, or returns a defaulted value when an optional file is
+/// absent. The only sources are `inputs`: no `std::env` access, and no
+/// environment variable overrides the file location.
 fn load_optional<T: Default>(
     explicit: Option<PathBuf>,
-    env_key: &str,
     default_name: impl Fn(&Path) -> PathBuf,
     kind: FileKind,
     inputs: &LoadInputs,
     parse: impl Fn(&str, &Path, FileKind) -> Result<T, ConfigError>,
 ) -> Result<(T, Option<PathBuf>), ConfigError> {
-    // An explicit override or an env-var path is *required*: a missing file is an
-    // error. A default-location file is *optional*: absent means env+defaults.
+    // An explicit override is *required*: a missing file is an error. A
+    // default-location file is *optional*: absent means built-in defaults.
     let (path, required) = match explicit {
         Some(path) => (path, true),
-        None => match inputs.env.non_empty(env_key) {
-            Some(path) => (PathBuf::from(path), true),
-            None => match paths::config_dir(inputs.paths) {
-                Some(dir) => (default_name(&dir), false),
-                None => return Ok((T::default(), None)),
-            },
+        None => match paths::config_dir(inputs.paths) {
+            Some(dir) => (default_name(&dir), false),
+            None => return Ok((T::default(), None)),
         },
     };
 

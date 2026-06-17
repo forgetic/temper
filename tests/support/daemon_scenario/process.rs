@@ -30,17 +30,18 @@ pub(super) fn spawn_daemon(
 ) -> ChildGuard {
     // The new CLI is config-file driven: write the engine's deployment settings
     // to a config file and run `temper daemon --service engine`. Secrets (forge
-    // token, CI web-UI creds, the engineer's per-role token) still come from the
-    // environment, which the resolver layers over the file.
-    let config_path = log
-        .parent()
-        .expect("daemon log has a parent dir")
-        .join("daemon-config.toml");
+    // admin token, CI web-UI creds, the engineer's per-role identity) go in a
+    // companion `credentials.toml` passed via `--credentials`; the deployment
+    // env overrides have been removed from `temper-config`.
+    let config_dir = log.parent().expect("daemon log has a parent dir");
+    let config_path = config_dir.join("daemon-config.toml");
     let config = format!(
         "schema_version = 1\n\
          [forge]\n\
          type = \"forgejo\"\n\
          url = \"{base_url}\"\n\
+         admin = \"admin\"\n\
+         ci_user = \"{ENGINEER}\"\n\
          [engine]\n\
          bind = \"127.0.0.1:{port}\"\n\
          repos = [\"{owner}/{name}\"]\n\
@@ -60,6 +61,27 @@ pub(super) fn spawn_daemon(
     );
     std::fs::write(&config_path, config).expect("write daemon config");
 
+    // Credentials file: the forge admin token (keyed by `[forge] admin`), the
+    // web-UI CI-read pair (keyed by `[forge] ci_user`), and the engineer's
+    // per-role identity (keyed by the role name). These were previously injected
+    // through FORGEJO_ACCESS_TOKEN / FORGEJO_USERNAME / FORGEJO_PASSWORD /
+    // TEMPER_FORGEJO_TOKEN_ENGINEER, which `temper-config` no longer reads.
+    let credentials_path = config_dir.join("daemon-credentials.toml");
+    let credentials = format!(
+        "schema_version = 1\n\
+         [forge.users.admin]\n\
+         token = \"{admin_token}\"\n\
+         [forge.users.{ENGINEER}]\n\
+         user = \"{eng_user}\"\n\
+         password = \"{eng_password}\"\n\
+         token = \"{eng_token}\"\n",
+        admin_token = provisioned.admin_token,
+        eng_user = engineer.user,
+        eng_password = engineer.password,
+        eng_token = engineer.token,
+    );
+    std::fs::write(&credentials_path, credentials).expect("write daemon credentials");
+
     // Hermeticity: point HOME / XDG_* at an isolated, empty dir beside the config
     // so the spawned daemon can never discover a global
     // ~/.config/temper/credentials.toml. The explicit --config already suppresses
@@ -78,15 +100,11 @@ pub(super) fn spawn_daemon(
         .arg("engine")
         .arg("--config")
         .arg(&config_path)
+        .arg("--credentials")
+        .arg(&credentials_path)
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))
-        .env("FORGEJO_ACCESS_TOKEN", &provisioned.admin_token)
-        // ADR 0019 web-UI CI-read fallback used by the mechanical backstop.
-        .env("FORGEJO_USERNAME", &engineer.user)
-        .env("FORGEJO_PASSWORD", &engineer.password)
-        // Per-role Forge API token routing (consolidation phase 4d).
-        .env("TEMPER_FORGEJO_TOKEN_ENGINEER", &engineer.token)
         .env_remove("FORGEJO_DEFAULT_REPO")
         .env_remove("FORGEJO_URL")
         .stdout(Stdio::from(
