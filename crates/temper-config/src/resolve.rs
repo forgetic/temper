@@ -29,7 +29,7 @@ use crate::resolved::{
 use crate::schema::{Config, Credentials};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
-const DEFAULT_POLL_CADENCE_SECS: u64 = 30;
+const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
 /// Mechanical backstop runs by default. It is the level-triggered safety net
 /// (webhooks accelerate it), so the cadence is conservative rather than
 /// aggressive: a slow idle backstop. Set `mechanical_cadence_secs = 0` to

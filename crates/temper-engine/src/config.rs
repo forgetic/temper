@@ -13,7 +13,7 @@ use temper_forge::RepositoryPath;
 use temper_workflow::RoleId;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
-const DEFAULT_POLL_CADENCE_SECS: u64 = 30;
+const DEFAULT_POLL_CADENCE_SECS: u64 = 300;
 /// Mechanical backstop runs by default. Webhooks are the primary reaction path,
 /// so this level-triggered safety net uses a conservative cadence. Pass
 /// `--mechanical-cadence-secs 0` to disable the mechanical worker entirely.

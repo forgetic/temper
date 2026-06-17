@@ -120,7 +120,7 @@ fn defaults_apply_when_only_repo_and_role_given() {
     assert_eq!(config.bind, "127.0.0.1:8080".parse().unwrap());
     assert_eq!(config.repos, vec![repo("acme", "service")]);
     assert_eq!(config.roles, vec![role("engineer")]);
-    assert_eq!(config.poll_cadence, Duration::from_secs(30));
+    assert_eq!(config.poll_cadence, Duration::from_secs(300));
     // The mechanical backstop is on by default; webhooks are the primary
     // reaction path and this is the level-triggered safety net.
     assert_eq!(config.mechanical_cadence, Some(Duration::from_secs(120)));
