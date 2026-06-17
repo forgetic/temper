@@ -18,6 +18,20 @@ use tongs::model::Usage;
 
 use crate::observability::StructuredEvent;
 
+/// A plain-`u64` snapshot of a run's [`UsageTotals`] for callers outside this
+/// crate (the standalone runner enriches the `agent.finished` info line from
+/// these). Decoupled from the atomic ledger so the reader gets a coherent,
+/// non-aliasing copy with no lock or `Ordering` concerns.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RunTotals {
+    /// Total input (prompt) tokens across the main run and all sub-agents.
+    pub input: u64,
+    /// Total output (completion) tokens.
+    pub output: u64,
+    /// Total tool calls issued.
+    pub tool_calls: u64,
+}
+
 /// Aggregated token/tool counters for one coding-agent run (main run plus all
 /// nested sub-agent runs).
 #[derive(Default)]
@@ -42,6 +56,18 @@ impl UsageTotals {
         self.turns.fetch_add(1, Ordering::Relaxed);
         if scope != MAIN_SCOPE {
             self.sub_agent_turns.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Reads the input/output/tool-call counters into a plain [`RunTotals`].
+    ///
+    /// Call once at end-of-run (after the drive loop has folded every turn);
+    /// the loads are `Relaxed` because the run is quiesced by then.
+    pub fn snapshot(&self) -> RunTotals {
+        RunTotals {
+            input: self.input.load(Ordering::Relaxed),
+            output: self.output.load(Ordering::Relaxed),
+            tool_calls: self.tool_calls.load(Ordering::Relaxed),
         }
     }
 

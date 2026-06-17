@@ -315,6 +315,7 @@ fn agent_invokes_the_checkpoint_tool_at_a_milestone() {
             Some(hook as Arc<dyn CheckpointHook>),
         )
         .await
+        .map(|(result, _totals)| result)
     })
     .expect("native coding agent with a checkpoint hook succeeds");
 

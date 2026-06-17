@@ -54,6 +54,7 @@ pub use provider::{
 pub use temper_process_protocol::{
     ConversationReply, ConversationRequest, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
+pub use usage::RunTotals;
 pub use workflow_role_decision::{
     WorkflowRoleDecisionError, WorkflowRoleDecisionResponder, WorkflowRoleModelDecision,
     reply_for_model_decision, workflow_role_system_prompt, workflow_role_user_context,

@@ -17,7 +17,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use skein::runtime::RuntimeHandle;
-use temper_agent::{CodingAgentError, ProviderConfig, run_coding_agent_native_with_hooks};
+use temper_agent::{
+    CodingAgentError, ProviderConfig, RunTotals, run_coding_agent_native_with_hooks,
+};
 use temper_agent_protocol::{PROTOCOL_VERSION, StepProgress, StepState, WorkspaceContext};
 use temper_log::WorkItemRef;
 use temper_log::emit::{AgentFinished, AgentStarted, emit_agent_finished, emit_agent_started};
@@ -120,11 +122,16 @@ impl AgentRunner for InProcessAgentRunner {
             // gets a `done in <dur> | <summary>` line so the agent plane never
             // shows a dangling `start` with no terminus. The summary carries
             // the verdict on success (e.g. `verdict=ready_code`) or the error
-            // classification on failure.
+            // classification on failure. On success we also append the run's
+            // humanized token totals (`<Nk> in / <Nk> out, <N> tool calls`); a
+            // failed run has no meaningful totals to report.
             let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let Some(item) = item.as_ref() {
                 let summary = match &outcome {
-                    Ok(result) => result.summary.clone().unwrap_or_else(|| "done".to_string()),
+                    Ok((result, totals)) => {
+                        let base = result.summary.clone().unwrap_or_else(|| "done".to_string());
+                        format!("{base} | {}", totals_suffix(*totals))
+                    }
                     Err(error) => format!("failed: {}", error.message),
                 };
                 emit_agent_finished(AgentFinished {
@@ -136,7 +143,7 @@ impl AgentRunner for InProcessAgentRunner {
                 });
             }
 
-            let result = outcome?;
+            let (result, _totals) = outcome?;
 
             progress.report(StepProgress {
                 correlation_key: correlation,
@@ -174,6 +181,53 @@ fn started_detail(kind: &str) -> &'static str {
         "coding" => "preparing workspace, implementing",
         "review" => "reviewing changes",
         _ => "running",
+    }
+}
+
+/// The token-totals suffix appended to a successful `agent.finished` summary.
+///
+/// Renders `<input> in / <output> out, <N> tool calls` with the token counts
+/// humanized via [`human_count`] (the §7 example: `470k in / 6.4k out, 52 tool
+/// calls`). The tool-call count is kept raw — it is a small cardinal number, not
+/// a token volume — so a one-off run reads `1 tool call`.
+fn totals_suffix(totals: RunTotals) -> String {
+    let calls = totals.tool_calls;
+    let unit = if calls == 1 {
+        "tool call"
+    } else {
+        "tool calls"
+    };
+    format!(
+        "{} in / {} out, {calls} {unit}",
+        human_count(totals.input),
+        human_count(totals.output),
+    )
+}
+
+/// Humanizes a token count with a `k` suffix above 1000.
+///
+/// Under 1000 the raw integer is shown (`0`, `999`). At/above 1000 the value is
+/// expressed in thousands: 1000–9999 keep one decimal of precision (`6379` ->
+/// `6.4k`), 10_000 and up round to a whole `k` (`470306` -> `470k`). A trailing
+/// `.0` is dropped so a round value stays tight (`2000` -> `2k`). Arithmetic is
+/// integer-only (half-up rounding) to avoid float surprises.
+fn human_count(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    if n >= 10_000 {
+        // Round to the nearest whole thousand: floor((n + 500) / 1000).
+        let thousands = (n + 500) / 1000;
+        return format!("{thousands}k");
+    }
+    // 1000–9999: one decimal, i.e. tenths = round(n / 100) half-up.
+    let tenths = (n + 50) / 100;
+    let whole = tenths / 10;
+    let frac = tenths % 10;
+    if frac == 0 {
+        format!("{whole}k")
+    } else {
+        format!("{whole}.{frac}k")
     }
 }
 
@@ -282,6 +336,49 @@ mod tests {
         assert_eq!(parse_target_number("Issue { }"), None);
         assert_eq!(parse_target_number("number: ItemNumber()"), None);
         assert_eq!(parse_target_number("garbage with no marker"), None);
+    }
+
+    #[test]
+    fn human_count_below_1000_is_raw() {
+        assert_eq!(human_count(0), "0");
+        assert_eq!(human_count(1), "1");
+        assert_eq!(human_count(999), "999");
+    }
+
+    #[test]
+    fn human_count_thousands_keep_one_decimal() {
+        assert_eq!(human_count(1000), "1k");
+        assert_eq!(human_count(1500), "1.5k");
+        assert_eq!(human_count(6379), "6.4k");
+        assert_eq!(human_count(9999), "10k"); // rounds up out of the decimal band
+    }
+
+    #[test]
+    fn human_count_large_rounds_to_whole_k() {
+        assert_eq!(human_count(10_000), "10k");
+        assert_eq!(human_count(10_500), "11k");
+        assert_eq!(human_count(470_306), "470k");
+        assert_eq!(human_count(1_000_000), "1000k");
+    }
+
+    #[test]
+    fn totals_suffix_renders_humanized_counts() {
+        let totals = RunTotals {
+            input: 470_306,
+            output: 6379,
+            tool_calls: 52,
+        };
+        assert_eq!(totals_suffix(totals), "470k in / 6.4k out, 52 tool calls");
+    }
+
+    #[test]
+    fn totals_suffix_singular_tool_call() {
+        let totals = RunTotals {
+            input: 0,
+            output: 0,
+            tool_calls: 1,
+        };
+        assert_eq!(totals_suffix(totals), "0 in / 0 out, 1 tool call");
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::prompt_overlays::PromptOverlays;
 use crate::provider::ProviderConfig;
+use crate::usage::RunTotals;
 use temper_agent_protocol::{WorkspaceContext, WorkspaceResult};
 
 use super::result::{collect_text, parse_result, validate_contract, validate_verdict_vocabulary};
@@ -66,7 +67,7 @@ pub async fn run_coding_agent_native_with_options(
     config_dir: Option<&Path>,
     enable_subagents: bool,
 ) -> Result<WorkspaceResult, CodingAgentError> {
-    run_coding_agent_native_with_hooks(
+    let (result, _totals) = run_coding_agent_native_with_hooks(
         handle,
         provider_config,
         context,
@@ -78,7 +79,8 @@ pub async fn run_coding_agent_native_with_options(
         None,
         None,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 /// [`run_coding_agent_native_with_options`] with the phase-6b hooks: an
@@ -86,6 +88,12 @@ pub async fn run_coding_agent_native_with_options(
 /// continuing a checkpointed branch), an optional [`temper_agent_core::TurnHook`]
 /// awaited before each model call (the safety-backstop checkpointer), and an
 /// optional [`CheckpointHook`] backing the model-driven `checkpoint` tool.
+///
+/// Returns the parsed [`WorkspaceResult`] paired with the run's [`RunTotals`]
+/// (input/output tokens + tool-call count, summed across the main run and every
+/// nested sub-agent). The standalone runner folds these into the §7
+/// `agent.finished` info line; callers that don't need them use the
+/// totals-discarding wrappers above.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_coding_agent_native_with_hooks(
     handle: skein::runtime::RuntimeHandle,
@@ -98,7 +106,7 @@ pub async fn run_coding_agent_native_with_hooks(
     resume_note: Option<&str>,
     turn_hook: Option<std::sync::Arc<dyn temper_agent_core::TurnHook>>,
     checkpoint_hook: Option<std::sync::Arc<dyn CheckpointHook>>,
-) -> Result<WorkspaceResult, CodingAgentError> {
+) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
 
@@ -174,6 +182,7 @@ pub async fn run_coding_agent_native_with_hooks(
     .await
     .map_err(|error| classify_run_error(&model_id, error.to_string()))?;
     totals.emit_summary();
+    let run_totals = totals.snapshot();
 
     if matches!(outcome.stop, temper_agent_core::AgentStop::ModelError) {
         let reason = outcome
@@ -195,7 +204,7 @@ pub async fn run_coding_agent_native_with_hooks(
     })?;
     validate_verdict_vocabulary(&result, &context.allowed_verdicts)?;
     validate_contract(capability, &result, cwd, context)?;
-    Ok(result)
+    Ok((result, run_totals))
 }
 
 /// Classifies a run/stop error message, promoting a model-availability

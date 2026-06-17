@@ -147,6 +147,8 @@ fn drive_coding_loop(
             checkpoint_hook,
         )
         .await
+        // The session path doesn't surface token totals; drop them here.
+        .map(|(result, _totals)| result)
     })
 }
 
