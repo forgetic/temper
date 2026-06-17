@@ -124,7 +124,10 @@ pub(super) const CHECKPOINT_GUIDANCE: &str = "\nCHECKPOINTS:\n\
     short imperative `label` for what you just finished.\n\
     - Checkpointing makes your progress durable: if the run is interrupted, work \
     you have checkpointed is recovered and you resume from it. Aim for a few \
-    meaningful checkpoints over a task rather than many tiny ones or none.\n";
+    meaningful checkpoints over a task rather than many tiny ones or none.\n\
+    - When your final result includes a multi-phase implementation `plan`, use \
+    the exact completed phase label as the checkpoint `label` so the PR \
+    checklist can be ticked without issue-thread chatter.\n";
 
 /// Guidance appended to the role prompt when the sub-agent tools are
 /// registered: tells the model which sub-agent to delegate to, that several run

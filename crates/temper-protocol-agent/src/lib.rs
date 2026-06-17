@@ -274,8 +274,9 @@ pub struct StepProgress {
     pub correlation_key: String,
     /// Monotonic step index within the turn, starting at 1.
     pub step: u32,
-    /// Short imperative label of the step, e.g. "write failing test". Suitable
-    /// as a checklist line on the PR.
+    /// Short imperative label of the step, e.g. "write failing test". For a
+    /// planned implementation phase, use the phase label exactly (modulo
+    /// whitespace) so the daemon can tick the matching PR checklist item.
     pub status: String,
     /// Step lifecycle phase.
     #[serde(default)]

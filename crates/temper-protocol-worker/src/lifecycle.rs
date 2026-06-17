@@ -37,8 +37,10 @@ pub struct Heartbeat {
 /// There is deliberately no `job_id`: the workspace `correlation_key` (the
 /// manifest's `coordination_key` value) is the one cross-plane identifier, and
 /// the daemon resolves it to its in-flight job. Delivery is fire-and-forget and
-/// the daemon applies progress idempotently keyed by
-/// `(correlation_key, step, state)`, so re-delivery after worker retry or
+/// the daemon applies progress idempotently to the implementation PR checklist
+/// by `(correlation_key, status, state)` when `status` matches a plan phase;
+/// terminal final-summary comments, when emitted, keep a
+/// `(correlation_key, step, state)` marker so re-delivery after worker retry or
 /// daemon restart is safe.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobProgress {

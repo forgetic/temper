@@ -25,8 +25,10 @@ pub trait ResultApplier: Send + Sync {
 
     /// Applies one agent step-progress checkpoint for an in-flight job.
     ///
-    /// Default: no-op. Implementations must be **idempotent keyed by
-    /// `(correlation_key, step, state)`** — workers fire-and-forget and may
+    /// Default: no-op. Implementations must be **idempotent for re-delivery** —
+    /// PR checklist progress is naturally keyed by `(correlation_key, status,
+    /// state)`, while terminal final-summary comments use a
+    /// `(correlation_key, step, state)` marker. Workers fire-and-forget and may
     /// re-deliver after retry or daemon restart.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
         let _ = (job, progress);
