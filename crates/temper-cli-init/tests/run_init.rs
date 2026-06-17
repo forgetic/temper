@@ -154,7 +154,7 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert_eq!(seen.admin_password, "admin-pass");
     assert_eq!(seen.owner, "acme");
     assert_eq!(seen.name, "service");
-    assert_eq!(seen.webhook_url, "http://127.0.0.1:8314/webhook");
+    assert_eq!(seen.webhook_url, "http://127.0.0.1:8314/forgejo/webhook");
     assert!(!seen.existing_repo);
     // The webhook secret file the adapter reads back is the one we wrote.
     assert!(seen.webhook_secret_file.ends_with("webhook-secret"));

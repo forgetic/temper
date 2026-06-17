@@ -66,10 +66,10 @@ pub(crate) fn planes_up() -> String {
     "planes up: engine + worker + agent on one loop".to_string()
 }
 
-/// Renders the `webhook listener up on <bind>/forgejo (issue, PR, CI events)`
-/// line (a `trigger:` status line).
+/// Renders the `webhook listener up on <bind>/forgejo/webhook (issue, PR, CI
+/// events)` line (a `trigger:` status line).
 pub(crate) fn webhook_listener(bind: &str) -> String {
-    format!("webhook listener up on {bind}/forgejo (issue, PR, CI events)")
+    format!("webhook listener up on {bind}/forgejo/webhook (issue, PR, CI events)")
 }
 
 /// Renders the `poll backstop every <Ns> (<roles> feeds across <N> repos)` line.
@@ -201,7 +201,7 @@ mod tests {
         );
         assert_eq!(
             webhook_listener(":8080"),
-            "webhook listener up on :8080/forgejo (issue, PR, CI events)"
+            "webhook listener up on :8080/forgejo/webhook (issue, PR, CI events)"
         );
     }
 

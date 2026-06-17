@@ -143,7 +143,7 @@ fn init_forgejo_drives_a_working_setup() {
     // ── 2. Forge-side provisioning ──────────────────────────────────────────────
     let admin_token = read_admin_token(&credentials_path);
     let rest = BlockingJsonClient::new();
-    let webhook_url = format!("{webhook_addr}/webhook");
+    let webhook_url = format!("{webhook_addr}/forgejo/webhook");
     assert_forge_state(&rest, &base_url, &admin_token, &webhook_url);
 
     // ── 3a. Idempotency: a second --force run converges, no duplicates. ─────────

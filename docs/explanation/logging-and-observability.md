@@ -240,7 +240,7 @@ $ journalctl -u temper -o short-iso
 2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/widgets: labels verified (untriaged,code,ready,in-progress,implementation)
 2026-06-16T09:00:01+0000 temper[4821]: engine:  repo acme/api:     labels verified (untriaged,code,ready,in-progress,implementation)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  planes up: engine + worker + agent on one loop
-2026-06-16T09:00:02+0000 temper[4821]: trigger: webhook listener up on :8080/forgejo (issue, PR, CI events)
+2026-06-16T09:00:02+0000 temper[4821]: trigger: webhook listener up on :8080/forgejo/webhook (issue, PR, CI events)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  poll backstop every 60s (architect, engineer feeds across 2 repos)
 2026-06-16T09:00:02+0000 temper[4821]: engine:  mechanical backstop every 30s (raw_intake, landing across 2 repos)
 2026-06-16T09:00:02+0000 temper[4821]: worker:  capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)

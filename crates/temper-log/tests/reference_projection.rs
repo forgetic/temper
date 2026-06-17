@@ -146,7 +146,7 @@ fn section_seven_reference_projection_is_prefixed_and_structured() {
         vec![
             "engine:  ready -- watching acme/widgets, acme/api, idle",
             "worker:  capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)",
-            "trigger: webhook listener up on :8080/forgejo (issue, PR, CI events)",
+            "trigger: webhook listener up on :8080/forgejo/webhook (issue, PR, CI events)",
             "trigger: [acme/widgets#42] issue opened by alice \"Cache invalidation drops stale keys on resize\"",
             "trigger: [acme/widgets#42] wake | artifact=intake queue=raw_intake",
             "worker:  [acme/widgets#42] architect claimed lease (ttl 10m) | running triage_intake",
@@ -317,7 +317,9 @@ fn emit_reference_lifecycle() {
     emit::emit_worker_status(
         "capacity: architect=1 engineer=1 mechanical=1 (per-role, shared across all repos)",
     );
-    emit::emit_trigger_status("webhook listener up on :8080/forgejo (issue, PR, CI events)");
+    emit::emit_trigger_status(
+        "webhook listener up on :8080/forgejo/webhook (issue, PR, CI events)",
+    );
     emit::emit_issue_opened(IssueOpened {
         item: &issue,
         author: "alice",

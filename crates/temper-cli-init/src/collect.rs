@@ -56,7 +56,10 @@ impl Answers {
     /// The webhook URL the daemon registers (the bind address + the engine's
     /// webhook route).
     pub fn webhook_url(&self) -> String {
-        format!("{}/webhook", self.webhook_addr.trim_end_matches('/'))
+        format!(
+            "{}/forgejo/webhook",
+            self.webhook_addr.trim_end_matches('/')
+        )
     }
 }
 
@@ -163,7 +166,7 @@ mod tests {
         assert_eq!(a.repo_name, "service");
         // The webhook URL is the *daemon's* address (where the forge POSTs
         // events), not the forge URL.
-        assert_eq!(a.webhook_url(), "http://127.0.0.1:8314/webhook");
+        assert_eq!(a.webhook_url(), "http://127.0.0.1:8314/forgejo/webhook");
     }
 
     #[test]
