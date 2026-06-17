@@ -5,8 +5,8 @@
 //! [`ProvisionPlan`](temper_provision::ProvisionPlan) (the demo CI seed commits
 //! plus an optional webhook), runs the backend-agnostic
 //! [`temper_provision::provision`] orchestration, then seeds the demo intake
-//! issue with the workflow-resolved author token. Also owns the `secrets.env`
-//! writer the demo launcher reads role tokens back from.
+//! issue with the workflow-resolved author token. Also owns the
+//! `credentials.toml` writer the demo launcher reads role tokens back from.
 //!
 //! `temper init` does NOT go through here: it inlines `temper-provision`
 //! directly. This is only the demo / ignored-e2e operator path.
@@ -17,7 +17,7 @@ mod secrets;
 
 pub use options::ProvisionOptions;
 pub use orchestrate::{provision_and_seed, provision_world};
-pub use secrets::{format_secrets_env, role_token_from_secrets_file, write_secrets_file};
+pub use secrets::{credentials_document, role_token_from_secrets_file, write_credentials_file};
 
 // Host-neutral provisioning types and intake-seed helpers, re-exported so the
 // CLI modules can name them without a second `temper_provision`/`temper_forge`

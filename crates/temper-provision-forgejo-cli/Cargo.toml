@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Operator CLI for the `temper provision-forgejo` reference-delivery demo subcommand: builds a ForgejoForge, runs the backend-agnostic temper-provision orchestration, seeds the demo intake issue, and writes secrets.env."
 
 [dependencies]
+temper-config = { path = "../temper-config" }
 temper-forge = { path = "../temper-forge" }
 temper-provision = { path = "../temper-provision" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
@@ -21,6 +22,7 @@ skein.workspace = true
 # Dev-only: production provisioning never depends on the test fixture.
 temper-testing = { path = "../temper-testing" }
 serde_json.workspace = true
+toml.workspace = true
 base64 = "0.22"
 
 [lints]

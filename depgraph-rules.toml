@@ -88,8 +88,10 @@ temper-provision = ["temper-forge", "temper-runner", "temper-workflow"]
 # Reference-delivery demo / operator CLI for `temper provision-forgejo`: builds a
 # forge through the facade factory (new_forgejo_provisioning) and runs the
 # backend-agnostic temper-provision orchestration. No concrete backend dep — the
-# demo CI/secrets/intake bits live in temper-reference-delivery.
-temper-provision-forgejo-cli = ["temper-forge", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
+# demo CI/intake bits live in temper-reference-delivery. Depends on temper-config
+# to write provisioned secrets in the runtime's own credentials.toml format (the
+# file the daemon loads via --credentials).
+temper-provision-forgejo-cli = ["temper-config", "temper-forge", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
 temper-engine = ["temper-forge", "temper-engine-io", "temper-log", "temper-runner", "temper-protocol-worker", "temper-worker-registry", "temper-workflow"]

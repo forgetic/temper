@@ -71,6 +71,28 @@ fn temper_run_gets_bot_credentials_without_argv_secrets() {
     assert!(boot_run.contains("daemon --config \"$_config\""));
 }
 
+/// The provisioner now writes the runtime's own `credentials.toml` (no env file),
+/// and the daemon loads the per-role + bot identities from it via
+/// `--credentials`. No legacy `roles.env` / per-role env exports remain.
+#[test]
+fn launcher_is_credentials_toml_driven() {
+    let script = read_example("run.sh");
+
+    assert!(script.contains("CREDENTIALS_FILE=\"$SECRETS_DIR/credentials.toml\""));
+    assert!(!script.contains("roles.env"));
+    assert!(script.contains("--out \"$CREDENTIALS_FILE\""));
+
+    let boot_run = script
+        .split("boot_run() {")
+        .nth(1)
+        .expect("boot_run function exists");
+    assert!(boot_run.contains("--credentials \"$CREDENTIALS_FILE\""));
+
+    assert!(!script.contains("export_run_role_env"));
+    assert!(!script.contains("TEMPER_FORGEJO_USER_"));
+    assert!(!script.contains("TEMPER_FORGEJO_TOKEN_"));
+}
+
 #[test]
 fn bot_identity_is_resolved_before_temper_run_launch() {
     let script = read_example("run.sh");

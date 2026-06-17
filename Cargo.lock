@@ -1838,6 +1838,7 @@ dependencies = [
  "base64",
  "serde_json",
  "skein",
+ "temper-config",
  "temper-engine-io",
  "temper-forge",
  "temper-provision",
@@ -1845,6 +1846,7 @@ dependencies = [
  "temper-runner",
  "temper-testing",
  "temper-workflow",
+ "toml",
 ]
 
 [[package]]

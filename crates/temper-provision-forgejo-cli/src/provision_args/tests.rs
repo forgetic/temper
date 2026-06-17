@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::provision::AccessScope;
 
-use super::{ADMIN_TOKEN_ENV, ParseOutcome, ProvisionArgs, WORKFLOW_FILE_ENV, parse_with_env};
+use super::{ADMIN_TOKEN_ENV, ParseOutcome, ProvisionArgs, parse_with_env};
 
 #[test]
 fn parse_requires_admin_token_from_env() {
@@ -15,7 +15,7 @@ fn parse_requires_admin_token_from_env() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
         ]
         .into_iter()
         .map(String::from),
@@ -36,7 +36,7 @@ fn parse_reads_token_from_env_and_debug_redacts_it() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
         ]
         .into_iter()
         .map(String::from),
@@ -63,7 +63,7 @@ fn parse_allows_disabling_or_customizing_seed_intake() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
             "--seed-intake",
             "no",
             "--intake-title",
@@ -95,7 +95,7 @@ fn parse_seed_only_keeps_seeding_enabled() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
             "--seed-only",
         ]
         .into_iter()
@@ -121,7 +121,7 @@ fn parse_rejects_seed_only_with_seed_intake_no() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
             "--seed-only",
             "--seed-intake",
             "no",
@@ -145,7 +145,7 @@ fn parse_args(extra: &[&str]) -> ProvisionArgs {
         "--name",
         "service",
         "--out",
-        "roles.env",
+        "credentials.toml",
     ];
     argv.extend_from_slice(extra);
     let outcome = parse_with_env(argv.into_iter().map(String::from), |key| {
@@ -198,7 +198,7 @@ fn parse_rejects_unknown_access_value() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
             "--access",
             "owner",
         ]
@@ -252,7 +252,7 @@ fn parse_defaults_workflow_file_to_none() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
         ]
         .into_iter()
         .map(String::from),
@@ -266,7 +266,7 @@ fn parse_defaults_workflow_file_to_none() {
 }
 
 #[test]
-fn parse_accepts_workflow_flag_with_env_fallback_and_precedence() {
+fn parse_accepts_workflow_flag_only_no_env_fallback() {
     // Flag override.
     let ParseOutcome::Run(args) = parse_with_env(
         [
@@ -277,24 +277,21 @@ fn parse_accepts_workflow_flag_with_env_fallback_and_precedence() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
             "--workflow",
             "from-flag.json",
         ]
         .into_iter()
         .map(String::from),
-        |key| match key {
-            ADMIN_TOKEN_ENV => Some("admin-secret".to_string()),
-            WORKFLOW_FILE_ENV => Some("from-env.json".to_string()),
-            _ => None,
-        },
+        |key| (key == ADMIN_TOKEN_ENV).then(|| "admin-secret".to_string()),
     )
     .expect("parses") else {
         panic!("expected run")
     };
     assert_eq!(args.workflow_file, Some(PathBuf::from("from-flag.json")));
 
-    // Env fallback when the flag is absent.
+    // No `--workflow` flag ⇒ `None` even if a (now-unsupported) env var is set:
+    // the workflow comes only from the flag, defaulting downstream.
     let ParseOutcome::Run(args) = parse_with_env(
         [
             "--base-url",
@@ -304,18 +301,18 @@ fn parse_accepts_workflow_flag_with_env_fallback_and_precedence() {
             "--name",
             "service",
             "--out",
-            "roles.env",
+            "credentials.toml",
         ]
         .into_iter()
         .map(String::from),
         |key| match key {
             ADMIN_TOKEN_ENV => Some("admin-secret".to_string()),
-            WORKFLOW_FILE_ENV => Some("from-env.json".to_string()),
+            "TEMPER_WORKFLOW_FILE" => Some("from-env.json".to_string()),
             _ => None,
         },
     )
     .expect("parses") else {
         panic!("expected run")
     };
-    assert_eq!(args.workflow_file, Some(PathBuf::from("from-env.json")));
+    assert_eq!(args.workflow_file, None);
 }
