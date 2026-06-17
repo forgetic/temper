@@ -14,8 +14,8 @@ pub enum CodingAgentError {
     /// The provider reported the requested model is unavailable (e.g. a model
     /// alias was suspended, or the subscription tier does not grant it). Kept
     /// distinct from a generic abnormal stop so the failure names the model and
-    /// any provider-suggested fallback, and an operator can fix it by setting
-    /// `TEMPER_AGENTS_ANTHROPIC_MODEL` (or `--codex-model`).
+    /// any provider-suggested fallback, and an operator can fix it by passing a
+    /// different `--model` (or setting the provider profile's `models.main`).
     ModelUnavailable { model: String, detail: String },
     /// The model's reply was not the expected JSON result object.
     Parse { snippet: String, error: String },
@@ -41,8 +41,8 @@ impl std::fmt::Display for CodingAgentError {
             }
             CodingAgentError::ModelUnavailable { model, detail } => write!(
                 formatter,
-                "model `{model}` is unavailable: {detail}. Set TEMPER_AGENTS_ANTHROPIC_MODEL \
-                 (Anthropic) or --codex-model (Codex) to a model the credential grants."
+                "model `{model}` is unavailable: {detail}. Pass --model (or set the \
+                 provider profile's models.main) to a model the credential grants."
             ),
             CodingAgentError::Parse { snippet, error } => {
                 write!(

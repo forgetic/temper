@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! How a resolved provider maps onto the agent process's environment.
+//! How a resolved provider maps onto the agent process's command line + the one
+//! secret env var.
 //!
-//! The coding agent reads its provider/model/credential wiring from a fixed set
-//! of environment variables (and, for OAuth, a pi-format `auth.json`). Both the
-//! out-of-process worker (which spawns the agent and injects these per spawn)
-//! and the in-process standalone mode share this mapping, so it lives here in
-//! the tier-agnostic config crate rather than being duplicated.
+//! The coding agent takes every non-secret input as a CLI flag (`--provider`,
+//! `--model`, `--investigate-model`, `--provider-url`, …) and reads exactly one
+//! secret from the environment: the provider credential JSON
+//! (`TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`). Both the out-of-process worker
+//! (which spawns the agent and injects this per spawn) and the in-process
+//! standalone mode share this mapping, so it lives here in the tier-agnostic
+//! config crate rather than being duplicated.
 //!
-//! This module is pure: it produces the env pairs and the `auth.json` *content*
-//! to write; the caller owns the actual file I/O.
+//! This module is pure: it produces the flag strings and the credential JSON
+//! *value*; the caller owns spawning the process and injecting the env. The
+//! credential JSON shape matches `temper_protocol_agent::ProviderCredentialJson`
+//! (the agent's parse target); it is emitted here with `serde_json` directly so
+//! the tier-agnostic config crate keeps its zero-internal-dependency footprint.
 
 use std::path::{Path, PathBuf};
 
@@ -17,26 +23,76 @@ use secrecy::ExposeSecret;
 
 use crate::resolved::{ProviderCredential, ProviderKind, ProviderSettings};
 
-/// Env var the agent reads for the OAuth `auth.json` path.
-pub const AUTH_FILE_ENV: &str = "TEMPER_AGENTS_AUTH_FILE";
-/// Env var the agent reads for the Codex (ChatGPT) model id.
-pub const CODEX_MODEL_ENV: &str = "TEMPER_AGENTS_CODEX_MODEL";
-/// Env var the agent reads for the Anthropic model id.
-pub const ANTHROPIC_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_MODEL";
-/// Env var the agent reads for the Anthropic sub-agent (investigate) model id.
-pub const ANTHROPIC_SUBAGENT_MODEL_ENV: &str = "TEMPER_AGENTS_ANTHROPIC_SUBAGENT_MODEL";
-/// Env var the agent reads for the DeepSeek API key.
-pub const DEEPSEEK_API_KEY_ENV: &str = "TEMPER_DEEPSEEK_API_KEY";
-/// Env var that redirects provider traffic to an alternate base URL.
-pub const PROVIDER_BASE_URL_ENV: &str = "ANVIL_TEST_PROVIDER_BASE_URL";
+/// The env var carrying the provider credential JSON. The agent reads it under
+/// the same name (`temper_protocol_agent::PROVIDER_CREDENTIALS_ENV`); duplicated
+/// here as a plain string so the config crate needs no protocol dependency.
+pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON";
 
-/// The agent's `--auth` flag value for a provider kind.
-pub fn auth_mode(kind: ProviderKind) -> &'static str {
+/// The agent's `--provider` flag value for a provider kind.
+pub fn provider_flag(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::DeepSeek => "deepseek",
-        ProviderKind::ChatGpt => "chatgpt-oauth",
-        ProviderKind::Anthropic => "anthropic-oauth",
+        ProviderKind::ChatGpt => "chatgpt",
+        ProviderKind::Anthropic => "anthropic",
     }
+}
+
+/// The agent CLI flags that carry the (non-secret) provider/model wiring:
+/// `--provider`, plus `--model`/`--investigate-model`/`--provider-url` when the
+/// resolved settings supply them.
+///
+/// The credential is **not** here — it crosses as the one secret env var (see
+/// [`provider_credentials_json`]).
+pub fn provider_flags(provider: &ProviderSettings) -> Vec<String> {
+    let mut flags = vec![
+        "--provider".to_string(),
+        provider_flag(provider.kind).to_string(),
+    ];
+    if let Some(model) = &provider.main_model {
+        flags.push("--model".to_string());
+        flags.push(model.clone());
+    }
+    if let Some(sub) = &provider.investigate_model {
+        flags.push("--investigate-model".to_string());
+        flags.push(sub.clone());
+    }
+    if let Some(url) = &provider.base_url {
+        flags.push("--provider-url".to_string());
+        flags.push(url.clone());
+    }
+    flags
+}
+
+/// The provider credential JSON the worker injects via
+/// [`PROVIDER_CREDENTIALS_ENV`], built from the resolved credential.
+///
+/// Returns `None` for an `Ambient` credential (no secret to forward) and for an
+/// `OAuthFile` reference (the worker has only a path, not inline tokens — the
+/// caller reads the file when it needs to forward it; the in-tree worker always
+/// resolves inline tokens). The `expires` field in the credentials file is in
+/// unix **milliseconds**; the JSON contract carries unix **seconds**, so it is
+/// converted here (the agent converts back when it materializes its `auth.json`).
+pub fn provider_credentials_json(provider: &ProviderSettings) -> Option<String> {
+    // I/O boundary: the key/tokens cross into the agent's env as JSON. The shape
+    // mirrors `temper_protocol_agent::ProviderCredentialJson`.
+    let value = match &provider.credential {
+        ProviderCredential::ApiKey(key) => serde_json::json!({
+            "type": "api-key",
+            "api_key": key.expose_secret(),
+        }),
+        ProviderCredential::OAuthInline {
+            access,
+            refresh,
+            expires,
+        } => serde_json::json!({
+            "type": "oauth",
+            "access_token": access.expose_secret(),
+            "refresh_token": refresh.as_ref().map(ExposeSecret::expose_secret),
+            "expires_at_unix_seconds": expires / 1_000,
+        }),
+        ProviderCredential::OAuthFile(_) | ProviderCredential::Ambient => return None,
+    };
+    serde_json::to_string(&value).ok()
 }
 
 /// The `auth.json` provider key an OAuth credential is stored under.
@@ -48,98 +104,135 @@ pub fn oauth_provider_key(kind: ProviderKind) -> &'static str {
     }
 }
 
-/// The environment to inject into an agent process so it builds the configured
-/// provider. `auth_file` is the path the OAuth credential lives at (materialized
-/// from inline tokens, or an explicit `auth_file`), if any.
-pub fn provider_env(
-    provider: &ProviderSettings,
-    auth_file: Option<&Path>,
-) -> Vec<(String, String)> {
-    let mut env = Vec::new();
-    if let Some(model) = &provider.main_model {
-        match provider.kind {
-            ProviderKind::ChatGpt => env.push((CODEX_MODEL_ENV.to_string(), model.clone())),
-            ProviderKind::Anthropic => env.push((ANTHROPIC_MODEL_ENV.to_string(), model.clone())),
-            // DeepSeek's model is not env-overridable in the agent today.
-            ProviderKind::DeepSeek => {}
-        }
-    }
-    if let Some(sub) = &provider.investigate_model
-        && provider.kind == ProviderKind::Anthropic
-    {
-        env.push((ANTHROPIC_SUBAGENT_MODEL_ENV.to_string(), sub.clone()));
-    }
-    if let Some(url) = &provider.base_url {
-        env.push((PROVIDER_BASE_URL_ENV.to_string(), url.clone()));
-    }
-    if let ProviderCredential::ApiKey(key) = &provider.credential {
-        // I/O boundary: the key crosses into the spawned agent's environment.
-        env.push((
-            DEEPSEEK_API_KEY_ENV.to_string(),
-            key.expose_secret().to_string(),
-        ));
-    }
-    if let Some(path) = auth_file {
-        env.push((AUTH_FILE_ENV.to_string(), path.display().to_string()));
-    }
-    env
-}
-
-/// For an inline-OAuth credential, the pi-format `auth.json` content to write so
-/// the agent's OAuth loader can read (and refresh) it. `None` for any other
-/// credential (api-key, an external `auth_file`, or ambient).
-pub fn oauth_auth_json(provider: &ProviderSettings) -> Option<String> {
-    let ProviderCredential::OAuthInline {
-        access,
-        refresh,
-        expires,
-    } = &provider.credential
-    else {
-        return None;
-    };
-    let key = oauth_provider_key(provider.kind);
-    // I/O boundary: the OAuth tokens are written to the agent's `auth.json`.
-    let refresh = refresh.as_ref().map(|token| token.expose_secret());
-    // The nodejs pi `auth.json` schema: `{ <key>: { type, access, refresh,
-    // expires } }`, with `expires` in unix milliseconds (see the agent's
-    // tolerant OAuth reader).
-    let entry = serde_json::json!({
-        key: {
-            "type": "oauth",
-            "access": access.expose_secret(),
-            "refresh": refresh,
-            "expires": expires,
-        }
-    });
-    serde_json::to_string_pretty(&entry).ok()
-}
-
-/// The path of an explicit (already-on-disk) OAuth `auth.json`, when the
-/// credential points at one rather than carrying inline tokens.
-pub fn external_auth_file(provider: &ProviderSettings) -> Option<&Path> {
-    match &provider.credential {
-        ProviderCredential::OAuthFile(path) => Some(path.as_path()),
-        _ => None,
-    }
-}
-
-/// Resolves the OAuth `auth.json` path the agent should read, materializing
-/// inline tokens into `dir` (created if needed, `0600` on Unix) or returning a
-/// configured external path. Returns `None` for api-key/ambient credentials.
+/// Materializes an inline OAuth credential into a pi-format `auth.json` under
+/// `dir` (created if needed, `0600` on Unix) for the resolved provider kind, or
+/// returns a configured external `auth_file` path. `None` for api-key/ambient
+/// credentials (the OAuth loader then uses its default file).
+///
+/// Used by the **in-process** standalone host, which builds the provider config
+/// directly from the resolved values. (The out-of-process agent receives the
+/// tokens via the credential JSON env and materializes its own file.)
 pub fn materialize_auth_file(
     provider: &ProviderSettings,
     dir: &Path,
 ) -> std::io::Result<Option<PathBuf>> {
-    if let Some(json) = oauth_auth_json(provider) {
-        std::fs::create_dir_all(dir)?;
-        let path = dir.join(format!("{}-auth.json", provider.kind.as_str()));
-        std::fs::write(&path, json)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    match &provider.credential {
+        ProviderCredential::OAuthInline {
+            access,
+            refresh,
+            expires,
+        } => {
+            std::fs::create_dir_all(dir)?;
+            // The nodejs pi schema: `{ <key>: { type, access, refresh, expires } }`
+            // with `expires` in unix milliseconds (matching the resolved field).
+            let entry = serde_json::json!({
+                oauth_provider_key(provider.kind): {
+                    "type": "oauth",
+                    "access": access.expose_secret(),
+                    "refresh": refresh.as_ref().map(ExposeSecret::expose_secret),
+                    "expires": expires,
+                }
+            });
+            let json = serde_json::to_string_pretty(&entry).unwrap_or_default();
+            let path = dir.join(format!("{}-auth.json", provider.kind.as_str()));
+            std::fs::write(&path, json)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(Some(path))
         }
-        return Ok(Some(path));
+        ProviderCredential::OAuthFile(path) => Ok(Some(path.clone())),
+        ProviderCredential::ApiKey(_) | ProviderCredential::Ambient => Ok(None),
     }
-    Ok(external_auth_file(provider).map(Path::to_path_buf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Secret;
+
+    fn settings(kind: ProviderKind, credential: ProviderCredential) -> ProviderSettings {
+        ProviderSettings {
+            kind,
+            main_model: None,
+            investigate_model: None,
+            base_url: None,
+            credential,
+        }
+    }
+
+    #[test]
+    fn provider_flags_carry_models_and_url() {
+        let provider = ProviderSettings {
+            kind: ProviderKind::Anthropic,
+            main_model: Some("claude-opus-4-8".to_string()),
+            investigate_model: Some("claude-haiku-4-5".to_string()),
+            base_url: Some("http://fake-llm".to_string()),
+            credential: ProviderCredential::Ambient,
+        };
+        let flags = provider_flags(&provider);
+        assert_eq!(
+            flags,
+            vec![
+                "--provider",
+                "anthropic",
+                "--model",
+                "claude-opus-4-8",
+                "--investigate-model",
+                "claude-haiku-4-5",
+                "--provider-url",
+                "http://fake-llm",
+            ]
+        );
+    }
+
+    #[test]
+    fn api_key_credential_json() {
+        let provider = settings(
+            ProviderKind::DeepSeek,
+            ProviderCredential::ApiKey(Secret::from("sk-x".to_string())),
+        );
+        let json = provider_credentials_json(&provider).expect("json");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(value["type"], "api-key");
+        assert_eq!(value["api_key"], "sk-x");
+    }
+
+    #[test]
+    fn oauth_inline_credential_json_converts_expiry_to_seconds() {
+        let provider = settings(
+            ProviderKind::Anthropic,
+            ProviderCredential::OAuthInline {
+                access: Secret::from("acc".to_string()),
+                refresh: Some(Secret::from("ref".to_string())),
+                expires: 1_781_371_005_373,
+            },
+        );
+        let json = provider_credentials_json(&provider).expect("json");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(value["type"], "oauth");
+        assert_eq!(value["access_token"], "acc");
+        assert_eq!(value["refresh_token"], "ref");
+        assert_eq!(value["expires_at_unix_seconds"], 1_781_371_005_i64);
+    }
+
+    #[test]
+    fn ambient_and_oauth_file_have_no_credential_json() {
+        assert!(
+            provider_credentials_json(&settings(
+                ProviderKind::Anthropic,
+                ProviderCredential::Ambient
+            ))
+            .is_none()
+        );
+        assert!(
+            provider_credentials_json(&settings(
+                ProviderKind::ChatGpt,
+                ProviderCredential::OAuthFile("/tmp/auth.json".into())
+            ))
+            .is_none()
+        );
+    }
 }

@@ -69,7 +69,6 @@ fn prepare_checkpointer(
         Arc::new(Checkpointer::new(
             cwd,
             context,
-            &config.role_identity,
             config.deadline,
             config.checkpoint_interval,
         ))

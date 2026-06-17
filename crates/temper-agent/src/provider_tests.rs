@@ -256,27 +256,6 @@ fn from_auth_anthropic_oauth_preflights_present_login() {
 }
 
 #[test]
-fn observability_identity_omits_credentials_and_auth_file_paths() {
-    let api_key = ProviderConfig::new("deepseek", "deepseek-chat", DEFAULT_BASE_URL, "sk-secret");
-    let identity = api_key.observability_identity();
-    let rendered = format!("{identity:?}");
-    assert_eq!(identity.provider_id, "deepseek");
-    assert_eq!(identity.model_id, "deepseek-chat");
-    assert_eq!(identity.auth_mode, "api_key");
-    assert!(!rendered.contains("sk-secret"));
-
-    let auth_path = std::path::PathBuf::from("/tmp/anvil-secret-auth-file.json");
-    let oauth = ProviderConfig::chatgpt_oauth(Some("gpt-test".to_string()), Some(auth_path));
-    let identity = oauth.observability_identity();
-    let rendered = format!("{identity:?}");
-    assert_eq!(identity.provider_id, CODEX_PROVIDER_ID);
-    assert_eq!(identity.model_id, "gpt-test");
-    assert_eq!(identity.auth_mode, "chatgpt_oauth");
-    assert!(!rendered.contains("anvil-secret-auth-file"));
-    assert!(!rendered.contains("/tmp"));
-}
-
-#[test]
 fn debug_redacts_api_key() {
     let config = ProviderConfig::new("deepseek", "deepseek-chat", DEFAULT_BASE_URL, "sk-secret");
     let rendered = format!("{config:?}");

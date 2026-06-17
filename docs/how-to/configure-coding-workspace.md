@@ -20,7 +20,7 @@ The conventional id is `coding_workspace`:
     "description": "Prepare a checkout, edit code, commit a PR head, and report changed files.",
     "required": false,
     "constraints": ["Only touch the checked-out repository workspace."],
-    "guidance": "If unbound, choose no_action for implementation work."
+    "guidance": "If unbound, fail the assigned implementation job with a structured unavailable-workspace result."
   }],
   "queues": ["code_ready"]
 }
@@ -50,17 +50,18 @@ this provider, deduped per `(role, id)`. Non-workspace external tools are left
 unbound for a different provider. When the env above is set but no role declares
 any workspace id, the worker logs a diagnostic and binds nothing.
 
-The command runs in the checkout. It receives the work item, assigned workflow
-action, and user guidance in `TEMPER_CODING_WORKSPACE_CONTEXT` (JSON), plus
-branch/base/correlation env vars. The LLM does not receive Forge mutation tools;
-it must perform the assigned action and return a branch/diff, declared verdict,
-or structured failure for Temper to validate and apply.
+The command runs in the checkout. It receives the assigned job, work item, user
+guidance, action, allowed verdicts, and branch/base/correlation data in
+`TEMPER_CODING_WORKSPACE_CONTEXT` (JSON). The agent does not receive Forge
+mutation tools; it completes the assigned action and reports a branch/diff,
+declared verdict with authored content, or structured failure for the worker to
+return to Temper.
 
 The context JSON includes an `action` string and an `allowed_verdicts` array: the
 verdict vocabulary the action declares (the keys of its compiled `outcomes` map).
 This is the **only** set of verdicts the command may write to the result file (§3) — emitting anything
 else fails the tick. A bound agent should read `allowed_verdicts` and constrain
-itself to that set rather than guessing a verdict, so the workflow stays the
+itself to that set rather than inventing a verdict, so the workflow stays the
 single source of truth for the action's options. The array is empty for a pure
 head action that declares no `outcomes` (the engineer `open_pr` default), where
 no verdict is expected at all.

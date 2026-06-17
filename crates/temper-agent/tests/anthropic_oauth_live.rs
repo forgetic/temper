@@ -15,9 +15,9 @@ use std::time::Instant;
 use serde::Deserialize;
 use temper_agent::{AuthChoice, ProviderConfig, ProviderEnv, run_decision};
 
-#[path = "support/workflow_role_fixture.rs"]
-mod workflow_role_fixture;
-use workflow_role_fixture::{role_context, role_manifest};
+#[path = "support/decision_fixture.rs"]
+mod decision_fixture;
+use decision_fixture::{role_context, role_prompt};
 
 #[derive(Debug, Deserialize)]
 struct RoleDecision {
@@ -48,22 +48,21 @@ fn anthropic_oauth_validation() {
     .expect("Anthropic OAuth provider builds (run `pi /login anthropic` first)");
     eprintln!("[anthropic] model id: {}", provider.model_id());
 
-    let role = role_manifest(
+    let prompt = role_prompt(
         "anthropic-generic-role-smoke",
         "When the work item is a task in the todo queue with the todo label, choose the advance action.",
     );
-    let context = role_context(&role);
+    let context = role_context();
     let start = Instant::now();
     let decision: RoleDecision = {
-        let prompt = role.prompt.render();
         temper_agent_io::block_on_with(move |_cx, handle| async move {
             run_decision(handle, &provider, &prompt, &context).await
         })
-        .expect("Anthropic OAuth generic role decision succeeds and parses")
+        .expect("Anthropic OAuth generic structured decision succeeds and parses")
     };
     assert_eq!(decision.action, "advance");
     eprintln!(
-        "[anthropic] generic role decision: {decision:?} latency={:?}",
+        "[anthropic] generic structured decision: {decision:?} latency={:?}",
         start.elapsed()
     );
 }

@@ -21,13 +21,13 @@ fn parses_anvil_native_agent_surface_from_agent_args() {
         "--agent-command",
         " anvil-native ",
         "--agent-arg",
-        "--auth",
+        "--provider",
         "--agent-arg",
-        "anthropic-oauth",
+        "anthropic",
         "--agent-arg",
-        "--auth-file",
+        "--model",
         "--agent-arg",
-        "/tmp/auth.json",
+        "claude-opus-4-8",
         "--agent-arg",
         "--max-iterations",
         "--agent-arg",
@@ -41,10 +41,9 @@ fn parses_anvil_native_agent_surface_from_agent_args() {
             git_base_url: "https://forgejo.example".to_string(),
             agent: AgentSurface::AnvilNative(AnvilNativeAgentSurface {
                 agent_program: "temper-agent".to_string(),
-                auth: AgentAuthChoice::AnthropicOAuth,
-                codex_model: None,
-                auth_file: Some(PathBuf::from("/tmp/auth.json")),
-                config_dir: None,
+                provider: AgentProviderChoice::Anthropic,
+                model: Some("claude-opus-4-8".to_string()),
+                capture_dir: None,
                 max_iterations: Some(42),
                 enable_subagents: false,
             }),
@@ -70,7 +69,9 @@ fn anvil_native_enable_subagents_flag_is_parsed() {
         "--agent-command",
         "anvil-native",
         "--agent-arg",
-        "--enable-subagents",
+        "--subagents",
+        "--agent-arg",
+        "on",
     ]);
     let ExecutorSelection::Coding(surface) = config.executor else {
         panic!("expected coding executor");
@@ -82,7 +83,7 @@ fn anvil_native_enable_subagents_flag_is_parsed() {
 }
 
 #[test]
-fn anvil_native_defaults_to_chatgpt_oauth_when_no_args() {
+fn anvil_native_defaults_to_chatgpt_when_no_args() {
     let config = parse_ok(&[
         "--daemon-url",
         "http://daemon.example",
@@ -107,10 +108,9 @@ fn anvil_native_defaults_to_chatgpt_oauth_when_no_args() {
         surface.agent,
         AgentSurface::AnvilNative(AnvilNativeAgentSurface {
             agent_program: "temper-agent".to_string(),
-            auth: AgentAuthChoice::ChatGptOAuth,
-            codex_model: None,
-            auth_file: None,
-            config_dir: None,
+            provider: AgentProviderChoice::ChatGpt,
+            model: None,
+            capture_dir: None,
             max_iterations: None,
             enable_subagents: false,
         })

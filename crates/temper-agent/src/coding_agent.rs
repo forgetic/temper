@@ -1,23 +1,22 @@
 //! The coding workspace agent, on anvil's native loop + tongs tools.
 //!
-//! This module implements temper's external coding-workspace command
-//! (`TEMPER_CODING_WORKSPACE_COMMAND`). Where [`crate::decision`] runs a
-//! single tool-less turn that only *decides*, this module runs a tool-using
-//! agent that *acts*: it reads the work-item context temper prepared, runs a
-//! real LLM agent loop with a [`tongs::tools::ToolRegistry`] scoped to the
-//! checkout, and produces the ADR 0022 work product (a working-tree diff
-//! and/or a verdict) for the role.
+//! This module implements temper's external coding-workspace command. Where
+//! [`crate::decision`] runs a single tool-less turn that only *decides*, this
+//! module runs a tool-using agent that *acts*: it reads the work-item context
+//! temper prepared, runs a real LLM agent loop with a
+//! [`tongs::tools::ToolRegistry`] scoped to the checkout, and produces the ADR
+//! 0022 work product (a working-tree diff and/or a verdict) for the role.
 //!
 //! # Protocol
 //!
-//! temper writes a context JSON file and names it with the
-//! `TEMPER_CODING_WORKSPACE_CONTEXT` env var, runs the command in the prepared
-//! checkout (cwd), and reads a result JSON file back from the path named by
-//! `TEMPER_CODING_WORKSPACE_RESULT`. The result shape is temper's
-//! `WorkspaceResult` (`{ verdict?, summary?, body?, review_body?, labels?,
-//! children? }`); see [`WorkspaceResult`]. Reading the context and writing the
-//! result is the binary's job ([`crate::coding_agent`] only models and runs the
-//! agent); this module owns the schema and the agent loop.
+//! temper writes a context JSON file and passes its path as the agent's
+//! `--context` flag, runs the agent in the prepared checkout (`--workspace`,
+//! also cwd), and reads a result JSON file back from the `--result` path. The
+//! result shape is temper's `WorkspaceResult` (`{ verdict?, summary?, body?,
+//! review_body?, labels?, children? }`); see [`WorkspaceResult`]. Reading the
+//! context and writing the result is the binary's job ([`crate::coding_agent`]
+//! only models and runs the agent); this module owns the schema and the agent
+//! loop.
 //!
 //! # Capability / role awareness
 //!
@@ -87,8 +86,8 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // ---------------------------------------------------------------------------
 // Wire DTOs — the worker ↔ agent process protocol.
 //
-// The context (input, `$TEMPER_CODING_WORKSPACE_CONTEXT`) and result (output,
-// `$TEMPER_CODING_WORKSPACE_RESULT`) shapes are owned by the serde-only
+// The context (input, the `--context` file) and result (output, the `--result`
+// file) shapes are owned by the serde-only
 // `smith-agent-protocol` crate — the contract a third-party agent speaks and
 // the worker consumes without linking anvil's internals. We re-export them here
 // so this crate's API (and all its callers) are unchanged by the move. The

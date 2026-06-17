@@ -14,7 +14,6 @@ members = [
     "crates/temper-forge-model",
     "crates/temper-forge",
     "crates/temper-protocol-interaction",
-    "crates/temper-protocol-decision",
     "crates/temper-protocol-worker",
     "crates/temper-worker-registry",
     "crates/temper-interaction",

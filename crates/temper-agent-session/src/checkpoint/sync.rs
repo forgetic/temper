@@ -19,9 +19,6 @@ pub(super) struct CheckpointJob {
     pub(super) cwd: PathBuf,
     pub(super) repos: Vec<CheckpointRepo>,
     pub(super) correlation_key: String,
-    pub(super) user: Option<String>,
-    pub(super) email: Option<String>,
-    pub(super) token: Option<String>,
 }
 
 impl CheckpointJob {
@@ -32,9 +29,6 @@ impl CheckpointJob {
             cwd: self.cwd,
             repos: self.repos,
             correlation_key: self.correlation_key,
-            user: self.user,
-            email: self.email,
-            token: self.token,
             deadline: None,
             interval: DEFAULT_CHECKPOINT_INTERVAL,
             last_checkpoint: Mutex::new(Instant::now()),
@@ -64,34 +58,20 @@ impl Checkpointer {
             {
                 continue;
             }
-            let user = self.user.as_deref().unwrap_or("temper-agent");
-            let email = self.email.as_deref().unwrap_or("temper-agent@localhost");
+            // The git author identity and push credential (`http.extraheader`)
+            // are configured by the worker in this repo's local `.git/config`
+            // before the agent was spawned, so the commit/push use them without
+            // the agent ever holding the push token.
             self.git_in(
                 &repo.dir,
                 &[
-                    "-c",
-                    &format!("user.name={user}"),
-                    "-c",
-                    &format!("user.email={email}"),
                     "commit",
                     "-m",
                     &format!("checkpoint(step {step}): {summary}"),
                 ],
             )?;
             let push_ref = format!("HEAD:refs/heads/{}", repo.branch);
-            match self.token.as_deref() {
-                Some(token) => self.git_in(
-                    &repo.dir,
-                    &[
-                        "-c",
-                        &format!("http.extraheader=AUTHORIZATION: token {token}"),
-                        "push",
-                        "origin",
-                        &push_ref,
-                    ],
-                )?,
-                None => self.git_in(&repo.dir, &["push", "origin", &push_ref])?,
-            };
+            self.git_in(&repo.dir, &["push", "origin", &push_ref])?;
             let sha = self
                 .git_in(&repo.dir, &["rev-parse", "HEAD"])?
                 .trim()
@@ -104,7 +84,9 @@ impl Checkpointer {
     }
 
     /// Runs git in a repo's checkout dir (under the workspace root), returning
-    /// stdout. Errors carry the command and stderr with the push token redacted.
+    /// stdout. The push credential lives in the repo's local `.git/config` (set
+    /// by the worker), never on argv, so neither the command nor git's stderr
+    /// carries the push token.
     pub(super) fn git_in(&self, dir: &str, args: &[&str]) -> Result<String, String> {
         let output = std::process::Command::new("git")
             .args(args)
@@ -112,16 +94,12 @@ impl Checkpointer {
             .output()
             .map_err(|error| format!("spawn git: {error}"))?;
         if !output.status.success() {
-            let mut detail = format!(
+            return Err(format!(
                 "git {} failed ({}): {}",
                 args.first().copied().unwrap_or(""),
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
-            );
-            if let Some(token) = self.token.as_deref() {
-                detail = detail.replace(token, "<redacted>");
-            }
-            return Err(detail);
+            ));
         }
         String::from_utf8(output.stdout).map_err(|error| format!("git output not UTF-8: {error}"))
     }

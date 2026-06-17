@@ -85,7 +85,9 @@ code `poll_timeout`; the worker should immediately re-poll unless shutting down.
 
 ### `assign` — daemon → worker
 
-Daemon assigns one job to a worker.
+Daemon assigns one concrete role/action job to a worker. The assignment is not a
+request for the worker to choose among workflow actions; the selected action,
+when known, is carried in the payload.
 
 | Field | Type | Required | Semantics |
 | --- | --- | --- | --- |
@@ -97,7 +99,7 @@ Daemon assigns one job to a worker.
 | `artifact` | object | yes | Target work item identity. |
 | `artifact.item` | string or number | yes | Artifact identity matching the daemon's work-item context representation for this forge. |
 | `artifact.kind` | string | yes | Artifact kind, for example `intake`, `issue`, or `pull_request`. |
-| `job_payload` | object | yes | Arbitrary JSON object containing the role-decision input/context required by the worker. |
+| `job_payload` | object | yes | Arbitrary JSON object containing the assigned role/action job context required by the worker. |
 
 The daemon, not the worker, holds the Forge lease/CAS token for the assignment,
 following ADR 0013. If duplicate dispatch occurs, the lease/CAS remains the
@@ -191,8 +193,9 @@ Worker returns the structured result for one assigned job.
 | `details` | object | no | Arbitrary structured role-specific result details. |
 
 The daemon performs any idempotent PR create/update through the Forge API as the
-role identity. The worker never calls the Forge API for PR create/update or
-artifact mutation.
+role identity. It also routes declared verdicts through the compiled workflow and
+applies authored body, review, or child-issue effects when declared. The worker
+never calls the Forge API for PR create/update or artifact mutation.
 
 Verdict jobs are successful jobs whose result may carry `verdict` plus `body`
 or breakdown `children` and no `branch`; the allowed vocabulary comes from the

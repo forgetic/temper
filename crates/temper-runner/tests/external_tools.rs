@@ -94,25 +94,19 @@ fn required_unbound_external_tool_fails_preflight_with_clear_error() {
 }
 
 #[test]
-fn optional_unbound_external_tools_are_omitted() {
+fn optional_unbound_external_tools_are_allowed() {
     let compiled = compiled_workflow(false);
-    let role = compiled.role(&role_id()).expect("role exists");
     let config = RunnerConfig::new(repo_input());
 
     config
         .validate_external_tool_bindings(&compiled)
         .expect("optional unbound tools are allowed");
-    let bound = config
-        .bound_external_tools_for(role)
-        .expect("optional unbound tools do not error");
-
-    assert!(bound.is_empty());
+    assert!(!config.has_external_tool_binding(&role_id(), &tool_id("coding_workspace")));
 }
 
 #[test]
-fn bound_declared_external_tool_surfaces_manifest_metadata() {
+fn declared_external_tool_binding_validates_and_records_presence() {
     let compiled = compiled_workflow(true);
-    let role = compiled.role(&role_id()).expect("role exists");
     let config = RunnerConfig::new(repo_input()).with_external_tool_binding(
         role_id(),
         tool_id("coding_workspace"),
@@ -122,22 +116,7 @@ fn bound_declared_external_tool_surfaces_manifest_metadata() {
     config
         .validate_external_tool_bindings(&compiled)
         .expect("declared binding validates");
-    let bound = config
-        .bound_external_tools_for(role)
-        .expect("declared binding resolves");
-
-    assert_eq!(bound.len(), 1);
-    assert_eq!(bound[0].id, "coding_workspace");
-    assert_eq!(bound[0].provider, "workspace-local");
-    assert_eq!(bound[0].description, "Edit and commit repository code.");
-    assert_eq!(
-        bound[0].constraints,
-        vec!["Only edit the checked-out repository.".to_string()]
-    );
-    assert_eq!(
-        bound[0].guidance.as_deref(),
-        Some("Use before opening implementation PRs.")
-    );
+    assert!(config.has_external_tool_binding(&role_id(), &tool_id("coding_workspace")));
 }
 
 #[test]

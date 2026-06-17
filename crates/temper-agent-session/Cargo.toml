@@ -8,8 +8,8 @@ description = "The out-of-process coding-agent session: reads a workspace contex
 
 [dependencies]
 async-trait = { workspace = true }
-secrecy = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tracing = { workspace = true }
 skein = { workspace = true }
 temper-log = { path = "../temper-log" }

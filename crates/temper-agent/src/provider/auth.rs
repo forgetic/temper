@@ -1,8 +1,7 @@
 //! Auth-mode selection types: the credential family a provider config uses.
 //!
 //! [`AuthChoice`] is the caller-facing selector; [`AuthMode`] is the resolved,
-//! credential-carrying variant the config stores; [`ProviderIdentity`] is the
-//! non-secret triple logged for observability.
+//! credential-carrying variant the config stores.
 
 use secrecy::SecretString;
 
@@ -49,12 +48,4 @@ impl AuthMode {
             Self::AnthropicOAuth { .. } => "anthropic_oauth",
         }
     }
-}
-
-/// Non-secret provider/model identity for observability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProviderIdentity<'a> {
-    pub(crate) provider_id: &'a str,
-    pub(crate) model_id: &'a str,
-    pub(crate) auth_mode: &'static str,
 }

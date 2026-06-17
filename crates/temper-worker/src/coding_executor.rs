@@ -320,7 +320,14 @@ async fn prepare_writable(
     workspace
         .prepare(&branch_hint)
         .await
-        .map_err(|error| workspace_failure("prepare workspace", error))
+        .map_err(|error| workspace_failure("prepare workspace", error))?;
+    // Persist the role's git author identity + push credential into this
+    // writable checkout's local `.git/config`, so the spawned agent (which holds
+    // no token) can commit + push its checkpoints against the prepared branch.
+    workspace
+        .configure_local_identity()
+        .await
+        .map_err(|error| workspace_failure("configure workspace git identity", error))
 }
 
 async fn verdict_only_outcome(

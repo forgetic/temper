@@ -10,7 +10,6 @@
 #   temper-protocol-worker    engine <-> worker boundary (daemon exposes; worker consumes)
 #   temper-protocol-agent     worker <-> agent  boundary (worker exposes; agent consumes)
 #   temper-protocol-interaction conversation/proposal responder contract (leaf, no deps)
-#   temper-protocol-decision    role-decision responder contract (leaf, no deps)
 #
 # Each value below is the COMPLETE allowlist of internal deps for that crate;
 # any internal dependency not listed is a violation. Dev-dependencies are NOT
@@ -57,7 +56,6 @@ temper-engine-io = []
 # The backend-agnostic forge model: Forge trait + domain types. Leaf.
 temper-forge-model = []
 temper-protocol-interaction = []
-temper-protocol-decision = []
 temper-protocol-worker = []
 temper-worker-registry = ["temper-protocol-worker"]
 # Concrete backends — each implements the model's traits and depends ONLY on the
@@ -73,7 +71,7 @@ temper-forge-github = ["temper-forge-model", "temper-engine-io"]
 temper-forge = ["temper-forge-model", "temper-forge-forgejo", "temper-forge-github", "temper-forge-memory", "temper-forge-filesystem"]
 temper-workflow = ["temper-forge"]
 temper-interaction = ["temper-forge", "temper-engine-io", "temper-protocol-interaction"]
-temper-runner = ["temper-forge", "temper-engine-io", "temper-log", "temper-protocol-decision", "temper-workflow"]
+temper-runner = ["temper-forge", "temper-engine-io", "temper-log", "temper-workflow"]
 temper-wake = ["temper-engine-io", "temper-runner"]
 temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
 # Validates live forge state. Builds its forge through the facade factory; no
@@ -112,13 +110,12 @@ temper-agent-io = []
 temper-protocol-agent = []
 temper-agent-core = ["temper-agent-io"]
 # NOTE / DIVERGENCE from rule 3: besides temper-protocol-agent (the protocol the
-# worker exposes), the agent also depends on the engine-owned external-responder
-# contracts it implements — temper-protocol-interaction (conversation/proposal)
-# and temper-protocol-decision (role-decision). All are leaf serde contracts with
-# zero internal deps, so no implementation leaks across tiers; but they ARE
-# additional upstream protocols. Drop them from this list if you want CI to force
+# worker exposes), the agent also depends on the engine-owned conversation /
+# proposal responder contract it implements. It is a leaf serde contract with
+# zero internal deps, so no implementation leaks across tiers; but it IS an
+# additional upstream protocol. Drop it from this list if you want CI to force
 # the agent down to exactly one protocol crate.
-temper-agent = ["temper-agent-core", "temper-protocol-agent", "temper-protocol-interaction", "temper-protocol-decision"]
+temper-agent = ["temper-agent-core", "temper-protocol-agent", "temper-protocol-interaction"]
 
 # ===========================================================================
 # COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get

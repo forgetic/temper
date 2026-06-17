@@ -24,10 +24,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use secrecy::ExposeSecret;
 use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext};
 
-use crate::config::RoleIdentity;
 use crate::progress::emit;
 
 use backstop::{CHECKPOINT_DEADLINE_MARGIN, backstop_decision};
@@ -49,17 +47,9 @@ pub(crate) struct Checkpointer {
     /// primary — home of the coordinating artifact).
     repos: Vec<CheckpointRepo>,
     correlation_key: String,
-    /// Per-role git identity + push token, threaded in from [`AgentConfig`]
-    /// (read by `entry` from `TEMPER_FORGEJO_{USER,EMAIL,TOKEN}_<ROLE>`); absent
-    /// values degrade gracefully (generic identity, credential-less push).
-    ///
-    /// [`AgentConfig`]: crate::AgentConfig
-    user: Option<String>,
-    email: Option<String>,
-    token: Option<String>,
-    /// Wall-clock job deadline (lease expiry) from `TEMPER_AGENT_DEADLINE`, if the
-    /// host supplied one. The backstop fires within [`CHECKPOINT_DEADLINE_MARGIN`]
-    /// of it.
+    /// Wall-clock job deadline (lease expiry) from `--deadline-unix-seconds`, if
+    /// the worker supplied one. The backstop fires within
+    /// [`CHECKPOINT_DEADLINE_MARGIN`] of it.
     deadline: Option<SystemTime>,
     /// Fallback backstop cadence used when there is no deadline (or between
     /// deadline checks).
@@ -73,14 +63,17 @@ pub(crate) struct Checkpointer {
 impl Checkpointer {
     /// Builds the checkpointer from the prepared checkout `cwd`, the workspace
     /// `context` (for the repos + correlation key), and the host-derived
-    /// `role_identity`/`deadline`/`interval` from [`AgentConfig`] — all read in
-    /// `entry`, never here.
+    /// `deadline`/`interval` from [`AgentConfig`] — all read in `entry`, never
+    /// here.
+    ///
+    /// The git author identity and push credential are configured by the worker
+    /// in each writable repo's local `.git/config` before the agent is spawned,
+    /// so the checkpointer just commits + pushes against the prepared checkout.
     ///
     /// [`AgentConfig`]: crate::AgentConfig
     pub(crate) fn new(
         cwd: &Path,
         context: &WorkspaceContext,
-        role_identity: &RoleIdentity,
         deadline: Option<SystemTime>,
         interval: Duration,
     ) -> Self {
@@ -98,13 +91,6 @@ impl Checkpointer {
             cwd: cwd.to_path_buf(),
             repos,
             correlation_key: context.correlation_key.clone(),
-            user: role_identity.user.clone(),
-            email: role_identity.email.clone(),
-            // I/O boundary: the push token is held for the git credential helper.
-            token: role_identity
-                .token
-                .as_ref()
-                .map(|token| token.expose_secret().to_string()),
             deadline,
             interval,
             last_checkpoint: Mutex::new(Instant::now()),
@@ -136,9 +122,6 @@ impl Checkpointer {
             cwd: self.cwd.clone(),
             repos: self.repos.clone(),
             correlation_key: self.correlation_key.clone(),
-            user: self.user.clone(),
-            email: self.email.clone(),
-            token: self.token.clone(),
         };
         let label_owned = label.map(str::to_string);
         let outcome = skein::runtime::spawn_blocking(move || {

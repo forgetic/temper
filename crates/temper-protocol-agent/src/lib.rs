@@ -15,8 +15,8 @@
 //!   repository, role, assigned action, branch, verdict vocabulary, and work item the worker
 //!   assembled, carrying the [`WorkspaceContext::correlation_key`] that is the
 //!   *only* bridge to the out-of-band control/observability plane. The worker
-//!   writes it to a file named by [`CONTEXT_ENV`] and runs the agent in the
-//!   prepared checkout (cwd).
+//!   writes it to a file and passes its path as the agent's `--context` flag,
+//!   running the agent in the prepared checkout (`--workspace`, also cwd).
 //! - **Outbound step-progress (agent → worker), stream:** zero or more
 //!   [`StepProgress`] records, one per coherent step boundary, emitted on the
 //!   agent's **stdout** as line-delimited JSON. Each is a crash-recovery
@@ -25,8 +25,8 @@
 //!   the corresponding commit is pushed, so the marker never claims more than
 //!   the branch actually holds.
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
-//!   written to the file named by [`RESULT_ENV`]. Unchanged from the legacy
-//!   file protocol, so existing external coders stay compatible.
+//!   written to the file named by the agent's `--result` flag. The result shape
+//!   is unchanged from the legacy file protocol.
 //!
 //! # Recovery, not transactions
 //!
@@ -42,13 +42,76 @@ use serde::{Deserialize, Serialize};
 /// so a mismatch is a clean protocol error rather than a silent misparse.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// The **single** secret env var the agent consumes: the provider credential as
+/// a JSON document (see [`ProviderCredentialJson`]).
+///
+/// The worker reads deployment config + secret sources, builds this JSON, and
+/// injects it into the spawned agent's environment. Every non-secret input (the
+/// context/result paths, the workspace, the provider/model/url, the
+/// deadline/cadence) is a CLI flag — only the credential crosses as env.
+pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON";
+
+/// The provider credential the worker hands the agent via
+/// [`PROVIDER_CREDENTIALS_ENV`].
+///
+/// Two shapes, tagged by `type`:
+///
+/// ```json
+/// {"type":"api-key","api_key":"..."}
+/// ```
+/// ```json
+/// {"type":"oauth","access_token":"...","refresh_token":"...","expires_at_unix_seconds":1781701200}
+/// ```
+///
+/// This is the serde-only wire shape; the token bytes are plain `String`s here.
+/// The agent immediately re-wraps them in a redacting secret type after parsing,
+/// and the worker builds this struct from its own secret sources. Errors that
+/// reference a credential must carry only its `type`, never token bytes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum ProviderCredentialJson {
+    /// A static API key (the DeepSeek / OpenAI-compatible path).
+    ApiKey {
+        /// The provider API key.
+        api_key: String,
+    },
+    /// OAuth tokens (the ChatGPT/Anthropic subscription path). The agent
+    /// materializes these into a pi-format `auth.json` its OAuth loader reads
+    /// (and refreshes) in place.
+    Oauth {
+        /// The current OAuth access token (the per-request bearer).
+        access_token: String,
+        /// The refresh token, when the worker has one to forward.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<String>,
+        /// Access-token expiry as a unix-seconds timestamp.
+        expires_at_unix_seconds: i64,
+    },
+}
+
+impl ProviderCredentialJson {
+    /// Parses a credential from its JSON document.
+    pub fn from_json(raw: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(raw.trim())
+    }
+
+    /// Serializes the credential to its JSON document (the worker→agent env
+    /// value). Errors only on a serializer fault, which cannot happen for this
+    /// shape.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
 /// Env var naming the file the worker wrote the [`WorkspaceContext`] JSON to.
 ///
-/// Kept byte-for-byte as the legacy `TEMPER_CODING_WORKSPACE_*` names so an
-/// existing external coder (e.g. the examples' deterministic `greeting`
-/// stand-in) needs no changes to keep working.
+/// Legacy channel: the current worker passes the context path as the
+/// `--context` CLI flag (and the result path as `--result`), so the in-tree
+/// agent no longer reads these. The names are retained for external coders that
+/// still speak the old file-via-env protocol.
 pub const CONTEXT_ENV: &str = "TEMPER_CODING_WORKSPACE_CONTEXT";
 /// Env var naming the file the agent must write its [`WorkspaceResult`] JSON to.
+/// Legacy; the worker now passes the path as the `--result` CLI flag.
 pub const RESULT_ENV: &str = "TEMPER_CODING_WORKSPACE_RESULT";
 
 /// The work-item context the worker hands the agent for one turn.
@@ -254,6 +317,51 @@ mod tests {
     fn blank_lines_are_skipped() {
         assert_eq!(StepProgress::from_line("   ").expect("ok"), None);
         assert_eq!(StepProgress::from_line("").expect("ok"), None);
+    }
+
+    #[test]
+    fn api_key_credential_round_trips() {
+        let credential =
+            ProviderCredentialJson::from_json(r#"{"type":"api-key","api_key":"sk-x"}"#)
+                .expect("parse api-key");
+        assert_eq!(
+            credential,
+            ProviderCredentialJson::ApiKey {
+                api_key: "sk-x".to_string(),
+            }
+        );
+        let json = credential.to_json().expect("serialize");
+        assert_eq!(
+            ProviderCredentialJson::from_json(&json).expect("re-parse"),
+            credential
+        );
+    }
+
+    #[test]
+    fn oauth_credential_parses_with_and_without_refresh() {
+        let with_refresh = ProviderCredentialJson::from_json(
+            r#"{"type":"oauth","access_token":"a","refresh_token":"r","expires_at_unix_seconds":1781701200}"#,
+        )
+        .expect("parse oauth");
+        assert_eq!(
+            with_refresh,
+            ProviderCredentialJson::Oauth {
+                access_token: "a".to_string(),
+                refresh_token: Some("r".to_string()),
+                expires_at_unix_seconds: 1_781_701_200,
+            }
+        );
+        let without_refresh = ProviderCredentialJson::from_json(
+            r#"{"type":"oauth","access_token":"a","expires_at_unix_seconds":0}"#,
+        )
+        .expect("parse oauth without refresh");
+        assert!(matches!(
+            without_refresh,
+            ProviderCredentialJson::Oauth {
+                refresh_token: None,
+                ..
+            }
+        ));
     }
 
     #[test]

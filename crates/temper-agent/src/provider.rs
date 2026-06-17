@@ -63,7 +63,7 @@ use std::sync::Arc;
 use secrecy::SecretString;
 use tongs::provider::Provider;
 
-use auth::{AuthMode, ProviderIdentity};
+use auth::AuthMode;
 
 pub use anthropic_model::ANTHROPIC_SUBAGENT_MODEL_ENV;
 pub use anthropic_oauth::{ANTHROPIC_MODEL_ENV, ANTHROPIC_TOKEN_URL_ENV, DEFAULT_ANTHROPIC_MODEL};
@@ -380,15 +380,6 @@ impl ProviderConfig {
                 anthropic_oauth::resolve_anthropic_subagent_model(None)
             }
             _ => self.model_id.clone(),
-        }
-    }
-
-    /// Non-secret provider/model/auth identity for structured logs.
-    pub(crate) fn observability_identity(&self) -> ProviderIdentity<'_> {
-        ProviderIdentity {
-            provider_id: &self.provider_id,
-            model_id: &self.model_id,
-            auth_mode: self.auth.label(),
         }
     }
 

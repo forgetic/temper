@@ -2,9 +2,8 @@
 //!
 //! This crate is anvil's initial home for the concrete `pi_agent_rust` wiring
 //! that Temper is splitting out: provider selection, OAuth auth-file handling,
-//! per-provider request knobs, and one-turn structured decision parsing. It does
-//! not mutate Forge state and depends on Temper's serialization-only process
-//! protocol crate for responder wire DTOs.
+//! per-provider request knobs, coding-agent execution, product-manager replies,
+//! and one-turn structured decision parsing. It does not mutate Forge state.
 
 #![allow(clippy::result_large_err)]
 
@@ -19,10 +18,6 @@ pub mod prompt_overlays;
 pub mod provider;
 mod tool_preview;
 pub mod usage;
-pub mod workflow_role_decision;
-mod workflow_role_decision_capture;
-mod workflow_role_decision_observability;
-mod workflow_role_decision_prompt;
 
 pub use coding_agent::{
     Capability, CheckpointHook, CodingAgentError, DEFAULT_MAX_ITERATIONS, WorkspaceContext,
@@ -52,11 +47,5 @@ pub use provider::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig,
     ProviderEnv, ProviderError, default_auth_path,
 };
-pub use temper_protocol_decision::{WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest};
 pub use temper_protocol_interaction::{ConversationReply, ConversationRequest};
 pub use usage::RunTotals;
-pub use workflow_role_decision::{
-    WorkflowRoleDecisionError, WorkflowRoleDecisionResponder, WorkflowRoleModelDecision,
-    reply_for_model_decision, workflow_role_system_prompt, workflow_role_user_context,
-};
-pub use workflow_role_decision_capture::WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV;

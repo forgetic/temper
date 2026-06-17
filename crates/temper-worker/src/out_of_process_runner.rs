@@ -3,13 +3,14 @@
 //! Spawns an agent **program** (the `anvil-agent` binary by default, or any
 //! operator-provided coder) that speaks the `smith-agent-protocol`:
 //!
-//! - the worker writes the [`WorkspaceContext`] to a temp file named by
-//!   [`CONTEXT_ENV`] and runs the program in the prepared checkout (cwd);
+//! - the worker writes the [`WorkspaceContext`] to a temp file and passes its
+//!   path as the `--context` flag, the result path as `--result`, and the
+//!   prepared checkout as `--workspace` (also the child's cwd);
 //! - the program emits [`StepProgress`] records as line-delimited JSON on its
 //!   **stdout**; the worker parses each and hands it to the [`ProgressSink`] to
 //!   relay onward to the forge;
-//! - the program writes a [`WorkspaceResult`] to the file named by
-//!   [`RESULT_ENV`], which the worker reads back.
+//! - the program writes a [`WorkspaceResult`] to the file named by `--result`,
+//!   which the worker reads back.
 //!
 //! This replaces the former in-process pi-SDK runner: the worker links no
 //! agent/LLM code, only this protocol. It also subsumes the old
@@ -24,7 +25,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use temper_protocol_agent::{CONTEXT_ENV, RESULT_ENV, StepProgress, WorkspaceContext};
+use temper_protocol_agent::{StepProgress, WorkspaceContext};
 
 use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink, WorkspaceResult};
 
@@ -32,12 +33,13 @@ use crate::agent_runner::{AgentRunError, AgentRunner, ProgressSink, WorkspaceRes
 #[derive(Clone, Debug)]
 pub struct OutOfProcessRunner {
     /// Program followed by fixed arguments, e.g.
-    /// `["temper", "agent", "--auth", "chatgpt-oauth"]`.
+    /// `["temper", "agent", "--provider", "anthropic", "--model", "…"]`. The
+    /// per-job `--context`/`--result`/`--workspace` flags are appended at spawn.
     command: Vec<String>,
     /// Environment injected into every spawned agent (on top of the inherited
-    /// environment): the per-role git identities and the provider/model wiring,
-    /// which a config-driven worker passes explicitly rather than relying on its
-    /// own inherited environment.
+    /// environment): just the one secret provider-credential var, which a
+    /// config-driven worker passes explicitly rather than relying on its own
+    /// inherited environment.
     env: Vec<(String, String)>,
 }
 
@@ -167,10 +169,17 @@ fn run_child(
     command
         .args(args)
         .current_dir(cwd)
-        .env(CONTEXT_ENV, context_path)
-        .env(RESULT_ENV, result_path);
-    // Inject the per-role git identities and provider/model wiring explicitly,
-    // so the agent does not depend on the worker's own inherited environment.
+        // The context/result/workspace paths are per-job flags (the workspace is
+        // also the child's cwd). Passing them as flags — not env — keeps the
+        // agent's only env input the one secret credential var.
+        .arg("--context")
+        .arg(context_path)
+        .arg("--result")
+        .arg(result_path)
+        .arg("--workspace")
+        .arg(cwd);
+    // Inject the one secret (the provider credential) explicitly, so the agent
+    // does not depend on the worker's own inherited environment.
     for (key, value) in env {
         command.env(key, value);
     }

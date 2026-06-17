@@ -104,9 +104,9 @@ pub struct CodingSurface {
 /// spawned verbatim (the examples' deterministic `greeting` stand-in, or an
 /// operator-provided coder). Trailing `--agent-arg` values are the agent's
 /// flags: for the anvil-native surface they are parsed here and re-rendered
-/// onto the `anvil-agent` command (`--agent-program` / `--auth` / `--auth-file`
-/// / `--codex-model` / `--max-iterations` / `--config-dir` / `--enable-subagents`);
-/// for an external command they are passed through verbatim.
+/// onto the agent command (`--agent-program` / `--provider` / `--model` /
+/// `--max-iterations` / `--capture-dir` / `--subagents`); for an external
+/// command they are passed through verbatim.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentSurface {
     /// The native anvil coding agent, spawned out-of-process as `anvil-agent`.
@@ -123,23 +123,23 @@ pub struct AnvilNativeAgentSurface {
     /// (`anvil-agent`, resolved on `PATH`); override with an absolute path via
     /// `--agent-program` when it is not on `PATH`.
     pub agent_program: String,
-    pub auth: AgentAuthChoice,
-    pub codex_model: Option<String>,
-    pub auth_file: Option<PathBuf>,
-    pub config_dir: Option<PathBuf>,
+    pub provider: AgentProviderChoice,
+    pub model: Option<String>,
+    pub capture_dir: Option<PathBuf>,
     pub max_iterations: Option<usize>,
     /// Enable the in-workspace `investigate` sub-agent tool (off by default).
     pub enable_subagents: bool,
 }
 
-/// Which credential the agent authenticates with. Mirrors the agent's
-/// `AuthChoice` but is parsed in the worker (which links no agent code); the
-/// worker renders it back to the `--auth` flag in [`AnvilNativeAgentSurface::into_command`].
+/// Which provider the agent authenticates against. Mirrors the agent's
+/// `--provider` flag values but is parsed in the worker (which links no agent
+/// code); the worker renders it back to `--provider` in
+/// [`AnvilNativeAgentSurface::into_command`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AgentAuthChoice {
+pub enum AgentProviderChoice {
     DeepSeek,
-    ChatGptOAuth,
-    AnthropicOAuth,
+    ChatGpt,
+    Anthropic,
 }
 
 // `Run(WorkerConfig)` is far larger than `Help`, but `ParseOutcome` is produced

@@ -34,7 +34,7 @@ pub use agent_runner::{
 };
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
 pub use config::{
-    AgentAuthChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
+    AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
     ExecutorSelection, ParseOutcome, USAGE, WorkerConfig, WorkerParams, parse,
     role_identities_from_env,
 };

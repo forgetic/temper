@@ -9,20 +9,17 @@ child-process configuration.
 
 ## Workflow role workers
 
-Build Smith's role responder and point `temper-worker` at it:
+Workflow role workers now receive concrete jobs from Temper and return structured
+results: a branch/diff, a declared verdict with authored content, or a structured
+failure. Configure provider auth in the external worker/agent process that runs
+that job; do not pass Forge tokens or generic Forge mutation handles to the
+agent.
 
-```sh
-cd ~/src/rust/smith
-cargo build -p smith-temper-agent-cli --bin smith-workflow-role-decision
-
-cd ~/src/rust/temper
-TEMPER_WORKER_ROLE_DECISION_COMMAND=../smith/target/debug/smith-workflow-role-decision \
-TEMPER_WORKER_ROLE_DECISION_ARGS_JSON='["--auth","chatgpt-oauth"]' \
-  temper-worker --kind role ...
-```
-
-Use `TEMPER_WORKER_ROLE_DECISION_ENV_ALLOWLIST` only for provider variables that
-Smith explicitly documents. Do not allow-list Forge tokens.
+For Smith-backed deployments, build and configure the Smith role-job worker from
+the sibling Smith checkout, then pass only the provider variables Smith documents
+(for example an auth-file path or model id) through that worker's configuration.
+Temper still owns workflow validation and all Forge mutations after the worker
+returns its result.
 
 ## Interactive profiles
 

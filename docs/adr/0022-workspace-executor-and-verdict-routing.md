@@ -6,11 +6,12 @@ Accepted
 
 ## Context
 
-Today every workflow role is serviced the same shallow way: the runner builds a
-small work-item context (artifact title/body/labels/state), asks a sandboxed,
-single-shot, **tool-less** decision process for **one** authorized transition
-name, and applies that transition's fixed effects. The decision never reads the
-repository, the diff, CI, or related artifacts.
+At the time of this ADR, workflow roles were serviced by a shallow upfront
+selector: the runner built a small work-item context (artifact
+title/body/labels/state), asked a sandboxed, single-shot, **tool-less** process
+for **one** authorized transition name, and applied that transition's fixed
+effects. That selector did not read the repository, the diff, CI, or related
+artifacts.
 
 Two narrow exceptions hint at what is missing. `coding_workspace` is the lone
 content-producing executor: it runs from the engineer's `open_pr` path and
@@ -20,7 +21,7 @@ queue's merge effect.
 
 So an informed, "fat" role — one that analyses with real tools, produces a work
 product, and emits a typed outcome that selects the transition (including
-escalation discovered mid-work) — cannot be expressed. The decision is made
+escalation discovered mid-work) — cannot be expressed. The route is selected
 *before* any analysis, the chosen transition cannot be re-selected by what the
 work reveals, and only the engineer can run a content executor at all.
 
@@ -85,13 +86,12 @@ the coder today (`run_with_pull_request_create_at` + correlation key):
 - `attach_review` — submit a native review (ADR 0016) carrying the work
   product's review body/comments, not just a bare decision.
 
-### D. Workspaces on the decision *and* automation paths
+### D. Workspaces on assigned role jobs and automation paths
 
-Workspaces are bindable from queue automation, not only the LLM role-decision
-path. A workflow may keep an LLM router that routes to a workspace-backed action,
-or run the workspace directly and let its verdict route — dropping the
-uninformed upfront classification where it adds nothing. This is independent of
-A–C.
+Workspaces are bindable from queue automation and from concrete role/action jobs.
+A workflow may assign a workspace-backed action directly and let its verdict
+route — dropping the uninformed upfront classification where it adds nothing.
+This is independent of A–C.
 
 The agent still only ever returns `{ verdict, work_product }`; the engine owns
 transition legality and effect application. The workspace is precisely the

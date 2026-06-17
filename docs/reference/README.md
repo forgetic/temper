@@ -26,5 +26,4 @@ Current reference pages:
 - [Interaction profile spec](interaction-profile-spec.md)
 - [Interactive process responder protocol](interactive-process-responder-protocol.md)
 - [Worker/Daemon wire protocol](worker-daemon-wire-protocol.md)
-- [Workflow role decision process protocol](workflow-role-decision-process-protocol.md)
 - [Workflow runtime robustness guarantees](robustness-guarantees.md)

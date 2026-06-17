@@ -34,9 +34,7 @@
 //!   candidate path for mechanically serviced queues.
 //! - [`Agent`] and [`RoleTools`], which define the production tool boundary:
 //!   agents mutate workflow state only by running authorized transitions or the
-//!   idempotent pull-request creation seam through role-scoped tools. The
-//!   workflow-role decision process adapter is provider-neutral and still runs
-//!   chosen actions only through this boundary.
+//!   idempotent pull-request creation seam through role-scoped tools.
 //! - [`Worker`], [`RoleWorker`], and [`MechanicalWorker`]: role workers re-scan
 //!   judgment queues and delegate to agents, while the mechanical worker runs
 //!   reconcile → apply and then declared queue automation once per normal tick
@@ -71,9 +69,6 @@ pub mod config;
 pub mod driver;
 pub mod multi_repo;
 pub mod observability;
-pub mod role_decision;
-pub mod role_decision_process;
-mod role_process_tools;
 pub mod scan;
 pub mod signal;
 pub mod stage;
@@ -105,15 +100,6 @@ pub use observability::{
     ObservabilityArtifactType, WorkItemIdentity, artifact_ref, execution_error_diagnostic_classes,
     execution_error_failure_class, gate_summary, labels_delta, postcondition_outcome_for_error,
     queue_after_transition, work_item_ref, workflow_effect_summary,
-};
-pub use role_decision::{
-    AuthorizedWorkflowAction, BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION,
-    WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION, WorkflowRoleDecisionProtocolError,
-    WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
-};
-pub use role_decision_process::{
-    WorkflowRoleDecisionProcessAgent, WorkflowRoleDecisionProcessConfig,
-    WorkflowRoleDecisionProcessError,
 };
 pub use scan::{
     AutomatedWorkItem, CandidateQueryPlan, ScanError, ScanMode, WorkItem, candidate_query_plan,
