@@ -194,8 +194,8 @@ async fn implementation_pull_request_exists_for_correlation<F: Forge + ?Sized>(
 pub(crate) fn skip_log_reason(outcome: EnrichOutcome) -> &'static str {
     match outcome {
         EnrichOutcome::Enriched => "",
-        EnrichOutcome::SkipTerminalArtifact => "terminal artifact",
-        EnrichOutcome::SkipExistingPullRequest => "existing implementation pull request",
+        EnrichOutcome::SkipTerminalArtifact => "terminal",
+        EnrichOutcome::SkipExistingPullRequest => "existing-pr",
     }
 }
 
@@ -206,13 +206,12 @@ pub(crate) fn skip_log_line(
     reason: EnrichOutcome,
 ) -> String {
     format!(
-        "engine: skipped role work for {} repo={} role={} queue={} artifact_kind={} target={:?}",
+        "engine: skip {} {} role={} queue={} kind={}",
         skip_log_reason(reason),
-        repo_label,
+        target_ref(repo_label, item.target),
         role.as_str(),
         item.queue.as_str(),
         item.kind.as_str(),
-        item.target
     )
 }
 
@@ -223,13 +222,19 @@ pub(crate) fn enrichment_failure_log_line(
     error: &ScanError,
 ) -> String {
     format!(
-        "engine: skipped scanned work item after enrichment failed for repo={} role={} queue={} artifact_kind={} target={:?}: {error}",
-        repo_label,
+        "engine: skip enrich-failed {} role={} queue={} kind={}: {error}",
+        target_ref(repo_label, item.target),
         role.as_str(),
         item.queue.as_str(),
         item.kind.as_str(),
-        item.target
     )
+}
+
+fn target_ref(repo_label: &str, target: ArtifactSource) -> String {
+    match target {
+        ArtifactSource::Issue { number } => format!("{}#{}", repo_label, number.get()),
+        ArtifactSource::PullRequest { number } => format!("{} PR#{}", repo_label, number.get()),
+    }
 }
 
 /// Scans `repo` for `role`'s queue work and enqueues each enriched `WorkItem`
@@ -267,11 +272,22 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
                     .await;
                 enqueued += 1;
             }
-            Ok(
-                skip @ (EnrichOutcome::SkipTerminalArtifact
-                | EnrichOutcome::SkipExistingPullRequest),
-            ) => {
-                tracing::debug!("{}", skip_log_line(&repo_label, role, item, skip));
+            Ok(EnrichOutcome::SkipTerminalArtifact) => {
+                tracing::debug!(
+                    "{}",
+                    skip_log_line(&repo_label, role, item, EnrichOutcome::SkipTerminalArtifact)
+                );
+            }
+            Ok(EnrichOutcome::SkipExistingPullRequest) => {
+                tracing::debug!(
+                    "{}",
+                    skip_log_line(
+                        &repo_label,
+                        role,
+                        item,
+                        EnrichOutcome::SkipExistingPullRequest
+                    )
+                );
             }
             Err(error) => tracing::debug!(
                 "{}",

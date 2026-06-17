@@ -205,7 +205,12 @@ pub async fn serve(
     .await?;
     // §5: WI-3's `trigger: webhook listener up …` banner is the operator-facing
     // line; this raw bind line is redundant detail, kept at debug for the addr.
-    tracing::debug!(target: "engine", addr = %server.local_addr(), "serving");
+    let local_addr = server.local_addr();
+    tracing::debug!(
+        target: "engine",
+        addr = %local_addr,
+        "engine: serving on {local_addr}"
+    );
     Ok(server)
 }
 

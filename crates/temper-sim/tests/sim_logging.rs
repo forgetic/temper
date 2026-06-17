@@ -19,15 +19,14 @@
 //! are disabled (`without_time`) so assertions never depend on wall or virtual
 //! time — only on event presence, level, and structured fields.
 //!
-//! Serving event, real vs. emitted: the `serving` readiness signal lives in
-//! `temper-cli-daemon`'s standalone composition (`standalone/mod.rs:212`),
-//! whose `run_async` boots a real provider, agent runner, and forge factory and
-//! is not wired to run under `LabRuntime` by this harness. Driving it for real
-//! is therefore out of the harness's reach, so we take the fallback the issue
-//! allows: emit the identical event — `tracing::info!(addr = %addr,
-//! "serving")` — from a task driven under the lab, and assert the captured
-//! message is `serving` with the bound address present as a structured `addr`
-//! field (not merely baked into the message text).
+//! Serving event, real vs. emitted: the readiness signal lives in
+//! `temper-cli-daemon`'s standalone composition, whose `run_async` boots a real
+//! provider, agent runner, and forge factory and is not wired to run under
+//! `LabRuntime` by this harness. Driving it for real is therefore out of the
+//! harness's reach, so we take the fallback the issue allows: emit the identical
+//! event — `tracing::info!(addr = %addr, "engine: serving on {addr}")` — from a
+//! task driven under the lab, and assert the captured message is self-contained
+//! while the bound address also survives as a structured `addr` field.
 
 use std::io::Write;
 use std::net::SocketAddr;
@@ -149,7 +148,7 @@ fn captured_output_is_ansi_free() {
     let captured = capture("info", || {
         tracing::error!(code = 7, "boom");
         tracing::warn!("careful");
-        tracing::info!(addr = "127.0.0.1:8080", "serving");
+        tracing::info!(addr = "127.0.0.1:8080", "engine: serving on 127.0.0.1:8080");
     });
     assert!(
         !captured.contains('\u{1b}'),
@@ -162,12 +161,12 @@ fn captured_output_is_ansi_free() {
 
 #[test]
 fn serving_readiness_event_carries_addr_field() {
-    // The migrated readiness signal is `tracing::info!(addr = %.., "serving")`.
+    // The readiness signal bakes the bound address into MESSAGE for default
+    // journald readers while also preserving it as a structured `addr` field.
     // Driving the real standalone daemon under LabRuntime is not supported by
     // this harness (its run_async boots a provider/agent/forge factory), so we
-    // emit the identical event from a task driven by the lab and assert the
-    // contract: message "serving" plus the bound address as a structured `addr`
-    // FIELD, not merely substring-baked into the message.
+    // emit the identical event from a task driven by the lab and assert both
+    // projections.
     let addr: SocketAddr = "127.0.0.1:8080".parse().expect("addr parses");
 
     let captured = {
@@ -178,17 +177,17 @@ fn serving_readiness_event_carries_addr_field() {
             // Emit through a lab task: the lab polls it inline on this thread, so
             // the thread-local subscriber captures it — deterministically.
             sim.run_scenario(MAX_STEPS, move |_cx| async move {
-                tracing::info!(addr = %addr, "serving");
+                tracing::info!(addr = %addr, "engine: serving on {addr}");
             });
         });
         buffer.contents()
     };
 
     assert!(
-        captured.contains("serving"),
-        "the readiness event message must be `serving`, got: {captured:?}"
+        captured.contains("engine: serving on 127.0.0.1:8080"),
+        "the readiness event message must include the bound address, got: {captured:?}"
     );
-    // The address is present as a key=value field, not just inside the message.
+    // The address is present as a key=value field too, not just in MESSAGE.
     assert!(
         captured.contains("addr=127.0.0.1:8080"),
         "the `addr` field must carry the bound address, got: {captured:?}"
