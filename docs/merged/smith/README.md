@@ -143,7 +143,7 @@ process protocols
         ↑
 Smith
   providers · authentication · prompts
-  decisions · coding agents · responders
+  assigned-job agents · coding agents · responders
         ↑
 LLMs
   OpenAI · Anthropic · DeepSeek · others
@@ -162,7 +162,7 @@ The current implementation includes:
 * OpenAI/ChatGPT authentication and provider integrations
 * Anthropic authentication and provider integrations
 * DeepSeek integrations
-* structured workflow-role decision responders
+* structured workflow role-job agents and responders
 * interactive profile responders
 * coding-agent integrations through `pi_agent_rust`
 * provider validation and live integration tests
