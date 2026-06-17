@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use temper_process_protocol::{ConversationProfileId, InteractionProtocolError, ProposalKind};
+use temper_protocol_interaction::{ConversationProfileId, InteractionProtocolError, ProposalKind};
 
 use crate::decision::DecisionError;
 use crate::interaction_profile_config_raw::{

@@ -5,7 +5,7 @@
 //! through [`redacted_preview`], and scalar fields through [`bounded`].
 
 use serde::Serialize;
-use temper_process_protocol::{
+use temper_protocol_decision::{
     WORKFLOW_ROLE_DECISION_NO_ACTION, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
 };
 

@@ -6,7 +6,8 @@ behind process protocols; Smith (`~/src/rust/smith`) is the reference external
 implementation used by the dogfood/example deployments.
 
 Temper keeps only provider-neutral contracts and adapters. External responders
-should depend on `temper-process-protocol` or implement equivalent JSON DTOs,
+should depend on `temper-protocol-interaction` / `temper-protocol-decision` or
+implement equivalent JSON DTOs,
 not on Temper runtime crates.
 
 - Workflow role decisions use

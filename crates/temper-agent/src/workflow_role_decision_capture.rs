@@ -17,7 +17,7 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use temper_process_protocol::{WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest};
+use temper_protocol_decision::{WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest};
 use uuid::Uuid;
 
 use crate::observability::{FIELD_PREVIEW_CHARS, redacted_preview};

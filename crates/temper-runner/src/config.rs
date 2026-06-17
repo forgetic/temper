@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use temper_forge::{CreatePullRequest, CreateRepository, User};
-use temper_process_protocol::workflow_role::BoundExternalTool;
+use temper_protocol_decision::BoundExternalTool;
 use temper_workflow::{
     CompiledWorkflow, ExecutionContext, ExternalToolId, ExternalToolManifest, RoleId, RoleManifest,
     TransitionId,

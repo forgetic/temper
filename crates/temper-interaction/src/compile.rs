@@ -15,7 +15,7 @@ use crate::validated::{
 };
 use crate::{ConversationProfileId, InteractionError, Participant, ProposalKind};
 
-pub use temper_process_protocol::interaction::ProposalPayloadValidator;
+pub use temper_protocol_interaction::ProposalPayloadValidator;
 
 /// A validated interaction spec projected into runtime-facing manifests.
 #[derive(Clone, Debug, Eq, PartialEq)]

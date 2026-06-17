@@ -1,6 +1,6 @@
 //! Re-exports and adapters for the workflow-role process protocol.
 //!
-//! The JSON protocol DTOs live in `temper-process-protocol` so external
+//! The JSON protocol DTOs live in `temper-protocol-decision` so external
 //! responders can depend on the wire contract without depending on Temper's
 //! runner, workflow engine, Forge interface, or concrete backends. This module
 //! keeps the historical `temper_runner::...` exports and converts runtime
@@ -9,7 +9,7 @@
 use temper_forge::ReviewDecision;
 use temper_workflow::{Effect, RoleManifest, ToolManifest};
 
-pub use temper_process_protocol::workflow_role::{
+pub use temper_protocol_decision::{
     AuthorizedWorkflowAction, BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION,
     WORKFLOW_ROLE_DECISION_PROTOCOL_VERSION, WorkflowEffect, WorkflowExternalToolManifest,
     WorkflowPromptManifest, WorkflowPromptSection, WorkflowReviewDecision,

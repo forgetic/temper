@@ -2,7 +2,7 @@ use super::*;
 
 fn fixture_request() -> WorkflowRoleDecisionRequest {
     serde_json::from_str(include_str!(
-        "../../temper-process-protocol/fixtures/workflow-role-decision-request.json"
+        "../../temper-protocol-decision/fixtures/workflow-role-decision-request.json"
     ))
     .expect("Temper workflow-role decision fixture parses")
 }

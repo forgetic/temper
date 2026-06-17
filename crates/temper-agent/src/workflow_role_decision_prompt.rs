@@ -6,7 +6,7 @@
 //! action to `no_action`. The orchestration that calls these (logging, capture,
 //! the provider call) lives in [`crate::workflow_role_decision`].
 
-use temper_process_protocol::{
+use temper_protocol_decision::{
     BoundExternalTool, WORKFLOW_ROLE_DECISION_NO_ACTION, WorkflowRoleDecisionReply,
     WorkflowRoleDecisionRequest, WorkflowRoleManifest,
 };

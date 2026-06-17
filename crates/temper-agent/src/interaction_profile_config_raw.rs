@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use temper_process_protocol::ProposalKind;
+use temper_protocol_interaction::ProposalKind;
 
 use crate::interaction_profile_config::{
     InteractionAllowedProposalKind, InteractionProfileError, InteractionProposalPayloadContract,

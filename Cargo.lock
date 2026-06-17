@@ -1482,7 +1482,8 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io",
  "temper-agent-protocol",
- "temper-process-protocol",
+ "temper-protocol-decision",
+ "temper-protocol-interaction",
  "tongs",
  "tracing",
  "uuid",
@@ -1553,7 +1554,7 @@ dependencies = [
  "temper-config",
  "temper-interaction-service",
  "temper-log",
- "temper-process-protocol",
+ "temper-protocol-interaction",
  "temper-provision-forgejo-cli",
  "temper-reference-delivery-validator",
  "temper-trigger-forgejo",
@@ -1759,7 +1760,7 @@ dependencies = [
  "temper-engine-io",
  "temper-forge",
  "temper-forge-memory",
- "temper-process-protocol",
+ "temper-protocol-interaction",
  "thiserror",
 ]
 
@@ -1791,7 +1792,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-process-protocol"
+name = "temper-protocol-decision"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "temper-protocol-interaction"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -1862,7 +1871,7 @@ dependencies = [
  "temper-forge-filesystem",
  "temper-forge-memory",
  "temper-log",
- "temper-process-protocol",
+ "temper-protocol-decision",
  "temper-testing",
  "temper-workflow",
  "tracing",

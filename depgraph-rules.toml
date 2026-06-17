@@ -9,7 +9,8 @@
 #
 #   temper-worker-protocol    engine <-> worker boundary (daemon exposes; worker consumes)
 #   temper-agent-protocol     worker <-> agent  boundary (worker exposes; agent consumes)
-#   temper-process-protocol   role-decision / external-responder contract (leaf, no deps)
+#   temper-protocol-interaction conversation/proposal responder contract (leaf, no deps)
+#   temper-protocol-decision    role-decision responder contract (leaf, no deps)
 #
 # Each value below is the COMPLETE allowlist of internal deps for that crate;
 # any internal dependency not listed is a violation. Dev-dependencies are NOT
@@ -55,7 +56,8 @@
 temper-engine-io = []
 # The backend-agnostic forge model: Forge trait + domain types. Leaf.
 temper-forge-model = []
-temper-process-protocol = []
+temper-protocol-interaction = []
+temper-protocol-decision = []
 temper-worker-protocol = []
 temper-worker-registry = ["temper-worker-protocol"]
 # Concrete backends — each implements the model's traits and depends ONLY on the
@@ -70,8 +72,8 @@ temper-forge-github = ["temper-forge-model", "temper-engine-io"]
 # the concrete backend crates. Everything downstream depends on this.
 temper-forge = ["temper-forge-model", "temper-forge-forgejo", "temper-forge-github", "temper-forge-memory", "temper-forge-filesystem"]
 temper-workflow = ["temper-forge"]
-temper-interaction = ["temper-forge", "temper-engine-io", "temper-process-protocol"]
-temper-runner = ["temper-forge", "temper-engine-io", "temper-log", "temper-process-protocol", "temper-workflow"]
+temper-interaction = ["temper-forge", "temper-engine-io", "temper-protocol-interaction"]
+temper-runner = ["temper-forge", "temper-engine-io", "temper-log", "temper-protocol-decision", "temper-workflow"]
 temper-wake = ["temper-engine-io", "temper-runner"]
 temper-reference-delivery = ["temper-forge", "temper-runner", "temper-workflow"]
 # Validates live forge state. Builds its forge through the facade factory; no
@@ -108,12 +110,13 @@ temper-agent-io = []
 temper-agent-protocol = []
 temper-agent-core = ["temper-agent-io"]
 # NOTE / DIVERGENCE from rule 3: besides temper-agent-protocol (the protocol the
-# worker exposes), the agent also depends on temper-process-protocol — the
-# engine-owned role-decision contract it implements as an external responder.
-# Both are leaf serde contracts with zero internal deps, so no implementation
-# leaks across tiers; but it IS a second upstream protocol. Drop it from this
-# list if you want CI to force the agent down to exactly one protocol crate.
-temper-agent = ["temper-agent-core", "temper-agent-protocol", "temper-process-protocol"]
+# worker exposes), the agent also depends on the engine-owned external-responder
+# contracts it implements — temper-protocol-interaction (conversation/proposal)
+# and temper-protocol-decision (role-decision). All are leaf serde contracts with
+# zero internal deps, so no implementation leaks across tiers; but they ARE
+# additional upstream protocols. Drop them from this list if you want CI to force
+# the agent down to exactly one protocol crate.
+temper-agent = ["temper-agent-core", "temper-agent-protocol", "temper-protocol-interaction", "temper-protocol-decision"]
 
 # ===========================================================================
 # COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get
@@ -166,7 +169,7 @@ temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "te
 # The thin dispatcher: routes argv to the per-subcommand crates and the hidden
 # operator/responder tools. Re-exports the in-process transport from
 # temper-cli-daemon. Much slimmer than the old monolith.
-temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-process-protocol", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
+temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-protocol-interaction", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
 
 # The unified `temper` binary's composition root (`src/bin/temper.rs`'s `boot()`)
 # snapshots the real environment into a CliEnv via temper-config's env shims, so

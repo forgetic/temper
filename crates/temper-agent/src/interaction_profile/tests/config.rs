@@ -2,7 +2,7 @@
 //! source rules, context/proposal-kind validation, and payload contracts.
 
 use serde_json::json;
-use temper_process_protocol::{
+use temper_protocol_interaction::{
     ConversationReply, InteractionProtocolError, IssueProposal, Proposal, ProposalId, ProposalKind,
 };
 use uuid::Uuid;

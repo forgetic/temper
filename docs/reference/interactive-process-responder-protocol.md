@@ -1,6 +1,6 @@
 # Interactive process responder protocol
 
-`temper-process-protocol` owns the serialization-oriented
+`temper-protocol-interaction` owns the serialization-oriented
 `ConversationRequest`/`ConversationReply` DTOs, deterministic id helpers,
 proposal DTOs, and proposal validation helpers. `temper-interaction` consumes and
 re-exports those DTOs while owning the provider-neutral process adapter and
@@ -42,8 +42,8 @@ and closes stdin. The responder writes exactly one UTF-8 JSON
 `ConversationReply` to stdout. Trailing whitespace is allowed; logs belong on
 stderr. Any extra stdout before or after the JSON value makes the reply
 malformed. Canonical fixture examples live at
-`crates/temper-process-protocol/fixtures/interactive-responder-request.json` and
-`crates/temper-process-protocol/fixtures/interactive-responder-reply.json`.
+`crates/temper-protocol-interaction/fixtures/interactive-responder-request.json` and
+`crates/temper-protocol-interaction/fixtures/interactive-responder-reply.json`.
 
 ```json
 {

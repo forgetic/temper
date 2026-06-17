@@ -16,7 +16,7 @@ use temper_agent::{
     WORKFLOW_ROLE_DECISION_CAPTURE_DIR_ENV, WorkflowRoleDecisionRequest,
     WorkflowRoleDecisionResponder,
 };
-use temper_process_protocol::ConversationRequest;
+use temper_protocol_interaction::ConversationRequest;
 
 /// `temper product-manager-responder`.
 pub fn product_manager(args: Vec<String>) -> ExitCode {

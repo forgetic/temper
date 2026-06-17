@@ -16,7 +16,8 @@ secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 temper-agent-core = { path = "../temper-agent-core" }
-temper-process-protocol = { path = "../temper-process-protocol" }
+temper-protocol-interaction = { path = "../temper-protocol-interaction" }
+temper-protocol-decision = { path = "../temper-protocol-decision" }
 uuid.workspace = true
 
 [dev-dependencies]

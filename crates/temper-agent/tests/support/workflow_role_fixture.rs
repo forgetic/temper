@@ -1,5 +1,5 @@
 use serde_json::json;
-use temper_process_protocol::{
+use temper_protocol_decision::{
     WorkflowEffect, WorkflowPromptManifest, WorkflowPromptSection, WorkflowRoleManifest,
     WorkflowRolePromptExtension, WorkflowToolManifest,
 };

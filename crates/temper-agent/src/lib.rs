@@ -52,9 +52,8 @@ pub use provider::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig,
     ProviderEnv, ProviderError, default_auth_path,
 };
-pub use temper_process_protocol::{
-    ConversationReply, ConversationRequest, WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest,
-};
+pub use temper_protocol_decision::{WorkflowRoleDecisionReply, WorkflowRoleDecisionRequest};
+pub use temper_protocol_interaction::{ConversationReply, ConversationRequest};
 pub use usage::RunTotals;
 pub use workflow_role_decision::{
     WorkflowRoleDecisionError, WorkflowRoleDecisionResponder, WorkflowRoleModelDecision,
