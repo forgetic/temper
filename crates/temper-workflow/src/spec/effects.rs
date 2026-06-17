@@ -15,7 +15,15 @@ pub enum RawEffect {
     /// Add a label to the target artifact. References a label id.
     AddLabel { label: String },
     /// Remove a label from the target artifact. References a label id.
-    RemoveLabel { label: String },
+    ///
+    /// By default the label must be present when the transition plans. Set
+    /// `if_present` for cleanup/handoff labels that should be cleared when
+    /// present without making the transition stale when already absent.
+    RemoveLabel {
+        label: String,
+        #[serde(default)]
+        if_present: bool,
+    },
     /// Assign the target artifact to the worker/user resolved for `role`.
     ///
     /// The payload references a declared workflow role, not a concrete Forge

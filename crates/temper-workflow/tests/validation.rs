@@ -137,6 +137,7 @@ fn valid_spec() -> RawWorkflowSpec {
                 effects: vec![
                     RawEffect::RemoveLabel {
                         label: "ready".to_string(),
+                        if_present: false,
                     },
                     RawEffect::AddLabel {
                         label: "in-progress".to_string(),

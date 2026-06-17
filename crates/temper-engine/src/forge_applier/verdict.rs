@@ -190,8 +190,16 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         }
 
-        let mut context =
-            verdict_execution_context(&job_context.artifact_kind, routed, number, result.body);
+        let mut context = verdict_execution_context(
+            self.forge.as_ref(),
+            job,
+            &job_context.artifact_kind,
+            routed,
+            role_id,
+            number,
+            result.body,
+        )
+        .await;
         if !result.children.is_empty()
             && !self
                 .bind_create_issues_children(VerdictChildrenBinding {
@@ -250,8 +258,16 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         }
 
-        let context =
-            verdict_execution_context(&job_context.artifact_kind, routed, number, result.body);
+        let context = verdict_execution_context(
+            self.forge.as_ref(),
+            job,
+            &job_context.artifact_kind,
+            routed,
+            role_id,
+            number,
+            result.body,
+        )
+        .await;
 
         self.execute_routed_verdict(RoutedVerdictApply {
             job,
@@ -351,13 +367,29 @@ pub(super) fn parse_child_target_repo(target_repo: &str) -> Option<RepositoryPat
     Some(RepositoryPath::new(owner, name))
 }
 
-fn verdict_execution_context(
+async fn verdict_execution_context<F: Forge + ?Sized>(
+    forge: &F,
+    job: &InFlightJob,
     artifact_kind: &str,
     routed: &TransitionId,
+    role_id: &RoleId,
     number: ItemNumber,
     body: Option<String>,
 ) -> ExecutionContext {
     let mut context = ExecutionContext::new();
+    match forge.current_user().await {
+        Ok(user) => {
+            context.set_assignee(role_id.clone(), user.id);
+        }
+        Err(error) => tracing::warn!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            role = %job.role,
+            %error,
+            "forge applier could not bind current role assignee"
+        ),
+    }
     if let Some(body) = body {
         let content_key =
             workspace_content_key(&ArtifactKindId::new(artifact_kind), routed, number);

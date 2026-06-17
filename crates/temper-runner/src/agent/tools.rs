@@ -82,6 +82,16 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         self.observability_tick_id.as_deref()
     }
 
+    async fn context_with_current_role_assignee(&self) -> ExecutionContext {
+        let mut context = self.context.clone();
+        if context.resolve_assignee(&self.role).is_none()
+            && let Ok(user) = self.forge.current_user().await
+        {
+            context.set_assignee(self.role.clone(), user.id);
+        }
+        context
+    }
+
     /// Repository these tools operate on.
     pub fn repo(&self) -> &RepositoryId {
         self.repo
@@ -122,7 +132,8 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         target: ArtifactSource,
         transition: &TransitionId,
     ) -> Result<ExecutionReport, ExecutionError> {
-        self.executor
+        let context = self.context_with_current_role_assignee().await;
+        Executor::with_context(self.workflow, self.forge, context)
             .execute(self.repo, target, transition, &self.role)
             .await
     }
@@ -137,7 +148,7 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         correlation_key: impl Into<String>,
         input: CreatePullRequest,
     ) -> Result<ExecutionReport, ExecutionError> {
-        let mut context = self.context.clone();
+        let mut context = self.context_with_current_role_assignee().await;
         context.set_pull_request_create_at(transition.clone(), effect_index, input);
         context.set_pull_request_correlation_key_at(
             transition.clone(),
@@ -164,7 +175,7 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         correlation_key: impl Into<String>,
         body: impl Into<String>,
     ) -> Result<ExecutionReport, ExecutionError> {
-        let mut context = self.context.clone();
+        let mut context = self.context_with_current_role_assignee().await;
         context.set_set_body_at(transition.clone(), effect_index, body);
         context.set_set_body_correlation_key_at(transition.clone(), effect_index, correlation_key);
         Executor::with_context(self.workflow, self.forge, context)
@@ -187,7 +198,7 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         correlation_key: impl Into<String>,
         body: impl Into<String>,
     ) -> Result<ExecutionReport, ExecutionError> {
-        let mut context = self.context.clone();
+        let mut context = self.context_with_current_role_assignee().await;
         context.set_attach_review_at(transition.clone(), effect_index, body);
         context.set_attach_review_correlation_key_at(
             transition.clone(),
@@ -218,7 +229,7 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         review_body: Option<String>,
     ) -> Result<ExecutionReport, ExecutionError> {
         let correlation_key = correlation_key.into();
-        let mut context = self.context.clone();
+        let mut context = self.context_with_current_role_assignee().await;
         if let Some(body) = body {
             context.set_set_body_at(transition.clone(), 0, body);
             context.set_set_body_correlation_key_at(transition.clone(), 0, correlation_key.clone());
@@ -252,7 +263,7 @@ impl<'a, F: Forge + ?Sized> RoleTools<'a, F> {
         base_correlation_key: impl Into<String>,
         children: impl IntoIterator<Item = CreateIssuesChild>,
     ) -> Result<ExecutionReport, ExecutionError> {
-        let mut context = self.context.clone();
+        let mut context = self.context_with_current_role_assignee().await;
         context.set_create_issues_at(transition.clone(), effect_index, children);
         context.set_create_issues_correlation_key_at(
             transition.clone(),

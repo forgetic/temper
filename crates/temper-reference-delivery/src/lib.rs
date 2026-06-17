@@ -199,6 +199,10 @@ mod tests {
     /// The canonical example workflow the bundled basic-delivery fixture mirrors,
     /// relative to this crate's manifest dir.
     const BASIC_DELIVERY_EXAMPLE_PATH: &str = "../../examples/basic-delivery/config/workflow.json";
+    /// The operator-facing example workflow the bundled reference-delivery
+    /// fixture mirrors, relative to this crate's manifest dir.
+    const REFERENCE_DELIVERY_EXAMPLE_PATH: &str =
+        "../../examples/reference-delivery/config/workflow.json";
 
     #[test]
     fn basic_delivery_workflow_parses_and_validates() {
@@ -224,6 +228,18 @@ mod tests {
             "the embedded basic-delivery fixture has drifted from \
              examples/basic-delivery/config/workflow.json; copy the example over \
              crates/temper-workflow/fixtures/basic-delivery.json"
+        );
+    }
+
+    #[test]
+    fn reference_delivery_fixture_matches_example() {
+        let example = std::fs::read_to_string(REFERENCE_DELIVERY_EXAMPLE_PATH)
+            .expect("reference-delivery example workflow is present");
+        assert_eq!(
+            FIXTURE, example,
+            "the embedded reference-delivery fixture has drifted from \
+             examples/reference-delivery/config/workflow.json; copy the example over \
+             crates/temper-workflow/fixtures/reference-delivery.json"
         );
     }
 

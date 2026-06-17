@@ -68,7 +68,7 @@ fn apply_label_effects(
             Effect::AddLabel(label) => {
                 result.insert(label.as_str().to_string());
             }
-            Effect::RemoveLabel(label) => {
+            Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
                 result.remove(label.as_str());
             }
             Effect::SetAssignee(_)

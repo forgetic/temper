@@ -287,6 +287,7 @@ pub struct QueueLabelSet {
 pub enum Effect {
     AddLabel(LabelId),
     RemoveLabel(LabelId),
+    RemoveLabelIfPresent(LabelId),
     SetAssignee(RoleId),
     RemoveAssignee(RoleId),
     CreateComment {

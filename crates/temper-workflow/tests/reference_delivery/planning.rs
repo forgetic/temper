@@ -25,6 +25,9 @@ fn intake_triage_is_a_normal_queue_match() {
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("code")),
             WorkflowEffect::AddLabel(LabelId::new("ready")),
+            WorkflowEffect::SetAssignee {
+                role: RoleId::new("architect"),
+            },
         ]
     );
 }
@@ -135,7 +138,12 @@ fn attention_queues_route_architect_owner_and_human_work() {
         .unwrap();
     assert_eq!(
         request.effects,
-        vec![WorkflowEffect::AddLabel(needs_owner.clone())]
+        vec![
+            WorkflowEffect::AddLabel(needs_owner.clone()),
+            WorkflowEffect::SetAssignee {
+                role: architect.clone(),
+            },
+        ]
     );
 
     let owner_design = classify_issue(&workflow, 33, &["design", "needs-owner"]);

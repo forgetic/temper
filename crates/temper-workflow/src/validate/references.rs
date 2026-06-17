@@ -406,7 +406,7 @@ pub(super) fn check_state_dimensions(
 /// Returns the label id referenced by a raw effect, if any.
 fn effect_label(effect: &RawEffect) -> Option<&str> {
     match effect {
-        RawEffect::AddLabel { label } | RawEffect::RemoveLabel { label } => Some(label),
+        RawEffect::AddLabel { label } | RawEffect::RemoveLabel { label, .. } => Some(label),
         RawEffect::SetAssignee { .. }
         | RawEffect::RemoveAssignee { .. }
         | RawEffect::CreateComment { .. }

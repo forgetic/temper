@@ -78,6 +78,48 @@ fn fresh_implementation_pr_matches_reviewer_queue() {
 }
 
 #[test]
+fn review_handoff_transitions_clear_working_state_without_requiring_it() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let engineer = RoleId::new("engineer");
+    let reviewer = RoleId::new("reviewer");
+
+    let plain_pr = classify_pr(&workflow, 24, &["implementation"]);
+    let request = planner
+        .plan_transition(&TransitionId::new("request_review"), &engineer, &plain_pr)
+        .expect("request_review can route a PR that is not currently marked in-progress");
+    assert_eq!(
+        request.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("in-progress")),
+            WorkflowEffect::AddLabel(LabelId::new("needs-reviewer")),
+            WorkflowEffect::RequestReviewers {
+                roles: vec![reviewer.clone()],
+            },
+        ]
+    );
+
+    let reworked_pr = classify_pr(&workflow, 25, &["implementation", "in-progress"]);
+    let address_changes = planner
+        .plan_transition(
+            &TransitionId::new("address_review_changes"),
+            &engineer,
+            &reworked_pr,
+        )
+        .expect("review return handoff clears an in-progress marker when present");
+    assert_eq!(
+        address_changes.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("in-progress")),
+            WorkflowEffect::AddLabel(LabelId::new("needs-reviewer")),
+            WorkflowEffect::RequestReviewers {
+                roles: vec![reviewer],
+            },
+        ]
+    );
+}
+
+#[test]
 fn failed_gates_route_back_to_engineer_queues() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
@@ -110,6 +152,7 @@ fn failed_gates_route_back_to_engineer_queues() {
         return_for_review.effects,
         vec![
             WorkflowEffect::RemoveLabel(LabelId::new("landing")),
+            WorkflowEffect::RemoveLabel(LabelId::new("in-progress")),
             WorkflowEffect::AddLabel(LabelId::new("needs-reviewer")),
             WorkflowEffect::RequestReviewers {
                 roles: vec![RoleId::new("reviewer")],

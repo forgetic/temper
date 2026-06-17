@@ -62,7 +62,10 @@ projection.
 ## Idempotency rules
 
 - Re-running a completed label transition fails its label preconditions, so it
-  is not double-applied.
+  is not double-applied. A `remove_label` effect declared with `"if_present":
+  true` is the exception for handoff cleanup: it still verifies the label is
+  absent after application but does not require the label to be present before
+  planning.
 - Assignee set/remove operations are set-like and cleanly idempotent.
 - Comments include a hidden marker
   (`<!-- temper:comment-key=<transition>:<comment-index> -->`) and are skipped

@@ -356,7 +356,9 @@ fn condition_label<'a>(
 
 fn effect_label(effect: &Effect) -> Option<&LabelId> {
     match effect {
-        Effect::AddLabel(label) | Effect::RemoveLabel(label) => Some(label),
+        Effect::AddLabel(label)
+        | Effect::RemoveLabel(label)
+        | Effect::RemoveLabelIfPresent(label) => Some(label),
         Effect::SetAssignee(_)
         | Effect::RemoveAssignee(_)
         | Effect::CreateComment { .. }

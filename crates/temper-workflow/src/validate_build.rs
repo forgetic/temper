@@ -219,7 +219,13 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
 fn build_effect(effect: &RawEffect) -> Effect {
     match effect {
         RawEffect::AddLabel { label } => Effect::AddLabel(LabelId::new(label)),
-        RawEffect::RemoveLabel { label } => Effect::RemoveLabel(LabelId::new(label)),
+        RawEffect::RemoveLabel { label, if_present } => {
+            if *if_present {
+                Effect::RemoveLabelIfPresent(LabelId::new(label))
+            } else {
+                Effect::RemoveLabel(LabelId::new(label))
+            }
+        }
         RawEffect::SetAssignee { role } => Effect::SetAssignee(RoleId::new(role)),
         RawEffect::RemoveAssignee { role } => Effect::RemoveAssignee(RoleId::new(role)),
         RawEffect::CreateComment { body } => Effect::CreateComment { body: body.clone() },

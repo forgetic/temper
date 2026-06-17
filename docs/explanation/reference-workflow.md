@@ -61,11 +61,13 @@ per tick (see [reference-workflow-gaps.md](reference-workflow-gaps.md)).
 ## State and routing labels
 
 `work_lifecycle` is exclusive: `draft` (design only), `ready` (design/code),
-`in_progress` (epic/code), and `blocked` (code). Artifact-specific legality
-prevents combinations such as `code + draft`.
+`in_progress` (epic/code/implementation PR), and `blocked` (code).
+Artifact-specific legality prevents combinations such as `code + draft`.
 
 Review and CI status are not workflow-owned state dimensions. `needs-reviewer`
-routes review work, while native review decisions feed review gates. Native CI
+routes review work, while native review decisions feed review gates. Transitions
+that hand work back to review also clear an `in-progress` label if one is present,
+so review routing does not leave a stale working-state signal behind. Native CI
 job conclusions feed `ci_passed` / `ci_failed` conditions. Merge eligibility is
 derived from review + CI gates; `landing` means approval has queued mechanical
 landing, not that merge gates are currently satisfied.
@@ -116,7 +118,8 @@ application; the workspace never mutates Forge.
   `ready`), `needs_design` to `triage_intake_to_design` (author a design proposal
   body, then `design` + `needs-owner`), and `needs_breakdown` to
   `triage_intake_breakdown` (`create_issues` for dependent children, with the
-  parent kept as an epic plan record).
+  parent kept as an epic plan record). Architect-owned triage/follow-up work
+  assigns the item to the `architect` role as the declarative pickup signal.
 - **Engineer `open_pr`** opens a PR from the head the coding workspace produces,
   or routes the `needs_architect` verdict to `request_code_architect_input` so an
   unimplementable issue escalates instead of looping on an empty diff.

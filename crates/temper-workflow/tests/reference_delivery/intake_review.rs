@@ -89,6 +89,9 @@ fn architect_triage_intake_routes_verdicts_to_content_bearing_transitions() {
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("code")),
             WorkflowEffect::AddLabel(LabelId::new("ready")),
+            WorkflowEffect::SetAssignee {
+                role: architect.clone(),
+            },
         ]
     );
 
@@ -109,6 +112,9 @@ fn architect_triage_intake_routes_verdicts_to_content_bearing_transitions() {
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("design")),
             WorkflowEffect::AddLabel(LabelId::new("needs-owner")),
+            WorkflowEffect::SetAssignee {
+                role: architect.clone(),
+            },
         ]
     );
 
@@ -129,6 +135,7 @@ fn architect_triage_intake_routes_verdicts_to_content_bearing_transitions() {
             },
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("epic")),
+            WorkflowEffect::SetAssignee { role: architect },
         ]
     );
 }

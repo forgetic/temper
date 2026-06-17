@@ -212,6 +212,7 @@ impl<'a> Planner<'a> {
                         label: label.clone(),
                     });
                 }
+                Effect::RemoveLabelIfPresent(_) => {}
                 Effect::AddLabel(label) if labels.contains(label.as_str()) => {
                     diagnostics.push(PlanDiagnostic::ContradictedPrecondition {
                         transition: transition.id.clone(),
@@ -336,6 +337,7 @@ impl<'a> Planner<'a> {
                 let mut produced = transition.effects.iter().filter_map(|effect| match effect {
                     Effect::AddLabel(label) => Some(label),
                     Effect::RemoveLabel(_)
+                    | Effect::RemoveLabelIfPresent(_)
                     | Effect::SetAssignee(_)
                     | Effect::RemoveAssignee(_)
                     | Effect::CreateComment { .. }
@@ -370,7 +372,9 @@ impl ValidatedWorkflow {
 fn to_effect(effect: &Effect) -> WorkflowEffect {
     match effect {
         Effect::AddLabel(label) => WorkflowEffect::AddLabel(label.clone()),
-        Effect::RemoveLabel(label) => WorkflowEffect::RemoveLabel(label.clone()),
+        Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
+            WorkflowEffect::RemoveLabel(label.clone())
+        }
         Effect::SetAssignee(role) => WorkflowEffect::SetAssignee { role: role.clone() },
         Effect::RemoveAssignee(role) => WorkflowEffect::RemoveAssignee { role: role.clone() },
         Effect::CreateComment { body } => WorkflowEffect::CreateComment { body: body.clone() },
@@ -404,7 +408,9 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
 fn to_postcondition(effect: &Effect) -> Option<Postcondition> {
     match effect {
         Effect::AddLabel(label) => Some(Postcondition::LabelPresent(label.clone())),
-        Effect::RemoveLabel(label) => Some(Postcondition::LabelAbsent(label.clone())),
+        Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
+            Some(Postcondition::LabelAbsent(label.clone()))
+        }
         Effect::SetAssignee(role) => Some(Postcondition::AssigneePresent { role: role.clone() }),
         Effect::RemoveAssignee(role) => Some(Postcondition::AssigneeAbsent { role: role.clone() }),
         Effect::CreateComment { .. }

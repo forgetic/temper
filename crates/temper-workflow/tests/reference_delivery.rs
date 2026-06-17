@@ -6,9 +6,9 @@ use temper_forge::{
 };
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, CiStatus, ClassifiedArtifact, ClassifiedRelation, Classifier,
-    DependencyStatus, GateCondition, GateId, GateSignals, IntakeAuthor, LabelId, PlanDiagnostic,
-    QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId, ValidatedWorkflow,
-    VerdictId, WorkflowEffect, WorkflowMetadata, compile, render_metadata_block,
+    DependencyStatus, Effect, GateCondition, GateId, GateSignals, IntakeAuthor, LabelId,
+    PlanDiagnostic, QueueId, RawWorkflowSpec, RelationKind, ReviewStatus, RoleId, TransitionId,
+    ValidatedWorkflow, VerdictId, WorkflowEffect, WorkflowMetadata, compile, render_metadata_block,
 };
 
 #[path = "reference_delivery/classification.rs"]

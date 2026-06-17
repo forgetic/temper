@@ -175,6 +175,43 @@ fn reference_fixture_validates_with_expected_shape() {
 }
 
 #[test]
+fn architect_work_transitions_self_assign_declaratively() {
+    let workflow = fixture_workflow();
+    let architect = RoleId::new("architect");
+    let expected = [
+        "triage_intake",
+        "triage_intake_to_code",
+        "triage_intake_to_design",
+        "triage_intake_breakdown",
+        "triage_to_code",
+        "triage_to_blocked_code",
+        "triage_to_design",
+        "refine_design",
+        // `mark_code_ready` is deliberately label-only: dependency reconciliation
+        // applies it mechanically once prerequisites land.
+        "reconcile_landed",
+        "resolve_architect_request",
+        "request_owner_input",
+        "resolve_code_architect_request",
+    ];
+
+    for transition_id in expected {
+        let transition = workflow
+            .transitions()
+            .iter()
+            .find(|transition| transition.id.as_str() == transition_id)
+            .unwrap_or_else(|| panic!("{transition_id} transition is declared"));
+        assert!(
+            transition
+                .effects
+                .iter()
+                .any(|effect| effect == &Effect::SetAssignee(architect.clone())),
+            "{transition_id} should assign the architect role"
+        );
+    }
+}
+
+#[test]
 fn reference_fixture_compiles_every_role() {
     let compiled = compile(&fixture_workflow());
     let mut ids: Vec<String> = compiled.roles().iter().map(|r| r.id.to_string()).collect();

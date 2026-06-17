@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use temper_forge_memory::MemoryForge;
-use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId};
+use temper_forge_model::{CreateIssue, CreateRepository, Forge, IssueQuery, RepositoryId, UserId};
 use temper_log::WorkItemRef;
 use temper_log::emit::{
     GateEvaluated, QueueEntered, TransitionApplied, emit_gate_evaluated, emit_queue_entered,
@@ -22,7 +22,9 @@ use temper_runner::{
     WorkItemIdentity, gate_summary, labels_delta, queue_after_transition, scan_role, work_item_ref,
 };
 use temper_testing::{block_on, workflow};
-use temper_workflow::{ArtifactSource, CiStatus, GateSignals, RoleId, TransitionId};
+use temper_workflow::{
+    ArtifactSource, CiStatus, ExecutionContext, GateSignals, RoleId, TransitionId,
+};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
 use tracing_subscriber::Layer;
@@ -122,7 +124,8 @@ fn applied_transition_emits_join_key_label_delta_and_human_line() {
     // Execute a real transition and emit `transition.applied` exactly as the
     // runner glue does: fields from the identity + applied effects.
     let transition = TransitionId::new("triage_to_code");
-    let report = block_on(workflow.executor(&forge).execute(
+    let context = ExecutionContext::new().with_assignee(role.clone(), UserId::new("user-1"));
+    let report = block_on(workflow.executor_with_context(&forge, context).execute(
         &repo,
         item.target,
         &transition,
@@ -225,7 +228,8 @@ fn applied_transition_derives_queue_entered_destination_and_role() {
             },
         ))
         .expect("intake issue");
-        block_on(workflow.executor(&forge).execute(
+        let context = ExecutionContext::new().with_assignee(role.clone(), UserId::new("user-1"));
+        block_on(workflow.executor_with_context(&forge, context).execute(
             &repo,
             ArtifactSource::Issue {
                 number: intake.number,
