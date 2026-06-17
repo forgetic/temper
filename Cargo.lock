@@ -1486,6 +1486,7 @@ dependencies = [
  "temper-protocol-interaction",
  "tongs",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
