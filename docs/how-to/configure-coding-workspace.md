@@ -1,100 +1,156 @@
-# Configure a coding workspace external tool
+# Configure the coding agent (real-implementation PRs)
 
 Use this when a workflow role should open implementation PRs from real code
-changes rather than from synthetic branch prep.
+changes rather than from synthetic branch prep. The worker prepares a git
+checkout, spawns the out-of-process coding agent (`temper agent`) against it, and
+turns the agent's diff or verdict into a PR or a routed workflow outcome.
 
-## 1. Declare the tool in the workflow
+There is no longer any `TEMPER_CODING_WORKSPACE_*` "binding" env var, and no
+`coding_workspace` external-tool declaration to add. The mechanism is entirely
+config-driven: the **workflow** declares the action the role performs, the
+**daemon** derives the checkout capability and verdict vocabulary from that
+action, and the **config/credentials files** wire up the provider the worker
+renders onto the `temper agent` command line. This page walks that path.
 
-Add an external tool declaration to the role that is allowed to implement code.
-The conventional id is `coding_workspace`:
+## 1. Let the workflow declare the implementing action
+
+A role gets a real coding turn whenever the daemon assigns it a
+**workspace-backed action** — an action that either declares a
+`create_pull_request` effect (the head path, e.g. an engineer `open_pr`) or
+declares verdict `outcomes` (the verdict path, e.g. a reviewer `approve` /
+`request_changes`). No external-tool declaration is needed; the role's compiled
+tools and the queue assignment are enough.
 
 ```json
 {
   "id": "engineer",
   "prompt": {
-    "guidance": "Use open_pr only after coding_workspace produced a real implementation diff.",
+    "guidance": "Only report success after producing a real implementation diff.",
     "tool_guidance": "Do not open bookkeeping-only PRs."
   },
-  "external_tools": [{
-    "id": "coding_workspace",
-    "description": "Prepare a checkout, edit code, commit a PR head, and report changed files.",
-    "required": false,
-    "constraints": ["Only touch the checked-out repository workspace."],
-    "guidance": "If unbound, fail the assigned implementation job with a structured unavailable-workspace result."
-  }],
   "queues": ["code_ready"]
 }
 ```
 
-Set `required: true` only when every runner that builds the compiled workflow is
-expected to have a binding. Optional declarations are omitted from the runtime
-prompt/context until a runner binds them.
+For each assigned job the daemon enriches the worker's job context with:
 
-## 2. Bind the production local-git provider
+- `action` — the assigned action name.
+- `allowed_verdicts` — the verdict vocabulary the action declares (the keys of
+  its compiled `outcomes` map). This is the **only** set of verdicts the agent
+  may write to the result file (§3); emitting anything else fails the tick. The
+  array is empty for a pure head action that declares no `outcomes` (the engineer
+  `open_pr` default), where no verdict is expected at all.
+- `checkout` — the checkout capability for this action (see the table in §2).
 
-`temper-worker` binds the local-git workspace provider when these environment
-variables are present:
+A queue action may pin the checkout explicitly with a `checkout` field on the
+queue's action assignment; otherwise the daemon infers it: an action with a
+`create_pull_request` effect ⇒ `writable`; an Issue-targeted verdict action ⇒
+`read_only`; a PR-targeted verdict action ⇒ `pull_request_read_only`. The
+workflow stays the single source of truth for the action's options, so a bound
+agent should read `allowed_verdicts` and constrain itself to that set rather than
+inventing a verdict.
 
-```sh
-export TEMPER_CODING_WORKSPACE_ROOT=/path/to/clean/checkout
-export TEMPER_CODING_WORKSPACE_COMMAND='your-coder --context "$TEMPER_CODING_WORKSPACE_CONTEXT"'
-export TEMPER_CODING_WORKSPACE_REMOTE=origin        # default
-export TEMPER_CODING_WORKSPACE_PUSH=1              # default; set 0 for local tests
-export TEMPER_CODING_WORKSPACE_PR_LABELS=implementation,needs-reviewer
+## 2. Configure the provider the worker renders onto `temper agent`
+
+`temper-worker` no longer binds an external provider from env. It spawns the
+in-tree coding agent (`temper agent`) once per job, reading the
+provider/model/iteration knobs from the resolved deployment config and rendering
+them as **command-line flags**. Exactly one secret — the provider credential —
+crosses as an environment variable (`TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON`),
+which the worker builds from the credentials file and injects into the child.
+
+Put non-secret wiring in the config file (`temper.toml`; the on-disk default
+filename is `config.toml`) and the provider secret in the credentials file
+(`credentials.toml`). `temper config init` writes copy-pasteable templates for
+both.
+
+```toml
+# temper.toml — non-secret deployment settings
+
+[engine]
+repos = ["acme/widgets"]
+roles = ["architect", "engineer", "code-reviewer"]
+
+[worker]
+# Top-level directory under which per-job checkouts are prepared.
+# Default: $XDG_STATE_HOME/temper/workspace (~/.local/state/temper/workspace).
+# workspace = "~/.local/state/temper/workspace"
+# Explicit owner/name:role capabilities this worker serves.
+# Default: the cross-product of [engine] repos × roles.
+# capabilities = ["acme/widgets:engineer"]
+
+[agent]
+provider = "anthropic"          # selects the [agent.providers.<name>] block below
+max_iterations = 250
+enable_subagents = false        # the investigate read-only sub-agent tool
+
+[agent.providers.anthropic]
+# url = "https://api.anthropic.com"   # optional base-URL override → --provider-url
+models = { main = "claude-opus-4-8", investigate = "claude-haiku-4-5" }
 ```
 
-The worker binds the provider for **every declared workspace external-tool id**,
-not just `coding_workspace`. Any role-declared id equal to `coding_workspace` or
-ending in `_workspace` (e.g. `triage_workspace`, `review_workspace`) is bound to
-this provider, deduped per `(role, id)`. Non-workspace external tools are left
-unbound for a different provider. When the env above is set but no role declares
-any workspace id, the worker logs a diagnostic and binds nothing.
+```toml
+# credentials.toml — secrets (chmod 600, keep out of version control)
 
-The command runs in the checkout. It receives the assigned job, work item, user
-guidance, action, allowed verdicts, and branch/base/correlation data in
-`TEMPER_CODING_WORKSPACE_CONTEXT` (JSON). The agent does not receive Forge
-mutation tools; it completes the assigned action and reports a branch/diff,
-declared verdict with authored content, or structured failure for the worker to
+# LLM provider secret, keyed to match [agent.providers.<name>] in temper.toml.
+[agent.providers.anthropic]
+type = "oauth"                  # "oauth" (access/refresh/expires) or "api-key" (key)
+access = "<oauth-access-token>"
+refresh = "<oauth-refresh-token>"
+expires = 0                     # access-token expiry, unix milliseconds
+# Or point at an existing pi-format auth.json instead of inline OAuth fields:
+# auth_file = "/home/agent/.pi/agent/auth.json"
+
+# A static-key provider (DeepSeek / OpenAI-compatible) would instead be:
+# [agent.providers.deepseek]
+# type = "api-key"
+# key = "<deepseek-api-key>"
+```
+
+From this resolved config the worker renders the agent command. The non-secret
+provider knobs become flags — `--provider <kind>`, and `--model`,
+`--investigate-model`, `--provider-url` when set — alongside `--max-iterations`,
+`--subagents on|off`, and a per-job `--context`, `--result`, and `--workspace`.
+The credential becomes the single `TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON` env
+the child reads. (For the full flag inventory and defaults, see
+[`docs/reference/environment-variables.md`](../reference/environment-variables.md).)
+
+The agent runs **in the prepared checkout** (its `--workspace`, also its cwd). It
+receives the assigned job, work item, user guidance, action, allowed verdicts,
+and branch/base/correlation data as fields of the `WorkspaceContext` JSON the
+worker writes to the `--context` file. The agent does **not** receive Forge
+mutation tools; it completes the assigned action and reports a branch/diff, a
+declared verdict with authored content, or a structured failure for the worker to
 return to Temper.
-
-The context JSON includes an `action` string and an `allowed_verdicts` array: the
-verdict vocabulary the action declares (the keys of its compiled `outcomes` map).
-This is the **only** set of verdicts the command may write to the result file (§3) — emitting anything
-else fails the tick. A bound agent should read `allowed_verdicts` and constrain
-itself to that set rather than inventing a verdict, so the workflow stays the
-single source of truth for the action's options. The array is empty for a pure
-head action that declares no `outcomes` (the engineer `open_pr` default), where
-no verdict is expected at all.
 
 ### Assigned-action checkout capability
 
-Different assigned actions need different checkouts, so the worker receives a
-checkout capability derived from the selected action and, when necessary, the
-queue's explicit action assignment (never from a hard-coded role id). The
-provider receives the capability per invocation and exposes it to the command as
-`TEMPER_CODING_WORKSPACE_CHECKOUT`:
+Different assigned actions need different checkouts, so the daemon derives a
+checkout capability (§1) and the worker prepares the checkout to match. The
+capability is surfaced to the agent as the `WorkspaceContext.checkout` field (the
+worker also lays the repos out so this is reflected in each repo's `access` and,
+for writable repos, its `branch_hint`):
 
-| Capability | `…CHECKOUT` | Checkout behavior |
+| Capability | `checkout` value | Checkout behavior |
 | --- | --- | --- |
-| Writable issue implementation | `writable` | Writable checkout at `base`; the head path commits and pushes a branch for a new PR. |
-| Read-only issue verdict | `read_only` | Read-only checkout at `base`; the command must route a verdict and never commits. |
-| Read-only PR verdict/review | `pull_request_read_only` | Read-only checkout with the PR head fetched (`TEMPER_CODING_WORKSPACE_PR_HEAD_REF`) **and** base so the command can compute `git diff <base> <pr-head-ref>`; never commits. |
+| Writable issue implementation | `writable` | Writable checkout at `base`; the head path commits and the worker pushes the work branch (the repo's `branch_hint`) for a new PR. |
+| Read-only issue verdict | `read_only` | Read-only checkout at `base`; the agent must route a verdict and never commits. |
+| Read-only PR verdict/review | `pull_request_read_only` | Read-only checkout with the PR head fetched **and** base, so the agent can compute `git diff <base> <pr-head>`; never commits. |
 | Writable PR-head fix | `pull_request_writable` | Writable checkout on the existing PR head branch; the worker pushes fixes back to that branch so CI/review gates can re-evaluate. |
 
 A read-only command (`read_only` or `pull_request_read_only`) **must** write a
 `verdict` to the result file (§3): producing a diff without a verdict in a
-read-only checkout is a misconfiguration and the provider fails loudly rather
-than committing into a tree the operator declared read-only. The reviewer's CI
-status is read from the granted work-item context; richer CI enrichment of that
-context is a follow-up.
+read-only checkout is a misconfiguration and the worker fails the job loudly
+rather than committing into a tree the operator declared read-only. The
+reviewer's CI status is summarized into the action guidance the worker assembles
+for the PR-fix path; richer CI enrichment is a follow-up.
 
 ## 3. Report a result (verdict / content)
 
-The command also receives `TEMPER_CODING_WORKSPACE_RESULT`: a path to a
-provider-created result file the command **may** write to report a verdict and/or
-content back to the workspace. Writing it is optional — leave it untouched to keep
-the default behavior. When written, it is a single JSON object; every field is
-optional:
+The agent writes its terminal work product to the file named by the `--result`
+flag: a single `WorkspaceResult` JSON object. Writing it is optional for the head
+path — leave it untouched (or write an empty/`verdict`-less object) to keep the
+default behavior. Every field is optional:
 
 ```jsonc
 {
@@ -102,14 +158,15 @@ optional:
   "summary": "one-line summary",    // optional; falls back to changed-files list
   "body": "rewritten issue body",   // optional; consumed by a routed set_body
   "review_body": "review prose",    // optional; consumed by a routed attach_review
-  "labels": ["implementation"],     // optional; overrides default PR labels (head path)
+  "labels": ["implementation"],     // optional; PR labels for the head path
   "children": [                     // optional; consumed by a routed create_issues
     {
       "slug": "api",                // stable id; seeds the child's correlation key
       "title": "Add the HTTP API",  // authored child title
       "body": "…",                  // authored child body
       "labels": ["code", "ready"],  // labels to create the child with
-      "depends_on": []              // slugs of sibling children that must land first
+      "depends_on": [],             // slugs of sibling children that must land first
+      "target_repo": "acme/widgets" // optional owner/name; omit ⇒ parent's repo
     }
   ]
 }
@@ -122,41 +179,49 @@ routes to a transition that declares a `create_issues` effect (e.g. an architect
 provider hands the authored children to that effect. Children land idempotently
 under a deterministic per-effect key, each linked back to the routed artifact as
 parent, and a child naming a sibling slug in `depends_on` records that dependency
-once both exist. `children` is ignored on the head path and when the routed
-transition declares no `create_issues`.
+once both exist. A child's `target_repo` selects which repo it is created in,
+defaulting to the parent's. `children` is ignored on the head path and when the
+routed transition declares no `create_issues`.
 
-The provider chooses one of two paths based on whether `verdict` is present:
+The worker chooses one of two paths based on whether `verdict` is present:
 
-- **No result file / empty file / no `verdict`** → the **head path**. The
-  provider enforces the diff guard (§4), commits, pushes the branch, and opens a
-  PR exactly as before. A `labels` or `summary` value in the result file
-  overrides the configured PR labels and the default changed-files summary; the
-  PR is still opened from the committed diff.
+- **No result file / empty file / no `verdict`** → the **head path**. The worker
+  enforces the diff check (§4), commits, and pushes the work branch; the daemon
+  then opens the PR. A `labels` or `summary` value in the result file overrides
+  the default PR labels and the default changed-files summary; the PR is still
+  opened from the committed diff.
 - **`verdict` present** → the **verdict path**. The verdict must be one of the
-  action's declared `allowed_verdicts` (surfaced in the context, §2); the provider
-  rejects an out-of-vocabulary verdict here, naming the declared set, rather than
-  handing a doomed verdict to the runner. The provider **skips** the diff
-  guard, the commit, and the push, and tolerates an empty working tree. It
-  returns a verdict-only output (empty branch) that routes through the action's
-  declared `outcomes` map, carrying any `body` (for a routed `set_body`) and
-  `review_body` (for a routed `attach_review`). This is how an external command
-  emits e.g. a reviewer `approve` with no diff, or an architect rewrite.
+  action's declared `allowed_verdicts` (surfaced in the context, §1); an
+  out-of-vocabulary verdict is rejected — naming the declared set — rather than
+  handing a doomed verdict to the runner. The worker **skips** the diff check,
+  the commit, and the push, and tolerates an empty working tree. It returns a
+  verdict-only output (empty branch) that routes through the action's declared
+  `outcomes` map, carrying any `body` (for a routed `set_body`) and `review_body`
+  (for a routed `attach_review`). This is how the agent emits e.g. a reviewer
+  `approve` with no diff, or an architect rewrite.
 
-`changed_files` is always computed by the provider from `git status` on the head
-path; the command never reports it.
+`changed_files` is always computed by the worker from `git status` on the head
+path; the agent never reports it.
+
+The agent may also emit line-delimited `StepProgress` records on its stdout as it
+goes — one per pushed step boundary — which the worker relays to the forge as
+durable, human-facing progress (a ticked checklist item, a PR-body update). These
+are crash-recovery checkpoints, not part of the terminal result.
 
 ## 4. Safety behavior
 
-The workspace must leave a real non-bookkeeping diff. Production rejects empty or
-synthetic-only changes such as `.temper-pr-prep/`, `.temper-ci/`, or the demo CI
-workflow file. The worker then commits and pushes the branch and opens the PR via
-`RoleTools`, so Forge/workflow mutation stays behind the normal authority
-boundary.
+The head path must leave a real diff: the worker rejects a job that produced no
+tree changes in any writable repo (and, for a PR-head fix, a job that did not
+change the PR head — "CI stays red") with a permanent failure rather than opening
+an empty PR. The worker commits and pushes only the work branch; the **daemon**
+opens the PR from that branch outcome, so Forge/workflow mutation stays behind
+the normal authority boundary and the token-holding agent never opens PRs itself.
 
 The Smith-owned dogfood launcher keeps `DOGFOOD_ENABLE_ENGINEER_AUTOMATION=0`
-by default. Turning it on requires the workspace env above, the engineer role's
-`coding_workspace` declaration, active PR diff guard settings, and role
-credentials. Check that live setup from the Smith checkout:
+by default. Turning it on requires the config above (a configured
+`[agent.providers.*]` provider plus its credentials), an engineer role whose
+workflow declares a writable implementing action, active PR diff-guard settings,
+and forge role credentials. Check that live setup from the Smith checkout:
 
 ```sh
 cd ~/src/rust/smith/examples/dogfood
