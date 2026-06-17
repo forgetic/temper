@@ -11,6 +11,7 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("product diff"));
     assert!(engineer.contains("Do NOT run git commit"));
     assert!(engineer.contains("needs_architect"));
+    assert!(engineer.contains("needs_human"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -70,9 +71,9 @@ fn system_prompt_single_outcome_collapses_to_one_choice() {
 
 #[test]
 fn system_prompt_engineer_keeps_head_path_under_constraint() {
-    // Even with a declared verdict (needs_architect), the engineer may still take
-    // the no-verdict head path.
-    let allowed = vec!["needs_architect".to_string()];
+    // Even with declared decline verdicts, the engineer may still take the
+    // no-verdict head path.
+    let allowed = vec!["needs_architect".to_string(), "needs_human".to_string()];
     let engineer = system_prompt(Capability::CodingWorkspace, &allowed);
     assert!(engineer.contains("VERDICT CONSTRAINT"));
     assert!(engineer.contains("head path"));

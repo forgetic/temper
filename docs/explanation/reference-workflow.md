@@ -121,8 +121,11 @@ application; the workspace never mutates Forge.
   parent kept as an epic plan record). Architect-owned triage/follow-up work
   assigns the item to the `architect` role as the declarative pickup signal.
 - **Engineer `open_pr`** opens a PR from the head the coding workspace produces,
-  or routes the `needs_architect` verdict to `request_code_architect_input` so an
-  unimplementable issue escalates instead of looping on an empty diff.
+  routes the `needs_architect` verdict to `request_code_architect_input` when a
+  ready code issue is underspecified or unimplementable as written, or routes
+  `needs_human` to `request_code_human_input` only when implementation needs
+  non-agent judgment. Both decline paths escalate instead of looping on an empty
+  diff.
 - **Reviewer `review_pr`** reads the real diff and CI and routes `approve` to
   `approve_review`, `changes` to `request_changes_with_review` (a native
   `attach_review` carrying the authored review body), and `escalate` to
@@ -136,10 +139,11 @@ to explain that `open_pr` is what produces the diff.
 
 Attention labels request another role; they are not verdicts. Engineers or
 reviewers can set `needs-architect`; the architect clears it after amending a
-spec, recording a decision, or returning work. If owner feedback is needed, the
+spec, recording a decision, or returning work. Engineers set `needs-human` only
+for explicit non-agent judgment on code work. If owner feedback is needed, the
 architect sets `needs-owner`; the owner either clears it or switches to
 `needs-human` for explicit non-agent judgment. The human role clears
-`needs-human` after resolution.
+`needs-human` after resolution, returning code work to `ready` when applicable.
 
 ## Post-merge handling
 

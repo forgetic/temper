@@ -38,8 +38,10 @@ For each assigned job the daemon enriches the worker's job context with:
 - `allowed_verdicts` — the verdict vocabulary the action declares (the keys of
   its compiled `outcomes` map). This is the **only** set of verdicts the agent
   may write to the result file (§3); emitting anything else fails the tick. The
-  array is empty for a pure head action that declares no `outcomes` (the engineer
-  `open_pr` default), where no verdict is expected at all.
+  array is empty for a pure head action that declares no `outcomes`. The
+  reference engineer `open_pr` action declares decline outcomes such as
+  `needs_architect` and `needs_human`; omitting `verdict` still takes the normal
+  PR head path.
 - `checkout` — the checkout capability for this action (see the table in §2).
 
 A queue action may pin the checkout explicitly with a `checkout` field on the
@@ -197,7 +199,8 @@ The worker chooses one of two paths based on whether `verdict` is present:
   the commit, and the push, and tolerates an empty working tree. It returns a
   verdict-only output (empty branch) that routes through the action's declared
   `outcomes` map, carrying any `body` (for a routed `set_body`) and `review_body`
-  (for a routed `attach_review`). This is how the agent emits e.g. a reviewer
+  (for a routed `attach_review`). This is how the agent emits e.g. an engineer
+  `needs_architect` / `needs_human` decline with no implementation PR, a reviewer
   `approve` with no diff, or an architect rewrite.
 
 `changed_files` is always computed by the worker from `git status` on the head

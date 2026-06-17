@@ -35,8 +35,10 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              - Do NOT run git commit, git push, or open a PR: the harness commits, \
              pushes, and opens the PR from your working-tree diff.\n\
              - On success, emit NO verdict (the head path opens the PR). Only emit \
-             verdict `needs_architect` if the item genuinely cannot be implemented \
-             as specified, explaining why in `summary`.\n",
+             a declared decline verdict: `needs_architect` when the item is \
+             underspecified or unimplementable as written, or `needs_human` only \
+             when implementation requires non-agent judgment. Explain the reason \
+             in `summary`.\n",
         ),
         Capability::TriageWorkspace => prompt.push_str(
             "ROLE: architect (triage_workspace capability).\n\

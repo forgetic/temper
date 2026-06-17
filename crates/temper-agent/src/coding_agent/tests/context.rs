@@ -28,7 +28,7 @@ fn parses_full_context_fixture() {
     assert_eq!(context.checkout.as_deref(), Some("writable"));
     assert_eq!(
         context.allowed_verdicts,
-        vec!["needs_architect".to_string()]
+        vec!["needs_architect".to_string(), "needs_human".to_string()]
     );
     assert_eq!(
         context.guidance.role_guidance.as_deref(),

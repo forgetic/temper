@@ -4,6 +4,42 @@ use crate::assertions::*;
 use crate::support::*;
 
 #[test]
+fn engineer_decline_verdicts_route_issue_without_opening_pr() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+
+        for (verdict, attention_label) in [
+            ("needs_architect", "needs-architect"),
+            ("needs_human", "needs-human"),
+        ] {
+            let issue = create_ready_issue(&forge, &repo).await;
+            let job = open_pr_in_flight_job("acme/service", issue);
+            let result = verdict_result("worker-a", &job.job_id, verdict, None);
+
+            applier.apply(job, result).await;
+
+            let labels = issue_labels(&forge, &repo, issue).await;
+            assert!(has_label(&labels, "code"), "code label remains: {labels:?}");
+            assert!(
+                has_label(&labels, attention_label),
+                "{verdict} should apply {attention_label}: {labels:?}"
+            );
+            assert!(!has_label(&labels, "ready"), "ready is cleared: {labels:?}");
+            assert!(
+                !has_label(&labels, "in-progress"),
+                "working state is absent: {labels:?}"
+            );
+            assert_no_pull_requests(&forge, &repo).await;
+        }
+
+        assert_pull_request_count_stays(&cx, &forge, &repo, 0).await;
+    })
+}
+
+#[test]
 fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());

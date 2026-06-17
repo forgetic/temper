@@ -24,8 +24,9 @@
 //!
 //! - **engineer** (`coding_workspace`): edit tools; implement the issue, leaving
 //!   a real product diff in the working tree. No verdict on success (the head
-//!   path ⇒ `open_pr`); verdict `needs_architect` when it cannot be implemented
-//!   as specified.
+//!   path ⇒ `open_pr`); verdict `needs_architect` when underspecified or
+//!   unimplementable as written; verdict `needs_human` only for non-agent
+//!   judgment.
 //! - **architect** (`triage_workspace`): read-only analysis; verdict
 //!   `ready_code` / `needs_design` with an authored `body`, or `needs_breakdown`
 //!   with `children`.

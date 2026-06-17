@@ -106,6 +106,46 @@ fn engineer_claims_ready_code_but_reviewer_cannot() {
 }
 
 #[test]
+fn engineer_decline_routes_ready_code_without_creating_a_pr() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let engineer = RoleId::new("engineer");
+    let artifact = classify_issue(&workflow, 43, &["code", "ready"]);
+
+    let needs_architect = planner
+        .plan_transition(
+            &TransitionId::new("request_code_architect_input"),
+            &engineer,
+            &artifact,
+        )
+        .expect("engineer can decline underspecified ready code");
+    assert_eq!(
+        needs_architect.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("ready")),
+            WorkflowEffect::RemoveLabel(LabelId::new("in-progress")),
+            WorkflowEffect::AddLabel(LabelId::new("needs-architect")),
+        ]
+    );
+
+    let needs_human = planner
+        .plan_transition(
+            &TransitionId::new("request_code_human_input"),
+            &engineer,
+            &artifact,
+        )
+        .expect("engineer can decline code requiring non-agent judgment");
+    assert_eq!(
+        needs_human.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("ready")),
+            WorkflowEffect::RemoveLabel(LabelId::new("in-progress")),
+            WorkflowEffect::AddLabel(LabelId::new("needs-human")),
+        ]
+    );
+}
+
+#[test]
 fn attention_queues_route_architect_owner_and_human_work() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
@@ -117,6 +157,7 @@ fn attention_queues_route_architect_owner_and_human_work() {
     let needs_human_queue = QueueId::new("needs_human");
     let needs_owner = LabelId::new("needs-owner");
     let needs_human = LabelId::new("needs-human");
+    let ready = LabelId::new("ready");
 
     let architect_issue = classify_issue(&workflow, 30, &["code", "needs-architect"]);
     let architect_pr = classify_pr(&workflow, 31, &["implementation", "needs-architect"]);
@@ -176,6 +217,25 @@ fn attention_queues_route_architect_owner_and_human_work() {
         .unwrap();
     assert_eq!(
         clear.effects,
-        vec![WorkflowEffect::RemoveLabel(needs_human)]
+        vec![WorkflowEffect::RemoveLabel(needs_human.clone())]
+    );
+
+    let human_code = classify_issue(&workflow, 35, &["code", "needs-human"]);
+    assert!(
+        planner
+            .matching_queues(&human_code)
+            .contains(&needs_human_queue)
+    );
+    let resolve_code_human = TransitionId::new("resolve_code_human_request");
+    let resolve = planner
+        .plan_transition(&resolve_code_human, &human, &human_code)
+        .unwrap();
+    assert_eq!(
+        resolve.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(needs_human),
+            WorkflowEffect::AddLabel(ready),
+            WorkflowEffect::SetAssignee { role: human },
+        ]
     );
 }

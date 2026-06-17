@@ -31,7 +31,7 @@ pub(super) const CONTEXT_FIXTURE: &str = r#"{
   "action": "open_pr",
   "correlation_key": "pr-for-code-7",
   "checkout": "writable",
-  "allowed_verdicts": ["needs_architect"],
+  "allowed_verdicts": ["needs_architect", "needs_human"],
   "guidance": {
     "role_guidance": "Make a real product change.",
     "tool_guidance": "Use docs/product-change.md for this fixture.",

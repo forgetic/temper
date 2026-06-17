@@ -313,6 +313,26 @@ pub(crate) fn in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob 
     )
 }
 
+pub(crate) fn open_pr_in_flight_job(repo_path: &str, number: ItemNumber) -> InFlightJob {
+    job_for_context(
+        repo_path,
+        number,
+        "issue",
+        JobContext {
+            role: "engineer".to_string(),
+            repo: repo_path.to_string(),
+            queue: "code_ready".to_string(),
+            artifact_kind: "code".to_string(),
+            artifact: None,
+            workspace: None,
+            action: Some("open_pr".to_string()),
+            checkout_capability: Some("writable".to_string()),
+            allowed_verdicts: vec!["needs_architect".to_string(), "needs_human".to_string()],
+            guidance: None,
+        },
+    )
+}
+
 pub(crate) fn writable_repo(repo: &str, branch: &str) -> WorkspaceRepo {
     let dir = repo.rsplit('/').next().unwrap_or(repo).to_string();
     WorkspaceRepo {

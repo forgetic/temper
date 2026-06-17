@@ -14,7 +14,7 @@ fn reference_fixture_validates_with_expected_shape() {
     assert_eq!(workflow.artifact_kinds().len(), 5);
     assert_eq!(workflow.state_dimensions().len(), 3);
     assert_eq!(workflow.queues().len(), 13);
-    assert_eq!(workflow.transitions().len(), 33);
+    assert_eq!(workflow.transitions().len(), 35);
     assert_eq!(workflow.gates().len(), 3);
     // +1: implementation_pr -> implementation_pr dependency, for coordinated
     // serial landing (ADR 0023).
@@ -123,6 +123,17 @@ fn reference_fixture_validates_with_expected_shape() {
             .artifacts
             .contains(&ArtifactKindId::new("implementation_pr"))
     );
+    let human_queue = workflow
+        .queues()
+        .iter()
+        .find(|queue| queue.id.as_str() == "needs_human")
+        .expect("needs_human queue is declared");
+    assert!(
+        human_queue
+            .artifacts
+            .contains(&ArtifactKindId::new("design"))
+    );
+    assert!(human_queue.artifacts.contains(&ArtifactKindId::new("code")));
 
     // `intake` is the default (catch-all) issue kind: it declares no identifying
     // labels, so raw human intake (an issue with no labels) is admitted as a
@@ -313,14 +324,21 @@ fn reference_fixture_compiles_every_role() {
         Some(&TransitionId::new("request_code_architect_input")),
         "open_pr routes the needs_architect verdict to the code-artifact escalation transition"
     );
-    let escalation = compiled
-        .transitions()
-        .iter()
-        .find(|transition| transition.id.as_str() == "request_code_architect_input")
-        .expect("escalation transition is compiled");
     assert_eq!(
-        escalation.artifact,
-        ArtifactKindId::new("code"),
-        "escalation transition is legal on the open_pr artifact (code)"
+        open_pr.outcomes.get(&VerdictId::new("needs_human")),
+        Some(&TransitionId::new("request_code_human_input")),
+        "open_pr routes the needs_human verdict to the code-artifact human escalation transition"
     );
+    for routed in ["request_code_architect_input", "request_code_human_input"] {
+        let escalation = compiled
+            .transitions()
+            .iter()
+            .find(|transition| transition.id.as_str() == routed)
+            .unwrap_or_else(|| panic!("{routed} transition is compiled"));
+        assert_eq!(
+            escalation.artifact,
+            ArtifactKindId::new("code"),
+            "{routed} is legal on the open_pr artifact (code)"
+        );
+    }
 }

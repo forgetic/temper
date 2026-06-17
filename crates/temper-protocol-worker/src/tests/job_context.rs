@@ -21,7 +21,7 @@ fn full_job_context_round_trips_without_loss() {
         workspace: Some(sample_manifest()),
         action: Some("open_pr".to_string()),
         checkout_capability: Some("writable".to_string()),
-        allowed_verdicts: vec!["needs_architect".to_string()],
+        allowed_verdicts: vec!["needs_architect".to_string(), "needs_human".to_string()],
         guidance: Some("fix CI".to_string()),
     };
 

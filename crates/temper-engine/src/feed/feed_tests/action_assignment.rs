@@ -24,7 +24,7 @@ async fn new_repo(forge: &MemoryForge) -> RepositoryId {
 }
 
 #[test]
-fn reference_open_pr_assignment_carries_escalation_verdict() {
+fn reference_open_pr_assignment_carries_decline_verdicts() {
     temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge).await;
@@ -63,7 +63,7 @@ fn reference_open_pr_assignment_carries_escalation_verdict() {
         assert_eq!(context.checkout_capability.as_deref(), Some("writable"));
         assert_eq!(
             context.allowed_verdicts,
-            vec!["needs_architect".to_string()]
+            vec!["needs_architect".to_string(), "needs_human".to_string()]
         );
     })
 }
