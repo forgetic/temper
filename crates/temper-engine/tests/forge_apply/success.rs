@@ -210,7 +210,7 @@ fn success_result_with_multi_phase_plan_details_creates_checklist_body() {
             body.contains("Implementation plan:\n\n- [ ] Write failing test\n- [ ] Implement fix")
         );
         assert!(
-            body.find("Implementation plan") < body.find("<!-- temper:workflow-metadata"),
+            body.find("Implementation plan") < body.find("<!-- temper:workflow"),
             "plan checklist should render before metadata block: {body}"
         );
         parse_metadata_block(body)

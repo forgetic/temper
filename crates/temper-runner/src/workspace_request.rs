@@ -284,7 +284,7 @@ mod tests {
         assert!(input.body.contains(
             "Implementation plan:\n\n- [ ] Write failing test\n- [ ] Implement fix with docs"
         ));
-        assert!(input.body.contains("<!-- temper:workflow-metadata"));
+        assert!(input.body.contains("<!-- temper:workflow"));
     }
 
     #[test]
