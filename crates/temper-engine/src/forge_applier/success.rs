@@ -5,10 +5,13 @@
 
 use std::collections::BTreeMap;
 
-use temper_forge::{Forge, ItemNumber, Repository, RepositoryId, RepositoryPath};
+use temper_forge::{
+    Forge, ItemNumber, PullRequest, Repository, RepositoryId, RepositoryPath, RequestReviewers,
+    UpdatePullRequest, UserId,
+};
 use temper_log::emit::{PrOpened, emit_pr_opened};
 use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
-use temper_workflow::{ArtifactKindId, ArtifactSource, Executor};
+use temper_workflow::{ArtifactKindId, ArtifactSource, Effect, Executor};
 
 use temper_runner::{artifact_ref, pr_correlation_key};
 
@@ -199,6 +202,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         for_issue: set.number.get(),
                     });
                 }
+                self.apply_implementation_pr_handoff_if_needed(
+                    set.job,
+                    ensured.artifact(),
+                    ensured.was_created(),
+                )
+                .await;
                 opened.insert(
                     outcome.repo.clone(),
                     (target_repository.id.clone(), ensured.artifact().number),
@@ -260,6 +269,140 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 None
             }
         }
+    }
+
+    async fn apply_implementation_pr_handoff_if_needed(
+        &self,
+        job: &InFlightJob,
+        pull_request: &PullRequest,
+        was_created: bool,
+    ) {
+        let handoff = self.implementation_pr_review_handoff(&job.role);
+        if handoff.is_empty() {
+            return;
+        }
+
+        let has_working_label = handoff
+            .remove_labels
+            .iter()
+            .any(|label| pull_request.labels.contains(label));
+        let has_review_label = handoff
+            .add_labels
+            .iter()
+            .any(|label| pull_request.labels.contains(label));
+        if !(was_created || has_working_label || has_review_label) {
+            return;
+        }
+
+        if was_created || has_working_label {
+            let update = UpdatePullRequest {
+                add_labels: handoff.add_labels,
+                remove_labels: handoff.remove_labels,
+                ..UpdatePullRequest::default()
+            };
+            if let Err(error) = self
+                .forge
+                .update_pull_request(&pull_request.id, update)
+                .await
+            {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    pull_request = %pull_request.number,
+                    %error,
+                    "forge applier could not apply implementation PR review labels"
+                );
+            }
+        }
+
+        let reviewers = handoff
+            .reviewers
+            .into_iter()
+            .filter(|reviewer| !pull_request.requested_reviewers.contains(reviewer))
+            .collect::<Vec<_>>();
+        if reviewers.is_empty() {
+            return;
+        }
+        if let Err(error) = self
+            .forge
+            .request_pull_request_reviewers(&pull_request.id, RequestReviewers { reviewers })
+            .await
+        {
+            tracing::warn!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                pull_request = %pull_request.number,
+                %error,
+                "forge applier could not request implementation PR review"
+            );
+        }
+    }
+
+    fn implementation_pr_review_handoff(&self, role: &str) -> ReviewHandoff {
+        let implementation_pr = ArtifactKindId::new("implementation_pr");
+        let preferred = self.workflow.transitions().iter().find(|transition| {
+            transition.id.as_str() == "request_review"
+                && transition.artifact == implementation_pr
+                && transition
+                    .roles
+                    .iter()
+                    .any(|candidate| candidate.as_str() == role)
+        });
+        let fallback = || {
+            self.workflow.transitions().iter().find(|transition| {
+                transition.artifact == implementation_pr
+                    && transition
+                        .roles
+                        .iter()
+                        .any(|candidate| candidate.as_str() == role)
+                    && transition
+                        .effects
+                        .iter()
+                        .any(|effect| matches!(effect, Effect::RequestReviewers { .. }))
+            })
+        };
+        let Some(transition) = preferred.or_else(fallback) else {
+            return ReviewHandoff::default();
+        };
+
+        let mut handoff = ReviewHandoff::default();
+        for effect in &transition.effects {
+            match effect {
+                Effect::AddLabel(label) => push_unique(&mut handoff.add_labels, label.as_str()),
+                Effect::RemoveLabel(label) | Effect::RemoveLabelIfPresent(label) => {
+                    push_unique(&mut handoff.remove_labels, label.as_str());
+                }
+                Effect::RequestReviewers { roles } => {
+                    for role in roles {
+                        let reviewer = UserId::new(role.as_str());
+                        if !handoff.reviewers.contains(&reviewer) {
+                            handoff.reviewers.push(reviewer);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        handoff
+    }
+}
+
+#[derive(Default)]
+struct ReviewHandoff {
+    add_labels: Vec<String>,
+    remove_labels: Vec<String>,
+    reviewers: Vec<UserId>,
+}
+
+impl ReviewHandoff {
+    fn is_empty(&self) -> bool {
+        self.add_labels.is_empty() && self.remove_labels.is_empty() && self.reviewers.is_empty()
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|candidate| candidate == value) {
+        values.push(value.to_string());
     }
 }
 

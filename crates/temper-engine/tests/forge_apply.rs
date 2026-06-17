@@ -16,3 +16,5 @@ mod success;
 mod support;
 #[path = "forge_apply/triage.rs"]
 mod triage;
+#[path = "forge_apply/trivial.rs"]
+mod trivial;

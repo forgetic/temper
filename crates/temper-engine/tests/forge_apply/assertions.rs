@@ -132,6 +132,23 @@ pub(crate) async fn issue_comment_bodies(
         .collect()
 }
 
+pub(crate) async fn assert_issue_comments_stay_empty(
+    cx: &temper_engine_io::Cx,
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    number: ItemNumber,
+) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        let comments = issue_comment_bodies(forge, repo, number).await;
+        assert!(
+            comments.is_empty(),
+            "unexpected issue comments: {comments:?}"
+        );
+        temper_engine_io::runtime::sleep_for(cx, Duration::from_millis(10)).await;
+    }
+}
+
 pub(crate) async fn assert_no_attention_mark(
     forge: &MemoryForge,
     repo: &RepositoryId,
