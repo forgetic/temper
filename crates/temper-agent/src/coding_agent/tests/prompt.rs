@@ -12,6 +12,7 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("Do NOT run git commit"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
+    assert!(engineer.contains("two or more meaningful implementation phases"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -33,8 +34,22 @@ fn system_prompt_is_role_specific() {
         assert!(prompt.contains("FINAL message after all tool use"));
         assert!(prompt.contains("FINAL MESSAGE FORMAT (mandatory)"));
         assert!(prompt.contains("single JSON object"));
+        assert!(prompt.contains("plan"));
         assert!(prompt.contains("children"));
     }
+}
+
+#[test]
+fn system_prompt_engineer_requests_plan_only_for_non_trivial_work() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    assert!(engineer.contains("include `\"plan\": {\"phases\": [...]}`"));
+    assert!(engineer.contains("zero or one meaningful phase"));
+    assert!(engineer.contains("omit `plan`"));
+    assert!(engineer.contains("do not invent checklist ceremony"));
+
+    let architect = system_prompt(Capability::TriageWorkspace, &[]);
+    assert!(!architect.contains("two or more meaningful implementation phases"));
+    assert!(!architect.contains("do not invent checklist ceremony"));
 }
 
 #[test]

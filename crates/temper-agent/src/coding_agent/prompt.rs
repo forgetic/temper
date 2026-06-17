@@ -38,7 +38,13 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              a declared decline verdict: `needs_architect` when the item is \
              underspecified or unimplementable as written, or `needs_human` only \
              when implementation requires non-agent judgment. Explain the reason \
-             in `summary`.\n",
+             in `summary`.\n\
+             - For non-trivial work with two or more meaningful implementation \
+             phases, include `\"plan\": {\"phases\": [...]}` in the final result. \
+             Phase labels must be ordered, concise, and suitable as PR checklist \
+             lines.\n\
+             - For trivial work with zero or one meaningful phase, omit `plan` \
+             (or include at most one phase) and do not invent checklist ceremony.\n",
         ),
         Capability::TriageWorkspace => prompt.push_str(
             "ROLE: architect (triage_workspace capability).\n\
@@ -123,12 +129,13 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
          When you have finished using tools, your very last message must be a \
          single JSON object and nothing else — no prose before or after it, no \
          code fences, no explanation. The JSON object describes the result, with \
-         these optional fields: `verdict` (string), `summary` (string), `body` \
-         (string), `review_body` (string), `labels` (array of strings), and \
-         `children` (array of {slug, title, body, labels, depends_on, \
-         target_repo?}). Omit fields you are not using.\n\
+         these optional fields: `verdict` (string), `summary` (string), `plan` \
+         ({phases: array of strings}), `body` (string), `review_body` (string), \
+         `labels` (array of strings), and `children` (array of {slug, title, \
+         body, labels, depends_on, target_repo?}). Omit fields you are not using.\n\
          For the engineer success path, emit `{\"summary\": \"...\"}` with no \
-         `verdict`.\n\
+         `verdict`; when you include `plan`, follow the engineer-specific \
+         phase guidance above.\n\
          Do NOT wrap the JSON in prose or code fences. Do NOT narrate what you \
          are about to do — just emit the JSON result as your final message.",
     );

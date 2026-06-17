@@ -53,10 +53,69 @@ fn breakdown_result_serializes_children() {
 }
 
 #[test]
+fn head_path_result_serializes_structured_plan_when_present() {
+    let result = WorkspaceResult {
+        summary: Some("Implemented the protocol change.".to_string()),
+        plan: Some(ImplementationPlan {
+            phases: vec![
+                "extend result DTO".to_string(),
+                "update prompt contract".to_string(),
+            ],
+        }),
+        ..WorkspaceResult::default()
+    };
+    let value = serde_json::to_value(&result).expect("serializes");
+    assert_eq!(value["summary"], "Implemented the protocol change.");
+    assert_eq!(value["plan"]["phases"][0], "extend result DTO");
+    assert_eq!(value["plan"]["phases"][1], "update prompt contract");
+    assert!(result.plan.as_ref().unwrap().is_checklist_worthy());
+}
+
+#[test]
+fn implementation_plan_trivial_rule_is_available_to_contract_code() {
+    let absent = WorkspaceResult::default();
+    assert!(absent.plan.is_none());
+
+    let one_phase = ImplementationPlan {
+        phases: vec!["fix one typo".to_string()],
+    };
+    assert!(!one_phase.is_checklist_worthy());
+
+    let two_phases = ImplementationPlan {
+        phases: vec!["add coverage".to_string(), "implement fix".to_string()],
+    };
+    assert!(two_phases.is_checklist_worthy());
+}
+
+#[test]
 fn parse_result_extracts_bare_json() {
     let result = parse_result(r#"{"verdict":"approve","summary":"ok"}"#).expect("parses");
     assert_eq!(result.verdict.as_deref(), Some("approve"));
     assert_eq!(result.summary.as_deref(), Some("ok"));
+}
+
+#[test]
+fn parse_result_extracts_structured_plan_from_json() {
+    let text = r#"{
+        "summary": "implemented the change",
+        "plan": {"phases": ["extend DTO", "update prompt"]}
+    }"#;
+    let result = parse_result(text).expect("parses plan");
+    let plan = result.plan.expect("plan present");
+    assert_eq!(
+        plan.phases,
+        vec!["extend DTO".to_string(), "update prompt".to_string()]
+    );
+    assert!(plan.is_checklist_worthy());
+}
+
+#[test]
+fn parse_result_does_not_parse_prose_checklist_as_plan() {
+    let text = "Plan:\n- [ ] extend DTO\n- [ ] update prompt\n\
+                Final result: {\"summary\":\"implemented the change\"}";
+    let result = parse_result(text).expect("parses final JSON only");
+    assert_eq!(result.summary.as_deref(), Some("implemented the change"));
+    assert_eq!(result.plan, None);
 }
 
 #[test]
