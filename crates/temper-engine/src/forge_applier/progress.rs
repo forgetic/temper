@@ -19,14 +19,21 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
         }
     }
 
-    /// Records one step-progress checkpoint as a comment on the job's source
-    /// issue.
+    /// Records terminal step-progress checkpoints as comments on the job's
+    /// source issue.
     ///
-    /// Idempotent keyed by `(correlation_key, step, state)`: every progress
-    /// comment carries a machine-readable marker line, and a checkpoint whose
-    /// marker already exists on the issue is skipped, so worker re-delivery
-    /// and daemon restarts cannot duplicate forge state.
+    /// Non-terminal `started` progress is intentionally left to the daemon log,
+    /// lease, assignment, and heartbeat signals so issues only show durable
+    /// outcomes. Terminal comments remain idempotent, keyed by
+    /// `(correlation_key, step, state)`: every progress comment carries a
+    /// machine-readable marker line, and a checkpoint whose marker already
+    /// exists on the issue is skipped, so worker re-delivery and daemon restarts
+    /// cannot duplicate forge state.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        if !should_comment_progress(&progress) {
+            return;
+        }
+
         let Some((repository, issue)) = self.resolve_issue(&job).await else {
             return;
         };
@@ -73,6 +80,10 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
         }
         let _ = repository;
     }
+}
+
+fn should_comment_progress(progress: &JobProgress) -> bool {
+    progress.state == "done"
 }
 
 /// The machine-readable idempotency marker for one progress checkpoint.
