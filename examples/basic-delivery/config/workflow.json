@@ -17,7 +17,7 @@
             "Only read the work-item context and repository; never mutate Forge state.",
             "Return the single declared verdict; the engine applies the routed transition's effects."
           ],
-          "guidance": "Use this from triage_intake. If it is not bound, choose no_action for intake triage."
+          "guidance": "Use this from triage_intake. If it is not bound, fail the assigned triage job with a structured unavailable-workspace result."
         }
       ],
       "concurrency": 1,
@@ -40,7 +40,7 @@
             "Only touch the checked-out repository workspace.",
             "Do not create bookkeeping-only diffs such as .temper-pr-prep or .temper-ci changes."
           ],
-          "guidance": "Use this before open_pr for ready code issues. If it is not bound, choose no_action for code implementation work."
+          "guidance": "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
         }
       ],
       "concurrency": 1,
@@ -51,7 +51,7 @@
     },
     {
       "id": "mechanical",
-      "charter": "Automation authority used by the mechanical worker to stamp raw intake untriaged and to land CI-green PRs; do not bind this role to an LLM.",
+      "charter": "Automation authority used by the mechanical worker to stamp raw intake untriaged and to land CI-green PRs; do not bind this role to an LLM worker.",
       "prompt": {
         "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
       },

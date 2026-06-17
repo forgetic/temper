@@ -17,7 +17,7 @@
             "Only read the work-item context and repository; never mutate Forge state.",
             "Return one of the declared verdicts; the engine applies the routed transition's effects."
           ],
-          "guidance": "Use this from triage_intake. If it is not bound, choose no_action for intake triage. For needs_breakdown, label every child code issue with both `code` and `ready` so it enters the engineer's code_ready queue immediately (a child labeled `code` alone is never picked up); set each child's target_repo to the repository it implements."
+          "guidance": "Use this from triage_intake. If it is not bound, fail the assigned triage job with a structured unavailable-workspace result. For needs_breakdown, label every child code issue with both `code` and `ready` so it enters the engineer's code_ready queue immediately (a child labeled `code` alone is never picked up); set each child's target_repo to the repository it implements."
         }
       ],
       "concurrency": 1,
@@ -42,7 +42,7 @@
             "Only touch the checked-out repository workspace.",
             "Do not create bookkeeping-only diffs such as .temper-pr-prep or .temper-ci changes."
           ],
-          "guidance": "Use this before open_pr for ready code issues. If it is not bound, choose no_action for code implementation work."
+          "guidance": "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
         }
       ],
       "concurrency": 3,
@@ -68,7 +68,7 @@
             "Read the diff and CI through the granted read capabilities; never mutate Forge state.",
             "Return one of the declared verdicts; the engine submits the native review and applies the routed effects."
           ],
-          "guidance": "Use this from review_pr. If it is not bound, choose no_action for review work."
+          "guidance": "Use this from review_pr. If it is not bound, fail the assigned review job with a structured unavailable-workspace result."
         }
       ],
       "concurrency": 2,
@@ -92,7 +92,7 @@
       "id": "human",
       "charter": "Resolve needs-human items that require non-agent judgment.",
       "prompt": {
-        "guidance": "Use clear_human_flag only after the needed human judgment has been supplied in the artifact context; otherwise choose no_action."
+        "guidance": "Use clear_human_flag only after the needed human judgment has been supplied in the artifact context; otherwise return a structured rejection explaining the missing input."
       },
       "concurrency": 1,
       "queues": [
@@ -101,7 +101,7 @@
     },
     {
       "id": "mechanical",
-      "charter": "Automation authority used by the mechanical worker for landing and merge-conflict routing; do not bind this role to an LLM.",
+      "charter": "Automation authority used by the mechanical worker for landing and merge-conflict routing; do not bind this role to an LLM worker.",
       "prompt": {
         "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
       },
