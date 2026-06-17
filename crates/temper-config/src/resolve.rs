@@ -52,7 +52,9 @@ const DEFAULT_CI_USER: &str = "bot";
 /// agree.
 const DEFAULT_MAX_ITERATIONS: usize = 250;
 
-/// Resolves a full deployment from the two files plus the environment.
+/// Resolves a full deployment from the config and credentials files. The
+/// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,
+/// never to override a deployment value.
 pub fn resolve(
     config: &Config,
     credentials: &Credentials,
