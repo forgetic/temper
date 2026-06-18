@@ -368,7 +368,8 @@ fn effect_label(effect: &Effect) -> Option<&LabelId> {
         | Effect::SetBody { .. }
         | Effect::AttachReview { .. }
         | Effect::CreateIssues { .. }
-        | Effect::MergePullRequest => None,
+        | Effect::MergePullRequest
+        | Effect::CloseParentIssues => None,
     }
 }
 

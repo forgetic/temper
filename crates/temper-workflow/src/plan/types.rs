@@ -73,6 +73,9 @@ pub enum WorkflowEffect {
     ReleaseLease,
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
+    /// Close parent issues of a pull request. The parents are read from the PR's
+    /// workflow metadata at execution time.
+    CloseParentIssues,
 }
 
 /// A condition that must hold after a plan's effects are applied.

@@ -87,6 +87,12 @@ pub enum RawEffect {
     },
     /// Request merging the target pull request. Carries no portable payload.
     MergePullRequest,
+    /// Close the parent issue(s) recorded in the pull-request artifact's workflow
+    /// metadata. Reads `WorkflowMetadata::parents` from the PR body and, for each
+    /// same-repository parent, closes the issue (state → Closed) and clears the
+    /// `in-progress` label if present. Already-closed parents are idempotent
+    /// no-ops; absent/missing parent metadata is not an error.
+    CloseParentIssues,
 }
 
 /// A portable condition that can satisfy a gate without a workflow transition.

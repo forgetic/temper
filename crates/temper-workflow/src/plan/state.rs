@@ -80,7 +80,8 @@ fn apply_label_effects(
             | Effect::SetBody { .. }
             | Effect::AttachReview { .. }
             | Effect::CreateIssues { .. }
-            | Effect::MergePullRequest => {}
+            | Effect::MergePullRequest
+            | Effect::CloseParentIssues => {}
         }
     }
     result

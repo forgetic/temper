@@ -21,9 +21,10 @@ use super::verify::AppliedState;
 use super::{ExecutionError, Executor, Loaded};
 use crate::context::CreateIssuesChild;
 use crate::ids::RoleId;
+use crate::metadata::parse_metadata_block;
 use crate::plan::{TransitionPlan, WorkflowEffect};
 use temper_forge::{
-    CreatePullRequest, Forge, RepositoryId, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
+    CreatePullRequest, Forge, IssueState, RepositoryId, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -54,6 +55,8 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         self.apply_attach_reviews(loaded, &prepared.attach_reviews)
             .await?;
         self.apply_merge(repo_id, loaded, prepared.merge).await?;
+        self.apply_close_parent_issues(repo_id, loaded, prepared.close_parent_issues)
+            .await?;
         let committed = self.apply_update(loaded, prepared).await?;
         if let Some(state) = committed {
             self.verify_state(&state, &plan.postconditions)?;
@@ -226,6 +229,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             WorkflowEffect::MergePullRequest => {
                 prepared.merge = true;
             }
+            WorkflowEffect::CloseParentIssues => {
+                prepared.close_parent_issues = true;
+            }
             other => {
                 return Err(ExecutionError::UnsupportedEffect {
                     effect: other.clone(),
@@ -308,6 +314,76 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             }
         }
     }
+
+    /// Closes parent issues of a pull request after merge, reading the parent
+    /// list from the PR's workflow metadata block.
+    ///
+    /// For each same-repo parent that is still open, closes the issue and
+    /// removes the `in-progress` label. Already-closed parents are idempotent
+    /// no-ops; missing metadata and missing parent issues are not errors.
+    async fn apply_close_parent_issues(
+        &self,
+        repo_id: &RepositoryId,
+        loaded: &Loaded,
+        close: bool,
+    ) -> Result<(), ExecutionError> {
+        if !close {
+            return Ok(());
+        }
+        let Loaded::PullRequest { id, classified, .. } = loaded else {
+            return Err(ExecutionError::UnsupportedEffect {
+                effect: WorkflowEffect::CloseParentIssues,
+            });
+        };
+        // Read the PR body to get metadata
+        let pull_request = self
+            .forge
+            .get_pull_request(id)
+            .await?
+            .ok_or_else(|| ExecutionError::TargetMissing {
+                target: classified.source,
+            })?;
+        let Some(metadata) = parse_metadata_block(&pull_request.body)
+            .map_err(|error| ExecutionError::Backend {
+                message: format!("invalid PR workflow metadata: {error}"),
+            })?
+        else {
+            return Ok(()); // No metadata block — nothing to close, not an error
+        };
+        for parent in &metadata.parents {
+            // Resolve same-repo shorthand; cross-repo parents are skipped for now
+            if !parent.is_in_repository(repo_id) {
+                continue;
+            }
+            let Some(issue) = self
+                .forge
+                .get_issue_by_number(repo_id, parent.number)
+                .await?
+            else {
+                continue; // Missing parent — not an error
+            };
+            let is_open = issue.state != IssueState::Closed;
+            let has_in_progress = issue.labels.iter().any(|l| l == "in-progress");
+            if !is_open && !has_in_progress {
+                continue; // Already fully resolved — idempotent no-op
+            }
+            self.forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        state: is_open.then_some(IssueState::Closed),
+                        remove_labels: if has_in_progress {
+                            vec!["in-progress".to_string()]
+                        } else {
+                            Vec::new()
+                        },
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 /// Per-effect-kind indices used while partitioning a plan's effects.
@@ -345,6 +421,8 @@ pub(super) struct PreparedEffects {
     body: Option<String>,
     /// Whether the plan requests merging the target pull request.
     merge: bool,
+    /// Whether the plan requests closing parent issues of the target PR.
+    close_parent_issues: bool,
 }
 
 impl PreparedEffects {

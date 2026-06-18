@@ -327,6 +327,8 @@ pub enum Effect {
         correlation_key: Option<String>,
     },
     MergePullRequest,
+    /// Close parent issues of a pull request. See [`crate::spec::RawEffect::CloseParentIssues`].
+    CloseParentIssues,
 }
 
 /// A validated transition with typed references.
