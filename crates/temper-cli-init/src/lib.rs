@@ -36,7 +36,7 @@ mod write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_cli_common::{EX_USAGE, EnvMap, LoadOptions, PathResolver, TerminalPrompter};
+use temper_cli_common::{EX_USAGE, EnvLookup, EnvMap, LoadOptions, PathResolver, TerminalPrompter};
 
 use args::parse_init_args;
 

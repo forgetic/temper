@@ -132,47 +132,32 @@ pub fn collect_answers(
 /// Non-interactive path: all values come from overrides, or an error is
 /// returned with the name of the missing flag / env var (never a secret value).
 fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitError> {
-    let forge_url = overrides
-        .forge_url
-        .clone()
-        .ok_or_else(|| {
-            InitError::Unsupported(
-                "--non-interactive: forge URL is required; pass --forge".to_string(),
-            )
-        })?;
+    let forge_url = overrides.forge_url.clone().ok_or_else(|| {
+        InitError::Unsupported("--non-interactive: forge URL is required; pass --forge".to_string())
+    })?;
     validate_forge_url(&forge_url)?;
 
     let workflow = WORKFLOW_BASIC_DELIVERY.to_string();
     let webhook_addr = DEFAULT_WEBHOOK_ADDR.to_string();
 
-    let admin_user = overrides
-        .admin_user
-        .clone()
-        .ok_or_else(|| {
-            InitError::Unsupported(
-                "--non-interactive: admin user is required; pass --admin-user".to_string(),
-            )
-        })?;
-    let admin_password = overrides
-        .admin_password
-        .clone()
-        .ok_or_else(|| {
-            InitError::Unsupported(
-                "--non-interactive: admin password is required; set TEMPER_INIT_ADMIN_PASSWORD"
-                    .to_string(),
-            )
-        })?;
+    let admin_user = overrides.admin_user.clone().ok_or_else(|| {
+        InitError::Unsupported(
+            "--non-interactive: admin user is required; pass --admin-user".to_string(),
+        )
+    })?;
+    let admin_password = overrides.admin_password.clone().ok_or_else(|| {
+        InitError::Unsupported(
+            "--non-interactive: admin password is required; set TEMPER_INIT_ADMIN_PASSWORD"
+                .to_string(),
+        )
+    })?;
 
     let provider = provider_from_override(overrides.provider.as_deref())?;
-    let provider_key = overrides
-        .provider_key
-        .clone()
-        .ok_or_else(|| {
-            InitError::Unsupported(
-                "--non-interactive: provider key is required; set TEMPER_INIT_PROVIDER_KEY"
-                    .to_string(),
-            )
-        })?;
+    let provider_key = overrides.provider_key.clone().ok_or_else(|| {
+        InitError::Unsupported(
+            "--non-interactive: provider key is required; set TEMPER_INIT_PROVIDER_KEY".to_string(),
+        )
+    })?;
 
     let repo = overrides.repo.clone().unwrap_or_else(default_repo);
 
@@ -264,8 +249,8 @@ mod tests {
     fn rejects_github_default() {
         // Unchanged `github` default → not a URL → Unsupported.
         let mut p = ScriptedPrompter::new(["".to_string()]);
-        let err = collect_answers(&mut p, &InitOverrides::default(), false)
-            .expect_err("github rejected");
+        let err =
+            collect_answers(&mut p, &InitOverrides::default(), false).expect_err("github rejected");
         assert!(matches!(err, InitError::Unsupported(_)), "{err}");
     }
 

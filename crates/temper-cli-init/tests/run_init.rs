@@ -201,6 +201,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
                 name: "service".to_string(),
             }),
             provider: Some("deepseek".to_string()),
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -264,4 +265,142 @@ fn run_init_refuses_to_clobber_without_force() {
         provisioner.seen.is_none(),
         "provisioner must not run on clobber"
     );
+}
+
+#[test]
+fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+
+    // NO scripted answers needed — everything comes from overrides.
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            repo: Some(RepoSelection {
+                owner: "widgets".to_string(),
+                name: "svc".to_string(),
+            }),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider_key: Some("sk-key".to_string()),
+            provider: Some("deepseek".to_string()),
+        },
+        ..Default::default()
+    };
+
+    let mut provisioner = StubProvisioner { seen: None };
+    run_init(&mut prompter, &mut provisioner, &opts).expect("non-interactive succeeds");
+
+    // Assert: no prompts consumed.
+    assert!(prompter.answers.is_empty(), "no prompts should fire");
+
+    // Assert: config reflects overrides.
+    let config = std::fs::read_to_string(&config_path).expect("config.toml");
+    assert!(config.contains("url = \"http://forge.local:3000\""));
+    assert!(config.contains("widgets/svc"));
+
+    // Assert: provisioner was called with the right data.
+    let seen = provisioner.seen.expect("provisioner called");
+    assert_eq!(seen.admin_user, "root");
+    assert_eq!(seen.admin_password, "admin-pass");
+
+    // Assert: credentials file contains the provider key.
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml");
+    assert!(creds.contains("sk-key"));
+}
+
+#[test]
+fn non_interactive_missing_admin_user_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(dir.path().join("config.toml")),
+            credentials: Some(dir.path().join("credentials.toml")),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_password: Some("pw".to_string()),
+            provider_key: Some("key".to_string()),
+            // admin_user intentionally missing
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut provisioner = StubProvisioner { seen: None };
+    let err = run_init(&mut prompter, &mut provisioner, &opts)
+        .expect_err("missing admin user should fail");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("admin user"),
+        "error should mention admin user: {msg}"
+    );
+    assert!(
+        msg.contains("--admin-user"),
+        "error should mention --admin-user flag: {msg}"
+    );
+    // Provisioner must not have been called.
+    assert!(provisioner.seen.is_none());
+}
+
+#[test]
+fn non_interactive_flag_off_ignores_env_overrides() {
+    // When --non-interactive is NOT set, env-based overrides in InitOverrides
+    // are ignored and the interactive flow fires prompts as usual.
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // Scripted answers are the source of truth (env overrides ignored).
+    let mut prompter = ScriptedPrompter::new([
+        "http://localhost:3000".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "interactive-admin".to_string(),
+        "interactive-pw".to_string(),
+        "sk-interactive".to_string(),
+    ]);
+
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(dir.path().join("config.toml")),
+            credentials: Some(dir.path().join("credentials.toml")),
+        },
+        non_interactive: false, // NOT non-interactive
+        overrides: InitOverrides {
+            // These would be populated from env in main(), but should be
+            // ignored since non_interactive is false.
+            admin_user: Some("env-user".to_string()),
+            admin_password: Some("env-pw".to_string()),
+            provider_key: Some("env-key".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut provisioner = StubProvisioner { seen: None };
+    run_init(&mut prompter, &mut provisioner, &opts).expect("run_init succeeds");
+
+    // Assert: all six scripted answers were consumed.
+    assert!(prompter.answers.is_empty(), "all prompts should fire");
+
+    // Assert: the INTERACTIVE values were used, not the env overrides.
+    let seen = provisioner.seen.expect("provisioner called");
+    assert_eq!(seen.admin_user, "interactive-admin");
+    assert_eq!(seen.admin_password, "interactive-pw");
+
+    let creds =
+        std::fs::read_to_string(dir.path().join("credentials.toml")).expect("credentials.toml");
+    assert!(creds.contains("sk-interactive"));
+    assert!(!creds.contains("env-key"));
 }
