@@ -1,0 +1,47 @@
+{
+  "streaming": true,
+  "events": [
+    {
+      "sequence": 1,
+      "conversation_id": "conversation-1",
+      "kind": "conversation_opened",
+      "occurred_at": "2026-06-18T12:00:00Z",
+      "payload": { "type": "conversation_opened", "profile_id": "product-manager", "transcript": { "issue_number": 88, "url": "https://forge.test/owner/repo/issues/88" } }
+    },
+    {
+      "sequence": 2,
+      "conversation_id": "conversation-1",
+      "kind": "human_turn_appended",
+      "occurred_at": "2026-06-18T12:00:05Z",
+      "payload": { "type": "human_turn_appended", "turn": { "id": "turn-1", "participant": { "kind": "human", "display_name": "you" }, "body": "I want users to export reports as CSV." } }
+    },
+    {
+      "sequence": 3,
+      "conversation_id": "conversation-1",
+      "kind": "agent_reply_appended",
+      "occurred_at": "2026-06-18T12:00:09Z",
+      "payload": {
+        "type": "agent_reply_appended",
+        "reply": {
+          "message": "Good scope. On-demand only for v1?",
+          "proposals": [
+            {
+              "id": "csv-export",
+              "kind": "issue",
+              "title": "Add CSV export to reports",
+              "summary": "Analysts need ad-hoc numbers without scheduling.",
+              "payload": { "title": "Add CSV export to reports", "body": "Add an on-demand CSV export to the reports view.", "rationale": "On-demand keeps v1 small." }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "sequence": 4,
+      "conversation_id": "conversation-1",
+      "kind": "proposal_accepted",
+      "occurred_at": "2026-06-18T12:01:00Z",
+      "payload": { "type": "proposal_accepted", "proposal_id": "csv-export", "created": true, "target": { "kind": "issue", "number": 142, "url": "https://forge.test/owner/repo/issues/142", "title": "Add CSV export to reports" } }
+    }
+  ]
+}

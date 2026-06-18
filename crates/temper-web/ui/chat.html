@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>temper · chat</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- Persistent shell. The chat view (chat-view.ts, bundled to dist/chat.js)
+       renders the conversation rail + transcript + toast into #root via
+       createChatApp; this header + #root are the only static markup. The
+       composer / send wiring is PR B's job. -->
+  <header class="health">
+    <span class="brand">temper<small>/web</small></span>
+    <nav class="nav">
+      <a href="./index.html">Board</a>
+      <a href="./chat.html" aria-current="page">Chat</a>
+    </nav>
+    <button class="iconbtn" id="theme" title="toggle theme" aria-label="toggle theme">◐</button>
+  </header>
+
+  <div id="root" class="chat"></div>
+
+  <script type="module" src="./dist/chat.js"></script>
+</body>
+</html>

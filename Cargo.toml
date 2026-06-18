@@ -33,6 +33,8 @@ members = [
     "crates/temper-provision-forgejo-cli",
     "crates/temper-reference-delivery-validator",
     "crates/temper-sim",
+    # The web dashboard (its own HTTP/SSE server + the bundled TS UI in ui/).
+    "crates/temper-web",
     # Merged from smith (the orchestration worker):
     "crates/temper-protocol-agent",
     "crates/temper-worker-io",

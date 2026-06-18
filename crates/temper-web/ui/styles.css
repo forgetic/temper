@@ -1,0 +1,361 @@
+/* temper-web — shared stylesheet.
+ *
+ * Extracted from the two mockups' <style> blocks
+ * (docs/plans/temper-web-mockup.html + temper-web-chat-mockup.html) and deduped:
+ * the design tokens + shared shell (health bar, pulse, nav) appear once, then
+ * the board-specific rules, then the chat-specific rules. The logic lives in the
+ * compiled TS bundles (dist/board.js, dist/chat.js); this file is markup styling
+ * only. Visual polish is PR A/B's job — this is the day-0 baseline. */
+
+/* ─────────────────────────── design tokens ─────────────────────────── */
+:root {
+  --bg:        #0e1116;
+  --bg-raised: #161b22;
+  --bg-sunken: #0a0d12;
+  --line:      #232a33;
+  --line-soft: #1b212a;
+  --fg:        #e6edf3;
+  --fg-dim:    #8b949e;
+  --fg-faint:  #56606b;
+
+  --ok:    #3fb950;
+  --warn:  #d29922;
+  --bad:   #f85149;
+  --info:  #58a6ff;
+  --accent:#a371f7;
+
+  --r:    8px;
+  --r-sm: 5px;
+  --gap:  12px;
+  --pad:  14px;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --shadow: 0 6px 24px rgba(0, 0, 0, .4);
+  --t-fast: 120ms ease;
+  --t:      220ms cubic-bezier(.2, .7, .3, 1);
+}
+
+/* light theme is a token swap only — no view code changes */
+:root[data-theme="light"] {
+  --bg: #f6f8fa; --bg-raised: #fff; --bg-sunken: #eef1f4;
+  --line: #d0d7de; --line-soft: #e4e8ec;
+  --fg: #1f2328; --fg-dim: #636c76; --fg-faint: #8c959f;
+  --shadow: 0 6px 24px rgba(140, 149, 159, .25);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;          /* lanes / transcript scroll, not the page */
+}
+
+/* ───────────────────────────── health bar ──────────────────────────── */
+header,
+.health {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+  z-index: 5;
+}
+.brand {
+  font: 600 15px/1 var(--mono);
+  letter-spacing: .5px;
+  color: var(--fg);
+}
+.brand small { color: var(--fg-faint); font-weight: 400; }
+
+/* the liveness pulse — ticks on every received event. The TS view emits the
+ * pulse as `[data-testid="pulse"][data-pipe]`; style off that. */
+.pulse,
+[data-testid="pulse"] {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 500 12px/1 var(--mono); color: var(--fg-dim);
+}
+.pulse .dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 0 var(--ok);
+}
+.pulse.live .dot,
+[data-testid="pulse"][data-pipe="live"]   { animation: ping 1.6s infinite; }
+.pulse.stale .dot,
+[data-testid="pulse"][data-pipe="stale"]  { background: var(--warn); animation: none; }
+.pulse.dead .dot,
+[data-testid="pulse"][data-pipe="dead"]    { background: var(--bad); animation: none; }
+@keyframes ping {
+  0%   { box-shadow: 0 0 0 0 rgba(63, 185, 80, .5); }
+  70%  { box-shadow: 0 0 0 7px rgba(63, 185, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
+}
+
+.stats { display: flex; gap: 16px; margin-left: auto; }
+.stat  { display: flex; align-items: baseline; gap: 6px; font: 500 12px/1 var(--mono); }
+.stat b { font-size: 15px; }
+.stat .label { color: var(--fg-faint); font-weight: 400; }
+.stat.bad b { color: var(--bad); }
+.stat.ok  b { color: var(--ok); }
+
+.nav { display: flex; gap: 4px; }
+.nav a {
+  color: var(--fg-dim); text-decoration: none; font: 500 13px/1 var(--sans);
+  padding: 6px 10px; border-radius: var(--r-sm);
+}
+.nav a[aria-current="page"] { background: var(--bg-sunken); color: var(--fg); }
+.nav a:hover { color: var(--fg); }
+
+.iconbtn {
+  background: none; border: 1px solid var(--line); color: var(--fg-dim);
+  border-radius: var(--r-sm); width: 30px; height: 30px; cursor: pointer;
+  font-size: 14px; transition: var(--t-fast);
+}
+.iconbtn:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+/* ═══════════════════════════ board page ════════════════════════════ */
+/* The TS board view renders <main role="main" aria-label="board"> with a
+ * <section> per lane (<h2> + .lane-body) and an <article class="card">. */
+.board,
+main[aria-label="board"] {
+  flex: 1 1 auto;
+  display: flex;
+  gap: var(--gap);
+  padding: var(--gap);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+}
+.lane,
+main[aria-label="board"] > section {
+  flex: 1 1 0;
+  min-width: 230px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  scroll-snap-align: start;
+}
+main[aria-label="board"] > section > h2 {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  margin: 0; padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 1px; text-transform: uppercase; color: var(--fg-dim);
+}
+main[aria-label="board"] > section > h2 > [aria-label="count"] {
+  margin-left: auto;
+  font: 500 11px/1 var(--mono); color: var(--fg-faint);
+  background: var(--bg-raised); border: 1px solid var(--line-soft);
+  border-radius: 99px; padding: 2px 7px;
+}
+.lane-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.lane-body:empty::after {
+  content: "—"; color: var(--fg-faint);
+  text-align: center; padding-top: 8px;
+}
+
+/* ───────────────────────────── card ────────────────────────────────── */
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 10px 11px;
+  cursor: pointer;
+  transition: transform var(--t), border-color var(--t-fast), box-shadow var(--t-fast);
+  animation: cardIn var(--t);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+@keyframes cardIn { from { opacity: 0; transform: translateY(-6px); } }
+.card:hover { border-color: var(--fg-faint); }
+.card.state-ok    { border-left-color: var(--ok); }
+.card.state-work  { border-left-color: var(--info); }
+.card.state-warn  { border-left-color: var(--warn); }
+.card.state-bad   { border-left-color: var(--bad); }
+/* stuck cards pulse + float to top of lane (order set by the reducer's sort) */
+.card.stuck { animation: stuckPulse 1.8s infinite; }
+@keyframes stuckPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0); }
+  50%      { box-shadow: 0 0 0 3px rgba(248, 81, 73, .18); }
+}
+
+.card .ref { font: 600 12px/1 var(--mono); color: var(--fg); }
+.card .badge {
+  align-self: flex-start;
+  font: 500 10px/1 var(--mono);
+  color: var(--fg-dim); border: 1px solid var(--line);
+  border-radius: 99px; padding: 2px 7px; white-space: nowrap;
+}
+.card .title {
+  font-size: 13px; color: var(--fg);
+}
+.card .activity {
+  display: flex; align-items: center; gap: 6px;
+  font: 500 11px/1.3 var(--mono); color: var(--fg-dim);
+  min-height: 15px;
+}
+.card .age { font: 500 10px/1 var(--mono); color: var(--fg-faint); }
+.card .age.warn { color: var(--warn); }
+.card .age.bad  { color: var(--bad); }
+
+/* ───────────────────────── problem ticker ──────────────────────────── */
+/* The TS view emits <section aria-label="problems" data-clear="true|false">. */
+.ticker,
+section[aria-label="problems"] {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  background: var(--bg-raised);
+  max-height: 132px; overflow-y: auto;
+}
+section[aria-label="problems"][data-clear="true"] {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; color: var(--ok); font: 500 12px/1 var(--mono);
+}
+.prob {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; border-bottom: 1px solid var(--line-soft);
+  font: 500 12px/1.3 var(--mono); cursor: pointer; color: var(--fg);
+}
+.prob:last-child { border-bottom: 0; }
+.prob:hover { background: var(--bg-sunken); }
+.prob.warn { border-left: 3px solid var(--warn); }
+.prob.bad  { border-left: 3px solid var(--bad); }
+
+/* ═══════════════════════════ chat page ═════════════════════════════ */
+/* The TS chat view renders <aside role="navigation">, <main role="main"
+ * aria-label="transcript">, and a toast. */
+.chat {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+aside[aria-label="conversations"],
+.rail {
+  flex: 0 0 260px;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  padding: 8px;
+  gap: 6px;
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--line-soft);
+}
+aside[aria-label="conversations"] > [data-select] {
+  padding: 10px; border: 1px solid transparent; border-radius: var(--r-sm);
+  cursor: pointer; transition: var(--t-fast);
+  display: flex; flex-direction: column; gap: 5px;
+}
+aside[aria-label="conversations"] > [data-select]:hover { background: var(--bg-raised); }
+aside[aria-label="conversations"] > [data-select][aria-current="true"] {
+  background: var(--bg-raised); border-color: var(--line);
+}
+[data-select] .profile { font: 600 12px/1 var(--mono); color: var(--fg); }
+[data-select] .preview {
+  font-size: 12px; color: var(--fg-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+main[aria-label="transcript"] {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 16px;
+  gap: 14px;
+}
+main[aria-label="transcript"] > header {
+  flex: 0 0 auto;
+  padding: 0 0 11px; border-bottom: 1px solid var(--line-soft);
+  font: 600 13px/1 var(--mono); color: var(--fg);
+  background: none; border-top: 0;
+}
+[data-testid="turns"] { display: flex; flex-direction: column; gap: 14px; }
+
+/* a turn */
+.turn { display: flex; flex-direction: column; gap: 4px; max-width: 78%; animation: turnIn var(--t); }
+@keyframes turnIn { from { opacity: 0; transform: translateY(6px); } }
+.turn.human  { align-self: flex-end; align-items: flex-end; }
+.turn.agent  { align-self: flex-start; }
+.turn.system { align-self: center; max-width: 90%; }
+.turn .meta { font: 500 10px/1 var(--mono); color: var(--fg-faint); text-transform: uppercase; letter-spacing: .5px; }
+.turn .bubble {
+  padding: 9px 12px; border-radius: 12px; font-size: 13.5px; white-space: pre-wrap;
+  border: 1px solid var(--line);
+}
+.turn.human  .bubble { background: var(--info); color: #06122a; border-color: var(--info); border-bottom-right-radius: 4px; }
+.turn.agent  .bubble { background: var(--bg-raised); border-bottom-left-radius: 4px; }
+.turn.system .bubble { background: transparent; border-style: dashed; color: var(--fg-dim); font: 500 12px/1.4 var(--mono); text-align: center; }
+
+/* agent "typing" indicator while a reply streams */
+[data-testid="typing"] {
+  align-self: flex-start; display: flex; gap: 4px; padding: 11px 13px;
+  color: var(--fg-faint);
+}
+
+/* proposal card — inert until accepted */
+.proposal {
+  align-self: flex-start; max-width: 78%;
+  border: 1px solid var(--accent); border-radius: var(--r); overflow: hidden;
+  background: var(--bg-raised); animation: turnIn var(--t);
+  padding: 10px 11px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.proposal .kind { font: 600 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .5px; color: var(--accent); border: 1px solid var(--accent); border-radius: 99px; padding: 2px 7px; align-self: flex-start; }
+.proposal .ptitle { font: 600 13px/1.3 var(--mono); color: var(--fg); }
+.proposal .summary { font-size: 12.5px; color: var(--fg-dim); margin: 0; }
+.proposal .draft { font: 11.5px/1.5 var(--mono); color: var(--fg-dim); background: var(--bg-sunken); border: 1px solid var(--line-soft); border-radius: var(--r-sm); padding: 8px 10px; white-space: pre-wrap; max-height: 120px; overflow: auto; margin: 0; }
+.proposal button[data-accept] { background: var(--accent); border: 0; color: #0c0618; border-radius: var(--r-sm); padding: 7px 14px; cursor: pointer; font: 600 12px/1 var(--sans); transition: var(--t-fast); align-self: flex-start; }
+.proposal button[data-accept]:hover { filter: brightness(1.1); }
+.proposal.accepted { border-color: var(--ok); }
+.proposal.accepted .kind { color: var(--ok); border-color: var(--ok); }
+.proposal [aria-label="proposal outcome"] { display: flex; align-items: center; gap: 7px; font: 500 12px/1 var(--mono); color: var(--ok); }
+
+/* the cross-surface link: an accepted issue raises a toast (role="alert") */
+[data-testid="toast"] {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-raised); border: 1px solid var(--ok); color: var(--fg);
+  border-radius: var(--r); padding: 11px 16px; font: 500 13px/1 var(--sans);
+  box-shadow: var(--shadow); z-index: 30;
+  display: flex; align-items: center; gap: 10px;
+}
+
+/* composer (PR B owns the send wiring; this is the baseline shell styling) */
+.composer { flex: 0 0 auto; padding: 12px 16px; border-top: 1px solid var(--line-soft); display: flex; gap: 10px; }
+.composer textarea {
+  flex: 1; resize: none; background: var(--bg-sunken); border: 1px solid var(--line); color: var(--fg);
+  border-radius: var(--r-sm); padding: 10px 12px; font: 14px/1.4 var(--sans); min-height: 42px; max-height: 140px;
+}
+.composer textarea:focus { outline: none; border-color: var(--info); }
+.composer .send { background: var(--info); border: 0; color: #06122a; border-radius: var(--r-sm); padding: 0 18px; cursor: pointer; font: 600 13px/1 var(--sans); transition: var(--t-fast); }
+.composer .send:hover { filter: brightness(1.1); }
+
+/* ─────────────────────────── responsive ────────────────────────────── */
+@media (max-width: 720px) {
+  .stats  { margin-left: 0; order: 3; flex-basis: 100%; }
+  main[aria-label="board"] > section { min-width: 82vw; max-width: 82vw; }
+  .chat { flex-direction: column; }
+  aside[aria-label="conversations"] { flex: 0 0 auto; border-right: 0; border-bottom: 1px solid var(--line-soft); max-height: 38vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
