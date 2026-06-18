@@ -240,6 +240,7 @@ fn spawn_temper_run(
          admin = \"admin\"\n\
          ci_user = \"{ENGINEER}\"\n\
          [engine]\n\
+         bind = \"127.0.0.1:0\"\n\
          repos = [\"{owner}/{name}\"]\n\
          roles = [\"{ENGINEER}\"]\n\
          workflow = \"{workflow}\"\n\
