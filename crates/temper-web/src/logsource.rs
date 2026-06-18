@@ -7,6 +7,17 @@
 //! the pump idles and emits a keep-alive. This is the production source today;
 //! a future in-process broadcast seam in `temper-log` swaps in behind the same
 //! trait with no change to the read-model or the UI (UX §6.1 a→b).
+//!
+//! ## Tailing semantics
+//!
+//! The binary opens this source with `from_end = true`, so the board only sees
+//! events emitted *after* temper-web started. This is intentional and is NOT a
+//! gap: card **existence** is owned by the periodic snapshot re-poll (Part A),
+//! which backfills any in-flight item the tail missed; the live tail only
+//! **refines** existing cards (lane moves, gate/CI badges, activity). No bounded
+//! history replay (`from_end = false` with a cap) is implemented — the snapshot
+//! re-poll makes it unnecessary. See [`crate::feeds::logtail`] for the matching
+//! note on the read-model side.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
