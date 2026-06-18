@@ -110,6 +110,7 @@ fn main() {
                 .and_then(|v| v.as_str())
                 .map(String::from),
             note: value.get("note").and_then(|v| v.as_str()).map(String::from),
+            plan_publication: None,
         };
         block_on(applier.apply_progress(job.clone(), progress));
         applied += 1;

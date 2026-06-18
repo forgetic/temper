@@ -247,5 +247,6 @@ fn flow_progress(
         state: state.to_string(),
         pushed_sha: pushed_sha.map(str::to_string),
         note: note.map(str::to_string),
+        plan_publication: None,
     }
 }

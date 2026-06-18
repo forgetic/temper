@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
+use crate::{
+    JobPlanPublication, JobPlanPublicationTarget, JobProgress, WORKER_PROTOCOL_VERSION,
+    WorkerProtocolMessage,
+};
 
 fn assert_round_trips(json: &str) -> WorkerProtocolMessage {
     let msg: WorkerProtocolMessage = serde_json::from_str(json).expect("fixture parses");
@@ -85,4 +88,54 @@ fn unknown_fields_are_ignored() {
     .expect("unknown fields must be accepted");
 
     assert!(matches!(msg, WorkerProtocolMessage::Poll(_)));
+}
+
+#[test]
+fn progress_accepts_legacy_json_without_plan_publication() {
+    let msg: WorkerProtocolMessage = serde_json::from_str(
+        r#"{
+            "type":"progress",
+            "protocol_version":1,
+            "worker_id":"w1",
+            "correlation_key":"pr-for-code-7",
+            "step":1,
+            "status":"write failing test",
+            "state":"done"
+        }"#,
+    )
+    .expect("legacy progress parses");
+
+    let WorkerProtocolMessage::Progress(progress) = msg else {
+        panic!("expected progress message");
+    };
+    assert_eq!(progress.plan_publication, None);
+}
+
+#[test]
+fn progress_round_trips_plan_publication() {
+    let msg = WorkerProtocolMessage::Progress(JobProgress {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        worker_id: "w1".to_string(),
+        correlation_key: "pr-for-code-7".to_string(),
+        step: 1,
+        status: "publish implementation plan".to_string(),
+        state: "done".to_string(),
+        pushed_sha: None,
+        note: Some("ready to implement".to_string()),
+        plan_publication: Some(JobPlanPublication {
+            summary: "Implement deterministic notes".to_string(),
+            phases: vec!["create notes file".to_string(), "verify result".to_string()],
+            target_repos: vec![JobPlanPublicationTarget {
+                repo_path: "acme/demo".to_string(),
+                dir: "demo".to_string(),
+                base_branch: "main".to_string(),
+                branch_hint: Some("agent/pr-for-code-7".to_string()),
+            }],
+        }),
+    });
+
+    let encoded = serde_json::to_string(&msg).expect("serialize");
+    assert!(encoded.contains("plan_publication"));
+    let decoded: WorkerProtocolMessage = serde_json::from_str(&encoded).expect("parse");
+    assert_eq!(decoded, msg);
 }

@@ -61,7 +61,7 @@ pub use run::{
     run_coding_agent_native, run_coding_agent_native_with_hooks,
     run_coding_agent_native_with_options,
 };
-pub use tools::{CheckpointHook, tool_registry};
+pub use tools::{CheckpointHook, PublishPlanHook, tool_registry};
 
 // Internal items the unit tests reach through `super::*`.
 #[cfg(test)]
@@ -99,8 +99,9 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // ---------------------------------------------------------------------------
 
 pub use temper_protocol_agent::{
-    ImplementationPlan, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult,
-    WorkspaceResultChild, WorkspaceWorkItem,
+    ImplementationPlan, PlanPublication, PlanPublicationTarget, WorkspaceContext,
+    WorkspaceGuidance, WorkspaceRepository, WorkspaceResult, WorkspaceResultChild,
+    WorkspaceWorkItem,
 };
 
 #[cfg(test)]

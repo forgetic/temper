@@ -31,8 +31,8 @@ pub struct Heartbeat {
 /// Carries the agent protocol's `StepProgress` fields plus the message
 /// envelope. Per the agent/orchestration split's bright-line rule, this is
 /// durable human-facing PR state only (step label, lifecycle phase, pushed
-/// sha) -- high-frequency observability belongs to the out-of-band control
-/// plane and must not grow fields here.
+/// sha, optional plan publication data) -- high-frequency observability belongs
+/// to the out-of-band control plane and must not grow fields here.
 ///
 /// There is deliberately no `job_id`: the workspace `correlation_key` (the
 /// manifest's `coordination_key` value) is the one cross-plane identifier, and
@@ -60,6 +60,40 @@ pub struct JobProgress {
     /// Optional one-line human note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Optional model-authored plan publication, with host-filled repo routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_publication: Option<JobPlanPublication>,
+}
+
+/// Plan publication data relayed worker -> daemon on a progress message.
+///
+/// Mirrors the agent protocol's plan-publication shape without making the
+/// worker/daemon protocol crate depend on the agent protocol crate; CI enforces
+/// that this DTO crate stays dependency-light.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JobPlanPublication {
+    /// Short human summary or title for the planned change.
+    pub summary: String,
+    /// Ordered human-readable phase labels.
+    #[serde(default)]
+    pub phases: Vec<String>,
+    /// Target repositories the plan applies to, in workspace/manifest order.
+    #[serde(default)]
+    pub target_repos: Vec<JobPlanPublicationTarget>,
+}
+
+/// One repository target included in a [`JobPlanPublication`].
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JobPlanPublicationTarget {
+    /// Repository path in `owner/name` form.
+    pub repo_path: String,
+    /// Workspace-relative checkout directory for the repository.
+    pub dir: String,
+    /// Branch the work is based on.
+    pub base_branch: String,
+    /// Host-provided work branch hint, when the target is writable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,5 +1,8 @@
-//! Tool registry, the model-driven `checkpoint` tool, and the read-only
-//! sub-agent roles (`investigate` / `delegate`) the coding agent can fan out to.
+//! Tool registry, the model-driven `checkpoint` / `publish_plan` tools, and
+//! the read-only sub-agent roles (`investigate` / `delegate`) the coding agent
+//! can fan out to.
+
+mod plan;
 
 use std::path::Path;
 
@@ -10,6 +13,9 @@ use tongs::tools::{
 };
 
 use super::Capability;
+
+pub use plan::PublishPlanHook;
+pub(super) use plan::{PUBLISH_PLAN_GUIDANCE, PublishPlanTool};
 
 /// Orchestration callback the `checkpoint` tool invokes: commit + push the
 /// current work as a coherent, labeled checkpoint, returning the pushed head sha

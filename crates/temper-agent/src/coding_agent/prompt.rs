@@ -43,6 +43,10 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              phases, include `\"plan\": {\"phases\": [...]}` in the final result. \
              Phase labels must be ordered, concise, and suitable as PR checklist \
              lines.\n\
+             - When a `publish_plan` tool is available, call it once for \
+             non-trivial multi-phase work with a concise summary/title and the \
+             same ordered phase labels; the host fills repo/base/branch data, so \
+             do not publish the plan via git or forge yourself.\n\
              - For trivial work with zero or one meaningful phase, omit `plan` \
              (or include at most one phase) and do not invent checklist ceremony.\n",
         ),

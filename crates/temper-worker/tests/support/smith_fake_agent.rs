@@ -41,6 +41,7 @@ fn main() {
         state: StepState::Started,
         pushed_sha: None,
         note: None,
+        plan_publication: None,
     });
 
     let verdict = std::env::var("SMITH_FAKE_AGENT_VERDICT").ok();
@@ -65,6 +66,7 @@ fn main() {
         state: StepState::Done,
         pushed_sha: None,
         note: Some("fake agent done".to_string()),
+        plan_publication: None,
     });
 
     if std::env::args().any(|arg| arg == "--crash-after-progress") {

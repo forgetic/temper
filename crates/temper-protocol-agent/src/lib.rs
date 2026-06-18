@@ -19,11 +19,11 @@
 //!   running the agent in the prepared checkout (`--workspace`, also cwd).
 //! - **Outbound step-progress (agent → worker), stream:** zero or more
 //!   [`StepProgress`] records, one per coherent step boundary, emitted on the
-//!   agent's **stdout** as line-delimited JSON. Each is a crash-recovery
-//!   checkpoint marker — *what was done and what was pushed* — that the worker
-//!   relays to the forge (tick a todo, update the PR body). Emitted **after**
-//!   the corresponding commit is pushed, so the marker never claims more than
-//!   the branch actually holds.
+//!   agent's **stdout** as line-delimited JSON. Most are crash-recovery
+//!   checkpoint markers — *what was done and what was pushed* — emitted
+//!   **after** the corresponding commit is pushed. A record may also carry a
+//!   plan publication with no pushed commit so the host/orchestrator can publish
+//!   checklist-worthy plans without asking the model to perform forge actions.
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
 //!   written to the file named by the agent's `--result` flag. The result may
 //!   include an optional structured implementation plan; omitting it preserves
@@ -37,6 +37,10 @@
 //! boundaries; let the marker reflect only what was pushed.
 
 use serde::{Deserialize, Serialize};
+
+mod plan;
+
+pub use plan::{PlanPublication, PlanPublicationTarget};
 
 /// Wire-format version. Bumped on any breaking change to the context, result,
 /// or step-progress shapes. The context and each step-progress record embed it
@@ -259,14 +263,15 @@ pub struct WorkspaceResultChild {
     pub target_repo: Option<String>,
 }
 
-/// One crash-recovery checkpoint marker, emitted by the agent at a coherent step
-/// boundary *after* the corresponding commit is pushed.
+/// One durable human-facing progress marker emitted by the agent/host at a
+/// coherent boundary.
 ///
-/// The worker relays each record to the forge as durable, human-facing progress
-/// (a ticked checklist item, a PR-body update). It carries only what a human
-/// reading the PR wants plus the pushed sha for recovery — everything
-/// high-frequency (token deltas, tool calls) belongs on the control plane, not
-/// here.
+/// Most markers are crash-recovery checkpoints emitted *after* the corresponding
+/// commit is pushed. Plan-publication markers may carry only the model-authored
+/// plan plus host-filled repository routing before any commit exists. The worker
+/// relays each record to the forge/orchestrator as durable progress (a ticked
+/// checklist item, a PR-body update). Everything high-frequency (token deltas,
+/// tool calls) belongs on the control plane, not here.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StepProgress {
     /// Echoes [`WorkspaceContext::correlation_key`] so the worker (and the
@@ -288,6 +293,10 @@ pub struct StepProgress {
     /// Optional one-line human note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Optional plan publication for this progress marker. Omitted by legacy
+    /// agents and by steps that are not publishing a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_publication: Option<PlanPublication>,
 }
 
 /// Lifecycle phase of a [`StepProgress`] record.
@@ -320,6 +329,9 @@ impl StepProgress {
 }
 
 #[cfg(test)]
+mod plan_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -332,6 +344,7 @@ mod tests {
             state: StepState::Done,
             pushed_sha: Some("abc123".to_string()),
             note: None,
+            plan_publication: None,
         };
         let line = progress.to_line().expect("serialize");
         assert!(!line.contains('\n'));

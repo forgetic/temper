@@ -40,6 +40,7 @@ pub(crate) fn drive(
         state: StepState::Started,
         pushed_sha: None,
         note: Some(format!("protocol v{PROTOCOL_VERSION}")),
+        plan_publication: None,
     });
 
     let (checkpointer, resume_note) = prepare_checkpointer(&cwd, &context, &config);
@@ -90,6 +91,7 @@ fn prepare_checkpointer(
                 "{} checkpoint commit(s) on the branch",
                 resume.commits
             )),
+            plan_publication: None,
         });
     }
     if let Some(checkpointer) = &checkpointer {
@@ -144,6 +146,7 @@ fn drive_coding_loop(
             resume_note.as_deref(),
             turn_hook,
             checkpoint_hook,
+            None,
         )
         .await
         // The session path doesn't surface token totals; drop them here.
@@ -167,6 +170,7 @@ fn finalize(
         state: StepState::Done,
         pushed_sha: None,
         note: result.summary.clone(),
+        plan_publication: None,
     });
     write_result(result_path, result)
 }

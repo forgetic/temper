@@ -141,6 +141,7 @@ impl Checkpointer {
                     state: StepState::Done,
                     pushed_sha: Some(sha.clone()),
                     note: None,
+                    plan_publication: None,
                 });
                 Ok(Some(sha))
             }

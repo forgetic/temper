@@ -43,12 +43,15 @@ fn system_prompt_is_role_specific() {
 fn system_prompt_engineer_requests_plan_only_for_non_trivial_work() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
     assert!(engineer.contains("include `\"plan\": {\"phases\": [...]}`"));
+    assert!(engineer.contains("publish_plan"));
+    assert!(engineer.contains("repo/base/branch"));
     assert!(engineer.contains("zero or one meaningful phase"));
     assert!(engineer.contains("omit `plan`"));
     assert!(engineer.contains("do not invent checklist ceremony"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(!architect.contains("two or more meaningful implementation phases"));
+    assert!(!architect.contains("publish_plan"));
     assert!(!architect.contains("do not invent checklist ceremony"));
 }
 

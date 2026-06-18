@@ -315,6 +315,7 @@ fn agent_invokes_the_checkpoint_tool_at_a_milestone() {
             None,
             None,
             Some(hook as Arc<dyn CheckpointHook>),
+            None,
         )
         .await
         .map(|(result, _totals)| result)

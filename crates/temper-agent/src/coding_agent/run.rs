@@ -10,9 +10,12 @@ use temper_protocol_agent::{WorkspaceContext, WorkspaceResult};
 
 use super::result::{collect_text, parse_result, validate_contract, validate_verdict_vocabulary};
 use super::tools::{
-    CHECKPOINT_GUIDANCE, CheckpointTool, SUBAGENT_GUIDANCE, add_subagents, tool_registry,
+    CHECKPOINT_GUIDANCE, CheckpointTool, PUBLISH_PLAN_GUIDANCE, PublishPlanTool, SUBAGENT_GUIDANCE,
+    add_subagents, tool_registry,
 };
-use super::{Capability, CheckpointHook, CodingAgentError, system_prompt, user_context};
+use super::{
+    Capability, CheckpointHook, CodingAgentError, PublishPlanHook, system_prompt, user_context,
+};
 
 /// Runs one capability/role-aware coding-workspace turn on anvil's native
 /// sans-IO agent loop ([`temper_agent_core::run_sub_agent`]).
@@ -78,6 +81,7 @@ pub async fn run_coding_agent_native_with_options(
         None,
         None,
         None,
+        None,
     )
     .await?;
     Ok(result)
@@ -86,8 +90,9 @@ pub async fn run_coding_agent_native_with_options(
 /// [`run_coding_agent_native_with_options`] with the phase-6b hooks: an
 /// optional resume note appended to the user turn (a re-dispatched agent
 /// continuing a checkpointed branch), an optional [`temper_agent_core::TurnHook`]
-/// awaited before each model call (the safety-backstop checkpointer), and an
-/// optional [`CheckpointHook`] backing the model-driven `checkpoint` tool.
+/// awaited before each model call (the safety-backstop checkpointer), an
+/// optional [`CheckpointHook`] backing the model-driven `checkpoint` tool, and
+/// an optional [`PublishPlanHook`] backing the model-facing `publish_plan` tool.
 ///
 /// Returns the parsed [`WorkspaceResult`] paired with the run's [`RunTotals`]
 /// (input/output tokens + tool-call count, summed across the main run and every
@@ -106,6 +111,7 @@ pub async fn run_coding_agent_native_with_hooks(
     resume_note: Option<&str>,
     turn_hook: Option<std::sync::Arc<dyn temper_agent_core::TurnHook>>,
     checkpoint_hook: Option<std::sync::Arc<dyn CheckpointHook>>,
+    publish_plan_hook: Option<std::sync::Arc<dyn PublishPlanHook>>,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
     let capability = Capability::for_role(&context.work_item.role);
     let provider = provider_config.build_provider()?;
@@ -116,6 +122,9 @@ pub async fn run_coding_agent_native_with_hooks(
     }
     if checkpoint_hook.is_some() {
         role_prompt.push_str(CHECKPOINT_GUIDANCE);
+    }
+    if publish_plan_hook.is_some() {
+        role_prompt.push_str(PUBLISH_PLAN_GUIDANCE);
     }
     let mut user = user_context(context);
     if let Some(note) = resume_note {
@@ -159,6 +168,12 @@ pub async fn run_coding_agent_native_with_hooks(
     }
     if let Some(hook) = &checkpoint_hook {
         tools.push(Box::new(CheckpointTool { hook: hook.clone() }));
+    }
+    if let Some(hook) = &publish_plan_hook {
+        tools.push(Box::new(PublishPlanTool {
+            context: context.clone(),
+            hook: hook.clone(),
+        }));
     }
 
     let sub_agent = temper_agent_core::SubAgent {
