@@ -69,10 +69,18 @@ impl Answers {
 /// Asks the operator the five questions + two secret prompts, validating the
 /// forge URL and rejecting hosted GitHub (unsupported today). `--forge` skips
 /// only the forge URL prompt; the rest of the provisioning flow stays intact.
+///
+/// When `non_interactive` is true, prompts are skipped entirely and all values
+/// are taken from the overrides (or errors when required values are missing).
 pub fn collect_answers(
     p: &mut dyn Prompter,
     overrides: &InitOverrides,
+    non_interactive: bool,
 ) -> Result<Answers, InitError> {
+    if non_interactive {
+        return collect_non_interactive(overrides);
+    }
+
     // Q1 — Forge URL. The default literal `github` is a deliberate nudge: a real
     // GitHub deployment is not supported yet, so an unchanged default (or any
     // non-URL) is rejected with guidance to enter a Forgejo URL.
@@ -105,6 +113,51 @@ pub fn collect_answers(
     // Q5 — DeepSeek API key (provider + auth shape are fixed).
     let provider = provider_from_override(overrides.provider.as_deref())?;
     let provider_key = p.ask_secret("DeepSeek API key")?;
+
+    let repo = overrides.repo.clone().unwrap_or_else(default_repo);
+
+    Ok(Answers {
+        forge_url,
+        workflow,
+        webhook_addr,
+        admin_user,
+        admin_password,
+        provider,
+        provider_key,
+        repo_owner: repo.owner,
+        repo_name: repo.name,
+    })
+}
+
+/// Non-interactive path: all values come from overrides, or an error is
+/// returned with the name of the missing flag / env var (never a secret value).
+fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitError> {
+    let forge_url = overrides.forge_url.clone().ok_or_else(|| {
+        InitError::Unsupported("--non-interactive: forge URL is required; pass --forge".to_string())
+    })?;
+    validate_forge_url(&forge_url)?;
+
+    let workflow = WORKFLOW_BASIC_DELIVERY.to_string();
+    let webhook_addr = DEFAULT_WEBHOOK_ADDR.to_string();
+
+    let admin_user = overrides.admin_user.clone().ok_or_else(|| {
+        InitError::Unsupported(
+            "--non-interactive: admin user is required; pass --admin-user".to_string(),
+        )
+    })?;
+    let admin_password = overrides.admin_password.clone().ok_or_else(|| {
+        InitError::Unsupported(
+            "--non-interactive: admin password is required; set TEMPER_INIT_ADMIN_PASSWORD"
+                .to_string(),
+        )
+    })?;
+
+    let provider = provider_from_override(overrides.provider.as_deref())?;
+    let provider_key = overrides.provider_key.clone().ok_or_else(|| {
+        InitError::Unsupported(
+            "--non-interactive: provider key is required; set TEMPER_INIT_PROVIDER_KEY".to_string(),
+        )
+    })?;
 
     let repo = overrides.repo.clone().unwrap_or_else(default_repo);
 
@@ -177,7 +230,7 @@ mod tests {
     #[test]
     fn collects_with_defaults() {
         let mut p = full_answers();
-        let a = collect_answers(&mut p, &InitOverrides::default()).expect("collect");
+        let a = collect_answers(&mut p, &InitOverrides::default(), false).expect("collect");
         assert_eq!(a.forge_url, "http://localhost:3000");
         assert_eq!(a.workflow, WORKFLOW_BASIC_DELIVERY);
         assert_eq!(a.webhook_addr, DEFAULT_WEBHOOK_ADDR);
@@ -196,7 +249,8 @@ mod tests {
     fn rejects_github_default() {
         // Unchanged `github` default → not a URL → Unsupported.
         let mut p = ScriptedPrompter::new(["".to_string()]);
-        let err = collect_answers(&mut p, &InitOverrides::default()).expect_err("github rejected");
+        let err =
+            collect_answers(&mut p, &InitOverrides::default(), false).expect_err("github rejected");
         assert!(matches!(err, InitError::Unsupported(_)), "{err}");
     }
 
@@ -206,7 +260,7 @@ mod tests {
             "http://localhost:3000".to_string(),
             "fancy-delivery".to_string(),
         ]);
-        let err = collect_answers(&mut p, &InitOverrides::default())
+        let err = collect_answers(&mut p, &InitOverrides::default(), false)
             .expect_err("unknown workflow rejected");
         assert!(matches!(err, InitError::Unsupported(_)), "{err}");
     }
@@ -225,7 +279,7 @@ mod tests {
             ..Default::default()
         };
 
-        let a = collect_answers(&mut p, &overrides).expect("collect");
+        let a = collect_answers(&mut p, &overrides, false).expect("collect");
 
         assert_eq!(a.forge_url, "http://forge.local:3000");
         assert!(p.answers.is_empty(), "all non-forge prompts consumed");
@@ -239,7 +293,7 @@ mod tests {
             ..Default::default()
         };
 
-        let err = collect_answers(&mut p, &overrides).expect_err("github rejected");
+        let err = collect_answers(&mut p, &overrides, false).expect_err("github rejected");
 
         assert!(matches!(err, InitError::Unsupported(_)), "{err}");
     }
