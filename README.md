@@ -131,6 +131,8 @@ Temper then dispatches work, executes transitions, and keeps the workflow moving
 
 A team defines a workflow with the following roles:
 
+These role names are illustrative examples for this workflow; Temper does not require or hard-code them.
+
 ```text
 architect
 engineer
