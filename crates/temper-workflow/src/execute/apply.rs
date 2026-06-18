@@ -24,7 +24,8 @@ use crate::ids::RoleId;
 use crate::metadata::parse_metadata_block;
 use crate::plan::{TransitionPlan, WorkflowEffect};
 use temper_forge::{
-    CreatePullRequest, Forge, IssueState, RepositoryId, ReviewDecision, UpdateIssue, UpdatePullRequest, UserId,
+    CreatePullRequest, Forge, IssueState, RepositoryId, ReviewDecision, UpdateIssue,
+    UpdatePullRequest, UserId,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -336,15 +337,13 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             });
         };
         // Read the PR body to get metadata
-        let pull_request = self
-            .forge
-            .get_pull_request(id)
-            .await?
-            .ok_or_else(|| ExecutionError::TargetMissing {
+        let pull_request = self.forge.get_pull_request(id).await?.ok_or_else(|| {
+            ExecutionError::TargetMissing {
                 target: classified.source,
-            })?;
-        let Some(metadata) = parse_metadata_block(&pull_request.body)
-            .map_err(|error| ExecutionError::Backend {
+            }
+        })?;
+        let Some(metadata) =
+            parse_metadata_block(&pull_request.body).map_err(|error| ExecutionError::Backend {
                 message: format!("invalid PR workflow metadata: {error}"),
             })?
         else {

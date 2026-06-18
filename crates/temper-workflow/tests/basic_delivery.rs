@@ -398,7 +398,10 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
         .expect("mechanical automation can land a PR on CI alone");
     assert_eq!(
         plan.effects,
-        vec![WorkflowEffect::MergePullRequest, WorkflowEffect::CloseParentIssues]
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::CloseParentIssues
+        ]
     );
 
     // Without CI, landing is gated even though no review is ever required.
@@ -480,6 +483,9 @@ fn review_status_unused_keeps_landing_unblocked() {
         .expect("landing depends on CI only; an unapproved review does not block it");
     assert_eq!(
         plan.effects,
-        vec![WorkflowEffect::MergePullRequest, WorkflowEffect::CloseParentIssues]
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::CloseParentIssues
+        ]
     );
 }

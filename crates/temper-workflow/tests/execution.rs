@@ -15,8 +15,8 @@ use temper_forge::{
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
     ArtifactRef, ArtifactSource, ExecutionContext, ExecutionError, Executor, PlanDiagnostic,
-    RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
-    WorkflowMetadata, parse_metadata_block, render_metadata_block,
+    RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
+    parse_metadata_block, render_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/ci-delivery.json");
@@ -612,15 +612,19 @@ const CLOSE_PARENTS_FIXTURE: &str = r#"
 fn close_parents_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(CLOSE_PARENTS_FIXTURE).expect("fixture valid JSON");
-    spec.validate()
-        .expect("close-parents fixture validates")
+    spec.validate().expect("close-parents fixture validates")
 }
 
 fn ts() -> chrono::DateTime<chrono::Utc> {
     "2026-05-29T00:00:00Z".parse().expect("valid timestamp")
 }
 
-fn create_pr_with_body(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str], body: &str) -> ItemNumber {
+fn create_pr_with_body(
+    forge: &MemoryForge,
+    repo: &RepositoryId,
+    labels: &[&str],
+    body: &str,
+) -> ItemNumber {
     block_on(forge.create_pull_request(
         repo,
         CreatePullRequest {
@@ -773,8 +777,7 @@ const BASIC_DELIVERY_FIXTURE: &str = include_str!("../fixtures/basic-delivery.js
 fn basic_delivery_workflow() -> ValidatedWorkflow {
     let spec: RawWorkflowSpec =
         serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery fixture valid JSON");
-    spec.validate()
-        .expect("basic-delivery fixture validates")
+    spec.validate().expect("basic-delivery fixture validates")
 }
 
 #[test]
@@ -831,7 +834,10 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     .expect("land_pr plans with CI passed and no deps");
     assert_eq!(
         plan.effects,
-        vec![WorkflowEffect::MergePullRequest, WorkflowEffect::CloseParentIssues]
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::CloseParentIssues
+        ]
     );
 
     // Execute land_pr — merge + close parent issues.
@@ -844,7 +850,10 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     .expect("land_pr executes on a green PR");
     assert_eq!(
         report.applied,
-        vec![WorkflowEffect::MergePullRequest, WorkflowEffect::CloseParentIssues]
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::CloseParentIssues
+        ]
     );
 
     // The PR should now be merged.

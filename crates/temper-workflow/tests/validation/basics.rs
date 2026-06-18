@@ -180,7 +180,9 @@ fn close_parent_issues_effect_validates() {
         actions: Vec::new(),
     });
 
-    let workflow = spec.validate().expect("spec with close_parent_issues validates");
+    let workflow = spec
+        .validate()
+        .expect("spec with close_parent_issues validates");
     let land = workflow
         .transitions()
         .iter()
