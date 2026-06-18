@@ -30,4 +30,14 @@ createChatApp({
       { method: "POST" },
     );
   },
+  // PR E wires this to POST /conversations (open a new conversation against a
+  // profile). The created conversation arrives via conversation_opened on the
+  // feed; here we just kick the request and let the feed update the rail.
+  postNewConversation: () => {
+    void fetch(`/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profile_id: "product-manager" }),
+    });
+  },
 });

@@ -80,6 +80,7 @@ export interface ChatState {
 // Reducer events: a feed ConversationEvent, plus local UI actions.
 export type ChatEvent =
   | { t: "conv.event"; event: ConversationEvent }
+  | { t: "human.optimistic"; id: string; body: string } // local echo of a sent turn
   | { t: "agent.typing"; id: string; on: boolean }
   | { t: "select"; id: string }
   | { t: "toast.clear" };
@@ -111,6 +112,19 @@ export function applyChat(state: ChatState, ev: ChatEvent): ChatState {
       const c = state.conversations[ev.id];
       if (!c) return state;
       return { ...state, conversations: { ...state.conversations, [ev.id]: { ...c, agentTyping: ev.on } } };
+    }
+    case "human.optimistic": {
+      // Local echo: append the human turn the user just sent so it shows
+      // instantly. It carries no server sequence, so it does NOT advance the
+      // cursor — the server's own human_turn_appended event (when it lands)
+      // is still applied, but the optimistic turn is what the user sees first.
+      const c = state.conversations[ev.id];
+      if (!c) return state;
+      const turn: ConversationTurn = { participant: { kind: "human", display_name: "you" }, body: ev.body };
+      return {
+        ...state,
+        conversations: { ...state.conversations, [ev.id]: { ...c, turns: [...c.turns, turn] } },
+      };
     }
     case "conv.event":
       return applyConvEvent(state, ev.event);
