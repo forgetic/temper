@@ -6,10 +6,20 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
-# Foundation skeleton only. The HTTP/SSE server, read-model, and feed adapters
-# arrive in PR D; the daemon snapshot DTOs in PR C. This crate is deliberately
-# dependency-free for now so the workspace stays lean until those land.
+# The temper-web server, read-model, SSE fan-out, and log-tail feed (PR D).
+#
+# Deliberately dependency-light: temper-web is a UI consumer / depgraph leaf, so
+# it runs its OWN blocking `std::net` HTTP+SSE server (no skein, no async
+# runtime — the daemon's one-shot H1 responder cannot hold a connection open for
+# SSE). It depends only on serde for the wire types, temper-log for the event
+# vocabulary it tails, and temper-workflow for lane derivation off the lifecycle
+# state dimension. The blocking daemon HTTP client lives in the binary, not here.
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+temper-log = { path = "../temper-log" }
+temper-workflow = { path = "../temper-workflow" }
 
 [lints]
 workspace = true

@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-06-18T12:05:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "trigger: [acme/widgets PR#6] CI completed: failure in 2m10s",
+    "service": "trigger",
+    "event": "ci.completed",
+    "repo": "acme/widgets",
+    "pr.ref": "acme/widgets PR#6",
+    "artifact.ref": "acme/widgets PR#6",
+    "conclusion": "failure",
+    "duration_ms": 130000
+  },
+  "target": "temper::trigger",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets PR#6" }
+}

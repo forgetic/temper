@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-18T12:00:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "engine:  [acme/widgets#42] applied triage_intake_to_code | -untriaged +code +ready",
+    "service": "engine",
+    "event": "transition.applied",
+    "repo": "acme/widgets",
+    "artifact.ref": "acme/widgets#42",
+    "transition": "triage_intake_to_code",
+    "labels.delta": "-untriaged +code +ready"
+  },
+  "target": "temper::engine",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets#42" }
+}

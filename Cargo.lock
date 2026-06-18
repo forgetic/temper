@@ -1955,6 +1955,13 @@ dependencies = [
 [[package]]
 name = "temper-web"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "temper-log",
+ "temper-workflow",
+ "tracing",
+]
 
 [[package]]
 name = "temper-worker"

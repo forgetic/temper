@@ -176,11 +176,15 @@ temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-c
 temper = ["temper-cli", "temper-config"]
 # Deterministic sim harness: runs the real daemon under skein's lab runtime.
 temper-sim = ["temper-engine", "temper-engine-io", "temper-protocol-worker"]
-# The web dashboard. A leaf today (foundation skeleton, no internal deps). Later
-# PRs add its server/read-model/feed deps — e.g. temper-engine-io for the H1
-# server, temper-protocol-interaction for the conversation-proxy wire type — as
-# the corresponding feature lands; keep this allowlist in lockstep with them.
-temper-web = []
+# The web dashboard (read-model, SSE fan-out, static UI, log-tail feed). A
+# depgraph leaf: it is a UI consumer, never depended-upon by a tier crate. It
+# runs its OWN dependency-light blocking std::net HTTP+SSE server (no skein —
+# the daemon's one-shot H1 responder cannot hold a connection open for SSE), so
+# it needs neither temper-engine-io nor temper-engine. It depends only on
+# temper-log (the event vocabulary + WorkItemRef/strip_provider_scheme helpers it
+# tails) and temper-workflow (lane derivation off the lifecycle state dimension).
+# PR E will add temper-protocol-interaction for the conversation-proxy wire type.
+temper-web = ["temper-log", "temper-workflow"]
 # Shared non-production test machinery (engine-side). THE SOLE EXCEPTION to the
 # forge-backend invariant: it depends directly on the concrete backends for
 # test-only affordances absent from the production Forge trait (see the invariant
