@@ -63,11 +63,13 @@ pub fn result_applier(
     // debug so `RUST_LOG=info` stays the §7 catalog + startup banner.
     let routed = role_list(&routed);
     let fallback = role_list(&fallback);
+    let message = role_identities_debug_message(&routed, &fallback);
     tracing::debug!(
-        target: "temper_engine",
+        target: "temper::engine",
+        service = temper_log::Service::Engine.as_str(),
         %routed,
         %fallback,
-        "engine: role identities routed={routed} fallback={fallback}"
+        "{message}"
     );
 
     Arc::new(routing)
@@ -88,6 +90,13 @@ fn applier_chain(
     ))
 }
 
+fn role_identities_debug_message(routed: &str, fallback: &str) -> String {
+    format!(
+        "{}role identities routed={routed} fallback={fallback}",
+        temper_log::Service::Engine.human_prefix()
+    )
+}
+
 fn role_list(roles: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     let roles = roles
         .into_iter()
@@ -97,5 +106,21 @@ fn role_list(roles: impl IntoIterator<Item = impl AsRef<str>>) -> String {
         "(none)".to_string()
     } else {
         roles.join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_identities_debug_message_uses_padded_engine_prefix() {
+        let message = role_identities_debug_message("architect,engineer", "(none)");
+
+        assert_eq!(
+            message,
+            "engine:  role identities routed=architect,engineer fallback=(none)"
+        );
+        assert_eq!(&message[.."engine:  ".len()], "engine:  ");
     }
 }

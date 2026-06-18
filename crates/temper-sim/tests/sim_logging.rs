@@ -24,9 +24,11 @@
 //! provider, agent runner, and forge factory and is not wired to run under
 //! `LabRuntime` by this harness. Driving it for real is therefore out of the
 //! harness's reach, so we take the fallback the issue allows: emit the identical
-//! event — `tracing::info!(addr = %addr, "engine: serving on {addr}")` — from a
-//! task driven under the lab, and assert the captured message is self-contained
-//! while the bound address also survives as a structured `addr` field.
+//! event MESSAGE —
+//! `tracing::info!(target: "temper::engine", service = "engine", addr = %addr,
+//! "engine:  serving on {addr}")` — from a task driven under the lab, and assert
+//! the captured message is self-contained while the bound address also survives
+//! as a structured `addr` field.
 
 use std::io::Write;
 use std::net::SocketAddr;
@@ -148,7 +150,12 @@ fn captured_output_is_ansi_free() {
     let captured = capture("info", || {
         tracing::error!(code = 7, "boom");
         tracing::warn!("careful");
-        tracing::info!(addr = "127.0.0.1:8080", "engine: serving on 127.0.0.1:8080");
+        tracing::info!(
+            target: "temper::engine",
+            service = "engine",
+            addr = "127.0.0.1:8080",
+            "engine:  serving on 127.0.0.1:8080"
+        );
     });
     assert!(
         !captured.contains('\u{1b}'),
@@ -177,14 +184,19 @@ fn serving_readiness_event_carries_addr_field() {
             // Emit through a lab task: the lab polls it inline on this thread, so
             // the thread-local subscriber captures it — deterministically.
             sim.run_scenario(MAX_STEPS, move |_cx| async move {
-                tracing::info!(addr = %addr, "engine: serving on {addr}");
+                tracing::info!(
+                    target: "temper::engine",
+                    service = "engine",
+                    addr = %addr,
+                    "engine:  serving on {addr}"
+                );
             });
         });
         buffer.contents()
     };
 
     assert!(
-        captured.contains("engine: serving on 127.0.0.1:8080"),
+        captured.contains("engine:  serving on 127.0.0.1:8080"),
         "the readiness event message must include the bound address, got: {captured:?}"
     );
     // The address is present as a key=value field too, not just in MESSAGE.

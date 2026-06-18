@@ -743,7 +743,7 @@ EOF
     # Readiness: the HTTP listener must be up before the seed-last webhook can be
     # delivered, and the in-process worker must have registered before any job can
     # be assigned. Wait for both, in order.
-    wait_for_log_line "$LOG_DIR/run.log" 'engine: serving on' "$RUN_PID" 'temper daemon'
+    wait_for_log_line "$LOG_DIR/run.log" 'engine:  serving on' "$RUN_PID" 'temper daemon'
     wait_for_log_line "$LOG_DIR/run.log" 'worker: registered' "$RUN_PID" 'temper daemon'
     log "temper daemon up (pid $RUN_PID; logs/run.log)"
 }
@@ -833,7 +833,7 @@ cmd_validate_webhooks() {
 
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
-    validate_contains "$_run_log" 'engine: serving on' \
+    validate_contains "$_run_log" 'engine:  serving on' \
         'temper daemon reached serving readiness' || _ok=1
     validate_contains "$_run_log" 'webhook accepted' \
         'Forgejo delivered at least one accepted webhook' || _ok=1
