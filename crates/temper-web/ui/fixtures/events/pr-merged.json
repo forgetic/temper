@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-06-18T12:10:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "engine:  [acme/widgets PR#6] merged into main via squash (e3f9a1c)",
+    "service": "engine",
+    "event": "pr.merged",
+    "repo": "acme/widgets",
+    "pr.ref": "acme/widgets PR#6",
+    "artifact.ref": "acme/widgets PR#6",
+    "target_branch": "main",
+    "merge_method": "squash",
+    "commit": "e3f9a1c",
+    "labels.delta": "+landed"
+  },
+  "target": "temper::engine",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets PR#6" }
+}

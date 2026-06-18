@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-06-18T12:03:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "worker:  role code saturated (1 in flight); 2 queued",
+    "service": "worker",
+    "event": "role.saturated",
+    "role": "code",
+    "concurrency": 1,
+    "queued": "acme/api#7,acme/widgets#43",
+    "queued_count": 2
+  },
+  "target": "temper::worker"
+}

@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-18T12:01:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "agent:   [acme/widgets#39] code/coding started",
+    "service": "agent",
+    "event": "agent.started",
+    "repo": "acme/widgets",
+    "artifact.ref": "acme/widgets#39",
+    "role": "code",
+    "kind": "coding"
+  },
+  "target": "temper::agent",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets#39" }
+}

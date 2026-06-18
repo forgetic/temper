@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-18T12:08:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "worker:  [acme/widgets PR#8] lease lost: expired (held 11m)",
+    "service": "worker",
+    "event": "lease.lost",
+    "repo": "acme/widgets",
+    "artifact.ref": "acme/widgets PR#8",
+    "role": "review",
+    "reason": "expired (held 11m)"
+  },
+  "target": "temper::worker",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets PR#8" }
+}
