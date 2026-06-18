@@ -24,11 +24,11 @@ cargo dev-test-quick
 If you're touching areas that might break or affect current Forgejo-based
 integration tests, or you are adding new Forgejo-based integration tests, run:
 
-``
+```sh
 cargo dev-test-full
 ```
 
-instead of ```cargo dev-test-quick```.
+instead of `cargo dev-test-quick`.
 
 Keep Clippy output clean.
 
