@@ -112,3 +112,97 @@ fn snapshot_cursor_advances_after_ingest_so_resume_has_no_gap() {
     let after = state.snapshot_event().seq();
     assert!(after > before, "cursor must advance so SSE resumes cleanly");
 }
+
+// --- Conversation proxy routing (feed 2) ---
+
+use crate::conversation::ConversationProxy;
+use crate::conversation::test_support::{FakeInteractionClient, RecordedPost};
+
+/// Build an [`AppState`] with a conversation proxy over a shared fake client, so
+/// the test can both route through the server AND inspect what the fake recorded.
+fn state_with_fake(
+    client: FakeInteractionClient,
+) -> (AppState, std::sync::Arc<FakeInteractionClient>) {
+    let client = std::sync::Arc::new(client);
+    let proxy = std::sync::Arc::new(ConversationProxy::new(std::sync::Arc::clone(&client) as _));
+    let state = empty_state().with_conversation_proxy(proxy);
+    (state, client)
+}
+
+#[test]
+fn conversation_post_is_503_when_proxy_disabled() {
+    let state = empty_state();
+    let response = route_conversation_post(&state, "/conversations/c1/turns", b"{}");
+    assert_eq!(response.status, 503);
+}
+
+#[test]
+fn turn_post_forwards_body_and_passes_response_through() {
+    let client =
+        FakeInteractionClient::new().with_post_response(200, r#"{"reply":{"message":"ok"}}"#);
+    let (state, fake) = state_with_fake(client);
+
+    let response = route_conversation_post(
+        &state,
+        "/conversations/conversation-1/turns",
+        br#"{"body":"hi"}"#,
+    );
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.content_type, "application/json");
+    assert_eq!(response.body, br#"{"reply":{"message":"ok"}}"#);
+    assert_eq!(
+        fake.recorded_posts(),
+        vec![RecordedPost::Turn {
+            conversation_id: "conversation-1".to_string(),
+            body: r#"{"body":"hi"}"#.to_string(),
+        }]
+    );
+}
+
+#[test]
+fn accept_post_forwards_both_ids() {
+    let client = FakeInteractionClient::new().with_post_response(200, "{}");
+    let (state, fake) = state_with_fake(client);
+
+    let response = route_conversation_post(
+        &state,
+        "/conversations/conversation-1/proposals/csv-export/accept",
+        b"",
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        fake.recorded_posts(),
+        vec![RecordedPost::Accept {
+            conversation_id: "conversation-1".to_string(),
+            proposal_id: "csv-export".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn new_conversation_post_forwards_and_preserves_201() {
+    let client =
+        FakeInteractionClient::new().with_post_response(201, r#"{"conversation_id":"c2"}"#);
+    let (state, fake) = state_with_fake(client);
+
+    let response = route_conversation_post(&state, "/conversations", b"{}");
+    assert_eq!(response.status, 201, "upstream status is preserved");
+    assert_eq!(response.body, br#"{"conversation_id":"c2"}"#);
+    assert_eq!(
+        fake.recorded_posts(),
+        vec![RecordedPost::NewConversation {
+            body: "{}".to_string()
+        }]
+    );
+}
+
+#[test]
+fn unknown_conversation_subpath_is_404() {
+    let client = FakeInteractionClient::new();
+    let (state, _fake) = state_with_fake(client);
+    assert_eq!(
+        route_conversation_post(&state, "/conversations/c1/bogus", b"{}").status,
+        404
+    );
+}

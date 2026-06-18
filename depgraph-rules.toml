@@ -183,8 +183,13 @@ temper-sim = ["temper-engine", "temper-engine-io", "temper-protocol-worker"]
 # it needs neither temper-engine-io nor temper-engine. It depends only on
 # temper-log (the event vocabulary + WorkItemRef/strip_provider_scheme helpers it
 # tails) and temper-workflow (lane derivation off the lifecycle state dimension).
-# PR E will add temper-protocol-interaction for the conversation-proxy wire type.
-temper-web = ["temper-log", "temper-workflow"]
+# PR E adds temper-interaction for the conversation-proxy wire types: the
+# `ConversationEvent` envelope + `ConversationEventPayload` enum live in
+# temper-interaction's `transport` module (the protocol crate only has the inner
+# turn/reply/proposal types), so depending on it is how the proxy reuses the exact
+# JSON contract the chat UI consumes rather than re-declaring drift-prone parallel
+# types. temper-web stays a leaf — nothing in any tier depends on it.
+temper-web = ["temper-log", "temper-workflow", "temper-interaction"]
 # Shared non-production test machinery (engine-side). THE SOLE EXCEPTION to the
 # forge-backend invariant: it depends directly on the concrete backends for
 # test-only affordances absent from the production Forge trait (see the invariant

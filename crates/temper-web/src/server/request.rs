@@ -27,15 +27,36 @@ impl RequestLine {
     }
 }
 
+/// A parsed request: the request line plus the body (for POST proxying). The body
+/// is read using the `Content-Length` header; absent/zero length yields empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    /// The parsed request line (method + target).
+    pub line: RequestLine,
+    /// The request body bytes (empty for bodyless requests).
+    pub body: Vec<u8>,
+}
+
 /// Read and discard headers up to the blank line, returning the request line.
 /// Returns `None` on a closed/empty connection or a malformed request line.
+///
+/// GET routing needs only the request line, so this is the cheap path. POST
+/// proxying uses [`read_request`] to also capture the body.
 pub fn read_request_line<R: Read>(reader: &mut BufReader<R>) -> Option<RequestLine> {
+    read_request(reader).map(|request| request.line)
+}
+
+/// Read the request line, headers, and (per `Content-Length`) the body. Used by
+/// the conversation POST proxies, which forward the body upstream verbatim.
+pub fn read_request<R: Read>(reader: &mut BufReader<R>) -> Option<Request> {
     let mut line = String::new();
     if reader.read_line(&mut line).ok()? == 0 {
         return None; // connection closed
     }
     let request_line = parse_request_line(line.trim_end())?;
-    // Drain the remaining headers (we route on the request line alone).
+
+    // Read headers; we only need Content-Length, to size the body read.
+    let mut content_length = 0usize;
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header).ok()? == 0 {
@@ -44,8 +65,21 @@ pub fn read_request_line<R: Read>(reader: &mut BufReader<R>) -> Option<RequestLi
         if header == "\r\n" || header == "\n" {
             break;
         }
+        if let Some((name, value)) = header.split_once(':')
+            && name.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().unwrap_or(0);
+        }
     }
-    Some(request_line)
+
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 && reader.read_exact(&mut body).is_err() {
+        body.clear();
+    }
+    Some(Request {
+        line: request_line,
+        body,
+    })
 }
 
 /// Parse a `METHOD path HTTP/1.1` request line.
@@ -112,6 +146,30 @@ mod tests {
     fn empty_connection_yields_none() {
         let mut reader = BufReader::new(&b""[..]);
         assert!(read_request_line(&mut reader).is_none());
+    }
+
+    #[test]
+    fn reads_post_body_using_content_length() {
+        let raw = "POST /conversations/c1/turns HTTP/1.1\r\n\
+                   Host: x\r\n\
+                   Content-Type: application/json\r\n\
+                   Content-Length: 15\r\n\
+                   \r\n\
+                   {\"body\":\"hi\"}xx";
+        let mut reader = BufReader::new(raw.as_bytes());
+        let request = read_request(&mut reader).expect("reads");
+        assert_eq!(request.line.method, "POST");
+        assert_eq!(request.line.path_only(), "/conversations/c1/turns");
+        assert_eq!(request.body, b"{\"body\":\"hi\"}xx");
+    }
+
+    #[test]
+    fn bodyless_request_yields_empty_body() {
+        let raw = "GET /conversations/events HTTP/1.1\r\nHost: x\r\n\r\n";
+        let mut reader = BufReader::new(raw.as_bytes());
+        let request = read_request(&mut reader).expect("reads");
+        assert!(request.body.is_empty());
+        assert_eq!(request.line.path_only(), "/conversations/events");
     }
 
     #[test]
