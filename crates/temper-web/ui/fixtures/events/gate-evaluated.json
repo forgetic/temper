@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-18T12:04:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "engine:  [acme/widgets PR#6] gates: ci_gate=pending dependency_gate=ok | waiting on CI",
+    "service": "engine",
+    "event": "gate.evaluated",
+    "repo": "acme/widgets",
+    "pr.ref": "acme/widgets PR#6",
+    "artifact.ref": "acme/widgets PR#6",
+    "gates": "ci_gate=pending dependency_gate=ok"
+  },
+  "target": "temper::engine",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets PR#6" }
+}

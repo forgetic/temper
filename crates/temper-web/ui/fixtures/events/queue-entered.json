@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-06-18T12:01:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "engine:  [acme/widgets#42] -> queue 'code_ready' | awaiting engineer",
+    "service": "engine",
+    "event": "queue.entered",
+    "repo": "acme/widgets",
+    "artifact.ref": "acme/widgets#42",
+    "queue.to": "code_ready"
+  },
+  "target": "temper::engine",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets#42" }
+}

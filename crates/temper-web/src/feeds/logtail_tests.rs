@@ -14,6 +14,9 @@ const PR_MERGED: &str = include_str!("../../ui/fixtures/events/pr-merged.json");
 const LEASE_LOST: &str = include_str!("../../ui/fixtures/events/lease-lost.json");
 const ROLE_SATURATED: &str = include_str!("../../ui/fixtures/events/role-saturated.json");
 const AGENT_STARTED: &str = include_str!("../../ui/fixtures/events/agent-started.json");
+const QUEUE_ENTERED: &str = include_str!("../../ui/fixtures/events/queue-entered.json");
+const GATE_BLOCKED: &str = include_str!("../../ui/fixtures/events/gate-evaluated.json");
+const GATE_PASSED: &str = include_str!("../../ui/fixtures/events/gate-evaluated-passed.json");
 
 #[test]
 fn transition_applied_moves_card_by_added_label() {
@@ -132,13 +135,79 @@ fn agent_started_clears_lease_and_sets_activity() {
 }
 
 #[test]
+fn queue_entered_moves_card_to_destination_lane() {
+    // queue.to "code_ready" -> the +code keyword resolves to the implement lane.
+    let deltas = adapter().deltas_for_line(QUEUE_ENTERED);
+    assert_eq!(
+        deltas,
+        vec![Delta::MoveCard {
+            id: card_id_for_ref("acme/widgets#42"),
+            lane: Lane::Implement,
+            now: 1000,
+        }]
+    );
+}
+
+#[test]
+fn queue_entered_without_destination_yields_no_deltas() {
+    // forward-compatible: a queue.entered missing queue.to can't resolve a lane.
+    assert!(
+        adapter()
+            .deltas_for_line(r#"{"fields":{"event":"queue.entered","artifact.ref":"a/b#1"}}"#)
+            .is_empty()
+    );
+}
+
+#[test]
+fn gate_blocked_raises_gate_problem() {
+    let deltas = adapter().deltas_for_line(GATE_BLOCKED);
+    let card = card_id_for_ref("acme/widgets PR#6");
+    assert_eq!(deltas.len(), 1);
+    match &deltas[0] {
+        Delta::AddProblem { id, problem } => {
+            assert_eq!(id, &format!("gate:{card}"));
+            // ci_gate=pending is a soft wait, not a hard failure.
+            assert_eq!(problem.sev, Sev::Warn);
+            assert_eq!(problem.card, card);
+            assert!(problem.msg.contains("gate blocked"));
+            assert!(problem.msg.contains("ci_gate=pending"));
+        }
+        other => panic!("expected problem, got {other:?}"),
+    }
+}
+
+#[test]
+fn gate_failed_is_a_hard_block() {
+    // a `failed` gate is a hard block -> Sev::Bad.
+    let line = r#"{"fields":{"event":"gate.evaluated","artifact.ref":"acme/widgets PR#6","gates":"ci_gate=failed dependency_gate=ok"}}"#;
+    let deltas = adapter().deltas_for_line(line);
+    assert_eq!(deltas.len(), 1);
+    match &deltas[0] {
+        Delta::AddProblem { problem, .. } => assert_eq!(problem.sev, Sev::Bad),
+        other => panic!("expected problem, got {other:?}"),
+    }
+}
+
+#[test]
+fn gate_passed_clears_gate_problem() {
+    let deltas = adapter().deltas_for_line(GATE_PASSED);
+    let card = card_id_for_ref("acme/widgets PR#6");
+    assert_eq!(
+        deltas,
+        vec![Delta::ClearProblem {
+            id: format!("gate:{card}"),
+        }]
+    );
+}
+
+#[test]
 fn unparseable_line_yields_no_deltas() {
     assert!(adapter().deltas_for_line("not json").is_empty());
     assert!(adapter().deltas_for_line("{}").is_empty());
     // a known-shaped line with an out-of-vocabulary event is ignored
     assert!(
         adapter()
-            .deltas_for_line(r#"{"fields":{"event":"queue.entered","artifact.ref":"a/b#1"}}"#)
+            .deltas_for_line(r#"{"fields":{"event":"wake.received","artifact.ref":"a/b#1"}}"#)
             .is_empty()
     );
 }
@@ -155,6 +224,35 @@ fn drain_replays_a_canned_line_stream_in_order() {
     let deltas = adapter().drain(&mut source);
     // transition(1) + agent.started(2) + ci.failure(2) + pr.merged(3)
     assert_eq!(deltas.len(), 8);
+}
+
+#[test]
+fn gate_block_then_pass_round_trips_through_readmodel() {
+    // A blocking gate raises the problem; a later passing gate clears it.
+    let mut model = ReadModel::new();
+    let card = card_id_for_ref("acme/widgets PR#6");
+    model.apply(Delta::UpsertCard(Card {
+        id: card.clone(),
+        lane: Lane::Ci,
+        artifact_ref: "acme/widgets PR#6".to_string(),
+        role: "code".to_string(),
+        title: "acme/widgets PR#6".to_string(),
+        entered_at: 0,
+        steps: None,
+        activity: None,
+        ci: None,
+        merged: None,
+    }));
+    let adapter = adapter();
+    let gate_problem = format!("gate:{card}");
+    for delta in adapter.deltas_for_line(GATE_BLOCKED) {
+        model.apply(delta);
+    }
+    assert!(model.problems().contains_key(&gate_problem));
+    for delta in adapter.deltas_for_line(GATE_PASSED) {
+        model.apply(delta);
+    }
+    assert!(!model.problems().contains_key(&gate_problem));
 }
 
 #[test]

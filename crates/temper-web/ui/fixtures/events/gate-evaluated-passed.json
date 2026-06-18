@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-18T12:06:00Z",
+  "level": "INFO",
+  "fields": {
+    "message": "engine:  [acme/widgets PR#6] gates: ci_gate=ok dependency_gate=ok | -> queue 'landing' eligible to land",
+    "service": "engine",
+    "event": "gate.evaluated",
+    "repo": "acme/widgets",
+    "pr.ref": "acme/widgets PR#6",
+    "artifact.ref": "acme/widgets PR#6",
+    "gates": "ci_gate=ok dependency_gate=ok"
+  },
+  "target": "temper::engine",
+  "span": { "name": "work_item", "artifact.ref": "acme/widgets PR#6" }
+}
