@@ -43,13 +43,29 @@ export function createApp(deps: AppDeps): App {
   es.onmessage = (m) => dispatch(JSON.parse(m.data) as Event);
   es.onerror = () => dispatch({ t: "pipe", pipe: "dead" });
 
-  // user events -> dispatch (delegated; never touch state/DOM directly)
+  // user events -> dispatch (delegated; never touch state/DOM directly).
+  // Order matters: a close affordance (the ✕ button or the scrim) wins over the
+  // card-open path, so a click inside the drawer's chrome doesn't re-open.
   deps.root.addEventListener("click", (e) => {
-    const el = (e.target as HTMLElement).closest("[data-card]");
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-close]") || target.closest('[data-region="scrim"]')) {
+      dispatch({ t: "close" });
+      return;
+    }
+    const el = target.closest("[data-card]");
     if (el) dispatch({ t: "open", id: (el as HTMLElement).dataset.card! });
   });
   deps.root.ownerDocument.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Escape") dispatch({ t: "close" });
+  });
+
+  // theme toggle — a DOM-only side effect (NOT model state, UX §4: "a token
+  // swap only — no view code changes"). The button lives in the static shell
+  // (index.html header), outside #root, so wire it off the document.
+  const themeBtn = deps.root.ownerDocument.getElementById("theme");
+  themeBtn?.addEventListener("click", () => {
+    const r = deps.root.ownerDocument.documentElement;
+    r.dataset.theme = r.dataset.theme === "light" ? "dark" : "light";
   });
 
   function stop() {
