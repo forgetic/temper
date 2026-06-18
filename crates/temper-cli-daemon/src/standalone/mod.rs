@@ -297,9 +297,12 @@ async fn run_async(
     // …` line (WI-3), so this stays at debug to keep `RUST_LOG=info` to the §7
     // catalog. (The analogous line in the engine daemon handle is already debug.)
     let local_addr = server.local_addr();
+    let message = serving_debug_message(local_addr);
     tracing::debug!(
+        target: "temper::engine",
+        service = "engine",
         addr = %local_addr,
-        "engine: serving on {local_addr}"
+        "{message}"
     );
 
     // §7 readiness line: everything is up and the daemon is idle, watching its
@@ -364,5 +367,25 @@ impl temper_worker::ProgressSink for InProcessProgressSink {
         self.handle.spawn_with_cx(move |_cx| async move {
             let _ = daemon.deliver_protocol_message(message).await;
         });
+    }
+}
+
+fn serving_debug_message(addr: impl std::fmt::Display) -> String {
+    format!(
+        "{}serving on {addr}",
+        temper_log::Service::Engine.human_prefix()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serving_debug_message;
+
+    #[test]
+    fn serving_debug_message_uses_padded_engine_prefix() {
+        let message = serving_debug_message("127.0.0.1:8314");
+
+        assert_eq!(message, "engine:  serving on 127.0.0.1:8314");
+        assert_eq!(&message[.."engine:  ".len()], "engine:  ");
     }
 }
