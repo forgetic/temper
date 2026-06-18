@@ -382,3 +382,82 @@ fn malformed_request_body() {
         assert_eq!(response.status, 400);
     })
 }
+
+/// `GET /v1/state` returns the live snapshot, and `GET /v1/state/job/{id}`
+/// returns one in-flight job (or 404). End-to-end over the real H1 server,
+/// pinning that the new read-only routes are wired into `handle_http`.
+#[test]
+fn state_snapshot_and_job_routes_serve_live_daemon_state() {
+    temper_engine_io::block_on_with(move |_cx, handle| async move {
+        let (daemon, message_url) = spawn(&handle).await;
+        let base = message_url
+            .strip_suffix("/v1/message")
+            .expect("message url ends with the message path")
+            .to_string();
+        let client = JsonClient::new();
+
+        // No workers, no jobs yet -> empty but well-formed snapshot.
+        let (status, empty) = client
+            .send_expect_json("GET", format!("{base}/v1/state"), None, None, "state")
+            .await;
+        assert_eq!(status, 200);
+        assert_eq!(empty["workers"], json!({ "healthy": 0, "total": 0 }));
+        assert_eq!(empty["queued"], json!([]));
+        assert_eq!(empty["in_flight"], json!([]));
+
+        // Register a worker, enqueue, and dispatch one job into flight.
+        assert_eq!(
+            post(
+                &client,
+                &message_url,
+                &register("w-1", "engineer", "ai/temper", 1)
+            )
+            .await
+            .status,
+            204
+        );
+        daemon
+            .enqueue_job(
+                "job-1",
+                "engineer",
+                "ai/temper",
+                artifact(),
+                json!({"k": 1}),
+            )
+            .await;
+        match post_json(&client, &message_url, &poll("w-1")).await {
+            WorkerProtocolMessage::Assign(assign) => assert_eq!(assign.job_id, "job-1"),
+            other => panic!("expected assign, got {other:?}"),
+        }
+
+        // Snapshot now reflects the in-flight job + worker tile.
+        let (status, snapshot) = client
+            .send_expect_json("GET", format!("{base}/v1/state"), None, None, "state")
+            .await;
+        assert_eq!(status, 200);
+        assert_eq!(snapshot["workers"], json!({ "healthy": 1, "total": 1 }));
+        assert_eq!(snapshot["in_flight"][0]["job_id"], json!("job-1"));
+        assert_eq!(snapshot["in_flight"][0]["ref"], json!("ai/temper#103"));
+
+        // The per-job route returns that in-flight job.
+        let (status, job) = client
+            .send_expect_json(
+                "GET",
+                format!("{base}/v1/state/job/job-1"),
+                None,
+                None,
+                "job",
+            )
+            .await;
+        assert_eq!(status, 200);
+        assert_eq!(job["job_id"], json!("job-1"));
+        assert_eq!(job["ref"], json!("ai/temper#103"));
+
+        // An unknown job is a 404.
+        let missing = client
+            .send("GET", format!("{base}/v1/state/job/nope"), None, None)
+            .await
+            .expect("send job lookup");
+        assert_eq!(missing.status, 404);
+    })
+}

@@ -14,6 +14,7 @@ mod handle;
 mod handlers;
 mod machine;
 mod protocol;
+pub mod state_dto;
 mod webhook_wiring;
 
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use temper_engine_io::CqSender;
 use machine::DaemonCompletion;
 
 pub use handle::{h1_handler, serve};
+pub use state_dto::{ArtifactDto, DaemonStateSnapshot, JobDto, RoleSaturationDto, WorkersDto};
 
 /// Worker-protocol + webhook transport handle for one daemon process. See the
 /// module docs for the machine/executor split.
