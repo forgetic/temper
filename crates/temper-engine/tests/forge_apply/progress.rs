@@ -47,6 +47,38 @@ fn started_progress_checkpoints_do_not_create_issue_comments() {
 }
 
 #[test]
+fn started_open_pr_progress_claims_source_issue() {
+    temper_engine_io::block_on(async move {
+        let root = MemoryForge::new();
+        let repo = new_repo(&root, "stable").await;
+        let issue = create_ready_issue(&root, &repo).await;
+        let forge = Arc::new(root.as_user(role_user("engineer")));
+        let applier = ForgeApplier::new(forge, Arc::new(workflow()));
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let correlation = correlation_key(issue);
+
+        applier
+            .apply_progress(
+                job,
+                progress(&correlation, 1, "started", "start engineer run", None, None),
+            )
+            .await;
+
+        let issue = root
+            .get_issue_by_number(&repo, issue)
+            .await
+            .expect("issue lookup succeeds")
+            .expect("issue exists");
+        assert_eq!(
+            issue.labels,
+            vec!["code".to_string(), "in-progress".to_string()]
+        );
+        assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
+        assert!(issue_comments(&root, &repo, issue.number).await.is_empty());
+    })
+}
+
+#[test]
 fn phase_done_progress_ticks_matching_pr_checklist_once() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());

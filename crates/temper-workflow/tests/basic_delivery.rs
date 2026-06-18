@@ -276,6 +276,9 @@ fn architect_triage_has_a_single_outcome_into_ready_code() {
             WorkflowEffect::RemoveLabel(LabelId::new("untriaged")),
             WorkflowEffect::AddLabel(LabelId::new("code")),
             WorkflowEffect::AddLabel(LabelId::new("ready")),
+            WorkflowEffect::SetAssignee {
+                role: architect.clone(),
+            },
         ]
     );
 }

@@ -88,6 +88,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 return;
             }
         };
+        self.apply_source_action_claim(&job).await;
+
         let source_kind = ArtifactKindId::new(context.artifact_kind.clone());
         // The coordination key keys every PR in the set; fall back to the
         // single-issue correlation key when the payload carries no manifest.
@@ -127,6 +129,9 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         for index in order {
             self.open_coordinated_pr(&set, &result.repos[index], &mut opened)
                 .await;
+        }
+        if !opened.is_empty() {
+            self.clear_source_action_working_labels(&job).await;
         }
     }
 

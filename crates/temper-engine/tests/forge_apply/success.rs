@@ -40,6 +40,42 @@ fn engineer_decline_verdicts_route_issue_without_opening_pr() {
 }
 
 #[test]
+fn success_result_finalizes_source_issue_claim_state() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let root = MemoryForge::new();
+        let repo = new_repo(&root, "stable").await;
+        let issue = create_ready_issue(&root, &repo).await;
+        let forge = Arc::new(root.as_user(role_user("engineer")));
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge, workflow);
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let branch_name = format!("agent/pr-for-code-{}", issue.get());
+
+        applier
+            .apply(
+                job.clone(),
+                success_result(
+                    "worker-a",
+                    &job.job_id,
+                    &job.repo,
+                    &branch_name,
+                    "implemented docs update",
+                ),
+            )
+            .await;
+
+        wait_for_pull_request_count(&cx, &root, &repo, 1).await;
+        let issue = root
+            .get_issue_by_number(&repo, issue)
+            .await
+            .expect("issue lookup succeeds")
+            .expect("issue exists");
+        assert_eq!(issue.labels, vec!["code".to_string()]);
+        assert_eq!(issue.assignees, vec![UserId::new("engineer")]);
+    })
+}
+
+#[test]
 fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
     temper_engine_io::block_on_with(move |cx, handle| async move {
         let forge = Arc::new(MemoryForge::new());

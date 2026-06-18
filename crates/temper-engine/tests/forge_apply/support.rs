@@ -10,7 +10,7 @@ pub(crate) use temper_engine::{
 pub(crate) use temper_forge::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, Issue, IssueQuery,
     ItemNumber, PullRequest, PullRequestQuery, PullRequestReview, RepositoryId, ReviewDecision,
-    UpdateIssue, UpdatePullRequest, UserId,
+    UpdateIssue, UpdatePullRequest, User, UserId,
 };
 pub(crate) use temper_forge_memory::MemoryForge;
 pub(crate) use temper_protocol_worker::{
@@ -38,6 +38,15 @@ pub(crate) fn ts(value: &str) -> chrono::DateTime<chrono::Utc> {
 
 pub(crate) fn policy() -> LeasePolicy {
     LeasePolicy::new(chrono::Duration::seconds(300))
+}
+
+pub(crate) fn role_user(role: &str) -> User {
+    User {
+        id: UserId::new(role),
+        handle: role.to_string(),
+        display_name: None,
+        email: None,
+    }
 }
 
 pub(crate) async fn new_repo(forge: &MemoryForge, default_branch: &str) -> RepositoryId {
