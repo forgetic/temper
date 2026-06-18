@@ -20,6 +20,13 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 temper-log = { path = "../temper-log" }
 temper-workflow = { path = "../temper-workflow" }
+# PR E (conversation SSE proxy): reuse the conversation wire types directly
+# instead of re-declaring parallel ones. The `ConversationEvent` envelope and
+# `ConversationEventPayload` enum live in `temper-interaction` (its `transport`
+# module); the protocol crate only carries the inner turn/reply/proposal types.
+# Depending on `temper-interaction` is how we keep one source of truth for the
+# JSON contract the chat UI consumes (no drift) — see depgraph-rules.toml.
+temper-interaction = { path = "../temper-interaction" }
 
 [lints]
 workspace = true

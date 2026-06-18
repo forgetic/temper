@@ -27,6 +27,12 @@ pub struct WebConfig {
     /// Path to the `temper-log` JSON-lines file to tail for live deltas, if any.
     /// `None` serves the cold-start snapshot without live updates.
     pub log_path: Option<PathBuf>,
+    /// Base URL of the interaction-service's REST API (e.g.
+    /// `http://127.0.0.1:8077`), if a conversation backend is configured. `Some`
+    /// enables the conversation SSE proxy (feed 2); `None` runs the chat surface
+    /// standalone — the proxy routes report 503 and the SSE stream emits only
+    /// keep-alives (the chat page connects cleanly, just idle).
+    pub interaction_url: Option<String>,
     /// Keep-alive cadence for the SSE pulse, in milliseconds (UX §6.3: ~15s).
     pub keep_alive_ms: u64,
 }
@@ -44,6 +50,7 @@ impl WebConfig {
             ui_dir,
             daemon_url: None,
             log_path: None,
+            interaction_url: None,
             keep_alive_ms: Self::DEFAULT_KEEP_ALIVE_MS,
         }
     }
@@ -59,6 +66,7 @@ mod tests {
             WebConfig::standalone("127.0.0.1:8080".parse().unwrap(), PathBuf::from("/srv/ui"));
         assert!(cfg.daemon_url.is_none());
         assert!(cfg.log_path.is_none());
+        assert!(cfg.interaction_url.is_none());
         assert_eq!(cfg.keep_alive_ms, WebConfig::DEFAULT_KEEP_ALIVE_MS);
     }
 }

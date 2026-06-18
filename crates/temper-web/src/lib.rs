@@ -20,8 +20,11 @@
 //!   ([`project::snapshot`]) and lane derivation ([`project::lanes`]).
 //! - [`feeds`] — feed adapters: the log-tail parser ([`feeds::logtail`], feed 1b)
 //!   and the cold-start snapshot source seam ([`feeds::snapshot_source`], feed 1a).
+//! - [`conversation`] — feed 2: the conversation SSE proxy. A poller turns the
+//!   interaction-service's poll-based events into a `/conversations/events` SSE
+//!   stream and forwards the turn/accept/new POSTs, reusing [`server::sse`]'s hub.
 //! - [`server`] — the blocking HTTP + SSE server and its reusable SSE machinery
-//!   ([`server::sse`], which PR E's conversation proxy reuses).
+//!   ([`server::sse`], reused by both the board feed and the conversation proxy).
 //! - [`config`] — the explicit [`config::WebConfig`] (no ambient env in lib code).
 //!
 //! # Server note
@@ -33,6 +36,7 @@
 
 pub mod board;
 pub mod config;
+pub mod conversation;
 pub mod feeds;
 pub mod project;
 pub mod readmodel;

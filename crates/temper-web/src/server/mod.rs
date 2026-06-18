@@ -37,6 +37,7 @@ use std::time::Duration;
 
 use crate::board::BoardEvent;
 use crate::config::WebConfig;
+use crate::conversation::ConversationProxy;
 use crate::feeds::logtail::{LogLineSource, LogTailAdapter};
 use crate::feeds::snapshot_source::SnapshotSource;
 use crate::project::lanes::LaneMap;
@@ -71,13 +72,48 @@ impl Response {
             body: b"not found".to_vec(),
         }
     }
+
+    /// A 503 used when the conversation proxy is disabled (no `interaction_url`).
+    fn service_unavailable(message: &'static str) -> Self {
+        Self {
+            status: 503,
+            reason: "Service Unavailable",
+            content_type: "text/plain; charset=utf-8",
+            body: message.as_bytes().to_vec(),
+        }
+    }
+
+    /// A 502 used when the upstream interaction-service is unreachable.
+    fn bad_gateway() -> Self {
+        Self {
+            status: 502,
+            reason: "Bad Gateway",
+            content_type: "text/plain; charset=utf-8",
+            body: b"interaction-service unreachable".to_vec(),
+        }
+    }
+
+    /// Pass an upstream interaction-service JSON response through with its status.
+    fn passthrough(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            // The status line reason is cosmetic; the body carries the truth.
+            reason: "OK",
+            content_type: "application/json",
+            body,
+        }
+    }
 }
 
-/// Shared server state: the read-model and the SSE fan-out hub.
+/// Shared server state: the read-model, the board SSE fan-out hub, and the
+/// optional conversation proxy (feed 2). The conversation proxy is `None` when no
+/// `interaction_url` is configured — the chat routes then report a clear 503 but
+/// the server still boots and the board feed works.
 pub struct AppState {
     model: Mutex<ReadModel>,
     broadcaster: Broadcaster,
     ui_dir: std::path::PathBuf,
+    conversation: Option<Arc<ConversationProxy>>,
 }
 
 impl AppState {
@@ -98,10 +134,26 @@ impl AppState {
             model: Mutex::new(model),
             broadcaster: Broadcaster::new(),
             ui_dir,
+            conversation: None,
         }
     }
 
-    /// The SSE hub (shared with PR E's conversation proxy).
+    /// Attach the conversation proxy (feed 2). Called at the binary entry when an
+    /// `interaction_url` is configured; absent, the chat routes report 503.
+    #[must_use]
+    pub fn with_conversation_proxy(mut self, proxy: Arc<ConversationProxy>) -> Self {
+        self.conversation = Some(proxy);
+        self
+    }
+
+    /// The conversation proxy, if one is attached.
+    #[must_use]
+    pub fn conversation(&self) -> Option<&Arc<ConversationProxy>> {
+        self.conversation.as_ref()
+    }
+
+    /// The board SSE hub (the `/events` board feed; the conversation proxy owns
+    /// its own hub for `/conversations/events`).
     #[must_use]
     pub fn broadcaster(&self) -> Broadcaster {
         self.broadcaster.clone()
@@ -220,8 +272,9 @@ pub fn serve(state: Arc<AppState>, config: &WebConfig) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Handle one connection: route a buffered request, or — for `/events` — upgrade
-/// to a long-lived SSE stream (snapshot greeting, then live frames + keep-alive).
+/// Handle one connection: route a buffered request, or — for the board `/events`
+/// and conversation `/conversations/events` paths — upgrade to a long-lived SSE
+/// stream. POST conversation routes read the body and forward it upstream.
 fn handle_connection(
     mut stream: TcpStream,
     state: &AppState,
@@ -230,17 +283,26 @@ fn handle_connection(
     let request = {
         let mut reader =
             BufReader::new(stream.try_clone().expect("clone stream for buffered read"));
-        request::read_request_line(&mut reader)
+        request::read_request(&mut reader)
     };
     let Some(request) = request else {
         return Ok(()); // closed/empty connection
     };
+    let method = request.line.method.as_str();
+    let path_only = request.line.path_only();
 
-    if request.method == "GET" && request.path_only() == "/events" {
+    if method == "GET" && path_only == "/events" {
         return serve_events(stream, state, keep_alive);
     }
+    if method == "GET" && path_only == "/conversations/events" {
+        return serve_conversation_events(stream, state, keep_alive);
+    }
 
-    let response = route(state, &request.method, request.path_only());
+    let response = if method == "POST" && path_only.starts_with("/conversations") {
+        route_conversation_post(state, path_only, &request.body)
+    } else {
+        route(state, method, path_only)
+    };
     request::write_response(
         &mut stream,
         response.status,
@@ -248,6 +310,37 @@ fn handle_connection(
         response.content_type,
         &response.body,
     )
+}
+
+/// Route a `POST /conversations…` proxy request to the interaction-service via
+/// the injected client, passing its response through. Returns 503 when the proxy
+/// is disabled (no `interaction_url`) and 502 when the upstream is unreachable.
+fn route_conversation_post(state: &AppState, path_only: &str, body: &[u8]) -> Response {
+    let Some(proxy) = state.conversation() else {
+        return Response::service_unavailable("conversation proxy disabled (no interaction_url)");
+    };
+    let body = String::from_utf8_lossy(body);
+    let segments: Vec<&str> = path_only
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    // Mirror the interaction-service's own route shapes (verified in its http.rs).
+    let result = match segments.as_slice() {
+        ["conversations"] => proxy.forward_new_conversation(&body),
+        ["conversations", id, "turns"] => proxy.forward_turn(id, &body),
+        ["conversations", id, "proposals", proposal_id, "accept"] => {
+            proxy.forward_accept(id, proposal_id)
+        }
+        _ => return Response::not_found(),
+    };
+    match result {
+        Ok(upstream) => Response::passthrough(upstream.status, upstream.body.into_bytes()),
+        Err(error) => {
+            tracing::debug!(target: "temper_web", %error, "conversation forward failed");
+            Response::bad_gateway()
+        }
+    }
 }
 
 /// Stream the board SSE feed on this connection: send the SSE head, the
@@ -268,6 +361,40 @@ fn serve_events(
         stream.flush()?;
     }
 
+    pump_subscription(&mut stream, &subscription, keep_alive)
+}
+
+/// Stream the conversation SSE feed (feed 2) on this connection: send the SSE
+/// head, then live `ConversationEvent` frames as the poller produces them, with
+/// periodic keep-alives. The chat page seeds its own transcript (from
+/// `GET /conversations`), so there is no cold-start greeting frame here.
+///
+/// When the proxy is disabled (no `interaction_url`), the stream still opens and
+/// emits only keep-alives — the chat page connects cleanly and shows an idle, live
+/// pipe rather than a failed `EventSource` (matching how the board degrades).
+fn serve_conversation_events(
+    mut stream: TcpStream,
+    state: &AppState,
+    keep_alive: Duration,
+) -> std::io::Result<()> {
+    stream.write_all(sse::sse_response_head().as_bytes())?;
+    stream.flush()?;
+
+    let Some(proxy) = state.conversation() else {
+        return keep_alive_only(&mut stream, keep_alive);
+    };
+    let subscription = proxy.broadcaster().subscribe();
+    pump_subscription(&mut stream, &subscription, keep_alive)
+}
+
+/// Drive an SSE subscription to a socket: write each broadcast frame, and on a
+/// quiet interval send a keep-alive so the client's pulse can tell idle from dead.
+/// A write/flush error (client closed) ends the loop by propagating.
+fn pump_subscription(
+    stream: &mut TcpStream,
+    subscription: &sse::Subscription,
+    keep_alive: Duration,
+) -> std::io::Result<()> {
     loop {
         match subscription.recv_timeout(keep_alive) {
             Ok(frame) => stream.write_all(frame.as_bytes())?,
@@ -280,6 +407,15 @@ fn serve_events(
         stream.flush()?;
     }
     Ok(())
+}
+
+/// Emit only keep-alives forever (the disabled-proxy idle stream).
+fn keep_alive_only(stream: &mut TcpStream, keep_alive: Duration) -> std::io::Result<()> {
+    loop {
+        std::thread::sleep(keep_alive);
+        stream.write_all(sse::keep_alive().as_bytes())?;
+        stream.flush()?;
+    }
 }
 
 #[cfg(test)]
