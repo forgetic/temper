@@ -65,7 +65,14 @@ Options:
   --repo          <owner/name>  Managed repository to provision
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --provider      <deepseek>    LLM provider profile (only deepseek today)
-  -h, --help                    Print help";
+  --non-interactive             Run without prompts; all required values must
+                                be supplied via flags or environment variables
+  --admin-user   <VALUE>        Forgejo admin username (only non-interactive)
+  -h, --help                    Print help
+
+Environment variables (only honoured with --non-interactive):
+  TEMPER_INIT_ADMIN_PASSWORD    Forgejo admin password
+  TEMPER_INIT_PROVIDER_KEY      LLM provider API key";
 
 /// Everything `temper init` needs that is *not* gathered interactively: the
 /// resolved file targets, the clobber flag, the workspace root, and whether the
@@ -83,6 +90,9 @@ pub struct InitOptions {
     pub topology: InitTopology,
     /// Non-interactive answers selected by local-dev flags.
     pub overrides: InitOverrides,
+    /// Run without prompts; all required values must be supplied via flags or
+    /// environment variables.
+    pub non_interactive: bool,
     /// The per-job worker workspace root written into `[worker] workspace`.
     /// `None` lets the daemon's default (`~/.local/state/temper/workspace`)
     /// apply by omitting the key.
@@ -160,16 +170,26 @@ pub fn main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let opts = InitOptions {
+    let mut opts = InitOptions {
         options: parsed.options,
         force: parsed.force,
         existing_repo: parsed.existing_repo,
         topology: parsed.topology,
         overrides: parsed.overrides,
+        non_interactive: parsed.non_interactive,
         workspace: None,
         env: env.clone(),
         paths: paths.clone(),
     };
+
+    // Resolve env-only secret overrides. They are only honoured when
+    // --non-interactive is set; collect_answers enforces that gate.
+    if let Some(pw) = env.get("TEMPER_INIT_ADMIN_PASSWORD") {
+        opts.overrides.admin_password = Some(pw);
+    }
+    if let Some(key) = env.get("TEMPER_INIT_PROVIDER_KEY") {
+        opts.overrides.provider_key = Some(key);
+    }
     let mut prompter = TerminalPrompter::stdio();
     let mut provisioner = ForgejoProvisioner;
     match run_init(&mut prompter, &mut provisioner, &opts) {
@@ -193,7 +213,7 @@ pub fn run_init(
     opts: &InitOptions,
 ) -> Result<(), InitError> {
     // 1. Collect answers (prompts only).
-    let answers = collect_answers(p, &opts.overrides)?;
+    let answers = collect_answers(p, &opts.overrides, opts.non_interactive)?;
 
     // 2. Build the artifacts (pure) and preflight every local target up front.
     let artifacts = build_artifacts(&answers, opts)?;
