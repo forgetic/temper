@@ -32,13 +32,37 @@ let root: HTMLElement;
 let feed: FakeEventSource;
 let app: ChatApp;
 let postAccept: ReturnType<typeof vi.fn>;
+let postTurn: ReturnType<typeof vi.fn>;
+let postNewConversation: ReturnType<typeof vi.fn>;
+// A controllable timer seam: capture the scheduled callback so a test can fire
+// the toast auto-dismiss synchronously, no fake clocks.
+let pendingTimer: (() => void) | null;
+let cancelledTimer: boolean;
 
 beforeEach(() => {
   document.body.innerHTML = `<div id="root"></div>`;
   root = document.getElementById("root")!;
   feed = new FakeEventSource("/conversations/events");
   postAccept = vi.fn();
-  app = createChatApp({ root, eventSource: () => feed, postAccept, seed: seed() });
+  postTurn = vi.fn();
+  postNewConversation = vi.fn();
+  pendingTimer = null;
+  cancelledTimer = false;
+  app = createChatApp({
+    root,
+    eventSource: () => feed,
+    postAccept,
+    postTurn,
+    postNewConversation,
+    seed: seed(),
+    setTimer: (fn) => {
+      pendingTimer = fn;
+      return 1;
+    },
+    clearTimer: () => {
+      cancelledTimer = true;
+    },
+  });
 });
 
 describe("transcript renders from conversation events", () => {
@@ -92,6 +116,69 @@ describe("user interactions", () => {
     const toast = screen.getByTestId("toast");
     expect(toast.textContent).toContain("#142");
     expect(toast.textContent).toContain("now in the pipeline");
+    // the cross-surface affordance: a link back to the board
+    const link = within(toast).getByText("view board →") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("./index.html");
+  });
+
+  it("the accepted proposal outcome links to the created issue", () => {
+    pushConv(feed, { sequence: 1, conversation_id: "conversation-1", payload: { type: "agent_reply_appended", reply: { message: "draft", proposals: [{ id: "csv-export", kind: "issue", title: "Add CSV export", payload: {} }] } } });
+    pushConv(feed, { sequence: 2, conversation_id: "conversation-1", payload: { type: "proposal_accepted", proposal_id: "csv-export", created: true, target: { kind: "issue", number: 142, url: "https://forge.test/issues/142", title: "Add CSV export" } } });
+    const outcome = screen.getByLabelText("proposal outcome");
+    expect(outcome.textContent).toContain("created");
+    const link = within(outcome).getByText("issue #142") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://forge.test/issues/142");
+  });
+
+  it("the toast auto-dismisses when the injected timer fires", () => {
+    pushConv(feed, { sequence: 1, conversation_id: "conversation-1", payload: { type: "proposal_accepted", proposal_id: "csv-export", created: true, target: { kind: "issue", number: 142, title: "Add CSV export" } } });
+    expect(screen.getByTestId("toast")).toBeTruthy();
+    expect(pendingTimer).not.toBeNull(); // a dismiss was scheduled
+    pendingTimer!(); // fire the timer the controller scheduled
+    expect(screen.queryByTestId("toast")).toBeNull();
+  });
+});
+
+describe("composer", () => {
+  it("typing and pressing Enter sends: optimistic human turn + postTurn, input cleared", async () => {
+    const input = screen.getByLabelText("message") as HTMLTextAreaElement;
+    await userEvent.type(input, "export to CSV?");
+    await userEvent.keyboard("{Enter}");
+    // the human turn shows immediately (optimistic echo)
+    expect(within(screen.getByTestId("turns")).getByText("export to CSV?")).toBeTruthy();
+    // the POST seam was called for the active conversation
+    expect(postTurn).toHaveBeenCalledWith("conversation-1", "export to CSV?");
+    // input cleared; the agent is now shown "typing"
+    expect((screen.getByLabelText("message") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByTestId("typing")).toBeTruthy();
+  });
+
+  it("Shift+Enter inserts a newline and does NOT send", async () => {
+    const input = screen.getByLabelText("message") as HTMLTextAreaElement;
+    await userEvent.type(input, "line one");
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(postTurn).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("message") as HTMLTextAreaElement).value).toContain("\n");
+  });
+
+  it("clicking Send also sends the typed turn", async () => {
+    await userEvent.type(screen.getByLabelText("message"), "via the button");
+    await userEvent.click(screen.getByLabelText("send"));
+    expect(postTurn).toHaveBeenCalledWith("conversation-1", "via the button");
+    expect(within(screen.getByTestId("turns")).getByText("via the button")).toBeTruthy();
+  });
+
+  it("an empty/whitespace composer does not send", async () => {
+    await userEvent.type(screen.getByLabelText("message"), "   ");
+    await userEvent.keyboard("{Enter}");
+    expect(postTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe("new conversation", () => {
+  it("clicking + new conversation calls the injected seam", async () => {
+    await userEvent.click(screen.getByLabelText("new conversation"));
+    expect(postNewConversation).toHaveBeenCalledTimes(1);
   });
 });
 

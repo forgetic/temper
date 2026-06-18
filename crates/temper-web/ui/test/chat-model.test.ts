@@ -84,6 +84,53 @@ describe("chat reducer", () => {
     s = applyChat(s, evt(5, { type: "human_turn_appended", turn: { participant: { kind: "human" }, body: "dup" } }));
     expect(s.conversations["conversation-1"]!.turns).toHaveLength(1);
   });
+
+  it("selecting a conversation flips active without touching transcripts", () => {
+    const base = {
+      ...withConvo(),
+      conversations: {
+        ...withConvo().conversations,
+        "conversation-2": seedConversation({ id: "conversation-2", profile_id: "product-manager", transcript: { issue_number: 9, url: "u" } }),
+      },
+    };
+    const s = applyChat(base, { t: "select", id: "conversation-2" });
+    expect(s.active).toBe("conversation-2");
+    expect(s.conversations["conversation-1"]!.turns).toHaveLength(0); // untouched
+  });
+
+  it("agent.typing sets and clears the per-conversation flag", () => {
+    let s = applyChat(withConvo(), { t: "agent.typing", id: "conversation-1", on: true });
+    expect(s.conversations["conversation-1"]!.agentTyping).toBe(true);
+    s = applyChat(s, { t: "agent.typing", id: "conversation-1", on: false });
+    expect(s.conversations["conversation-1"]!.agentTyping).toBe(false);
+  });
+
+  it("toast.clear drops the cross-surface toast", () => {
+    let s = applyChat(withConvo(), evt(1, {
+      type: "proposal_accepted", proposal_id: "csv-export", created: true,
+      target: { kind: "issue", number: 142, title: "Add CSV export" },
+    }));
+    expect(s.toast).not.toBeNull();
+    s = applyChat(s, { t: "toast.clear" });
+    expect(s.toast).toBeNull();
+  });
+
+  it("an optimistic human turn appends locally WITHOUT advancing the cursor", () => {
+    // the optimistic echo shows the sent turn immediately...
+    let s = applyChat(withConvo(), { t: "human.optimistic", id: "conversation-1", body: "send me" });
+    const c1 = s.conversations["conversation-1"]!;
+    expect(c1.turns.at(-1)).toMatchObject({ participant: { kind: "human", display_name: "you" }, body: "send me" });
+    expect(c1.cursor).toBe(0); // no server sequence consumed
+    // ...so the server's own sequenced human_turn_appended still applies.
+    s = applyChat(s, evt(1, { type: "human_turn_appended", turn: { participant: { kind: "human" }, body: "from server" } }));
+    expect(s.conversations["conversation-1"]!.turns).toHaveLength(2);
+    expect(s.conversations["conversation-1"]!.cursor).toBe(1);
+  });
+
+  it("ignores an optimistic turn for an unknown conversation (no throw)", () => {
+    const s = applyChat(emptyChat(), { t: "human.optimistic", id: "nope", body: "x" });
+    expect(s.conversations).toEqual({});
+  });
 });
 
 describe("feed contract (Layer 3): the real /events shape replays cleanly", () => {
