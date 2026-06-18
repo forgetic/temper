@@ -26,7 +26,7 @@ in-process worker, and the coding agent all write to a **single log**:
 For the default single-repo run, expect (interleaved) in `logs/run.log`:
 
 ```text
-engine: serving on 127.0.0.1:38100
+engine:  serving on 127.0.0.1:38100
 worker: registered worker_id=basic-delivery-1 capabilities=2
 engine: webhook accepted repo=acme/service kind=Issue item=<n>
 engine: webhook wake scan repo=acme/service enqueued=1

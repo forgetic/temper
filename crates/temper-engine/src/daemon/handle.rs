@@ -206,12 +206,34 @@ pub async fn serve(
     // §5: WI-3's `trigger: webhook listener up …` banner is the operator-facing
     // line; this raw bind line is redundant detail, kept at debug for the addr.
     let local_addr = server.local_addr();
+    let message = serving_debug_message(local_addr);
     tracing::debug!(
-        target: "engine",
+        target: "temper::engine",
+        service = "engine",
         addr = %local_addr,
-        "engine: serving on {local_addr}"
+        "{message}"
     );
     Ok(server)
+}
+
+fn serving_debug_message(addr: impl std::fmt::Display) -> String {
+    format!(
+        "{}serving on {addr}",
+        temper_log::Service::Engine.human_prefix()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serving_debug_message;
+
+    #[test]
+    fn serving_debug_message_uses_padded_engine_prefix() {
+        let message = serving_debug_message("127.0.0.1:8314");
+
+        assert_eq!(message, "engine:  serving on 127.0.0.1:8314");
+        assert_eq!(&message[.."engine:  ".len()], "engine:  ");
+    }
 }
 
 /// The daemon's h1 request handler — the same request→completion conversion
