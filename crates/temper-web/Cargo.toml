@@ -1,0 +1,15 @@
+[package]
+name = "temper-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Foundation skeleton only. The HTTP/SSE server, read-model, and feed adapters
+# arrive in PR D; the daemon snapshot DTOs in PR C. This crate is deliberately
+# dependency-free for now so the workspace stays lean until those land.
+[dependencies]
+
+[lints]
+workspace = true

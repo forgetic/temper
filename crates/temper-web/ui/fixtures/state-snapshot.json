@@ -1,0 +1,16 @@
+{
+  "t": "snapshot",
+  "seq": 100,
+  "state": {
+    "workers": { "healthy": 3, "total": 3 },
+    "cards": {
+      "i42": { "id": "i42", "lane": "triage", "ref": "widgets#42", "role": "code", "title": "Add CSV export", "enteredAt": 0 },
+      "i39": { "id": "i39", "lane": "implement", "ref": "widgets#39", "role": "code", "title": "Refactor feed mapper", "enteredAt": 0, "steps": { "done": 3, "total": 4 }, "activity": { "kind": "tool", "text": "cargo test" } },
+      "p8": { "id": "p8", "lane": "review", "ref": "api PR#8", "role": "review", "title": "Webhook signature variants", "enteredAt": 0 },
+      "p6": { "id": "p6", "lane": "ci", "ref": "app PR#6", "role": "code", "title": "Report scheduler", "enteredAt": 0, "ci": "failed" }
+    },
+    "problems": {
+      "p6-ci": { "sev": "bad", "msg": "PR#6 CI failed: test_apply_idempotent", "card": "p6", "since": 0 }
+    }
+  }
+}

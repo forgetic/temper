@@ -1,0 +1,4 @@
+# Installed deps and the esbuild output are not committed. package-lock.json IS
+# committed (CI uses `npm ci`, which requires it).
+node_modules/
+dist/

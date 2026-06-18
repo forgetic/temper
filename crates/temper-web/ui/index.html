@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>temper · board</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- Persistent shell. The board view (view.ts, bundled to dist/board.js)
+       renders its DOM into #root via createApp; this header + #root are the only
+       static markup. Visual polish is PR A's job. -->
+  <header class="health">
+    <span class="brand">temper<small>/web</small></span>
+    <nav class="nav">
+      <a href="./index.html" aria-current="page">Board</a>
+      <a href="./chat.html">Chat</a>
+    </nav>
+    <button class="iconbtn" id="theme" title="toggle theme" aria-label="toggle theme">◐</button>
+  </header>
+
+  <div id="root"></div>
+
+  <script type="module" src="./dist/board.js"></script>
+</body>
+</html>

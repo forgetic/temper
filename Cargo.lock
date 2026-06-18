@@ -1953,6 +1953,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-web"
+version = "0.1.0"
+
+[[package]]
 name = "temper-worker"
 version = "0.1.0"
 dependencies = [

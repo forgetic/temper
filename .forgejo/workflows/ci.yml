@@ -62,3 +62,25 @@ jobs:
         env:
           TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "180"
         run: cargo dev-test-full
+
+  # The temper-web TypeScript UI (crates/temper-web/ui). Kept a separate job from
+  # the Rust `validate` job above so a TS failure is legible on its own and does
+  # not wait on (or block) the Rust build. Node 22 / npm 11 are already on the
+  # host runner's PATH, so no setup-node step is needed.
+  web:
+    runs-on: host
+    defaults:
+      run:
+        working-directory: crates/temper-web/ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install (npm ci)
+        # `npm ci` installs exactly the committed package-lock.json — fails if it
+        # is missing or out of sync with package.json.
+        run: npm ci
+      - name: Test (vitest)
+        run: npm test
+      - name: Build (esbuild)
+        # Proves the two bundles (dist/board.js, dist/chat.js) compile.
+        run: npm run build
