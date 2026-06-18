@@ -144,6 +144,18 @@ impl WorkerRegistry {
             .get(worker_id)
             .is_some_and(|entry| entry.healthy)
     }
+
+    /// Total registered workers, healthy or not. The `total` of the §4
+    /// `{healthy, total}` worker tile.
+    pub fn worker_count(&self) -> usize {
+        self.workers.len()
+    }
+
+    /// Registered workers currently marked healthy. The `healthy` of the §4
+    /// `{healthy, total}` worker tile.
+    pub fn healthy_worker_count(&self) -> usize {
+        self.workers.values().filter(|entry| entry.healthy).count()
+    }
 }
 
 impl WorkerEntry {

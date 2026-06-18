@@ -18,6 +18,7 @@ use super::protocol::{
     ResultDisposition, assignment_log_line, is_poll_timeout, progress_log_line, protocol_response,
     result_disposition, result_disposition_log_value, result_received_log_line,
 };
+use super::state_dto::{DaemonStateSnapshot, JobDto};
 
 impl DaemonMachine {
     pub(super) fn handle_http(
@@ -30,11 +31,42 @@ impl DaemonMachine {
             ("POST", "/forgejo/webhook") if self.webhook.is_some() => {
                 self.handle_webhook_delivery(&request, responder)
             }
+            ("GET", "/v1/state") => self.handle_state_snapshot(responder),
+            ("GET", uri) if uri.starts_with("/v1/state/job/") => {
+                let job_id = &uri["/v1/state/job/".len()..];
+                self.handle_state_job(job_id, responder)
+            }
             _ => vec![DaemonRequest::Respond {
                 responder,
                 response: HttpResponseData::status_only(404),
             }],
         }
+    }
+
+    /// Answers `GET /v1/state` with the full raw daemon dispatch snapshot.
+    ///
+    /// A pure in-process read over the single-threaded daemon core — no new
+    /// locking. The board (temper-web, PR D) projects this raw view into its
+    /// card model; see [`DaemonStateSnapshot`].
+    fn handle_state_snapshot(&self, responder: HttpResponder) -> Vec<DaemonRequest> {
+        let snapshot = DaemonStateSnapshot::from_core(&self.core);
+        vec![DaemonRequest::Respond {
+            responder,
+            response: HttpResponseData::json(200, &snapshot.to_json()),
+        }]
+    }
+
+    /// Answers `GET /v1/state/job/{id}` with one in-flight job DTO, or 404 when
+    /// the job is pending, unknown, or already completed.
+    fn handle_state_job(&self, job_id: &str, responder: HttpResponder) -> Vec<DaemonRequest> {
+        let response = match self.core.in_flight_job(job_id) {
+            Some(job) => HttpResponseData::json(200, &JobDto::from(&job).to_json()),
+            None => HttpResponseData::status_only(404),
+        };
+        vec![DaemonRequest::Respond {
+            responder,
+            response,
+        }]
     }
 
     fn handle_protocol_message(
