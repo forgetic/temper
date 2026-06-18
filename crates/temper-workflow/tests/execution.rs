@@ -8,13 +8,14 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge::{
-    BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, ItemNumber, PullRequestState,
-    RepositoryId, ReviewDecision, UserId,
+    BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, IssueState, ItemNumber,
+    PullRequestState, RepositoryId, ReviewDecision, UpdateIssue, UserId,
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
-    ArtifactSource, ExecutionContext, ExecutionError, Executor, PlanDiagnostic, RawWorkflowSpec,
-    RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect, parse_metadata_block,
+    ArtifactRef, ArtifactSource, ExecutionContext, ExecutionError, Executor, PlanDiagnostic,
+    RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    WorkflowMetadata, parse_metadata_block, render_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/ci-delivery.json");
@@ -568,4 +569,268 @@ fn missing_target_is_reported_distinctly() {
             target: ArtifactSource::Issue { .. }
         }
     ));
+}
+
+// ── close_parent_issues execution tests ──
+
+const CLOSE_PARENTS_FIXTURE: &str = r#"
+{
+  "name": "close-parents-execution",
+  "roles": [{"id": "engineer"}],
+  "labels": [
+    {"id": "code"},
+    {"id": "in-progress"},
+    {"id": "implementation"}
+  ],
+  "artifact_kinds": [
+    {"id": "code", "target": "issue", "identifying_labels": ["code"]},
+    {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+  ],
+  "transitions": [
+    {
+      "id": "land_pr",
+      "artifact": "implementation_pr",
+      "roles": ["engineer"],
+      "effects": [
+        {"kind": "merge_pull_request"},
+        {"kind": "close_parent_issues"}
+      ]
+    },
+    {
+      "id": "close_parent_only",
+      "artifact": "implementation_pr",
+      "roles": ["engineer"],
+      "effects": [
+        {"kind": "close_parent_issues"}
+      ]
+    }
+  ]
+}
+"#;
+
+fn close_parents_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(CLOSE_PARENTS_FIXTURE).expect("fixture valid JSON");
+    spec.validate()
+        .expect("close-parents fixture validates")
+}
+
+fn create_pr_with_body(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str], body: &str) -> ItemNumber {
+    block_on(forge.create_pull_request(
+        repo,
+        CreatePullRequest {
+            title: "implementation".into(),
+            body: body.to_string(),
+            source: BranchRef {
+                repository_id: repo.clone(),
+                branch: "feature".into(),
+            },
+            target: BranchRef {
+                repository_id: repo.clone(),
+                branch: "main".into(),
+            },
+            labels: labels.iter().map(|l| (*l).to_string()).collect(),
+            assignees: Vec::new(),
+        },
+    ))
+    .expect("pull request is created")
+    .number
+}
+
+#[test]
+fn close_parent_issues_closes_open_same_repo_parent() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = close_parents_workflow();
+    let repo = new_repo(&forge);
+
+    // Create a parent code issue with in-progress label.
+    let parent_number = create_issue(&forge, &repo, &["code", "in-progress"]);
+
+    // Create an implementation PR with metadata pointing to the parent.
+    let metadata = temper_workflow::WorkflowMetadata {
+        parents: vec![ArtifactRef::same_repo(parent_number)],
+        ..Default::default()
+    };
+    let block = temper_workflow::render_metadata_block(&metadata);
+    let pr_number = create_pr_with_body(&forge, &repo, &["implementation"], &block);
+
+    let executor = workflow.executor(&forge);
+    block_on(executor.execute(
+        &repo,
+        ArtifactSource::PullRequest { number: pr_number },
+        &TransitionId::new("close_parent_only"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("close_parent_issues executes on PR with parent metadata");
+
+    // Parent issue should now be closed and in-progress removed.
+    let parent = block_on(forge.get_issue_by_number(&repo, parent_number))
+        .expect("lookup succeeds")
+        .expect("parent issue exists");
+    assert_eq!(parent.state, IssueState::Closed);
+    assert!(!parent.labels.contains(&"in-progress".to_string()));
+}
+
+#[test]
+fn close_parent_issues_is_idempotent_on_already_closed_parent() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = close_parents_workflow();
+    let repo = new_repo(&forge);
+
+    // Create a parent issue already closed without in-progress.
+    let parent_number = create_issue(&forge, &repo, &["code"]);
+    // Pre-close it.
+    let parent_issue = block_on(forge.get_issue_by_number(&repo, parent_number))
+        .expect("lookup succeeds")
+        .expect("parent exists");
+    block_on(forge.update_issue(
+        &parent_issue.id,
+        UpdateIssue {
+            state: Some(IssueState::Closed),
+            ..UpdateIssue::default()
+        },
+    ))
+    .expect("close succeeds");
+
+    let metadata = temper_workflow::WorkflowMetadata {
+        parents: vec![ArtifactRef::same_repo(parent_number)],
+        ..Default::default()
+    };
+    let block = temper_workflow::render_metadata_block(&metadata);
+    let pr_number = create_pr_with_body(&forge, &repo, &["implementation"], &block);
+
+    let executor = workflow.executor(&forge);
+    block_on(executor.execute(
+        &repo,
+        ArtifactSource::PullRequest { number: pr_number },
+        &TransitionId::new("close_parent_only"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("close_parent_issues is idempotent on already-closed parent");
+
+    // Parent remains closed.
+    let parent = block_on(forge.get_issue_by_number(&repo, parent_number))
+        .expect("lookup succeeds")
+        .expect("parent issue exists");
+    assert_eq!(parent.state, IssueState::Closed);
+}
+
+#[test]
+fn close_parent_issues_handles_missing_metadata() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = close_parents_workflow();
+    let repo = new_repo(&forge);
+
+    // PR with no metadata block at all.
+    let pr_number = create_pr(&forge, &repo, &["implementation"]);
+
+    let executor = workflow.executor(&forge);
+    block_on(executor.execute(
+        &repo,
+        ArtifactSource::PullRequest { number: pr_number },
+        &TransitionId::new("close_parent_only"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("close_parent_issues with no metadata does not crash");
+}
+
+#[test]
+fn close_parent_issues_handles_non_existent_parent() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = close_parents_workflow();
+    let repo = new_repo(&forge);
+
+    // Metadata references a non-existent parent.
+    let metadata = temper_workflow::WorkflowMetadata {
+        parents: vec![ArtifactRef::same_repo(ItemNumber::new(999))],
+        ..Default::default()
+    };
+    let block = temper_workflow::render_metadata_block(&metadata);
+    let pr_number = create_pr_with_body(&forge, &repo, &["implementation"], &block);
+
+    let executor = workflow.executor(&forge);
+    block_on(executor.execute(
+        &repo,
+        ArtifactSource::PullRequest { number: pr_number },
+        &TransitionId::new("close_parent_only"),
+        &RoleId::new("engineer"),
+    ))
+    .expect("close_parent_issues with non-existent parent does not crash");
+}
+
+/// The basic-delivery fixture, used to verify the full `land_pr` transition.
+const BASIC_DELIVERY_FIXTURE: &str = include_str!("../fixtures/basic-delivery.json");
+
+fn basic_delivery_workflow() -> ValidatedWorkflow {
+    let spec: RawWorkflowSpec =
+        serde_json::from_str(BASIC_DELIVERY_FIXTURE).expect("basic-delivery fixture valid JSON");
+    spec.validate()
+        .expect("basic-delivery fixture validates")
+}
+
+#[test]
+fn basic_delivery_land_pr_closes_parent_code_issue() {
+    let root = TestRoot::new();
+    let forge = root.forge();
+    let workflow = basic_delivery_workflow();
+    let repo = new_repo(&forge);
+
+    // Create a parent code issue with in-progress label.
+    let parent_number = create_issue(&forge, &repo, &["code", "in-progress"]);
+
+    // Create an implementation PR with metadata pointing to the parent.
+    let metadata = WorkflowMetadata {
+        parents: vec![ArtifactRef::same_repo(parent_number)],
+        ..Default::default()
+    };
+    let block = render_metadata_block(&metadata);
+    let pr_number = create_pr_with_body(&forge, &repo, &["implementation"], &block);
+
+    // The basic-delivery `land_pr` transition requires CI + dependency gates.
+    // Provide CI-passed and empty dependencies (PR has no deps) so it plans.
+    let context = ExecutionContext::new();
+    let executor = workflow.executor_with_context(&forge, context);
+
+    // Pre-plan: check that land_pr plans with both merge and close parents.
+    let plan = block_on(executor.plan(
+        &repo,
+        ArtifactSource::PullRequest { number: pr_number },
+        &TransitionId::new("land_pr"),
+        &RoleId::new("mechanical"),
+    ))
+    .expect("land_pr plans with CI passed and no deps");
+    assert_eq!(
+        plan.effects,
+        vec![WorkflowEffect::MergePullRequest, WorkflowEffect::CloseParentIssues]
+    );
+
+    // Execute land_pr — merge + close parent issues.
+    let report = block_on(executor.execute(
+        &repo,
+        ArtifactSource::PullRequest { number: pr_number },
+        &TransitionId::new("land_pr"),
+        &RoleId::new("mechanical"),
+    ))
+    .expect("land_pr executes on a green PR");
+    assert_eq!(
+        report.applied,
+        vec![WorkflowEffect::MergePullRequest, WorkflowEffect::CloseParentIssues]
+    );
+
+    // The PR should now be merged.
+    let merged_pr = block_on(forge.get_pull_request_by_number(&repo, pr_number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    assert_eq!(merged_pr.state, PullRequestState::Merged);
+
+    // Parent code issue should now be closed and in-progress removed.
+    let parent = block_on(forge.get_issue_by_number(&repo, parent_number))
+        .expect("lookup succeeds")
+        .expect("parent issue exists");
+    assert_eq!(parent.state, IssueState::Closed);
+    assert!(!parent.labels.contains(&"in-progress".to_string()));
 }

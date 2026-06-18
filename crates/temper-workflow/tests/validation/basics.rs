@@ -142,3 +142,57 @@ fn compiler_style_apis_require_validated_workflow() {
     let workflow = spec.validate().expect("spec should validate");
     assert_eq!(compile_role_count(&workflow), 2);
 }
+
+#[test]
+fn close_parent_issues_effect_validates() {
+    let mut spec = valid_spec();
+    // Add a pull-request artifact kind and a transition that uses
+    // close_parent_issues so validation can resolve it.
+    spec.artifact_kinds.push(RawArtifactKind {
+        id: "implementation_pr".to_string(),
+        target: ArtifactTarget::PullRequest,
+        identifying_labels: vec!["implementation".to_string()],
+        initial_labels: Vec::new(),
+    });
+    spec.labels.push(RawLabel {
+        id: "implementation".to_string(),
+        description: None,
+    });
+    spec.transitions.push(RawTransition {
+        id: "land_pr".to_string(),
+        artifact: "implementation_pr".to_string(),
+        roles: vec!["engineer".to_string()],
+        requires_gates: Vec::new(),
+        effects: vec![RawEffect::CloseParentIssues],
+        outcomes: Default::default(),
+    });
+    // Assign engineer role to the new queue.
+    spec.roles[0].queues.push("landing".to_string());
+    spec.queues.push(RawQueue {
+        id: "landing".to_string(),
+        artifacts: vec!["implementation_pr".to_string()],
+        labels: Vec::new(),
+        any_of: Vec::new(),
+        min_depth: None,
+        max_age: None,
+        condition: None,
+        automation: None,
+        actions: Vec::new(),
+    });
+
+    let workflow = spec.validate().expect("spec with close_parent_issues validates");
+    let land = workflow
+        .transitions()
+        .iter()
+        .find(|t| t.id.as_str() == "land_pr")
+        .expect("land_pr transition is declared");
+    assert_eq!(
+        land.effects.len(),
+        1,
+        "close_parent_issues alone lands in the effect list"
+    );
+    assert!(matches!(
+        &land.effects[0],
+        temper_workflow::Effect::CloseParentIssues
+    ));
+}
