@@ -29,6 +29,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
     /// materializes PRs from the worker's repo outcomes.
     pub(super) async fn apply_source_action_claim(&self, job: &InFlightJob) {
         let Some(effects) = self.action_effects(job) else {
+            tracing::debug!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                role = %job.role,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                "forge applier found no source action effects to claim"
+            );
             return;
         };
         let include_label_effects = effects
@@ -36,6 +45,20 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }));
         let current_role_user = self.current_role_user(job).await;
         let mutation = claim_mutation(job, &effects, include_label_effects, current_role_user);
+        tracing::debug!(
+            target: "temper_daemon",
+            job_id = %job.job_id,
+            repo = %job.repo,
+            role = %job.role,
+            artifact_kind = %job.artifact.kind,
+            artifact_item = %job.artifact.item,
+            include_label_effects,
+            add_labels = mutation.add_labels.len(),
+            remove_labels = mutation.remove_labels.len(),
+            add_assignees = mutation.add_assignees.len(),
+            remove_assignees = mutation.remove_assignees.len(),
+            "forge applier computed source mutation"
+        );
         self.apply_source_mutation(job, mutation, "claim source action")
             .await;
     }
@@ -135,6 +158,16 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         operation: &'static str,
     ) {
         if mutation.is_empty() {
+            tracing::debug!(
+                target: "temper_daemon",
+                job_id = %job.job_id,
+                repo = %job.repo,
+                role = %job.role,
+                artifact_kind = %job.artifact.kind,
+                artifact_item = %job.artifact.item,
+                operation,
+                "forge applier skipped empty source mutation"
+            );
             return;
         }
 
