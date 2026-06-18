@@ -200,6 +200,25 @@ fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
 }
 
 #[test]
+fn plan_only_empty_commit_is_not_a_successful_product_diff() {
+    temper_worker_io::block_on(async {
+        let fixture = Fixture::new();
+        let executor = fixture.executor(AgentBehavior::PlanOnlyEmptyCommit.runner(), true);
+
+        let outcome = executor
+            .execute(assign("agent/pr-for-code-10", "pr-for-code-10"))
+            .await;
+
+        let message = expect_failure_class(outcome, FailureClass::Permanent);
+        assert!(
+            message.contains("agent produced no diff"),
+            "unexpected message: {message}"
+        );
+        assert_no_origin_branch(&fixture, "agent/pr-for-code-10");
+    });
+}
+
+#[test]
 fn checkpoint_committed_work_with_clean_tree_succeeds() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();

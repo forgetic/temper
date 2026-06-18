@@ -173,9 +173,9 @@ async fn repo_produced_diff(
     }
     prepared
         .workspace
-        .commits_ahead_of_base()
+        .tree_differs_from_base()
         .await
-        .map_err(|error| workspace_failure("inspect workspace commits", error))
+        .map_err(|error| workspace_failure("inspect workspace tree diff", error))
 }
 
 /// Builds the implementation commit message.

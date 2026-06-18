@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "The `temper daemon` subcommand: run the full standalone (all-in-one) daemon, or one of its services (engine, worker). Carries the heavy engine/worker/agent wiring; the in-process transport + agent runner live here."
 
 [dependencies]
+async-trait = { workspace = true }
 chrono = { workspace = true }
 skein = { workspace = true }
 tracing = { workspace = true }

@@ -22,6 +22,7 @@
 //! are crash-recovery checkpoints the worker relays onward to the forge.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use temper_protocol_agent::{StepProgress, WorkspaceContext};
 use temper_protocol_worker::FailureClass;
@@ -116,6 +117,6 @@ pub trait AgentRunner: Send + Sync {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        progress: &dyn ProgressSink,
+        progress: Arc<dyn ProgressSink>,
     ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send;
 }

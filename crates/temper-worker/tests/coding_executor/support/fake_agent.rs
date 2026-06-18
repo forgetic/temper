@@ -20,6 +20,9 @@ pub enum AgentBehavior {
     /// Engineer that checkpoint-commits and pushes its whole product itself
     /// (phase 6b), leaving a clean working tree for the executor.
     CheckpointCommits,
+    /// Engineer only creates the plan-publication empty commit; no product tree
+    /// diff exists, so the final head path must be rejected.
+    PlanOnlyEmptyCommit,
     /// Return a writable verdict the executor does not route (permanent).
     Verdict,
     /// Architect read-only `ready_code` verdict with a rewritten body.
@@ -90,7 +93,7 @@ impl AgentRunner for FakeAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        _progress: &dyn ProgressSink,
+        _progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
         *self.captured.lock().expect("capture lock") = Some(context.clone());
         // The agent's cwd is the workspace root; it edits inside each repo's
@@ -155,6 +158,24 @@ impl AgentRunner for FakeAgentRunner {
                 ]);
                 Ok(WorkspaceResult {
                     summary: Some("checkpointed the work".to_string()),
+                    ..WorkspaceResult::default()
+                })
+            }
+            AgentBehavior::PlanOnlyEmptyCommit => {
+                git_output([
+                    "-C",
+                    path_str(&repo_cwd),
+                    "-c",
+                    "user.name=Agent Plan",
+                    "-c",
+                    "user.email=agent@example.test",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "Publish implementation plan for pr-for-code-7",
+                ]);
+                Ok(WorkspaceResult {
+                    summary: Some("published a plan only".to_string()),
                     ..WorkspaceResult::default()
                 })
             }

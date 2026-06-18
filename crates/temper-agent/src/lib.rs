@@ -48,5 +48,6 @@ pub use provider::{
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, PROVIDER_BASE_URL_ENV, ProviderConfig,
     ProviderEnv, ProviderError, default_auth_path,
 };
+pub use temper_agent_core::TurnHook;
 pub use temper_protocol_interaction::{ConversationReply, ConversationRequest};
 pub use usage::RunTotals;

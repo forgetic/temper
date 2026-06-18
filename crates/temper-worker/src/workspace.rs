@@ -320,25 +320,24 @@ impl Workspace {
         Ok(stdout.trim().to_string())
     }
 
-    /// True when HEAD carries commits beyond the fetched base branch — the
-    /// agent checkpoint-committed (and pushed) work mid-run, so a clean
-    /// working tree can still hold a product.
-    pub async fn commits_ahead_of_base(&self) -> Result<bool, WorkspaceError> {
-        let range = format!("origin/{}..HEAD", self.base_branch);
+    /// True when HEAD's tree differs from the fetched base branch. A clean
+    /// working tree can still hold checkpoint-committed product work, but a
+    /// plan-publication empty commit leaves this false even though HEAD is ahead.
+    pub async fn tree_differs_from_base(&self) -> Result<bool, WorkspaceError> {
+        let base = format!("origin/{}", self.base_branch);
         let output = self
             .run_workspace_git(
                 false,
-                format!("git rev-list --count {range}"),
+                format!("git diff --name-only {base} HEAD"),
                 vec![
-                    OsString::from("rev-list"),
-                    OsString::from("--count"),
-                    OsString::from(range),
+                    OsString::from("diff"),
+                    OsString::from("--name-only"),
+                    OsString::from(base),
+                    OsString::from("HEAD"),
                 ],
             )
             .await?;
-        let count = String::from_utf8(output.stdout)
-            .map_err(|error| WorkspaceError::Utf8(error.to_string()))?;
-        Ok(count.trim() != "0")
+        Ok(!output.stdout.is_empty())
     }
 
     /// True when the working tree has any staged, unstaged, or untracked change.

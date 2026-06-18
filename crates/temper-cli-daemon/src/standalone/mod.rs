@@ -13,6 +13,7 @@
 
 mod agent_runner;
 mod banner;
+mod hooks;
 mod transport;
 
 pub use agent_runner::InProcessAgentRunner;

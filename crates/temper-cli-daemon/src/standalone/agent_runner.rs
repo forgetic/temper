@@ -13,6 +13,7 @@
 //! deployment keeps the subprocess `OutOfProcessRunner`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
@@ -57,12 +58,12 @@ impl AgentRunner for InProcessAgentRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        progress: &dyn ProgressSink,
+        progress: Arc<dyn ProgressSink>,
     ) -> impl std::future::Future<Output = Result<WorkspaceResult, AgentRunError>> + Send {
-        // v1 emits the start/finish boundary markers (the subprocess wrapper's
-        // outer markers); per-turn checkpoint markers are a follow-up (turn_hook =
-        // None here, so the executor commits the final diff itself).
-        let step = AtomicU32::new(1);
+        // Emit the same outer start/finish boundary markers as the subprocess
+        // wrapper; writable in-process runs also get live checkpoint and plan
+        // hooks wired below.
+        let step = Arc::new(AtomicU32::new(1));
         let role = context.work_item.role.clone();
         let correlation = context.correlation_key.clone();
 
@@ -98,6 +99,8 @@ impl AgentRunner for InProcessAgentRunner {
         let max_iterations = self.max_iterations;
         let config_dir = self.config_dir.clone();
         let enable_subagents = self.enable_subagents;
+        let hook_set =
+            super::hooks::hooks_for_context(context, cwd, Arc::clone(&progress), Arc::clone(&step));
         let context = context.clone();
         let cwd = cwd.to_path_buf();
 
@@ -111,12 +114,9 @@ impl AgentRunner for InProcessAgentRunner {
                 config_dir.as_deref(),
                 enable_subagents,
                 None,
-                // turn_hook: per-turn checkpointing in-process is a follow-up.
-                None,
-                // checkpoint_hook: ditto (the model-driven checkpoint tool).
-                None,
-                // publish_plan_hook: plan publication wiring is a follow-up.
-                None,
+                hook_set.turn_hook,
+                hook_set.checkpoint_hook,
+                hook_set.publish_plan_hook,
             )
             .await
             .map_err(classify_coding_agent_error);

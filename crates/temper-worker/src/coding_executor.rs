@@ -176,7 +176,7 @@ async fn execute<R: AgentRunner>(
     // agent mechanism and streams step-progress checkpoints to the sink; the
     // executor owns the workspace lifecycle around it.
     let result = match runner
-        .run(&workspace_context, &workspace_root, progress.as_ref())
+        .run(&workspace_context, &workspace_root, Arc::clone(&progress))
         .await
     {
         Ok(result) => result,

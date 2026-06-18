@@ -114,15 +114,17 @@ pub(crate) fn validate_contract(
             }
             // The cwd is the workspace root; a writable repo's product lives in
             // its own sibling dir. The run produced a product if ANY writable
-            // repo has working-tree changes or commits beyond its base branch (a
-            // checkpointing run may have committed/pushed, leaving a clean tree).
+            // repo has working-tree changes or a committed tree diff from its
+            // base branch. A plan-publication empty commit can put HEAD ahead
+            // with an identical tree, so commits-ahead alone is not product.
             let produced = context
                 .repos
                 .iter()
                 .filter(|repo| repo.is_writable())
                 .any(|repo| {
                     let dir = cwd.join(&repo.dir);
-                    working_tree_has_changes(&dir) || commits_ahead_of_base(&dir, &repo.base_branch)
+                    working_tree_has_changes(&dir)
+                        || tree_differs_from_base(&dir, &repo.base_branch)
                 });
             if produced {
                 Ok(())
@@ -142,24 +144,22 @@ pub(crate) fn validate_contract(
     }
 }
 
-/// Returns true when `HEAD` carries commits beyond `origin/<base_branch>` in
+/// Returns true when `HEAD`'s tree differs from `origin/<base_branch>` in
 /// `cwd` (checkpoint commits a phase-6b run pushed mid-run). Falls back to
 /// `false` when git cannot answer, leaving the working-tree check decisive.
-fn commits_ahead_of_base(cwd: &Path, base_branch: &str) -> bool {
+fn tree_differs_from_base(cwd: &Path, base_branch: &str) -> bool {
     let base_branch = base_branch.trim();
     if base_branch.is_empty() {
         return false;
     }
     std::process::Command::new("git")
-        .arg("rev-list")
-        .arg("--count")
-        .arg(format!("origin/{base_branch}..HEAD"))
+        .arg("diff")
+        .arg("--name-only")
+        .arg(format!("origin/{base_branch}"))
+        .arg("HEAD")
         .current_dir(cwd)
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|count| count.trim() != "0")
+        .map(|output| output.status.success() && !output.stdout.is_empty())
         .unwrap_or(false)
 }
 

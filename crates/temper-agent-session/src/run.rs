@@ -61,11 +61,7 @@ fn prepare_checkpointer(
     // Writable jobs checkpoint: commit + push at turn boundaries, resume from
     // prior checkpoints found on the prepared branch. Read-only jobs never
     // mutate the tree, so they run hook-less.
-    let writable = context
-        .checkout
-        .as_deref()
-        .map(|capability| capability == "writable")
-        .unwrap_or(true);
+    let writable = checkpoint_hooks_enabled(context);
     let checkpointer = writable.then(|| {
         Arc::new(Checkpointer::new(
             cwd,
@@ -135,6 +131,10 @@ fn drive_coding_loop(
     temper_agent_io::block_on_with(move |_cx, handle| async move {
         let turn_hook = checkpointer.as_ref().map(Checkpointer::as_turn_hook);
         let checkpoint_hook = checkpointer.as_ref().map(Checkpointer::as_checkpoint_hook);
+        let publish_plan_hook = checkpointer
+            .as_ref()
+            .filter(|_| publish_plan_enabled(&run_context))
+            .map(Checkpointer::as_publish_plan_hook);
         run_coding_agent_native_with_hooks(
             handle,
             &provider,
@@ -146,7 +146,7 @@ fn drive_coding_loop(
             resume_note.as_deref(),
             turn_hook,
             checkpoint_hook,
-            None,
+            publish_plan_hook,
         )
         .await
         // The session path doesn't surface token totals; drop them here.
@@ -173,6 +173,17 @@ fn finalize(
         plan_publication: None,
     });
     write_result(result_path, result)
+}
+
+fn checkpoint_hooks_enabled(context: &WorkspaceContext) -> bool {
+    matches!(
+        context.checkout.as_deref().unwrap_or("writable"),
+        "writable" | "pull_request_writable"
+    )
+}
+
+fn publish_plan_enabled(context: &WorkspaceContext) -> bool {
+    context.checkout.as_deref().unwrap_or("writable") == "writable"
 }
 
 fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), String> {

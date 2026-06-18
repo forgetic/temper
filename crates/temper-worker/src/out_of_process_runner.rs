@@ -24,6 +24,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use temper_protocol_agent::{StepProgress, WorkspaceContext};
 
@@ -65,7 +66,7 @@ impl AgentRunner for OutOfProcessRunner {
         &self,
         context: &WorkspaceContext,
         cwd: &Path,
-        progress: &dyn ProgressSink,
+        progress: Arc<dyn ProgressSink>,
     ) -> Result<WorkspaceResult, AgentRunError> {
         let Some((program, args)) = self.command.split_first() else {
             return Err(AgentRunError::permanent("agent command is empty"));
@@ -83,20 +84,17 @@ impl AgentRunner for OutOfProcessRunner {
             AgentRunError::transient(format!("write agent context file: {error}"))
         })?;
 
-        // The blocking child reads stdout line-by-line and pushes every parsed
-        // step-progress marker into the channel *as it arrives*, so a marker the
-        // agent emitted (after pushing its checkpoint) is captured even if the
-        // child later dies — the crash-recovery guarantee. We drain and relay
-        // after the child returns; relay latency does not affect recovery (the
-        // agent already pushed + emitted before any crash).
-        let (sender, mut receiver) = temper_worker_io::channel::<StepProgress>();
-
+        // The blocking child reads stdout line-by-line and reports every parsed
+        // step-progress marker to the sink *as it arrives*. A marker the agent
+        // emitted (after pushing its checkpoint) reaches the daemon even if the
+        // child later dies — the crash-recovery guarantee.
         let program_owned = program.clone();
         let args_owned: Vec<String> = args.to_vec();
         let env_owned: Vec<(String, String)> = self.env.clone();
         let cwd_owned = cwd.to_path_buf();
         let context_path_owned = context_path.clone();
         let result_path_owned = result_path.clone();
+        let progress_sink = Arc::clone(&progress);
         // `skein::runtime::spawn_blocking` returns the closure's value
         // directly (no JoinError wrapper), so the closure's own
         // `Result<ChildOutcome, AgentRunError>` is what comes back.
@@ -108,16 +106,10 @@ impl AgentRunner for OutOfProcessRunner {
                 &cwd_owned,
                 &context_path_owned,
                 &result_path_owned,
-                &sender,
+                progress_sink,
             )
         })
         .await;
-
-        // Relay every captured marker before interpreting the exit status, so a
-        // failing run still surfaces the progress it made.
-        while let Some(marker) = receiver.try_recv() {
-            progress.report(marker);
-        }
 
         let ChildOutcome {
             status_code,
@@ -163,7 +155,7 @@ fn run_child(
     cwd: &Path,
     context_path: &Path,
     result_path: &Path,
-    sender: &temper_worker_io::CqSender<StepProgress>,
+    progress: Arc<dyn ProgressSink>,
 ) -> Result<ChildOutcome, AgentRunError> {
     let mut command = Command::new(program);
     command
@@ -200,12 +192,8 @@ fn run_child(
         for line in reader.lines() {
             let Ok(line) = line else { break };
             match StepProgress::from_line(&line) {
-                Ok(Some(progress)) => {
-                    // Receiver dropped ⇒ nobody is relaying; stop parsing but let
-                    // the child finish (it owns the result file + pushed commits).
-                    if sender.send(progress).is_err() {
-                        break;
-                    }
+                Ok(Some(marker)) => {
+                    progress.report(marker);
                 }
                 Ok(None) => {}
                 Err(_) => {}
@@ -252,15 +240,102 @@ mod tests {
     }
 
     #[test]
+    fn relays_progress_before_child_exits() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let script = temp.path().join("agent.sh");
+        let release = temp.path().join("release");
+        let progress = StepProgress {
+            correlation_key: "pr-for-code-7".to_string(),
+            step: 1,
+            status: "start engineer run".to_string(),
+            state: temper_protocol_agent::StepState::Started,
+            pushed_sha: None,
+            note: None,
+            plan_publication: None,
+        };
+        let progress_json = progress.to_line().expect("progress json");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 result=\"\"\n\
+                 while [ $# -gt 0 ]; do\n\
+                   case \"$1\" in --result) result=\"$2\"; shift 2 ;; *) shift ;; esac\n\
+                 done\n\
+                 printf '%s\\n' '{}'\n\
+                 while [ ! -f '{}' ]; do sleep 0.05; done\n\
+                 printf '{{\"summary\":\"done\"}}' > \"$result\"\n",
+                progress_json,
+                release.display()
+            ),
+        )
+        .expect("write script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).expect("chmod");
+        }
+
+        let runner = OutOfProcessRunner::new(vec![script.display().to_string()]);
+        let context = test_context();
+        let cwd = temp.path().to_path_buf();
+        let sink = Arc::new(RecordingProgressSink::default());
+        let run_sink = sink.clone();
+        let handle = std::thread::spawn(move || {
+            temper_worker_io::block_on(async move { runner.run(&context, &cwd, run_sink).await })
+        });
+
+        let relayed_before_exit = sink.wait_for_marker(std::time::Duration::from_secs(2));
+        std::fs::write(&release, "ok").expect("release child");
+        let result = handle.join().expect("runner thread").expect("runner ok");
+        assert!(
+            relayed_before_exit,
+            "progress should be reported while child is still waiting for release"
+        );
+        assert_eq!(result.summary.as_deref(), Some("done"));
+        assert_eq!(sink.snapshot(), vec![progress]);
+    }
+
+    #[test]
     fn empty_command_is_a_permanent_error() {
         let runner = OutOfProcessRunner::new(Vec::new());
         let context = test_context();
         let cwd = std::env::temp_dir();
-        let sink = crate::agent_runner::NullProgressSink;
+        let sink = Arc::new(crate::agent_runner::NullProgressSink);
         let outcome =
-            temper_worker_io::block_on(async move { runner.run(&context, &cwd, &sink).await });
+            temper_worker_io::block_on(async move { runner.run(&context, &cwd, sink).await });
         let error = outcome.expect_err("empty command must fail");
         assert_eq!(error.class, temper_protocol_worker::FailureClass::Permanent);
+    }
+
+    #[derive(Default)]
+    struct RecordingProgressSink {
+        markers: std::sync::Mutex<Vec<StepProgress>>,
+        cvar: std::sync::Condvar,
+    }
+
+    impl ProgressSink for RecordingProgressSink {
+        fn report(&self, progress: StepProgress) {
+            self.markers.lock().expect("markers lock").push(progress);
+            self.cvar.notify_all();
+        }
+    }
+
+    impl RecordingProgressSink {
+        fn wait_for_marker(&self, timeout: std::time::Duration) -> bool {
+            let markers = self.markers.lock().expect("markers lock");
+            let (markers, _) = self
+                .cvar
+                .wait_timeout_while(markers, timeout, |markers| markers.is_empty())
+                .expect("cvar wait");
+            !markers.is_empty()
+        }
+
+        fn snapshot(&self) -> Vec<StepProgress> {
+            self.markers.lock().expect("markers lock").clone()
+        }
     }
 
     fn test_context() -> WorkspaceContext {

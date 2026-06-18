@@ -4,8 +4,9 @@
 //! turn boundaries, emit the matching step-progress markers, and recover a
 //! prior run's pushed checkpoints from the prepared branch.
 //!
-//! The same [`Checkpointer`] is both the mechanical backstop ([`TurnHook`]) and
-//! the model-driven checkpoint tool ([`CheckpointHook`]). Awaited by the agent
+//! The same [`Checkpointer`] is the mechanical backstop ([`TurnHook`]), the
+//! model-driven checkpoint tool ([`CheckpointHook`]), and the model-driven plan
+//! publication tool ([`PublishPlanHook`]). Awaited by the agent
 //! shell immediately before each model call — the previous turn's tool batch has
 //! fully drained, so the tree is quiescent. Failures are logged to stderr and
 //! swallowed: a checkpoint is an opportunistic crash-recovery point, never a
@@ -14,8 +15,10 @@
 //!
 //! [`TurnHook`]: temper_agent_core::TurnHook
 //! [`CheckpointHook`]: temper_agent::CheckpointHook
+//! [`PublishPlanHook`]: temper_agent::PublishPlanHook
 
 mod backstop;
+mod plan;
 mod resume;
 mod sync;
 
