@@ -30,14 +30,12 @@ createChatApp({
       { method: "POST" },
     );
   },
-  // PR E wires this to POST /conversations (open a new conversation against a
-  // profile). The created conversation arrives via conversation_opened on the
-  // feed; here we just kick the request and let the feed update the rail.
+  // PR E wires this to POST /conversations (open a new conversation). Profile
+  // selection belongs to PR E's real route — this composition-root stub stays
+  // provider-neutral and never names a concrete interaction profile; the
+  // created conversation arrives via conversation_opened on the feed and the
+  // feed updates the rail.
   postNewConversation: () => {
-    void fetch(`/conversations`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ profile_id: "product-manager" }),
-    });
+    void fetch(`/conversations`, { method: "POST" });
   },
 });
