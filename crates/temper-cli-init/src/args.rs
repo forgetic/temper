@@ -71,6 +71,12 @@ pub struct InitOverrides {
     pub repo: Option<RepoSelection>,
     /// Provider supplied by `--provider` (only `deepseek` is accepted today).
     pub provider: Option<String>,
+    /// Forgejo admin username supplied by `--admin-user` (only non-interactive).
+    pub admin_user: Option<String>,
+    /// Forgejo admin password from `TEMPER_INIT_ADMIN_PASSWORD` (only non-interactive).
+    pub admin_password: Option<String>,
+    /// LLM provider API key from `TEMPER_INIT_PROVIDER_KEY` (only non-interactive).
+    pub provider_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,6 +87,7 @@ pub(crate) struct ParsedInitArgs {
     pub(crate) existing_repo: bool,
     pub(crate) topology: InitTopology,
     pub(crate) overrides: InitOverrides,
+    pub(crate) non_interactive: bool,
 }
 
 pub(crate) fn parse_init_args(args: Vec<String>) -> Result<ParsedInitArgs, String> {
@@ -122,7 +129,11 @@ pub(crate) fn parse_init_args(args: Vec<String>) -> Result<ParsedInitArgs, Strin
                 }
                 parsed.overrides.provider = Some(provider);
             }
-            other => return Err(format!("unexpected argument `{other}`")),
+            "--non-interactive" => parsed.non_interactive = true,
+            "--admin-user" => {
+                parsed.overrides.admin_user = Some(init_value(&mut rest, "--admin-user")?);
+            }
+            other => return Err(format!("unexpected argument `{other}")),
         }
     }
     Ok(parsed)
@@ -159,6 +170,9 @@ mod tests {
             "http://localhost:3000".to_string(),
             "--provider".to_string(),
             "deepseek".to_string(),
+            "--non-interactive".to_string(),
+            "--admin-user".to_string(),
+            "myuser".to_string(),
             "--force".to_string(),
             "--existing-repo".to_string(),
         ])
@@ -167,6 +181,8 @@ mod tests {
         assert!(!parsed.help);
         assert!(parsed.force);
         assert!(parsed.existing_repo);
+        assert!(parsed.non_interactive);
+        assert_eq!(parsed.overrides.admin_user.as_deref(), Some("myuser"));
         assert_eq!(parsed.topology, InitTopology::Standalone);
         assert_eq!(
             parsed.overrides.repo,
@@ -197,5 +213,24 @@ mod tests {
         let err = parse_init_args(vec!["--repo".to_string(), "service".to_string()])
             .expect_err("repo requires owner/name");
         assert!(err.contains("owner/name"), "{err}");
+    }
+
+    #[test]
+    fn parse_accepts_non_interactive_and_admin_user() {
+        let parsed = parse_init_args(vec![
+            "--non-interactive".to_string(),
+            "--admin-user".to_string(),
+            "myuser".to_string(),
+        ])
+        .expect("parse");
+        assert!(parsed.non_interactive);
+        assert_eq!(parsed.overrides.admin_user.as_deref(), Some("myuser"));
+    }
+
+    #[test]
+    fn admin_user_without_value_fails() {
+        let err = parse_init_args(vec!["--admin-user".to_string(), "--force".to_string()])
+            .expect_err("--admin-user requires a value");
+        assert!(err.contains("requires a value"), "{err}");
     }
 }
