@@ -13,6 +13,7 @@
 //!   --daemon-url <url>       (env TEMPER_WEB_DAEMON_URL)       default none (standalone)
 //!   --log-path <path>        (env TEMPER_WEB_LOG_PATH)         default none (no live tail)
 //!   --interaction-url <url>  (env TEMPER_WEB_INTERACTION_URL)  default none (chat proxy off)
+//!   --snapshot-poll-ms <ms>  (env TEMPER_WEB_SNAPSHOT_POLL_MS) default none (no re-poll)
 //!   --snapshot-fixture <path>                                  dev: serve a canned snapshot
 
 use std::path::PathBuf;
@@ -27,7 +28,7 @@ use temper_web::feeds::snapshot_source::{
     EmptySnapshotSource, FixtureSnapshotSource, SnapshotSource,
 };
 use temper_web::project::lanes::LaneMap;
-use temper_web::server::{AppState, pump_log_source, serve};
+use temper_web::server::{AppState, pump_log_source, pump_snapshot_source, serve};
 
 #[path = "temper-web/daemon_client.rs"]
 mod daemon_client;
@@ -51,15 +52,18 @@ fn run() -> Result<(), String> {
 
     // Resolve the cold-start snapshot source (explicit; never ambient):
     //   fixture flag > live daemon URL > empty (standalone).
-    let source: Box<dyn SnapshotSource> = if let Some(path) = snapshot_fixture {
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|error| format!("reading snapshot fixture {path}: {error}"))?;
-        Box::new(FixtureSnapshotSource::new(raw))
-    } else if let Some(url) = config.daemon_url.clone() {
-        Box::new(HttpSnapshotSource::new(url))
-    } else {
-        Box::new(EmptySnapshotSource)
-    };
+    // `Arc` so the same source seeds cold start AND drives the re-poll pump.
+    // `real_source` gates the pump: re-polling an always-empty source is pointless.
+    let (source, real_source): (Arc<dyn SnapshotSource>, bool) =
+        if let Some(path) = snapshot_fixture {
+            let raw = std::fs::read_to_string(&path)
+                .map_err(|error| format!("reading snapshot fixture {path}: {error}"))?;
+            (Arc::new(FixtureSnapshotSource::new(raw)), true)
+        } else if let Some(url) = config.daemon_url.clone() {
+            (Arc::new(HttpSnapshotSource::new(url)), true)
+        } else {
+            (Arc::new(EmptySnapshotSource), false)
+        };
 
     // No workflow is loaded into temper-web today, so lane derivation runs in its
     // queued/in-flight fallback mode; the log-tail adapter still name-maps
@@ -107,6 +111,20 @@ fn run() -> Result<(), String> {
         }
     }
 
+    // Re-poll the daemon snapshot and reconcile it into the read-model so jobs
+    // that go in-flight after startup appear without a restart. Only when a poll
+    // interval is configured AND a real (daemon/fixture) source exists — re-polling
+    // the empty standalone source would do nothing.
+    if let Some(poll_ms) = config.snapshot_poll_ms.filter(|ms| *ms > 0 && real_source) {
+        pump_snapshot_source(
+            Arc::clone(&state),
+            Arc::clone(&source),
+            lanes.clone(),
+            Duration::from_millis(poll_ms),
+            now_ms,
+        );
+    }
+
     serve(state, &config).map_err(|error| format!("serve failed: {error}"))
 }
 
@@ -130,6 +148,14 @@ fn parse_config(args: &[String]) -> Result<WebConfig, String> {
     let interaction_url =
         flag(args, "--interaction-url").or_else(|| env("TEMPER_WEB_INTERACTION_URL"));
 
+    let snapshot_poll_ms = flag(args, "--snapshot-poll-ms")
+        .or_else(|| env("TEMPER_WEB_SNAPSHOT_POLL_MS"))
+        .map(|raw| {
+            raw.parse::<u64>()
+                .map_err(|error| format!("invalid --snapshot-poll-ms {raw}: {error}"))
+        })
+        .transpose()?;
+
     Ok(WebConfig {
         bind,
         ui_dir,
@@ -137,6 +163,7 @@ fn parse_config(args: &[String]) -> Result<WebConfig, String> {
         log_path,
         interaction_url,
         keep_alive_ms: WebConfig::DEFAULT_KEEP_ALIVE_MS,
+        snapshot_poll_ms,
     })
 }
 
@@ -159,4 +186,28 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn parses_snapshot_poll_flag() {
+        // An explicit `--snapshot-poll-ms` flag wins over any ambient env, so this
+        // is deterministic without touching the process environment.
+        let config = parse_config(&args(&["--snapshot-poll-ms", "3000"])).expect("parses");
+        assert_eq!(config.snapshot_poll_ms, Some(3000));
+    }
+
+    #[test]
+    fn rejects_non_numeric_snapshot_poll_flag() {
+        let error = parse_config(&args(&["--snapshot-poll-ms", "soon"]))
+            .expect_err("non-numeric is rejected");
+        assert!(error.contains("--snapshot-poll-ms"), "got: {error}");
+    }
 }
