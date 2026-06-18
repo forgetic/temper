@@ -1,6 +1,8 @@
 {
   "name": "basic-delivery",
-  "intake_author": { "kind": "site_admin" },
+  "intake_author": {
+    "kind": "site_admin"
+  },
   "roles": [
     {
       "id": "engineer",
@@ -22,8 +24,7 @@
       ],
       "concurrency": 1,
       "queues": [
-        "code_ready",
-        "pr_ci_failed"
+        "code_ready"
       ]
     },
     {
@@ -102,7 +103,8 @@
           "id": "in_progress",
           "label": "in-progress",
           "artifacts": [
-            "code"
+            "code",
+            "implementation_pr"
           ]
         }
       ]
@@ -137,20 +139,6 @@
         {
           "role": "engineer",
           "action": "open_pr"
-        }
-      ]
-    },
-    {
-      "id": "pr_ci_failed",
-      "artifact": "implementation_pr",
-      "condition": {
-        "kind": "ci_failed"
-      },
-      "actions": [
-        {
-          "role": "engineer",
-          "action": "address_ci_failure",
-          "checkout": "pull_request_writable"
         }
       ]
     },
