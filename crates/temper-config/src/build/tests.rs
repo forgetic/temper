@@ -18,6 +18,7 @@ fn sample_config_inputs() -> ConfigInputs {
         admin_user: Some("agent".to_string()),
         ci_user: Some("bot".to_string()),
         provider: Some("anthropic".to_string()),
+        provider_url: None,
         workspace: Some("~/.local/state/temper/workspace".to_string()),
     }
 }

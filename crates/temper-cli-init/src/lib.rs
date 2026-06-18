@@ -65,6 +65,7 @@ Options:
   --repo          <owner/name>  Managed repository to provision
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --provider      <deepseek>    LLM provider profile (only deepseek today)
+  --provider-url  <URL>         Base URL override for the provider
   --non-interactive             Run without prompts; all required values must
                                 be supplied via flags or environment variables
   --admin-user   <VALUE>        Forgejo admin username (only non-interactive)

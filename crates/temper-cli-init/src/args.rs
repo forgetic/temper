@@ -77,6 +77,8 @@ pub struct InitOverrides {
     pub admin_password: Option<String>,
     /// LLM provider API key from `TEMPER_INIT_PROVIDER_KEY` (only non-interactive).
     pub provider_key: Option<String>,
+    /// LLM provider base URL override for `[agent.providers.<name>].url`.
+    pub provider_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -132,6 +134,9 @@ pub(crate) fn parse_init_args(args: Vec<String>) -> Result<ParsedInitArgs, Strin
             "--non-interactive" => parsed.non_interactive = true,
             "--admin-user" => {
                 parsed.overrides.admin_user = Some(init_value(&mut rest, "--admin-user")?);
+            }
+            "--provider-url" => {
+                parsed.overrides.provider_url = Some(init_value(&mut rest, "--provider-url")?);
             }
             other => return Err(format!("unexpected argument `{other}")),
         }
@@ -225,6 +230,22 @@ mod tests {
         .expect("parse");
         assert!(parsed.non_interactive);
         assert_eq!(parsed.overrides.admin_user.as_deref(), Some("myuser"));
+    }
+
+    #[test]
+    fn parse_provider_url_flag() {
+        let parsed = parse_init_args(vec![
+            "--provider".to_string(),
+            "deepseek".to_string(),
+            "--provider-url".to_string(),
+            "http://localhost:9999/v1".to_string(),
+        ])
+        .expect("parse");
+        assert_eq!(parsed.overrides.provider.as_deref(), Some("deepseek"));
+        assert_eq!(
+            parsed.overrides.provider_url.as_deref(),
+            Some("http://localhost:9999/v1")
+        );
     }
 
     #[test]

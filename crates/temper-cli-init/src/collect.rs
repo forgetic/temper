@@ -44,6 +44,9 @@ pub struct Answers {
     pub provider: String,
     /// DeepSeek API key. **Secret.**
     pub provider_key: String,
+    /// LLM provider base URL override (for `[agent.providers.<name>].url`).
+    /// Only set via `--provider-url`; the interactive flow never prompts for it.
+    pub provider_url: Option<String>,
     /// Repository owner (derived from [`DEFAULT_REPO`] or `--repo`).
     pub repo_owner: String,
     /// Repository name (derived from [`DEFAULT_REPO`] or `--repo`).
@@ -124,6 +127,7 @@ pub fn collect_answers(
         admin_password,
         provider,
         provider_key,
+        provider_url: overrides.provider_url.clone(),
         repo_owner: repo.owner,
         repo_name: repo.name,
     })
@@ -169,6 +173,7 @@ fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitErr
         admin_password,
         provider,
         provider_key,
+        provider_url: overrides.provider_url.clone(),
         repo_owner: repo.owner,
         repo_name: repo.name,
     })

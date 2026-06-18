@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{ConfigError, FileKind};
 use crate::schema::{
-    AgentConfig, AgentCredentials, Config, Credentials, EngineConfig, ForgeConfig,
-    ForgeCredentials, ForgeUser, ProviderCredential, SCHEMA_VERSION, WorkerConfig,
+    AgentConfig, AgentCredentials, AgentProviderConfig, Config, Credentials, EngineConfig,
+    ForgeConfig, ForgeCredentials, ForgeUser, ProviderCredential, SCHEMA_VERSION, WorkerConfig,
 };
 
 /// Collected, non-secret answers for [`build_config`].
@@ -62,6 +62,9 @@ pub struct ConfigInputs {
     pub ci_user: Option<String>,
     /// `[agent] provider` — the active provider profile name.
     pub provider: Option<String>,
+    /// `[agent.providers.<provider>].url` — base URL override for the active
+    /// provider (e.g. a self-hosted gateway or a test LLM).
+    pub provider_url: Option<String>,
     /// `[worker] workspace` — the per-job workspace root (a `~`-prefixed value
     /// is expanded at resolve time).
     pub workspace: Option<String>,
@@ -154,6 +157,21 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
 
     let agent = AgentConfig {
         provider: inputs.provider.clone(),
+        providers: if let (Some(provider_name), Some(url)) =
+            (&inputs.provider, &inputs.provider_url)
+        {
+            let mut map = BTreeMap::new();
+            map.insert(
+                provider_name.clone(),
+                AgentProviderConfig {
+                    url: Some(url.clone()),
+                    ..Default::default()
+                },
+            );
+            map
+        } else {
+            BTreeMap::new()
+        },
         ..AgentConfig::default()
     };
 

@@ -72,6 +72,7 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         admin_user: Some(answers.admin_user.clone()),
         ci_user: Some(temper_provision::BOT_USER.to_string()),
         provider: Some(answers.provider.clone()),
+        provider_url: answers.provider_url.clone(),
         workspace: opts
             .workspace
             .as_ref()
