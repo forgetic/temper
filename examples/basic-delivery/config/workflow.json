@@ -310,6 +310,9 @@
       "effects": [
         {
           "kind": "merge_pull_request"
+        },
+        {
+          "kind": "close_parent_issues"
         }
       ]
     }
