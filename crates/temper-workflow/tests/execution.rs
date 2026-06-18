@@ -8,8 +8,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge::{
-    BranchRef, CreateComment, CreateIssue, CreatePullRequest, Forge, IssueState, ItemNumber,
-    PullRequestState, RepositoryId, ReviewDecision, UpdateIssue, UserId,
+    BranchRef, CiJob, CiJobConclusion, CiJobStatus, CreateComment, CreateIssue, CreatePullRequest,
+    Forge, IssueState, ItemNumber, PullRequestState, RepositoryId, ReviewDecision, UpdateIssue,
+    UserId,
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
@@ -615,6 +616,10 @@ fn close_parents_workflow() -> ValidatedWorkflow {
         .expect("close-parents fixture validates")
 }
 
+fn ts() -> chrono::DateTime<chrono::Utc> {
+    "2026-05-29T00:00:00Z".parse().expect("valid timestamp")
+}
+
 fn create_pr_with_body(forge: &MemoryForge, repo: &RepositoryId, labels: &[&str], body: &str) -> ItemNumber {
     block_on(forge.create_pull_request(
         repo,
@@ -790,8 +795,29 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     let block = render_metadata_block(&metadata);
     let pr_number = create_pr_with_body(&forge, &repo, &["implementation"], &block);
 
-    // The basic-delivery `land_pr` transition requires CI + dependency gates.
-    // Provide CI-passed and empty dependencies (PR has no deps) so it plans.
+    // Seed CI jobs so the ci_gate is satisfied.
+    let pr = block_on(forge.get_pull_request_by_number(&repo, pr_number))
+        .expect("lookup succeeds")
+        .expect("pull request exists");
+    let head_sha = pr.head_sha.clone().unwrap_or_else(|| "sha".to_string());
+    forge.seed_ci_jobs(
+        &repo,
+        vec![CiJob {
+            id: "ci-job-1".into(),
+            repo_id: repo.clone(),
+            pull_request_id: Some(pr.id.clone()),
+            commit_sha: head_sha.clone(),
+            name: "ci".into(),
+            status: CiJobStatus::Completed,
+            conclusion: Some(CiJobConclusion::Success),
+            url: None,
+            created_at: ts(),
+            started_at: None,
+            completed_at: None,
+            updated_at: ts(),
+        }],
+    );
+
     let context = ExecutionContext::new();
     let executor = workflow.executor_with_context(&forge, context);
 
