@@ -35,6 +35,12 @@ pub struct WebConfig {
     pub interaction_url: Option<String>,
     /// Keep-alive cadence for the SSE pulse, in milliseconds (UX §6.3: ~15s).
     pub keep_alive_ms: u64,
+    /// Interval (ms) at which to re-poll the daemon snapshot and reconcile it into
+    /// the read-model, surfacing jobs that go in-flight after startup. `None`/`0`
+    /// disables re-polling (today's behaviour: the cold-start snapshot is frozen).
+    /// Only takes effect when a real snapshot source exists (daemon URL or
+    /// fixture). ~2–5s feels live without hammering the daemon.
+    pub snapshot_poll_ms: Option<u64>,
 }
 
 impl WebConfig {
@@ -52,6 +58,7 @@ impl WebConfig {
             log_path: None,
             interaction_url: None,
             keep_alive_ms: Self::DEFAULT_KEEP_ALIVE_MS,
+            snapshot_poll_ms: None,
         }
     }
 }
@@ -68,5 +75,6 @@ mod tests {
         assert!(cfg.log_path.is_none());
         assert!(cfg.interaction_url.is_none());
         assert_eq!(cfg.keep_alive_ms, WebConfig::DEFAULT_KEEP_ALIVE_MS);
+        assert!(cfg.snapshot_poll_ms.is_none());
     }
 }

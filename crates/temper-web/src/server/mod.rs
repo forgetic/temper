@@ -171,6 +171,19 @@ impl AppState {
         }
     }
 
+    /// Merge a freshly-projected snapshot into the read-model and fan the
+    /// resulting events out to SSE subscribers. Called by the snapshot re-poll
+    /// pump ([`pump_snapshot_source`]).
+    pub fn reconcile(&self, fresh: crate::board::SnapshotState, now: i64) {
+        let events = {
+            let mut model = self.model.lock().expect("read-model mutex not poisoned");
+            model.reconcile_snapshot(fresh, now)
+        };
+        for event in &events {
+            self.broadcast_event(event);
+        }
+    }
+
     fn broadcast_event(&self, event: &BoardEvent) {
         if let Ok(json) = serde_json::to_string(event) {
             self.broadcaster.broadcast(&sse::data_frame(&json));
@@ -249,6 +262,37 @@ pub fn pump_log_source<S: LogLineSource + Send + 'static>(
                     std::thread::sleep(idle);
                 }
             }
+        }
+    });
+}
+
+/// Pump the daemon snapshot source into the read-model on a background thread:
+/// re-fetch on `interval`, project via [`project_snapshot`], reconcile-merge into
+/// the model (see [`ReadModel::reconcile_snapshot`]), and fan each resulting
+/// [`BoardEvent`] out to SSE subscribers.
+///
+/// This is the liveness fix for the one-shot cold-start snapshot: a job that goes
+/// in-flight after startup appears within one interval, with no reload or restart.
+/// The reconcile **merges** rather than clobbers, so log-tail-refined lifecycle
+/// state survives the re-poll.
+///
+/// The source is shared (`Arc`) with cold start; `lanes` is cloned in so the pump
+/// projects identically. A fetch that yields `None` (daemon momentarily
+/// unreachable) is skipped — the model keeps its last good state.
+pub fn pump_snapshot_source(
+    state: Arc<AppState>,
+    source: Arc<dyn SnapshotSource>,
+    lanes: LaneMap,
+    interval: Duration,
+    clock: impl Fn() -> i64 + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(interval);
+            let Some(raw) = source.fetch() else { continue };
+            let now = clock();
+            let fresh = project_snapshot(&raw, &lanes, now);
+            state.reconcile(fresh, now);
         }
     });
 }

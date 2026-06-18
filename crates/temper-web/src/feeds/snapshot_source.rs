@@ -13,7 +13,11 @@ use crate::project::snapshot::RawDaemonSnapshot;
 
 /// Yields the raw daemon dispatch snapshot for a board cold start. Implementors:
 /// the live daemon HTTP client (built at the entry point), a fixture, or empty.
-pub trait SnapshotSource {
+///
+/// `Send + Sync` so a shared `Arc<dyn SnapshotSource>` can be threaded into the
+/// background re-poll pump (`pump_snapshot_source`) as well as used at cold start.
+/// All implementors (empty, fixture, HTTP) are already trivially `Send + Sync`.
+pub trait SnapshotSource: Send + Sync {
     /// Fetch the current raw daemon snapshot, or `None` when no daemon is
     /// reachable/configured (the server then serves an empty board).
     fn fetch(&self) -> Option<RawDaemonSnapshot>;
