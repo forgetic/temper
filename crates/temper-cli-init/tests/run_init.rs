@@ -292,6 +292,7 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
             admin_password: Some("admin-pass".to_string()),
             provider_key: Some("sk-key".to_string()),
             provider: Some("deepseek".to_string()),
+            provider_url: None,
         },
         ..Default::default()
     };
@@ -403,4 +404,57 @@ fn non_interactive_flag_off_ignores_env_overrides() {
         std::fs::read_to_string(dir.path().join("credentials.toml")).expect("credentials.toml");
     assert!(creds.contains("sk-interactive"));
     assert!(!creds.contains("env-key"));
+}
+
+#[test]
+fn non_interactive_with_provider_url_writes_providers_table() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+
+    // NO scripted answers needed — everything comes from overrides.
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        non_interactive: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            repo: Some(RepoSelection {
+                owner: "widgets".to_string(),
+                name: "svc".to_string(),
+            }),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider_key: Some("sk-key".to_string()),
+            provider: Some("deepseek".to_string()),
+            provider_url: Some("http://localhost:9999/v1".to_string()),
+        },
+        ..Default::default()
+    };
+
+    let mut provisioner = StubProvisioner { seen: None };
+    run_init(&mut prompter, &mut provisioner, &opts)
+        .expect("non-interactive with provider-url succeeds");
+
+    let config = std::fs::read_to_string(&config_path).expect("config.toml");
+
+    // The [agent] section should have provider = "deepseek".
+    assert!(config.contains("provider = \"deepseek\""), "{config}");
+
+    // The [agent.providers.deepseek] table should contain the URL.
+    assert!(
+        config.contains("[agent.providers.deepseek]"),
+        "expected [agent.providers.deepseek] section: {config}"
+    );
+    assert!(
+        config.contains("url = \"http://localhost:9999/v1\""),
+        "expected provider URL in config: {config}"
+    );
+
+    // Round-trip: the written config must parse through Config::parse.
+    temper_config::Config::load(&config_path).expect("config parses");
 }
