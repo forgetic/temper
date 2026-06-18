@@ -59,13 +59,13 @@ pub(super) fn tick_implementation_plan_phase(body: &str, phase: &str) -> Checkli
     }
 }
 
-struct ChecklistItem<'a> {
-    indent: &'a str,
-    checked: bool,
-    label: &'a str,
+pub(super) struct ChecklistItem<'a> {
+    pub(super) indent: &'a str,
+    pub(super) checked: bool,
+    pub(super) label: &'a str,
 }
 
-fn parse_checklist_item(line: &str) -> Option<ChecklistItem<'_>> {
+pub(super) fn parse_checklist_item(line: &str) -> Option<ChecklistItem<'_>> {
     let indent_len = line.len() - line.trim_start().len();
     let indent = &line[..indent_len];
     let rest = &line[indent_len..];

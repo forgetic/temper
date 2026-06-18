@@ -39,6 +39,10 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     /// checkpoint (`finish …` with a non-empty note), and remains idempotent via
     /// the machine-readable progress marker.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        if self.apply_plan_publication_progress(&job, &progress).await {
+            return;
+        }
+
         if progress.state == "started" {
             self.apply_source_action_claim(&job).await;
             return;

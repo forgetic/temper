@@ -6,6 +6,8 @@ mod assertions;
 mod breakdown;
 #[path = "forge_apply/failure.rs"]
 mod failure;
+#[path = "forge_apply/plan_publication.rs"]
+mod plan_publication;
 #[path = "forge_apply/progress.rs"]
 mod progress;
 #[path = "forge_apply/review.rs"]

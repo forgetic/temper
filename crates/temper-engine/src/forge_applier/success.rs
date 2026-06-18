@@ -111,7 +111,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         // closed until its prerequisites merge.
         let depends_on = manifest_depends_on(&context);
         let order = coordinated_landing_order(&result.repos, &depends_on);
-        // repo path -> (forge id, opened PR number) for wiring dependents.
         let mut opened: BTreeMap<String, (RepositoryId, ItemNumber)> = BTreeMap::new();
 
         let set = CoordinatedSet {
@@ -157,8 +156,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         };
         let base_branch = default_base_branch(&target_repository);
-        // A PR in the primary repo links to the coordinating issue with a bare
-        // same-repo ref; cross-repo PRs use a repo-qualified one.
         let coordinating = if &target_repository.id == set.primary_id {
             temper_workflow::ArtifactRef::same_repo(set.number)
         } else {
@@ -179,6 +176,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             dependencies,
             set.plan_phases,
         );
+        let desired_body = input.body.clone();
 
         match Executor::new(self.workflow.as_ref(), self.forge.as_ref())
             .ensure_pull_request_with_lookup(
@@ -190,14 +188,13 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .await
         {
             Ok(ensured) => {
-                if ensured.was_created() {
-                    // §7 `engine` / `pr.opened`: a brand-new implementation PR.
-                    // The PR title is the coordinating issue's title; `for #n`
-                    // names that issue so the issue<->PR alias is greppable.
+                let was_created = ensured.was_created();
+                let mut pull_request = ensured.into_artifact();
+                if was_created {
                     let pr_ref = artifact_ref(
                         &target_repository.id,
                         ArtifactSource::PullRequest {
-                            number: ensured.artifact().number,
+                            number: pull_request.number,
                         },
                     );
                     emit_pr_opened(PrOpened {
@@ -206,16 +203,21 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                         kind: "implementation",
                         for_issue: set.number.get(),
                     });
+                } else {
+                    pull_request = self
+                        .update_implementation_pr_body(
+                            set.job,
+                            pull_request,
+                            &desired_body,
+                            "final success",
+                        )
+                        .await;
                 }
-                self.apply_implementation_pr_handoff_if_needed(
-                    set.job,
-                    ensured.artifact(),
-                    ensured.was_created(),
-                )
-                .await;
+                self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, was_created)
+                    .await;
                 opened.insert(
                     outcome.repo.clone(),
-                    (target_repository.id.clone(), ensured.artifact().number),
+                    (target_repository.id.clone(), pull_request.number),
                 );
             }
             Err(error) => tracing::error!(

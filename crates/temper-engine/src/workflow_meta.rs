@@ -7,7 +7,7 @@
 //! carry is derived from the validated workflow's artifact-kind declarations.
 
 use temper_forge::Repository;
-use temper_workflow::{ArtifactKindId, ValidatedWorkflow};
+use temper_workflow::{ArtifactKindId, StateId, ValidatedWorkflow};
 
 /// The repository's default branch, falling back to `main` when the Forge
 /// reports a blank default.
@@ -33,9 +33,29 @@ pub(crate) fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<Stri
         .unwrap_or_default()
 }
 
-/// Labels a freshly-created implementation PR must carry.
+/// Labels a freshly-created implementation PR must carry at final handoff.
 pub(crate) fn implementation_pr_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
     artifact_kind_create_labels(workflow, "implementation_pr")
+}
+
+/// Labels a plan-first implementation PR carries while product work is still in
+/// progress: stable identifying labels plus the workflow's implementation-PR
+/// `in_progress` state label, deliberately excluding review-queue initial
+/// labels such as `needs-reviewer`.
+pub(crate) fn implementation_pr_plan_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
+    let artifact = ArtifactKindId::new("implementation_pr");
+    let mut labels = implementation_pr_labels(workflow);
+    for dimension in workflow.state_dimensions() {
+        for state in &dimension.states {
+            if state.id == StateId::new("in_progress")
+                && state.allows_artifact(&artifact)
+                && let Some(label) = &state.label
+            {
+                push_unique(&mut labels, label.as_str());
+            }
+        }
+    }
+    labels
 }
 
 /// Labels a freshly-materialised `code` child issue must carry to be a valid,
@@ -70,4 +90,10 @@ pub(crate) fn artifact_kind_create_labels(
         }
     }
     labels
+}
+
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|candidate| candidate == value) {
+        values.push(value.to_string());
+    }
 }
