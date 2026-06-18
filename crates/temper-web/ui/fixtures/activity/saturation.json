@@ -1,0 +1,7 @@
+{
+  "comment": "A `role.saturated` board-feed delta: a role/lane has work waiting with no free capacity (UX §4.3), which drives the lane-header saturation badge. `waiting` is the queue depth; 0 clears the badge. ADDED by PR A as the wire-shape anchor; maps to temper-log's role.saturated event (UX Appendix A.2).",
+  "events": [
+    { "t": "role.saturated", "seq": 210, "lane": "implement", "waiting": 2 },
+    { "t": "role.saturated", "seq": 211, "lane": "implement", "waiting": 0 }
+  ]
+}

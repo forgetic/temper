@@ -13,6 +13,20 @@ export interface Activity {
   text: string;
 }
 
+// A single line in the drill-down's live activity stream (UX §5). Maps to the
+// agent's AgentEvent/StreamDelta: thinking / text / tool start / tool end. `k`
+// is an optional short label (e.g. the tool name `bash`); when absent the view
+// falls back to the kind. Held in a bounded ring buffer, dropped on reload.
+export interface StreamEvent {
+  kind: "think" | "text" | "tool";
+  k?: string;
+  v: string;
+}
+
+// Cap for the per-card live activity ring buffer (UX §5: "Capped ring buffer
+// client-side; not persisted"). Drop-oldest once full.
+export const STREAM_CAP = 100;
+
 export interface Card {
   id: string;
   lane: Lane;
@@ -24,6 +38,17 @@ export interface Card {
   activity?: Activity;
   ci?: "running" | "failed";
   merged?: boolean;
+  // ephemeral live-activity ring buffer (drill-down stream, UX §5). Bounded by
+  // STREAM_CAP, drop-oldest. Not part of the durable snapshot contract.
+  stream?: StreamEvent[];
+}
+
+// Per-lane state the board header renders. `sat` = work waiting with no free
+// capacity (the saturation badge, UX §4.3 / §4.1 "N waiting · 0 slots").
+export interface LaneState {
+  id: Lane;
+  title: string;
+  sat: number;
 }
 
 export interface Problem {
@@ -34,6 +59,7 @@ export interface Problem {
 }
 
 export interface State {
+  lanes: LaneState[];
   cards: Record<string, Card>;
   problems: Record<string, Problem>;
   workers: { healthy: number; total: number };
@@ -44,6 +70,16 @@ export interface State {
   cursor: number; // last applied feed sequence (snapshot+resume, Appendix B.5)
 }
 
+// The pipeline columns, in flow order (UX §4.1). The ordered, mutually-exclusive
+// lifecycle the read-model projects artifacts onto (UX Appendix A.4).
+export const LANES: { id: Lane; title: string }[] = [
+  { id: "triage", title: "Triage" },
+  { id: "implement", title: "Implement" },
+  { id: "review", title: "Review" },
+  { id: "ci", title: "CI / Gates" },
+  { id: "done", title: "Done" },
+];
+
 // Discriminated union mirroring the SSE/feed events. In prod these arrive as the
 // `data:` payload of an SSE message; in tests we push them through the same path.
 export type Event =
@@ -52,8 +88,12 @@ export type Event =
   | { t: "card.move"; seq: number; id: string; lane: Lane; now: number }
   | { t: "card.activity"; seq: number; id: string; activity: Activity }
   | { t: "card.step"; seq: number; id: string; steps: { done: number; total: number } }
+  // push a line into a card's live activity ring buffer (drop-oldest, UX §5)
+  | { t: "card.stream"; seq: number; id: string; event: StreamEvent }
   | { t: "problem.add"; seq: number; id: string; problem: Problem }
   | { t: "problem.clear"; seq: number; id: string }
+  // a role/lane became saturated: N items waiting, 0 free slots (UX §4.3)
+  | { t: "role.saturated"; seq: number; lane: Lane; waiting: number }
   | { t: "pipe"; pipe: State["pipe"] }
   // user actions funnel through the same reducer (unidirectional)
   | { t: "open"; id: string }
@@ -66,6 +106,7 @@ export const STALE_MS = 5_000; // no event for this long => pipe goes stale
 
 export function initialState(now: number): State {
   return {
+    lanes: LANES.map((l) => ({ ...l, sat: 0 })),
     cards: {},
     problems: {},
     workers: { healthy: 0, total: 0 },
@@ -106,6 +147,26 @@ export function stuckCount(state: State): number {
   return Object.values(state.cards).filter((c) => isStuck(c, state.now)).length;
 }
 
+// ── durable step ledger (UX §5) ──────────────────────────────────────────────
+// Derive the checklist the drawer renders from a card's `steps {done,total}`:
+// the first `done` rows are complete, the next is in progress, the rest pending.
+// This is the authoritative, reload-surviving view (vs. the ephemeral stream).
+export type LedgerStatus = "done" | "now" | "todo";
+export interface LedgerStep {
+  n: number; // 1-based
+  status: LedgerStatus;
+}
+
+export function ledger(card: Card): LedgerStep[] {
+  const total = card.steps?.total ?? 0;
+  const done = card.steps?.done ?? 0;
+  return Array.from({ length: total }, (_, i) => {
+    const n = i + 1;
+    const status: LedgerStatus = n <= done ? "done" : n === done + 1 ? "now" : "todo";
+    return { n, status };
+  });
+}
+
 // ── UPDATE: the single mutation path. Returns a NEW state (pure). ─────────────
 // Out-of-order / duplicate feed events are ignored via the seq cursor, so
 // snapshot-then-stream produces no gap and no dup (Appendix B.5).
@@ -119,13 +180,19 @@ export function apply(state: State, ev: Event): State {
 
   switch (ev.t) {
     case "tick": {
-      const pipe = ev.now - state.lastEventAt > STALE_MS ? "stale" : state.pipe === "dead" ? "dead" : "live";
+      // a dead pipe (connection lost) stays dead until a real event revives it —
+      // check it first so a long idle gap can't downgrade "dead" to "stale".
+      const pipe =
+        state.pipe === "dead" ? "dead" : ev.now - state.lastEventAt > STALE_MS ? "stale" : "live";
       return { ...base, now: ev.now, pipe };
     }
     case "snapshot":
       return {
         ...base,
         ...ev.state,
+        // keep the fixed lane order/titles; only adopt sat values if the
+        // snapshot supplies them (it usually doesn't — sat is a live signal).
+        lanes: ev.state.lanes ?? base.lanes,
         cards: { ...ev.state.cards },
         cursor: ev.seq,
         pipe: "live",
@@ -149,12 +216,26 @@ export function apply(state: State, ev: Event): State {
       if (!c) return { ...base, cursor: ev.seq };
       return { ...base, cards: { ...state.cards, [ev.id]: { ...c, steps: ev.steps } }, cursor: ev.seq };
     }
+    case "card.stream": {
+      const c = state.cards[ev.id];
+      if (!c) return { ...base, cursor: ev.seq };
+      // append then drop-oldest past the cap (bounded ring buffer, UX §5)
+      const stream = [...(c.stream ?? []), ev.event];
+      if (stream.length > STREAM_CAP) stream.splice(0, stream.length - STREAM_CAP);
+      return { ...base, cards: { ...state.cards, [ev.id]: { ...c, stream } }, cursor: ev.seq };
+    }
     case "problem.add":
       return { ...base, problems: { ...state.problems, [ev.id]: ev.problem }, cursor: ev.seq };
     case "problem.clear": {
       const next = { ...state.problems };
       delete next[ev.id];
       return { ...base, problems: next, cursor: ev.seq };
+    }
+    case "role.saturated": {
+      // set the lane's saturation count (0 clears the badge). Unknown lanes are
+      // a no-op but still advance the cursor.
+      const lanes = state.lanes.map((l) => (l.id === ev.lane ? { ...l, sat: ev.waiting } : l));
+      return { ...base, lanes, cursor: ev.seq };
     }
     case "pipe":
       return { ...base, pipe: ev.pipe };

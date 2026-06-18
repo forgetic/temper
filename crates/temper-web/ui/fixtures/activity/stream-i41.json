@@ -1,0 +1,9 @@
+{
+  "comment": "Live agent-activity deltas for one in-flight card (UX §5, the drill-down stream). Each entry is one `card.stream` SSE event as the board feed emits it: an agent AgentEvent/StreamDelta (think / text / tool) pushed into that card's bounded ring buffer. ADDED by PR A as the wire-shape anchor for the activity feed; the shared state-snapshot.json is left untouched.",
+  "events": [
+    { "t": "card.stream", "seq": 201, "id": "i41", "event": { "kind": "think", "v": "The failing test expects the old signature, so I should update the call site." } },
+    { "t": "card.stream", "seq": 202, "id": "i41", "event": { "kind": "tool", "k": "edit", "v": "crates/temper-engine/src/feed/mod.rs" } },
+    { "t": "card.stream", "seq": 203, "id": "i41", "event": { "kind": "tool", "k": "bash", "v": "cargo test -p temper-engine" } },
+    { "t": "card.stream", "seq": 204, "id": "i41", "event": { "kind": "text", "v": "Tests pass. Committing step 3." } }
+  ]
+}
