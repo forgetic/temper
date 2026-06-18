@@ -17,6 +17,7 @@
 //! lookups), [`progress`] (the trait impl), and [`progress_checklist`] (PR
 //! checklist ticking).
 
+mod claim;
 mod coordinated;
 mod failure;
 mod progress;

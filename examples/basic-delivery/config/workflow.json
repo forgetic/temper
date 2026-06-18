@@ -224,6 +224,10 @@
         {
           "kind": "remove_label",
           "label": "untriaged"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "architect"
         }
       ]
     },
@@ -249,6 +253,10 @@
         {
           "kind": "add_label",
           "label": "ready"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "architect"
         }
       ]
     },
