@@ -347,7 +347,8 @@ impl<'a> Planner<'a> {
                     | Effect::SetBody { .. }
                     | Effect::AttachReview { .. }
                     | Effect::CreateIssues { .. }
-                    | Effect::MergePullRequest => None,
+                    | Effect::MergePullRequest
+                    | Effect::CloseParentIssues => None,
                 });
                 let mut any = false;
                 let all_present = produced.all(|label| {
@@ -401,6 +402,7 @@ fn to_effect(effect: &Effect) -> WorkflowEffect {
             correlation_key: correlation_key.clone(),
         },
         Effect::MergePullRequest => WorkflowEffect::MergePullRequest,
+        Effect::CloseParentIssues => WorkflowEffect::CloseParentIssues,
     }
 }
 
@@ -420,6 +422,7 @@ fn to_postcondition(effect: &Effect) -> Option<Postcondition> {
         | Effect::SetBody { .. }
         | Effect::AttachReview { .. }
         | Effect::CreateIssues { .. }
-        | Effect::MergePullRequest => None,
+        | Effect::MergePullRequest
+        | Effect::CloseParentIssues => None,
     }
 }

@@ -48,6 +48,7 @@ fn summarize_effect(effect: &WorkflowEffect) -> String {
         WorkflowEffect::UpdateLease { .. } => "update_lease".to_string(),
         WorkflowEffect::ReleaseLease => "release_lease".to_string(),
         WorkflowEffect::MergePullRequest => "merge_pull_request".to_string(),
+        WorkflowEffect::CloseParentIssues => "close_parent_issues".to_string(),
     }
 }
 

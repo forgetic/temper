@@ -252,5 +252,6 @@ fn build_effect(effect: &RawEffect) -> Effect {
             correlation_key: correlation_key.clone(),
         },
         RawEffect::MergePullRequest => Effect::MergePullRequest,
+        RawEffect::CloseParentIssues => Effect::CloseParentIssues,
     }
 }

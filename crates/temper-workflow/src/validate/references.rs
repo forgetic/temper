@@ -416,7 +416,8 @@ fn effect_label(effect: &RawEffect) -> Option<&str> {
         | RawEffect::SetBody { .. }
         | RawEffect::AttachReview { .. }
         | RawEffect::CreateIssues { .. }
-        | RawEffect::MergePullRequest => None,
+        | RawEffect::MergePullRequest
+        | RawEffect::CloseParentIssues => None,
     }
 }
 
@@ -433,6 +434,7 @@ fn effect_roles(effect: &RawEffect) -> Vec<&str> {
         | RawEffect::SetBody { .. }
         | RawEffect::AttachReview { .. }
         | RawEffect::CreateIssues { .. }
-        | RawEffect::MergePullRequest => Vec::new(),
+        | RawEffect::MergePullRequest
+        | RawEffect::CloseParentIssues => Vec::new(),
     }
 }

@@ -587,3 +587,47 @@ fn artifact_scoped_state_legality_is_checked_before_planning() {
             })
     );
 }
+
+#[test]
+fn close_parent_issues_is_planned_as_workflow_effect() {
+    let json = r#"{
+        "name": "close-parents-test",
+        "labels": [{"id": "code"}, {"id": "implementation"}],
+        "artifact_kinds": [
+            {"id": "code", "target": "issue", "identifying_labels": ["code"]},
+            {"id": "implementation_pr", "target": "pull_request", "identifying_labels": ["implementation"]}
+        ],
+        "roles": [{"id": "engineer"}],
+        "transitions": [{
+            "id": "land_pr",
+            "artifact": "implementation_pr",
+            "roles": ["engineer"],
+            "effects": [
+                {"kind": "merge_pull_request"},
+                {"kind": "close_parent_issues"}
+            ]
+        }]
+    }"#;
+    let spec: RawWorkflowSpec = serde_json::from_str(json).expect("json parses");
+    let workflow = spec.validate().expect("workflow validates");
+    let artifact = classify_pr(&workflow, 10, &["implementation"]);
+    let plan = workflow
+        .planner()
+        .plan_transition(
+            &TransitionId::new("land_pr"),
+            &RoleId::new("engineer"),
+            &artifact,
+        )
+        .expect("engineer can land PR");
+    assert_eq!(
+        plan.effects,
+        vec![
+            WorkflowEffect::MergePullRequest,
+            WorkflowEffect::CloseParentIssues,
+        ]
+    );
+    assert!(
+        plan.postconditions.is_empty(),
+        "close_parent_issues has no postcondition"
+    );
+}
