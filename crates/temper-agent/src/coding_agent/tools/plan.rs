@@ -4,12 +4,15 @@ use temper_protocol_agent::{PlanPublication, WorkspaceContext};
 
 /// Guidance appended to the role prompt when the `publish_plan` tool is wired.
 pub(crate) const PUBLISH_PLAN_GUIDANCE: &str = "\nPLAN PUBLICATION:\n\
-    - You have a `publish_plan` tool. For non-trivial engineer work with two or \
-    more meaningful phases, call it once after you understand the work and \
-    before relying on checkpoints/final output for plan visibility.\n\
-    - Pass a concise `summary` (or `title`) and the ordered phase labels. Use \
-    those same phase labels in the final `plan.phases` and later checkpoint \
-    labels so host progress can match checklist items.\n\
+    - You have a `publish_plan` tool. Call it only when you expect two or more \
+    separate, non-empty checkpoint commits. The phases are planned checkpoint \
+    commit boundaries, not a generic todo list.\n\
+    - Pass a concise `summary` (or `title`) and only diff-bearing phase labels. \
+    Do not include validation-only steps such as formatting, running tests, or \
+    manual verification; report validation in the final summary instead.\n\
+    - Use those same phase labels in the final `plan.phases` and later \
+    checkpoint labels so host progress can match checklist items. If you expect \
+    one checkpoint commit, do not call this tool.\n\
     - The host fills target repository, base branch, and work branch data from \
     the workspace context. Do NOT run git, create branches, open PRs, or call a \
     forge to publish the plan yourself.\n";
@@ -39,11 +42,12 @@ impl tongs::tools::Tool for PublishPlanTool {
     }
 
     fn description(&self) -> &str {
-        "Publish your implementation plan to the host before substantial work. \
-         Provide a short summary/title and ordered phase labels. The host fills \
-         target repo, base branch, and work branch data from the workspace \
-         context; do not run git, create branches, open PRs, or call a forge to \
-         publish the plan yourself."
+        "Publish your checkpoint/commit plan to the host before substantial \
+         work, only when you expect two or more separate non-empty checkpoint \
+         commits. Provide a short summary/title and ordered diff-bearing phase \
+         labels. The host fills target repo, base branch, and work branch data \
+         from the workspace context; do not run git, create branches, open PRs, \
+         or call a forge to publish the plan yourself."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -60,7 +64,7 @@ impl tongs::tools::Tool for PublishPlanTool {
                 },
                 "phases": {
                     "type": "array",
-                    "description": "Ordered implementation phase labels, concise and reusable as PR checklist lines.",
+                    "description": "Ordered diff-bearing checkpoint/commit phase labels, concise and reusable as PR checklist lines.",
                     "items": { "type": "string" },
                     "minItems": 1
                 }
