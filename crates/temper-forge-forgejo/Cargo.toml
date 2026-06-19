@@ -21,7 +21,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-bench-forgejo = { git = "http://127.0.0.1:3000/ai/bench.git", rev = "1a739a6e17df042283399df0530e2ca5adcf1785" }
+bench-forgejo = { git = "http://127.0.0.1:3000/ai/bench.git", rev = "7aae3a0604e208f275b94c0279b95f60ccc1d217" }
 temper-workflow = { path = "../temper-workflow" }
 
 [lints]

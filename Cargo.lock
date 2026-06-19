@@ -91,7 +91,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "bench-forgejo"
 version = "0.0.0"
-source = "git+http://127.0.0.1:3000/ai/bench.git?rev=1a739a6e17df042283399df0530e2ca5adcf1785#1a739a6e17df042283399df0530e2ca5adcf1785"
+source = "git+http://127.0.0.1:3000/ai/bench.git?rev=7aae3a0604e208f275b94c0279b95f60ccc1d217#7aae3a0604e208f275b94c0279b95f60ccc1d217"
 dependencies = [
  "serde",
  "serde_json",
@@ -347,7 +347,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "franken-decision"
 version = "0.2.0"
-source = "git+http://127.0.0.1:3000/ai/skein.git?rev=d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853#d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853"
+source = "git+http://127.0.0.1:3000/ai/skein.git?rev=5cd8c4d88a41720afa8f509279bde53b16bf38d0#5cd8c4d88a41720afa8f509279bde53b16bf38d0"
 dependencies = [
  "franken-evidence",
  "franken-kernel",
@@ -357,7 +357,7 @@ dependencies = [
 [[package]]
 name = "franken-evidence"
 version = "0.2.0"
-source = "git+http://127.0.0.1:3000/ai/skein.git?rev=d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853#d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853"
+source = "git+http://127.0.0.1:3000/ai/skein.git?rev=5cd8c4d88a41720afa8f509279bde53b16bf38d0#5cd8c4d88a41720afa8f509279bde53b16bf38d0"
 dependencies = [
  "serde",
  "serde_json",
@@ -366,7 +366,7 @@ dependencies = [
 [[package]]
 name = "franken-kernel"
 version = "0.2.0"
-source = "git+http://127.0.0.1:3000/ai/skein.git?rev=d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853#d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853"
+source = "git+http://127.0.0.1:3000/ai/skein.git?rev=5cd8c4d88a41720afa8f509279bde53b16bf38d0#5cd8c4d88a41720afa8f509279bde53b16bf38d0"
 dependencies = [
  "serde",
 ]
@@ -631,7 +631,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "jig-core"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=6e645dde7d263ee2940d2965267cbc37fc302bfb#6e645dde7d263ee2940d2965267cbc37fc302bfb"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=529bc09b807e80158d7ec9d0e08940616d8894c7#529bc09b807e80158d7ec9d0e08940616d8894c7"
 dependencies = [
  "serde",
  "serde_json",
@@ -640,7 +640,7 @@ dependencies = [
 [[package]]
 name = "jig-record"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=6e645dde7d263ee2940d2965267cbc37fc302bfb#6e645dde7d263ee2940d2965267cbc37fc302bfb"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=529bc09b807e80158d7ec9d0e08940616d8894c7#529bc09b807e80158d7ec9d0e08940616d8894c7"
 dependencies = [
  "jig-core",
  "jig-runtime",
@@ -652,7 +652,7 @@ dependencies = [
 [[package]]
 name = "jig-runtime"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=6e645dde7d263ee2940d2965267cbc37fc302bfb#6e645dde7d263ee2940d2965267cbc37fc302bfb"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=529bc09b807e80158d7ec9d0e08940616d8894c7#529bc09b807e80158d7ec9d0e08940616d8894c7"
 dependencies = [
  "skein",
 ]
@@ -660,7 +660,7 @@ dependencies = [
 [[package]]
 name = "jig-server"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/jig.git?rev=6e645dde7d263ee2940d2965267cbc37fc302bfb#6e645dde7d263ee2940d2965267cbc37fc302bfb"
+source = "git+http://127.0.0.1:3000/ai/jig.git?rev=529bc09b807e80158d7ec9d0e08940616d8894c7#529bc09b807e80158d7ec9d0e08940616d8894c7"
 dependencies = [
  "jig-core",
  "jig-runtime",
@@ -1353,7 +1353,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "skein"
 version = "0.2.4"
-source = "git+http://127.0.0.1:3000/ai/skein.git?rev=d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853#d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853"
+source = "git+http://127.0.0.1:3000/ai/skein.git?rev=5cd8c4d88a41720afa8f509279bde53b16bf38d0#5cd8c4d88a41720afa8f509279bde53b16bf38d0"
 dependencies = [
  "base64",
  "bincode-next",
@@ -2139,7 +2139,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 [[package]]
 name = "tongs"
 version = "0.1.0"
-source = "git+http://127.0.0.1:3000/ai/tongs.git?rev=de509a589cfe01970d406e0430237be9e206ab0d#de509a589cfe01970d406e0430237be9e206ab0d"
+source = "git+http://127.0.0.1:3000/ai/tongs.git?rev=3ac95df9bd77d8420873b8f46203489bb847c3de#3ac95df9bd77d8420873b8f46203489bb847c3de"
 dependencies = [
  "async-trait",
  "futures-core",
