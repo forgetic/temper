@@ -79,6 +79,10 @@
     {
       "id": "implementation",
       "description": "identifies an implementation pull request"
+    },
+    {
+      "id": "landing",
+      "description": "engineer-complete implementation PR awaiting CI-green mechanical landing"
     }
   ],
   "artifact_kinds": [
@@ -99,6 +103,9 @@
       "target": "pull_request",
       "identifying_labels": [
         "implementation"
+      ],
+      "initial_labels": [
+        "landing"
       ]
     }
   ],
@@ -130,7 +137,8 @@
           "id": "in_progress",
           "label": "in-progress",
           "artifacts": [
-            "code"
+            "code",
+            "implementation_pr"
           ]
         }
       ]
@@ -188,6 +196,9 @@
     {
       "id": "landing",
       "artifact": "implementation_pr",
+      "labels": [
+        "landing"
+      ],
       "condition": {
         "kind": "ci_passed"
       },
@@ -285,6 +296,24 @@
       ]
     },
     {
+      "id": "request_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "in-progress",
+          "if_present": true
+        },
+        {
+          "kind": "add_label",
+          "label": "landing"
+        }
+      ]
+    },
+    {
       "id": "address_ci_failure",
       "artifact": "implementation_pr",
       "roles": [
@@ -310,6 +339,10 @@
       "effects": [
         {
           "kind": "merge_pull_request"
+        },
+        {
+          "kind": "remove_label",
+          "label": "landing"
         },
         {
           "kind": "close_parent_issues"
