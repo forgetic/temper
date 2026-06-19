@@ -14,9 +14,9 @@ use temper_forge::{
 };
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_workflow::{
-    ArtifactRef, ArtifactSource, ExecutionContext, ExecutionError, Executor, PlanDiagnostic,
-    RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect, WorkflowMetadata,
-    parse_metadata_block, render_metadata_block,
+    ArtifactRef, ArtifactSource, ExecutionContext, ExecutionError, Executor, LabelId,
+    PlanDiagnostic, RawWorkflowSpec, RoleId, TransitionId, ValidatedWorkflow, WorkflowEffect,
+    WorkflowMetadata, parse_metadata_block, render_metadata_block,
 };
 
 const FIXTURE: &str = include_str!("../fixtures/ci-delivery.json");
@@ -796,7 +796,7 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
         ..Default::default()
     };
     let block = render_metadata_block(&metadata);
-    let pr_number = create_pr_with_body(&forge, &repo, &["implementation"], &block);
+    let pr_number = create_pr_with_body(&forge, &repo, &["implementation", "landing"], &block);
 
     // Seed CI jobs so the ci_gate is satisfied.
     let pr = block_on(forge.get_pull_request_by_number(&repo, pr_number))
@@ -824,7 +824,7 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
     let context = ExecutionContext::new();
     let executor = workflow.executor_with_context(&forge, context);
 
-    // Pre-plan: check that land_pr plans with both merge and close parents.
+    // Pre-plan: check that land_pr plans with merge, landing-label cleanup, and close parents.
     let plan = block_on(executor.plan(
         &repo,
         ArtifactSource::PullRequest { number: pr_number },
@@ -836,11 +836,12 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
         plan.effects,
         vec![
             WorkflowEffect::MergePullRequest,
+            WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::CloseParentIssues
         ]
     );
 
-    // Execute land_pr — merge + close parent issues.
+    // Execute land_pr — merge + landing-label cleanup + close parent issues.
     let report = block_on(executor.execute(
         &repo,
         ArtifactSource::PullRequest { number: pr_number },
@@ -852,6 +853,7 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
         report.applied,
         vec![
             WorkflowEffect::MergePullRequest,
+            WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::CloseParentIssues
         ]
     );
@@ -861,6 +863,7 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
         .expect("lookup succeeds")
         .expect("pull request exists");
     assert_eq!(merged_pr.state, PullRequestState::Merged);
+    assert!(!merged_pr.labels.contains(&"landing".to_string()));
 
     // Parent code issue should now be closed and in-progress removed.
     let parent = block_on(forge.get_issue_by_number(&repo, parent_number))
