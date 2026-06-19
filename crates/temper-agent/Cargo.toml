@@ -22,12 +22,12 @@ uuid.workspace = true
 [dev-dependencies]
 temper-agent-io = { path = "../temper-agent-io" }
 tracing-subscriber = { workspace = true }
-jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
-jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
-jig-record = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
+jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
+jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
+jig-record = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
 # Test-only: the jig-record request oracle runs its recorder on a jig-runtime
 # (skein) thread.
-jig-runtime = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
+jig-runtime = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
 
 [lints]
 workspace = true

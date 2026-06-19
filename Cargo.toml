@@ -82,8 +82,8 @@ temper-workflow = { path = "crates/temper-workflow" }
 temper-engine = { path = "crates/temper-engine" }
 temper-engine-io = { path = "crates/temper-engine-io" }
 temper-worker = { path = "crates/temper-worker" }
-jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
-jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "6e645dde7d263ee2940d2965267cbc37fc302bfb" }
+jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
+jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
 # `examples/checkpoint_progress_to_issue`: replays agent step-progress markers
 # through the daemon's apply_progress against an in-memory forge.
 temper-forge-memory = { path = "crates/temper-forge-memory" }
@@ -120,7 +120,7 @@ rust-version = "1.88"
 # skein: our maintained, MIT, cancel-correct async runtime (a clean-room fork of
 # asupersync 0.2.4 — the last plain-MIT upstream release; 0.2.5+ carry an
 # OpenAI/Anthropic license rider and 0.3.3+ require nightly). Lives in its own
-# repo at ../skein and is shared across projects (temper, smith, …).
+# repo and is consumed from the local Forgejo `ai/skein` git remote.
 #
 # TLS features are enabled because the merged agent crates (formerly anvil)
 # reach LLM providers over HTTPS. skein is needed by every role and so cannot be
@@ -136,7 +136,7 @@ rust-version = "1.88"
 # different keys every CI run, defeating the build cache. Enabling it
 # unconditionally costs only a small static root bundle and keeps skein's
 # resolved feature set identical across every build, so the cache is shared.
-skein = { git = "http://127.0.0.1:3000/ai/skein.git", rev = "d2c98ecbad0825cdfef7feeb58f1e7f7e4f4d853", features = [
+skein = { git = "http://127.0.0.1:3000/ai/skein.git", rev = "5cd8c4d88a41720afa8f509279bde53b16bf38d0", features = [
     "tls",
     "tls-native-roots",
     "tls-webpki-roots",
@@ -154,7 +154,7 @@ serde_json = "1"
 toml = "0.8"
 thiserror = "2"
 # Merged-in agent stack (formerly anvil) and worker (formerly smith).
-tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "de509a589cfe01970d406e0430237be9e206ab0d" }
+tongs = { git = "http://127.0.0.1:3000/ai/tongs.git", rev = "3ac95df9bd77d8420873b8f46203489bb847c3de" }
 # Structured logging stack (see crates/temper-log). `tracing` is the facade;
 # `tracing-subscriber` provides the registry + EnvFilter (RUST_LOG) + fmt layer
 # + the `json` fmt layer behind the `TEMPER_LOG_FORMAT=json` toggle;
