@@ -3,10 +3,11 @@
 //! `basic-delivery` is the minimal, no-human-in-the-loop reference shape: a
 //! single unlabeled intake issue is stamped `untriaged` by the bot, triaged by
 //! the architect into a ready code issue (a *single* outcome — no design or
-//! breakdown branch), implemented by the engineer into a PR, and auto-merged by
-//! the bot once CI is green. Only three workers participate: `architect`,
-//! `engineer`, and `mechanical`. There is no reviewer/owner/human role and the
-//! landing gate is CI-only (no review gate).
+//! breakdown branch), implemented by the engineer into a PR, handed off by the
+//! engineer with a `landing` label, and auto-merged by the bot once CI is green.
+//! Only three workers participate: `architect`, `engineer`, and `mechanical`.
+//! There is no reviewer/owner/human role and the landing gate has no review
+//! gate.
 //!
 //! This mirrors `reference_delivery.rs` at smaller scope. It is the in-process
 //! fixture check; it exercises validation, classification, queue matching, and
@@ -158,6 +159,36 @@ fn basic_delivery_fixture_validates_with_expected_shape() {
     assert!(
         intake.identifying_labels.is_empty(),
         "intake is the default issue kind and carries no identifying labels"
+    );
+
+    // Implementation PRs are identified by `implementation`; final-handoff PRs
+    // also start with `landing`, while plan-first PRs use the in-progress state
+    // label until the engineer explicitly hands them off.
+    let implementation_pr = workflow
+        .artifact_kinds()
+        .iter()
+        .find(|kind| kind.id.as_str() == "implementation_pr")
+        .expect("implementation_pr kind is declared");
+    assert_eq!(
+        implementation_pr.identifying_labels,
+        vec![LabelId::new("implementation")]
+    );
+    assert_eq!(
+        implementation_pr.initial_labels,
+        vec![LabelId::new("landing")]
+    );
+    let in_progress = workflow
+        .state_dimensions()
+        .iter()
+        .flat_map(|dimension| &dimension.states)
+        .find(|state| state.id.as_str() == "in_progress")
+        .expect("in_progress state is declared");
+    assert_eq!(
+        in_progress.artifacts,
+        vec![
+            ArtifactKindId::new("code"),
+            ArtifactKindId::new("implementation_pr")
+        ]
     );
 }
 
@@ -333,14 +364,15 @@ fn engineer_claims_ready_code_and_opens_a_pr() {
 }
 
 #[test]
-fn mechanical_landing_gate_is_ci_only_no_review_required() {
+fn mechanical_landing_requires_handoff_and_ci_no_review_required() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
 
-    // basic-delivery landing requires CI plus the coordinated-landing dependency
-    // gate, and crucially NO review gate. `ci_gate` checks `ci_passed`;
-    // `dependency_gate` checks `dependencies_resolved` (vacuously true for a PR
-    // with no dependency links, so single-repo landing is unaffected).
+    // basic-delivery landing requires an explicit `landing` handoff label, CI,
+    // plus the coordinated-landing dependency gate, and crucially NO review
+    // gate. `ci_gate` checks `ci_passed`; `dependency_gate` checks
+    // `dependencies_resolved` (vacuously true for a PR with no dependency links,
+    // so single-repo landing is unaffected).
     let ci_gate = workflow
         .gates()
         .iter()
@@ -366,16 +398,14 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
         "landing requires CI + dependency gates — but no review gate"
     );
 
-    // The `landing` queue is mechanically serviced once CI passes. It carries no
-    // label filter: the artifact kind already identifies implementation PRs, and
-    // adding the `implementation` label to this terminal queue would make
-    // terminal recovery scans revisit already-merged implementation PRs.
+    // The `landing` queue is mechanically serviced once CI passes, but only for
+    // PRs that the engineer has explicitly handed off with the `landing` label.
     let landing = workflow
         .queues()
         .iter()
         .find(|queue| queue.id.as_str() == "landing")
         .expect("landing queue is declared");
-    assert!(landing.labels.is_empty());
+    assert_eq!(landing.labels, vec![LabelId::new("landing")]);
     assert_eq!(landing.condition.as_ref(), Some(&GateCondition::CiPassed));
     let automation = landing
         .automation
@@ -384,10 +414,23 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
     assert_eq!(automation.actor, RoleId::new("mechanical"));
     assert_eq!(automation.transition, TransitionId::new("land_pr"));
 
-    // A PR with green CI lands with no review signal supplied at all — proving the
-    // gate set does not include review approval.
-    let ready = classify_pr(&workflow, 10, &["implementation"]);
     let ci_only = GateSignals::new().with_ci(CiStatus::passed());
+    let in_progress = classify_pr(&workflow, 9, &["implementation", "in-progress"]);
+    assert!(
+        !planner
+            .matching_queues_with(&in_progress, &ci_only)
+            .contains(&QueueId::new("landing")),
+        "green plan-first PRs are not mechanically landable until engineer handoff"
+    );
+
+    // A handed-off PR with green CI lands with no review signal supplied at all —
+    // proving the gate set does not include review approval.
+    let ready = classify_pr(&workflow, 10, &["implementation", "landing"]);
+    assert!(
+        planner
+            .matching_queues_with(&ready, &ci_only)
+            .contains(&QueueId::new("landing"))
+    );
     let plan = planner
         .plan_transition_with(
             &TransitionId::new("land_pr"),
@@ -395,11 +438,12 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
             &ready,
             &ci_only,
         )
-        .expect("mechanical automation can land a PR on CI alone");
+        .expect("mechanical automation can land a handed-off PR on CI alone");
     assert_eq!(
         plan.effects,
         vec![
             WorkflowEffect::MergePullRequest,
+            WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::CloseParentIssues
         ]
     );
@@ -421,6 +465,28 @@ fn mechanical_landing_gate_is_ci_only_no_review_required() {
                 transition: TransitionId::new("land_pr"),
                 gate: GateId::new("ci_gate"),
             })
+    );
+}
+
+#[test]
+fn engineer_handoff_moves_plan_first_pr_to_landing_queue() {
+    let workflow = fixture_workflow();
+    let planner = workflow.planner();
+    let in_progress = classify_pr(&workflow, 20, &["implementation", "in-progress"]);
+
+    let handoff = planner
+        .plan_transition(
+            &TransitionId::new("request_review"),
+            &RoleId::new("engineer"),
+            &in_progress,
+        )
+        .expect("engineer can mark a completed plan-first PR ready for landing");
+    assert_eq!(
+        handoff.effects,
+        vec![
+            WorkflowEffect::RemoveLabel(LabelId::new("in-progress")),
+            WorkflowEffect::AddLabel(LabelId::new("landing")),
+        ]
     );
 }
 
@@ -463,12 +529,12 @@ fn failed_ci_routes_back_to_the_engineer() {
 
 #[test]
 fn review_status_unused_keeps_landing_unblocked() {
-    // Defensive: even if a stray review signal is present, the CI-only gate does
-    // not consult it; landing depends solely on CI. This documents that adding a
-    // review signal neither helps nor blocks a basic-delivery landing.
+    // Defensive: even if a stray review signal is present, the CI/dependency
+    // gates do not consult it. This documents that adding a review signal
+    // neither helps nor blocks a basic-delivery landing.
     let workflow = fixture_workflow();
     let planner = workflow.planner();
-    let ready = classify_pr(&workflow, 30, &["implementation"]);
+    let ready = classify_pr(&workflow, 30, &["implementation", "landing"]);
 
     let ci_and_stray_review = GateSignals::new()
         .with_ci(CiStatus::passed())
@@ -485,6 +551,7 @@ fn review_status_unused_keeps_landing_unblocked() {
         plan.effects,
         vec![
             WorkflowEffect::MergePullRequest,
+            WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::CloseParentIssues
         ]
     );

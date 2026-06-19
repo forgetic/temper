@@ -81,14 +81,14 @@ fn audit_candidate_plan_keeps_terminal_workflow_label_recovery_queries() {
 }
 
 #[test]
-fn basic_delivery_landing_does_not_recover_merged_implementation_prs() {
+fn basic_delivery_landing_recovery_is_bounded_to_handoff_labels() {
     let workflow = workflow_from_json(BASIC_FIXTURE);
     let compiled = workflow.compile();
 
-    // The basic landing queue intentionally has no `implementation` label filter:
-    // the implementation_pr artifact kind still classifies open candidates, but
-    // terminal recovery scans must not keep querying already-merged PRs merely
-    // because they retain the implementation label.
+    // The basic landing queue is label-bounded by the engineer's `landing`
+    // handoff. Terminal recovery may revisit landing-labelled PRs to finish a
+    // queued merge/cleanup, but it must not query already-merged PRs merely
+    // because they retain the stable `implementation` identity label.
     let audit = candidate_query_plan(&workflow, &compiled, None, ScanMode::Audit);
     assert!(!has_pull_request_query(
         &audit.pull_request_queries,
@@ -100,15 +100,27 @@ fn basic_delivery_landing_does_not_recover_merged_implementation_prs() {
         PullRequestState::Merged,
         &["implementation"]
     ));
-    assert!(!audit.pull_request_queries.iter().any(|query| {
-        matches!(
-            query.state,
-            Some(PullRequestState::Closed | PullRequestState::Merged)
-        )
-    }));
+    assert!(closed_pull_request_queries_have_labels(
+        &audit.pull_request_queries
+    ));
+    assert!(has_pull_request_query(
+        &audit.pull_request_queries,
+        PullRequestState::Closed,
+        &["landing"]
+    ));
+    assert!(has_pull_request_query(
+        &audit.pull_request_queries,
+        PullRequestState::Merged,
+        &["landing"]
+    ));
 
     let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
     assert!(has_pull_request_query(
+        &automated.pull_request_queries,
+        PullRequestState::Open,
+        &["landing"]
+    ));
+    assert!(!has_pull_request_query(
         &automated.pull_request_queries,
         PullRequestState::Open,
         &[]
