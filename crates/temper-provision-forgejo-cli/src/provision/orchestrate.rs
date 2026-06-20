@@ -171,3 +171,37 @@ fn build_plan(
     )?;
     Ok(plan)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_forge::AccessScope;
+
+    #[test]
+    fn demo_plan_auto_initializes_repo_for_seed_commits() {
+        let workflow = temper_reference_delivery::workflow();
+        let config = runner_config_for(&workflow, repo_input());
+
+        let plan = build_plan(
+            &workflow,
+            "acme",
+            "service",
+            &config.repository.default_branch,
+            &config.role_bindings,
+            ProvisionOptions {
+                existing_repo: false,
+                access: AccessScope::OrgOwners,
+            },
+        )
+        .expect("plan builds");
+
+        assert!(
+            plan.repository_auto_init,
+            "seed-commit demo provisioning should preserve Forgejo auto-init"
+        );
+        assert!(
+            !plan.seed_commits.is_empty(),
+            "regression test should cover the seed-commit provisioning path"
+        );
+    }
+}

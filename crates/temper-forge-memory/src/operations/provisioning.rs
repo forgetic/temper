@@ -13,8 +13,8 @@ use crate::util::validate_create_repository;
 use async_trait::async_trait;
 use temper_forge_model::{
     AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository,
-    EnsureRepository, ForgeContent, ForgeResult, NewUser, RepositoryId, RepositoryPath,
-    TokenScope, WebhookSpec,
+    EnsureRepository, ForgeContent, ForgeResult, NewUser, RepositoryId, RepositoryPath, TokenScope,
+    WebhookSpec,
 };
 
 #[async_trait]

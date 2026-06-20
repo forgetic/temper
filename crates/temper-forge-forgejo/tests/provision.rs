@@ -13,7 +13,7 @@ use base64::Engine;
 use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, repo_id};
 use temper_forge_forgejo::HttpMethod;
 use temper_forge_model::{
-    AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
+    AccessGrant, AccessScope, CommitFile, CreateBranch, EnsureRepository, ForgeAdmin, ForgeContent,
     ForgeError, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope, WebhookEvents,
     WebhookSpec,
 };
@@ -26,11 +26,12 @@ fn ensure_repository_posts_org_repo_and_returns_id() {
     client.push_response(201, "{}");
     let forge = forge(client.clone());
 
-    let id = block_on(forge.ensure_repository(CreateRepository {
+    let id = block_on(forge.ensure_repository(EnsureRepository {
         owner: OWNER.to_string(),
         name: REPO.to_string(),
         default_branch: "main".to_string(),
         description: None,
+        auto_init: true,
     }))
     .unwrap();
 
@@ -46,16 +47,43 @@ fn ensure_repository_posts_org_repo_and_returns_id() {
 }
 
 #[test]
+fn ensure_repository_can_request_empty_repo_without_auto_init() {
+    let client = MockHttpClient::new();
+    client.push_response(201, "{}");
+    let forge = forge(client.clone());
+
+    let id = block_on(forge.ensure_repository(EnsureRepository {
+        owner: OWNER.to_string(),
+        name: REPO.to_string(),
+        default_branch: "main".to_string(),
+        description: None,
+        auto_init: false,
+    }))
+    .unwrap();
+
+    assert_eq!(id, repo_id());
+    let request = client.last_request().unwrap();
+    assert_eq!(request.method, HttpMethod::Post);
+    assert_eq!(request.path, format!("/api/v1/orgs/{OWNER}/repos"));
+    let body = body_json(&request);
+    assert_eq!(body["name"], REPO);
+    assert_eq!(body["default_branch"], "main");
+    assert_eq!(body["auto_init"], false);
+    assert_eq!(body["private"], false);
+}
+
+#[test]
 fn ensure_repository_tolerates_existing_conflict() {
     let client = MockHttpClient::new();
     client.push_response(409, "repository already exists");
     let forge = forge(client);
 
-    let id = block_on(forge.ensure_repository(CreateRepository {
+    let id = block_on(forge.ensure_repository(EnsureRepository {
         owner: OWNER.to_string(),
         name: REPO.to_string(),
         default_branch: "main".to_string(),
         description: None,
+        auto_init: true,
     }))
     .unwrap();
     assert_eq!(id, repo_id());

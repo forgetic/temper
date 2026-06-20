@@ -203,5 +203,9 @@ mod tests {
             "temper init must not request repository seed commits: {:?}",
             plan.seed_commits
         );
+        assert!(
+            !plan.repository_auto_init,
+            "temper init must request a missing repo without Forgejo auto-initialization"
+        );
     }
 }

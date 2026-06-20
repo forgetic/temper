@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{
-    AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
+    AccessGrant, AccessScope, CommitFile, CreateBranch, EnsureRepository, ForgeAdmin, ForgeContent,
     NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope, WebhookEvents, WebhookSpec,
 };
 
@@ -34,12 +34,13 @@ fn memory_forge_is_a_provisioning_forge() {
     assert_provisioning::<MemoryForge>();
 }
 
-fn repo_input(owner: &str, name: &str) -> CreateRepository {
-    CreateRepository {
+fn repo_input(owner: &str, name: &str) -> EnsureRepository {
+    EnsureRepository {
         owner: owner.into(),
         name: name.into(),
         default_branch: "main".into(),
         description: None,
+        auto_init: true,
     }
 }
 
