@@ -63,9 +63,10 @@ authority** and lands purely on CI.
 ## What is real vs. canned
 
 - **Real:** the Forgejo server, the host-mode `forgejo-runner` and its CI, the
-  provisioning, the daemon's Forge API authority (webhooks, leases, per-role apply
-  tokens, mechanical landing), the worker's git workspaces, and the **coding agent
-  itself** (architect triage + engineer implementation are real LLM work).
+  provisioning, the direct Forgejo issue-create API call, the daemon's Forge API
+  authority (webhooks, leases, per-role apply tokens, mechanical landing), the
+  worker's git workspaces, and the **coding agent itself** (architect triage +
+  engineer implementation are real LLM work).
 - **Canned:** only the thin seed intake body (`config/intake-issue.md`).
 
 The coding agent's LLM provider is selected with `TEMPER_RUN_AUTH` in
