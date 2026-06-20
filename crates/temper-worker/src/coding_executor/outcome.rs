@@ -1,4 +1,4 @@
-use temper_protocol_agent::{ImplementationPlan, WorkspaceResult};
+use temper_protocol_agent::WorkspaceResult;
 use temper_protocol_worker::{Branch, FailureClass, RepoOutcome};
 
 use crate::executor::JobOutcome;
@@ -52,12 +52,8 @@ pub(super) async fn writable_outcome(
         summary: result
             .summary
             .or_else(|| Some(format!("implemented {coordination_key}"))),
-        details: implementation_plan_details(result.plan),
+        details: None,
     }
-}
-
-fn implementation_plan_details(plan: Option<ImplementationPlan>) -> Option<serde_json::Value> {
-    plan.map(|plan| serde_json::json!({ "plan": { "phases": plan.phases } }))
 }
 
 async fn writable_verdict_outcome(

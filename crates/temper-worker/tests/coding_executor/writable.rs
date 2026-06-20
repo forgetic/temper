@@ -71,32 +71,6 @@ fn success_path_commits_pushes_and_reports_branch() {
 }
 
 #[test]
-fn success_path_carries_structured_plan_details() {
-    temper_worker_io::block_on(async {
-        let fixture = Fixture::new();
-        let executor = fixture.executor(AgentBehavior::SuccessWithPlan.runner(), true);
-
-        let outcome = executor
-            .execute(assign("agent/pr-for-code-7", "pr-for-code-7"))
-            .await;
-
-        let JobOutcome::Success {
-            repos: _,
-            summary,
-            details,
-        } = outcome
-        else {
-            panic!("expected success outcome");
-        };
-        assert_eq!(summary.as_deref(), Some("did the planned work"));
-        assert_eq!(
-            details,
-            Some(json!({"plan":{"phases":["Write test","Implement fix"]}}))
-        );
-    });
-}
-
-#[test]
 fn workspace_is_reused_across_successful_jobs_for_same_repo_and_role() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
@@ -200,10 +174,10 @@ fn writable_job_with_allowed_escalation_verdict_returns_verdict() {
 }
 
 #[test]
-fn plan_only_empty_commit_is_not_a_successful_product_diff() {
+fn empty_checkpoint_commit_is_not_a_successful_product_diff() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
-        let executor = fixture.executor(AgentBehavior::PlanOnlyEmptyCommit.runner(), true);
+        let executor = fixture.executor(AgentBehavior::EmptyCheckpointCommit.runner(), true);
 
         let outcome = executor
             .execute(assign("agent/pr-for-code-10", "pr-for-code-10"))

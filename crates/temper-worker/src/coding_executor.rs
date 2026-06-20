@@ -342,9 +342,6 @@ async fn verdict_only_outcome(
         body,
         review_body,
         children,
-        // Structured plans are meaningful for writable PR head paths; read-only
-        // verdict routing does not consume them.
-        plan: _plan,
         // `labels` is a head-path PR-label override; read-only verdict routing
         // does not consume it.
         labels: _labels,

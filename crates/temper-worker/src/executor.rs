@@ -12,9 +12,7 @@ pub enum JobOutcome {
         /// to a single repo produces exactly one outcome.
         repos: Vec<RepoOutcome>,
         summary: Option<String>,
-        /// Optional structured metadata for daemon-side application. The
-        /// implementation plan from the agent protocol is carried here as JSON
-        /// so the worker still exposes no Forge mutation authority.
+        /// Optional structured metadata for daemon-side application.
         details: Option<Value>,
     },
     Verdict {
@@ -185,7 +183,7 @@ mod tests {
 
     #[test]
     fn success_outcome_maps_structured_details_to_result() {
-        let details = json!({"plan":{"phases":["Write test","Implement fix"]}});
+        let details = json!({"extra":{"note":"worker metadata"}});
         let result = job_result(
             "worker-1",
             "job-123",

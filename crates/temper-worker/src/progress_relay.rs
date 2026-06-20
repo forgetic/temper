@@ -15,10 +15,7 @@ use std::sync::Arc;
 use skein::http::h1::http_client::HttpClient;
 use skein::runtime::RuntimeHandle;
 use temper_protocol_agent::{StepProgress, StepState};
-use temper_protocol_worker::{
-    JobPlanPublication, JobPlanPublicationTarget, JobProgress, WORKER_PROTOCOL_VERSION,
-    WorkerProtocolMessage,
-};
+use temper_protocol_worker::{JobProgress, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 use temper_worker_io::{HttpCall, build_http_client, http_call};
 
 use crate::agent_runner::ProgressSink;
@@ -40,30 +37,7 @@ pub fn progress_message(worker_id: &str, progress: &StepProgress) -> WorkerProto
         .to_string(),
         pushed_sha: progress.pushed_sha.clone(),
         note: progress.note.clone(),
-        plan_publication: progress
-            .plan_publication
-            .as_ref()
-            .map(plan_publication_message),
     })
-}
-
-fn plan_publication_message(
-    publication: &temper_protocol_agent::PlanPublication,
-) -> JobPlanPublication {
-    JobPlanPublication {
-        summary: publication.summary.clone(),
-        phases: publication.phases.clone(),
-        target_repos: publication
-            .target_repos
-            .iter()
-            .map(|target| JobPlanPublicationTarget {
-                repo_path: target.repo_path.clone(),
-                dir: target.dir.clone(),
-                base_branch: target.base_branch.clone(),
-                branch_hint: target.branch_hint.clone(),
-            })
-            .collect(),
-    }
 }
 
 /// The production sink: log locally, relay to the daemon, never fail.
@@ -137,7 +111,6 @@ impl ProgressSink for DaemonRelayProgressSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_protocol_agent::{PlanPublication, PlanPublicationTarget};
 
     #[test]
     fn message_carries_exactly_the_step_progress_fields() {
@@ -148,16 +121,6 @@ mod tests {
             state: StepState::Done,
             pushed_sha: Some("abc123".to_string()),
             note: Some("done in one pass".to_string()),
-            plan_publication: Some(PlanPublication {
-                summary: "Ship the banner".to_string(),
-                phases: vec!["implement the banner".to_string()],
-                target_repos: vec![PlanPublicationTarget {
-                    repo_path: "acme/demo".to_string(),
-                    dir: "demo".to_string(),
-                    base_branch: "main".to_string(),
-                    branch_hint: Some("agent/banner".to_string()),
-                }],
-            }),
         };
         let WorkerProtocolMessage::Progress(message) = progress_message("w1", &progress) else {
             panic!("expected a progress message");
@@ -170,14 +133,6 @@ mod tests {
         assert_eq!(message.state, "done");
         assert_eq!(message.pushed_sha.as_deref(), Some("abc123"));
         assert_eq!(message.note.as_deref(), Some("done in one pass"));
-        let publication = message.plan_publication.expect("plan publication carried");
-        assert_eq!(publication.summary, "Ship the banner");
-        assert_eq!(publication.phases, vec!["implement the banner".to_string()]);
-        assert_eq!(publication.target_repos[0].repo_path, "acme/demo");
-        assert_eq!(
-            publication.target_repos[0].branch_hint.as_deref(),
-            Some("agent/banner")
-        );
     }
 
     #[test]
@@ -189,7 +144,6 @@ mod tests {
             state: StepState::Started,
             pushed_sha: None,
             note: None,
-            plan_publication: None,
         };
         let WorkerProtocolMessage::Progress(message) = progress_message("w", &progress) else {
             panic!("expected a progress message");
