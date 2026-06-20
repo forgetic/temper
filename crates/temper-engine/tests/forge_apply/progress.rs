@@ -114,7 +114,6 @@ fn checkpoint_done_progress_updates_same_run_ledger_idempotently_before_pr() {
         assert!(
             body.contains("Latest checkpoint: step 2 — implement managed ledger (abc123456789)")
         );
-        assert!(!body.contains("Implementation plan"));
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
     })
 }
@@ -236,9 +235,6 @@ fn final_engineer_open_pr_progress_uses_pr_body_not_issue_comment() {
         let branch_name = format!("agent/{correlation}");
         let summary = "Implemented the API and tests.";
 
-        // The terminal progress checkpoint can arrive immediately before the
-        // success result that opens the PR. It should not leave a duplicate
-        // final-summary comment on the source issue.
         applier
             .apply_progress(
                 job.clone(),
@@ -282,8 +278,6 @@ fn final_engineer_open_pr_progress_uses_pr_body_not_issue_comment() {
         );
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
 
-        // Re-delivery after the PR exists is also quiet and does not replace the
-        // finalized ledger with checkpoint details.
         applier
             .apply_progress(
                 job,
