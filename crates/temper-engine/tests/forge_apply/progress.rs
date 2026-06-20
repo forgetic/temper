@@ -224,6 +224,66 @@ fn trivial_pr_receives_no_checklist_progress_chatter() {
 }
 
 #[test]
+fn final_engineer_open_pr_progress_uses_pr_body_not_issue_comment() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let correlation = correlation_key(issue);
+        let branch_name = format!("agent/{correlation}");
+        let summary = "Implemented the API and tests.";
+
+        // The terminal progress checkpoint can arrive immediately before the
+        // success result that opens the PR. It should not leave a duplicate
+        // final-summary comment on the source issue.
+        applier
+            .apply_progress(
+                job.clone(),
+                progress(
+                    &correlation,
+                    3,
+                    "done",
+                    "finish engineer run",
+                    None,
+                    Some(summary),
+                ),
+            )
+            .await;
+        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
+
+        applier
+            .apply(
+                job.clone(),
+                success_result("worker-a", &job.job_id, &job.repo, &branch_name, summary),
+            )
+            .await;
+
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
+        assert!(pulls[0].body.contains(summary));
+        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
+
+        // Re-delivery after the PR exists is also quiet.
+        applier
+            .apply_progress(
+                job,
+                progress(
+                    &correlation,
+                    3,
+                    "done",
+                    "finish engineer run",
+                    None,
+                    Some(summary),
+                ),
+            )
+            .await;
+        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
+    })
+}
+
+#[test]
 fn terminal_progress_comment_requires_useful_final_note_and_is_idempotent() {
     temper_engine_io::block_on(async move {
         let forge = Arc::new(MemoryForge::new());
