@@ -53,28 +53,20 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 repo: job.repo.clone(),
                 number: pull_request.number,
             }];
-            self.update_issue_run_ledger(
-                job,
-                issue,
-                &RunLedgerUpdate::Continued {
-                    correlation_key: &progress.correlation_key,
-                    worker_id: &progress.worker_id,
-                    pull_requests: &pull_requests,
-                },
-            )
-            .await;
+            let update = RunLedgerUpdate::Continued {
+                correlation_key: &progress.correlation_key,
+                worker_id: &progress.worker_id,
+                pull_requests: &pull_requests,
+            };
+            self.update_issue_run_ledger(job, issue, &update).await;
             return;
         }
 
-        self.update_issue_run_ledger(
-            job,
-            issue,
-            &RunLedgerUpdate::Progress {
-                progress,
-                include_final_note,
-            },
-        )
-        .await;
+        let update = RunLedgerUpdate::Progress {
+            progress,
+            include_final_note,
+        };
+        self.update_issue_run_ledger(job, issue, &update).await;
     }
 
     /// Finalizes the source issue ledger once the implementation PR body is the
@@ -92,16 +84,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         let Some((_, issue)) = self.resolve_issue(job).await else {
             return;
         };
-        self.update_issue_run_ledger(
-            job,
-            issue,
-            &RunLedgerUpdate::Continued {
-                correlation_key,
-                worker_id,
-                pull_requests,
-            },
-        )
-        .await;
+        let update = RunLedgerUpdate::Continued {
+            correlation_key,
+            worker_id,
+            pull_requests,
+        };
+        self.update_issue_run_ledger(job, issue, &update).await;
     }
 
     async fn existing_implementation_pr(
