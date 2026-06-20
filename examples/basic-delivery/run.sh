@@ -15,10 +15,10 @@
 #      mechanical CI/landing backstop, leases, and per-role apply tokens; the
 #      in-process worker drives the in-process coding agent for architect +
 #      engineer with persistent workspaces and per-role git credentials,
-#   5. only once `temper run` is ready, a second seed-only provision pass
-#      (--seed-only) files ONE unlabeled intake issue authored by the SITE ADMIN
-#      (the workflow's intake_author = site_admin), so the issue-created webhook
-#      is the demonstrated wake path.
+#   5. only once `temper run` is ready, a direct Forgejo REST API call files
+#      ONE unlabeled intake issue authored by the SITE ADMIN (the workflow's
+#      intake_author = site_admin), so the issue-created webhook is the
+#      demonstrated wake path.
 # The coding agent lets the architect triage the intake to a ready code issue and
 # the engineer open a real implementation PR; CI runs, goes green, and the
 # mechanical backstop auto-merges — no reviewer, owner, or human. It tears
@@ -79,7 +79,7 @@ FORGEJO_RUNNER_VERSION=3.5.1
 
 # Throwaway admin identity. This is also the workflow's intake_author
 # (site_admin): the bundled workflow.json declares intake_author = site_admin, so
-# the provisioner seeds the intake issue as THIS admin (the "external filer").
+# run.sh files the intake issue as THIS admin (the "external filer").
 # The server is killed + wiped on teardown; this is never a credential that
 # reaches anything real, and never echoed.
 ADMIN_USER=basicadmin
@@ -328,6 +328,11 @@ resolve_binaries() {
     # (engine + worker + agent) and the `temper provision-forgejo` subcommand.
     RUN_BIN=${TEMPER_RUN_BIN:-$WORKSPACE_ROOT/target/debug/temper}
 
+    command -v curl >/dev/null 2>&1 \
+        || die 'curl is required to probe Forgejo readiness'
+    command -v python3 >/dev/null 2>&1 \
+        || die 'python3 is required for Forgejo issue API JSON construction and git credential URL encoding'
+
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
     # this is an explicit operator choice for prebuilt/current binaries.
@@ -344,8 +349,8 @@ resolve_binaries() {
     # process). Refuse to run against a stale development binary.
     _provision_help=$("$RUN_BIN" provision-forgejo --help 2>&1 || true)
     case "$_provision_help" in
-        *--workflow*--seed-intake*--seed-only*) ;;
-        *) die "temper binary is stale or incompatible: $RUN_BIN 'provision-forgejo' does not advertise --workflow/--seed-intake/--seed-only. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+        *--workflow*--seed-intake*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'provision-forgejo' does not advertise --workflow/--seed-intake. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
     _daemon_help=$("$RUN_BIN" daemon --help 2>&1 || true)
     case "$_daemon_help" in
@@ -536,10 +541,11 @@ roles_from_credentials() {
 bootstrap_and_provision() {
     log 'bootstrapping admin + provisioning the single repo against the bundled 3-role workflow ...'
     # Create the admin (tolerate a pre-existing one on a re-run), then mint an
-    # all-scoped token. The token stays in a shell variable; it is never echoed
-    # and reaches the provision steps only via the environment. It is also kept
-    # for the later seed_intake pass: the workflow's intake_author = site_admin
-    # means the intake issue is authored by THIS admin (the "external filer").
+    # all-scoped token. The token stays in a shell variable; it is never echoed,
+    # reaches the provisioner only via the environment, and is reused by
+    # seed_intake as the REST API credential. The workflow's intake_author =
+    # site_admin means the intake issue is authored by THIS admin (the "external
+    # filer").
     # This pass deliberately runs with --seed-intake no: it sets up the
     # org/users/repo/labels/CI and registers the webhook but does NOT file the
     # intake issue, so `temper run` can come up first and the issue's creation
@@ -560,7 +566,7 @@ bootstrap_and_provision() {
     log "provisioning $REPO (labels + CI + webhook; intake filed after temper run readiness) ..."
     # _webhook_args intentionally word-split: POSIX sh has no arrays and the
     # values above are controlled by this script/config. --seed-intake no holds
-    # the intake issue back for the post-launch seed_intake pass.
+    # the intake issue back for the post-launch REST API call.
     # shellcheck disable=SC2086
     _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$RUN_BIN" provision-forgejo \
         --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$CREDENTIALS_FILE" \
@@ -578,31 +584,96 @@ bootstrap_and_provision() {
     [ -f "$CREDENTIALS_FILE" ] || die "provision did not write $CREDENTIALS_FILE"
 }
 
-# Files the single site-admin intake issue AFTER `temper run` is up. This is a
-# second, seed-only provision pass (--seed-only): the org/users/repo/labels/CI
-# and the webhook already exist from bootstrap_and_provision, so this only
-# creates the issue. The poll backstop is deliberately long; filing now lets the
-# issue-created webhook demonstrate the wake path.
+# Files the single site-admin intake issue AFTER `temper run` is up by POSTing
+# directly to Forgejo's REST API. The org/users/repo/labels/CI and the webhook
+# already exist from bootstrap_and_provision; this creates one unlabeled issue so
+# the issue-created webhook demonstrates the wake path while the poll backstop is
+# deliberately long.
 seed_intake() {
     [ -n "${ADMIN_TOKEN:-}" ] || die 'seed_intake: no admin token (bootstrap_and_provision must run first)'
     _owner=$(repo_owner "$REPO")
     _name=$(repo_name "$REPO")
     log 'filing the site-admin intake issue now that temper run is ready ...'
-    _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$RUN_BIN" provision-forgejo \
-        --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$CREDENTIALS_FILE" \
-        --workflow "$WORKFLOW_PATH" --seed-only \
-        --intake-title "$INTAKE_TITLE" --intake-body-file "$INTAKE_BODY_PATH") \
-        || die "seeding intake issue for $REPO failed"
+    _issue_info=$(
+        TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" \
+        TEMPER_FORGEJO_BASE_URL="$BASE_URL" \
+        TEMPER_FORGEJO_OWNER="$_owner" \
+        TEMPER_FORGEJO_REPO="$_name" \
+        TEMPER_INTAKE_TITLE="$INTAKE_TITLE" \
+        TEMPER_INTAKE_BODY_PATH="$INTAKE_BODY_PATH" \
+            python3 <<'PY'
+import json
+import os
+import pathlib
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
-    _issue=$(printf '%s\n' "$_status" | sed -n 's/.*intake issue #\([0-9][0-9]*\).*/\1/p')
+base_url = os.environ["TEMPER_FORGEJO_BASE_URL"].rstrip("/")
+owner = os.environ["TEMPER_FORGEJO_OWNER"]
+repo = os.environ["TEMPER_FORGEJO_REPO"]
+owner_path = urllib.parse.quote(owner, safe="")
+repo_path = urllib.parse.quote(repo, safe="")
+body_path = pathlib.Path(os.environ["TEMPER_INTAKE_BODY_PATH"])
+try:
+    body = body_path.read_text(encoding="utf-8")
+except OSError as exc:
+    print(f"failed to read intake body {body_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+payload = json.dumps({
+    "title": os.environ["TEMPER_INTAKE_TITLE"],
+    "body": body,
+}).encode("utf-8")
+request = urllib.request.Request(
+    f"{base_url}/api/v1/repos/{owner_path}/{repo_path}/issues",
+    data=payload,
+    headers={
+        "Accept": "application/json",
+        "Authorization": f"token {os.environ['TEMPER_FORGEJO_ADMIN_TOKEN']}",
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read()
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", "replace")
+    print(f"Forgejo issue create failed: HTTP {exc.code} {exc.reason}: {detail}", file=sys.stderr)
+    sys.exit(1)
+except urllib.error.URLError as exc:
+    print(f"Forgejo issue create failed: {exc.reason}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    issue = json.loads(raw.decode("utf-8"))
+except json.JSONDecodeError as exc:
+    print(f"Forgejo issue create returned invalid JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+number = issue.get("number")
+if number is None:
+    print("Forgejo issue create response did not include an issue number", file=sys.stderr)
+    sys.exit(1)
+html_url = issue.get("html_url") or f"{base_url}/{owner_path}/{repo_path}/issues/{number}"
+print(number)
+print(html_url)
+PY
+    ) || die "filing intake issue for $REPO failed"
+
+    _issue=$(printf '%s\n' "$_issue_info" | sed -n '1p')
+    _issue_url=$(printf '%s\n' "$_issue_info" | sed -n '2p')
+    [ -n "$_issue" ] || die "filing intake issue for $REPO did not return an issue number"
+    [ -n "$_issue_url" ] || _issue_url="$BASE_URL/$REPO/issues/$_issue"
+    _status="created intake issue #$_issue at $_issue_url"
     {
         printf 'repo=%s %s\n' "$REPO" "$_status"
-        [ -n "$_issue" ] && printf 'repo=%s intake_issue_url=%s/%s/issues/%s\n' "$REPO" "$BASE_URL" "$REPO" "$_issue"
+        printf 'repo=%s intake_issue_number=%s intake_issue_url=%s\n' "$REPO" "$_issue" "$_issue_url"
     } >>"$LOG_DIR/provision.log"
     log "$_status"
-    if [ -n "$_issue" ]; then
-        log "  intake issue: $BASE_URL/$REPO/issues/$_issue (filing it should drive the webhook path)"
-    fi
+    log "  intake issue: $_issue_url (filing it should drive the webhook path)"
 }
 
 # --- Demo CI seed -------------------------------------------------------------

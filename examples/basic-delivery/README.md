@@ -33,10 +33,10 @@ The run converges through the unified daemon/worker topology with a single
    appliers), an in-process worker with capabilities for `acme/service:architect`
    and `acme/service:engineer`, and the in-process coding agent.
 3. Only after `temper run` is ready (HTTP listener up, worker registered), `run.sh`
-   runs a second `temper-provision-forgejo --seed-only` pass to file **one
-   unlabeled intake issue**. The issue is authored by the **site admin** because
-   the workflow declares `intake_author: { "kind": "site_admin" }`; the seed-only
-   pass mimics an external filer, not a workflow role.
+   uses the site-admin token to `POST /api/v1/repos/{owner}/{repo}/issues` and
+   file **one unlabeled intake issue**. The issue is authored by the **site
+   admin** because the workflow declares `intake_author: { "kind": "site_admin" }`;
+   the direct API call mimics an external filer, not a workflow role.
 4. Filing the issue last is the **seed-last webhook-wake proof**: the issue-created
    webhook reaches the daemon's `POST /forgejo/webhook` route, is accepted, and
    triggers a targeted wake scan instead of waiting for the long poll backstop.
@@ -75,6 +75,8 @@ The coding agent's LLM provider is selected with `TEMPER_RUN_AUTH` in
 ## Prerequisites
 
 - Rust workspace build tools.
+- `curl` for Forgejo readiness probes and Python 3 for the small Forgejo API JSON
+  helper plus git credential URL encoding.
 - The pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries, either in the
   shared `.cache/forgejo/` cache or through `TEMPER_FORGEJO_BINARY` and
   `TEMPER_FORGEJO_RUNNER_BINARY` in `config/temper.env` or the environment.
