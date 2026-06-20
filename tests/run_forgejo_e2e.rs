@@ -6,15 +6,14 @@
 //! it spawns **one `temper run`** process that hosts the daemon, the worker, and
 //! the coding agent on one event loop. The agent's LLM traffic is redirected to
 //! a local jig `FakeLlm` (no real credentials), and the forge is the shared
-//! throwaway Forgejo fixture from `../bench`. The fake engineer publishes a
-//! two-phase plan, waits until the daemon opens the plan-first implementation PR,
-//! then writes a product file and checkpoints the first phase. The test asserts
-//! that the final handoff reuses that PR and preserves the checked phase.
+//! throwaway Forgejo fixture from `../bench`. The fake engineer writes a
+//! product file, calls `checkpoint` for the completed milestone, and returns a
+//! final summary. The test asserts that the implementation PR opens only from
+//! the real product diff and contains no model-authored plan checklist.
 //!
 //! Stops at **PR opened/finalized** (not merged): merging is gated on real
 //! Actions CI, which `daemon_forgejo_e2e` already covers. This test's job is the
-//! single-process path — agent plan publication → early PR → checkpoint → final
-//! PR reuse — end to end.
+//! single-process path — agent checkpoint → final PR handoff — end to end.
 //!
 //! The fake-LLM base URL and a dummy DeepSeek api-key credential are supplied
 //! through the config/credentials files (the agent reads no provider env). Run
@@ -26,7 +25,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jig_core::{Reply, Script, StopReason, Turn};
@@ -37,11 +36,6 @@ use temper_testing::forgejo_runtime::RunWorkspace;
 use temper_testing::forgejo_server::{
     ForgejoRunner, ForgejoServer, Provisioned, start_cached_provisioned_repositories,
 };
-
-#[path = "run_forgejo_e2e/plan_gate.rs"]
-mod plan_gate;
-
-use plan_gate::PlanGate;
 
 const ENGINEER: &str = "engineer";
 const REPO_NAME: &str = "temper-run-e2e";
@@ -57,15 +51,15 @@ fn convergence_timeout() -> Duration {
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(DEFAULT_CONVERGENCE_SECS))
 }
-// A delivery workflow tuned for this test: the engineer opens and finalizes a
-// plan-first PR while a real host-mode runner is alive. The test converges on
-// PR-open/finalization; the daemon/runner CI-merge path is covered by
-// `daemon_forgejo_e2e`.
+// A delivery workflow tuned for this test: the engineer opens and finalizes an
+// implementation PR from a real product diff while a real host-mode runner is
+// alive. The test converges on PR-open/finalization; the daemon/runner CI-merge
+// path is covered by `daemon_forgejo_e2e`.
 const RUN_WORKFLOW: &str = include_str!("run-delivery.json");
 
 #[test]
 #[ignore = "boots a real Forgejo fixture + a fake LLM and spawns `temper run`; run with --ignored"]
-fn temper_run_publishes_plan_first_pr_via_fake_llm() {
+fn temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm() {
     let started = Instant::now();
 
     // --- World: provisioned Forgejo (org, engineer identity, labels, repo) ---
@@ -89,16 +83,10 @@ fn temper_run_publishes_plan_first_pr_via_fake_llm() {
         started.elapsed()
     );
 
-    // --- Fake LLM: publish a plan, wait for the plan PR before writing, then
-    //     checkpoint one phase and return final success. ---
+    // --- Fake LLM: write the product file, checkpoint it, then return final
+    //     success. ---
     let observed_continuation = Arc::new(AtomicUsize::new(0));
-    let early_pr_observed = Arc::new(AtomicUsize::new(0));
-    let seeded_issue = Arc::new(Mutex::new(None));
-    let fake = engineer_fake(
-        Arc::clone(&observed_continuation),
-        PlanGate::new(&server, &provisioned, &engineer, Arc::clone(&seeded_issue)),
-        Arc::clone(&early_pr_observed),
-    );
+    let fake = engineer_fake(Arc::clone(&observed_continuation));
 
     let workspace = RunWorkspaceGuard::new("temper-run-forgejo-e2e");
     let workflow_file = workspace.0.write_file("run/workflow.json", RUN_WORKFLOW);
@@ -124,11 +112,10 @@ fn temper_run_publishes_plan_first_pr_via_fake_llm() {
         &provisioned.name,
     ))
     .expect("seed intake issue");
-    *seeded_issue.lock().expect("seeded issue lock") = Some(issue);
     eprintln!("run_forgejo_e2e seeded intake issue #{issue}");
 
-    // --- Converge: the same engineer-authored implementation PR is finalized
-    //     after the checkpointed product diff, with the first phase still ticked. ---
+    // --- Converge: the engineer-authored implementation PR is finalized after
+    //     the checkpointed product diff, with no implementation-plan checklist. ---
     let forge = admin_forge(&server, &provisioned);
     let timeout = convergence_timeout();
     let deadline = Instant::now() + timeout;
@@ -163,10 +150,6 @@ fn temper_run_publishes_plan_first_pr_via_fake_llm() {
         started.elapsed()
     );
     assert!(
-        early_pr_observed.load(Ordering::SeqCst) >= 1,
-        "fake LLM did not observe the plan-first PR before issuing product edits"
-    );
-    assert!(
         observed_continuation.load(Ordering::SeqCst) >= 1,
         "fake LLM never saw a tool-result continuation — the agent did not run its loop"
     );
@@ -175,16 +158,9 @@ fn temper_run_publishes_plan_first_pr_via_fake_llm() {
     let _ = run.child.kill();
 }
 
-/// The fake engineer agent: first publishes the plan, then waits until the
-/// daemon opens the plan-first PR before it is willing to issue the product edit.
-/// That gate proves the PR is visible before the model asks Temper to write
-/// `DELIVERY.md`. Later turns write the product file, checkpoint the first
-/// phase, and return the plan-bearing success JSON.
-fn engineer_fake(
-    observed_continuation: Arc<AtomicUsize>,
-    plan_gate: PlanGate,
-    early_pr_observed: Arc<AtomicUsize>,
-) -> FakeLlm {
+/// The fake engineer agent writes the product file, checkpoints the completed
+/// milestone, and returns summary-only success JSON.
+fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
     // The agent's cwd is the workspace root; the single repo is checked out in
     // its sibling dir (the repo's last path segment, ADR 0023). Write the product
     // into that subdir so the worker sees a diff in the repo and pushes it.
@@ -195,34 +171,17 @@ fn engineer_fake(
         match turn {
             0 => Reply {
                 turns: vec![Turn::ToolCall {
-                    id: "call_publish_plan".to_string(),
-                    name: "publish_plan".to_string(),
+                    id: "call_write".to_string(),
+                    name: "write".to_string(),
                     args: serde_json::json!({
-                        "summary": "Plan-first delivery proof",
-                        "phases": ["Create delivery file", "Verify delivery"]
+                        "path": product_path.clone(),
+                        "content": "delivered by temper run\n"
                     }),
                 }],
                 usage: Default::default(),
                 stop: StopReason::ToolCalls,
             },
-            1 => {
-                plan_gate.wait_for_plan_pr(convergence_timeout());
-                eprintln!("run_forgejo_e2e fake observed plan-first PR before write");
-                early_pr_observed.fetch_add(1, Ordering::SeqCst);
-                Reply {
-                    turns: vec![Turn::ToolCall {
-                        id: "call_write".to_string(),
-                        name: "write".to_string(),
-                        args: serde_json::json!({
-                            "path": product_path.clone(),
-                            "content": "delivered by temper run\n"
-                        }),
-                    }],
-                    usage: Default::default(),
-                    stop: StopReason::ToolCalls,
-                }
-            },
-            2 => Reply {
+            1 => Reply {
                 turns: vec![Turn::ToolCall {
                     id: "call_checkpoint".to_string(),
                     name: "checkpoint".to_string(),
@@ -233,9 +192,7 @@ fn engineer_fake(
             },
             _ => {
                 observed_continuation.fetch_add(1, Ordering::SeqCst);
-                Reply::text(
-                    r#"{"summary":"Created DELIVERY.md after plan-first PR.","plan":{"phases":["Create delivery file","Verify delivery"]}}"#,
-                )
+                Reply::text(r#"{"summary":"Created DELIVERY.md via checkpoint-only flow."}"#)
             },
         }
     }))
@@ -253,16 +210,13 @@ async fn find_final_engineer_pr(
     verify_correlated_engineer_pr(&pr, issue, &engineer.user)?;
     if !pr
         .body
-        .contains("Summary: Created DELIVERY.md after plan-first PR.")
+        .contains("Summary: Created DELIVERY.md via checkpoint-only flow.")
     {
         return Err("final PR missing final success summary".to_string());
     }
-    if !pr
-        .body
-        .contains("- [x] Create delivery file\n- [ ] Verify delivery")
-    {
+    if pr.body.contains("Implementation plan") || pr.body.contains("- [ ]") {
         return Err(format!(
-            "final PR did not preserve the checked first phase:\n{}",
+            "final PR unexpectedly contained a model-authored checklist:\n{}",
             pr.body
         ));
     }

@@ -207,9 +207,9 @@ The worker chooses one of two paths based on whether `verdict` is present:
 path; the agent never reports it.
 
 The agent may also emit line-delimited `StepProgress` records on its stdout as it
-goes — one per pushed step boundary — which the worker relays to the forge as
-durable, human-facing progress (a ticked checklist item, a PR-body update). These
-are crash-recovery checkpoints, not part of the terminal result.
+goes — one per pushed step boundary — which the worker relays to the daemon as
+crash-recovery progress. These markers make interrupted work resumable and may
+feed the managed run ledger; they are not model-authored PR checklist ceremony.
 
 ## 4. Safety behavior
 
