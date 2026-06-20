@@ -161,9 +161,9 @@ fn basic_delivery_fixture_validates_with_expected_shape() {
         "intake is the default issue kind and carries no identifying labels"
     );
 
-    // Implementation PRs are identified by `implementation`; final-handoff PRs
-    // also start with `landing`, while plan-first PRs use the in-progress state
-    // label until the engineer explicitly hands them off.
+    // Implementation PRs are identified by `implementation`; final handoff PRs
+    // start with `landing`, while in-progress PRs are not landable until the
+    // engineer explicitly hands them off.
     let implementation_pr = workflow
         .artifact_kinds()
         .iter()
@@ -420,7 +420,7 @@ fn mechanical_landing_requires_handoff_and_ci_no_review_required() {
         !planner
             .matching_queues_with(&in_progress, &ci_only)
             .contains(&QueueId::new("landing")),
-        "green plan-first PRs are not mechanically landable until engineer handoff"
+        "green in-progress PRs are not mechanically landable until engineer handoff"
     );
 
     // A handed-off PR with green CI lands with no review signal supplied at all —
@@ -469,7 +469,7 @@ fn mechanical_landing_requires_handoff_and_ci_no_review_required() {
 }
 
 #[test]
-fn engineer_handoff_moves_plan_first_pr_to_landing_queue() {
+fn engineer_handoff_moves_in_progress_pr_to_landing_queue() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
     let in_progress = classify_pr(&workflow, 20, &["implementation", "in-progress"]);
@@ -480,7 +480,7 @@ fn engineer_handoff_moves_plan_first_pr_to_landing_queue() {
             &RoleId::new("engineer"),
             &in_progress,
         )
-        .expect("engineer can mark a completed plan-first PR ready for landing");
+        .expect("engineer can mark a completed implementation PR ready for landing");
     assert_eq!(
         handoff.effects,
         vec![
