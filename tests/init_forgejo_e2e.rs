@@ -16,9 +16,10 @@
 //!    secret; `lint` reports no errors; `workflow.json` byte-equals the embedded
 //!    basic-delivery bytes and validates; `credentials.toml` is `0600` and holds
 //!    the minted role/bot tokens, the admin identity, and the DeepSeek key.
-//! 2. **Forge state** — the org/owner, the repo (Actions enabled, CI workflow
-//!    committed), every basic-delivery label, the role users + `bot`, and the
-//!    webhook pointing at the configured address all exist on the live forge.
+//! 2. **Forge state** — the org/owner, the repo (Actions enabled, with no
+//!    project/CI files committed), every basic-delivery label, the role users +
+//!    `bot`, and the webhook pointing at the configured address all exist on the
+//!    live forge.
 //! 3. **Idempotency** — a second `run_init --force` converges with no duplicate
 //!    forge objects and freshly-minted tokens; a second run WITHOUT `--force` is
 //!    refused at preflight with a clear "already exists" message.
@@ -84,7 +85,7 @@ fn init_forgejo_drives_a_working_setup() {
     // --- A bare Forgejo with a site admin, but NOTHING else provisioned. ---
     // We deliberately do not use the cached *provisioned* world: the whole point
     // is to let `run_init`'s real ForgejoProvisioner create the org, repo, users,
-    // labels, webhook, and CI itself.
+    // labels, webhook, and CI enablement itself, without seeding project files.
     let server = temper_testing::forgejo_server::ForgejoServer::start()
         .expect("bench Forgejo fixture starts");
     create_site_admin(&server);
