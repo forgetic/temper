@@ -111,7 +111,9 @@ fn checkpoint_done_progress_updates_same_run_ledger_idempotently_before_pr() {
         let body = issue_body(&forge, &repo, issue).await;
         assert_one_run_ledger(&body, &correlation);
         assert!(body.contains("Current status: checkpointed"));
-        assert!(body.contains("Latest checkpoint: step 2 — implement managed ledger (abc123456789)"));
+        assert!(
+            body.contains("Latest checkpoint: step 2 — implement managed ledger (abc123456789)")
+        );
         assert!(!body.contains("Implementation plan"));
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
     })
@@ -148,10 +150,9 @@ fn checkpoint_done_progress_does_not_create_checklist_or_issue_chatter() {
         assert!(!body.contains("- [ ]"));
         let issue_body_after_success = issue_body(&forge, &repo, issue).await;
         assert_one_run_ledger(&issue_body_after_success, &correlation);
-        assert!(issue_body_after_success.contains(&format!(
-            "continued in PR #{}",
-            pull_number.get()
-        )));
+        assert!(
+            issue_body_after_success.contains(&format!("continued in PR #{}", pull_number.get()))
+        );
 
         applier
             .apply_progress(
@@ -168,7 +169,10 @@ fn checkpoint_done_progress_does_not_create_checklist_or_issue_chatter() {
             .await;
 
         assert_eq!(pull_request_body(&forge, &repo, pull_number).await, body);
-        assert_eq!(issue_body(&forge, &repo, issue).await, issue_body_after_success);
+        assert_eq!(
+            issue_body(&forge, &repo, issue).await,
+            issue_body_after_success
+        );
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
     })
 }
@@ -269,10 +273,9 @@ fn final_engineer_open_pr_progress_uses_pr_body_not_issue_comment() {
         assert!(pulls[0].body.contains(summary));
         let issue_body_after_success = issue_body(&forge, &repo, issue).await;
         assert_one_run_ledger(&issue_body_after_success, &correlation);
-        assert!(issue_body_after_success.contains(&format!(
-            "continued in PR #{}",
-            pull_number.get()
-        )));
+        assert!(
+            issue_body_after_success.contains(&format!("continued in PR #{}", pull_number.get()))
+        );
         assert!(
             !issue_body_after_success.contains(summary),
             "source issue ledger must not duplicate PR summary after handoff: {issue_body_after_success}"
@@ -294,7 +297,10 @@ fn final_engineer_open_pr_progress_uses_pr_body_not_issue_comment() {
                 ),
             )
             .await;
-        assert_eq!(issue_body(&forge, &repo, issue).await, issue_body_after_success);
+        assert_eq!(
+            issue_body(&forge, &repo, issue).await,
+            issue_body_after_success
+        );
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
     })
 }

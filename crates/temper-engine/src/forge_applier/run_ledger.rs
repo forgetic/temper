@@ -267,10 +267,7 @@ fn render_progress_ledger(
     include_final_note: bool,
 ) -> String {
     let mut lines = common_ledger_lines(job, &progress.correlation_key, &progress.worker_id);
-    lines.push(format!(
-        "- Current status: {}",
-        progress_status(progress)
-    ));
+    lines.push(format!("- Current status: {}", progress_status(progress)));
     lines.push(format!(
         "- Latest progress: step {} — {}",
         progress.step,
@@ -328,7 +325,10 @@ fn common_ledger_lines(job: &InFlightJob, correlation_key: &str, worker_id: &str
         ledger_marker(correlation_key),
         "### Temper run ledger".to_string(),
         format!("- Role: {}", one_line_or(&job.role, "worker")),
-        format!("- Work branch: `{}`", one_line_or(&work_branch(job, correlation_key), "-")),
+        format!(
+            "- Work branch: `{}`",
+            one_line_or(&work_branch(job, correlation_key), "-")
+        ),
         format!("- Worker: `{}`", one_line_or(worker_id, "unknown")),
     ]
 }
@@ -542,7 +542,7 @@ mod tests {
             .expect("second merge succeeds")
             .expect("body changes");
 
-        assert_eq!(updated.matches("temper-run-ledger").count(), 1);
+        assert_eq!(updated.matches(&ledger_marker("key")).count(), 1);
         assert!(updated.contains("two"));
         assert!(!updated.contains("one"));
     }
@@ -555,8 +555,8 @@ mod tests {
             LEDGER_END
         );
         let progress = format!("{}\ncheckpointed\n{}", ledger_marker("key"), LEDGER_END);
-        let updated = upsert_run_ledger_block(&finalized, "key", &progress, true)
-            .expect("merge succeeds");
+        let updated =
+            upsert_run_ledger_block(&finalized, "key", &progress, true).expect("merge succeeds");
 
         assert!(updated.is_none());
     }
