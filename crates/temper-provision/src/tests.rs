@@ -95,6 +95,7 @@ fn from_workflow_carries_options_and_resolves_labels() {
     let workflow = temper_reference_delivery::workflow();
     let options = ProvisionOptions {
         existing_repo: false,
+        repository_auto_init: false,
         roles: Vec::new(),
         automation_login: "bot".into(),
         password: "pw".into(),
@@ -114,6 +115,7 @@ fn from_workflow_carries_options_and_resolves_labels() {
     .expect("plan builds from the reference workflow");
     assert_eq!(plan.automation_login, "bot");
     assert_eq!(plan.password, "pw");
+    assert!(!plan.repository_auto_init);
     // The reference workflow's entry kind is the default (catch-all) issue kind,
     // so the intake issue is seeded unlabeled.
     assert!(plan.intake_labels.is_empty());

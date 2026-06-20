@@ -53,13 +53,18 @@ impl IntakeIssueSeed {
 /// into any reference-delivery defaults: the adapter passes in the role
 /// bindings, the seed commits (e.g. the Forgejo CI workflow + sentinel), the
 /// webhook, and the intake seed it wants applied.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ProvisionOptions {
     /// Provision onto a repo that must already exist: require the repo up front
     /// (erroring if absent) and skip the [`seed_commits`](Self::seed_commits)
     /// so the repo's own content and history are never touched. Labels, the
     /// webhook, grants, and CI enablement still apply.
     pub existing_repo: bool,
+    /// Whether creating a missing repository should ask the backend to create
+    /// an initial commit/default branch. Seed-commit provisioning flows need
+    /// this so subsequent file commits can target the default branch; first-run
+    /// init flows set it to `false` so the user receives an empty repository.
+    pub repository_auto_init: bool,
     /// Role users to provision, each bound to a workflow role.
     pub roles: Vec<RoleBinding>,
     /// Login of the automation (bot) identity to provision alongside the roles.
@@ -81,6 +86,23 @@ pub struct ProvisionOptions {
     pub webhook: Option<WebhookSpec>,
     /// Optional entry intake issue to seed once provisioning completes.
     pub intake: Option<IntakeIssueSeed>,
+}
+
+impl Default for ProvisionOptions {
+    fn default() -> Self {
+        Self {
+            existing_repo: false,
+            repository_auto_init: true,
+            roles: Vec::new(),
+            automation_login: String::new(),
+            password: String::new(),
+            token_scopes: Vec::new(),
+            labels: Vec::new(),
+            seed_commits: Vec::new(),
+            webhook: None,
+            intake: None,
+        }
+    }
 }
 
 /// A distilled, backend-agnostic provisioning plan.
@@ -112,6 +134,10 @@ pub struct ProvisionPlan {
     /// Whether the repository must already exist (`true`) or is created
     /// (`false`).
     pub existing_repo: bool,
+    /// Whether creating a missing repository should ask the backend to create
+    /// an initial commit/default branch. Ignored when [`existing_repo`](Self::existing_repo)
+    /// is set because the repository is required rather than created.
+    pub repository_auto_init: bool,
     /// Optional webhook to register on the target repository.
     pub webhook: Option<WebhookSpec>,
     /// Optional entry intake issue to seed.

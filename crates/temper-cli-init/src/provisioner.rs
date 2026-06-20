@@ -85,6 +85,7 @@ fn build_init_plan(
     let default_branch = config.repository.default_branch.clone();
     let plan_options = temper_provision::ProvisionOptions {
         existing_repo: request.existing_repo,
+        repository_auto_init: false,
         roles: config.role_bindings.clone(),
         automation_login: temper_provision::BOT_USER.to_string(),
         password: temper_forge::config::FORGEJO_ROLE_PASSWORD.to_string(),

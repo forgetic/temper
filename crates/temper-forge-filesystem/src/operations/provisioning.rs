@@ -15,14 +15,20 @@ use crate::storage::{UserRecord, WebhookRecord};
 use crate::validation::validate_create_repository;
 use async_trait::async_trait;
 use temper_forge_model::{
-    AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository, ForgeContent,
-    ForgeError, ForgeResult, NewUser, RepositoryId, RepositoryPath, TokenScope, WebhookSpec,
+    AccessGrant, AccessScope, ChangeKind, CommitFile, CreateBranch, CreateRepository,
+    EnsureRepository, ForgeContent, ForgeError, ForgeResult, NewUser, RepositoryId, RepositoryPath,
+    TokenScope, WebhookSpec,
 };
 
 #[async_trait]
 impl ForgeContent for FilesystemForge {
-    async fn ensure_repository(&self, input: CreateRepository) -> ForgeResult<RepositoryId> {
-        validate_create_repository(&input)?;
+    async fn ensure_repository(&self, input: EnsureRepository) -> ForgeResult<RepositoryId> {
+        validate_create_repository(&CreateRepository {
+            owner: input.owner.clone(),
+            name: input.name.clone(),
+            default_branch: input.default_branch.clone(),
+            description: input.description.clone(),
+        })?;
 
         let _guard = self.write_lock()?;
         let path = RepositoryPath::new(input.owner.clone(), input.name.clone());

@@ -152,6 +152,7 @@ fn build_plan(
 ) -> Result<ProvisionPlan> {
     let plan_options = temper_provision::ProvisionOptions {
         existing_repo: options.existing_repo,
+        repository_auto_init: true,
         roles: roles.to_vec(),
         automation_login: BOT_USER.to_string(),
         password: ROLE_PASSWORD.to_string(),
