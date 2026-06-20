@@ -118,8 +118,14 @@ fn tool_registry_writability_matches_capability() {
     // We can't easily introspect tool names, but we assert the writable mapping
     // is what selects the edit/write tools.
     let cwd = std::env::temp_dir();
-    let _writable = tool_registry(Capability::CodingWorkspace, &cwd);
-    let _readonly = tool_registry(Capability::TriageWorkspace, &cwd);
+    let writable = tool_registry(Capability::CodingWorkspace, &cwd);
+    let readonly = tool_registry(Capability::TriageWorkspace, &cwd);
+    let writable_names: Vec<&str> = writable.tools().iter().map(|tool| tool.name()).collect();
+    let readonly_names: Vec<&str> = readonly.tools().iter().map(|tool| tool.name()).collect();
+    assert!(writable_names.contains(&"write"));
+    assert!(writable_names.contains(&"edit"));
+    assert!(!writable_names.contains(&"publish_plan"));
+    assert!(!readonly_names.contains(&"publish_plan"));
     assert!(Capability::CodingWorkspace.is_writable());
     assert!(!Capability::TriageWorkspace.is_writable());
 }

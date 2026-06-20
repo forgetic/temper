@@ -103,11 +103,7 @@ pub fn implementation_pr_pull_request_input(
 }
 
 /// Renders the shared implementation PR body.
-pub fn implementation_pr_body(
-    intro: &str,
-    summary: &str,
-    metadata: &WorkflowMetadata,
-) -> String {
+pub fn implementation_pr_body(intro: &str, summary: &str, metadata: &WorkflowMetadata) -> String {
     let summary = summary.trim();
     format!(
         "{}\n\nSummary: {}\n\n{}",

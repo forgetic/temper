@@ -155,9 +155,7 @@ fn plan_section_span_str(lines: &[&str]) -> Option<(usize, usize)> {
 }
 
 fn is_checklist_item(trimmed: &str) -> bool {
-    trimmed.starts_with("- [ ] ")
-        || trimmed.starts_with("- [x] ")
-        || trimmed.starts_with("- [X] ")
+    trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ")
 }
 
 fn lines(body: &str) -> Vec<String> {
@@ -200,7 +198,10 @@ mod tests {
             "Intro.\n\nSummary: planned\n\nImplementation plan:\n\n- [ ] Test\n- [x] Build\n\n{}",
             render_metadata_block(&metadata())
         );
-        let desired = format!("Intro.\n\nSummary: final\n\n{}", render_metadata_block(&metadata()));
+        let desired = format!(
+            "Intro.\n\nSummary: final\n\n{}",
+            render_metadata_block(&metadata())
+        );
 
         let updated = merge_implementation_pr_body(&current, &desired)
             .expect("merge succeeds")
@@ -218,7 +219,10 @@ mod tests {
             "Intro.\n\nHuman note.\n\nSummary: planned\n\nImplementation plan:\n\n- [x] Test\n- [ ] Build\n\nMore notes.\n\n{}",
             render_metadata_block(&metadata())
         );
-        let desired = format!("Intro.\n\nSummary: final\n\n{}", render_metadata_block(&metadata()));
+        let desired = format!(
+            "Intro.\n\nSummary: final\n\n{}",
+            render_metadata_block(&metadata())
+        );
 
         let updated = merge_implementation_pr_body(&current, &desired)
             .expect("merge succeeds")

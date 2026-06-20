@@ -232,13 +232,17 @@ mod tests {
 
     #[test]
     fn pull_request_writable_gets_checkpoint_hooks() {
-        assert!(checkpoint_hooks_enabled(&context(Some("pull_request_writable"))));
+        assert!(checkpoint_hooks_enabled(&context(Some(
+            "pull_request_writable"
+        ))));
     }
 
     #[test]
     fn read_only_jobs_are_hookless() {
         assert!(!checkpoint_hooks_enabled(&context(Some("read_only"))));
-        assert!(!checkpoint_hooks_enabled(&context(Some("pull_request_read_only"))));
+        assert!(!checkpoint_hooks_enabled(&context(Some(
+            "pull_request_read_only"
+        ))));
     }
 
     fn context(checkout: Option<&str>) -> WorkspaceContext {

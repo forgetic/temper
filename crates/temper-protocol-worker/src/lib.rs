@@ -29,8 +29,8 @@ mod workspace;
 pub use assignment::{Artifact, Assign, Capability, Capacity, Poll, Register};
 pub use job::{JobArtifactSnapshot, JobContext};
 pub use lifecycle::{
-    ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, JobProgress, LeaseAck,
-    LeaseAckDisposition, ProtocolError, Release, ReleaseDisposition,
+    ErrorCode, Heartbeat, HeartbeatState, JobHeartbeat, JobProgress, LeaseAck, LeaseAckDisposition,
+    ProtocolError, Release, ReleaseDisposition,
 };
 pub use message::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 pub use result::{Branch, Failure, FailureClass, JobChild, JobResult, RepoOutcome, ResultStatus};

@@ -24,8 +24,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use jig_core::{Reply, Script, StopReason, Turn};
@@ -193,7 +193,7 @@ fn engineer_fake(observed_continuation: Arc<AtomicUsize>) -> FakeLlm {
             _ => {
                 observed_continuation.fetch_add(1, Ordering::SeqCst);
                 Reply::text(r#"{"summary":"Created DELIVERY.md via checkpoint-only flow."}"#)
-            },
+            }
         }
     }))
     .expect("start fake LLM")

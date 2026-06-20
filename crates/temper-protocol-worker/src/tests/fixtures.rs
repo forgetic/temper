@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::{JobProgress, WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
+use crate::{WORKER_PROTOCOL_VERSION, WorkerProtocolMessage};
 
 fn assert_round_trips(json: &str) -> WorkerProtocolMessage {
     let msg: WorkerProtocolMessage = serde_json::from_str(json).expect("fixture parses");
