@@ -55,10 +55,13 @@
 //!    every JSON line, exactly as it does for the human projection.
 //! 2. **journald (systemd), when JSON is *not* forced.** systemd sets
 //!    `JOURNAL_STREAM` when the unit's stderr is connected to the journal. When
-//!    that variable is present and the journal socket is reachable, logs go to
-//!    journald via [`tracing_journald`] (Linux only). journald already gives
-//!    machine output — `journalctl -o json` exposes every §3 field as a JSON key
-//!    — so the explicit `TEMPER_LOG_FORMAT=json` toggle exists for the
+//!    that variable identifies the process's current stderr file descriptor and
+//!    the journal socket is reachable, logs go to journald via
+//!    [`tracing_journald`] (Linux only). Checking the descriptor matters because
+//!    child processes can inherit a stale `JOURNAL_STREAM` after redirecting
+//!    stderr to a test log file. journald already gives machine output —
+//!    `journalctl -o json` exposes every §3 field as a JSON key — so the
+//!    explicit `TEMPER_LOG_FORMAT=json` toggle exists for the
 //!    *non*-journald case, and journald stays the default under systemd. The
 //!    journal records its own timestamps, so this path stays minimal and does
 //!    not configure a redundant fmt timer.
@@ -114,6 +117,9 @@ pub use span::{agent_run_span, work_item_span};
 pub use work_item::{ArtifactKind, WorkItemRef, strip_provider_scheme};
 
 use std::io::IsTerminal;
+
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -188,7 +194,8 @@ fn use_ansi(no_color: Option<&str>, stderr_is_terminal: bool) -> bool {
 /// Install the global [`tracing`] subscriber for this process.
 ///
 /// See the [crate-level docs](crate) for the env detection rules
-/// (`JOURNAL_STREAM`, stderr `is_terminal`, `RUST_LOG` defaulting to `info`).
+/// (`JOURNAL_STREAM` matching stderr, stderr `is_terminal`, `RUST_LOG`
+/// defaulting to `info`).
 ///
 /// Safe to call more than once: it uses `try_init` and swallows the
 /// already-initialized error, so a second call is a no-op rather than a panic.
@@ -218,11 +225,13 @@ pub fn init_logging() {
     }
 
     // systemd sets JOURNAL_STREAM when our stderr is the journal. Prefer the
-    // journal sink there; fall through to the stderr fmt layer if it is absent
-    // or the socket cannot be opened. The journal adds its own timestamps, so
-    // this path stays minimal (no fmt timer).
+    // journal sink only while the variable still points at the current stderr;
+    // test harnesses often redirect child stderr to files while inheriting the
+    // parent's stale JOURNAL_STREAM. Fall through to the stderr fmt layer when
+    // it is absent, stale, or the socket cannot be opened. The journal adds its
+    // own timestamps, so this path stays minimal (no fmt timer).
     #[cfg(target_os = "linux")]
-    if std::env::var_os("JOURNAL_STREAM").is_some()
+    if stderr_is_journal_stream()
         && let Ok(journald) = tracing_journald::layer()
     {
         let _ = tracing_subscriber::registry()
@@ -245,6 +254,32 @@ pub fn init_logging() {
         .with(maybe_otel_layer())
         .with(fmt_layer)
         .try_init();
+}
+
+#[cfg(target_os = "linux")]
+fn stderr_is_journal_stream() -> bool {
+    let Some(value) = std::env::var_os("JOURNAL_STREAM") else {
+        return false;
+    };
+    let Ok(stderr) = std::fs::metadata("/proc/self/fd/2") else {
+        return false;
+    };
+
+    journal_stream_matches_dev_ino(&value, stderr.dev(), stderr.ino())
+}
+
+#[cfg(target_os = "linux")]
+fn journal_stream_matches_dev_ino(value: &std::ffi::OsStr, dev: u64, ino: u64) -> bool {
+    parse_journal_stream(value) == Some((dev, ino))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_journal_stream(value: &std::ffi::OsStr) -> Option<(u64, u64)> {
+    let value = value.to_str()?;
+    let (dev, ino) = value.split_once(':')?;
+    let dev = dev.parse().ok()?;
+    let ino = ino.parse().ok()?;
+    Some((dev, ino))
 }
 
 /// The optional OpenTelemetry layer for [`init_logging`] to chain next to the
@@ -333,6 +368,35 @@ mod tests {
         assert_eq!(select_format(Some("human")), LogFormat::Auto);
         assert_eq!(select_format(Some("jsonl")), LogFormat::Auto);
         assert_eq!(select_format(Some("text")), LogFormat::Auto);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn journal_stream_parser_accepts_systemd_dev_inode_pair() {
+        assert_eq!(
+            parse_journal_stream(std::ffi::OsStr::new("9:1006296")),
+            Some((9, 1_006_296))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn journal_stream_match_requires_same_dev_and_inode() {
+        let stream = std::ffi::OsStr::new("9:1006296");
+        assert!(journal_stream_matches_dev_ino(stream, 9, 1_006_296));
+        assert!(!journal_stream_matches_dev_ino(stream, 8, 1_006_296));
+        assert!(!journal_stream_matches_dev_ino(stream, 9, 1_006_297));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn journal_stream_parser_rejects_malformed_values() {
+        assert_eq!(parse_journal_stream(std::ffi::OsStr::new("")), None);
+        assert_eq!(parse_journal_stream(std::ffi::OsStr::new("9")), None);
+        assert_eq!(parse_journal_stream(std::ffi::OsStr::new("9:")), None);
+        assert_eq!(parse_journal_stream(std::ffi::OsStr::new(":100")), None);
+        assert_eq!(parse_journal_stream(std::ffi::OsStr::new("9:100:1")), None);
+        assert_eq!(parse_journal_stream(std::ffi::OsStr::new("dev:ino")), None);
     }
 
     #[test]
