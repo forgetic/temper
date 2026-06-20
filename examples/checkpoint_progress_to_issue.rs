@@ -1,11 +1,11 @@
 //! Replay agent step-progress markers through the daemon's progress applier and
-//! print the issue's ticked checklist.
+//! print any final progress comments.
 //!
 //! Reads a JSONL file of `smith-agent-protocol` `StepProgress` records (the
 //! exact lines an agent prints on stdout — `argv[1]`), then for each one calls
 //! the **real** [`temper_engine::ForgeApplier::apply_progress`] against a fresh
-//! in-memory forge issue. The output is the human-facing checklist the daemon
-//! posts on the coordinating issue/PR as the agent checkpoints.
+//! in-memory forge issue. The output is the human-facing final progress comment
+//! the daemon posts when the agent emits a useful terminal checkpoint.
 //!
 //! Used by `smith/examples/checkpoint-live` to show the second half of the live
 //! flow (the first half being a real agent calling the `checkpoint` tool).
@@ -110,7 +110,6 @@ fn main() {
                 .and_then(|v| v.as_str())
                 .map(String::from),
             note: value.get("note").and_then(|v| v.as_str()).map(String::from),
-            plan_publication: None,
         };
         block_on(applier.apply_progress(job.clone(), progress));
         applied += 1;
@@ -118,25 +117,23 @@ fn main() {
 
     let comments = block_on(forge.list_issue_comments(&issue.id)).expect("list comments");
     println!(
-        "issue #{}: {applied} progress markers applied -> {} checklist comment(s):",
+        "issue #{}: {applied} progress markers applied -> {} final progress comment(s):",
         issue.number.get(),
         comments.len()
     );
     println!("---------------------------------------------------------------");
     for comment in &comments {
-        for checklist_line in comment.body.lines().filter(|line| line.starts_with("- [")) {
-            println!("{checklist_line}");
-        }
+        println!("{}", comment.body);
     }
     println!("---------------------------------------------------------------");
 
-    // Prove the checkpoint markers ticked the list.
-    let ticked = comments
+    // Prove at least one final checkpoint marker was recorded.
+    let final_markers = comments
         .iter()
-        .filter(|comment| comment.body.contains("- [x] step"))
+        .filter(|comment| comment.body.contains("temper-progress"))
         .count();
     assert!(
-        ticked >= 1,
-        "expected at least one ticked checkpoint on the issue"
+        final_markers >= 1,
+        "expected at least one final checkpoint comment on the issue"
     );
 }

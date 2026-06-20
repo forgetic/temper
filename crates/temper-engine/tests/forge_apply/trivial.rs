@@ -93,16 +93,13 @@ fn trivial_engineer_flow_stays_quiet_and_requests_review() {
         }
         assert_issue_comments_stay_empty(&cx, &forge, &repo, issue).await;
 
-        let mut posted_result = success_result(
+        let posted_result = success_result(
             "worker-a",
             &assignment.job_id,
             &assignment.repo,
             &branch_name,
             "implemented one obvious edit",
         );
-        posted_result.details = Some(json!({
-            "plan": {"phases": ["Apply obvious edit"]}
-        }));
         assert_release(
             post_json(&client, &url, &WorkerProtocolMessage::Result(posted_result)).await,
             "worker-a",
@@ -176,14 +173,13 @@ fn existing_trivial_pr_with_working_label_gets_final_handoff() {
             .await
             .expect("existing PR is created");
         let job = open_pr_in_flight_job("acme/service", issue);
-        let mut result = success_result(
+        let result = success_result(
             "worker-a",
             &job.job_id,
             &job.repo,
             &branch_name,
             "implemented one obvious edit",
         );
-        result.details = Some(json!({"plan": {"phases": ["Apply obvious edit"]}}));
 
         applier.apply(job, result).await;
 
@@ -247,6 +243,5 @@ fn flow_progress(
         state: state.to_string(),
         pushed_sha: pushed_sha.map(str::to_string),
         note: note.map(str::to_string),
-        plan_publication: None,
     }
 }

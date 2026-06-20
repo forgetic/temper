@@ -79,7 +79,7 @@ fn started_open_pr_progress_claims_source_issue() {
 }
 
 #[test]
-fn phase_done_progress_ticks_matching_pr_checklist_once() {
+fn checkpoint_done_progress_does_not_create_checklist_or_issue_chatter() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
@@ -104,74 +104,25 @@ fn phase_done_progress_ticks_matching_pr_checklist_once() {
 
         let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
         let pull_number = pulls[0].number;
-        assert!(
-            pulls[0]
-                .body
-                .contains("Implementation plan:\n\n- [ ] Write failing test\n- [ ] Implement fix")
-        );
+        let body = pulls[0].body.clone();
+        assert!(!body.contains("Implementation plan"));
+        assert!(!body.contains("- [ ]"));
 
-        // Phase 2 can arrive before phase 1; only the matching checkbox is
-        // ticked, and the issue thread stays quiet.
-        applier
-            .apply_progress(
-                job.clone(),
-                progress(
-                    &correlation,
-                    2,
-                    "done",
-                    "Implement fix",
-                    Some("abc123456789"),
-                    None,
-                ),
-            )
-            .await;
-
-        let body = pull_request_body(&forge, &repo, pull_number).await;
-        assert!(
-            body.contains("Implementation plan:\n\n- [ ] Write failing test\n- [x] Implement fix"),
-            "only the matching phase should be ticked: {body}"
-        );
-        parse_metadata_block(&body)
-            .expect("PR metadata parses")
-            .expect("workflow metadata is preserved");
-        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
-
-        // Re-delivery of the same checkpoint is a no-op.
-        applier
-            .apply_progress(
-                job.clone(),
-                progress(
-                    &correlation,
-                    2,
-                    "done",
-                    "Implement fix",
-                    Some("abc123456789"),
-                    None,
-                ),
-            )
-            .await;
-        assert_eq!(pull_request_body(&forge, &repo, pull_number).await, body);
-        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
-
-        // The earlier phase can still arrive later and tick its own box.
         applier
             .apply_progress(
                 job,
                 progress(
                     &correlation,
-                    1,
+                    2,
                     "done",
-                    "Write failing test",
-                    Some("def456789012"),
-                    None,
+                    "Implement fix",
+                    Some("abc123456789"),
+                    Some("checkpoint pushed"),
                 ),
             )
             .await;
-        let final_body = pull_request_body(&forge, &repo, pull_number).await;
-        assert!(
-            final_body
-                .contains("Implementation plan:\n\n- [x] Write failing test\n- [x] Implement fix")
-        );
+
+        assert_eq!(pull_request_body(&forge, &repo, pull_number).await, body);
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
     })
 }
@@ -187,14 +138,13 @@ fn trivial_pr_receives_no_checklist_progress_chatter() {
         let job = open_pr_in_flight_job("acme/service", issue);
         let correlation = correlation_key(issue);
         let branch_name = format!("agent/{correlation}");
-        let mut result = success_result(
+        let result = success_result(
             "worker-a",
             &job.job_id,
             &job.repo,
             &branch_name,
             "implemented one obvious edit",
         );
-        result.details = Some(json!({"plan": {"phases": ["Apply obvious edit"]}}));
 
         applier.apply(job.clone(), result).await;
 
@@ -378,7 +328,6 @@ fn progress(
         state: state.to_string(),
         pushed_sha: pushed_sha.map(str::to_string),
         note: note.map(str::to_string),
-        plan_publication: None,
     }
 }
 

@@ -221,7 +221,7 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
 }
 
 #[test]
-fn success_result_with_multi_phase_plan_details_creates_checklist_body() {
+fn success_result_ignores_legacy_plan_details_for_plain_body() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
@@ -230,7 +230,7 @@ fn success_result_with_multi_phase_plan_details_creates_checklist_body() {
         let applier = ForgeApplier::new(forge.clone(), workflow.clone());
         let job = open_pr_in_flight_job("acme/service", issue);
         let branch_name = format!("agent/pr-for-code-{}", issue.get());
-        let summary = "implemented with a visible plan";
+        let summary = "implemented with a final summary";
         let mut result = success_result("worker-a", &job.job_id, &job.repo, &branch_name, summary);
         result.details = Some(json!({
             "note": "fake worker result",
@@ -241,46 +241,12 @@ fn success_result_with_multi_phase_plan_details_creates_checklist_body() {
 
         let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
         let body = &pulls[0].body;
-        assert!(body.contains("Summary: implemented with a visible plan"));
-        assert!(
-            body.contains("Implementation plan:\n\n- [ ] Write failing test\n- [ ] Implement fix")
-        );
-        assert!(
-            body.find("Implementation plan") < body.find("<!-- temper:workflow"),
-            "plan checklist should render before metadata block: {body}"
-        );
+        assert!(body.contains("Summary: implemented with a final summary"));
+        assert!(!body.contains("Implementation plan"));
+        assert!(!body.contains("- [ ] Write failing test"));
         parse_metadata_block(body)
             .expect("PR metadata parses")
             .expect("PR metadata exists");
-    })
-}
-
-#[test]
-fn success_result_with_trivial_plan_details_keeps_plain_body() {
-    temper_engine_io::block_on_with(move |cx, _handle| async move {
-        let forge = Arc::new(MemoryForge::new());
-        let repo = new_repo(&forge, "stable").await;
-        let issue = create_ready_issue(&forge, &repo).await;
-        let workflow = Arc::new(workflow());
-        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
-        let job = open_pr_in_flight_job("acme/service", issue);
-        let branch_name = format!("agent/pr-for-code-{}", issue.get());
-        let mut result = success_result(
-            "worker-a",
-            &job.job_id,
-            &job.repo,
-            &branch_name,
-            "implemented one small edit",
-        );
-        result.details = Some(json!({"plan": {"phases": ["Apply obvious edit"]}}));
-
-        applier.apply(job, result).await;
-
-        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
-        let body = &pulls[0].body;
-        assert!(body.contains("Summary: implemented one small edit"));
-        assert!(!body.contains("Implementation plan"));
-        assert!(!body.contains("- [ ]"));
     })
 }
 

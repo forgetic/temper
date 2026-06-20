@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Pull-request body merging for plan-first implementation PRs.
-
-use std::collections::BTreeSet;
+//! Pull-request body merging for implementation PR finalization.
 
 use temper_workflow::{
     METADATA_BEGIN, METADATA_END, MetadataError, WorkflowMetadata, parse_metadata_block,
     render_metadata_block,
 };
-
-use crate::forge_applier::progress_checklist::parse_checklist_item;
 
 pub(super) fn merge_implementation_pr_body(
     current: &str,
@@ -18,17 +14,13 @@ pub(super) fn merge_implementation_pr_body(
     let desired_parts = DesiredBodyParts::parse(desired)?;
     let split = split_metadata_block(current)?;
     let metadata = parse_metadata_block(current)?.unwrap_or(desired_parts.metadata);
-    let checked = checked_phase_labels(current);
 
     let mut prose = split.before.trim_end().to_string();
     if prose.trim().is_empty() {
         prose = desired_parts.prose.trim_end().to_string();
     }
     prose = upsert_summary(&prose, desired_parts.summary_line);
-    if let Some(plan) = desired_parts.plan_section {
-        let plan = apply_checked_phases(plan, &checked);
-        prose = upsert_plan_section(&prose, &plan);
-    }
+    prose = remove_plan_section(&prose);
 
     let updated = join_body(&prose, &metadata, split.after);
     if updated == current {
@@ -41,7 +33,6 @@ pub(super) fn merge_implementation_pr_body(
 struct DesiredBodyParts<'a> {
     prose: &'a str,
     summary_line: &'a str,
-    plan_section: Option<&'a str>,
     metadata: WorkflowMetadata,
 }
 
@@ -57,7 +48,6 @@ impl<'a> DesiredBodyParts<'a> {
         Ok(Self {
             prose: split.before,
             summary_line,
-            plan_section: plan_section(split.before),
             metadata,
         })
     }
@@ -101,21 +91,6 @@ fn upsert_summary(prose: &str, summary_line: &str) -> String {
     trim_joined(lines)
 }
 
-fn upsert_plan_section(prose: &str, plan: &str) -> String {
-    let mut prose_lines = lines(prose);
-    let mut plan_lines = lines(plan);
-    if let Some((start, end)) = plan_section_span(&prose_lines) {
-        if end < prose_lines.len() && !prose_lines[end].trim().is_empty() {
-            plan_lines.push(String::new());
-        }
-        prose_lines.splice(start..end, plan_lines);
-    } else {
-        let index = prose_lines.len();
-        insert_section(&mut prose_lines, index, &plan_lines);
-    }
-    trim_joined(prose_lines)
-}
-
 fn insert_section(lines: &mut Vec<String>, index: usize, section: &[String]) {
     let mut replacement = Vec::new();
     if index > 0
@@ -132,16 +107,20 @@ fn insert_section(lines: &mut Vec<String>, index: usize, section: &[String]) {
     lines.splice(index..index, replacement);
 }
 
-fn plan_section(body: &str) -> Option<&str> {
-    let lines = body.lines().collect::<Vec<_>>();
-    let (start, end) = plan_section_span_str(&lines)?;
-    let start_byte = byte_offset_of_line(body, start);
-    let end_byte = if end >= lines.len() {
-        body.len()
-    } else {
-        byte_offset_of_line(body, end)
-    };
-    Some(body[start_byte..end_byte].trim_end())
+fn remove_plan_section(prose: &str) -> String {
+    let mut prose_lines = lines(prose);
+    if let Some((start, end)) = plan_section_span(&prose_lines) {
+        let mut replacement = Vec::new();
+        if start > 0
+            && end < prose_lines.len()
+            && !prose_lines[start - 1].trim().is_empty()
+            && !prose_lines[end].trim().is_empty()
+        {
+            replacement.push(String::new());
+        }
+        prose_lines.splice(start..end, replacement);
+    }
+    trim_joined(prose_lines)
 }
 
 fn plan_section_span(lines: &[String]) -> Option<(usize, usize)> {
@@ -161,7 +140,7 @@ fn plan_section_span_str(lines: &[&str]) -> Option<(usize, usize)> {
             index += 1;
             continue;
         }
-        if parse_checklist_item(lines[index]).is_some() {
+        if is_checklist_item(trimmed) {
             saw_item = true;
             index += 1;
             continue;
@@ -175,51 +154,10 @@ fn plan_section_span_str(lines: &[&str]) -> Option<(usize, usize)> {
     }
 }
 
-fn byte_offset_of_line(body: &str, target: usize) -> usize {
-    if target == 0 {
-        return 0;
-    }
-    let mut line = 0;
-    for (index, byte) in body.bytes().enumerate() {
-        if byte == b'\n' {
-            line += 1;
-            if line == target {
-                return index + 1;
-            }
-        }
-    }
-    body.len()
-}
-
-fn checked_phase_labels(body: &str) -> BTreeSet<String> {
-    let mut labels = BTreeSet::new();
-    let Some(section) = plan_section(body) else {
-        return labels;
-    };
-    for line in section.lines() {
-        if let Some(item) = parse_checklist_item(line)
-            && item.checked
-        {
-            labels.insert(normalize_phase(item.label));
-        }
-    }
-    labels
-}
-
-fn apply_checked_phases(plan: &str, checked: &BTreeSet<String>) -> String {
-    plan.lines()
-        .map(|line| {
-            let Some(item) = parse_checklist_item(line) else {
-                return line.to_string();
-            };
-            if checked.contains(&normalize_phase(item.label)) {
-                format!("{}- [x] {}", item.indent, item.label)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn is_checklist_item(trimmed: &str) -> bool {
+    trimmed.starts_with("- [ ] ")
+        || trimmed.starts_with("- [x] ")
+        || trimmed.starts_with("- [X] ")
 }
 
 fn lines(body: &str) -> Vec<String> {
@@ -243,10 +181,6 @@ fn is_summary_line(line: &str) -> bool {
     line.trim_start().starts_with("Summary:")
 }
 
-fn normalize_phase(phase: &str) -> String {
-    phase.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,22 +195,20 @@ mod tests {
     }
 
     #[test]
-    fn preserves_checked_items_when_summary_changes() {
+    fn removes_legacy_plan_checklist_when_summary_changes() {
         let current = format!(
             "Intro.\n\nSummary: planned\n\nImplementation plan:\n\n- [ ] Test\n- [x] Build\n\n{}",
             render_metadata_block(&metadata())
         );
-        let desired = format!(
-            "Intro.\n\nSummary: final\n\nImplementation plan:\n\n- [ ] Test\n- [ ] Build\n\n{}",
-            render_metadata_block(&metadata())
-        );
+        let desired = format!("Intro.\n\nSummary: final\n\n{}", render_metadata_block(&metadata()));
 
         let updated = merge_implementation_pr_body(&current, &desired)
             .expect("merge succeeds")
             .expect("body changes");
 
         assert!(updated.contains("Summary: final"));
-        assert!(updated.contains("- [ ] Test\n- [x] Build"));
+        assert!(!updated.contains("Implementation plan"));
+        assert!(!updated.contains("- [x] Build"));
         assert_eq!(parse_metadata_block(&updated).unwrap(), Some(metadata()));
     }
 
@@ -286,10 +218,7 @@ mod tests {
             "Intro.\n\nHuman note.\n\nSummary: planned\n\nImplementation plan:\n\n- [x] Test\n- [ ] Build\n\nMore notes.\n\n{}",
             render_metadata_block(&metadata())
         );
-        let desired = format!(
-            "Intro.\n\nSummary: final\n\nImplementation plan:\n\n- [ ] Test\n- [ ] Build\n\n{}",
-            render_metadata_block(&metadata())
-        );
+        let desired = format!("Intro.\n\nSummary: final\n\n{}", render_metadata_block(&metadata()));
 
         let updated = merge_implementation_pr_body(&current, &desired)
             .expect("merge succeeds")
@@ -297,6 +226,7 @@ mod tests {
 
         assert!(updated.contains("Human note."));
         assert!(updated.contains("More notes."));
-        assert!(updated.contains("- [x] Test\n- [ ] Build"));
+        assert!(!updated.contains("Implementation plan"));
+        assert!(!updated.contains("- [x] Test"));
     }
 }

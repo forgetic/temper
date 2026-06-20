@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Optimistic body updates for implementation PR plan publication/finalization.
+//! Optimistic body updates for implementation PR finalization.
 
 use temper_forge::{Forge, ForgeError, PullRequest, UpdatePullRequest};
 

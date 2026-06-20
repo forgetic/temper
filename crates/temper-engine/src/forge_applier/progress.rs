@@ -3,14 +3,13 @@
 //! The [`ResultApplier`] trait impl for [`ForgeApplier`] and the step-progress
 //! checkpoints it records.
 
-use temper_forge::{CreateComment, Forge, RepositoryPath};
+use temper_forge::{CreateComment, Forge};
 use temper_protocol_worker::{JobContext, JobProgress, JobResult, ResultStatus};
 use temper_workflow::{Effect, RoleId};
 
 use crate::InFlightJob;
 use crate::applier::ResultApplier;
 use crate::forge_applier::ForgeApplier;
-use crate::workflow_meta::implementation_pr_labels;
 
 #[async_trait::async_trait]
 impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
