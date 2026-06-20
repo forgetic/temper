@@ -9,7 +9,7 @@ mod support;
 use support::{TestRoot, block_on};
 use temper_forge_filesystem::FilesystemForge;
 use temper_forge_model::{
-    AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
+    AccessGrant, AccessScope, CommitFile, CreateBranch, EnsureRepository, ForgeAdmin, ForgeContent,
     ForgeError, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope, WebhookEvents,
     WebhookSpec,
 };
@@ -20,12 +20,13 @@ fn filesystem_forge_is_a_provisioning_forge() {
     assert_provisioning::<FilesystemForge>();
 }
 
-fn repo_input(owner: &str, name: &str) -> CreateRepository {
-    CreateRepository {
+fn repo_input(owner: &str, name: &str) -> EnsureRepository {
+    EnsureRepository {
         owner: owner.into(),
         name: name.into(),
         default_branch: "main".into(),
         description: None,
+        auto_init: true,
     }
 }
 

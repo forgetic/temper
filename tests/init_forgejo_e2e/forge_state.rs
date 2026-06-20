@@ -35,16 +35,18 @@ pub(super) fn assert_forge_state(
     );
 
     for path in [".forgejo/workflows/ci.yml", ".temper-ci/main.txt"] {
-        let (status, _) = rest.send_expect_json(
+        let (status, body) = rest.send_expect_json(
             "GET",
             format!("{base_url}/api/v1/repos/{REPO_OWNER}/{REPO_NAME}/contents/{path}"),
             token,
             None,
             "get repository seed file",
         );
-        assert_eq!(
-            status, 404,
-            "temper init must not commit project seed file {path}"
+        let absent = status == 404
+            || (status == 200 && body.as_array().is_some_and(|items| items.is_empty()));
+        assert!(
+            absent,
+            "temper init must not commit project seed file {path}; got status {status} body {body}"
         );
     }
 

@@ -13,8 +13,23 @@
 
 use crate::ForgeResult;
 use crate::ids::RepositoryId;
-use crate::model::{CreateRepository, RepositoryPath};
+use crate::model::RepositoryPath;
 use async_trait::async_trait;
+
+/// Input used to idempotently create a repository during provisioning.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnsureRepository {
+    /// Repository owner / organization.
+    pub owner: String,
+    /// Repository name.
+    pub name: String,
+    /// Default branch to configure when creating the repository.
+    pub default_branch: String,
+    /// Optional repository description.
+    pub description: Option<String>,
+    /// Whether the backend should create an initial commit/default branch.
+    pub auto_init: bool,
+}
 
 /// Input used to commit a single file into a repository on a branch.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,7 +65,7 @@ pub trait ForgeContent: Send + Sync {
     /// Idempotent: if a repository already exists at the requested owner/name it
     /// is left unchanged and its identifier is returned; only an absent
     /// repository is created. Re-running provisioning is benign.
-    async fn ensure_repository(&self, input: CreateRepository) -> ForgeResult<RepositoryId>;
+    async fn ensure_repository(&self, input: EnsureRepository) -> ForgeResult<RepositoryId>;
 
     /// Requires that a repository already exists, returning its identifier.
     ///

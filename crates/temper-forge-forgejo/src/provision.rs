@@ -29,7 +29,7 @@ use crate::{EngineHttpClient, ForgejoForge, HttpClient, HttpMethod, HttpRequest,
 use base64::Engine;
 use serde_json::{Value, json};
 use temper_forge_model::{
-    AccessGrant, AccessScope, CommitFile, CreateBranch, CreateRepository, ForgeAdmin, ForgeContent,
+    AccessGrant, AccessScope, CommitFile, CreateBranch, EnsureRepository, ForgeAdmin, ForgeContent,
     ForgeError, ForgeResult, NewUser, RepoPermission, RepositoryId, RepositoryPath, TokenScope,
     WebhookEvents, WebhookSpec,
 };
@@ -189,7 +189,7 @@ impl<C: HttpClient> ForgejoForge<C> {
 
 #[async_trait::async_trait]
 impl<C: HttpClient> ForgeContent for ForgejoForge<C> {
-    async fn ensure_repository(&self, input: CreateRepository) -> ForgeResult<RepositoryId> {
+    async fn ensure_repository(&self, input: EnsureRepository) -> ForgeResult<RepositoryId> {
         let response = self
             .provision_send(
                 HttpMethod::Post,
@@ -197,7 +197,7 @@ impl<C: HttpClient> ForgeContent for ForgejoForge<C> {
                 Some(json!({
                     "name": input.name,
                     "default_branch": input.default_branch,
-                    "auto_init": true,
+                    "auto_init": input.auto_init,
                     "private": false,
                 })),
             )

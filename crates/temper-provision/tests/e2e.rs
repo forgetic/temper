@@ -97,6 +97,7 @@ fn role_bindings() -> Vec<RoleBinding> {
 fn full_plan() -> ProvisionPlan {
     let options = ProvisionOptions {
         existing_repo: false,
+        repository_auto_init: true,
         roles: role_bindings(),
         automation_login: BOT_USER.to_string(),
         password: "s3cret".into(),
@@ -345,6 +346,7 @@ fn existing_repo_requires_repo_and_skips_seed_commits() {
     let forge = MemoryForge::new();
     let options = ProvisionOptions {
         existing_repo: true,
+        repository_auto_init: true,
         roles: role_bindings(),
         automation_login: BOT_USER.to_string(),
         password: "s3cret".into(),
@@ -377,11 +379,12 @@ fn existing_repo_requires_repo_and_skips_seed_commits() {
     // Now pre-create the repo, then provision: the seed CI commit must be
     // skipped under `existing_repo`.
     let forge = MemoryForge::new();
-    let repo = block_on(forge.ensure_repository(temper_forge::CreateRepository {
+    let repo = block_on(forge.ensure_repository(temper_forge::EnsureRepository {
         owner: OWNER.into(),
         name: NAME.into(),
         default_branch: BRANCH.into(),
         description: None,
+        auto_init: true,
     }))
     .expect("pre-create repo");
     let provisioned = block_on(provision_with(&plan, &forge)).expect("provision succeeds");
@@ -399,6 +402,7 @@ fn org_owners_access_records_owners_membership_not_repo_grants() {
     let forge = MemoryForge::new();
     let options = ProvisionOptions {
         existing_repo: false,
+        repository_auto_init: true,
         roles: role_bindings(),
         automation_login: BOT_USER.to_string(),
         password: "s3cret".into(),

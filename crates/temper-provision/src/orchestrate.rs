@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use temper_forge::{
-    AccessGrant, CreateIssue, CreateRepository, Forge, ForgeAdmin, ForgeContent, NewUser,
+    AccessGrant, CreateIssue, EnsureRepository, Forge, ForgeAdmin, ForgeContent, NewUser,
     ProvisioningForge, RepoPermission, RepositoryId, UpsertLabel,
 };
 
@@ -68,11 +68,12 @@ pub async fn provision(
         content.require_repository(&plan.repo).await?
     } else {
         content
-            .ensure_repository(CreateRepository {
+            .ensure_repository(EnsureRepository {
                 owner: owner.to_string(),
                 name: name.to_string(),
                 default_branch: plan.default_branch.clone(),
                 description: None,
+                auto_init: plan.repository_auto_init,
             })
             .await?
     };

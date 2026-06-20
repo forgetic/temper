@@ -17,7 +17,7 @@ pub mod ids;
 pub mod model;
 
 pub use admin::{AccessGrant, ForgeAdmin, NewUser, TokenScope, WebhookSpec};
-pub use content::{CommitFile, CreateBranch, ForgeContent};
+pub use content::{CommitFile, CreateBranch, EnsureRepository, ForgeContent};
 pub use forge::{
     CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueQuery,
     ItemListDetails, ItemSort, ItemSortField, PullRequestQuery, RepositoryQuery, RepositorySort,

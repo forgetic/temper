@@ -71,6 +71,7 @@ impl ProvisionPlan {
             token_scopes: options.token_scopes,
             labels: all_labels,
             existing_repo: options.existing_repo,
+            repository_auto_init: options.repository_auto_init,
             webhook: options.webhook,
             intake: options.intake,
             intake_labels,
