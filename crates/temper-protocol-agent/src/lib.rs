@@ -19,15 +19,11 @@
 //!   running the agent in the prepared checkout (`--workspace`, also cwd).
 //! - **Outbound step-progress (agent → worker), stream:** zero or more
 //!   [`StepProgress`] records, one per coherent step boundary, emitted on the
-//!   agent's **stdout** as line-delimited JSON. Most are crash-recovery
+//!   agent's **stdout** as line-delimited JSON. These are crash-recovery
 //!   checkpoint markers — *what was done and what was pushed* — emitted
-//!   **after** the corresponding commit is pushed. A record may also carry a
-//!   plan publication with no pushed commit so the host/orchestrator can publish
-//!   checklist-worthy plans without asking the model to perform forge actions.
+//!   **after** the corresponding commit is pushed.
 //! - **Outbound result (agent → worker), terminal:** a [`WorkspaceResult`]
-//!   written to the file named by the agent's `--result` flag. The result may
-//!   include an optional structured implementation plan; omitting it preserves
-//!   the legacy file protocol.
+//!   written to the file named by the agent's `--result` flag.
 //!
 //! # Recovery, not transactions
 //!
@@ -37,10 +33,6 @@
 //! boundaries; let the marker reflect only what was pushed.
 
 use serde::{Deserialize, Serialize};
-
-mod plan;
-
-pub use plan::{PlanPublication, PlanPublicationTarget};
 
 /// Wire-format version. Bumped on any breaking change to the context, result,
 /// or step-progress shapes. The context and each step-progress record embed it
@@ -205,18 +197,13 @@ pub struct WorkspaceGuidance {
 
 /// The agent's terminal work product for one turn.
 ///
-/// Verdict absent ⇒ head path (the working-tree diff is the product). The
-/// optional [`WorkspaceResult::plan`] carries structured implementation phases
-/// for non-trivial engineer work without overloading the free-text summary; it
-/// is omitted by legacy agents and for trivial/no-checklist jobs.
+/// Verdict absent ⇒ head path (the working-tree diff is the product).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan: Option<ImplementationPlan>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -225,28 +212,6 @@ pub struct WorkspaceResult {
     pub labels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<WorkspaceResultChild>,
-}
-
-/// Structured plan data for non-trivial implementation work.
-///
-/// Phases are ordered, human-readable labels. Zero or one phase means the work
-/// is trivial enough that no PR checklist ceremony should be created; two or
-/// more phases are checklist-worthy and may be rendered one checkbox per phase
-/// by later workflow layers.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ImplementationPlan {
-    #[serde(default)]
-    pub phases: Vec<String>,
-}
-
-impl ImplementationPlan {
-    /// Minimum number of phases that should produce PR checklist ceremony.
-    pub const CHECKLIST_PHASE_COUNT: usize = 2;
-
-    /// Whether the plan is substantial enough to render as a PR checklist.
-    pub fn is_checklist_worthy(&self) -> bool {
-        self.phases.len() >= Self::CHECKLIST_PHASE_COUNT
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -266,12 +231,10 @@ pub struct WorkspaceResultChild {
 /// One durable human-facing progress marker emitted by the agent/host at a
 /// coherent boundary.
 ///
-/// Most markers are crash-recovery checkpoints emitted *after* the corresponding
-/// commit is pushed. Plan-publication markers may carry only the model-authored
-/// plan plus host-filled repository routing before any commit exists. The worker
-/// relays each record to the forge/orchestrator as durable progress (a ticked
-/// checklist item, a PR-body update). Everything high-frequency (token deltas,
-/// tool calls) belongs on the control plane, not here.
+/// Markers are crash-recovery checkpoints emitted *after* the corresponding
+/// commit is pushed. The worker relays each record to the forge/orchestrator as
+/// durable progress. Everything high-frequency (token deltas, tool calls)
+/// belongs on the control plane, not here.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StepProgress {
     /// Echoes [`WorkspaceContext::correlation_key`] so the worker (and the
@@ -279,9 +242,7 @@ pub struct StepProgress {
     pub correlation_key: String,
     /// Monotonic step index within the turn, starting at 1.
     pub step: u32,
-    /// Short imperative label of the step, e.g. "write failing test". For a
-    /// planned implementation phase, use the phase label exactly (modulo
-    /// whitespace) so the daemon can tick the matching PR checklist item.
+    /// Short imperative label of the step, e.g. "write failing test".
     pub status: String,
     /// Step lifecycle phase.
     #[serde(default)]
@@ -293,10 +254,6 @@ pub struct StepProgress {
     /// Optional one-line human note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Optional plan publication for this progress marker. Omitted by legacy
-    /// agents and by steps that are not publishing a plan.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_publication: Option<PlanPublication>,
 }
 
 /// Lifecycle phase of a [`StepProgress`] record.
@@ -327,9 +284,6 @@ impl StepProgress {
         serde_json::from_str(trimmed).map(Some)
     }
 }
-
-#[cfg(test)]
-mod plan_tests;
 
 #[cfg(test)]
 mod tests {
