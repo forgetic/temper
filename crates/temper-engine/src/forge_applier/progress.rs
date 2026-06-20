@@ -20,21 +20,30 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
         }
     }
 
-    /// Applies terminal step-progress checkpoints when they carry a useful
-    /// final summary.
+    /// Applies step-progress to one host-owned source issue ledger for engineer
+    /// issue runs, while retaining terminal comments for non-ledger roles.
     ///
-    /// Non-terminal `started` progress is intentionally left to daemon/worker
-    /// logs, lease, assignment, and heartbeat signals, except that open-PR
-    /// engineer starts claim the source issue. Ordinary checkpoint labels are
-    /// resumability markers and do not create issue-thread chatter. A terminal
-    /// issue comment is retained only for an explicit final-summary checkpoint
-    /// (`finish …` with a non-empty note), and remains idempotent via the
-    /// machine-readable progress marker. Engineer issue runs whose success path
-    /// opens an implementation PR keep that final handoff in the PR body instead
-    /// of duplicating it on the source issue.
+    /// `started` progress still claims the source action. Engineer checkpoint
+    /// labels update a single managed body block keyed by the correlation key;
+    /// they do not create per-step comments or PR checklists. Once an
+    /// implementation PR exists, the ledger is finalized to a concise PR handoff
+    /// and replayed checkpoints no longer mutate the source issue. Non-engineer
+    /// final-summary progress keeps the previous idempotent comment behavior.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
+        let use_run_ledger = progress_uses_run_ledger(&job);
+
         if progress.state == "started" {
             self.apply_source_action_claim(&job).await;
+            if !use_run_ledger {
+                return;
+            }
+        }
+
+        if use_run_ledger {
+            let include_final_note = should_comment_progress(&progress)
+                && !self.final_progress_uses_implementation_pr_body(&job);
+            self.apply_run_ledger_progress(&job, &progress, include_final_note)
+                .await;
             return;
         }
 
@@ -43,9 +52,6 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
         }
 
         if !should_comment_progress(&progress) {
-            return;
-        }
-        if self.final_progress_uses_implementation_pr_body(&job) {
             return;
         }
 
@@ -97,7 +103,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
 }
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
-    fn final_progress_uses_implementation_pr_body(&self, job: &InFlightJob) -> bool {
+    pub(super) fn final_progress_uses_implementation_pr_body(&self, job: &InFlightJob) -> bool {
         if job.role != "engineer" || job.artifact.kind != "issue" {
             return false;
         }
@@ -120,6 +126,10 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             })
         })
     }
+}
+
+fn progress_uses_run_ledger(job: &InFlightJob) -> bool {
+    job.role == "engineer" && job.artifact.kind == "issue"
 }
 
 /// Terminal issue comments are reserved for useful final summaries, not generic

@@ -21,6 +21,7 @@ use crate::forge_applier::coordinated::{
     CoordinatedSet, coordinated_landing_order, coordinated_pr_pull_request_input,
     manifest_depends_on,
 };
+use crate::forge_applier::run_ledger::RunLedgerPullRequest;
 use crate::workflow_meta::{
     default_base_branch, implementation_pr_create_labels, implementation_pr_labels,
 };
@@ -101,6 +102,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
 
         let lookup_labels = implementation_pr_labels(self.workflow.as_ref());
         let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
+        let worker_id = result.worker_id.clone();
         let summary = result.summary.unwrap_or_default();
 
         // Open one PR per writable repo that produced a diff, in coordinated
@@ -129,6 +131,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
         if !opened.is_empty() {
             self.clear_source_action_working_labels(&job).await;
+            let pull_requests = opened
+                .iter()
+                .map(|(repo, (_, number))| RunLedgerPullRequest {
+                    repo: repo.clone(),
+                    number: *number,
+                })
+                .collect::<Vec<_>>();
+            self.finalize_run_ledger(&job, &coordination_key, &worker_id, &pull_requests)
+                .await;
         }
     }
 
