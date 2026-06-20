@@ -173,17 +173,17 @@ fn launcher_passes_workflow_to_provision_and_run() {
 }
 
 #[test]
-fn launcher_seeds_intake_last_as_site_admin() {
+fn launcher_files_intake_last_as_site_admin_via_forgejo_api() {
     let script = read_example("run.sh");
     let workflow = read_example("config/workflow.json");
 
-    // The bundled spec declares intake_author = site_admin, so the seed pass files
-    // the intake issue as the admin (there is no `human` role).
+    // The bundled spec declares intake_author = site_admin, so the direct API
+    // call files the intake issue as the admin (there is no `human` role).
     assert!(workflow.contains("\"intake_author\": { \"kind\": \"site_admin\" }"));
 
     // Seed-last: the provision pass holds the intake back (--seed-intake no), then
-    // a second --seed-only pass files it AFTER temper run is ready, so the
-    // issue-created webhook is the demonstrated wake path.
+    // a direct Forgejo REST API issue create files it AFTER temper run is ready,
+    // so the issue-created webhook is the demonstrated wake path.
     let bootstrap = script
         .split("bootstrap_and_provision() {")
         .nth(1)
@@ -196,8 +196,14 @@ fn launcher_seeds_intake_last_as_site_admin() {
         .split("seed_intake() {")
         .nth(1)
         .expect("seed_intake function exists");
-    assert!(seed_intake.contains("--seed-only"));
-    assert!(seed_intake.contains("--intake-title \"$INTAKE_TITLE\""));
+    assert!(seed_intake.contains("TEMPER_FORGEJO_ADMIN_TOKEN=\"$ADMIN_TOKEN\""));
+    assert!(seed_intake.contains("/api/v1/repos/{owner_path}/{repo_path}/issues"));
+    assert!(seed_intake.contains("\"title\": os.environ[\"TEMPER_INTAKE_TITLE\"]"));
+    assert!(seed_intake.contains("\"body\": body"));
+    assert!(seed_intake.contains("method=\"POST\""));
+    assert!(seed_intake.contains("intake_issue_number=%s intake_issue_url=%s"));
+    assert!(!seed_intake.contains("--seed-only"));
+    assert!(!seed_intake.contains("--intake-title"));
 
     // seed_intake runs after boot_run in cmd_start.
     let cmd_start = script
