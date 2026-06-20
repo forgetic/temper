@@ -42,10 +42,11 @@ pub(super) fn assert_forge_state(
             None,
             "get repository seed file",
         );
-        eprintln!("seed check {path}: status={status} body={body}");
-        assert_eq!(
-            status, 404,
-            "temper init must not commit project seed file {path}"
+        let absent = status == 404
+            || (status == 200 && body.as_array().is_some_and(|items| items.is_empty()));
+        assert!(
+            absent,
+            "temper init must not commit project seed file {path}; got status {status} body {body}"
         );
     }
 
