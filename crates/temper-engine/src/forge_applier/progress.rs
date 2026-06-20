@@ -253,17 +253,15 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         };
 
         let role_id = RoleId::new(job.role.as_str());
-        self.compiled
-            .role(&role_id)
-            .is_some_and(|role| {
-                role.tools.iter().any(|tool| {
-                    tool.name == action
-                        && tool
-                            .effects
-                            .iter()
-                            .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
-                })
+        self.compiled.role(&role_id).is_some_and(|role| {
+            role.tools.iter().any(|tool| {
+                tool.name == action
+                    && tool
+                        .effects
+                        .iter()
+                        .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
             })
+        })
     }
 
     async fn resolve_progress_repository(
