@@ -7,7 +7,7 @@ use temper_forge::{
     CreateComment, Forge, ForgeError, PullRequest, Repository, RepositoryPath, UpdatePullRequest,
 };
 use temper_protocol_worker::{JobContext, JobProgress, JobResult, ResultStatus};
-use temper_workflow::find_pull_request_by_correlation;
+use temper_workflow::{Effect, RoleId, find_pull_request_by_correlation};
 
 use crate::InFlightJob;
 use crate::applier::ResultApplier;
@@ -37,7 +37,9 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
     ///
     /// A terminal issue comment is retained only for an explicit final-summary
     /// checkpoint (`finish …` with a non-empty note), and remains idempotent via
-    /// the machine-readable progress marker.
+    /// the machine-readable progress marker. Engineer issue runs whose success
+    /// path opens an implementation PR keep that final handoff in the PR body
+    /// instead of duplicating it on the source issue.
     async fn apply_progress(&self, job: InFlightJob, progress: JobProgress) {
         if self.apply_plan_publication_progress(&job, &progress).await {
             return;
@@ -60,6 +62,9 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F> {
         }
 
         if !should_comment_progress(&progress) {
+            return;
+        }
+        if self.final_progress_uses_implementation_pr_body(&job) {
             return;
         }
 
@@ -233,6 +238,30 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             "forge applier gave up ticking implementation PR progress after conflicts"
         );
         false
+    }
+
+    fn final_progress_uses_implementation_pr_body(&self, job: &InFlightJob) -> bool {
+        if job.role != "engineer" || job.artifact.kind != "issue" {
+            return false;
+        }
+
+        let Ok(context) = serde_json::from_value::<JobContext>(job.job_payload.clone()) else {
+            return false;
+        };
+        let Some(action) = context.action.as_deref() else {
+            return false;
+        };
+
+        let role_id = RoleId::new(job.role.as_str());
+        self.compiled.role(&role_id).is_some_and(|role| {
+            role.tools.iter().any(|tool| {
+                tool.name == action
+                    && tool
+                        .effects
+                        .iter()
+                        .any(|effect| matches!(effect, Effect::CreatePullRequest { .. }))
+            })
+        })
     }
 
     async fn resolve_progress_repository(
