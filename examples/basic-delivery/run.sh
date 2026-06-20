@@ -3,26 +3,24 @@
 #
 # The minimal, no-human-in-the-loop counterpart to reference-delivery: ONE repo,
 # TWO human-capable workflow roles (architect + engineer) plus a mechanical bot,
-# CI, webhooks on, and landing gated on CI alone. It boots the production
-# topology from development-profile binaries, but as a SINGLE process:
+# CI, webhooks on, and landing gated on CI alone. It boots a local development
+# topology as a SINGLE process:
 #   1. a throwaway Forgejo server (SQLite, Actions enabled),
 #   2. a host-mode forgejo-runner producing real CI,
-#   3. admin bootstrap + the production provision binary against the bundled
-#      3-role workflow (--workflow), creating the org/users/repo/labels/CI and
-#      registering the webhook — but deliberately NOT yet filing the intake issue,
-#   4. one `temper run`: the unified daemon + worker + coding agent on ONE event
-#      loop. The daemon hosts the webhook route, the long poll backstop, the short
-#      mechanical CI/landing backstop, leases, and per-role apply tokens; the
-#      in-process worker drives the in-process coding agent for architect +
-#      engineer with persistent workspaces and per-role git credentials,
-#   5. only once `temper run` is ready, a direct Forgejo REST API call files
-#      ONE unlabeled intake issue authored by the SITE ADMIN (the workflow's
-#      intake_author = site_admin), so the issue-created webhook is the
-#      demonstrated wake path.
-# The coding agent lets the architect triage the intake to a ready code issue and
-# the engineer open a real implementation PR; CI runs, goes green, and the
-# mechanical backstop auto-merges — no reviewer, owner, or human. It tears
-# everything down cleanly on Ctrl-C / signal / `./run.sh stop`.
+#   3. a local jig fake LLM provider loaded with fixtures/basic-delivery.json,
+#   4. admin bootstrap, then `temper init --non-interactive` to create the empty
+#      managed repo, labels, webhook, config.toml, workflow.json,
+#      credentials.toml, and webhook-secret,
+#   5. an explicit initial repo commit (README + .forgejo/workflows/ci.yml),
+#   6. `temper serve standalone`: the unified daemon + worker + coding agent on
+#      ONE event loop, using the init-emitted config and credentials,
+#   7. only once serve-standalone is ready, a direct Forgejo REST API call files
+#      ONE unlabeled intake issue authored by the SITE ADMIN, so the
+#      issue-created webhook is the demonstrated wake path.
+# The jig-backed coding agent lets the architect triage the intake to a ready
+# code issue and the engineer open a real implementation PR; CI runs, goes green,
+# and the mechanical backstop auto-merges — no reviewer, owner, or human. It
+# tears everything down cleanly on Ctrl-C / signal / `./run.sh stop`.
 #
 # This script targets the operator-facing `temper` entry point. By default it
 # builds/uses the development binary under target/debug; override TEMPER_RUN_BIN
@@ -39,12 +37,13 @@
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
 #       pkill -f 'target/debug/temper'
+#       pkill -f 'target/debug/jig'
 #       rm -rf examples/basic-delivery/run
 #
 # POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
-# Secrets travel by env or the sourced secrets files, NEVER on a command line.
+# Secrets travel by env or generated files, NEVER on a command line.
 
-set -eu
+set -euset -eu
 
 # --- Locations ----------------------------------------------------------------
 if [ -n "${TEMPER_BASIC_DELIVERY_SCRIPT_DIR:-}" ]; then
@@ -65,13 +64,15 @@ STOP_FILE="$RUN_DIR/stop"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
-# The provisioner writes the live forge identities in the runtime's own
-# credentials.toml format ([forge.users.<role>] + a bot user). The daemon loads
-# it via `temper daemon --credentials`; the launcher only reads a couple of
-# fields back (the bot identity for the mechanical backstop and the engineer
-# identity for the demo CI seed) — never on argv.
-CREDENTIALS_FILE="$SECRETS_DIR/credentials.toml"
-WEBHOOK_SECRET_FILE="$SECRETS_DIR/webhook-secret"
+JIG_PID_FILE="$RUN_DIR/jig.pid"
+
+# `temper init` emits the live deployment artifacts into the run directory. The
+# launcher consumes these exact files for `temper serve standalone`; it does not
+# synthesize an equivalent runtime config by hand.
+CONFIG_FILE="$RUN_DIR/config.toml"
+CREDENTIALS_FILE="$RUN_DIR/credentials.toml"
+INIT_WORKFLOW_PATH="$RUN_DIR/workflow.json"
+WEBHOOK_SECRET_FILE="$RUN_DIR/webhook-secret"
 
 # Pinned versions for the bundled throwaway server/runner used by this example.
 FORGEJO_VERSION=7.0.12
@@ -87,7 +88,7 @@ ADMIN_EMAIL=basicadmin@example.invalid
 ADMIN_PASSWORD='Basic-Delivery-Admin-1!'
 
 # Diagnostic strings emitted when Forgejo 7.0.x Actions status cannot be read by
-# the ADR-0019 web-UI fallback. `temper run` hosts the mechanical CI-read path.
+# the ADR-0019 web-UI fallback. `temper serve standalone` hosts the mechanical CI-read path.
 CI_FALLBACK_MISSING_CREDENTIALS='no web-UI credentials configured for the CI read fallback'
 CI_FALLBACK_LOGIN_FAILED='forgejo web-ui login failed'
 
@@ -123,19 +124,20 @@ usage() {
     cat <<EOF
 usage: $DISPLAY_SCRIPT [start|validate-webhooks|stop|help]
 
-  start (default)      boot Forgejo + runner, provision the single repo against
-                       the bundled 3-role workflow, launch one \`temper run\`
-                       (daemon + worker + coding agent for architect + engineer),
-                       then file one site-admin intake issue so its webhook wakes
-                       the run, and block until Ctrl-C or the stop-file.
+  start (default)      boot Forgejo + runner + local jig, run
+                       \`temper init --non-interactive\` against the empty repo,
+                       commit the demo README + CI workflow explicitly, launch
+                       \`temper serve standalone\` (daemon + worker + jig-backed
+                       coding agent), then file one site-admin intake issue so
+                       its webhook wakes the run, and block until Ctrl-C or the
+                       stop-file.
   validate-webhooks    inspect logs/ and report whether the webhook was
                        registered, accepted, scanned, assigned, and completed.
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
-Configuration is read from config/temper.env (no secrets). The coding agent's
-LLM provider is selected with TEMPER_RUN_AUTH; provider credentials live in
-secrets/.env (gitignored).
+Configuration is read from config/temper.env (no secrets). The LLM provider is a
+local jig server by default; jig ignores the dummy provider key stored by init.
 EOF
 }
 
@@ -173,13 +175,13 @@ cleanup() {
     [ -d "$RUN_DIR" ] && : >"$STOP_FILE" 2>/dev/null || true
     sleep 1
     stop_pid_file "$RUN_PID_FILE"
+    stop_pid_file "$JIG_PID_FILE"
     stop_pid_file "$RUNNER_PID_FILE"
     stop_pid_file "$SERVER_PID_FILE"
-    # Drop throwaway server/runner data + runtime checkouts + sentinel so a
-    # re-run starts fresh; keep logs/ for inspection.
-    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" \
-        "$RUN_DIR/ci-seed" "$RUN_DIR/workspaces" "$RUN_DIR"/run.sh.snapshot.* \
-        2>/dev/null || true
+    # Drop throwaway server/runner data + runtime checkouts + init-emitted
+    # secrets/config + sentinel so a re-run starts fresh; keep logs/ for
+    # inspection.
+    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE"         "$RUN_DIR/repo-seed" "$RUN_DIR/workspaces"         "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH"         "$WEBHOOK_SECRET_FILE" "$RUN_DIR"/run.sh.snapshot.*         2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
     log 'teardown complete'
 }
@@ -194,11 +196,11 @@ cmd_stop() {
 # Config knobs whose pre-existing environment value should win over the file
 # (precedence: CLI/env > config/temper.env > built-in default). The file is the
 # operator's edited config; a `VAR=x ./run.sh` still overrides it.
-CONFIG_KNOBS="OWNER NAME DEFAULT_BRANCH WORKFLOW_FILE INTAKE_TITLE INTAKE_BODY_FILE BASE_URL DAEMON_BIND WEBHOOK_URL \
+CONFIG_KNOBS="OWNER NAME DEFAULT_BRANCH INTAKE_TITLE INTAKE_BODY_FILE BASE_URL DAEMON_BIND \
 DAEMON_POLL_CADENCE_SECS DAEMON_MECHANICAL_CADENCE_SECS DAEMON_LEASE_TTL_SECS RUN_SECS \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
 TEMPER_RUN_BIN TEMPER_BUILD_PACKAGE \
-TEMPER_RUN_AUTH RUN_MAX_ITERATIONS"
+JIG_REPO JIG_BIN JIG_FIXTURE TEMPER_SKIP_JIG_BUILD INIT_PROVIDER_KEY RUN_MAX_ITERATIONS"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -231,15 +233,6 @@ load_config() {
     done
     # shellcheck disable=SC1090
     . "$CONFIG_DIR/temper.env"
-    # Optional operator secret overrides (gitignored). This is where the coding
-    # agent's provider credentials live (e.g. TEMPER_DEEPSEEK_API_KEY); they are
-    # exported so the single `temper run` process inherits them.
-    if [ -f "$SECRETS_DIR/.env" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        . "$SECRETS_DIR/.env"
-        set +a
-    fi
     # Re-apply any non-empty pre-existing env value over the file's setting.
     for _k in $CONFIG_KNOBS; do
         eval "_p=\${_pre_$_k}"
@@ -249,7 +242,6 @@ load_config() {
     OWNER=${OWNER:-acme}
     NAME=${NAME:-service}
     DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
-    WORKFLOW_FILE=${WORKFLOW_FILE:-workflow.json}
     # The seeded intake issue is deliberately THIN: the site admin (external
     # filer) states only the overall intent, with no acceptance criteria, no
     # setting name, and no implementation detail. Turning that into an
@@ -259,7 +251,7 @@ load_config() {
     INTAKE_BODY_FILE=${INTAKE_BODY_FILE:-intake-issue.md}
     BASE_URL=${BASE_URL:-http://127.0.0.1:4100}
     DAEMON_BIND=${DAEMON_BIND:-127.0.0.1:38100}
-    WEBHOOK_URL=${WEBHOOK_URL:-http://$DAEMON_BIND/forgejo/webhook}
+    WEBHOOK_URL=http://$DAEMON_BIND/forgejo/webhook
     DAEMON_POLL_CADENCE_SECS=${DAEMON_POLL_CADENCE_SECS:-120}
     DAEMON_MECHANICAL_CADENCE_SECS=${DAEMON_MECHANICAL_CADENCE_SECS:-2}
     DAEMON_LEASE_TTL_SECS=${DAEMON_LEASE_TTL_SECS:-300}
@@ -269,14 +261,11 @@ load_config() {
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
     TEMPER_RUN_BIN=${TEMPER_RUN_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper}
-    # Coding-agent LLM provider for `temper run --auth`. Default mirrors the
-    # agent binary's own default. The matching credentials must be present in the
-    # environment (secrets/.env) for the chosen provider.
-    TEMPER_RUN_AUTH=${TEMPER_RUN_AUTH:-chatgpt-oauth}
-    case "$TEMPER_RUN_AUTH" in
-        deepseek | chatgpt-oauth | anthropic-oauth) ;;
-        *) die "TEMPER_RUN_AUTH must be deepseek|chatgpt-oauth|anthropic-oauth, got '$TEMPER_RUN_AUTH'" ;;
-    esac
+    JIG_REPO=${JIG_REPO:-$HOME/src/rust/jig}
+    JIG_BIN=${JIG_BIN:-}
+    JIG_FIXTURE=${JIG_FIXTURE:-fixtures/basic-delivery.json}
+    TEMPER_SKIP_JIG_BUILD=${TEMPER_SKIP_JIG_BUILD:-0}
+    INIT_PROVIDER_KEY=${INIT_PROVIDER_KEY:-basic-delivery-jig-dummy-key}
     RUN_MAX_ITERATIONS=${RUN_MAX_ITERATIONS:-250}
 
     require_positive_int DAEMON_POLL_CADENCE_SECS "$DAEMON_POLL_CADENCE_SECS"
@@ -289,21 +278,20 @@ load_config() {
     REPO="$OWNER/$NAME"
     validate_repo_path "$REPO"
 
-    # Resolve the workflow file. A relative WORKFLOW_FILE is taken relative to
-    # config/; an absolute path is used verbatim.
-    case "$WORKFLOW_FILE" in
-        /*) WORKFLOW_PATH="$WORKFLOW_FILE" ;;
-        *)  WORKFLOW_PATH="$CONFIG_DIR/$WORKFLOW_FILE" ;;
-    esac
-    [ -f "$WORKFLOW_PATH" ] || die "workflow file not found: $WORKFLOW_PATH (set WORKFLOW_FILE in config/temper.env)"
-
-    # Resolve the thin intake body the same way: a relative path is taken
-    # relative to config/, an absolute path is used verbatim.
+    # Resolve the thin intake body: a relative path is taken relative to config/,
+    # an absolute path is used verbatim.
     case "$INTAKE_BODY_FILE" in
         /*) INTAKE_BODY_PATH="$INTAKE_BODY_FILE" ;;
         *)  INTAKE_BODY_PATH="$CONFIG_DIR/$INTAKE_BODY_FILE" ;;
     esac
     [ -f "$INTAKE_BODY_PATH" ] || die "intake body file not found: $INTAKE_BODY_PATH (set INTAKE_BODY_FILE in config/temper.env)"
+
+    # Resolve the jig fixture the same way: relative paths are anchored at the
+    # jig checkout so the default is portable across cwd changes.
+    case "$JIG_FIXTURE" in
+        /*) JIG_FIXTURE_PATH="$JIG_FIXTURE" ;;
+        *)  JIG_FIXTURE_PATH="$JIG_REPO/$JIG_FIXTURE" ;;
+    esac
 
     # Cap the Go runtime of the spawned forgejo + forgejo-runner (lesson 0009).
     # Exported so both Go processes inherit it; harmless for Rust processes.
@@ -324,38 +312,35 @@ load_config() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    # One unified binary provides everything this example needs: `temper daemon`
-    # (engine + worker + agent) and the `temper provision-forgejo` subcommand.
+    # One unified binary provides everything this example needs: `temper init`
+    # and `temper serve standalone`.
     RUN_BIN=${TEMPER_RUN_BIN:-$WORKSPACE_ROOT/target/debug/temper}
 
-    command -v curl >/dev/null 2>&1 \
-        || die 'curl is required to probe Forgejo readiness'
-    command -v python3 >/dev/null 2>&1 \
-        || die 'python3 is required for Forgejo issue API JSON construction and git credential URL encoding'
+    command -v curl >/dev/null 2>&1         || die 'curl is required to probe Forgejo readiness'
+    command -v python3 >/dev/null 2>&1         || die 'python3 is required for Forgejo issue API JSON construction, git credential URL encoding, and config patching'
+    command -v git >/dev/null 2>&1         || die 'git is required to create the explicit initial repository commit'
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
     # this is an explicit operator choice for prebuilt/current binaries.
     if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
         log "ensuring the Temper development binary is current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) \
-            || die 'Temper cargo build failed'
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" )             || die 'Temper cargo build failed'
     fi
 
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
 
-    # This example requires the runtime workflow provisioner subcommand and the
-    # config-driven `temper daemon` command (engine + worker + agent in one
-    # process). Refuse to run against a stale development binary.
-    _provision_help=$("$RUN_BIN" provision-forgejo --help 2>&1 || true)
-    case "$_provision_help" in
-        *--workflow*--seed-intake*) ;;
-        *) die "temper binary is stale or incompatible: $RUN_BIN 'provision-forgejo' does not advertise --workflow/--seed-intake. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+    # This example requires the local-dev init path and the serve-standalone UX.
+    # Refuse to run against a stale development binary.
+    _init_help=$("$RUN_BIN" init --help 2>&1 || true)
+    case "$_init_help" in
+        *--non-interactive*--provider-url*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'init' does not advertise --non-interactive/--provider-url. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
-    _daemon_help=$("$RUN_BIN" daemon --help 2>&1 || true)
-    case "$_daemon_help" in
-        *--config*) ;;
-        *) die "temper binary is stale or incompatible: $RUN_BIN 'daemon' does not advertise --config. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+    _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
+    case "$_serve_help" in
+        *--config*--credentials*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'serve standalone' does not advertise --config/--credentials. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
 
     # Pinned Forgejo + runner: env override, else the cached pinned path.
@@ -368,7 +353,20 @@ resolve_binaries() {
        Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/
        with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
 
-    log "coding agent: in-process (temper daemon; provider from TEMPER_RUN_AUTH=$TEMPER_RUN_AUTH)"
+    # Local jig fake LLM provider.
+    [ -d "$JIG_REPO" ] || die "jig checkout not found: $JIG_REPO (set JIG_REPO in config/temper.env or the environment)"
+    [ -f "$JIG_REPO/Cargo.toml" ] || die "jig checkout lacks Cargo.toml: $JIG_REPO"
+    if [ -z "$JIG_BIN" ]; then
+        JIG_BIN="$JIG_REPO/target/debug/jig"
+        if [ "$TEMPER_SKIP_JIG_BUILD" != "1" ]; then
+            log "ensuring the jig development binary is current (cargo build -p jig in $JIG_REPO)..."
+            ( cd "$JIG_REPO" && cargo build -p jig ) || die 'jig cargo build failed'
+        fi
+    fi
+    [ -x "$JIG_BIN" ] || die "jig binary not found: $JIG_BIN (set JIG_BIN or build $JIG_REPO)"
+    [ -f "$JIG_FIXTURE_PATH" ] || die "jig fixture not found: $JIG_FIXTURE_PATH (set JIG_FIXTURE)"
+
+    log "coding agent: in-process (temper serve standalone; provider=deepseek via jig fixture $JIG_FIXTURE_PATH)"
 }
 
 # --- Forgejo server -----------------------------------------------------------
@@ -498,17 +496,17 @@ wait_for_log_line() {
     done
 }
 
-# --- Provision + seed ---------------------------------------------------------
+# --- Jig + init + repo population + seed --------------------------------------
 
 repo_slug() {
     repo_name "$1" | tr -c '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]' | sed 's/^-*//;s/-*$//'
 }
 
-# Reads one `[forge.users.<key>]` field from the credentials.toml the
-# provisioner wrote. `$1` is the user/role key, `$2` the field name
-# (`user`/`token`/`password`/`email`). Prints the unquoted value, or nothing if
-# the section/field is absent (e.g. `user` is omitted when it equals the key).
-# POSIX awk only; values never contain embedded quotes in practice.
+# Reads one `[forge.users.<key>]` field from the credentials.toml init wrote.
+# `$1` is the user/role key, `$2` the field name (`user`/`token`/`password`/
+# `email`). Prints the unquoted value, or nothing if the section/field is absent
+# (e.g. `user` is omitted when it equals the key). POSIX awk only; values never
+# contain embedded quotes in practice.
 toml_forge_user_field() {
     [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
     awk -v section="[forge.users.$1]" -v field="$2" '
@@ -530,70 +528,234 @@ toml_forge_user_field() {
     ' "$CREDENTIALS_FILE"
 }
 
-# Lists the provisioned workflow roles (every `[forge.users.<key>]` except the
-# `bot` automation account).
-roles_from_credentials() {
-    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
-    sed -n 's/^\[forge\.users\.\([^]]*\)\]$/\1/p' "$CREDENTIALS_FILE" |
-        grep -v '^bot$' || true
+# URL-encodes one value for a git-credentials store entry. python3 is already a
+# demo dependency (the intake helper also uses it for JSON construction).
+percent_encode() {
+    python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
 
-bootstrap_and_provision() {
-    log 'bootstrapping admin + provisioning the single repo against the bundled 3-role workflow ...'
+boot_jig() {
+    log "starting local jig fake LLM provider from $JIG_REPO ..."
+    : >"$LOG_DIR/jig.log"
+    # The jig binary prints its bound base URL on stdout, then blocks until stdin
+    # closes. Feed it an endless inert stdin so the provider stays up until the
+    # launcher kills the jig process during cleanup.
+    tail -f /dev/null | "$JIG_BIN" "$JIG_FIXTURE_PATH" >"$LOG_DIR/jig.log" 2>&1 &
+    JIG_PID=$!
+    echo "$JIG_PID" >"$JIG_PID_FILE"
+
+    _i=0
+    JIG_URL=
+    while [ -z "$JIG_URL" ]; do
+        kill -0 "$JIG_PID" 2>/dev/null || die "jig exited during startup (see logs/jig.log)"
+        JIG_URL=$(sed -n 's#^\(http://[^[:space:]]*\).*#\1#p' "$LOG_DIR/jig.log" 2>/dev/null | sed -n '1p')
+        [ -n "$JIG_URL" ] && break
+        _i=$((_i + 1))
+        [ "$_i" -gt 100 ] && die "jig did not print a base URL (see logs/jig.log)"
+        sleep_short
+    done
+    # DeepSeek uses the SDK's OpenAI-compatible completions path, which appends
+    # /chat/completions to the configured base URL. Jig serves that route at the
+    # printed base itself, so do not add /v1 here.
+    JIG_PROVIDER_URL=$JIG_URL
+    log "jig ready at $JIG_URL (fixture $JIG_FIXTURE_PATH)"
+}
+
+bootstrap_admin() {
+    log 'bootstrapping the throwaway Forgejo site admin ...'
     # Create the admin (tolerate a pre-existing one on a re-run), then mint an
     # all-scoped token. The token stays in a shell variable; it is never echoed,
-    # reaches the provisioner only via the environment, and is reused by
-    # seed_intake as the REST API credential. The workflow's intake_author =
-    # site_admin means the intake issue is authored by THIS admin (the "external
-    # filer").
-    # This pass deliberately runs with --seed-intake no: it sets up the
-    # org/users/repo/labels/CI and registers the webhook but does NOT file the
-    # intake issue, so `temper run` can come up first and the issue's creation
-    # webhook is what drives the first demonstrated progress.
+    # reaches `temper init` only through the admin password env, and is reused by
+    # populate_repo / seed_intake as the setup-only REST/API credential. The
+    # workflow's intake_author = site_admin means the intake issue is authored by
+    # THIS admin (the "external filer").
     forgejo_cli admin user create --username "$ADMIN_USER" --password "$ADMIN_PASSWORD" \
         --email "$ADMIN_EMAIL" --admin --must-change-password=false \
         >"$LOG_DIR/admin-create.log" 2>&1 || true
     ADMIN_TOKEN=$(forgejo_cli admin user generate-access-token --username "$ADMIN_USER" \
         --scopes all --raw | tr -d '[:space:]')
     [ -n "$ADMIN_TOKEN" ] || die 'failed to mint an admin access token'
-
-    ensure_secret_file "$WEBHOOK_SECRET_FILE"
-    _webhook_args="--webhook-url $WEBHOOK_URL --webhook-secret-file $WEBHOOK_SECRET_FILE"
-    : >"$LOG_DIR/provision.log"
-
-    _owner=$(repo_owner "$REPO")
-    _name=$(repo_name "$REPO")
-    log "provisioning $REPO (labels + CI + webhook; intake filed after temper run readiness) ..."
-    # _webhook_args intentionally word-split: POSIX sh has no arrays and the
-    # values above are controlled by this script/config. --seed-intake no holds
-    # the intake issue back for the post-launch REST API call.
-    # shellcheck disable=SC2086
-    _status=$(TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" "$RUN_BIN" provision-forgejo \
-        --base-url "$BASE_URL" --owner "$_owner" --name "$_name" --out "$CREDENTIALS_FILE" \
-        --workflow "$WORKFLOW_PATH" --seed-intake no \
-        $_webhook_args) \
-        || die "provisioning $REPO failed"
-
-    {
-        printf 'repo=%s %s\n' "$REPO" "$_status"
-        printf 'repo=%s webhook registered url=%s\n' "$REPO" "$WEBHOOK_URL"
-    } >>"$LOG_DIR/provision.log"
-    log "$_status"
-    log "  webhook registered for $REPO ($WEBHOOK_URL)"
-
-    [ -f "$CREDENTIALS_FILE" ] || die "provision did not write $CREDENTIALS_FILE"
 }
 
-# Files the single site-admin intake issue AFTER `temper run` is up by POSTing
-# directly to Forgejo's REST API. The org/users/repo/labels/CI and the webhook
-# already exist from bootstrap_and_provision; this creates one unlabeled issue so
-# the issue-created webhook demonstrates the wake path while the poll backstop is
-# deliberately long.
+patch_init_config_runtime_knobs() {
+    # `temper init` owns the deployment config. The example only adds
+    # demo-specific runtime knobs that init intentionally leaves at defaults:
+    # backstop cadences, stable IDs, workspace/git base, and max iterations.
+    TEMPER_CONFIG_FILE="$CONFIG_FILE" \
+    TEMPER_DEMO_POLL="$DAEMON_POLL_CADENCE_SECS" \
+    TEMPER_DEMO_MECHANICAL="$DAEMON_MECHANICAL_CADENCE_SECS" \
+    TEMPER_DEMO_LEASE="$DAEMON_LEASE_TTL_SECS" \
+    TEMPER_DEMO_WORKSPACE="$RUN_DIR/workspaces" \
+    TEMPER_DEMO_GIT_BASE="$BASE_URL" \
+    TEMPER_DEMO_MAX_ITERATIONS="$RUN_MAX_ITERATIONS" \
+        python3 <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["TEMPER_CONFIG_FILE"])
+text = path.read_text(encoding="utf-8")
+lines = text.splitlines()
+
+updates = {
+    "engine": [
+        ("poll_cadence_secs", os.environ["TEMPER_DEMO_POLL"]),
+        ("mechanical_cadence_secs", os.environ["TEMPER_DEMO_MECHANICAL"]),
+        ("lease_ttl_secs", os.environ["TEMPER_DEMO_LEASE"]),
+        ("daemon_id", json.dumps("basic-delivery-daemon")),
+    ],
+    "worker": [
+        ("worker_id", json.dumps("basic-delivery-1")),
+        ("workspace", json.dumps(os.environ["TEMPER_DEMO_WORKSPACE"])),
+        ("git_base_url", json.dumps(os.environ["TEMPER_DEMO_GIT_BASE"])),
+    ],
+    "agent": [
+        ("max_iterations", os.environ["TEMPER_DEMO_MAX_ITERATIONS"]),
+    ],
+}
+
+
+def section_of(line: str):
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]") and not stripped.startswith("[["):
+        return stripped.strip("[]")
+    return None
+
+
+def existing_keys(section: str):
+    keys = set()
+    in_section = False
+    for line in lines:
+        current = section_of(line)
+        if current is not None:
+            in_section = current == section
+            continue
+        if in_section and "=" in line and not line.lstrip().startswith("#"):
+            keys.add(line.split("=", 1)[0].strip())
+    return keys
+
+
+def ensure_section(section: str, pairs):
+    global lines
+    keys = existing_keys(section)
+    missing = [(k, v) for k, v in pairs if k not in keys]
+    if not missing:
+        return
+    header = f"[{section}]"
+    for idx, line in enumerate(lines):
+        if line.strip() == header:
+            insert_at = idx + 1
+            while insert_at < len(lines):
+                current = section_of(lines[insert_at])
+                if current is not None:
+                    break
+                insert_at += 1
+            lines[insert_at:insert_at] = [f"{k} = {v}" for k, v in missing]
+            return
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(header)
+    lines.extend(f"{k} = {v}" for k, v in missing)
+
+for section, pairs in updates.items():
+    ensure_section(section, pairs)
+
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
+run_temper_init() {
+    [ -n "${JIG_PROVIDER_URL:-}" ] || die 'run_temper_init: jig provider URL is not set'
+    log "running temper init --non-interactive for $REPO ..."
+    : >"$LOG_DIR/init.log"
+    : >"$LOG_DIR/provision.log"
+    (
+        TEMPER_INIT_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+        TEMPER_INIT_PROVIDER_KEY="$INIT_PROVIDER_KEY" \
+            "$RUN_BIN" init --non-interactive --force \
+                --forge "$BASE_URL" \
+                --repo "$REPO" \
+                --bind "$DAEMON_BIND" \
+                --admin-user "$ADMIN_USER" \
+                --provider deepseek \
+                --provider-url "$JIG_PROVIDER_URL" \
+                --config "$CONFIG_FILE" \
+                --secrets "$CREDENTIALS_FILE"
+    ) >"$LOG_DIR/init.log" 2>&1 || die "temper init failed (see logs/init.log)"
+
+    [ -f "$CONFIG_FILE" ] || die "temper init did not write $CONFIG_FILE"
+    [ -f "$CREDENTIALS_FILE" ] || die "temper init did not write $CREDENTIALS_FILE"
+    [ -f "$INIT_WORKFLOW_PATH" ] || die "temper init did not write $INIT_WORKFLOW_PATH"
+    [ -f "$WEBHOOK_SECRET_FILE" ] || die "temper init did not write $WEBHOOK_SECRET_FILE"
+    patch_init_config_runtime_knobs
+
+    {
+        printf 'repo=%s initialized_by=temper_init config=%s credentials=%s workflow=%s webhook_secret=%s\n' \
+            "$REPO" "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH" "$WEBHOOK_SECRET_FILE"
+        printf 'repo=%s webhook registered url=%s\n' "$REPO" "$WEBHOOK_URL"
+        printf 'repo=%s provider=deepseek provider_url=%s fixture=%s\n' "$REPO" "$JIG_PROVIDER_URL" "$JIG_FIXTURE_PATH"
+    } >>"$LOG_DIR/provision.log"
+    log "temper init wrote config/credentials and registered the webhook for $REPO ($WEBHOOK_URL)"
+}
+
+populate_repo() {
+    [ -n "${ADMIN_TOKEN:-}" ] || die 'populate_repo: no admin token (bootstrap_admin must run first)'
+    _seed_dir="$RUN_DIR/repo-seed"
+    _checkout="$_seed_dir/$(repo_slug "$REPO")"
+    _creds="$_seed_dir/git-credentials"
+    _remote="$BASE_URL/$REPO.git"
+    _without_scheme=${BASE_URL#*://}
+
+    log "creating the initial $DEFAULT_BRANCH commit for $REPO (README + demo CI) ..."
+    rm -rf "$_seed_dir"
+    mkdir -p "$_checkout"
+    ( umask 077; printf 'http://%s:%s@%s\n' "$(percent_encode "$ADMIN_USER")" "$(percent_encode "$ADMIN_TOKEN")" "$_without_scheme" >"$_creds" )
+
+    : >"$LOG_DIR/repo-populate.log"
+    if ! git -C "$_checkout" init -b "$DEFAULT_BRANCH" >>"$LOG_DIR/repo-populate.log" 2>&1; then
+        git -C "$_checkout" init >>"$LOG_DIR/repo-populate.log" 2>&1 \
+            || die "repo population failed: git init (see logs/repo-populate.log)"
+        git -C "$_checkout" checkout -b "$DEFAULT_BRANCH" >>"$LOG_DIR/repo-populate.log" 2>&1 \
+            || die "repo population failed: git checkout -b $DEFAULT_BRANCH (see logs/repo-populate.log)"
+    fi
+    git -C "$_checkout" config user.email "$ADMIN_EMAIL" \
+        && git -C "$_checkout" config user.name 'Basic Delivery Admin' \
+        && git -C "$_checkout" config credential.helper "store --file=$_creds" \
+        && git -C "$_checkout" remote add origin "$_remote" \
+        || die "repo population failed: git config/remote setup (see logs/repo-populate.log)"
+
+    mkdir -p "$_checkout/.forgejo/workflows"
+    cp "$CONFIG_DIR/ci.yml" "$_checkout/.forgejo/workflows/ci.yml"
+    cat >"$_checkout/README.md" <<EOF
+# $REPO
+
+Minimal project baseline for the Temper basic-delivery demo.
+
+Temper initialized the Forgejo integration, and run.sh created this explicit
+first commit so the demo starts from a normal repository instead of provisioned
+content.
+EOF
+
+    git -C "$_checkout" add README.md .forgejo/workflows/ci.yml \
+        && git -C "$_checkout" commit --quiet -m 'chore: initialize basic-delivery demo repository' >>"$LOG_DIR/repo-populate.log" 2>&1 \
+        && git -C "$_checkout" push --quiet --set-upstream origin "HEAD:$DEFAULT_BRANCH" >>"$LOG_DIR/repo-populate.log" 2>&1 \
+        || die "repo population failed: commit/push (see logs/repo-populate.log)"
+
+    printf 'repo=%s initial_commit_branch=%s files=README.md,.forgejo/workflows/ci.yml\n' \
+        "$REPO" "$DEFAULT_BRANCH" >>"$LOG_DIR/provision.log"
+    log "created initial commit on $REPO@$DEFAULT_BRANCH"
+}
+
+# Files the single site-admin intake issue AFTER `temper serve standalone` is up
+# by POSTing directly to Forgejo's REST API. The org/users/repo/labels, initial
+# README+CI commit, and webhook already exist from init + populate_repo; this
+# creates one unlabeled issue so the issue-created webhook demonstrates the wake
+# path while the poll backstop is deliberately long.
 seed_intake() {
-    [ -n "${ADMIN_TOKEN:-}" ] || die 'seed_intake: no admin token (bootstrap_and_provision must run first)'
+    [ -n "${ADMIN_TOKEN:-}" ] || die 'seed_intake: no admin token (bootstrap_admin must run first)'
     _owner=$(repo_owner "$REPO")
     _name=$(repo_name "$REPO")
-    log 'filing the site-admin intake issue now that temper run is ready ...'
+    log 'filing the site-admin intake issue now that temper serve standalone is ready ...'
     _issue_info=$(
         TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" \
         TEMPER_FORGEJO_BASE_URL="$BASE_URL" \
@@ -676,147 +838,28 @@ PY
     log "  intake issue: $_issue_url (filing it should drive the webhook path)"
 }
 
-# --- Demo CI seed -------------------------------------------------------------
+# --- temper serve standalone --------------------------------------------------
 
-# URL-encodes one value for a git-credentials store entry. python3 is already a
-# demo dependency (the bundled CI workflow runs it via actions/checkout).
-percent_encode() {
-    python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
-}
-
-# Replaces the provisioned commit-message-marker CI with the bundled pass-through
-# workflow so a real coder PR head (which carries an ordinary commit message, not
-# the demo marker) clears the landing CI gate. Non-fatal: if this setup fails the
-# rest of the topology still boots, but landing CI may not pass.
-apply_demo_ci() {
-    # The engineer `user` may be omitted from credentials.toml when it equals the
-    # section key, so fall back to the role name (`engineer`).
-    _eng_user=$(toml_forge_user_field engineer user)
-    [ -n "$_eng_user" ] || _eng_user=engineer
-    _eng_password=$(toml_forge_user_field engineer password)
-    if [ -z "$_eng_password" ]; then
-        log "demo CI seed: no engineer password in $CREDENTIALS_FILE; landing CI may not pass"
-        return 0
-    fi
-
-    _seed_dir="$RUN_DIR/ci-seed"
-    _checkout="$_seed_dir/$(repo_slug "$REPO")"
-    _creds="$_seed_dir/git-credentials"
-    _remote="$BASE_URL/$REPO.git"
-    _without_scheme=${BASE_URL#*://}
-
-    log "demo CI seed: cloning $REPO to apply bundled CI ..."
-    rm -rf "$_seed_dir"
-    mkdir -p "$_seed_dir"
-    ( umask 077; printf 'http://%s:%s@%s\n' "$(percent_encode "$_eng_user")" "$(percent_encode "$_eng_password")" "$_without_scheme" >"$_creds" )
-    if ! git -c credential.helper="store --file=$_creds" clone --quiet "$_remote" "$_checkout" >>"$LOG_DIR/ci-seed.log" 2>&1; then
-        log "demo CI seed: clone of $REPO failed (see logs/ci-seed.log); landing CI may not pass"
-        return 0
-    fi
-    if ! { git -C "$_checkout" config user.email "$_eng_user@example.invalid" \
-        && git -C "$_checkout" config user.name 'Temper Engineer' \
-        && git -C "$_checkout" config credential.helper "store --file=$_creds"; }; then
-        log "demo CI seed: could not configure the checkout; landing CI may not pass"
-        return 0
-    fi
-
-    _base=$(git -C "$_checkout" rev-parse --abbrev-ref HEAD 2>/dev/null || printf '%s' "$DEFAULT_BRANCH")
-    mkdir -p "$_checkout/.forgejo/workflows"
-    if cp "$CONFIG_DIR/ci.yml" "$_checkout/.forgejo/workflows/ci.yml" \
-        && ! git -C "$_checkout" diff --quiet -- .forgejo/workflows/ci.yml; then
-        if git -C "$_checkout" add .forgejo/workflows/ci.yml \
-            && git -C "$_checkout" commit --quiet -m 'ci: use basic-delivery demo CI workflow' >>"$LOG_DIR/ci-seed.log" 2>&1 \
-            && git -C "$_checkout" push --quiet origin "HEAD:$_base" >>"$LOG_DIR/ci-seed.log" 2>&1; then
-            log "demo CI seed: applied bundled CI to $REPO@$_base"
-        else
-            log "demo CI seed: could not apply bundled CI to $REPO (see logs/ci-seed.log); landing CI may not pass"
-        fi
-    else
-        log "demo CI seed: bundled CI already present for $REPO"
-    fi
-}
-
-# --- temper run ---------------------------------------------------------------
-
-# Resolves the provisioned `bot` automation identity from the secrets file.
-# `temper run` uses it for the mechanical backstop: landing CI-green PRs and the
-# ADR-0019 web-UI CI read fallback. The setup-only site admin never participates
-# in the workflow.
-resolve_bot_identity() {
-    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
-    # The bot `user` is omitted from credentials.toml when it equals the section
-    # key, so default it to the literal `bot` automation login.
-    BOT_USER=$(toml_forge_user_field bot user)
-    [ -n "$BOT_USER" ] || BOT_USER=bot
-    BOT_TOKEN=$(toml_forge_user_field bot token)
-    BOT_PASSWORD=$(toml_forge_user_field bot password)
-    [ -n "$BOT_USER" ] || die "automation user 'bot' has no username in $CREDENTIALS_FILE"
-    [ "$BOT_USER" = "bot" ] || die "automation user must be 'bot' in $CREDENTIALS_FILE, got '$BOT_USER'"
-    [ -n "$BOT_TOKEN" ] || die "automation user 'bot' has no token in $CREDENTIALS_FILE"
-    [ -n "$BOT_PASSWORD" ] || die "automation user 'bot' has no password in $CREDENTIALS_FILE"
-}
-
-# Boots one `temper run`: the daemon, one worker, and the in-process coding agent
-# on a single event loop. Replaces the split daemon + worker boot of the legacy
-# topology.
+# Boots one `temper serve standalone`: the daemon, one worker, and the
+# in-process coding agent on a single event loop. The deployment is loaded from
+# the config.toml and credentials.toml emitted by `temper init`.
 boot_run() {
-    resolve_bot_identity
-    ensure_secret_file "$WEBHOOK_SECRET_FILE"
-    _roles=$(roles_from_credentials)
-    [ -n "$_roles" ] || die "no roles found in $CREDENTIALS_FILE"
+    [ -f "$CONFIG_FILE" ] || die "missing $CONFIG_FILE (run_temper_init must run first)"
+    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE (run_temper_init must run first)"
     mkdir -p "$RUN_DIR/workspaces"
 
-    # The new CLI is config-file driven: standalone `temper daemon` (no
-    # --service) runs engine + worker + agent in one process. Write the
-    # deployment to a config file; the per-role and bot secrets come from the
-    # provisioned credentials.toml via `--credentials` (never on argv).
-    _roles_toml=$(printf '"%s", ' $_roles); _roles_toml="[${_roles_toml%, }]"
-    case "$TEMPER_RUN_AUTH" in
-        chatgpt-oauth) _provider=chatgpt ;;
-        anthropic-oauth) _provider=anthropic ;;
-        *) _provider=deepseek ;;
-    esac
-    _config="$RUN_DIR/config.toml"
-    cat >"$_config" <<EOF
-schema_version = 1
-[forge]
-type = "forgejo"
-url = "$BASE_URL"
-[engine]
-bind = "$DAEMON_BIND"
-repos = ["$REPO"]
-roles = $_roles_toml
-workflow = "$WORKFLOW_PATH"
-webhook_secret_file = "$WEBHOOK_SECRET_FILE"
-poll_cadence_secs = $DAEMON_POLL_CADENCE_SECS
-mechanical_cadence_secs = $DAEMON_MECHANICAL_CADENCE_SECS
-lease_ttl_secs = $DAEMON_LEASE_TTL_SECS
-daemon_id = "basic-delivery-daemon"
-[worker]
-worker_id = "basic-delivery-1"
-workspace = "$RUN_DIR/workspaces"
-git_base_url = "$BASE_URL"
-[agent]
-provider = "$_provider"
-max_iterations = $RUN_MAX_ITERATIONS
-EOF
-
-    log "starting temper daemon at $DAEMON_BIND (roles: $_roles; poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=$_provider) ..."
+    log "starting temper serve standalone at $DAEMON_BIND (poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=deepseek/jig) ..."
     : >"$LOG_DIR/run.log"
-    (
-        FORGEJO_ACCESS_TOKEN="$BOT_TOKEN" \
-        FORGEJO_USERNAME="$BOT_USER" \
-        FORGEJO_PASSWORD="$BOT_PASSWORD" \
-            "$RUN_BIN" daemon --config "$_config" --credentials "$CREDENTIALS_FILE"
-    ) >"$LOG_DIR/run.log" 2>&1 &
+    "$RUN_BIN" serve standalone --config "$CONFIG_FILE" --credentials "$CREDENTIALS_FILE"         >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
-    # Readiness: the HTTP listener must be up before the seed-last webhook can be
-    # delivered, and the in-process worker must have registered before any job can
-    # be assigned. Wait for both, in order.
-    wait_for_log_line "$LOG_DIR/run.log" 'engine:  serving on' "$RUN_PID" 'temper daemon'
-    wait_for_log_line "$LOG_DIR/run.log" 'worker: registered' "$RUN_PID" 'temper daemon'
-    log "temper daemon up (pid $RUN_PID; logs/run.log)"
+    # Readiness: the webhook listener must be up before the seed-last webhook can
+    # be delivered, the in-process worker must have registered before any job can
+    # be assigned, and the standalone boot banner must report ready/idle.
+    wait_for_log_line "$LOG_DIR/run.log" 'webhook listener up' "$RUN_PID" 'temper serve standalone'
+    wait_for_log_line "$LOG_DIR/run.log" 'worker: registered' "$RUN_PID" 'temper serve standalone'
+    wait_for_log_line "$LOG_DIR/run.log" 'ready -- watching' "$RUN_PID" 'temper serve standalone'
+    log "temper serve standalone up (pid $RUN_PID; logs/run.log)"
 }
 
 # --- Webhook validation -------------------------------------------------------
@@ -841,7 +884,7 @@ validate_contains() {
     return 1
 }
 
-# Confirms `temper run` has the bot automation credentials it needs to merge
+# Confirms `temper serve standalone` has the bot automation credentials it needs to merge
 # CI-green PRs and read Forgejo 7.0.x Actions status (ADR 0019).
 validate_mechanical_bot_config() {
     _ok=0
@@ -857,7 +900,7 @@ validate_mechanical_bot_config() {
         log 'ok: bot automation token + web-UI credentials present for the mechanical backstop'
     else
         log "missing: bot automation user token/username/password in $CREDENTIALS_FILE"
-        log 'diagnosis: provision the bot user and launch temper run with its REST token plus FORGEJO_USERNAME/FORGEJO_PASSWORD for landing and the ADR-0019 CI read fallback'
+        log 'diagnosis: provision the bot user and launch temper serve standalone with its REST token plus FORGEJO_USERNAME/FORGEJO_PASSWORD for landing and the ADR-0019 CI read fallback'
         _ok=1
     fi
     return "$_ok"
@@ -873,12 +916,12 @@ validate_mechanical_ci_log() {
         return 1
     fi
     if grep -F -q "$CI_FALLBACK_MISSING_CREDENTIALS" "$_run_log" 2>/dev/null; then
-        log 'missing: temper run reported missing Forgejo web-UI credentials for CI reads'
-        log 'diagnosis: the landing queue needs native CI; pass the bot FORGEJO_USERNAME/FORGEJO_PASSWORD to temper run (ADR 0019)'
+        log 'missing: temper serve standalone reported missing Forgejo web-UI credentials for CI reads'
+        log 'diagnosis: the landing queue needs native CI; pass the bot FORGEJO_USERNAME/FORGEJO_PASSWORD to temper serve standalone (ADR 0019)'
         _ok=1
     fi
     if grep -F -q "$CI_FALLBACK_LOGIN_FAILED" "$_run_log" 2>/dev/null; then
-        log 'missing: temper run could not log in to Forgejo web UI for CI reads'
+        log 'missing: temper serve standalone could not log in to Forgejo web UI for CI reads'
         log 'diagnosis: verify the bot automation credentials in secrets/credentials.toml'
         _ok=1
     fi
@@ -904,12 +947,12 @@ cmd_validate_webhooks() {
 
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
-    validate_contains "$_run_log" 'engine:  serving on' \
-        'temper daemon reached serving readiness' || _ok=1
+    validate_contains "$_run_log" 'ready -- watching' \
+        'temper serve standalone reached serving readiness' || _ok=1
     validate_contains "$_run_log" 'webhook accepted' \
         'Forgejo delivered at least one accepted webhook' || _ok=1
     validate_contains "$_run_log" 'webhook wake scan' \
-        'temper run ran at least one webhook wake scan' || _ok=1
+        'temper serve standalone ran at least one webhook wake scan' || _ok=1
     if grep -E -q 'webhook wake scan.*enqueued=[1-9][0-9]*' "$_run_log" 2>/dev/null; then
         log 'ok: webhook wake scan enqueued work'
     else
@@ -917,7 +960,7 @@ cmd_validate_webhooks() {
         _ok=1
     fi
     validate_contains "$_run_log" 'assigned job_id=' \
-        'daemon assigned at least one job' || _ok=1
+        'engine assigned at least one job' || _ok=1
     validate_contains "$_run_log" 'result received' \
         'daemon received at least one job result' || _ok=1
 
@@ -955,13 +998,14 @@ cmd_validate_webhooks() {
 monitor() {
     log ''
     log "Forgejo UI:   $BASE_URL  (log in as any provisioned role)"
-    log "temper run:   http://$DAEMON_BIND  (webhook + poll/mechanical backstops + in-process coding agent for $REPO)"
+    log "temper serve: http://$DAEMON_BIND  (webhook + poll/mechanical backstops + in-process coding agent for $REPO)"
+    log "Jig LLM:      ${JIG_URL:-unknown}  (fixture $JIG_FIXTURE_PATH)"
     log "Intake issue: $BASE_URL/$REPO/issues"
     log "Logs:         $LOG_DIR/run.log"
-    log 'The intake issue is filed once temper run is ready, so its webhook drives'
-    log 'the wake scan; the architect triages it to a ready code issue, the engineer'
-    log 'opens an implementation PR, CI runs and goes green, and the mechanical'
-    log 'backstop auto-merges it — no human.'
+    log 'The intake issue is filed once temper serve standalone is ready, so its'
+    log 'webhook drives the wake scan; the architect triages it to a ready code'
+    log 'issue, the engineer opens an implementation PR, CI runs and goes green,'
+    log 'and the mechanical backstop auto-merges it — no human.'
     log ''
     log "Press Ctrl-C (or run '$DISPLAY_SCRIPT stop') to tear everything down."
 
@@ -998,8 +1042,10 @@ cmd_start() {
 
     boot_server
     boot_runner
-    bootstrap_and_provision
-    apply_demo_ci
+    boot_jig
+    bootstrap_admin
+    run_temper_init
+    populate_repo
     boot_run
     seed_intake
     monitor
