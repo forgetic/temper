@@ -128,10 +128,6 @@ pub struct CodingWorkspaceOutput {
     pub changed_files: Vec<String>,
     /// Labels the created PR should carry in addition to workflow metadata.
     pub labels: Vec<String>,
-    /// Optional ordered implementation phases. Zero or one phase is treated as
-    /// trivial and keeps the PR body plain; two or more phases render as a
-    /// checklist in implementation PR bodies.
-    pub plan_phases: Vec<String>,
     /// Optional typed verdict selecting the outcome transition via the action's
     /// declared `outcomes` map. `None` keeps today's behavior: the action's
     /// own transition runs and the workspace head produces a pull request.
@@ -170,22 +166,11 @@ impl CodingWorkspaceOutput {
             summary: summary.into(),
             changed_files,
             labels,
-            plan_phases: Vec::new(),
             verdict: None,
             body: None,
             review_body: None,
             children: Vec::new(),
         }
-    }
-
-    /// Returns this output carrying structured implementation plan phases.
-    pub fn with_plan_phases<I, S>(mut self, phases: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.plan_phases = phases.into_iter().map(Into::into).collect();
-        self
     }
 
     /// Returns this output carrying a typed verdict that selects the outcome

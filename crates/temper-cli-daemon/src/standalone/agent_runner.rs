@@ -74,7 +74,6 @@ impl AgentRunner for InProcessAgentRunner {
             state: StepState::Started,
             pushed_sha: None,
             note: Some(format!("protocol v{PROTOCOL_VERSION} (in-process)")),
-            plan_publication: None,
         });
 
         // §7 agent boundary events. The `item` ref is the work-item subject tag
@@ -116,7 +115,6 @@ impl AgentRunner for InProcessAgentRunner {
                 None,
                 hook_set.turn_hook,
                 hook_set.checkpoint_hook,
-                hook_set.publish_plan_hook,
             )
             .await
             .map_err(classify_coding_agent_error);
@@ -155,7 +153,6 @@ impl AgentRunner for InProcessAgentRunner {
                 state: StepState::Done,
                 pushed_sha: None,
                 note: result.summary.clone(),
-                plan_publication: None,
             });
 
             Ok(result)

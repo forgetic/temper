@@ -4,25 +4,22 @@
 //!
 //! The distributed worker gets these hooks from the `temper-agent` subprocess.
 //! Standalone runs the same coding loop in-process, so it provides equivalent
-//! checkpoint and plan-publication hooks here and routes progress through the
-//! worker's in-memory [`ProgressSink`].
+//! checkpoint hooks here and routes progress through the worker's in-memory
+//! [`ProgressSink`].
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use temper_agent::{CheckpointHook, PublishPlanHook};
-use temper_protocol_agent::{PlanPublication, StepProgress, StepState, WorkspaceContext};
+use temper_agent::CheckpointHook;
+use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext};
 use temper_worker::ProgressSink;
-
-const PLAN_STATUS: &str = "publish implementation plan";
 
 #[derive(Default)]
 pub(super) struct HookSet {
     pub(super) turn_hook: Option<Arc<dyn temper_agent::TurnHook>>,
     pub(super) checkpoint_hook: Option<Arc<dyn CheckpointHook>>,
-    pub(super) publish_plan_hook: Option<Arc<dyn PublishPlanHook>>,
 }
 
 pub(super) fn hooks_for_context(
@@ -31,44 +28,29 @@ pub(super) fn hooks_for_context(
     progress: Arc<dyn ProgressSink>,
     step: Arc<AtomicU32>,
 ) -> HookSet {
-    let policy = hook_policy(context);
-    if policy == HookPolicy::None {
+    if !checkpoint_hooks_enabled(context) {
         return HookSet::default();
     }
     let hook = Arc::new(WritableHooks::new(context, cwd, progress, step));
     let turn_hook: Arc<dyn temper_agent::TurnHook> = hook.clone();
     let checkpoint_hook: Arc<dyn CheckpointHook> = hook.clone();
-    let publish_plan_hook = (policy == HookPolicy::CheckpointsAndPlan).then(|| {
-        let hook: Arc<dyn PublishPlanHook> = hook.clone();
-        hook
-    });
     HookSet {
         turn_hook: Some(turn_hook),
         checkpoint_hook: Some(checkpoint_hook),
-        publish_plan_hook,
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HookPolicy {
-    None,
-    CheckpointsOnly,
-    CheckpointsAndPlan,
-}
-
-fn hook_policy(context: &WorkspaceContext) -> HookPolicy {
-    match context.checkout.as_deref().unwrap_or("writable") {
-        "writable" => HookPolicy::CheckpointsAndPlan,
-        "pull_request_writable" => HookPolicy::CheckpointsOnly,
-        _ => HookPolicy::None,
-    }
+fn checkpoint_hooks_enabled(context: &WorkspaceContext) -> bool {
+    matches!(
+        context.checkout.as_deref().unwrap_or("writable"),
+        "writable" | "pull_request_writable"
+    )
 }
 
 #[derive(Clone)]
 struct HookRepo {
     dir: String,
     branch: String,
-    base_branch: String,
 }
 
 struct WritableHooks {
@@ -94,7 +76,6 @@ impl WritableHooks {
             .map(|repo| HookRepo {
                 dir: repo.dir.clone(),
                 branch: repo.branch_hint.clone().unwrap_or_default(),
-                base_branch: repo.base_branch.clone(),
             })
             .collect();
         Self {
@@ -112,7 +93,6 @@ impl WritableHooks {
         let job = HookJob {
             cwd: self.cwd.clone(),
             repos: self.repos.clone(),
-            correlation_key: self.correlation_key.clone(),
         };
         let label_owned = label.map(str::to_string);
         let outcome = skein::runtime::spawn_blocking(move || {
@@ -129,7 +109,6 @@ impl WritableHooks {
                     state: StepState::Done,
                     pushed_sha: Some(sha.clone()),
                     note: None,
-                    plan_publication: None,
                 });
                 Ok(Some(sha))
             }
@@ -141,45 +120,6 @@ impl WritableHooks {
                 self.hand_back_step(step);
                 Err(error)
             }
-        }
-    }
-
-    async fn do_publish_plan(&self, publication: PlanPublication) -> Result<(), String> {
-        let step = self.step.fetch_add(1, Ordering::SeqCst);
-        let job = HookJob {
-            cwd: self.cwd.clone(),
-            repos: self.repos.clone(),
-            correlation_key: self.correlation_key.clone(),
-        };
-        let outcome = skein::runtime::spawn_blocking(move || job.publish_plan_sync()).await;
-        match outcome {
-            Ok(sha) => {
-                self.mark_checkpoint_pushed();
-                self.progress
-                    .report(self.plan_marker(step, sha, publication));
-                Ok(())
-            }
-            Err(error) => {
-                self.hand_back_step(step);
-                Err(error)
-            }
-        }
-    }
-
-    fn plan_marker(
-        &self,
-        step: u32,
-        pushed_sha: String,
-        publication: PlanPublication,
-    ) -> StepProgress {
-        StepProgress {
-            correlation_key: self.correlation_key.clone(),
-            step,
-            status: PLAN_STATUS.to_string(),
-            state: StepState::Done,
-            pushed_sha: Some(pushed_sha),
-            note: Some(publication.summary.clone()),
-            plan_publication: Some(publication),
         }
     }
 
@@ -222,17 +162,9 @@ impl CheckpointHook for WritableHooks {
     }
 }
 
-#[async_trait::async_trait]
-impl PublishPlanHook for WritableHooks {
-    async fn publish_plan(&self, publication: PlanPublication) -> Result<(), String> {
-        self.do_publish_plan(publication).await
-    }
-}
-
 struct HookJob {
     cwd: PathBuf,
     repos: Vec<HookRepo>,
-    correlation_key: String,
 }
 
 impl HookJob {
@@ -258,56 +190,6 @@ impl HookJob {
             }
         }
         Ok(pushed)
-    }
-
-    fn publish_plan_sync(&self) -> Result<String, String> {
-        if self.repos.is_empty() {
-            return Err("publish_plan requires at least one writable repository".to_string());
-        }
-        for repo in &self.repos {
-            if self.worktree_dirty(repo)? {
-                return Err(format!(
-                    "publish_plan must run before product edits; worktree already has changes in {}",
-                    repo.dir
-                ));
-            }
-        }
-        let mut first_sha = None;
-        for repo in &self.repos {
-            if repo.branch.trim().is_empty() {
-                return Err(format!(
-                    "publish_plan target {} is missing a work branch hint",
-                    repo.dir
-                ));
-            }
-            if !self.branch_ahead_of_base(repo)? {
-                self.git_in(
-                    repo,
-                    &[
-                        "commit",
-                        "--allow-empty",
-                        "-m",
-                        &format!("Publish implementation plan for {}", self.correlation_key),
-                    ],
-                )?;
-            }
-            let sha = self.push_current_head(repo)?;
-            if first_sha.is_none() {
-                first_sha = Some(sha);
-            }
-        }
-        first_sha.ok_or_else(|| "publish_plan found no writable repository to push".to_string())
-    }
-
-    fn worktree_dirty(&self, repo: &HookRepo) -> Result<bool, String> {
-        let status = self.git_in(repo, &["status", "--porcelain=v1", "--untracked-files=all"])?;
-        Ok(!status.is_empty())
-    }
-
-    fn branch_ahead_of_base(&self, repo: &HookRepo) -> Result<bool, String> {
-        let range = format!("origin/{}..HEAD", repo.base_branch);
-        let count = self.git_in(repo, &["rev-list", "--count", &range])?;
-        Ok(count.trim() != "0")
     }
 
     fn push_current_head(&self, repo: &HookRepo) -> Result<String, String> {
@@ -343,29 +225,24 @@ mod tests {
     use temper_protocol_agent::{WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem};
 
     #[test]
-    fn writable_jobs_get_checkpoint_and_plan_hooks() {
-        assert_eq!(
-            hook_policy(&context(Some("writable"))),
-            HookPolicy::CheckpointsAndPlan
-        );
-        assert_eq!(hook_policy(&context(None)), HookPolicy::CheckpointsAndPlan);
+    fn writable_jobs_get_checkpoint_hooks() {
+        assert!(checkpoint_hooks_enabled(&context(Some("writable"))));
+        assert!(checkpoint_hooks_enabled(&context(None)));
     }
 
     #[test]
-    fn pull_request_writable_gets_checkpoints_without_plan_publication() {
-        assert_eq!(
-            hook_policy(&context(Some("pull_request_writable"))),
-            HookPolicy::CheckpointsOnly
-        );
+    fn pull_request_writable_gets_checkpoint_hooks() {
+        assert!(checkpoint_hooks_enabled(&context(Some(
+            "pull_request_writable"
+        ))));
     }
 
     #[test]
     fn read_only_jobs_are_hookless() {
-        assert_eq!(hook_policy(&context(Some("read_only"))), HookPolicy::None);
-        assert_eq!(
-            hook_policy(&context(Some("pull_request_read_only"))),
-            HookPolicy::None
-        );
+        assert!(!checkpoint_hooks_enabled(&context(Some("read_only"))));
+        assert!(!checkpoint_hooks_enabled(&context(Some(
+            "pull_request_read_only"
+        ))));
     }
 
     fn context(checkout: Option<&str>) -> WorkspaceContext {

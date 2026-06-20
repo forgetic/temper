@@ -251,7 +251,6 @@ mod tests {
             state: temper_protocol_agent::StepState::Started,
             pushed_sha: None,
             note: None,
-            plan_publication: None,
         };
         let progress_json = progress.to_line().expect("progress json");
         std::fs::write(

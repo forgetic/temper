@@ -10,8 +10,6 @@ use super::*;
 pub enum AgentBehavior {
     /// Engineer head path: write a product diff, return a summary-only result.
     Success,
-    /// Engineer head path: write a product diff and return a structured plan.
-    SuccessWithPlan,
     /// A transient provider error (the in-process analog of the old non-zero
     /// subprocess exit).
     TransientError,
@@ -20,9 +18,9 @@ pub enum AgentBehavior {
     /// Engineer that checkpoint-commits and pushes its whole product itself
     /// (phase 6b), leaving a clean working tree for the executor.
     CheckpointCommits,
-    /// Engineer only creates the plan-publication empty commit; no product tree
-    /// diff exists, so the final head path must be rejected.
-    PlanOnlyEmptyCommit,
+    /// Engineer creates only an empty checkpoint commit; no product tree diff
+    /// exists, so the final head path must be rejected.
+    EmptyCheckpointCommit,
     /// Return a writable verdict the executor does not route (permanent).
     Verdict,
     /// Architect read-only `ready_code` verdict with a rewritten body.
@@ -114,16 +112,6 @@ impl AgentRunner for FakeAgentRunner {
                     ..WorkspaceResult::default()
                 })
             }
-            AgentBehavior::SuccessWithPlan => {
-                Self::write_diff(&repo_cwd);
-                Ok(WorkspaceResult {
-                    summary: Some("did the planned work".to_string()),
-                    plan: Some(ImplementationPlan {
-                        phases: vec!["Write test".to_string(), "Implement fix".to_string()],
-                    }),
-                    ..WorkspaceResult::default()
-                })
-            }
             AgentBehavior::TransientError => Err(AgentRunError::transient(
                 "LLM run failed: provider transport reset",
             )),
@@ -161,7 +149,7 @@ impl AgentRunner for FakeAgentRunner {
                     ..WorkspaceResult::default()
                 })
             }
-            AgentBehavior::PlanOnlyEmptyCommit => {
+            AgentBehavior::EmptyCheckpointCommit => {
                 git_output([
                     "-C",
                     path_str(&repo_cwd),
@@ -172,10 +160,10 @@ impl AgentRunner for FakeAgentRunner {
                     "commit",
                     "--allow-empty",
                     "-m",
-                    "Publish implementation plan for pr-for-code-7",
+                    "empty checkpoint for pr-for-code-7",
                 ]);
                 Ok(WorkspaceResult {
-                    summary: Some("published a plan only".to_string()),
+                    summary: Some("pushed an empty checkpoint only".to_string()),
                     ..WorkspaceResult::default()
                 })
             }

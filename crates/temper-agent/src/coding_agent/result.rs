@@ -115,8 +115,8 @@ pub(crate) fn validate_contract(
             // The cwd is the workspace root; a writable repo's product lives in
             // its own sibling dir. The run produced a product if ANY writable
             // repo has working-tree changes or a committed tree diff from its
-            // base branch. A plan-publication empty commit can put HEAD ahead
-            // with an identical tree, so commits-ahead alone is not product.
+            // base branch. An empty checkpoint commit can put HEAD ahead with
+            // an identical tree, so commits-ahead alone is not product.
             let produced = context
                 .repos
                 .iter()

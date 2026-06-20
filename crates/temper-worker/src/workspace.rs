@@ -321,8 +321,8 @@ impl Workspace {
     }
 
     /// True when HEAD's tree differs from the fetched base branch. A clean
-    /// working tree can still hold checkpoint-committed product work, but a
-    /// plan-publication empty commit leaves this false even though HEAD is ahead.
+    /// working tree can still hold checkpoint-committed product work, but an
+    /// empty checkpoint commit leaves this false even though HEAD is ahead.
     pub async fn tree_differs_from_base(&self) -> Result<bool, WorkspaceError> {
         let base = format!("origin/{}", self.base_branch);
         let output = self

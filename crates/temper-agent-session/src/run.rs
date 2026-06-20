@@ -40,7 +40,6 @@ pub(crate) fn drive(
         state: StepState::Started,
         pushed_sha: None,
         note: Some(format!("protocol v{PROTOCOL_VERSION}")),
-        plan_publication: None,
     });
 
     let (checkpointer, resume_note) = prepare_checkpointer(&cwd, &context, &config);
@@ -87,7 +86,6 @@ fn prepare_checkpointer(
                 "{} checkpoint commit(s) on the branch",
                 resume.commits
             )),
-            plan_publication: None,
         });
     }
     if let Some(checkpointer) = &checkpointer {
@@ -131,10 +129,6 @@ fn drive_coding_loop(
     temper_agent_io::block_on_with(move |_cx, handle| async move {
         let turn_hook = checkpointer.as_ref().map(Checkpointer::as_turn_hook);
         let checkpoint_hook = checkpointer.as_ref().map(Checkpointer::as_checkpoint_hook);
-        let publish_plan_hook = checkpointer
-            .as_ref()
-            .filter(|_| publish_plan_enabled(&run_context))
-            .map(Checkpointer::as_publish_plan_hook);
         run_coding_agent_native_with_hooks(
             handle,
             &provider,
@@ -146,7 +140,6 @@ fn drive_coding_loop(
             resume_note.as_deref(),
             turn_hook,
             checkpoint_hook,
-            publish_plan_hook,
         )
         .await
         // The session path doesn't surface token totals; drop them here.
@@ -170,7 +163,6 @@ fn finalize(
         state: StepState::Done,
         pushed_sha: None,
         note: result.summary.clone(),
-        plan_publication: None,
     });
     write_result(result_path, result)
 }
@@ -180,10 +172,6 @@ fn checkpoint_hooks_enabled(context: &WorkspaceContext) -> bool {
         context.checkout.as_deref().unwrap_or("writable"),
         "writable" | "pull_request_writable"
     )
-}
-
-fn publish_plan_enabled(context: &WorkspaceContext) -> bool {
-    context.checkout.as_deref().unwrap_or("writable") == "writable"
 }
 
 fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), String> {

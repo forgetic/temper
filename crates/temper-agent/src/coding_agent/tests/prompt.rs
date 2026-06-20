@@ -12,7 +12,7 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("Do NOT run git commit"));
     assert!(engineer.contains("needs_architect"));
     assert!(engineer.contains("needs_human"));
-    assert!(engineer.contains("Implementation plans are checkpoint/commit plans"));
+    assert!(engineer.contains("checkpoint(label)"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
     assert!(architect.contains("ROLE: architect"));
@@ -34,28 +34,28 @@ fn system_prompt_is_role_specific() {
         assert!(prompt.contains("FINAL message after all tool use"));
         assert!(prompt.contains("FINAL MESSAGE FORMAT (mandatory)"));
         assert!(prompt.contains("single JSON object"));
-        assert!(prompt.contains("plan"));
+        assert!(!prompt.contains("publish_plan"));
+        assert!(!prompt.contains("\"plan\""));
         assert!(prompt.contains("children"));
     }
 }
 
 #[test]
-fn system_prompt_engineer_requests_plan_only_for_multi_checkpoint_work() {
+fn system_prompt_engineer_uses_checkpoint_only_progress_discipline() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
-    assert!(engineer.contains("checkpoint/commit plans, not generic"));
-    assert!(engineer.contains("Include `\"plan\": {\"phases\": [...]}`"));
-    assert!(engineer.contains("two or more separate, non-empty checkpoint"));
-    assert!(engineer.contains("diff-bearing milestone"));
-    assert!(engineer.contains("batch the work into one coherent checkpoint"));
-    assert!(engineer.contains("omit `plan`"));
-    assert!(engineer.contains("validation-only work"));
-    assert!(engineer.contains("publish_plan"));
-    assert!(engineer.contains("repo/base/branch"));
+    assert!(engineer.contains("checkpoint(label)"));
+    assert!(engineer.contains("meaningful, diff-bearing"));
+    assert!(engineer.contains("do not create up-front"));
+    assert!(engineer.contains("checklist ceremony"));
+    assert!(engineer.contains("validation in `summary`"));
+    assert!(!engineer.contains("publish_plan"));
+    assert!(!engineer.contains("`plan`"));
+    assert!(!engineer.contains("phases"));
 
     let architect = system_prompt(Capability::TriageWorkspace, &[]);
-    assert!(!architect.contains("checkpoint/commit plans, not generic"));
+    assert!(!architect.contains("checkpoint(label)"));
     assert!(!architect.contains("publish_plan"));
-    assert!(!architect.contains("validation-only work"));
+    assert!(!architect.contains("validation in `summary`"));
 }
 
 #[test]
