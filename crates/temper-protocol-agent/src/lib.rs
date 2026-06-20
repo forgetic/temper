@@ -298,7 +298,6 @@ mod tests {
             state: StepState::Done,
             pushed_sha: Some("abc123".to_string()),
             note: None,
-            plan_publication: None,
         };
         let line = progress.to_line().expect("serialize");
         assert!(!line.contains('\n'));
@@ -377,61 +376,16 @@ mod tests {
         let value = serde_json::to_value(&result).expect("serialize");
         assert_eq!(value["summary"], "did the thing");
         assert!(value.get("verdict").is_none());
-        assert!(value.get("plan").is_none());
         assert!(value.get("children").is_none());
     }
 
     #[test]
-    fn workspace_result_parses_legacy_result_without_plan() {
+    fn workspace_result_ignores_legacy_plan_field() {
         let parsed: WorkspaceResult = serde_json::from_str(
-            r#"{"summary":"legacy head path","body":"existing result shape"}"#,
+            r#"{"summary":"legacy head path","plan":{"phases":["old checklist"]}}"#,
         )
-        .expect("legacy result parses");
+        .expect("legacy result with plan parses");
         assert_eq!(parsed.summary.as_deref(), Some("legacy head path"));
-        assert_eq!(parsed.plan, None);
-    }
-
-    #[test]
-    fn workspace_result_carries_optional_implementation_plan() {
-        let result = WorkspaceResult {
-            summary: Some("implemented protocol polish".to_string()),
-            plan: Some(ImplementationPlan {
-                phases: vec![
-                    "extend protocol DTO".to_string(),
-                    "update agent prompt".to_string(),
-                    "cover result parsing".to_string(),
-                ],
-            }),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&result).expect("serialize");
-        let parsed: WorkspaceResult = serde_json::from_str(&json).expect("parse");
-        let plan = parsed.plan.expect("plan present");
-        assert_eq!(
-            plan.phases,
-            vec![
-                "extend protocol DTO".to_string(),
-                "update agent prompt".to_string(),
-                "cover result parsing".to_string(),
-            ]
-        );
-        assert!(plan.is_checklist_worthy());
-    }
-
-    #[test]
-    fn implementation_plan_checklist_rule_treats_zero_or_one_phase_as_trivial() {
-        let empty = ImplementationPlan { phases: Vec::new() };
-        assert!(!empty.is_checklist_worthy());
-
-        let one = ImplementationPlan {
-            phases: vec!["fix typo".to_string()],
-        };
-        assert!(!one.is_checklist_worthy());
-
-        let two = ImplementationPlan {
-            phases: vec!["add test".to_string(), "implement fix".to_string()],
-        };
-        assert!(two.is_checklist_worthy());
     }
 
     #[test]

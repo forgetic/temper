@@ -39,21 +39,12 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              underspecified or unimplementable as written, or `needs_human` only \
              when implementation requires non-agent judgment. Explain the reason \
              in `summary`.\n\
-             - Implementation plans are checkpoint/commit plans, not generic \
-             todo lists. Include `\"plan\": {\"phases\": [...]}` only when \
-             you expect to produce two or more separate, non-empty checkpoint \
-             commits. Each phase label must describe a diff-bearing milestone \
-             that you will checkpoint independently using the exact same label.\n\
-             - If you expect to batch the work into one coherent checkpoint \
-             commit, omit `plan` and do not create checklist ceremony.\n\
-             - Do not include validation-only work such as formatting, running \
-             tests, or manual verification as plan phases; report validation in \
-             `summary`.\n\
-             - When a `publish_plan` tool is available, call it only for such \
-             multi-checkpoint work, before substantial product edits, with a \
-             concise summary/title and the same ordered phase labels; the host \
-             fills repo/base/branch data, so do not publish the plan via git or \
-             forge yourself.\n",
+             - Use `checkpoint(label)` only for meaningful, diff-bearing \
+             milestones you have actually completed; do not create up-front \
+             plan/checklist ceremony or require later checkpoint labels to \
+             match a predeclared plan.\n\
+             - Report validation in `summary` when relevant; do not create \
+             validation-only checkpoints.\n",
         ),
         Capability::TriageWorkspace => prompt.push_str(
             "ROLE: architect (triage_workspace capability).\n\
@@ -138,13 +129,12 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
          When you have finished using tools, your very last message must be a \
          single JSON object and nothing else — no prose before or after it, no \
          code fences, no explanation. The JSON object describes the result, with \
-         these optional fields: `verdict` (string), `summary` (string), `plan` \
-         ({phases: array of strings}), `body` (string), `review_body` (string), \
-         `labels` (array of strings), and `children` (array of {slug, title, \
-         body, labels, depends_on, target_repo?}). Omit fields you are not using.\n\
+         these optional fields: `verdict` (string), `summary` (string), `body` \
+         (string), `review_body` (string), `labels` (array of strings), and \
+         `children` (array of {slug, title, body, labels, depends_on, \
+         target_repo?}). Omit fields you are not using.\n\
          For the engineer success path, emit `{\"summary\": \"...\"}` with no \
-         `verdict`; when you include `plan`, follow the engineer-specific \
-         phase guidance above.\n\
+         `verdict`.\n\
          Do NOT wrap the JSON in prose or code fences. Do NOT narrate what you \
          are about to do — just emit the JSON result as your final message.",
     );

@@ -1,8 +1,5 @@
-//! Tool registry, the model-driven `checkpoint` / `publish_plan` tools, and
-//! the read-only sub-agent roles (`investigate` / `delegate`) the coding agent
-//! can fan out to.
-
-mod plan;
+//! Tool registry, the model-driven `checkpoint` tool, and the read-only
+//! sub-agent roles (`investigate` / `delegate`) the coding agent can fan out to.
 
 use std::path::Path;
 
@@ -13,9 +10,6 @@ use tongs::tools::{
 };
 
 use super::Capability;
-
-pub use plan::PublishPlanHook;
-pub(super) use plan::{PUBLISH_PLAN_GUIDANCE, PublishPlanTool};
 
 /// Orchestration callback the `checkpoint` tool invokes: commit + push the
 /// current work as a coherent, labeled checkpoint, returning the pushed head sha
@@ -130,10 +124,7 @@ pub(super) const CHECKPOINT_GUIDANCE: &str = "\nCHECKPOINTS:\n\
     short imperative `label` for what you just finished.\n\
     - Checkpointing makes your progress durable: if the run is interrupted, work \
     you have checkpointed is recovered and you resume from it. Aim for a few \
-    meaningful checkpoints over a task rather than many tiny ones or none.\n\
-    - When your final result includes a multi-phase implementation `plan`, use \
-    the exact completed phase label as the checkpoint `label` so the PR \
-    checklist can be ticked without issue-thread chatter.\n";
+    meaningful checkpoints over a task rather than many tiny ones or none.\n";
 
 /// Guidance appended to the role prompt when the sub-agent tools are
 /// registered: tells the model which sub-agent to delegate to, that several run

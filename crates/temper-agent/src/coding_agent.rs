@@ -12,8 +12,8 @@
 //! temper writes a context JSON file and passes its path as the agent's
 //! `--context` flag, runs the agent in the prepared checkout (`--workspace`,
 //! also cwd), and reads a result JSON file back from the `--result` path. The
-//! result shape is temper's `WorkspaceResult` (`{ verdict?, summary?, plan?,
-//! body?, review_body?, labels?, children? }`); see [`WorkspaceResult`].
+//! result shape is temper's `WorkspaceResult` (`{ verdict?, summary?, body?,
+//! review_body?, labels?, children? }`); see [`WorkspaceResult`].
 //! Reading the context and writing the result is the binary's job
 //! ([`crate::coding_agent`]
 //! only models and runs the agent); this module owns the schema and the agent
@@ -61,7 +61,7 @@ pub use run::{
     run_coding_agent_native, run_coding_agent_native_with_hooks,
     run_coding_agent_native_with_options,
 };
-pub use tools::{CheckpointHook, PublishPlanHook, tool_registry};
+pub use tools::{CheckpointHook, tool_registry};
 
 // Internal items the unit tests reach through `super::*`.
 #[cfg(test)]
@@ -99,8 +99,7 @@ pub const DEFAULT_MAX_ITERATIONS: usize = 250;
 // ---------------------------------------------------------------------------
 
 pub use temper_protocol_agent::{
-    ImplementationPlan, PlanPublication, PlanPublicationTarget, WorkspaceContext,
-    WorkspaceGuidance, WorkspaceRepository, WorkspaceResult, WorkspaceResultChild,
+    WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceResult, WorkspaceResultChild,
     WorkspaceWorkItem,
 };
 

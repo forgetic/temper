@@ -4,25 +4,22 @@
 //!
 //! The distributed worker gets these hooks from the `temper-agent` subprocess.
 //! Standalone runs the same coding loop in-process, so it provides equivalent
-//! checkpoint and plan-publication hooks here and routes progress through the
-//! worker's in-memory [`ProgressSink`].
+//! checkpoint hooks here and routes progress through the worker's in-memory
+//! [`ProgressSink`].
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use temper_agent::{CheckpointHook, PublishPlanHook};
-use temper_protocol_agent::{PlanPublication, StepProgress, StepState, WorkspaceContext};
+use temper_agent::CheckpointHook;
+use temper_protocol_agent::{StepProgress, StepState, WorkspaceContext};
 use temper_worker::ProgressSink;
-
-const PLAN_STATUS: &str = "publish implementation plan";
 
 #[derive(Default)]
 pub(super) struct HookSet {
     pub(super) turn_hook: Option<Arc<dyn temper_agent::TurnHook>>,
     pub(super) checkpoint_hook: Option<Arc<dyn CheckpointHook>>,
-    pub(super) publish_plan_hook: Option<Arc<dyn PublishPlanHook>>,
 }
 
 pub(super) fn hooks_for_context(
