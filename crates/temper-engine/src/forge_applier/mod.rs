@@ -18,6 +18,7 @@
 
 mod body_merge;
 mod body_update;
+mod checkpoint_pr;
 mod claim;
 mod coordinated;
 mod failure;

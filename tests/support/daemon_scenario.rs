@@ -26,6 +26,8 @@
 
 #[path = "daemon_scenario/convergence.rs"]
 mod convergence;
+#[path = "e2e_lock.rs"]
+mod e2e_lock;
 #[path = "daemon_scenario/process.rs"]
 mod process;
 #[path = "daemon_scenario/runtime.rs"]
@@ -92,6 +94,7 @@ impl Variant {
 }
 
 pub fn run_daemon_variant(variant: Variant) {
+    let _e2e_lock = e2e_lock::acquire();
     let test_start = Instant::now();
 
     // World: cached provisioned Forgejo (org, role identities, labels, repo,

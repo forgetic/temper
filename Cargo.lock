@@ -1444,6 +1444,7 @@ dependencies = [
 name = "temper"
 version = "0.1.0"
 dependencies = [
+ "fs2",
  "jig-core",
  "jig-server",
  "serde_json",

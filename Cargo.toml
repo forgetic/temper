@@ -98,6 +98,7 @@ temper-provision = { path = "crates/temper-provision" }
 temper-reference-delivery = { path = "crates/temper-reference-delivery" }
 toml = { workspace = true }
 tempfile = { workspace = true }
+fs2 = { workspace = true }
 
 # The unified everything-binary: `temper config|daemon|agent` (+ hidden operator
 # tools). A one-line shim over `temper_cli::run()`.

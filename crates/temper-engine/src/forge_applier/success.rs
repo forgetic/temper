@@ -145,7 +145,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
 
     /// Opens (or ensures) the coordinated PR for one repo outcome, recording the
     /// opened PR in `opened` so later dependents can wire dependency links.
-    async fn open_coordinated_pr(
+    pub(super) async fn open_coordinated_pr(
         &self,
         set: &CoordinatedSet<'_>,
         outcome: &RepoOutcome,
