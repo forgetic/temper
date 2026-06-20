@@ -43,7 +43,7 @@
 # POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
 # Secrets travel by env or generated files, NEVER on a command line.
 
-set -euset -eu
+set -eu
 
 # --- Locations ----------------------------------------------------------------
 if [ -n "${TEMPER_BASIC_DELIVERY_SCRIPT_DIR:-}" ]; then
@@ -65,6 +65,7 @@ SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
 JIG_PID_FILE="$RUN_DIR/jig.pid"
+JIG_STDIN="$RUN_DIR/jig.stdin"
 
 # `temper init` emits the live deployment artifacts into the run directory. The
 # launcher consumes these exact files for `temper serve standalone`; it does not
@@ -181,7 +182,11 @@ cleanup() {
     # Drop throwaway server/runner data + runtime checkouts + init-emitted
     # secrets/config + sentinel so a re-run starts fresh; keep logs/ for
     # inspection.
-    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE"         "$RUN_DIR/repo-seed" "$RUN_DIR/workspaces"         "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH"         "$WEBHOOK_SECRET_FILE" "$RUN_DIR"/run.sh.snapshot.*         2>/dev/null || true
+    rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" \
+        "$RUN_DIR/repo-seed" "$RUN_DIR/workspaces" \
+        "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH" \
+        "$WEBHOOK_SECRET_FILE" "$JIG_STDIN" "$RUN_DIR"/run.sh.snapshot.* \
+        2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
     log 'teardown complete'
 }
@@ -316,16 +321,22 @@ resolve_binaries() {
     # and `temper serve standalone`.
     RUN_BIN=${TEMPER_RUN_BIN:-$WORKSPACE_ROOT/target/debug/temper}
 
-    command -v curl >/dev/null 2>&1         || die 'curl is required to probe Forgejo readiness'
-    command -v python3 >/dev/null 2>&1         || die 'python3 is required for Forgejo issue API JSON construction, git credential URL encoding, and config patching'
-    command -v git >/dev/null 2>&1         || die 'git is required to create the explicit initial repository commit'
+    command -v curl >/dev/null 2>&1 \
+        || die 'curl is required to probe Forgejo readiness'
+    command -v python3 >/dev/null 2>&1 \
+        || die 'python3 is required for Forgejo issue API JSON construction, git credential URL encoding, and config patching'
+    command -v git >/dev/null 2>&1 \
+        || die 'git is required to create the explicit initial repository commit'
+    command -v mkfifo >/dev/null 2>&1 \
+        || die 'mkfifo is required to keep the local jig process stdin open'
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
     # this is an explicit operator choice for prebuilt/current binaries.
     if [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
         log "ensuring the Temper development binary is current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
-        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" )             || die 'Temper cargo build failed'
+        ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) \
+            || die 'Temper cargo build failed'
     fi
 
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
@@ -538,9 +549,11 @@ boot_jig() {
     log "starting local jig fake LLM provider from $JIG_REPO ..."
     : >"$LOG_DIR/jig.log"
     # The jig binary prints its bound base URL on stdout, then blocks until stdin
-    # closes. Feed it an endless inert stdin so the provider stays up until the
-    # launcher kills the jig process during cleanup.
-    tail -f /dev/null | "$JIG_BIN" "$JIG_FIXTURE_PATH" >"$LOG_DIR/jig.log" 2>&1 &
+    # closes. Give it a FIFO opened read/write so stdin remains open without an
+    # extra feeder process; cleanup kills jig and removes the FIFO.
+    rm -f "$JIG_STDIN"
+    mkfifo "$JIG_STDIN"
+    "$JIG_BIN" "$JIG_FIXTURE_PATH" <>"$JIG_STDIN" >"$LOG_DIR/jig.log" 2>&1 &
     JIG_PID=$!
     echo "$JIG_PID" >"$JIG_PID_FILE"
 
@@ -850,7 +863,8 @@ boot_run() {
 
     log "starting temper serve standalone at $DAEMON_BIND (poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=deepseek/jig) ..."
     : >"$LOG_DIR/run.log"
-    "$RUN_BIN" serve standalone --config "$CONFIG_FILE" --credentials "$CREDENTIALS_FILE"         >"$LOG_DIR/run.log" 2>&1 &
+    "$RUN_BIN" serve standalone --config "$CONFIG_FILE" --credentials "$CREDENTIALS_FILE" \
+        >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
     # Readiness: the webhook listener must be up before the seed-last webhook can
@@ -900,7 +914,7 @@ validate_mechanical_bot_config() {
         log 'ok: bot automation token + web-UI credentials present for the mechanical backstop'
     else
         log "missing: bot automation user token/username/password in $CREDENTIALS_FILE"
-        log 'diagnosis: provision the bot user and launch temper serve standalone with its REST token plus FORGEJO_USERNAME/FORGEJO_PASSWORD for landing and the ADR-0019 CI read fallback'
+        log 'diagnosis: rerun temper init so credentials.toml contains the bot token/password used for landing and ADR-0019 CI reads'
         _ok=1
     fi
     return "$_ok"
@@ -917,7 +931,7 @@ validate_mechanical_ci_log() {
     fi
     if grep -F -q "$CI_FALLBACK_MISSING_CREDENTIALS" "$_run_log" 2>/dev/null; then
         log 'missing: temper serve standalone reported missing Forgejo web-UI credentials for CI reads'
-        log 'diagnosis: the landing queue needs native CI; pass the bot FORGEJO_USERNAME/FORGEJO_PASSWORD to temper serve standalone (ADR 0019)'
+        log 'diagnosis: the landing queue needs native CI; verify the bot password in the init-emitted credentials.toml (ADR 0019)'
         _ok=1
     fi
     if grep -F -q "$CI_FALLBACK_LOGIN_FAILED" "$_run_log" 2>/dev/null; then
