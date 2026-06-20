@@ -46,7 +46,7 @@ fn system_prompt_engineer_uses_checkpoint_only_progress_discipline() {
     assert!(engineer.contains("checkpoint(label)"));
     assert!(engineer.contains("meaningful, diff-bearing"));
     assert!(engineer.contains("do not create up-front"));
-    assert!(engineer.contains("plan/checklist ceremony"));
+    assert!(engineer.contains("checklist ceremony"));
     assert!(engineer.contains("validation in `summary`"));
     assert!(!engineer.contains("publish_plan"));
     assert!(!engineer.contains("`plan`"));

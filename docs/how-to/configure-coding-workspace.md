@@ -174,16 +174,18 @@ default behavior. Every field is optional:
 }
 ```
 
-Unknown keys are rejected, so a typo fails loudly rather than being silently
-ignored. Each `children` entry is one dependent child artifact: when the verdict
-routes to a transition that declares a `create_issues` effect (e.g. an architect
-`needs_breakdown` verdict routing an intake to a breakdown transition), the
-provider hands the authored children to that effect. Children land idempotently
-under a deterministic per-effect key, each linked back to the routed artifact as
-parent, and a child naming a sibling slug in `depends_on` records that dependency
-once both exist. A child's `target_repo` selects which repo it is created in,
-defaulting to the parent's. `children` is ignored on the head path and when the
-routed transition declares no `create_issues`.
+Unknown keys are ignored by the wire parser for forward compatibility, so agents
+should stick to the documented fields above; unsupported fields such as legacy
+`plan` data are not used to render PR progress. Each `children` entry is one
+dependent child artifact: when the verdict routes to a transition that declares a
+`create_issues` effect (e.g. an architect `needs_breakdown` verdict routing an
+intake to a breakdown transition), the provider hands the authored children to
+that effect. Children land idempotently under a deterministic per-effect key,
+each linked back to the routed artifact as parent, and a child naming a sibling
+slug in `depends_on` records that dependency once both exist. A child's
+`target_repo` selects which repo it is created in, defaulting to the parent's.
+`children` is ignored on the head path and when the routed transition declares no
+`create_issues`.
 
 The worker chooses one of two paths based on whether `verdict` is present:
 

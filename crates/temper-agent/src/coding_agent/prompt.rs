@@ -41,8 +41,8 @@ pub fn system_prompt(capability: Capability, allowed_verdicts: &[String]) -> Str
              in `summary`.\n\
              - Use `checkpoint(label)` only for meaningful, diff-bearing \
              milestones you have actually completed; do not create up-front \
-             plan/checklist ceremony or require later checkpoint labels to \
-             match a predeclared plan.\n\
+             checklist ceremony or require later checkpoint labels to match \
+             labels declared before the work exists.\n\
              - Report validation in `summary` when relevant; do not create \
              validation-only checkpoints.\n",
         ),
