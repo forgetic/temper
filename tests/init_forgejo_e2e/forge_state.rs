@@ -34,16 +34,19 @@ pub(super) fn assert_forge_state(
         "Actions/CI must be enabled on the repo"
     );
 
-    let (status, _) = rest.send_expect_json(
-        "GET",
-        format!(
-            "{base_url}/api/v1/repos/{REPO_OWNER}/{REPO_NAME}/contents/.forgejo/workflows/ci.yml"
-        ),
-        token,
-        None,
-        "get CI workflow file",
-    );
-    assert_eq!(status, 200, "the CI workflow file must be committed");
+    for path in [".forgejo/workflows/ci.yml", ".temper-ci/main.txt"] {
+        let (status, _) = rest.send_expect_json(
+            "GET",
+            format!("{base_url}/api/v1/repos/{REPO_OWNER}/{REPO_NAME}/contents/{path}"),
+            token,
+            None,
+            "get repository seed file",
+        );
+        assert_eq!(
+            status, 404,
+            "temper init must not commit project seed file {path}"
+        );
+    }
 
     let labels = repo_label_names(rest, base_url, admin_token);
     for label in temper_reference_delivery::basic_delivery_workflow().labels() {

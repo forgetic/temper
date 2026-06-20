@@ -13,7 +13,8 @@
 //! 3. **Write** `config.toml`, `workflow.json` (the embedded basic-delivery
 //!    bytes), and a freshly generated `webhook-secret` (chmod 600).
 //! 4. **Provision** the forge idempotently (admin user+password → admin REST
-//!    token → plan → `temper_provision::provision`). No intake issue is seeded.
+//!    token → plan → `temper_provision::provision`). No intake issue or
+//!    repository seed content is created.
 //! 5. **Write** `credentials.toml` (chmod 600) from the admin identity, the
 //!    minted role/bot identities, and the provider key.
 //! 6. **Summarize** what was written and what to run next.
@@ -51,7 +52,7 @@ Interactively configure and provision a temper deployment.
 
 Walks you through your forge URL, admin credentials, and LLM provider key, then
 writes config.toml + workflow.json + a webhook secret, provisions the forge
-(idempotently), and writes credentials.toml.
+(idempotently, without committing project files), and writes credentials.toml.
 
 Usage: temper init [OPTIONS]
 
@@ -225,6 +226,8 @@ pub fn run_init(
     write_artifacts(&artifacts, opts.force)?;
 
     // 4. Provision the forge idempotently (admin token, plan, orchestration).
+    // `temper init` configures integration only; it requests no repository seed
+    // commits, so user/project files are left untouched.
     let request = ProvisionRequest {
         base_url: answers.forge_url.clone(),
         admin_user: answers.admin_user.clone(),
