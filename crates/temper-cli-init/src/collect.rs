@@ -62,10 +62,13 @@ impl Answers {
     /// The webhook URL the daemon registers (the bind address + the engine's
     /// webhook route).
     pub fn webhook_url(&self) -> String {
-        format!(
-            "{}/forgejo/webhook",
-            self.webhook_addr.trim_end_matches('/')
-        )
+        let base = self.webhook_addr.trim_end_matches('/');
+        let base = if base.starts_with("http://") || base.starts_with("https://") {
+            base.to_string()
+        } else {
+            format!("http://{base}")
+        };
+        format!("{base}/forgejo/webhook")
     }
 }
 
@@ -102,7 +105,10 @@ pub fn collect_answers(
     }
 
     // Q3 — Daemon webhook address.
-    let webhook_addr = p.ask("Daemon webhook address", Some(DEFAULT_WEBHOOK_ADDR))?;
+    let webhook_addr = match &overrides.bind {
+        Some(value) => value.clone(),
+        None => p.ask("Daemon webhook address", Some(DEFAULT_WEBHOOK_ADDR))?,
+    };
 
     // Q4 — Forge admin user + password.
     let admin_user = p.ask("Forge admin user", None)?;
@@ -142,7 +148,10 @@ fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitErr
     validate_forge_url(&forge_url)?;
 
     let workflow = WORKFLOW_BASIC_DELIVERY.to_string();
-    let webhook_addr = DEFAULT_WEBHOOK_ADDR.to_string();
+    let webhook_addr = overrides
+        .bind
+        .clone()
+        .unwrap_or_else(|| DEFAULT_WEBHOOK_ADDR.to_string());
 
     let admin_user = overrides.admin_user.clone().ok_or_else(|| {
         InitError::Unsupported(
@@ -288,6 +297,46 @@ mod tests {
 
         assert_eq!(a.forge_url, "http://forge.local:3000");
         assert!(p.answers.is_empty(), "all non-forge prompts consumed");
+    }
+
+    #[test]
+    fn bind_override_skips_webhook_prompt() {
+        let mut p = ScriptedPrompter::new([
+            "".to_string(),            // workflow (default)
+            "root".to_string(),        // admin user
+            "admin-pw".to_string(),    // admin password
+            "sk-deepseek".to_string(), // provider key
+        ]);
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            bind: Some("127.0.0.1:38100".to_string()),
+            ..Default::default()
+        };
+
+        let a = collect_answers(&mut p, &overrides, false).expect("collect");
+
+        assert_eq!(a.webhook_addr, "127.0.0.1:38100");
+        assert_eq!(a.webhook_url(), "http://127.0.0.1:38100/forgejo/webhook");
+        assert!(p.answers.is_empty(), "webhook prompt should be skipped");
+    }
+
+    #[test]
+    fn non_interactive_bind_overrides_default_webhook_addr() {
+        let mut p = ScriptedPrompter::new(Vec::<String>::new());
+        let overrides = InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            bind: Some("127.0.0.1:38100".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pw".to_string()),
+            provider_key: Some("sk-deepseek".to_string()),
+            ..Default::default()
+        };
+
+        let a = collect_answers(&mut p, &overrides, true).expect("collect");
+
+        assert_eq!(a.webhook_addr, "127.0.0.1:38100");
+        assert_eq!(a.webhook_url(), "http://127.0.0.1:38100/forgejo/webhook");
+        assert!(p.answers.is_empty(), "non-interactive should not prompt");
     }
 
     #[test]

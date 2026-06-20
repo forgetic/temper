@@ -67,6 +67,9 @@ impl RepoSelection {
 pub struct InitOverrides {
     /// Forgejo base URL supplied by `--forge`, skipping the forge prompt.
     pub forge_url: Option<String>,
+    /// Daemon bind / webhook advertise address supplied by `--bind`, skipping
+    /// the webhook prompt.
+    pub bind: Option<String>,
     /// Managed repository supplied by `--repo`.
     pub repo: Option<RepoSelection>,
     /// Provider supplied by `--provider` (only `deepseek` is accepted today).
@@ -121,6 +124,9 @@ pub(crate) fn parse_init_args(args: Vec<String>) -> Result<ParsedInitArgs, Strin
             }
             "--forge" => {
                 parsed.overrides.forge_url = Some(init_value(&mut rest, "--forge")?);
+            }
+            "--bind" => {
+                parsed.overrides.bind = Some(init_value(&mut rest, "--bind")?);
             }
             "--provider" => {
                 let provider = init_value(&mut rest, "--provider")?;
@@ -201,6 +207,32 @@ mod tests {
             Some("http://localhost:3000")
         );
         assert_eq!(parsed.overrides.provider.as_deref(), Some("deepseek"));
+        assert_eq!(parsed.overrides.bind, None);
+    }
+
+    #[test]
+    fn parse_bind_flag() {
+        let parsed = parse_init_args(vec!["--bind".to_string(), "127.0.0.1:38100".to_string()])
+            .expect("parse");
+
+        assert_eq!(parsed.overrides.bind.as_deref(), Some("127.0.0.1:38100"));
+    }
+
+    #[test]
+    fn parse_bind_absent_by_default() {
+        let parsed = parse_init_args(Vec::new()).expect("parse");
+
+        assert_eq!(parsed.overrides.bind, None);
+    }
+
+    #[test]
+    fn bind_without_value_fails() {
+        let err = parse_init_args(vec!["--bind".to_string()]).expect_err("--bind requires a value");
+        assert!(err.contains("requires a value"), "{err}");
+
+        let err = parse_init_args(vec!["--bind".to_string(), "--force".to_string()])
+            .expect_err("--bind requires a value before another flag");
+        assert!(err.contains("requires a value"), "{err}");
     }
 
     #[test]

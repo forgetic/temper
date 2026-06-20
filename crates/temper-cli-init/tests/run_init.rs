@@ -179,10 +179,10 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     let config_path = dir.path().join("config.toml");
     let credentials_path = dir.path().join("credentials.toml");
 
-    // `--forge` skips the first prompt, so this starts at workflow.
+    // `--forge` skips the first prompt and `--bind` skips the webhook prompt,
+    // so this starts at workflow and then moves to admin credentials.
     let mut prompter = ScriptedPrompter::new([
         "".to_string(),                     // Q2 workflow (default basic-delivery)
-        "".to_string(),                     // Q3 webhook addr (default)
         "root".to_string(),                 // Q4 admin user
         "admin-pass".to_string(),           // Q4 admin password (secret)
         "sk-deepseek-override".to_string(), // Q5 DeepSeek API key (secret)
@@ -201,6 +201,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
                 name: "service".to_string(),
             }),
             provider: Some("deepseek".to_string()),
+            bind: Some("127.0.0.1:38100".to_string()),
             ..Default::default()
         },
         ..Default::default()
@@ -217,6 +218,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     assert!(config.contains("widgets/service"), "{config}");
     assert!(!config.contains("acme/service"), "{config}");
     assert!(config.contains("provider = \"deepseek\""), "{config}");
+    assert!(config.contains("bind = \"127.0.0.1:38100\""), "{config}");
 
     let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
     assert!(creds.contains("sk-deepseek-override"), "{creds}");
@@ -225,9 +227,10 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     assert_eq!(seen.base_url, "http://forge.local:3000");
     assert_eq!(seen.owner, "widgets");
     assert_eq!(seen.name, "service");
+    assert_eq!(seen.webhook_url, "http://127.0.0.1:38100/forgejo/webhook");
     assert!(
         prompter.answers.is_empty(),
-        "forge prompt should be skipped"
+        "forge and webhook prompts should be skipped"
     );
 }
 
@@ -293,6 +296,7 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
             provider_key: Some("sk-key".to_string()),
             provider: Some("deepseek".to_string()),
             provider_url: None,
+            bind: None,
         },
         ..Default::default()
     };
@@ -432,6 +436,7 @@ fn non_interactive_with_provider_url_writes_providers_table() {
             provider_key: Some("sk-key".to_string()),
             provider: Some("deepseek".to_string()),
             provider_url: Some("http://localhost:9999/v1".to_string()),
+            bind: None,
         },
         ..Default::default()
     };
