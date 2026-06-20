@@ -39,6 +39,7 @@ fn started_progress_checkpoints_update_one_run_ledger_without_comments() {
         assert!(body.contains("Current status: editing"));
         assert!(body.contains("Latest progress: step 2"));
         assert!(body.contains("fedcba987654"));
+        assert_no_pull_requests(&forge, &repo).await;
         assert!(issue_comments(&forge, &repo, number).await.is_empty());
     })
 }
@@ -75,12 +76,13 @@ fn started_open_pr_progress_claims_source_issue() {
         assert_one_run_ledger(&body, &correlation);
         assert!(body.contains("Current status: editing"));
         assert!(body.contains("Work branch: `agent/pr-for-code-"));
+        assert_no_pull_requests(&root, &repo).await;
         assert!(issue_comments(&root, &repo, issue.number).await.is_empty());
     })
 }
 
 #[test]
-fn checkpoint_done_progress_updates_same_run_ledger_idempotently_before_pr() {
+fn first_diff_checkpoint_opens_implementation_pr_and_finalizes_ledger_idempotently() {
     temper_engine_io::block_on(async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "stable").await;
@@ -106,13 +108,181 @@ fn checkpoint_done_progress_updates_same_run_ledger_idempotently_before_pr() {
         applier
             .apply_progress(job.clone(), checkpoint.clone())
             .await;
-        applier.apply_progress(job, checkpoint).await;
+        applier.apply_progress(job.clone(), checkpoint).await;
+
+        let pulls = forge
+            .list_pull_requests(&repo, PullRequestQuery::default())
+            .await
+            .expect("list pull requests succeeds");
+        assert_eq!(pulls.len(), 1, "checkpoint replay must not duplicate PRs");
+        let pull = &pulls[0];
+        assert_eq!(
+            pull.title,
+            format!("Implement #{}: ready code issue", issue.get())
+        );
+        assert_eq!(pull.source.branch, format!("agent/{correlation}"));
+        assert_eq!(
+            pull.labels,
+            vec!["implementation".to_string(), "needs-reviewer".to_string()]
+        );
+        assert!(pull.body.contains("Opened from pushed checkpoint step 2"));
+        let metadata = parse_metadata_block(&pull.body)
+            .expect("PR metadata parses")
+            .expect("PR metadata exists");
+        assert_eq!(
+            metadata.kind,
+            Some(ArtifactKindId::new("implementation_pr"))
+        );
+        assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+        assert_eq!(
+            metadata.correlation_key.as_deref(),
+            Some(correlation.as_str())
+        );
 
         let body = issue_body(&forge, &repo, issue).await;
         assert_one_run_ledger(&body, &correlation);
+        assert!(body.contains(&format!("continued in PR #{}", pull.number.get())));
+        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
+
+        applier
+            .apply_progress(
+                job,
+                progress(
+                    &correlation,
+                    3,
+                    "done",
+                    "continue implementation",
+                    Some("def123456789fedcba98765432100123456789ab"),
+                    None,
+                ),
+            )
+            .await;
+        assert_eq!(issue_body(&forge, &repo, issue).await, body);
+        let pulls_after = forge
+            .list_pull_requests(&repo, PullRequestQuery::default())
+            .await
+            .expect("list pull requests succeeds");
+        assert_eq!(pulls_after.len(), 1);
+    })
+}
+
+#[test]
+fn no_op_checkpoint_progress_updates_ledger_without_opening_pr() {
+    temper_engine_io::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let correlation = correlation_key(issue);
+
+        applier
+            .apply_progress(
+                job,
+                progress(
+                    &correlation,
+                    2,
+                    "done",
+                    "nothing changed",
+                    None,
+                    Some("checkpoint skipped"),
+                ),
+            )
+            .await;
+
+        assert_no_pull_requests(&forge, &repo).await;
+        let body = issue_body(&forge, &repo, issue).await;
+        assert_one_run_ledger(&body, &correlation);
         assert!(body.contains("Current status: checkpointed"));
+        assert!(body.contains("Latest checkpoint: step 2 — nothing changed"));
+        assert!(issue_comments(&forge, &repo, issue).await.is_empty());
+    })
+}
+
+#[test]
+fn publish_plan_style_checkpoint_does_not_open_pr() {
+    temper_engine_io::block_on(async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow()));
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let correlation = correlation_key(issue);
+
+        applier
+            .apply_progress(
+                job,
+                progress(
+                    &correlation,
+                    2,
+                    "done",
+                    "publish_plan",
+                    Some("abc123456789fedcba98765432100123456789ab"),
+                    None,
+                ),
+            )
+            .await;
+
+        assert_no_pull_requests(&forge, &repo).await;
+        let body = issue_body(&forge, &repo, issue).await;
+        assert_one_run_ledger(&body, &correlation);
+        assert!(body.contains("Latest checkpoint: step 2 — publish_plan (abc123456789)"));
+    })
+}
+
+#[test]
+fn final_success_reuses_checkpoint_opened_pr() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let correlation = correlation_key(issue);
+        let branch_name = format!("agent/{correlation}");
+
+        applier
+            .apply_progress(
+                job.clone(),
+                progress(
+                    &correlation,
+                    2,
+                    "done",
+                    "implement managed ledger",
+                    Some("abc123456789fedcba98765432100123456789ab"),
+                    None,
+                ),
+            )
+            .await;
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
+        let pull_number = pulls[0].number;
         assert!(
-            body.contains("Latest checkpoint: step 2 — implement managed ledger (abc123456789)")
+            pulls[0]
+                .body
+                .contains("final implementation summary will update")
+        );
+
+        let summary = "Implemented the API and tests.";
+        applier
+            .apply(
+                job.clone(),
+                success_result("worker-a", &job.job_id, &job.repo, &branch_name, summary),
+            )
+            .await;
+
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
+        assert_eq!(pulls[0].number, pull_number);
+        assert!(pulls[0].body.contains(&format!("Summary: {summary}")));
+        assert!(
+            !pulls[0]
+                .body
+                .contains("final implementation summary will update")
+        );
+        let issue_body_after_success = issue_body(&forge, &repo, issue).await;
+        assert_one_run_ledger(&issue_body_after_success, &correlation);
+        assert!(
+            issue_body_after_success.contains(&format!("continued in PR #{}", pull_number.get()))
         );
         assert!(issue_comments(&forge, &repo, issue).await.is_empty());
     })
@@ -252,6 +422,7 @@ fn final_engineer_open_pr_progress_uses_pr_body_not_issue_comment() {
         let pre_pr_body = issue_body(&forge, &repo, issue).await;
         assert_one_run_ledger(&pre_pr_body, &correlation);
         assert!(pre_pr_body.contains("Current status: finalizing"));
+        assert_no_pull_requests(&forge, &repo).await;
         assert!(
             !pre_pr_body.contains(summary),
             "source issue ledger must not duplicate the final implementation summary: {pre_pr_body}"

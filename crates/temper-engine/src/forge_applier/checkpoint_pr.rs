@@ -13,10 +13,10 @@
 
 use std::collections::BTreeMap;
 
-use temper_forge::{Forge, Issue, ItemNumber, Repository};
+use temper_forge::{Forge, Issue, Repository};
 use temper_protocol_worker::{Branch, JobContext, JobProgress, RepoOutcome};
 use temper_runner::pr_correlation_key;
-use temper_workflow::{ArtifactKindId, ArtifactSource};
+use temper_workflow::ArtifactKindId;
 
 use crate::InFlightJob;
 use crate::forge_applier::ForgeApplier;
@@ -198,7 +198,11 @@ fn default_work_branch(coordination_key: &str) -> String {
 }
 
 fn checkpoint_pr_summary(progress: &JobProgress) -> String {
-    let status = progress.status.split_whitespace().collect::<Vec<_>>().join(" ");
+    let status = progress
+        .status
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if status.is_empty() {
         "Opened from a pushed checkpoint. The final implementation summary will update this PR when the run completes.".to_string()
     } else {

@@ -62,6 +62,28 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             return;
         }
 
+        let pull_requests = self
+            .ensure_checkpoint_implementation_prs(job, &repository, &issue, progress)
+            .await;
+        if !pull_requests.is_empty() {
+            // The checkpoint just materialized the same implementation PR that
+            // final success would have opened. Mirror the source-artifact
+            // lifecycle signals now, then reload the issue so the body update's
+            // compare-and-swap version accounts for the label mutations.
+            self.apply_source_action_claim(job).await;
+            self.clear_source_action_working_labels(job).await;
+            let Some((_, issue)) = self.resolve_issue(job).await else {
+                return;
+            };
+            let update = RunLedgerUpdate::Continued {
+                correlation_key: &progress.correlation_key,
+                worker_id: &progress.worker_id,
+                pull_requests: &pull_requests,
+            };
+            self.update_issue_run_ledger(job, issue, &update).await;
+            return;
+        }
+
         let update = RunLedgerUpdate::Progress {
             progress,
             include_final_note,
