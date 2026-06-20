@@ -114,8 +114,6 @@ pub use stage::{
 pub use trigger::{ChangeHint, ChangeKind, TriggerScheduler, WakeTarget, broad_targets};
 pub use worker::{MechanicalWorker, Progress, RoleWorker, Worker, WorkerError};
 pub use workspace_request::{
-    IMPLEMENTATION_PLAN_CHECKLIST_PHASE_COUNT, implementation_pr_body,
-    implementation_pr_pull_request_input, implementation_pr_pull_request_input_with_plan,
-    pr_branch_hint, pr_correlation_key, render_implementation_plan_checklist,
-    workspace_content_key,
+    implementation_pr_body, implementation_pr_pull_request_input, pr_branch_hint,
+    pr_correlation_key, workspace_content_key,
 };

@@ -14,17 +14,14 @@
 //! The implementation is split by responsibility across child modules:
 //! [`success`] (PR opening), [`failure`] (audit + attention), [`verdict`] and
 //! [`verdict_children`] (routed transitions), [`resolve`] (Forge artifact
-//! lookups), [`progress`] (the trait impl), and [`progress_checklist`] (PR
-//! checklist ticking).
+//! lookups), and [`progress`] (the trait impl).
 
 mod body_merge;
 mod body_update;
 mod claim;
 mod coordinated;
 mod failure;
-mod plan_publication;
 mod progress;
-mod progress_checklist;
 mod resolve;
 mod success;
 mod verdict;

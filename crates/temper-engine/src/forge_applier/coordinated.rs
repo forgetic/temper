@@ -23,7 +23,6 @@ pub(super) struct CoordinatedSet<'a> {
     pub(super) coordination_key: &'a str,
     pub(super) lookup_labels: &'a [String],
     pub(super) create_labels: &'a [String],
-    pub(super) plan_phases: &'a [String],
     pub(super) depends_on: &'a BTreeMap<String, Vec<String>>,
 }
 
@@ -135,7 +134,6 @@ pub(super) fn coordinated_pr_pull_request_input(
     labels: Vec<String>,
     coordination_key: &str,
     dependencies: Vec<temper_workflow::ArtifactRef>,
-    plan_phases: &[String],
 ) -> CreatePullRequest {
     let gated = !dependencies.is_empty();
     let metadata = temper_workflow::WorkflowMetadata {
@@ -157,7 +155,7 @@ pub(super) fn coordinated_pr_pull_request_input(
     let intro = format!(
         "Coordinated implementation for issue #{coordinating_number} (set `{coordination_key}`).{landing_note}"
     );
-    let body = implementation_pr_body(&intro, summary, plan_phases, &metadata);
+    let body = implementation_pr_body(&intro, summary, &metadata);
     CreatePullRequest {
         title: format!("Implement #{coordinating_number}: {issue_title}"),
         body,

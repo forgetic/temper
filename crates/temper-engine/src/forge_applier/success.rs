@@ -101,7 +101,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
 
         let lookup_labels = implementation_pr_labels(self.workflow.as_ref());
         let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
-        let plan_phases = implementation_plan_phases(result.details.as_ref());
         let summary = result.summary.unwrap_or_default();
 
         // Open one PR per writable repo that produced a diff, in coordinated
@@ -122,7 +121,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             coordination_key: &coordination_key,
             lookup_labels: &lookup_labels,
             create_labels: &create_labels,
-            plan_phases: &plan_phases,
             depends_on: &depends_on,
         };
         for index in order {
@@ -174,7 +172,6 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             set.create_labels.to_vec(),
             set.coordination_key,
             dependencies,
-            set.plan_phases,
         );
         let desired_body = input.body.clone();
 
@@ -411,18 +408,4 @@ fn push_unique(values: &mut Vec<String>, value: &str) {
     if !values.iter().any(|candidate| candidate == value) {
         values.push(value.to_string());
     }
-}
-
-fn implementation_plan_phases(details: Option<&serde_json::Value>) -> Vec<String> {
-    details
-        .and_then(|details| details.get("plan"))
-        .and_then(|plan| plan.get("phases"))
-        .and_then(serde_json::Value::as_array)
-        .map(|phases| {
-            phases
-                .iter()
-                .filter_map(|phase| phase.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
 }
