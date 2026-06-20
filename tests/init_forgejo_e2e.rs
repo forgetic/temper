@@ -39,6 +39,8 @@
 mod credentials;
 #[path = "init_forgejo_e2e/daemon_boot.rs"]
 mod daemon_boot;
+#[path = "support/e2e_lock.rs"]
+mod e2e_lock;
 #[path = "init_forgejo_e2e/forge_state.rs"]
 mod forge_state;
 #[path = "init_forgejo_e2e/local_artifacts.rs"]
@@ -76,6 +78,7 @@ const DAEMON_BOOT_TIMEOUT: Duration = Duration::from_secs(60);
 #[test]
 #[ignore = "boots a real Forgejo fixture and provisions it via `temper init`; run with --ignored"]
 fn init_forgejo_drives_a_working_setup() {
+    let _e2e_lock = e2e_lock::acquire();
     let started = Instant::now();
 
     // --- A bare Forgejo with a site admin, but NOTHING else provisioned. ---

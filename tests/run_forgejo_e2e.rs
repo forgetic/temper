@@ -22,6 +22,9 @@
 
 #![cfg(unix)]
 
+#[path = "support/e2e_lock.rs"]
+mod e2e_lock;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -60,6 +63,7 @@ const RUN_WORKFLOW: &str = include_str!("run-delivery.json");
 #[test]
 #[ignore = "boots a real Forgejo fixture + a fake LLM and spawns `temper run`; run with --ignored"]
 fn temper_run_opens_pr_from_checkpointed_product_diff_via_fake_llm() {
+    let _e2e_lock = e2e_lock::acquire();
     let started = Instant::now();
 
     // --- World: provisioned Forgejo (org, engineer identity, labels, repo) ---
