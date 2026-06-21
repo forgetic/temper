@@ -138,7 +138,9 @@ fn launcher_populates_repo_before_serve() {
     let ci = read_example("config/ci.yml");
 
     let populate = section(&script, "populate_repo() {");
-    assert!(populate.contains("cp \"$CONFIG_DIR/ci.yml\" \"$_checkout/.forgejo/workflows/ci.yml\""));
+    assert!(
+        populate.contains("cp \"$CONFIG_DIR/ci.yml\" \"$_checkout/.forgejo/workflows/ci.yml\"")
+    );
     assert!(populate.contains("cat >\"$_checkout/README.md\""));
     assert!(populate.contains("git -C \"$_checkout\" commit"));
     assert!(populate.contains("git -C \"$_checkout\" push"));
@@ -146,8 +148,12 @@ fn launcher_populates_repo_before_serve() {
     assert!(ci.contains("run.sh commits this file explicitly"));
 
     let cmd_start = section(&script, "cmd_start() {");
-    assert_order(cmd_start, "run_temper_init", "populate_repo");
-    assert_order(cmd_start, "populate_repo", "boot_run");
+    assert_order(
+        cmd_start,
+        "\n    run_temper_init\n",
+        "\n    populate_repo\n",
+    );
+    assert_order(cmd_start, "\n    populate_repo\n", "\n    boot_run\n");
 }
 
 #[test]
