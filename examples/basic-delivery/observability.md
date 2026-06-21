@@ -25,14 +25,14 @@ are prefixed `engine:`; worker lines are prefixed `worker:`.
 For the fixed single-repo run, expect interleaved lines like:
 
 ```text
-worker: registered worker_id=basic-delivery-1 capabilities=2
+worker: registered worker_id=temper-worker-1 capabilities=2
 engine: webhook accepted repo=acme/service kind=Issue item=<n>
 engine: webhook wake scan repo=acme/service enqueued=1
-engine: assigned job_id=... role=architect repo=acme/service worker=basic-delivery-1
+engine: assigned job_id=... role=architect repo=acme/service worker=temper-worker-1
 worker: assigned job_id=... role=architect repo=acme/service
 worker: result sent job_id=... status=success
 engine: result received job_id=... status=success disposition=...
-engine: assigned job_id=... role=engineer repo=acme/service worker=basic-delivery-1
+engine: assigned job_id=... role=engineer repo=acme/service worker=temper-worker-1
 worker: result sent job_id=... status=success
 engine: ... mechanical landing ...
 ```

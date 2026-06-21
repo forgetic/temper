@@ -288,42 +288,6 @@ bootstrap_admin() {
     [ -n "$ADMIN_TOKEN" ] || die 'failed to mint an admin access token'
 }
 
-patch_init_config_for_demo() {
-    TEMPER_CONFIG_FILE="$CONFIG_FILE" \
-    TEMPER_DEMO_GIT_BASE="$BASE_URL" \
-        python3 <<'PY'
-import json, os, re
-from pathlib import Path
-
-path = Path(os.environ["TEMPER_CONFIG_FILE"])
-text = path.read_text(encoding="utf-8")
-updates = {
-    "engine": {
-        "daemon_id": json.dumps("basic-delivery-daemon"),
-    },
-    "worker": {
-        "worker_id": json.dumps("basic-delivery-1"),
-        "git_base_url": json.dumps(os.environ["TEMPER_DEMO_GIT_BASE"]),
-    },
-}
-
-for section, pairs in updates.items():
-    block = re.search(rf"(?ms)^\[{re.escape(section)}\]\n.*?(?=^\[|\Z)", text)
-    if block:
-        body = block.group(0)
-        for key, value in pairs.items():
-            pattern = rf"(?m)^({re.escape(key)}\s*=\s*).*$"
-            body = re.sub(pattern, rf"\g<1>{value}", body) if re.search(pattern, body) else body + f"{key} = {value}\n"
-        text = text[:block.start()] + body + text[block.end():]
-    else:
-        if text and not text.endswith("\n"):
-            text += "\n"
-        text += "\n[{}]\n{}".format(section, "".join(f"{k} = {v}\n" for k, v in pairs.items()))
-
-path.write_text(text, encoding="utf-8")
-PY
-}
-
 run_temper_init() {
     log "running temper init --non-interactive for $REPO ..."
     : >"$LOG_DIR/init.log"
@@ -347,7 +311,6 @@ run_temper_init() {
     [ -f "$CREDENTIALS_FILE" ] || die "temper init did not write $CREDENTIALS_FILE"
     [ -f "$INIT_WORKFLOW_PATH" ] || die "temper init did not write $INIT_WORKFLOW_PATH"
     [ -f "$WEBHOOK_SECRET_FILE" ] || die "temper init did not write $WEBHOOK_SECRET_FILE"
-    patch_init_config_for_demo
 
     {
         printf 'repo=%s initialized_by=temper_init config=%s credentials=%s workflow=%s webhook_secret=%s\n' \
