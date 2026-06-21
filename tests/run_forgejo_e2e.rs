@@ -42,11 +42,13 @@ use temper_testing::forgejo_server::{
 
 const ENGINEER: &str = "engineer";
 const REPO_NAME: &str = "temper-run-e2e";
-const DEFAULT_CONVERGENCE_SECS: u64 = 180;
+const DEFAULT_CONVERGENCE_SECS: u64 = 300;
 
 /// Convergence budget, overridable via `TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS`
-/// (the same knob the daemon e2e honors). CI sets it higher because a cold
-/// machine spends ~2min provisioning the Forgejo fixture before any work runs.
+/// (the same knob the daemon e2e honors). CI sets it explicitly; the default
+/// also keeps a full five-minute window for local `--ignored` runs because the
+/// checkpoint-opened PR can briefly contend with the host runner before final
+/// summary handoff.
 fn convergence_timeout() -> Duration {
     std::env::var("TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS")
         .ok()

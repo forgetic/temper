@@ -221,6 +221,66 @@ fn success_result_creates_implementation_pr_and_replay_is_idempotent() {
 }
 
 #[test]
+fn success_result_finalizes_existing_branch_pr_even_when_correlation_lookup_misses() {
+    temper_engine_io::block_on_with(move |cx, _handle| async move {
+        let forge = Arc::new(MemoryForge::new());
+        let repo = new_repo(&forge, "stable").await;
+        let issue = create_ready_issue(&forge, &repo).await;
+        let workflow = Arc::new(workflow());
+        let applier = ForgeApplier::new(forge.clone(), workflow.clone());
+        let job = open_pr_in_flight_job("acme/service", issue);
+        let branch_name = format!("agent/pr-for-code-{}", issue.get());
+
+        forge
+            .create_pull_request(
+                &repo,
+                CreatePullRequest {
+                    title: format!("Implement #{}: ready code issue", issue.get()),
+                    body: "Opened from a checkpoint.\n\nSummary: checkpoint pending".to_string(),
+                    source: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: branch_name.clone(),
+                    },
+                    target: BranchRef {
+                        repository_id: repo.clone(),
+                        branch: "stable".to_string(),
+                    },
+                    labels: vec!["implementation".to_string()],
+                    assignees: Vec::new(),
+                },
+            )
+            .await
+            .expect("checkpoint PR exists before final success");
+
+        let summary = "final implementation summary";
+        applier
+            .apply(
+                job,
+                success_result(
+                    "worker-a",
+                    "job-branch-fallback",
+                    "acme/service",
+                    &branch_name,
+                    summary,
+                ),
+            )
+            .await;
+
+        let pulls = wait_for_pull_request_count(&cx, &forge, &repo, 1).await;
+        let body = &pulls[0].body;
+        assert!(body.contains("Summary: final implementation summary"));
+        let metadata = parse_metadata_block(body)
+            .expect("PR metadata parses")
+            .expect("PR metadata exists");
+        assert_eq!(metadata.parents, vec![ArtifactRef::same_repo(issue)]);
+        assert_eq!(
+            metadata.correlation_key.as_deref(),
+            Some(format!("pr-for-code-{}", issue.get()).as_str())
+        );
+    })
+}
+
+#[test]
 fn success_result_ignores_legacy_plan_details_for_plain_body() {
     temper_engine_io::block_on_with(move |cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());

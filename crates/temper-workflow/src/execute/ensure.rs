@@ -1,8 +1,11 @@
 use super::{EnsureOutcome, ExecutionError, Executor};
 use crate::artifact::ArtifactRef;
 use crate::metadata::{WorkflowMetadata, parse_metadata_block, replace_metadata_block};
-use std::collections::BTreeSet;
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Mutex, OnceLock};
+use std::task::{Context, Poll, Waker};
 use temper_forge::{
     CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, IssueState,
     ItemListDetails, PullRequest, PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
@@ -39,7 +42,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         parent: Option<ArtifactRef>,
         input: CreateIssue,
     ) -> Result<EnsureOutcome<Issue>, ExecutionError> {
-        let _guard = correlation_locks().acquire(lock_key("issue", repo_id, correlation_key));
+        let _guard = correlation_locks()
+            .acquire(lock_key("issue", repo_id, correlation_key))
+            .await;
         if let Some(existing) = self
             .find_issue_by_correlation(repo_id, correlation_key, &input.labels)
             .await?
@@ -150,7 +155,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         lookup_labels: &[String],
         input: CreatePullRequest,
     ) -> Result<EnsureOutcome<PullRequest>, ExecutionError> {
-        let _guard = correlation_locks().acquire(lock_key("pull", repo_id, correlation_key));
+        let _guard = correlation_locks()
+            .acquire(lock_key("pull", repo_id, correlation_key))
+            .await;
         if let Some(existing) = self
             .find_pull_request_by_correlation(repo_id, correlation_key, lookup_labels)
             .await?
@@ -386,18 +393,52 @@ fn lock_key(kind: &str, repo_id: &RepositoryId, correlation_key: &str) -> String
 }
 
 struct CorrelationLocks {
-    held: Mutex<BTreeSet<String>>,
-    changed: Condvar,
+    state: Mutex<CorrelationLockState>,
+}
+
+#[derive(Default)]
+struct CorrelationLockState {
+    held: BTreeSet<String>,
+    waiters: BTreeMap<String, Vec<Waker>>,
 }
 
 impl CorrelationLocks {
-    fn acquire(&self, key: String) -> CorrelationGuard<'_> {
-        let mut held = self.held.lock().expect("correlation lock poisoned");
-        while held.contains(&key) {
-            held = self.changed.wait(held).expect("correlation lock poisoned");
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(CorrelationLockState::default()),
         }
-        held.insert(key.clone());
-        CorrelationGuard { locks: self, key }
+    }
+
+    fn acquire(&self, key: String) -> CorrelationAcquire<'_> {
+        CorrelationAcquire { locks: self, key }
+    }
+}
+
+struct CorrelationAcquire<'a> {
+    locks: &'a CorrelationLocks,
+    key: String,
+}
+
+impl<'a> Future for CorrelationAcquire<'a> {
+    type Output = CorrelationGuard<'a>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let mut state = this.locks.state.lock().expect("correlation lock poisoned");
+        if !state.held.contains(&this.key) {
+            state.held.insert(this.key.clone());
+            return Poll::Ready(CorrelationGuard {
+                locks: this.locks,
+                key: this.key.clone(),
+            });
+        }
+
+        state
+            .waiters
+            .entry(this.key.clone())
+            .or_default()
+            .push(cx.waker().clone());
+        Poll::Pending
     }
 }
 
@@ -408,16 +449,61 @@ struct CorrelationGuard<'a> {
 
 impl Drop for CorrelationGuard<'_> {
     fn drop(&mut self) {
-        let mut held = self.locks.held.lock().expect("correlation lock poisoned");
-        held.remove(&self.key);
-        self.locks.changed.notify_all();
+        let waiters = {
+            let mut state = self.locks.state.lock().expect("correlation lock poisoned");
+            state.held.remove(&self.key);
+            state.waiters.remove(&self.key).unwrap_or_default()
+        };
+        for waiter in waiters {
+            waiter.wake();
+        }
     }
 }
 
 fn correlation_locks() -> &'static CorrelationLocks {
     static LOCKS: OnceLock<CorrelationLocks> = OnceLock::new();
-    LOCKS.get_or_init(|| CorrelationLocks {
-        held: Mutex::new(BTreeSet::new()),
-        changed: Condvar::new(),
-    })
+    LOCKS.get_or_init(CorrelationLocks::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::task::{Wake, Waker};
+
+    #[test]
+    fn correlation_lock_waits_without_blocking_the_executor_thread() {
+        let locks = CorrelationLocks::new();
+        let key = "pull:repo:run".to_string();
+
+        let mut first = Box::pin(locks.acquire(key.clone()));
+        let first_guard = match poll_acquire(first.as_mut()) {
+            Poll::Ready(guard) => guard,
+            Poll::Pending => panic!("uncontended acquire should be ready"),
+        };
+
+        let mut second = Box::pin(locks.acquire(key));
+        assert!(matches!(poll_acquire(second.as_mut()), Poll::Pending));
+
+        drop(first_guard);
+        let second_guard = match poll_acquire(second.as_mut()) {
+            Poll::Ready(guard) => guard,
+            Poll::Pending => panic!("released key should wake the waiter"),
+        };
+        drop(second_guard);
+    }
+
+    fn poll_acquire<'a>(future: Pin<&mut CorrelationAcquire<'a>>) -> Poll<CorrelationGuard<'a>> {
+        let waker = noop_waker();
+        let mut context = Context::from_waker(&waker);
+        Future::poll(future, &mut context)
+    }
+
+    fn noop_waker() -> Waker {
+        struct NoopWake;
+        impl Wake for NoopWake {
+            fn wake(self: Arc<Self>) {}
+        }
+        Waker::from(Arc::new(NoopWake))
+    }
 }

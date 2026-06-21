@@ -2,6 +2,8 @@
 
 //! Argument-only parsing and flag value types for `temper init`.
 
+use std::path::PathBuf;
+
 use temper_cli_common::{LoadOptions, next_value, parse_common_args};
 
 use crate::collect::PROVIDER_DEEPSEEK;
@@ -92,6 +94,7 @@ pub(crate) struct ParsedInitArgs {
     pub(crate) existing_repo: bool,
     pub(crate) topology: InitTopology,
     pub(crate) overrides: InitOverrides,
+    pub(crate) workspace: Option<PathBuf>,
     pub(crate) non_interactive: bool,
 }
 
@@ -127,6 +130,9 @@ pub(crate) fn parse_init_args(args: Vec<String>) -> Result<ParsedInitArgs, Strin
             }
             "--bind" => {
                 parsed.overrides.bind = Some(init_value(&mut rest, "--bind")?);
+            }
+            "--workspace" => {
+                parsed.workspace = Some(PathBuf::from(init_value(&mut rest, "--workspace")?));
             }
             "--provider" => {
                 let provider = init_value(&mut rest, "--provider")?;
@@ -179,6 +185,8 @@ mod tests {
             "acme/widget".to_string(),
             "--forge".to_string(),
             "http://localhost:3000".to_string(),
+            "--workspace".to_string(),
+            "/tmp/temper-workspaces".to_string(),
             "--provider".to_string(),
             "deepseek".to_string(),
             "--non-interactive".to_string(),
@@ -208,6 +216,10 @@ mod tests {
         );
         assert_eq!(parsed.overrides.provider.as_deref(), Some("deepseek"));
         assert_eq!(parsed.overrides.bind, None);
+        assert_eq!(
+            parsed.workspace,
+            Some(PathBuf::from("/tmp/temper-workspaces"))
+        );
     }
 
     #[test]
@@ -223,6 +235,17 @@ mod tests {
         let parsed = parse_init_args(Vec::new()).expect("parse");
 
         assert_eq!(parsed.overrides.bind, None);
+    }
+
+    #[test]
+    fn parse_workspace_flag() {
+        let parsed = parse_init_args(vec![
+            "--workspace".to_string(),
+            "./run/workspaces".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(parsed.workspace, Some(PathBuf::from("./run/workspaces")));
     }
 
     #[test]
@@ -284,6 +307,13 @@ mod tests {
     fn admin_user_without_value_fails() {
         let err = parse_init_args(vec!["--admin-user".to_string(), "--force".to_string()])
             .expect_err("--admin-user requires a value");
+        assert!(err.contains("requires a value"), "{err}");
+    }
+
+    #[test]
+    fn workspace_without_value_fails() {
+        let err = parse_init_args(vec!["--workspace".to_string(), "--force".to_string()])
+            .expect_err("--workspace requires a value");
         assert!(err.contains("requires a value"), "{err}");
     }
 }

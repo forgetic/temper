@@ -140,6 +140,7 @@ resolve_binaries() {
     _init_help=$("$RUN_BIN" init --help 2>&1 || true)
     case "$_init_help" in *--non-interactive*) ;; *) die 'temper init lacks --non-interactive' ;; esac
     case "$_init_help" in *--provider-url*) ;; *) die 'temper init lacks --provider-url' ;; esac
+    case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
     case "$_serve_help" in *--config*) ;; *) die 'temper serve standalone lacks --config' ;; esac
     case "$_serve_help" in *--credentials*) ;; *) die 'temper serve standalone lacks --credentials' ;; esac
@@ -292,7 +293,6 @@ bootstrap_admin() {
 patch_init_config_for_demo() {
     TEMPER_CONFIG_FILE="$CONFIG_FILE" \
     TEMPER_DEMO_LEASE="$DAEMON_LEASE_TTL_SECS" \
-    TEMPER_DEMO_WORKSPACE="$RUN_DIR/workspaces" \
     TEMPER_DEMO_GIT_BASE="$BASE_URL" \
     TEMPER_DEMO_MAX_ITERATIONS="$RUN_MAX_ITERATIONS" \
         python3 <<'PY'
@@ -308,7 +308,6 @@ updates = {
     },
     "worker": {
         "worker_id": json.dumps("basic-delivery-1"),
-        "workspace": json.dumps(os.environ["TEMPER_DEMO_WORKSPACE"]),
         "git_base_url": json.dumps(os.environ["TEMPER_DEMO_GIT_BASE"]),
     },
     "agent": {"max_iterations": os.environ["TEMPER_DEMO_MAX_ITERATIONS"]},
@@ -342,6 +341,7 @@ run_temper_init() {
                 --forge "$BASE_URL" \
                 --repo "$REPO" \
                 --bind "$DAEMON_BIND" \
+                --workspace "$RUN_DIR/workspaces" \
                 --admin-user "$ADMIN_USER" \
                 --provider deepseek \
                 --provider-url "$JIG_PROVIDER_URL" \
