@@ -230,7 +230,10 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
         "expected worker workspace in config: {config}"
     );
     let loaded = temper_config::Config::load(&config_path).expect("config parses");
-    assert_eq!(loaded.worker.workspace.as_deref(), Some(workspace_text.as_str()));
+    assert_eq!(
+        loaded.worker.workspace.as_deref(),
+        Some(workspace_text.as_str())
+    );
 
     let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
     assert!(creds.contains("sk-deepseek-override"), "{creds}");

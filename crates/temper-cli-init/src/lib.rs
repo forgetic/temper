@@ -268,3 +268,14 @@ pub fn run_init(
     p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::USAGE;
+
+    #[test]
+    fn usage_documents_workspace_flag() {
+        assert!(USAGE.contains("--workspace"), "{USAGE}");
+        assert!(USAGE.contains("Per-job worker workspace root"), "{USAGE}");
+    }
+}
