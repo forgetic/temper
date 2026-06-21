@@ -42,8 +42,6 @@ ADMIN_EMAIL=basicadmin@example.invalid
 ADMIN_PASSWORD='Basic-Delivery-Admin-1!'
 
 RUN_SECS=600
-DAEMON_POLL_CADENCE_SECS=120
-DAEMON_MECHANICAL_CADENCE_SECS=2
 DAEMON_LEASE_TTL_SECS=300
 RUN_MAX_ITERATIONS=250
 GOMAXPROCS=2
@@ -293,8 +291,6 @@ bootstrap_admin() {
 
 patch_init_config_for_demo() {
     TEMPER_CONFIG_FILE="$CONFIG_FILE" \
-    TEMPER_DEMO_POLL="$DAEMON_POLL_CADENCE_SECS" \
-    TEMPER_DEMO_MECHANICAL="$DAEMON_MECHANICAL_CADENCE_SECS" \
     TEMPER_DEMO_LEASE="$DAEMON_LEASE_TTL_SECS" \
     TEMPER_DEMO_WORKSPACE="$RUN_DIR/workspaces" \
     TEMPER_DEMO_GIT_BASE="$BASE_URL" \
@@ -307,8 +303,6 @@ path = Path(os.environ["TEMPER_CONFIG_FILE"])
 text = path.read_text(encoding="utf-8")
 updates = {
     "engine": {
-        "poll_cadence_secs": os.environ["TEMPER_DEMO_POLL"],
-        "mechanical_cadence_secs": os.environ["TEMPER_DEMO_MECHANICAL"],
         "lease_ttl_secs": os.environ["TEMPER_DEMO_LEASE"],
         "daemon_id": json.dumps("basic-delivery-daemon"),
     },
