@@ -161,9 +161,15 @@ replace each non-`[A-Z0-9]` character with `_`, so `code-reviewer` becomes
 
 ### Demo launcher variables
 
-The `examples/basic-delivery` and `examples/reference-delivery` launchers source
-`config/temper.env` plus gitignored `secrets/.env`. These are demo shell knobs,
-not core library APIs:
+`examples/basic-delivery/run.sh` is intentionally fixed and no longer sources a
+launcher config/env file. It sets only child-process implementation variables
+internally (`GOMAXPROCS`, `GITEA_WORK_DIR`, `TEMPER_INIT_ADMIN_PASSWORD`,
+`TEMPER_INIT_PROVIDER_KEY`, and short-lived helper variables for its Python
+snippets).
+
+`examples/reference-delivery/run.sh` still sources `config/temper.env` plus
+optional gitignored local secret files. Those are demo shell knobs, not core
+library APIs:
 
 `OWNER`, `NAME`, `DEFAULT_BRANCH`, `WORKFLOW_FILE`, `INTAKE_TITLE`,
 `INTAKE_BODY_FILE`, `BASE_URL`, `DAEMON_BIND`, `WEBHOOK_URL`,
@@ -172,10 +178,9 @@ not core library APIs:
 `TEMPER_FORGEJO_BINARY`, `TEMPER_FORGEJO_RUNNER_BINARY`, `TEMPER_RUN_BIN`,
 `TEMPER_BUILD_PACKAGE`, `TEMPER_SKIP_BUILD`, `TEMPER_RUN_AUTH`,
 `RUN_MAX_ITERATIONS`, `TEMPER_WORKSPACE_ROOT`, the
-`TEMPER_BASIC_DELIVERY_*` / `TEMPER_REFERENCE_DELIVERY_*` re-exec/snapshot
-internals, `REPOS`, `SERVED_ROLES`, `CROSS_REPO_INTAKE`,
-`CROSS_REPO_INTAKE_TITLE`, and `GOMAXPROCS` / `GITEA_WORK_DIR` passed to
-Forgejo/runner child processes.
+`TEMPER_REFERENCE_DELIVERY_*` re-exec/snapshot internals, `REPOS`,
+`SERVED_ROLES`, `CROSS_REPO_INTAKE`, `CROSS_REPO_INTAKE_TITLE`, and
+`GOMAXPROCS` / `GITEA_WORK_DIR` passed to Forgejo/runner child processes.
 
 Forgejo Actions workflows use GitHub-compatible env names supplied by Forgejo
 Actions (`GITHUB_API_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_TOKEN`).
