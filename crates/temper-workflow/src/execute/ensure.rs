@@ -493,9 +493,7 @@ mod tests {
         drop(second_guard);
     }
 
-    fn poll_acquire<'a>(
-        future: Pin<&mut CorrelationAcquire<'a>>,
-    ) -> Poll<CorrelationGuard<'a>> {
+    fn poll_acquire<'a>(future: Pin<&mut CorrelationAcquire<'a>>) -> Poll<CorrelationGuard<'a>> {
         let waker = noop_waker();
         let mut context = Context::from_waker(&waker);
         Future::poll(future, &mut context)
