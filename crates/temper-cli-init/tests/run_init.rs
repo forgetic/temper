@@ -110,6 +110,8 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert!(config.contains("provider = \"deepseek\""), "{config}");
     assert!(config.contains("workflow.json"), "{config}");
     assert!(config.contains("webhook-secret"), "{config}");
+    // No explicit workspace is written unless requested; runtime defaults apply.
+    assert!(!config.contains("workspace ="), "{config}");
 
     // ── workflow.json ─────────────────────────────────────────────────────────
     let workflow_path = dir.path().join("workflow.json");
@@ -178,6 +180,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("config.toml");
     let credentials_path = dir.path().join("credentials.toml");
+    let workspace_path = dir.path().join("workspaces");
 
     // `--forge` skips the first prompt and `--bind` skips the webhook prompt,
     // so this starts at workflow and then moves to admin credentials.
@@ -204,6 +207,7 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
             bind: Some("127.0.0.1:38100".to_string()),
             ..Default::default()
         },
+        workspace: Some(workspace_path.clone()),
         ..Default::default()
     };
 
@@ -219,6 +223,14 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
     assert!(!config.contains("acme/service"), "{config}");
     assert!(config.contains("provider = \"deepseek\""), "{config}");
     assert!(config.contains("bind = \"127.0.0.1:38100\""), "{config}");
+    let workspace_text = workspace_path.display().to_string();
+    assert!(
+        config.contains("[worker]")
+            && config.contains(&format!("workspace = \"{workspace_text}\"")),
+        "expected worker workspace in config: {config}"
+    );
+    let loaded = temper_config::Config::load(&config_path).expect("config parses");
+    assert_eq!(loaded.worker.workspace.as_deref(), Some(workspace_text.as_str()));
 
     let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
     assert!(creds.contains("sk-deepseek-override"), "{creds}");

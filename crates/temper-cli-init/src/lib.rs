@@ -66,6 +66,7 @@ Options:
   --repo          <owner/name>  Managed repository to provision
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --bind          <ADDR>        Daemon bind / webhook advertise address override
+  --workspace     <PATH>        Per-job worker workspace root to write
   --provider      <deepseek>    LLM provider profile (only deepseek today)
   --provider-url  <URL>         Base URL override for the provider
   --non-interactive             Run without prompts; all required values must
@@ -180,7 +181,7 @@ pub fn main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
         topology: parsed.topology,
         overrides: parsed.overrides,
         non_interactive: parsed.non_interactive,
-        workspace: None,
+        workspace: parsed.workspace,
         env: env.clone(),
         paths: paths.clone(),
     };
