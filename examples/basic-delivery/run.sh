@@ -42,8 +42,6 @@ ADMIN_EMAIL=basicadmin@example.invalid
 ADMIN_PASSWORD='Basic-Delivery-Admin-1!'
 
 RUN_SECS=600
-DAEMON_LEASE_TTL_SECS=300
-RUN_MAX_ITERATIONS=250
 GOMAXPROCS=2
 export GOMAXPROCS
 
@@ -292,9 +290,7 @@ bootstrap_admin() {
 
 patch_init_config_for_demo() {
     TEMPER_CONFIG_FILE="$CONFIG_FILE" \
-    TEMPER_DEMO_LEASE="$DAEMON_LEASE_TTL_SECS" \
     TEMPER_DEMO_GIT_BASE="$BASE_URL" \
-    TEMPER_DEMO_MAX_ITERATIONS="$RUN_MAX_ITERATIONS" \
         python3 <<'PY'
 import json, os, re
 from pathlib import Path
@@ -303,14 +299,12 @@ path = Path(os.environ["TEMPER_CONFIG_FILE"])
 text = path.read_text(encoding="utf-8")
 updates = {
     "engine": {
-        "lease_ttl_secs": os.environ["TEMPER_DEMO_LEASE"],
         "daemon_id": json.dumps("basic-delivery-daemon"),
     },
     "worker": {
         "worker_id": json.dumps("basic-delivery-1"),
         "git_base_url": json.dumps(os.environ["TEMPER_DEMO_GIT_BASE"]),
     },
-    "agent": {"max_iterations": os.environ["TEMPER_DEMO_MAX_ITERATIONS"]},
 }
 
 for section, pairs in updates.items():
