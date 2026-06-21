@@ -27,8 +27,9 @@ pub mod world;
 use chrono::{DateTime, Utc};
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::Duration;
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{
     BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, ItemNumber, RepositoryId,
@@ -44,19 +45,69 @@ use temper_workflow::ValidatedWorkflow;
 // importable from this crate.
 pub use temper_reference_delivery::WorkflowLoadError;
 
-struct NoopWake;
+const BLOCK_ON_WAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
+struct BlockingWake {
+    notified: Mutex<bool>,
+    condvar: Condvar,
+}
+
+impl BlockingWake {
+    fn new() -> Self {
+        Self {
+            notified: Mutex::new(false),
+            condvar: Condvar::new(),
+        }
+    }
+
+    fn wait(&self) {
+        let mut notified = self
+            .notified
+            .lock()
+            .expect("test future wake mutex poisoned");
+        while !*notified {
+            let (guard, timeout) = self
+                .condvar
+                .wait_timeout(notified, BLOCK_ON_WAKE_TIMEOUT)
+                .expect("test future wake mutex poisoned");
+            notified = guard;
+            if timeout.timed_out() && !*notified {
+                panic!("test future parked without waking");
+            }
+        }
+        *notified = false;
+    }
+
+    fn notify(&self) {
+        let mut notified = self
+            .notified
+            .lock()
+            .expect("test future wake mutex poisoned");
+        *notified = true;
+        self.condvar.notify_one();
+    }
+}
+
+impl Wake for BlockingWake {
+    fn wake(self: Arc<Self>) {
+        self.notify();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.notify();
+    }
 }
 
 pub fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
+    let wake = Arc::new(BlockingWake::new());
+    let waker = Waker::from(Arc::clone(&wake));
     let mut context = Context::from_waker(&waker);
     let mut future = Box::pin(future);
-    match Future::poll(future.as_mut(), &mut context) {
-        Poll::Ready(value) => value,
-        Poll::Pending => panic!("reference forge futures should not park in tests"),
+    loop {
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => wake.wait(),
+        }
     }
 }
 
