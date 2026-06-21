@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use temper_forge::{
-    Forge, ItemNumber, PullRequest, Repository, RepositoryId, RepositoryPath, RequestReviewers,
-    UpdatePullRequest, UserId,
+    Forge, ItemNumber, PullRequest, PullRequestQuery, PullRequestState, Repository, RepositoryId,
+    RepositoryPath, RequestReviewers, UpdatePullRequest, UserId,
 };
 use temper_log::emit::{PrOpened, emit_pr_opened};
 use temper_protocol_worker::{JobContext, JobResult, RepoOutcome};
@@ -186,6 +186,28 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         );
         let desired_body = input.body.clone();
 
+        if let Some(pull_request) = self
+            .existing_open_pr_for_branch(
+                set.job,
+                &target_repository.id,
+                &outcome.branch.name,
+                set.lookup_labels,
+            )
+            .await
+        {
+            self.update_existing_coordinated_pr(
+                set,
+                outcome,
+                opened,
+                &target_repository.id,
+                pull_request,
+                &desired_body,
+                "source branch reuse",
+            )
+            .await;
+            return;
+        }
+
         match Executor::new(self.workflow.as_ref(), self.forge.as_ref())
             .ensure_pull_request_with_lookup(
                 &target_repository.id,
@@ -197,47 +219,146 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         {
             Ok(ensured) => {
                 let was_created = ensured.was_created();
-                let mut pull_request = ensured.into_artifact();
+                let pull_request = ensured.into_artifact();
                 if was_created {
-                    let pr_ref = artifact_ref(
+                    self.record_created_coordinated_pr(
+                        set,
+                        outcome,
+                        opened,
                         &target_repository.id,
-                        ArtifactSource::PullRequest {
-                            number: pull_request.number,
-                        },
-                    );
-                    emit_pr_opened(PrOpened {
-                        item: &pr_ref,
-                        title: set.issue_title,
-                        kind: "implementation",
-                        for_issue: set.number.get(),
-                    });
-                } else {
-                    pull_request = self
-                        .update_implementation_pr_body(
-                            set.job,
-                            pull_request,
-                            &desired_body,
-                            "final success",
-                        )
-                        .await;
-                }
-                self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, was_created)
+                        pull_request,
+                    )
                     .await;
-                opened.insert(
-                    outcome.repo.clone(),
-                    (target_repository.id.clone(), pull_request.number),
-                );
+                } else {
+                    self.update_existing_coordinated_pr(
+                        set,
+                        outcome,
+                        opened,
+                        &target_repository.id,
+                        pull_request,
+                        &desired_body,
+                        "final success",
+                    )
+                    .await;
+                }
             }
-            Err(error) => tracing::error!(
-                target: "temper_daemon",
-                job_id = %set.job.job_id,
-                repo = %set.job.repo,
-                issue = %set.number,
-                target_repo = %outcome.repo,
-                coordination_key = %set.coordination_key,
-                %error,
-                "forge applier ensure_pull_request failed"
-            ),
+            Err(error) => {
+                tracing::error!(
+                    target: "temper_daemon",
+                    job_id = %set.job.job_id,
+                    repo = %set.job.repo,
+                    issue = %set.number,
+                    target_repo = %outcome.repo,
+                    coordination_key = %set.coordination_key,
+                    %error,
+                    "forge applier ensure_pull_request failed"
+                );
+                if let Some(pull_request) = self
+                    .existing_open_pr_for_branch(
+                        set.job,
+                        &target_repository.id,
+                        &outcome.branch.name,
+                        set.lookup_labels,
+                    )
+                    .await
+                {
+                    self.update_existing_coordinated_pr(
+                        set,
+                        outcome,
+                        opened,
+                        &target_repository.id,
+                        pull_request,
+                        &desired_body,
+                        "ensure fallback",
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    async fn record_created_coordinated_pr(
+        &self,
+        set: &CoordinatedSet<'_>,
+        outcome: &RepoOutcome,
+        opened: &mut BTreeMap<String, (RepositoryId, ItemNumber)>,
+        target_repo_id: &RepositoryId,
+        pull_request: PullRequest,
+    ) {
+        let pr_ref = artifact_ref(
+            target_repo_id,
+            ArtifactSource::PullRequest {
+                number: pull_request.number,
+            },
+        );
+        emit_pr_opened(PrOpened {
+            item: &pr_ref,
+            title: set.issue_title,
+            kind: "implementation",
+            for_issue: set.number.get(),
+        });
+        self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, true)
+            .await;
+        opened.insert(
+            outcome.repo.clone(),
+            (target_repo_id.clone(), pull_request.number),
+        );
+    }
+
+    async fn update_existing_coordinated_pr(
+        &self,
+        set: &CoordinatedSet<'_>,
+        outcome: &RepoOutcome,
+        opened: &mut BTreeMap<String, (RepositoryId, ItemNumber)>,
+        target_repo_id: &RepositoryId,
+        pull_request: PullRequest,
+        desired_body: &str,
+        operation: &'static str,
+    ) {
+        let pull_request = self
+            .update_implementation_pr_body(set.job, pull_request, desired_body, operation)
+            .await;
+        self.apply_implementation_pr_handoff_if_needed(set.job, &pull_request, false)
+            .await;
+        opened.insert(
+            outcome.repo.clone(),
+            (target_repo_id.clone(), pull_request.number),
+        );
+    }
+
+    async fn existing_open_pr_for_branch(
+        &self,
+        job: &InFlightJob,
+        repo_id: &RepositoryId,
+        source_branch: &str,
+        labels: &[String],
+    ) -> Option<PullRequest> {
+        let source_branch = source_branch.trim();
+        if source_branch.is_empty() {
+            return None;
+        }
+        let query = PullRequestQuery {
+            state: Some(PullRequestState::Open),
+            labels: labels.to_vec(),
+            ..PullRequestQuery::default()
+        };
+        match self.forge.list_pull_requests(repo_id, query).await {
+            Ok(pull_requests) => pull_requests.into_iter().find(|pull_request| {
+                pull_request.source.repository_id == *repo_id
+                    && pull_request.source.branch == source_branch
+            }),
+            Err(error) => {
+                tracing::warn!(
+                    target: "temper_daemon",
+                    job_id = %job.job_id,
+                    repo = %job.repo,
+                    target_repo = %repo_id,
+                    source_branch,
+                    %error,
+                    "forge applier could not look up existing PR by source branch"
+                );
+                None
+            }
         }
     }
 
