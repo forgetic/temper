@@ -876,10 +876,10 @@ boot_run() {
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
     # Readiness: the webhook listener must be up before the seed-last webhook can
-    # be delivered, the in-process worker must have registered before any job can
-    # be assigned, and the standalone boot banner must report ready/idle.
+    # be delivered, the in-process worker must have announced capacity before any
+    # job can be assigned, and the standalone boot banner must report ready/idle.
     wait_for_log_line "$LOG_DIR/run.log" 'webhook listener up' "$RUN_PID" 'temper serve standalone'
-    wait_for_log_line "$LOG_DIR/run.log" 'worker: registered' "$RUN_PID" 'temper serve standalone'
+    wait_for_log_line "$LOG_DIR/run.log" 'worker:  capacity:' "$RUN_PID" 'temper serve standalone'
     wait_for_log_line "$LOG_DIR/run.log" 'ready -- watching' "$RUN_PID" 'temper serve standalone'
     log "temper serve standalone up (pid $RUN_PID; logs/run.log)"
 }
@@ -986,8 +986,8 @@ cmd_validate_webhooks() {
     validate_contains "$_run_log" 'result received' \
         'daemon received at least one job result' || _ok=1
 
-    validate_contains "$_run_log" 'worker: registered' \
-        'in-process worker registered with the daemon' || _ok=1
+    validate_contains "$_run_log" 'worker:  capacity:' \
+        'in-process worker announced standalone capacity' || _ok=1
     validate_contains "$_run_log" 'worker: assigned job_id=' \
         'in-process worker accepted at least one assignment' || _ok=1
     validate_contains "$_run_log" 'worker: result sent' \
@@ -1000,10 +1000,10 @@ cmd_validate_webhooks() {
     _results=$(count_matches 'result received' "$_run_log")
     log "daemon summary: accepted=$_accepted wake_scans=$_wake_scans wake_enqueued=$_wake_enqueued assigned=$_assigned result_received=$_results"
 
-    _registered=$(count_matches 'worker: registered' "$_run_log")
+    _capacity=$(count_matches 'worker:  capacity:' "$_run_log")
     _worker_assigned=$(count_matches 'worker: assigned job_id=' "$_run_log")
     _worker_results=$(count_matches 'worker: result sent' "$_run_log")
-    log "worker summary: registered=$_registered assigned=$_worker_assigned result_sent=$_worker_results"
+    log "worker summary: capacity=$_capacity assigned=$_worker_assigned result_sent=$_worker_results"
 
     if [ "$_ok" -eq 0 ]; then
         log 'webhook validation passed'

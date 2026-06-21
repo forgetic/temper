@@ -127,7 +127,7 @@ fn launcher_uses_init_emitted_artifacts_for_serve_standalone() {
         "\"$RUN_BIN\" serve standalone --config \"$CONFIG_FILE\" --credentials \"$CREDENTIALS_FILE\""
     ));
     assert!(boot_run.contains("webhook listener up"));
-    assert!(boot_run.contains("worker: registered"));
+    assert!(boot_run.contains("worker:  capacity:"));
     assert!(boot_run.contains("ready -- watching"));
     assert!(!boot_run.contains("daemon --config"));
 }
@@ -234,7 +234,7 @@ fn validators_and_config_cover_webhook_and_ci_fallback() {
     // standalone readiness, accepted deliveries, wake scans, and worker lifecycle.
     assert!(script.contains("ready -- watching"));
     assert!(script.contains("webhook listener up"));
-    assert!(script.contains("worker: registered"));
+    assert!(script.contains("worker:  capacity:"));
     assert!(script.contains("webhook wake scan"));
 }
 
