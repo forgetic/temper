@@ -85,17 +85,28 @@ fn launcher_uses_init_not_legacy_provisioner() {
 }
 
 #[test]
+fn launcher_has_no_operator_config_knob_file() {
+    let script = read_example("run.sh");
+
+    assert!(
+        !example_path("config/temper.env").exists(),
+        "basic-delivery should no longer carry a knob matrix"
+    );
+    assert!(!script.contains("CONFIG_KNOBS"));
+    assert!(!script.contains("load_config"));
+    assert!(!script.contains("config/temper.env"));
+    assert!(!script.contains("${BASE_URL:-"));
+    assert!(!script.contains("${DAEMON_BIND:-"));
+    assert!(!script.contains("${JIG_REPO:-"));
+}
+
+#[test]
 fn launcher_starts_jig_fixture_and_wires_provider_url() {
     let script = read_example("run.sh");
-    let config = read_example("config/temper.env");
 
-    assert!(config.contains("JIG_REPO=$HOME/src/rust/jig"));
-    assert!(config.contains("JIG_FIXTURE=fixtures/basic-delivery.json"));
-    assert!(config.contains("INIT_PROVIDER_KEY=basic-delivery-jig-dummy-key"));
-
-    assert!(script.contains("JIG_REPO=${JIG_REPO:-$HOME/src/rust/jig}"));
-    assert!(script.contains("JIG_FIXTURE=${JIG_FIXTURE:-fixtures/basic-delivery.json}"));
-    assert!(script.contains("JIG_FIXTURE_PATH=\"$JIG_REPO/$JIG_FIXTURE\""));
+    assert!(script.contains("JIG_REPO=\"$HOME/src/rust/jig\""));
+    assert!(script.contains("JIG_FIXTURE_PATH=\"$JIG_REPO/fixtures/basic-delivery.json\""));
+    assert!(script.contains("INIT_PROVIDER_KEY=basic-delivery-jig-dummy-key"));
 
     let boot_jig = section(&script, "boot_jig() {");
     assert!(boot_jig.contains("\"$JIG_BIN\" \"$JIG_FIXTURE_PATH\""));
@@ -165,7 +176,7 @@ fn launcher_files_intake_after_serve_readiness() {
 
     let seed_intake = section(&script, "seed_intake() {");
     assert!(seed_intake.contains("TEMPER_FORGEJO_ADMIN_TOKEN=\"$ADMIN_TOKEN\""));
-    assert!(seed_intake.contains("/api/v1/repos/{owner_path}/{repo_path}/issues"));
+    assert!(seed_intake.contains("/api/v1/repos/{owner}/{repo}/issues"));
     assert!(seed_intake.contains("\"title\": os.environ[\"TEMPER_INTAKE_TITLE\"]"));
     assert!(seed_intake.contains("\"body\": body"));
     assert!(seed_intake.contains("method=\"POST\""));
@@ -201,13 +212,10 @@ fn launcher_compatibility_checks_do_not_assume_help_flag_order() {
 #[test]
 fn launcher_defaults_basic_forgejo_to_distinct_ports() {
     let script = read_example("run.sh");
-    let config = read_example("config/temper.env");
 
     // Distinct from reference-delivery (4200 / 38200) so both demos coexist.
-    assert!(config.contains("BASE_URL=http://127.0.0.1:4100"));
-    assert!(config.contains("DAEMON_BIND=127.0.0.1:38100"));
-    assert!(script.contains("BASE_URL=${BASE_URL:-http://127.0.0.1:4100}"));
-    assert!(script.contains("DAEMON_BIND=${DAEMON_BIND:-127.0.0.1:38100}"));
+    assert!(script.contains("BASE_URL=http://127.0.0.1:4100"));
+    assert!(script.contains("DAEMON_BIND=127.0.0.1:38100"));
     assert!(script.contains("WEBHOOK_URL=http://$DAEMON_BIND/forgejo/webhook"));
 }
 
@@ -222,12 +230,11 @@ fn launcher_uses_non_reserved_setup_admin_handle() {
 }
 
 #[test]
-fn validators_and_config_cover_webhook_and_ci_fallback() {
+fn validator_covers_webhook_and_ci_fallback() {
     let script = read_example("run.sh");
 
     assert!(script.contains("CI_FALLBACK_MISSING_CREDENTIALS="));
-    assert!(script.contains("validate_mechanical_bot_config || _ok=1"));
-    assert!(script.contains("validate_mechanical_ci_log || _ok=1"));
+    assert!(script.contains("validate_absent \"$_run_log\" \"$CI_FALLBACK_MISSING_CREDENTIALS\""));
     assert!(script.contains("no web-UI credentials configured for the CI read fallback"));
 
     // Webhooks are the wake path: the validator inspects the unified run log for
@@ -236,6 +243,7 @@ fn validators_and_config_cover_webhook_and_ci_fallback() {
     assert!(script.contains("webhook listener up"));
     assert!(script.contains("worker:  capacity:"));
     assert!(script.contains("webhook wake scan"));
+    assert!(script.contains("worker: assigned job_id="));
 }
 
 #[test]
