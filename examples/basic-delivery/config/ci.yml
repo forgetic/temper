@@ -1,12 +1,10 @@
 # Bundled CI workflow for the basic-delivery example.
 #
-# The production Forgejo provisioner commits a COMMIT-MESSAGE-MARKER CI workflow
-# ("[ci-pass]") that only a deterministic fake worker can satisfy. This example
-# instead runs the REAL in-process coding agent (`temper run`), whose engineer
-# PR-head commits carry an ordinary message ("Implement ..."), not the demo
-# marker. So `run.sh` overrides the provisioned marker workflow with this one —
-# it commits this file onto the repo's default branch before `temper run` starts,
-# so a real product diff clears the landing CI gate and the bot can merge.
+# `temper init` intentionally creates an empty/non-auto-initialized repository and
+# does not seed project content. run.sh commits this file explicitly as
+# `.forgejo/workflows/ci.yml` in the repository's first default-branch commit,
+# alongside a tiny README, before `temper serve standalone` starts. That keeps CI
+# project-owned instead of provisioner-owned.
 #
 # It runs directly on the host (`runs-on: host`, no containers) because the
 # bundled forgejo-runner is registered in host mode. It checks out the PR head
