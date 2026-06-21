@@ -345,13 +345,21 @@ resolve_binaries() {
     # Refuse to run against a stale development binary.
     _init_help=$("$RUN_BIN" init --help 2>&1 || true)
     case "$_init_help" in
-        *--non-interactive*--provider-url*) ;;
-        *) die "temper binary is stale or incompatible: $RUN_BIN 'init' does not advertise --non-interactive/--provider-url. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+        *--non-interactive*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'init' does not advertise --non-interactive. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+    esac
+    case "$_init_help" in
+        *--provider-url*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'init' does not advertise --provider-url. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
     case "$_serve_help" in
-        *--config*--credentials*) ;;
-        *) die "temper binary is stale or incompatible: $RUN_BIN 'serve standalone' does not advertise --config/--credentials. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+        *--config*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'serve standalone' does not advertise --config. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
+    esac
+    case "$_serve_help" in
+        *--credentials*) ;;
+        *) die "temper binary is stale or incompatible: $RUN_BIN 'serve standalone' does not advertise --credentials. Re-run without TEMPER_SKIP_BUILD=1 or rebuild with cargo build -p $TEMPER_BUILD_PACKAGE." ;;
     esac
 
     # Pinned Forgejo + runner: env override, else the cached pinned path.

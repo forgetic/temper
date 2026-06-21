@@ -181,6 +181,24 @@ fn launcher_files_intake_after_serve_readiness() {
 }
 
 #[test]
+fn launcher_compatibility_checks_do_not_assume_help_flag_order() {
+    let script = read_example("run.sh");
+
+    assert!(script.contains("*--non-interactive*)"));
+    assert!(script.contains("*--provider-url*)"));
+    assert!(script.contains("*--config*)"));
+    assert!(script.contains("*--credentials*)"));
+    assert!(
+        !script.contains("*--non-interactive*--provider-url*"),
+        "the init help check must not depend on clap's flag display order"
+    );
+    assert!(
+        !script.contains("*--config*--credentials*"),
+        "the serve help check must not depend on clap's flag display order"
+    );
+}
+
+#[test]
 fn launcher_defaults_basic_forgejo_to_distinct_ports() {
     let script = read_example("run.sh");
     let config = read_example("config/temper.env");
