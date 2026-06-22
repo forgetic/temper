@@ -1,10 +1,10 @@
 //! Static (source-level) assertions for the `examples/reference-delivery`
 //! launcher.
 //!
-//! The reference demo should dogfood the long-term UX surface in the same style
-//! as `examples/basic-delivery`: provision with `temper init --apply --yes`, run
-//! with `temper serve standalone`, and keep demo-only Forgejo setup out of the
-//! Temper command surface.
+//! The default reference demo should dogfood the long-term UX surface in the same
+//! style as `examples/basic-delivery`: provision with `temper init --apply --yes`
+//! and run with `temper serve standalone`. The same launcher also exposes a
+//! separate fixed multi-repo fan-out mode.
 
 use std::{fs, path::PathBuf};
 
@@ -43,17 +43,21 @@ fn read_example(relative: &str) -> String {
 }
 
 #[test]
-fn launcher_uses_init_apply_and_serve_standalone_only() {
+fn launcher_uses_init_apply_and_serve_standalone_for_default_start() {
     let script = read_example("run.sh");
+    let cmd_start = script
+        .split("cmd_start() {")
+        .nth(1)
+        .expect("cmd_start function exists");
 
-    assert!(script.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" \\\n                init --non-interactive --force --apply --yes"));
-    assert!(script.contains("--workflow \"$WORKFLOW_PATH\""));
-    assert!(script.contains(
+    assert!(cmd_start.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" \\\n                init --non-interactive --force --apply --yes"));
+    assert!(cmd_start.contains("--workflow \"$WORKFLOW_PATH\""));
+    assert!(cmd_start.contains(
         "\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" serve standalone"
     ));
 
-    assert!(!script.contains("provision-forgejo"));
-    assert!(!script.contains("validate-reference-delivery"));
+    assert!(!cmd_start.contains("provision-forgejo"));
+    assert!(!cmd_start.contains("validate-reference-delivery"));
     assert!(!script.contains("\"$RUN_BIN\" daemon"));
     assert!(!script.contains("temper run"));
     assert!(!script.contains("FORGEJO_ACCESS_TOKEN"));
@@ -68,13 +72,32 @@ fn launcher_is_fixed_and_has_no_operator_env_config_file() {
     assert!(script.contains("DAEMON_BIND=127.0.0.1:38200"));
     assert!(script.contains("REPO=$OWNER/$NAME"));
     assert!(script.contains("JIG_FIXTURE_PATH=\"$JIG_REPO/fixtures/reference-delivery.json\""));
-    assert!(script.contains("The demo intentionally has no config knobs"));
+    assert!(script.contains("The single-repo demo intentionally has no config knobs"));
+    assert!(script.contains("MULTI_REPOS=\"$REPO $CANARY_REPO\""));
 
     assert!(!example_path("config/temper.env").exists());
     assert!(!script.contains("TEMPER_REFERENCE_DELIVERY_SCRIPT_DIR"));
     assert!(!script.contains("TEMPER_RUN_BIN"));
     assert!(!script.contains("SERVED_ROLES="));
-    assert!(!script.contains("REPOS="));
+}
+
+#[test]
+fn launcher_exposes_fixed_multi_repo_fanout_mode() {
+    let script = read_example("run.sh");
+
+    assert!(script.contains("multi-repo) cmd_multi_repo"));
+    assert!(script.contains("CANARY_NAME=service-canary"));
+    assert!(script.contains("CANARY_REPO=$OWNER/$CANARY_NAME"));
+    assert!(script.contains("cargo build -p temper-testing --bin temper-testing-worker"));
+    assert!(script.contains("\"$RUN_BIN\" provision-forgejo"));
+    assert!(script.contains("\"$WORKER_BIN\""));
+    assert!(script.contains("--repo \"$REPO\""));
+    assert!(script.contains("--repo \"$CANARY_REPO\""));
+    assert!(script.contains("--architect closing"));
+    assert!(script.contains("validate-reference-delivery"));
+    assert!(script.contains("--expected-children 2"));
+    assert!(script.contains("\"target_repo\": \"forgejo:$CANARY_REPO\""));
+    assert!(script.contains("validate-multi-repo) cmd_validate_multi_repo"));
 }
 
 #[test]

@@ -128,6 +128,16 @@ fn parent_with_landed_child_backrefs_and_correlation_passes() {
             )
             .await
             .expect("parent dependencies updated");
+        forge
+            .update_issue(
+                &parent.id,
+                UpdateIssue {
+                    state: Some(IssueState::Closed),
+                    ..UpdateIssue::default()
+                },
+            )
+            .await
+            .expect("parent closed after children");
 
         let report = validate_state(
             &forge,

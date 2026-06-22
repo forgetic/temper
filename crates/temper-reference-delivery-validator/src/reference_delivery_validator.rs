@@ -399,7 +399,7 @@ fn validate_child_distribution(
         let child_repo = dependency.resolved_repository(source_repo);
         if let Some(display) = repos
             .iter()
-            .find_map(|(display, repo_id)| (*repo_id == child_repo).then(|| display.clone()))
+            .find_map(|(display, repo_id)| (repo_id == &child_repo).then(|| display.clone()))
         {
             if let Some(count) = counts.get_mut(&display) {
                 *count = count.saturating_add(1);
@@ -424,6 +424,13 @@ fn validate_child_distribution(
     }
 }
 
+struct ChildValidationSummary {
+    total: usize,
+    landed: usize,
+    latest_child_closed: Option<DateTime<Utc>>,
+}
+
+async fn validate_children<F: Forge + ?Sized>(
     forge: &F,
     report: &mut ValidationReport,
     source_repo: &RepositoryId,
@@ -431,8 +438,9 @@ fn validate_child_distribution(
     config: &ValidatorConfig,
     dependencies: &[ArtifactRef],
     parent_blocked: bool,
-) -> Result<(), ForgeError> {
+) -> Result<ChildValidationSummary, ForgeError> {
     let mut landed = 0usize;
+    let mut latest_child_closed = None;
     for dependency in dependencies {
         let child_repo = dependency.resolved_repository(source_repo);
         let child_display = display_repo_id(repos, &child_repo);
@@ -448,6 +456,19 @@ fn validate_child_distribution(
         };
         if child.state == IssueState::Closed {
             landed = landed.saturating_add(1);
+            match child.closed_at {
+                Some(closed_at) => {
+                    latest_child_closed = Some(
+                        latest_child_closed
+                            .map(|latest| latest.max(closed_at))
+                            .unwrap_or(closed_at),
+                    );
+                }
+                None => report.missing(format!(
+                    "closed child dependency {child_display}#{} has a closed_at timestamp",
+                    child.number
+                )),
+            }
         }
         validate_child_metadata(
             report,
@@ -459,7 +480,11 @@ fn validate_child_distribution(
         );
     }
     if dependencies.is_empty() {
-        return Ok(());
+        return Ok(ChildValidationSummary {
+            total: 0,
+            landed: 0,
+            latest_child_closed: None,
+        });
     }
     let landed_summary = format!(
         "child landed count {landed}/{} (closed issues count as landed dependency targets)",
@@ -484,7 +509,56 @@ fn validate_child_distribution(
             "mechanical_reconciliation events"
         ));
     }
-    Ok(())
+    Ok(ChildValidationSummary {
+        total: dependencies.len(),
+        landed,
+        latest_child_closed,
+    })
+}
+
+fn validate_parent_resolution(
+    report: &mut ValidationReport,
+    config: &ValidatorConfig,
+    parent: &Issue,
+    children: &ChildValidationSummary,
+) {
+    if children.total == 0 || children.landed != children.total {
+        return;
+    }
+    if parent.state == IssueState::Closed {
+        report.ok(format!(
+            "parent {}#{} is closed after all children landed",
+            display_path(&config.source_repo),
+            config.parent_number
+        ));
+    } else {
+        report.missing(format!(
+            "parent {}#{} is closed after all children landed",
+            display_path(&config.source_repo),
+            config.parent_number
+        ));
+        return;
+    }
+    let Some(latest_child_closed) = children.latest_child_closed else {
+        return;
+    };
+    match parent.closed_at {
+        Some(parent_closed) if parent_closed >= latest_child_closed => report.ok(format!(
+            "parent {}#{} closed no earlier than the latest child landing",
+            display_path(&config.source_repo),
+            config.parent_number
+        )),
+        Some(parent_closed) => report.missing(format!(
+            "parent {}#{} closed at {parent_closed} before latest child landing {latest_child_closed}",
+            display_path(&config.source_repo),
+            config.parent_number
+        )),
+        None => report.missing(format!(
+            "closed parent {}#{} has a closed_at timestamp",
+            display_path(&config.source_repo),
+            config.parent_number
+        )),
+    }
 }
 
 fn validate_child_metadata(
