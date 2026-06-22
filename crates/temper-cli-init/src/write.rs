@@ -169,6 +169,28 @@ pub fn provisioned_forge_users(
     answers: &Answers,
     outcome: &ProvisionOutcome,
 ) -> BTreeMap<String, temper_config::ForgeUser> {
+    let mut forge_users = provisioned_role_and_bot_users(outcome);
+    // The admin identity (Q4): its token is minted from the password during
+    // provisioning, but the *credentials* we write store the admin's own token
+    // and password so the daemon authenticates as the admin by default. Insert
+    // it under the admin user key referenced by `[forge] admin`.
+    forge_users.insert(
+        answers.admin_user.clone(),
+        temper_config::forge_user(
+            None,
+            None,
+            Some(answers.admin_password.clone()),
+            Some(outcome.admin_token.clone()),
+        ),
+    );
+    forge_users
+}
+
+/// Maps the provisioned role identities plus the automation bot into
+/// `[forge.users.*]` entries, leaving the admin/default identity to the caller.
+pub fn provisioned_role_and_bot_users(
+    outcome: &ProvisionOutcome,
+) -> BTreeMap<String, temper_config::ForgeUser> {
     let provisioned = &outcome.provisioned;
     // Map the provisioned role + bot identities into the plain-data seam type,
     // keyed by user/role name, then fold them into forge.users credentials.
@@ -197,21 +219,7 @@ pub fn provisioned_forge_users(
         },
     );
 
-    let mut forge_users = forge_users_from_provisioned(&provisioned_users);
-    // The admin identity (Q4): its token is minted from the password during
-    // provisioning, but the *credentials* we write store the admin's own token
-    // and password so the daemon authenticates as the admin by default. Insert
-    // it under the admin user key referenced by `[forge] admin`.
-    forge_users.insert(
-        answers.admin_user.clone(),
-        temper_config::forge_user(
-            None,
-            None,
-            Some(answers.admin_password.clone()),
-            Some(outcome.admin_token.clone()),
-        ),
-    );
-    forge_users
+    forge_users_from_provisioned(&provisioned_users)
 }
 
 fn write_credentials_with_users(

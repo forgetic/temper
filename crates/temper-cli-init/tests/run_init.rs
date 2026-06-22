@@ -83,6 +83,8 @@ fn run_init_collects_writes_and_provisions_offline() {
         },
         force: false,
         existing_repo: false,
+        apply: true,
+        yes: true,
         workspace: None,
         ..Default::default()
     };
@@ -197,6 +199,8 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
             credentials: Some(credentials_path.clone()),
         },
         topology: InitTopology::Standalone,
+        apply: true,
+        yes: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
             repo: Some(RepoSelection {
@@ -272,6 +276,8 @@ fn run_init_refuses_to_clobber_without_force() {
         },
         force: false,
         existing_repo: false,
+        apply: true,
+        yes: true,
         workspace: None,
         ..Default::default()
     };
@@ -300,6 +306,8 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
             credentials: Some(credentials_path.clone()),
         },
         non_interactive: true,
+        apply: true,
+        yes: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
             repo: Some(RepoSelection {
@@ -397,6 +405,8 @@ fn non_interactive_flag_off_ignores_env_overrides() {
             credentials: Some(dir.path().join("credentials.toml")),
         },
         non_interactive: false, // NOT non-interactive
+        apply: true,
+        yes: true,
         overrides: InitOverrides {
             // These would be populated from env in main(), but should be
             // ignored since non_interactive is false.

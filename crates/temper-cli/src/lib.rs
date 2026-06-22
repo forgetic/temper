@@ -2,8 +2,8 @@
 
 //! The unified `temper` command line — a thin dispatcher.
 //!
-//! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `config`,
-//! `serve`, `daemon`, `agent` — and to the hidden operator/responder tools. Each
+//! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `apply`,
+//! `config`, `serve`, `daemon`, `agent` — and to the hidden operator/responder tools. Each
 //! subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
 //! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
 //! dispatch table and the operator/responder wrappers, so the heavy
@@ -37,7 +37,8 @@ the source of truth.
 Usage: temper [OPTIONS] [COMMAND]
 
 Commands:
-  init    Interactively configure and provision a deployment
+  init    Interactively configure a deployment bundle
+  apply   Provision a deployment bundle on the forge
   serve   Run a long-lived Temper process (standalone supported)
   config  Guided or programmatic configuration
   daemon  Run a full standalone daemon or one of its components (engine, worker)
@@ -135,7 +136,7 @@ fn apply_global_args(command: &str, rest: Vec<String>, globals: Vec<String>) -> 
         return rest;
     }
     match command {
-        "init" | "daemon" => prepend_globals(globals, rest),
+        "init" | "apply" | "daemon" => prepend_globals(globals, rest),
         // These commands reserve argv[0] after the command for a nested action
         // (`config validate`) or component (`serve standalone`), so global flags
         // must be inserted after that token rather than before it.
@@ -170,6 +171,7 @@ pub fn dispatch(
 ) -> ExitCode {
     match command {
         "init" => temper_cli_init::main(args, env, paths),
+        "apply" => temper_cli_init::apply_main(args, env, paths),
         "serve" => temper_cli_daemon::serve_main(args, env, paths),
         "config" => temper_cli_config::main(temper_cli_config::ConfigInputs { args, env, paths }),
         "daemon" => temper_cli_daemon::main(args, env, paths),
