@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Step 4 of `temper init`: provision the forge — the one step that touches a
-//! network and a runtime.
+//! Optional apply step of `temper init` / `temper apply`: provision the forge —
+//! the one step that touches a network and a runtime.
 //!
 //! It is hidden behind the [`Provisioner`] trait so [`run_init`](crate::run_init)
 //! can be exercised offline: production uses [`ForgejoProvisioner`] (mints an

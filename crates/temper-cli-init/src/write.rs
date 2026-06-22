@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Steps 2/3/5 of `temper init`: build the on-disk artifacts (pure), preflight
-//! every target up front, write them, then write credentials from the
-//! provisioning result.
+//! Steps 2/3/4 of `temper init`: build the on-disk artifacts (pure), preflight
+//! every target up front, write them, then write local or provisioned
+//! credentials.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

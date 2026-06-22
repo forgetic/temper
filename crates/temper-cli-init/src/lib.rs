@@ -25,8 +25,9 @@
 //!
 //! ## The live-forge seam
 //!
-//! Steps 1–3, 5, 6 are pure-ish (prompts + disk only); only step 4 needs a forge
-//! and a runtime. [`run_init`] takes a `&mut dyn Provisioner` so the live call is
+//! Steps 1–4 and 6 are local (prompts + disk only); only the optional apply
+//! portion of step 5 needs a forge and a runtime. [`run_init`] takes a
+//! `&mut dyn Provisioner` so the live call is
 //! injectable: [`main`] passes [`ForgejoProvisioner`] (mints an admin token and
 //! calls the Forgejo adapter on a real runtime); the unit test passes a stub
 //! that returns a canned [`Provisioned`] without touching a network. Issue #183's
@@ -335,8 +336,10 @@ mod tests {
     use super::USAGE;
 
     #[test]
-    fn usage_documents_workspace_flag() {
+    fn usage_documents_workspace_and_apply_flags() {
         assert!(USAGE.contains("--workspace"), "{USAGE}");
         assert!(USAGE.contains("Per-job worker workspace root"), "{USAGE}");
+        assert!(USAGE.contains("--apply"), "{USAGE}");
+        assert!(USAGE.contains("--yes"), "{USAGE}");
     }
 }

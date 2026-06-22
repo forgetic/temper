@@ -6,8 +6,8 @@
 //! `temper-cli-init` stubs the live-forge step, this test swaps in the **real**
 //! [`ForgejoProvisioner`] and runs the whole flow end to end:
 //!
-//!   collect (scripted answers) → write local files → provision the live forge
-//!   → write credentials → summarize
+//!   collect (scripted answers) → write local files → apply/provision the live forge
+//!   → update credentials → summarize
 //!
 //! and then asserts BOTH sides of the seam:
 //!
@@ -77,7 +77,7 @@ const DUMMY_DEEPSEEK_KEY: &str = "sk-init-e2e-dummy";
 const DAEMON_BOOT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[test]
-#[ignore = "boots a real Forgejo fixture and provisions it via `temper init`; run with --ignored"]
+#[ignore = "boots a real Forgejo fixture and provisions it via `temper init --apply`; run with --ignored"]
 fn init_forgejo_drives_a_working_setup() {
     let _e2e_lock = e2e_lock::acquire();
     let started = Instant::now();
@@ -117,6 +117,8 @@ fn init_forgejo_drives_a_working_setup() {
         },
         force: false,
         existing_repo: false,
+        apply: true,
+        yes: true,
         workspace: Some(workspace_dir.path().to_path_buf()),
         ..Default::default()
     };

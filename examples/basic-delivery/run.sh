@@ -2,7 +2,7 @@
 # Fixed, minimal launcher for the basic-delivery happy-path demo.
 #
 # It boots throwaway Forgejo + forgejo-runner, starts the local jig fake LLM,
-# runs `temper init`, commits the tiny demo project/CI baseline, launches
+# runs `temper init --apply --yes`, commits the tiny demo project/CI baseline, launches
 # `temper serve standalone`, then files one site-admin intake issue after the
 # webhook listener is ready.
 
@@ -133,6 +133,8 @@ resolve_binaries() {
 
     _init_help=$("$RUN_BIN" init --help 2>&1 || true)
     case "$_init_help" in *--non-interactive*) ;; *) die 'temper init lacks --non-interactive' ;; esac
+    case "$_init_help" in *--apply*) ;; *) die 'temper init lacks --apply' ;; esac
+    case "$_init_help" in *--yes*) ;; *) die 'temper init lacks --yes' ;; esac
     case "$_init_help" in *--provider-url*) ;; *) die 'temper init lacks --provider-url' ;; esac
     case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
@@ -285,13 +287,13 @@ bootstrap_admin() {
 }
 
 run_temper_init() {
-    log "running temper init --non-interactive for $REPO ..."
+    log "running temper init --apply --yes --non-interactive for $REPO ..."
     : >"$LOG_DIR/init.log"
     : >"$LOG_DIR/provision.log"
     (
         TEMPER_INIT_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         TEMPER_INIT_PROVIDER_KEY="$INIT_PROVIDER_KEY" \
-            "$RUN_BIN" init --non-interactive --force \
+            "$RUN_BIN" init --non-interactive --force --apply --yes \
                 --forge "$BASE_URL" \
                 --repo "$REPO" \
                 --bind "$DAEMON_BIND" \
@@ -309,12 +311,12 @@ run_temper_init() {
     [ -f "$WEBHOOK_SECRET_FILE" ] || die "temper init did not write $WEBHOOK_SECRET_FILE"
 
     {
-        printf 'repo=%s initialized_by=temper_init config=%s credentials=%s workflow=%s webhook_secret=%s\n' \
+        printf 'repo=%s initialized_by=temper_init_apply config=%s credentials=%s workflow=%s webhook_secret=%s\n' \
             "$REPO" "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH" "$WEBHOOK_SECRET_FILE"
         printf 'repo=%s webhook registered url=%s\n' "$REPO" "$WEBHOOK_URL"
         printf 'repo=%s provider=deepseek provider_url=%s fixture=%s\n' "$REPO" "$JIG_PROVIDER_URL" "$JIG_FIXTURE_PATH"
     } >>"$LOG_DIR/provision.log"
-    log "temper init wrote config/credentials and registered $WEBHOOK_URL"
+    log "temper init --apply wrote config/credentials and registered $WEBHOOK_URL"
 }
 
 percent_encode() {

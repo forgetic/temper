@@ -3,7 +3,8 @@
 //! The unified `temper` command line — a thin dispatcher.
 //!
 //! [`run`] dispatches `argv[1]` to the headline subcommands — `init`, `apply`,
-//! `config`, `serve`, `daemon`, `agent` — and to the hidden operator/responder tools. Each
+//! `config`, `serve`, `daemon`, `agent` — and to the hidden operator/responder
+//! tools. Each
 //! subcommand lives in its own crate (`temper-cli-init`, `temper-cli-config`,
 //! `temper-cli-daemon`, `temper-agent-session`); this crate owns only the
 //! dispatch table and the operator/responder wrappers, so the heavy
@@ -211,6 +212,7 @@ mod tests {
 
     #[test]
     fn top_level_usage_lists_serve_command() {
+        assert!(USAGE.contains("apply"));
         assert!(USAGE.contains("serve"));
         assert!(USAGE.contains("standalone supported"));
         assert!(USAGE.contains("--secrets"));
@@ -237,6 +239,30 @@ mod tests {
                 "deploy/config.toml".to_string(),
                 "--secrets".to_string(),
                 "deploy/credentials.toml".to_string(),
+            ]
+        );
+    }
+
+    fn global_options_are_prepended_for_apply() {
+        let args = apply_global_args(
+            "apply",
+            vec!["--yes".to_string()],
+            vec![
+                "--config".to_string(),
+                "deploy/config.toml".to_string(),
+                "--secrets".to_string(),
+                "deploy/credentials.toml".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "--config".to_string(),
+                "deploy/config.toml".to_string(),
+                "--secrets".to_string(),
+                "deploy/credentials.toml".to_string(),
+                "--yes".to_string(),
             ]
         );
     }

@@ -18,10 +18,11 @@ alone.
 2. It starts local jig from `~/src/rust/jig` with
    `fixtures/basic-delivery.json` and uses the printed URL as Temper's
    DeepSeek-compatible provider URL.
-3. It creates the Forgejo site admin, then runs `temper init --non-interactive`
-   with the fixed repo, forge URL, bind address, admin user, provider, config,
-   and secrets paths. Init provisions the empty repo, labels, webhook, and
-   writes `run/config.toml`, `run/credentials.toml`, `run/workflow.json`, and
+3. It creates the Forgejo site admin, then runs
+   `temper init --non-interactive --apply --yes` with the fixed repo, forge URL,
+   bind address, admin user, provider, config, and secrets paths. The explicit
+   apply step provisions the empty repo, labels, webhook, and writes
+   `run/config.toml`, `run/credentials.toml`, `run/workflow.json`, and
    `run/webhook-secret`.
 4. Because init does not seed project content, `run.sh` creates the initial
    default-branch commit explicitly: a tiny `README.md` plus

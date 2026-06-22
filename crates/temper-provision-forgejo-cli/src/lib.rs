@@ -2,7 +2,7 @@
 //! subcommand.
 //!
 //! This is **reference-delivery demo / operator tooling**, not a product
-//! feature: `temper init` provisions a real deployment by inlining
+//! feature: `temper init --apply` / `temper apply` provision a real deployment by inlining
 //! `temper-provision` directly. This crate keeps the demo launcher / ignored
 //! e2e operator path working: it builds a forge handle, distills a
 //! [`ProvisionPlan`](temper_provision::ProvisionPlan) (with the demo CI seed
