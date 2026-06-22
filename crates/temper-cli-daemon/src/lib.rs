@@ -211,25 +211,22 @@ fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocation, String> 
 }
 
 fn parse_serve_standalone(args: Vec<String>) -> Result<ServeInvocation, String> {
-    for arg in args {
-        match arg.as_str() {
-            "-h" | "--help" | "help" => return Ok(ServeInvocation::StandaloneHelp),
-            "-V" | "--version" => return Ok(ServeInvocation::Version),
-            "--service" => {
-                return Err(
-                    "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
-                        .to_string(),
-                );
-            }
-            "-c" | "--config" | "--secrets" => {
-                return Err(format!(
-                    "`{arg}` is a global option; place it before `serve`"
-                ));
-            }
-            other => return Err(format!("unexpected argument `{other}`")),
-        }
+    let Some(arg) = args.into_iter().next() else {
+        return Ok(ServeInvocation::Standalone);
+    };
+
+    match arg.as_str() {
+        "-h" | "--help" | "help" => Ok(ServeInvocation::StandaloneHelp),
+        "-V" | "--version" => Ok(ServeInvocation::Version),
+        "--service" => Err(
+            "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
+                .to_string(),
+        ),
+        "-c" | "--config" | "--secrets" => Err(format!(
+            "`{arg}` is a global option; place it before `serve`"
+        )),
+        other => Err(format!("unexpected argument `{other}`")),
     }
-    Ok(ServeInvocation::Standalone)
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
