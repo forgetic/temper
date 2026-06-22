@@ -48,9 +48,9 @@ child code issue per target repo.
 - A host where the runner may execute host-mode jobs directly. No containers.
 
 `run.sh` builds the needed development-profile binaries by default: the unified
-`temper` binary (`cargo build -p temper`) and the deterministic jig helper
-(`cargo build -p temper-testing --bin temper-reference-delivery-jig`). Set
-`TEMPER_SKIP_BUILD=1` only when those paths are already current.
+`temper` binary (`cargo build -p temper`) and the vanilla jig standalone server
+from the sibling jig checkout (`cargo build -p jig`). Set `TEMPER_SKIP_BUILD=1`
+only when those paths are already current.
 
 ## Layout
 
@@ -129,8 +129,10 @@ Edit `config/temper.env` or export variables before launch:
 - `REPOS="owner/a owner/b"` — repo set served by the run.
 - `CROSS_REPO_INTAKE=auto|1|0` — one parent fan-out issue or independent intakes.
 - `SERVED_ROLES="architect engineer reviewer"` — the workflow roles the run serves.
-- `TEMPER_REFERENCE_DELIVERY_JIG_BIN=/path/to/temper-reference-delivery-jig` —
-  override the jig helper path when using `TEMPER_SKIP_BUILD=1`.
+- `TEMPER_JIG_REPO=/path/to/jig`, `TEMPER_JIG_BIN=/path/to/jig`, or
+  `TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE=/path/to/reference-delivery.json` —
+  override the vanilla jig checkout, binary, or fixture when using
+  nonstandard paths or `TEMPER_SKIP_BUILD=1`.
 - `RUN_MAX_ITERATIONS=8` — max jig-backed agent iterations per job.
 - `DAEMON_POLL_CADENCE_SECS=120` — long poll backstop; webhooks drive prompt
   progress. **Do not shorten this** to compensate for webhooks.
@@ -162,6 +164,7 @@ If a run is force-killed, clean up possible orphans:
 pkill -f forgejo
 pkill -f forgejo-runner
 pkill -f 'target/debug/temper'
+pkill -f 'target/debug/jig'
 rm -rf examples/reference-delivery/run
 ```
 

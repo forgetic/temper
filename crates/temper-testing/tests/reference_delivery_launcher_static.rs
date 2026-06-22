@@ -164,7 +164,10 @@ fn launcher_passes_workflow_and_serves_reviewer() {
     assert!(boot_run.contains("provider = \"$_provider\""));
     assert!(boot_run.contains("[agent.providers.deepseek]"));
     assert!(boot_run.contains("url = \"$JIG_URL\""));
-    assert!(config.contains("TEMPER_REFERENCE_DELIVERY_JIG_BIN="));
+    assert!(config.contains("TEMPER_JIG_REPO="));
+    assert!(config.contains("TEMPER_JIG_BIN="));
+    assert!(config.contains("TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE="));
+    assert!(!config.contains("TEMPER_REFERENCE_DELIVERY_JIG_BIN="));
     assert!(!script.contains("TEMPER_RUN_AUTH"));
     // Roles (incl. reviewer) and repos are rendered into the config's TOML arrays.
     assert!(boot_run.contains("$SERVED_ROLES"));
@@ -247,6 +250,13 @@ fn launcher_runs_a_single_temper_run_process() {
     assert!(!script.contains("anvil-agent"));
     assert!(!script.contains("--agent-command"));
 
-    assert!(script.contains("temper-reference-delivery-jig"));
+    assert!(!script.contains("temper-reference-delivery-jig"));
+    assert!(script.contains("JIG_REPO=${TEMPER_JIG_REPO:-$HOME/src/rust/jig}"));
+    assert!(script.contains("JIG_BIN=${TEMPER_JIG_BIN:-$JIG_REPO/target/debug/jig}"));
+    assert!(script.contains("fixtures/reference-delivery.json"));
+    assert!(script.contains("cargo build -p jig"));
+    assert!(script.contains("\"$JIG_BIN\" \"$JIG_FIXTURE_PATH\""));
+    assert!(script.contains("JIG_URL=$(sed -n"));
+    assert!(script.contains("do not add /v1"));
     assert!(script.contains("\"$RUN_BIN\" daemon --config"));
 }

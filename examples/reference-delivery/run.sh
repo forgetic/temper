@@ -40,6 +40,7 @@
 #       pkill -f forgejo
 #       pkill -f forgejo-runner
 #       pkill -f 'target/debug/temper'
+#       pkill -f 'target/debug/jig'
 #       rm -rf examples/reference-delivery/run
 #
 # POSIX sh only (no bashisms). Validate with `sh -n run.sh` (and shellcheck).
@@ -67,7 +68,7 @@ SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
 JIG_PID_FILE="$RUN_DIR/jig.pid"
-JIG_URL_FILE="$RUN_DIR/jig-url"
+JIG_STDIN="$RUN_DIR/jig.stdin"
 # The provisioner writes the live forge identities in the runtime's own
 # credentials.toml format ([forge.users.<role>] + a bot user). The daemon loads
 # it via `temper daemon --secrets`; the launcher only reads a couple of
@@ -184,7 +185,7 @@ cleanup() {
     # re-run starts fresh; keep logs/ for inspection.
     rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" \
         "$RUN_DIR/ci-seed" "$RUN_DIR/workspaces" \
-        "$RUN_DIR/cross-repo-intake.md" "$JIG_URL_FILE" \
+        "$RUN_DIR/cross-repo-intake.md" "$JIG_STDIN" \
         "$RUN_DIR"/run.sh.snapshot.* \
         2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
@@ -206,7 +207,7 @@ CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL DAEMON_BIND WEBHOOK_URL \
 DAEMON_POLL_CADENCE_SECS DAEMON_MECHANICAL_CADENCE_SECS DAEMON_LEASE_TTL_SECS RUN_SECS \
 RUN_MAX_ITERATIONS \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
-TEMPER_RUN_BIN TEMPER_REFERENCE_DELIVERY_JIG_BIN TEMPER_BUILD_PACKAGE"
+TEMPER_RUN_BIN TEMPER_JIG_REPO TEMPER_JIG_BIN TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE TEMPER_BUILD_PACKAGE"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -286,7 +287,9 @@ load_config() {
     TEMPER_FORGEJO_BINARY=${TEMPER_FORGEJO_BINARY:-}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
     TEMPER_RUN_BIN=${TEMPER_RUN_BIN:-}
-    TEMPER_REFERENCE_DELIVERY_JIG_BIN=${TEMPER_REFERENCE_DELIVERY_JIG_BIN:-}
+    TEMPER_JIG_REPO=${TEMPER_JIG_REPO:-}
+    TEMPER_JIG_BIN=${TEMPER_JIG_BIN:-}
+    TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE=${TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper}
 
     require_positive_int DAEMON_POLL_CADENCE_SECS "$DAEMON_POLL_CADENCE_SECS"
@@ -365,11 +368,16 @@ load_config() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
+    command -v mkfifo >/dev/null 2>&1 || die 'mkfifo is required'
+
     # One unified binary provides the runtime: `temper daemon` (engine + worker
     # + agent), `temper provision-forgejo`, and `temper validate-reference-delivery`.
-    # A small temper-testing binary provides the local deterministic jig LLM.
+    # The deterministic LLM is the vanilla jig standalone server from the sibling
+    # jig checkout, loaded with the reference-delivery fixture.
     RUN_BIN=${TEMPER_RUN_BIN:-$WORKSPACE_ROOT/target/debug/temper}
-    JIG_BIN=${TEMPER_REFERENCE_DELIVERY_JIG_BIN:-$WORKSPACE_ROOT/target/debug/temper-reference-delivery-jig}
+    JIG_REPO=${TEMPER_JIG_REPO:-$HOME/src/rust/jig}
+    JIG_BIN=${TEMPER_JIG_BIN:-$JIG_REPO/target/debug/jig}
+    JIG_FIXTURE_PATH=${TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE:-$JIG_REPO/fixtures/reference-delivery.json}
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
@@ -378,14 +386,17 @@ resolve_binaries() {
         log "ensuring the Temper development binary is current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
         ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) \
             || die 'Temper cargo build failed'
-        log 'ensuring the reference-delivery jig binary is current (cargo build -p temper-testing --bin temper-reference-delivery-jig)...'
-        ( cd "$WORKSPACE_ROOT" && cargo build -p temper-testing --bin temper-reference-delivery-jig ) \
-            || die 'reference-delivery jig cargo build failed'
+        [ -d "$JIG_REPO" ] || die "jig checkout not found: $JIG_REPO"
+        log 'ensuring the jig development binary is current (cargo build -p jig)...'
+        ( cd "$JIG_REPO" && cargo build -p jig ) \
+            || die 'jig cargo build failed'
     fi
 
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
-    [ -x "$JIG_BIN" ] || die "reference-delivery jig binary not found: $JIG_BIN
-       Re-run without TEMPER_SKIP_BUILD=1, or set TEMPER_REFERENCE_DELIVERY_JIG_BIN."
+    [ -x "$JIG_BIN" ] || die "jig binary not found: $JIG_BIN
+       Re-run without TEMPER_SKIP_BUILD=1, or set TEMPER_JIG_BIN."
+    [ -f "$JIG_FIXTURE_PATH" ] || die "jig reference-delivery fixture not found: $JIG_FIXTURE_PATH
+       Update the jig checkout or set TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE."
 
     # This example requires the runtime workflow provisioner subcommand and the
     # config-driven `temper daemon` command (engine + worker + agent in one
@@ -755,21 +766,25 @@ apply_demo_ci() {
 
 boot_jig() {
     mkdir -p "$RUN_DIR" "$LOG_DIR"
-    rm -f "$JIG_URL_FILE"
-    log 'starting deterministic jig LLM for architect/engineer/reviewer roles ...'
-    "$JIG_BIN" --url-file "$JIG_URL_FILE" >"$LOG_DIR/jig.log" 2>&1 &
+    : >"$LOG_DIR/jig.log"
+    rm -f "$JIG_STDIN"
+    mkfifo "$JIG_STDIN"
+    log "starting vanilla jig fake LLM from $JIG_FIXTURE_PATH ..."
+    "$JIG_BIN" "$JIG_FIXTURE_PATH" <>"$JIG_STDIN" >"$LOG_DIR/jig.log" 2>&1 &
     JIG_PID=$!
     echo "$JIG_PID" >"$JIG_PID_FILE"
 
     _i=0
-    while [ ! -s "$JIG_URL_FILE" ]; do
-        kill -0 "$JIG_PID" 2>/dev/null || die "reference-delivery jig exited during startup (see logs/jig.log)"
+    JIG_URL=
+    while [ -z "$JIG_URL" ]; do
+        kill -0 "$JIG_PID" 2>/dev/null || die "jig exited during startup (see logs/jig.log)"
+        JIG_URL=$(sed -n 's#^\(http://[^[:space:]]*\).*#\1#p' "$LOG_DIR/jig.log" 2>/dev/null | sed -n '1p')
+        [ -n "$JIG_URL" ] && break
         _i=$((_i + 1))
-        [ "$_i" -gt 100 ] && die "reference-delivery jig did not become ready (see logs/jig.log)"
+        [ "$_i" -gt 100 ] && die "jig did not print a base URL (see logs/jig.log)"
         sleep_short
     done
-    JIG_URL=$(sed -n '1p' "$JIG_URL_FILE")
-    [ -n "$JIG_URL" ] || die "reference-delivery jig wrote an empty URL (see logs/jig.log)"
+    # DeepSeek appends /chat/completions itself; jig serves that route at this base, so do not add /v1.
     log "jig LLM ready at $JIG_URL (pid $JIG_PID)"
 }
 

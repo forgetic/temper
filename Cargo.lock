@@ -1907,8 +1907,6 @@ dependencies = [
  "base64",
  "bench-forgejo",
  "chrono",
- "jig-core",
- "jig-server",
  "serde",
  "serde_json",
  "sha2",
