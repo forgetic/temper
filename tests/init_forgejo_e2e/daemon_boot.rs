@@ -15,13 +15,13 @@ pub(super) fn assert_daemon_boots(
     let log_path = scratch_dir.join("engine-boot.log");
     let log = std::fs::File::create(&log_path).expect("create engine boot log");
     let mut child = Command::new(env!("CARGO_BIN_EXE_temper"))
-        .arg("daemon")
-        .arg("--service")
-        .arg("engine")
         .arg("--config")
         .arg(config_path)
         .arg("--secrets")
         .arg(credentials_path)
+        .arg("daemon")
+        .arg("--service")
+        .arg("engine")
         .env_remove("FORGEJO_URL")
         .env_remove("FORGEJO_ACCESS_TOKEN")
         .env_remove("FORGEJO_DEFAULT_REPO")
