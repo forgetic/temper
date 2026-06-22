@@ -256,15 +256,7 @@ pub async fn validate_state<F: Forge + ?Sized>(
         dependencies.len(),
         config.expected_children,
     );
-    validate_parent_uniqueness(
-        forge,
-        &mut report,
-        source_repo,
-        &repos,
-        config,
-        &parent,
-    )
-    .await?;
+    validate_parent_uniqueness(forge, &mut report, source_repo, &repos, config, &parent).await?;
     validate_child_distribution(&mut report, source_repo, &repos, &dependencies);
     let child_summary = validate_children(
         forge,

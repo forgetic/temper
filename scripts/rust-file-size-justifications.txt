@@ -26,6 +26,10 @@ crates/temper-workflow/tests/execution.rs
 # Worker automation has many constructor-style helpers around one role flow.
 crates/temper-runner/src/worker/automation.rs
 
+# Reference-delivery validator keeps one operator-facing validation flow and
+# its helper checks together for readable diagnostic sequencing.
+crates/temper-reference-delivery-validator/src/reference_delivery_validator.rs
+
 # Memory/filesystem backend contract tests retain grouped backend behavior.
 crates/temper-forge-memory/tests/backend.rs
 crates/temper-forge-filesystem/tests/issues.rs
