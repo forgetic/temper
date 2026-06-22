@@ -16,8 +16,7 @@
 //!   [`expand_tilde`], [`resolve_targets`]/[`FileTargets`]).
 //!
 //! The common config-flag types are re-exported so a subcommand crate need not
-//! also depend on `temper-config` just for `--config`/`--credentials`/`--secrets`
-//! parsing.
+//! also depend on `temper-config` just for `--config`/`--secrets` parsing.
 
 mod prompt;
 
@@ -159,13 +158,13 @@ pub struct FileTargets {
 }
 
 /// Resolves both file targets from [`LoadOptions`], failing when a default path
-/// cannot be determined (no `--config`/`--credentials`/`--secrets`, no env
-/// override, no `HOME`/`XDG_CONFIG_HOME`).
+/// cannot be determined (no `--config`/`--secrets`, no env override, no
+/// `HOME`/`XDG_CONFIG_HOME`).
 ///
 /// This is the single place a CLI turns "where should I read/write?" into
-/// concrete paths, honoring the same `--config` / `--credentials` / `--secrets`
-/// / env / default precedence the loader uses. The environment is injected (the
-/// snapshot `src/bin` took): this helper never reads `std::env`.
+/// concrete paths, honoring the same `--config` / `--secrets` / default
+/// precedence the loader uses. The environment is injected (the snapshot
+/// `src/bin` took): this helper never reads `std::env`.
 pub fn resolve_targets(
     options: &LoadOptions,
     env: &dyn EnvLookup,

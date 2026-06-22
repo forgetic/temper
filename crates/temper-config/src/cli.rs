@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Shared parsing for the `--config` / `--credentials` / `--secrets` flags every
-//! temper binary accepts, so the slim per-service binaries stay one-liners and
-//! the unified binary parses these the same way.
+//! Shared parsing for the `--config` / `--secrets` flags every temper binary
+//! accepts, so the slim per-service binaries stay one-liners and the unified
+//! binary parses these the same way.
 
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use crate::LoadOptions;
 /// The common flags parsed off a binary's argument list.
 #[derive(Debug, Clone, Default)]
 pub struct CommonArgs {
-    /// `--config` / `--credentials` / `--secrets` paths.
+    /// `--config` / `--secrets` paths.
     pub options: LoadOptions,
     /// `-h` / `--help` was given.
     pub help: bool,
@@ -22,9 +22,8 @@ pub struct CommonArgs {
     pub rest: Vec<String>,
 }
 
-/// Parses `--config <path>`, `--credentials <path>`, `--secrets <path>`,
-/// `-h`/`--help`, and `-V`/`--version`, collecting everything else into
-/// [`CommonArgs::rest`].
+/// Parses `--config <path>`, `--secrets <path>`, `-h`/`--help`, and
+/// `-V`/`--version`, collecting everything else into [`CommonArgs::rest`].
 pub fn parse_common_args(args: impl IntoIterator<Item = String>) -> Result<CommonArgs, String> {
     let mut parsed = CommonArgs::default();
     let mut iter = args.into_iter();
@@ -33,7 +32,7 @@ pub fn parse_common_args(args: impl IntoIterator<Item = String>) -> Result<Commo
             "--config" => {
                 parsed.options.config = Some(PathBuf::from(value(&mut iter, "--config")?));
             }
-            "--credentials" | "--secrets" => {
+            "--secrets" => {
                 parsed.options.credentials = Some(PathBuf::from(value(&mut iter, &arg)?));
             }
             "-h" | "--help" => parsed.help = true,
@@ -69,16 +68,20 @@ mod tests {
     }
 
     #[test]
-    fn credentials_flag_still_populates_credentials_option() {
+    fn unrecognized_secret_source_flags_are_left_for_callers_to_reject() {
         let parsed = parse_common_args([
-            "--credentials".to_string(),
+            "--old-secrets".to_string(),
             "legacy/credentials.toml".to_string(),
         ])
         .expect("parse succeeds");
 
+        assert_eq!(parsed.options.credentials, None);
         assert_eq!(
-            parsed.options.credentials,
-            Some(PathBuf::from("legacy/credentials.toml"))
+            parsed.rest,
+            vec![
+                "--old-secrets".to_string(),
+                "legacy/credentials.toml".to_string()
+            ]
         );
     }
 

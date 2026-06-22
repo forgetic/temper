@@ -7,9 +7,9 @@
 //! - the **config** file ([`Config`]) — non-secret deployment settings;
 //! - the **credentials** file ([`Credentials`]) — secrets.
 //!
-//! [`load`] reads both (honoring `--config` / `--secrets` / `--credentials`
-//! overrides and default `~/.config/temper` locations — no environment variable
-//! selects the files), validates each file's `schema_version`, then
+//! [`load`] reads both (honoring `--config` / `--secrets` overrides and default
+//! `~/.config/temper` locations — no environment variable selects the files),
+//! validates each file's `schema_version`, then
 //! [`resolve`](resolve::resolve)s everything — file, environment, and built-in
 //! defaults — into a [`Resolved`] the binary's adapters turn into runtime types.
 //!
@@ -75,7 +75,7 @@ pub use template::{config_template, credentials_template};
 pub struct LoadOptions {
     /// Explicit `--config` path.
     pub config: Option<PathBuf>,
-    /// Explicit `--credentials` / `--secrets` path.
+    /// Explicit `--secrets` path.
     pub credentials: Option<PathBuf>,
 }
 
@@ -188,15 +188,15 @@ pub const EX_USAGE: u8 = 64;
 
 /// The shared entry point for a slim per-service binary.
 ///
-/// Parses the common `--config` / `--credentials` / `--secrets` / `--help` /
-/// `--version` flags, loads + resolves the deployment from the **injected** environment
+/// Parses the common `--config` / `--secrets` / `--help` / `--version` flags,
+/// loads + resolves the deployment from the **injected** environment snapshot
 /// snapshot (`env` / `paths`, captured by the binary's composition root), and
 /// hands the [`Resolved`] to `run`. This is the *entire* body of each slim
 /// binary's `main` — the proof that a per-service binary needs no plumbing
 /// beyond naming its service, snapshotting its env, and naming its runner.
 ///
-/// Hermeticity: an explicit `--config` / `--credentials` / `--secrets`
-/// suppresses default `~/.config/temper` discovery (an empty [`PathResolver`] is
+/// Hermeticity: an explicit `--config` / `--secrets` suppresses default
+/// `~/.config/temper` discovery (an empty [`PathResolver`] is used). An explicit
 /// used). An explicit config root may load sibling `credentials.toml`, but the
 /// operator's global credentials never ambiently layer in behind an explicit
 /// deployment — matching the unified `temper daemon` path.

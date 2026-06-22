@@ -12,13 +12,13 @@
 //!
 //! - [`PathResolver`] — the home / XDG base directories, normally a snapshot of
 //!   the real environment built at the binary boundary ([`PathResolver::from_system`]);
-//! - [`LoadInputs`] — the explicit `--config` / `--credentials` / `--secrets`
-//!   overrides plus an injected [`EnvLookup`] and the [`PathResolver`].
+//! - [`LoadInputs`] — the explicit `--config` / `--secrets` overrides plus an
+//!   injected [`EnvLookup`] and the [`PathResolver`].
 //!
 //! [`load_explicit`] takes only [`LoadInputs`] and never touches `std::env`. The
 //! **hermeticity contract** is: a `PathResolver` with every field `None` and an
 //! empty [`EnvLookup`] discovers nothing — only explicit `--config` /
-//! `--credentials` paths and explicit-config sibling credentials load. Construct
+//! explicit `--secrets` paths and explicit-config sibling credentials load. Construct
 //! an empty `PathResolver` in-memory (its `Default`) for fully isolated loads.
 
 use std::path::{Path, PathBuf};
@@ -83,7 +83,7 @@ impl PathResolver {
 pub struct LoadInputs<'a> {
     /// Explicit `--config` path (wins over env + defaults).
     pub explicit_config: Option<PathBuf>,
-    /// Explicit `--credentials` / `--secrets` path (wins over env + defaults).
+    /// Explicit `--secrets` path (wins over env + defaults).
     pub explicit_credentials: Option<PathBuf>,
     /// Injected environment snapshot. Used only for `$HOME` / `$XDG_*` path
     /// expansion during resolution; no environment variable selects which files
