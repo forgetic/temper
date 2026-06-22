@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use temper_forge::config::ForgejoConfig;
 use temper_forge::{
-    Forge, ForgeError, Issue, IssueState, ItemNumber, RepositoryId, RepositoryPath,
+    Forge, ForgeError, Issue, IssueQuery, IssueState, ItemNumber, RepositoryId, RepositoryPath,
 };
 use temper_workflow::{ArtifactRef, WorkflowMetadata, parse_metadata_block};
 
@@ -255,7 +256,17 @@ pub async fn validate_state<F: Forge + ?Sized>(
         dependencies.len(),
         config.expected_children,
     );
-    validate_children(
+    validate_parent_uniqueness(
+        forge,
+        &mut report,
+        source_repo,
+        &repos,
+        config,
+        &parent,
+    )
+    .await?;
+    validate_child_distribution(&mut report, source_repo, &repos, &dependencies);
+    let child_summary = validate_children(
         forge,
         &mut report,
         source_repo,
@@ -265,6 +276,7 @@ pub async fn validate_state<F: Forge + ?Sized>(
         parent_blocked,
     )
     .await?;
+    validate_parent_resolution(&mut report, config, &parent, &child_summary);
     Ok(report)
 }
 
@@ -325,7 +337,93 @@ fn validate_parent_dependency_count(
     }
 }
 
-async fn validate_children<F: Forge + ?Sized>(
+async fn validate_parent_uniqueness<F: Forge + ?Sized>(
+    forge: &F,
+    report: &mut ValidationReport,
+    source_repo: &RepositoryId,
+    repos: &BTreeMap<String, RepositoryId>,
+    config: &ValidatorConfig,
+    parent: &Issue,
+) -> Result<(), ForgeError> {
+    for (display, repo_id) in repos {
+        let matches: Vec<Issue> = forge
+            .list_issues(repo_id, IssueQuery::default())
+            .await?
+            .into_iter()
+            .filter(|issue| issue.title == parent.title)
+            .collect();
+        if repo_id == source_repo {
+            let source_has_only_parent = matches.len() == 1
+                && matches
+                    .iter()
+                    .any(|issue| issue.number == config.parent_number);
+            if source_has_only_parent {
+                report.ok(format!(
+                    "source repository {display} has one parent intake titled {:?}",
+                    parent.title
+                ));
+            } else {
+                report.missing(format!(
+                    "source repository {display} has exactly one parent intake titled {:?} (found {})",
+                    parent.title,
+                    matches.len()
+                ));
+            }
+        } else if matches.is_empty() {
+            report.ok(format!(
+                "target repository {display} has no duplicate parent intake titled {:?}",
+                parent.title
+            ));
+        } else {
+            report.missing(format!(
+                "target repository {display} has no duplicate parent intake titled {:?} (found {})",
+                parent.title,
+                matches.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_child_distribution(
+    report: &mut ValidationReport,
+    source_repo: &RepositoryId,
+    repos: &BTreeMap<String, RepositoryId>,
+    dependencies: &[ArtifactRef],
+) {
+    if dependencies.is_empty() {
+        return;
+    }
+    let mut counts: BTreeMap<String, usize> = repos.keys().map(|repo| (repo.clone(), 0)).collect();
+    for dependency in dependencies {
+        let child_repo = dependency.resolved_repository(source_repo);
+        if let Some(display) = repos
+            .iter()
+            .find_map(|(display, repo_id)| (*repo_id == child_repo).then(|| display.clone()))
+        {
+            if let Some(count) = counts.get_mut(&display) {
+                *count = count.saturating_add(1);
+            }
+        } else {
+            report.missing(format!(
+                "child dependency {}#{} targets a configured repository",
+                child_repo, dependency.number
+            ));
+        }
+    }
+    for (display, count) in counts {
+        if count == 1 {
+            report.ok(format!(
+                "repository {display} has exactly one child dependency from the parent"
+            ));
+        } else {
+            report.missing(format!(
+                "repository {display} has exactly one child dependency from the parent (found {count})"
+            ));
+        }
+    }
+}
+
     forge: &F,
     report: &mut ValidationReport,
     source_repo: &RepositoryId,
