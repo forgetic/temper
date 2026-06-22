@@ -285,7 +285,7 @@ fn spawn_temper_run(
     // --service) runs engine + worker + agent in one process. Deployment
     // settings go in the config file; secrets (forge admin token, the engineer's
     // role identity, the dummy LLM api-key) go in a companion `credentials.toml`
-    // passed via `--credentials`. The fake-LLM base URL is a provider profile
+    // passed via `--secrets`. The fake-LLM base URL is a provider profile
     // (`[agent.providers.deepseek] url`) and the dummy DeepSeek key is its
     // api-key credential — the agent reads no LLM env.
     let config_path = workspace.join("run-config.toml");
@@ -360,7 +360,7 @@ fn spawn_temper_run(
         .arg("daemon")
         .arg("--config")
         .arg(&config_path)
-        .arg("--credentials")
+        .arg("--secrets")
         .arg(&credentials_path)
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))

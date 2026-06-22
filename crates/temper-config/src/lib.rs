@@ -190,16 +190,16 @@ pub const EX_USAGE: u8 = 64;
 ///
 /// Parses the common `--config` / `--secrets` / `--help` / `--version` flags,
 /// loads + resolves the deployment from the **injected** environment snapshot
-/// snapshot (`env` / `paths`, captured by the binary's composition root), and
-/// hands the [`Resolved`] to `run`. This is the *entire* body of each slim
-/// binary's `main` — the proof that a per-service binary needs no plumbing
-/// beyond naming its service, snapshotting its env, and naming its runner.
+/// (`env` / `paths`, captured by the binary's composition root), and hands the
+/// [`Resolved`] to `run`. This is the *entire* body of each slim binary's
+/// `main` — the proof that a per-service binary needs no plumbing beyond naming
+/// its service, snapshotting its env, and naming its runner.
 ///
 /// Hermeticity: an explicit `--config` / `--secrets` suppresses default
 /// `~/.config/temper` discovery (an empty [`PathResolver`] is used). An explicit
-/// used). An explicit config root may load sibling `credentials.toml`, but the
-/// operator's global credentials never ambiently layer in behind an explicit
-/// deployment — matching the unified `temper daemon` path.
+/// config root may load sibling `credentials.toml`, but the operator's global
+/// credentials never ambiently layer in behind an explicit deployment — matching
+/// the unified `temper daemon` path.
 pub fn service_main(
     name: &str,
     usage: &str,

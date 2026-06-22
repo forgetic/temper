@@ -68,7 +68,7 @@ RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
 # The provisioner writes the live forge identities in the runtime's own
 # credentials.toml format ([forge.users.<role>] + a bot user). The daemon loads
-# it via `temper daemon --credentials`; the launcher only reads a couple of
+# it via `temper daemon --secrets`; the launcher only reads a couple of
 # fields back (the bot identity for the mechanical backstop, the engineer for the
 # demo CI seed, and the architect read token for the Forge-state validator) —
 # never on argv.
@@ -776,7 +776,7 @@ boot_run() {
     # The new CLI is config-file driven: standalone `temper daemon` (no
     # --service) runs engine + worker + agent in one process. Write the
     # deployment to a config file; the per-role and bot secrets come from the
-    # provisioned credentials.toml via `--credentials` (never on argv).
+    # provisioned credentials.toml via `--secrets` (never on argv).
     _repos_toml=$(printf '"%s", ' $CONFIGURED_REPOS); _repos_toml="[${_repos_toml%, }]"
     _roles_toml=$(printf '"%s", ' $SERVED_ROLES); _roles_toml="[${_roles_toml%, }]"
     case "$TEMPER_RUN_AUTH" in
@@ -815,7 +815,7 @@ EOF
         FORGEJO_ACCESS_TOKEN="$BOT_TOKEN" \
         FORGEJO_USERNAME="$BOT_USER" \
         FORGEJO_PASSWORD="$BOT_PASSWORD" \
-            "$RUN_BIN" daemon --config "$_config" --credentials "$CREDENTIALS_FILE"
+            "$RUN_BIN" daemon --config "$_config" --secrets "$CREDENTIALS_FILE"
     ) >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"

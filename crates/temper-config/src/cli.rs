@@ -54,7 +54,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn secrets_alias_populates_credentials_option() {
+    fn secrets_populates_credentials_option() {
         let parsed = parse_common_args([
             "--secrets".to_string(),
             "local/credentials.toml".to_string(),
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn unrecognized_secret_source_flags_are_left_for_callers_to_reject() {
         let parsed = parse_common_args([
-            "--old-secrets".to_string(),
+            "--unknown-secret-source".to_string(),
             "legacy/credentials.toml".to_string(),
         ])
         .expect("parse succeeds");
@@ -79,14 +79,14 @@ mod tests {
         assert_eq!(
             parsed.rest,
             vec![
-                "--old-secrets".to_string(),
+                "--unknown-secret-source".to_string(),
                 "legacy/credentials.toml".to_string()
             ]
         );
     }
 
     #[test]
-    fn missing_secrets_value_names_alias() {
+    fn missing_secrets_value_names_flag() {
         let err = parse_common_args(["--secrets".to_string()]).expect_err("missing value errors");
 
         assert_eq!(err, "--secrets requires a value");

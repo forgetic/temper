@@ -31,7 +31,7 @@ pub(super) fn spawn_daemon(
     // The new CLI is config-file driven: write the engine's deployment settings
     // to a config file and run `temper daemon --service engine`. Secrets (forge
     // admin token, CI web-UI creds, the engineer's per-role identity) go in a
-    // companion `credentials.toml` passed via `--credentials`; the deployment
+    // companion `credentials.toml` passed via `--secrets`; the deployment
     // env overrides have been removed from `temper-config`.
     let config_dir = log.parent().expect("daemon log has a parent dir");
     let config_path = config_dir.join("daemon-config.toml");
@@ -100,7 +100,7 @@ pub(super) fn spawn_daemon(
         .arg("engine")
         .arg("--config")
         .arg(&config_path)
-        .arg("--credentials")
+        .arg("--secrets")
         .arg(&credentials_path)
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))

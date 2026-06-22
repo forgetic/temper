@@ -141,7 +141,7 @@ resolve_binaries() {
     case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
     case "$_serve_help" in *--config*) ;; *) die 'temper serve standalone lacks --config' ;; esac
-    case "$_serve_help" in *--credentials*) ;; *) die 'temper serve standalone lacks --credentials' ;; esac
+    case "$_serve_help" in *--secrets*) ;; *) die 'temper serve standalone lacks --secrets' ;; esac
 
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
@@ -410,7 +410,7 @@ boot_run() {
     mkdir -p "$RUN_DIR/workspaces"
     log "starting temper serve standalone at $DAEMON_BIND ..."
     : >"$LOG_DIR/run.log"
-    "$RUN_BIN" serve standalone --config "$CONFIG_FILE" --credentials "$CREDENTIALS_FILE" \
+    "$RUN_BIN" serve standalone --config "$CONFIG_FILE" --secrets "$CREDENTIALS_FILE" \
         >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
