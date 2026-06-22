@@ -66,6 +66,8 @@ STOP_FILE="$RUN_DIR/stop"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
+JIG_PID_FILE="$RUN_DIR/jig.pid"
+JIG_STDIN="$RUN_DIR/jig.stdin"
 # The provisioner writes the live forge identities in the runtime's own
 # credentials.toml format ([forge.users.<role>] + a bot user). The daemon loads
 # it via `temper daemon --secrets`; the launcher only reads a couple of
@@ -135,9 +137,9 @@ usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|stop|help]
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
-Configuration is read from config/temper.env (no secrets). The coding agent's
-LLM provider is selected with TEMPER_RUN_AUTH; provider credentials live in
-secrets/.env (gitignored).
+Configuration is read from config/temper.env (no secrets). The default coding
+agent provider is the local jig fake LLM; set TEMPER_RUN_AUTH to a real provider
+only when intentionally using credentials from secrets/.env (gitignored).
 EOF
 }
 
@@ -175,6 +177,7 @@ cleanup() {
     [ -d "$RUN_DIR" ] && : >"$STOP_FILE" 2>/dev/null || true
     sleep 1
     stop_pid_file "$RUN_PID_FILE"
+    stop_pid_file "$JIG_PID_FILE"
     stop_pid_file "$RUNNER_PID_FILE"
     stop_pid_file "$SERVER_PID_FILE"
     # Drop throwaway server/runner data + runtime checkouts + sentinel so a
@@ -182,6 +185,7 @@ cleanup() {
     rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" \
         "$RUN_DIR/ci-seed" "$RUN_DIR/workspaces" \
         "$RUN_DIR/cross-repo-intake.md" "$RUN_DIR"/run.sh.snapshot.* \
+        "$JIG_STDIN" \
         2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
     log 'teardown complete'
@@ -202,7 +206,8 @@ CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL DAEMON_BIND WEBHOOK_URL \
 DAEMON_POLL_CADENCE_SECS DAEMON_MECHANICAL_CADENCE_SECS DAEMON_LEASE_TTL_SECS RUN_SECS \
 TEMPER_RUN_AUTH RUN_MAX_ITERATIONS \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
-TEMPER_RUN_BIN TEMPER_BUILD_PACKAGE"
+TEMPER_RUN_BIN TEMPER_BUILD_PACKAGE \
+JIG_REPO JIG_BIN JIG_FIXTURE_PATH"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -274,13 +279,14 @@ load_config() {
     DAEMON_MECHANICAL_CADENCE_SECS=${DAEMON_MECHANICAL_CADENCE_SECS:-2}
     DAEMON_LEASE_TTL_SECS=${DAEMON_LEASE_TTL_SECS:-300}
     RUN_SECS=${RUN_SECS:-600}
-    # Coding-agent LLM provider for `temper run --auth`. Default mirrors the
-    # agent binary's own default. The matching credentials must be present in the
-    # environment (secrets/.env) for the chosen provider.
-    TEMPER_RUN_AUTH=${TEMPER_RUN_AUTH:-chatgpt-oauth}
+    # Coding-agent LLM provider. The checked-in demo defaults to jig, a local
+    # fake LLM served through Temper's DeepSeek-compatible provider path. Real
+    # providers remain available as an explicit opt-in and require credentials in
+    # secrets/.env or the provider's normal auth file.
+    TEMPER_RUN_AUTH=${TEMPER_RUN_AUTH:-jig}
     case "$TEMPER_RUN_AUTH" in
-        deepseek | chatgpt-oauth | anthropic-oauth) ;;
-        *) die "TEMPER_RUN_AUTH must be deepseek|chatgpt-oauth|anthropic-oauth, got '$TEMPER_RUN_AUTH'" ;;
+        jig | deepseek | chatgpt-oauth | anthropic-oauth) ;;
+        *) die "TEMPER_RUN_AUTH must be jig|deepseek|chatgpt-oauth|anthropic-oauth, got '$TEMPER_RUN_AUTH'" ;;
     esac
     RUN_MAX_ITERATIONS=${RUN_MAX_ITERATIONS:-250}
     TEMPER_FORGEJO_GOMAXPROCS=${TEMPER_FORGEJO_GOMAXPROCS:-2}
@@ -288,6 +294,9 @@ load_config() {
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
     TEMPER_RUN_BIN=${TEMPER_RUN_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper}
+    JIG_REPO=${JIG_REPO:-${HOME:-}/src/rust/jig}
+    JIG_BIN=${JIG_BIN:-$JIG_REPO/target/debug/jig}
+    JIG_FIXTURE_PATH=${JIG_FIXTURE_PATH:-$CONFIG_DIR/jig-reference-delivery.json}
 
     require_positive_int DAEMON_POLL_CADENCE_SECS "$DAEMON_POLL_CADENCE_SECS"
     require_positive_int DAEMON_MECHANICAL_CADENCE_SECS "$DAEMON_MECHANICAL_CADENCE_SECS"
@@ -405,7 +414,19 @@ resolve_binaries() {
        Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/
        with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
 
-    log "coding agent: in-process (temper daemon; provider from TEMPER_RUN_AUTH=$TEMPER_RUN_AUTH)"
+    if [ "$TEMPER_RUN_AUTH" = "jig" ]; then
+        command -v mkfifo >/dev/null 2>&1 || die 'mkfifo is required for jig stdin management'
+        [ -f "$JIG_FIXTURE_PATH" ] || die "jig fixture not found: $JIG_FIXTURE_PATH"
+        if [ ! -x "$JIG_BIN" ] || [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
+            [ -d "$JIG_REPO" ] || die "jig checkout not found: $JIG_REPO"
+            log 'ensuring the jig fake-LLM binary is current (cargo build -p jig)...'
+            ( cd "$JIG_REPO" && cargo build -p jig ) || die 'jig cargo build failed'
+        fi
+        [ -x "$JIG_BIN" ] || die "jig binary not found: $JIG_BIN"
+        log "coding agent: in-process (temper daemon; provider=jig via $JIG_BIN)"
+    else
+        log "coding agent: in-process (temper daemon; provider from TEMPER_RUN_AUTH=$TEMPER_RUN_AUTH)"
+    fi
 }
 
 # --- Forgejo server -----------------------------------------------------------
