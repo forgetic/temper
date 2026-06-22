@@ -328,7 +328,7 @@ pub fn run_init(
     if applied {
         p.note("Now run `temper serve standalone` to start the engine, worker, and agent.");
     } else {
-        p.note("Run `temper init --apply` (or `temper apply`) before starting the engine.");
+        p.note("Run `temper apply` before starting the engine.");
     }
     Ok(())
 }
