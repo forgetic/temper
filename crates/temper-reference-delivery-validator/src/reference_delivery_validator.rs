@@ -363,10 +363,18 @@ async fn validate_children<F: Forge + ?Sized>(
     if dependencies.is_empty() {
         return Ok(());
     }
-    report.ok(format!(
+    let landed_summary = format!(
         "child landed count {landed}/{} (closed issues count as landed dependency targets)",
         dependencies.len()
-    ));
+    );
+    if landed == dependencies.len() {
+        report.ok(landed_summary);
+    } else {
+        report.missing(landed_summary);
+        report.diagnosis(
+            "wait for each child PR to merge and close its parent code issue via close_parent_issues",
+        );
+    }
     if landed == dependencies.len() && parent_blocked {
         report.missing(format!(
             "parent {}#{} remains blocked even though all child dependencies landed",

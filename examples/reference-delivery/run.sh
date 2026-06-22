@@ -790,6 +790,8 @@ schema_version = 1
 [forge]
 type = "forgejo"
 url = "$BASE_URL"
+admin = "bot"
+ci_user = "bot"
 [engine]
 bind = "$DAEMON_BIND"
 repos = $_repos_toml
@@ -819,11 +821,13 @@ EOF
     ) >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
-    # Readiness: the HTTP listener must be up before the seed-last webhook can be
-    # delivered, and the in-process worker must have registered before any job can
-    # be assigned. Wait for both, in order.
-    wait_for_log_line "$LOG_DIR/run.log" 'engine:  serving on' "$RUN_PID" 'temper daemon'
-    wait_for_log_line "$LOG_DIR/run.log" 'worker: registered' "$RUN_PID" 'temper daemon'
+    # Readiness: the webhook listener must be up before the seed-last webhook can
+    # be delivered, the in-process worker capacity must be initialized before any
+    # job can be assigned, and the daemon's ready banner is the final startup
+    # signal.
+    wait_for_log_line "$LOG_DIR/run.log" 'webhook listener up' "$RUN_PID" 'temper daemon'
+    wait_for_log_line "$LOG_DIR/run.log" 'worker:  capacity:' "$RUN_PID" 'temper daemon'
+    wait_for_log_line "$LOG_DIR/run.log" 'ready -- watching' "$RUN_PID" 'temper daemon'
     log "temper daemon up (pid $RUN_PID; logs/run.log)"
 }
 
@@ -925,41 +929,35 @@ cmd_validate_webhooks() {
 
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
-    validate_contains "$_run_log" 'engine:  serving on' \
-        'temper daemon reached serving readiness' || _ok=1
-    validate_contains "$_run_log" 'webhook accepted' \
-        'Forgejo delivered at least one accepted webhook' || _ok=1
-    validate_contains "$_run_log" 'webhook wake scan' \
-        'temper run ran at least one webhook wake scan' || _ok=1
-    if grep -E -q 'webhook wake scan.*enqueued=[1-9][0-9]*' "$_run_log" 2>/dev/null; then
-        log 'ok: webhook wake scan enqueued work'
-    else
-        log 'missing: no webhook wake scan reported enqueued>0'
-        _ok=1
-    fi
-    validate_contains "$_run_log" 'assigned job_id=' \
-        'daemon assigned at least one job' || _ok=1
-    validate_contains "$_run_log" 'result received' \
-        'daemon received at least one job result' || _ok=1
+    validate_contains "$_run_log" 'webhook listener up' \
+        'temper daemon webhook listener reached readiness' || _ok=1
+    validate_contains "$_run_log" 'worker:  capacity:' \
+        'in-process worker capacity reported' || _ok=1
+    validate_contains "$_run_log" 'ready -- watching' \
+        'temper daemon reached watching readiness' || _ok=1
+    validate_contains "$_run_log" 'event="wake.received"' \
+        'Forgejo delivered at least one accepted webhook wake' || _ok=1
+    validate_contains "$_run_log" 'mark_untriaged applied' \
+        'seed-last wake advanced raw intake into triage' || _ok=1
+    validate_contains "$_run_log" 'event="agent.started"' \
+        'in-process agent accepted at least one assignment' || _ok=1
+    validate_contains "$_run_log" 'event="agent.finished"' \
+        'in-process agent finished at least one assignment' || _ok=1
+    validate_contains "$_run_log" 'event="lease.claimed"' \
+        'daemon apply path claimed at least one result lease' || _ok=1
+    validate_contains "$_run_log" 'event="lease.released"' \
+        'daemon apply path released at least one result lease' || _ok=1
 
-    validate_contains "$_run_log" 'worker: registered' \
-        'in-process worker registered with the daemon' || _ok=1
-    validate_contains "$_run_log" 'worker: assigned job_id=' \
-        'in-process worker accepted at least one assignment' || _ok=1
-    validate_contains "$_run_log" 'worker: result sent' \
-        'in-process worker sent at least one result' || _ok=1
+    _wakes=$(count_matches 'event="wake.received"' "$_run_log")
+    _advanced=$(count_matches 'mark_untriaged applied' "$_run_log")
+    _agent_started=$(count_matches 'event="agent.started"' "$_run_log")
+    _agent_finished=$(count_matches 'event="agent.finished"' "$_run_log")
+    log "daemon summary: wakes=$_wakes raw_intake_advanced=$_advanced agent_started=$_agent_started agent_finished=$_agent_finished"
 
-    _accepted=$(count_matches 'webhook accepted' "$_run_log")
-    _wake_scans=$(count_matches 'webhook wake scan' "$_run_log")
-    _wake_enqueued=$(grep -E -c 'webhook wake scan.*enqueued=[1-9][0-9]*' "$_run_log" 2>/dev/null || true)
-    _assigned=$(count_matches 'assigned job_id=' "$_run_log")
-    _results=$(count_matches 'result received' "$_run_log")
-    log "daemon summary: accepted=$_accepted wake_scans=$_wake_scans wake_enqueued=$_wake_enqueued assigned=$_assigned result_received=$_results"
-
-    _registered=$(count_matches 'worker: registered' "$_run_log")
-    _worker_assigned=$(count_matches 'worker: assigned job_id=' "$_run_log")
-    _worker_results=$(count_matches 'worker: result sent' "$_run_log")
-    log "worker summary: registered=$_registered assigned=$_worker_assigned result_sent=$_worker_results"
+    _registered=$(count_matches 'worker:  capacity:' "$_run_log")
+    _leases_claimed=$(count_matches 'event="lease.claimed"' "$_run_log")
+    _leases_released=$(count_matches 'event="lease.released"' "$_run_log")
+    log "worker summary: registered=$_registered leases_claimed=$_leases_claimed leases_released=$_leases_released"
 
     if [ "$_ok" -eq 0 ]; then
         log 'webhook validation passed'
@@ -988,10 +986,10 @@ validate_repo_specific_logs() {
             validate_contains "$_provision_log" "repo=$_repo intake_issue_url=" \
                 "seeded intake issue URL recorded for $_repo" || _ok=1
         fi
-        validate_line_with_literals "$_run_log" 'assigned job_id=' "repo=$_repo" \
-            "daemon assigned at least one job for $_repo" || _ok=1
-        validate_line_with_literals "$_run_log" 'worker: assigned job_id=' "repo=$_repo" \
-            "in-process worker accepted at least one assignment for $_repo" || _ok=1
+        validate_line_with_literals "$_run_log" 'event="agent.started"' "repo=\"$_repo\"" \
+            "in-process agent accepted at least one assignment for $_repo" || _ok=1
+        validate_line_with_literals "$_run_log" 'event="agent.finished"' "repo=\"$_repo\"" \
+            "in-process agent finished at least one assignment for $_repo" || _ok=1
     done
     return "$_ok"
 }

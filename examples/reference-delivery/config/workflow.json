@@ -1218,6 +1218,9 @@
           "kind": "merge_pull_request"
         },
         {
+          "kind": "close_parent_issues"
+        },
+        {
           "kind": "remove_label",
           "label": "landing"
         },
