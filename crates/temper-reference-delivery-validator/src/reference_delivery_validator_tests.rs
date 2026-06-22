@@ -75,7 +75,7 @@ fn zero_dependency_blocked_parent_reports_original_incident_shape() {
 }
 
 #[test]
-fn parent_with_child_backrefs_and_correlation_passes() {
+fn parent_with_landed_child_backrefs_and_correlation_passes() {
     temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();
         let source = create_repo(&forge, "acme", "service").await;
@@ -84,7 +84,7 @@ fn parent_with_child_backrefs_and_correlation_passes() {
             &forge,
             &source,
             "parent",
-            &["code", "blocked"],
+            &["code"],
             WorkflowMetadata {
                 kind: Some(ArtifactKindId::new("code")),
                 ..WorkflowMetadata::default()
@@ -98,7 +98,7 @@ fn parent_with_child_backrefs_and_correlation_passes() {
             "service child",
             &["code", "ready"],
             child_metadata(&source, parent.number, "child-a"),
-            false,
+            true,
         )
         .await;
         let child_b = create_issue(
@@ -107,7 +107,7 @@ fn parent_with_child_backrefs_and_correlation_passes() {
             "canary child",
             &["code", "ready"],
             child_metadata(&source, parent.number, "child-b"),
-            false,
+            true,
         )
         .await;
         let parent_metadata = WorkflowMetadata {
@@ -150,6 +150,12 @@ fn parent_with_child_backrefs_and_correlation_passes() {
                 .lines()
                 .iter()
                 .any(|line| line.contains("expected 2 child dependencies, found 2"))
+        );
+        assert!(
+            report
+                .lines()
+                .iter()
+                .any(|line| line.contains("child landed count 2/2"))
         );
     })
 }

@@ -27,24 +27,27 @@ in-process worker, and the coding agent all write to a **single log**:
 For the default two-repo cross-repo run, expect (interleaved) in `logs/run.log`:
 
 ```text
-engine:  serving on 127.0.0.1:38200
-worker: registered worker_id=reference-delivery-1 capabilities=6
-engine: webhook accepted repo=acme/service kind=Issue item=<n>
-engine: webhook wake scan repo=acme/service enqueued=1
-engine: assigned job_id=... role=architect repo=acme/service worker=reference-delivery-1
-worker: result sent job_id=... status=success     # fans the parent into per-repo children
-engine: assigned job_id=... role=engineer repo=acme/service ...
-engine: assigned job_id=... role=engineer repo=acme/service-canary ...
-worker: result sent job_id=... status=success     # opens each implementation PR
-engine: assigned job_id=... role=reviewer repo=... worker=reference-delivery-1
-worker: result sent job_id=... status=success     # reviewer approves
-engine: ... mechanical landing ...                # bot merges each CI-green, approved PR
+trigger: webhook listener up on 127.0.0.1:38200/forgejo/webhook (issue, PR, CI events)
+worker:  capacity: architect=1 engineer=1 reviewer=1 (per-role, shared across all repos)
+engine:  ready -- watching acme/service, acme/service-canary, idle
+trigger: [acme/service#1] wake | artifact=intake queue=raw_intake ... event="wake.received"
+engine:  [acme/service#1] mark_untriaged applied | +untriaged
+agent:   [acme/service#1] architect/triage start ... event="agent.started"
+agent:   [acme/service#1] architect/triage done ... event="agent.finished" # fans the parent into per-repo children
+agent:   [acme/service#2] engineer/coding start ...
+agent:   [acme/service-canary#1] engineer/coding start ...
+agent:   [...] engineer/coding done ...              # opens each implementation PR
+agent:   [...] reviewer/review start ...
+agent:   [...] reviewer/review done ...              # reviewer approves
+engine:  [...] merged -> main ... event="pr.merged" # bot merges each CI-green, approved PR
+engine:  [...] resolved -- implemented by PR#...     # source issue closed by close_parent_issues
 ```
 
-The seed-last webhook-wake proof is the `webhook accepted` → `webhook wake scan …
-enqueued=1` pair: intake is filed only after `temper run` is ready, so its creation
-webhook (not the slow poll backstop) drives the first scan. Mechanical logs also
-include `mechanical_automation_summary` / `mechanical_reconciliation_summary` lines
+The seed-last webhook-wake proof is the `event="wake.received"` line followed by
+`mark_untriaged applied`: intake is filed only after `temper run` is ready, so its
+creation webhook (not the slow poll backstop) drives the first transition.
+Mechanical logs also include `mechanical_automation_summary` /
+`mechanical_reconciliation_summary` lines
 (high volume), and after a merge rejection a merge-conflict route; these show the
 landing queue, transition, target PR, and whether the item was applied,
 gate-blocked, unchanged, or routed to `merge-conflict`.

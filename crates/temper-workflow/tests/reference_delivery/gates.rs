@@ -57,6 +57,7 @@ fn mechanical_landing_requires_review_and_native_ci() {
         plan.effects,
         vec![
             WorkflowEffect::MergePullRequest,
+            WorkflowEffect::CloseParentIssues,
             WorkflowEffect::RemoveLabel(LabelId::new("landing")),
             WorkflowEffect::AddLabel(LabelId::new("landed")),
             WorkflowEffect::AddLabel(LabelId::new("alignment")),

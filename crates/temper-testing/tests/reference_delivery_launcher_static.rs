@@ -87,6 +87,8 @@ fn launcher_is_credentials_toml_driven() {
         .nth(1)
         .expect("boot_run function exists");
     assert!(boot_run.contains("--secrets \"$CREDENTIALS_FILE\""));
+    assert!(boot_run.contains("admin = \"bot\""));
+    assert!(boot_run.contains("ci_user = \"bot\""));
 
     assert!(!script.contains("export_run_role_env"));
     assert!(!script.contains("TEMPER_FORGEJO_USER_"));
@@ -207,9 +209,11 @@ fn validators_and_config_cover_forgejo_ci_fallback() {
     assert!(script.contains("no web-UI credentials configured for the CI read fallback"));
 
     // Webhooks are the wake path: the validator inspects the unified run log.
-    assert!(script.contains("engine:  serving on"));
-    assert!(script.contains("worker: registered"));
-    assert!(script.contains("webhook wake scan"));
+    assert!(script.contains("webhook listener up"));
+    assert!(script.contains("worker:  capacity:"));
+    assert!(script.contains("ready -- watching"));
+    assert!(script.contains("event=\"wake.received\""));
+    assert!(script.contains("mark_untriaged applied"));
 
     // The cross-repo Forge-state validator is still wired in, as a subcommand of
     // the unified binary.
