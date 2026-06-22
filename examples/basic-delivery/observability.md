@@ -40,14 +40,3 @@ engine: ... mechanical landing ...
 The seed-last webhook-wake proof is the `webhook accepted` → `webhook wake scan …
 enqueued=1` pair. The intake issue is filed only after standalone readiness, so
 its creation webhook drives the first scan instead of the slow poll backstop.
-
-## Validator
-
-```sh
-./run.sh validate-webhooks
-```
-
-The validator checks retained logs for webhook registration, the seeded intake,
-standalone readiness, accepted delivery, wake scan with enqueued work, engine and
-worker assignment/result lines, and absence of the Forgejo 7.0.x CI-read fallback
-credential/login diagnostics.

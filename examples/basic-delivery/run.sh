@@ -59,19 +59,15 @@ CREDENTIALS_FILE="$RUN_DIR/credentials.toml"
 INIT_WORKFLOW_PATH="$RUN_DIR/workflow.json"
 WEBHOOK_SECRET_FILE="$RUN_DIR/webhook-secret"
 
-CI_FALLBACK_MISSING_CREDENTIALS='no web-UI credentials configured for the CI read fallback'
-CI_FALLBACK_LOGIN_FAILED='forgejo web-ui login failed'
-
 log() { printf '[run.sh] %s\n' "$*"; }
 die() { printf '[run.sh] error: %s\n' "$*" >&2; exit 1; }
 sleep_short() { sleep 0.2 2>/dev/null || sleep 1; }
 
 usage() {
     cat <<EOF
-usage: ./run.sh [start|validate-webhooks|stop|help]
+usage: ./run.sh [start|stop|help]
 
   start (default)      run the fixed basic-delivery demo
-  validate-webhooks    inspect retained logs for the webhook-driven path
   stop                 tear down a previous run via run/*.pid
   help                 show this message
 
@@ -420,71 +416,6 @@ boot_run() {
     log "temper serve standalone up (pid $RUN_PID; logs/run.log)"
 }
 
-validate_contains() {
-    _file=$1
-    _pattern=$2
-    _description=$3
-    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
-        log "ok: $_description"
-        return 0
-    fi
-    log "missing: $_description (looked in $_file)"
-    return 1
-}
-
-validate_absent() {
-    _file=$1
-    _pattern=$2
-    _description=$3
-    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
-        log "missing: $_description"
-        return 1
-    fi
-    log "ok: $_description"
-}
-
-count_matches() {
-    _count=$(grep -c "$1" "$2" 2>/dev/null || true)
-    [ -n "$_count" ] || _count=0
-    printf '%s\n' "$_count"
-}
-
-cmd_validate_webhooks() {
-    [ -d "$LOG_DIR" ] || die 'no logs/ directory yet; start a run first'
-    _run_log="$LOG_DIR/run.log"
-    _provision_log="$LOG_DIR/provision.log"
-    _ok=0
-    log "validating retained logs for $REPO"
-
-    validate_contains "$_provision_log" 'webhook registered url=' 'webhook registration recorded' || _ok=1
-    validate_contains "$_provision_log" 'intake_issue_number=' 'seed-last intake issue recorded' || _ok=1
-    validate_contains "$_run_log" 'webhook listener up' 'standalone webhook listener started' || _ok=1
-    validate_contains "$_run_log" 'ready -- watching' 'standalone reached serving readiness' || _ok=1
-    validate_contains "$_run_log" 'webhook accepted' 'Forgejo delivered an accepted webhook' || _ok=1
-    validate_contains "$_run_log" 'webhook wake scan' 'webhook wake scan ran' || _ok=1
-    if grep -E -q 'webhook wake scan.*enqueued=[1-9][0-9]*' "$_run_log" 2>/dev/null; then
-        log 'ok: webhook wake scan enqueued work'
-    else
-        log 'missing: no webhook wake scan reported enqueued>0'
-        _ok=1
-    fi
-    validate_contains "$_run_log" 'assigned job_id=' 'engine assigned at least one job' || _ok=1
-    validate_contains "$_run_log" 'result received' 'engine received at least one result' || _ok=1
-    validate_contains "$_run_log" 'worker:  capacity:' 'in-process worker announced capacity' || _ok=1
-    validate_contains "$_run_log" 'worker: assigned job_id=' 'worker accepted an assignment' || _ok=1
-    validate_contains "$_run_log" 'worker: result sent' 'worker sent a result' || _ok=1
-    validate_absent "$_run_log" "$CI_FALLBACK_MISSING_CREDENTIALS" 'no missing CI-read credentials diagnostic' || _ok=1
-    validate_absent "$_run_log" "$CI_FALLBACK_LOGIN_FAILED" 'no failed CI-read web login diagnostic' || _ok=1
-
-    log "summary: accepted=$(count_matches 'webhook accepted' "$_run_log") assigned=$(count_matches 'assigned job_id=' "$_run_log") results=$(count_matches 'result received' "$_run_log")"
-    if [ "$_ok" -eq 0 ]; then
-        log 'webhook validation passed'
-    else
-        log 'webhook validation failed; inspect logs/provision.log and logs/run.log'
-    fi
-    return "$_ok"
-}
-
 monitor() {
     log ''
     log "Forgejo UI:   $BASE_URL"
@@ -528,7 +459,6 @@ cmd_start() {
 
 case "${1:-start}" in
     start | "") cmd_start ;;
-    validate-webhooks | smoke-webhooks) cmd_validate_webhooks ;;
     stop) cmd_stop ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;

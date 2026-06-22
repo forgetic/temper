@@ -58,7 +58,7 @@ examples/basic-delivery/
 │   ├── intake-issue.md  # deliberately thin seed intake body
 │   └── ci.yml           # CI committed explicitly into the demo repo
 ├── observability.md
-└── run.sh               # fixed launcher / teardown / validator
+└── run.sh               # fixed launcher / teardown
 ```
 
 Runtime data goes under gitignored `run/` and `logs/`. The init-emitted
@@ -70,7 +70,6 @@ From this directory:
 
 ```sh
 ./run.sh start                  # blocks until Ctrl-C, ./run.sh stop, or RUN_SECS
-./run.sh validate-webhooks      # while the run is still alive, or after teardown
 ./run.sh stop
 ```
 
@@ -78,18 +77,13 @@ The launcher intentionally has no editable config file. Repo, ports, cadences,
 binary paths, and the jig fixture are fixed in `run.sh` to keep the happy path
 short and auditable.
 
-## Validation and troubleshooting
+## Troubleshooting
 
-Run the validator before or after teardown; `./run.sh stop` removes the
-throwaway Forgejo state and init-emitted credentials, but logs are retained.
-
-```sh
-./run.sh validate-webhooks
-```
-
-It checks `logs/provision.log` and `logs/run.log` for init/webhook records,
-standalone readiness, webhook delivery + wake scan, job assignment/result lines,
-worker assignment/result lines, and CI-read fallback diagnostics.
+`./run.sh stop` removes the throwaway Forgejo state and init-emitted
+credentials, but logs are retained. Inspect `logs/provision.log` and
+`logs/run.log` for init/webhook records, standalone readiness, webhook delivery
+and wake scan, job assignment/result lines, worker assignment/result lines, and
+CI-read fallback diagnostics.
 
 If a run is force-killed, clean up possible orphans:
 
