@@ -121,7 +121,10 @@ fn parse_top_level_args(args: Vec<String>) -> Result<ParsedTopLevelArgs, String>
     })
 }
 
-fn next_global_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+fn next_global_value(
+    iter: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<String, String> {
     iter.next()
         .filter(|value| !value.starts_with("--"))
         .ok_or_else(|| format!("{flag} requires a value"))

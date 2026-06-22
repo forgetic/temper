@@ -41,7 +41,7 @@ pub struct ConfigInputs<'a> {
 /// hermeticity rule the daemon uses: an explicit `--config` / `--secrets`
 /// suppresses default `~/.config/temper` discovery. An explicit config root may
 /// load its sibling `credentials.toml`, but the operator's global credentials
-/// global credentials never ambiently layer in behind an explicit deployment.
+/// never ambiently layer in behind an explicit deployment.
 fn load_for(
     options: &LoadOptions,
     env: &EnvMap,
