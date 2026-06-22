@@ -50,9 +50,9 @@ fn launcher_uses_init_apply_and_serve_standalone_for_default_start() {
         .nth(1)
         .expect("cmd_start function exists");
 
-    assert!(cmd_start.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" \\\n                init --non-interactive --force --apply --yes"));
-    assert!(cmd_start.contains("--workflow \"$WORKFLOW_PATH\""));
-    assert!(cmd_start.contains(
+    assert!(script.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" \\\n                init --non-interactive --force --apply --yes"));
+    assert!(script.contains("--workflow \"$WORKFLOW_PATH\""));
+    assert!(script.contains(
         "\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" serve standalone"
     ));
 

@@ -440,7 +440,7 @@ async fn validate_children<F: Forge + ?Sized>(
     parent_blocked: bool,
 ) -> Result<ChildValidationSummary, ForgeError> {
     let mut landed = 0usize;
-    let mut latest_child_closed = None;
+    let mut latest_child_closed: Option<DateTime<Utc>> = None;
     for dependency in dependencies {
         let child_repo = dependency.resolved_repository(source_repo);
         let child_display = display_repo_id(repos, &child_repo);
