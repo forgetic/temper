@@ -26,8 +26,12 @@ WEBHOOK_URL=http://$DAEMON_BIND/forgejo/webhook
 OWNER=acme
 NAME=service
 REPO=$OWNER/$NAME
+CANARY_NAME=service-canary
+CANARY_REPO=$OWNER/$CANARY_NAME
+MULTI_REPOS="$REPO $CANARY_REPO"
 DEFAULT_BRANCH=main
 INTAKE_TITLE='Service banner should identify the environment'
+MULTI_INTAKE_TITLE='Ship cross-repo reference delivery'
 INTAKE_BODY_PATH="$CONFIG_DIR/intake-issue.md"
 WORKFLOW_PATH="$CONFIG_DIR/workflow.json"
 
