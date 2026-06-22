@@ -3,8 +3,8 @@
 //! The demo provision-forgejo CLI writes the provisioned secrets in the same
 //! `credentials.toml` format the runtime actually reads (`[forge.users.<role>]`
 //! with `user`/`email`/`password`/`token`, plus a `bot` automation user). This
-//! is the file the daemon loads via `--credentials`; there is no separate env
-//! file. `temper init` writes its own `credentials.toml` and never touches this.
+//! is the file the daemon loads via `--secrets`; there is no separate env file.
+//! `temper init` writes its own `credentials.toml` and never touches this.
 
 use std::collections::BTreeMap;
 use std::path::Path;

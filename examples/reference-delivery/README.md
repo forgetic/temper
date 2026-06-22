@@ -72,7 +72,7 @@ examples/reference-delivery/
 
 Runtime data goes under gitignored `run/`, `logs/`, and `secrets/credentials.toml`
 (the provisioned forge identities in the runtime's own credentials format, loaded
-via `temper daemon --credentials`). The single process logs to `logs/run.log`.
+via `temper daemon --secrets`). The single process logs to `logs/run.log`.
 
 ## Quick start
 

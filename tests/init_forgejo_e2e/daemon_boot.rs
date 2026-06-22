@@ -20,7 +20,7 @@ pub(super) fn assert_daemon_boots(
         .arg("engine")
         .arg("--config")
         .arg(config_path)
-        .arg("--credentials")
+        .arg("--secrets")
         .arg(credentials_path)
         .env_remove("FORGEJO_URL")
         .env_remove("FORGEJO_ACCESS_TOKEN")

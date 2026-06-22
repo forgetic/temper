@@ -2,15 +2,15 @@
 
 //! Default on-disk locations for the config and credentials files.
 //!
-//! Resolution order for each: an explicit path (the `--config` /
-//! `--credentials`/`--secrets` flag) wins; then
+//! Resolution order for each: an explicit path (the `--config` / `--secrets`
+//! flag) wins; then
 //! `<config-dir>/temper/{config,credentials}.toml`, where the config dir is
 //! `$XDG_CONFIG_HOME` or `~/.config`. No environment variable overrides these
 //! file locations.
 //!
 //! Explicit file flags also accept a directory: `--config <dir>` resolves to
-//! `<dir>/config.toml`, and `--credentials <dir>` / `--secrets <dir>` resolves
-//! to `<dir>/credentials.toml`. When the explicit path does not exist yet, a
+//! `<dir>/config.toml`, and `--secrets <dir>` resolves to
+//! `<dir>/credentials.toml`. When the explicit path does not exist yet, a
 //! `.toml` suffix is treated as a file and any other path is treated as a
 //! directory; this lets `temper init --config ./bundle` create a new local
 //! bundle directory.
@@ -68,8 +68,8 @@ pub fn config_path(
         .or_else(|| config_dir(paths).map(|dir| dir.join(CONFIG_FILE_NAME)))
 }
 
-/// Resolves the credentials-file path: explicit override (the `--credentials`
-/// or `--secrets` flag), else `<config-dir>/credentials.toml`.
+/// Resolves the credentials-file path: explicit override (the `--secrets` flag),
+/// else `<config-dir>/credentials.toml`.
 ///
 /// An explicit directory resolves to `<dir>/credentials.toml`; an explicit file
 /// path resolves to that exact file.

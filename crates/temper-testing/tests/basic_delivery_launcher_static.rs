@@ -135,7 +135,7 @@ fn launcher_uses_init_emitted_artifacts_for_serve_standalone() {
 
     let boot_run = section(&script, "boot_run() {");
     assert!(boot_run.contains(
-        "\"$RUN_BIN\" serve standalone --config \"$CONFIG_FILE\" --credentials \"$CREDENTIALS_FILE\""
+        "\"$RUN_BIN\" serve standalone --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\""
     ));
     assert!(boot_run.contains("webhook listener up"));
     assert!(boot_run.contains("worker:  capacity:"));
@@ -198,13 +198,13 @@ fn launcher_compatibility_checks_do_not_assume_help_flag_order() {
     assert!(script.contains("*--non-interactive*)"));
     assert!(script.contains("*--provider-url*)"));
     assert!(script.contains("*--config*)"));
-    assert!(script.contains("*--credentials*)"));
+    assert!(script.contains("*--secrets*)"));
     assert!(
         !script.contains("*--non-interactive*--provider-url*"),
         "the init help check must not depend on clap's flag display order"
     );
     assert!(
-        !script.contains("*--config*--credentials*"),
+        !script.contains("*--config*--secrets*"),
         "the serve help check must not depend on clap's flag display order"
     );
 }

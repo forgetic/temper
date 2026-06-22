@@ -38,10 +38,10 @@ pub struct ConfigInputs<'a> {
 }
 
 /// Loads + resolves a deployment for `validate` / `show`, honoring the same
-/// hermeticity rule the daemon uses: an explicit `--config` / `--credentials` /
-/// `--secrets` suppresses default `~/.config/temper` discovery. An explicit
-/// config root may load its sibling `credentials.toml`, but the operator's
-/// global credentials never ambiently layer in behind an explicit deployment.
+/// hermeticity rule the daemon uses: an explicit `--config` / `--secrets`
+/// suppresses default `~/.config/temper` discovery. An explicit config root may
+/// load its sibling `credentials.toml`, but the operator's global credentials
+/// never ambiently layer in behind an explicit deployment.
 fn load_for(
     options: &LoadOptions,
     env: &EnvMap,
@@ -69,11 +69,10 @@ Commands:
   init      Write starter config.toml + credentials.toml templates
 
 Options:
-  --config      <PATH>  Path to configuration file or bundle directory
-  --secrets     <PATH>  Path to credentials file or directory (preferred)
-  --credentials <PATH>  Backwards-compatible alias for --secrets
-  --force               (init) overwrite existing files
-  -h, --help            Print help";
+  --config  <PATH>  Path to configuration file or bundle directory
+  --secrets <PATH>  Explicit secret source directory or credentials.toml
+  --force           (init) overwrite existing files
+  -h, --help        Print help";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
     let ConfigInputs { args, env, paths } = inputs;
@@ -96,8 +95,8 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
     }
 }
 
-/// Parses the `--config` / `--credentials` / `--secrets` flags (and, when
-/// `allow_force`, the `--force` flag) from a config-subcommand's args.
+/// Parses the `--config` / `--secrets` flags (and, when `allow_force`, the
+/// `--force` flag) from a config-subcommand's args.
 fn parse_options(args: &[String], allow_force: bool) -> Result<(LoadOptions, bool), String> {
     let mut options = LoadOptions::default();
     let mut force = false;
@@ -109,7 +108,7 @@ fn parse_options(args: &[String], allow_force: bool) -> Result<(LoadOptions, boo
                     &mut iter, "--config",
                 )?))
             }
-            "--credentials" | "--secrets" => {
+            "--secrets" => {
                 options.credentials = Some(PathBuf::from(temper_cli_common::next_value(
                     &mut iter, arg,
                 )?))

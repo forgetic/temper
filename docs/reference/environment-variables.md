@@ -219,7 +219,7 @@ or the single provider-credentials JSON instead.
 
 | Removed variable(s) | Replaced by |
 | --- | --- |
-| `TEMPER_CONFIG`, `TEMPER_CREDENTIALS` | `--config` / `--credentials` / `--secrets` flags, plus the `~/.config/temper` default location. No environment variable selects the config files. |
+| `TEMPER_CONFIG` | `--config` flag, plus the `~/.config/temper` default location. No environment variable selects the config files. |
 | `TEMPER_FORGE_URL`, `FORGEJO_URL` | `[forge] url` in `temper.toml`. |
 | `TEMPER_FORGE_TOKEN`, `FORGEJO_ACCESS_TOKEN` | A `token` under `[forge.users.<admin>]` in `credentials.toml` (with `[forge] admin` naming the admin). |
 | `FORGEJO_USERNAME`, `FORGEJO_PASSWORD` | Web-UI / per-role credentials in `credentials.toml`. |

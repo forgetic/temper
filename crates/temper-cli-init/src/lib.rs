@@ -58,8 +58,7 @@ Usage: temper init [OPTIONS]
 
 Options:
   --config        <PATH>        Where to write config.toml, or bundle directory
-  --secrets       <PATH>        Where to write credentials.toml, or secrets directory
-  --credentials   <PATH>        Backwards-compatible alias for --secrets
+  --secrets       <PATH>        Explicit secret source directory or credentials.toml
   --force                       Overwrite existing local files
   --existing-repo               Provision onto a repo that already exists
   --topology      <standalone>  Local topology to initialize (only standalone today)

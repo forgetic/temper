@@ -177,7 +177,7 @@ mod tests {
         let parsed = parse_init_args(vec![
             "--config".to_string(),
             "config.toml".to_string(),
-            "--credentials".to_string(),
+            "--secrets".to_string(),
             "credentials.toml".to_string(),
             "--topology".to_string(),
             "standalone".to_string(),

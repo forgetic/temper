@@ -17,9 +17,9 @@
 //!
 //! ## Hermeticity
 //!
-//! [`run`] takes a [`DaemonInputs`] — explicit `--config` / `--credentials` /
-//! `--secrets` paths, the `--service`, and the injected env snapshot + base
-//! directories the composition root captured. It loads via
+//! [`run`] takes a [`DaemonInputs`] — explicit `--config` / `--secrets` paths,
+//! the `--service`, and the injected env snapshot + base directories the
+//! composition root captured. It loads via
 //! [`temper_config::load_explicit`]; when an explicit `--config` *or* secret path
 //! is given, default-location discovery is suppressed. An explicit config root
 //! may load its sibling `credentials.toml`, but the operator's global
@@ -56,12 +56,11 @@ override defaults.
 Usage: temper daemon [OPTIONS]
 
 Options:
-  --config      <PATH>  Path to configuration file or bundle directory
-  --secrets     <PATH>  Secrets file or directory (preferred)
-  --credentials <PATH>  Backwards-compatible alias for --secrets
-  --service     <NAME>  Which individual service to run (engine, worker). If not
-                        given, run as standalone.
-  -h, --help            Print help";
+  --config  <PATH>  Path to configuration file or bundle directory
+  --secrets <PATH>  Explicit secret source directory or credentials.toml
+  --service <NAME>  Which individual service to run (engine, worker). If not
+                    given, run as standalone.
+  -h, --help        Print help";
 
 pub const SERVE_USAGE: &str = "\
 Run a Temper process.
@@ -88,8 +87,8 @@ without `--service`: engine, worker, and agent execution run in one process.
 Usage: temper serve standalone [OPTIONS]
 
 Options:
-  --config      <FILE>  Path to configuration file
-  --credentials <FILE>  Secrets for external services (Forgejo, LLM providers, ...)
+  --config  <DIR|FILE>  Path to configuration file or bundle directory
+  --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
   -h, --help            Print help";
 
 #[derive(Debug, Eq, PartialEq)]
@@ -129,7 +128,7 @@ impl Service {
 pub struct DaemonInputs<'a> {
     /// Explicit `--config` path.
     pub config: Option<PathBuf>,
-    /// Explicit `--credentials` / `--secrets` path.
+    /// Explicit `--secrets` path.
     pub credentials: Option<PathBuf>,
     /// Which single service to run, or `None` for the all-in-one standalone.
     pub service: Option<Service>,
@@ -288,9 +287,9 @@ fn extract_service(rest: &[String]) -> Result<Option<Service>, String> {
 
 /// Loads the deployment from [`DaemonInputs`] and runs the selected service.
 ///
-/// Hermeticity: an explicit `--config` / `--credentials` / `--secrets`
-/// suppresses default `~/.config/temper` discovery (see [`load_for`]). An
-/// explicit config root may load its sibling `credentials.toml`, but the global
+/// Hermeticity: an explicit `--config` / `--secrets` suppresses default
+/// `~/.config/temper` discovery (see [`load_for`]). An explicit config root may
+/// load its sibling `credentials.toml`, but the global credentials file never
 /// credentials file never layers in behind an explicit deployment.
 pub fn run(inputs: DaemonInputs) -> Result<(), DaemonError> {
     let (resolved, loaded_paths) = load_for(&inputs).map_err(DaemonError::Load)?;

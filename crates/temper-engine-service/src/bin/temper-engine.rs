@@ -11,7 +11,7 @@ use std::process::ExitCode;
 const USAGE: &str = "\
 temper-engine — run only the orchestrator (engine) service
 
-usage: temper-engine [--config <PATH>] [--secrets <PATH>|--credentials <PATH>]
+usage: temper-engine [--config <PATH>] [--secrets <PATH>]
 
 Reads the same config + credentials files as the unified `temper daemon`, runs
 only the engine, and serves until SIGINT/SIGTERM. Equivalent to

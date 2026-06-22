@@ -316,26 +316,16 @@ fn xdg_config_home_wins_over_home() {
 
 #[test]
 fn temper_config_env_is_ignored() {
-    // `TEMPER_CONFIG` / `TEMPER_CREDENTIALS` no longer select the files: the path
-    // comes only from `--config` / `--credentials` and the XDG/HOME default
-    // location. With those env vars set but no explicit path and an empty
-    // PathResolver, discovery still finds NOTHING — the env files are ignored.
+    // `TEMPER_CONFIG` no longer selects the config file: file locations come
+    // only from `--config` / `--secrets` and the XDG/HOME default location.
+    // With that env var set but no explicit path and an empty PathResolver,
+    // discovery still finds NOTHING — the env-pointed file is ignored.
     let dir = temp_dir("env-config-ignored");
     let config_path = dir.join("custom-config.toml");
-    let credentials_path = dir.join("custom-credentials.toml");
     std::fs::write(&config_path, MINIMAL_CONFIG).expect("write config");
-    std::fs::write(
-        &credentials_path,
-        "schema_version = 1\n[agent.providers.anthropic]\ntype = \"api-key\"\nkey = \"sk-x\"\n",
-    )
-    .expect("write credentials");
 
     let mut env = EnvMap::new();
     env.insert("TEMPER_CONFIG", config_path.to_string_lossy().into_owned());
-    env.insert(
-        "TEMPER_CREDENTIALS",
-        credentials_path.to_string_lossy().into_owned(),
-    );
 
     let inputs = LoadInputs {
         explicit_config: None,
@@ -345,7 +335,7 @@ fn temper_config_env_is_ignored() {
     };
     let (resolved, loaded) = load_explicit(&inputs).expect("load resolves to defaults");
 
-    // The env-pointed files were ignored: nothing discovered, defaults only.
+    // The env-pointed file was ignored: nothing discovered, defaults only.
     assert!(
         loaded.config.is_none(),
         "TEMPER_CONFIG must not select a file, got {:?}",
@@ -353,7 +343,7 @@ fn temper_config_env_is_ignored() {
     );
     assert!(
         loaded.credentials.is_none(),
-        "TEMPER_CREDENTIALS must not select a file, got {:?}",
+        "env must not select a credentials file, got {:?}",
         loaded.credentials
     );
     assert!(resolved.engine.roles.is_empty());

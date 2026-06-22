@@ -27,7 +27,7 @@ alone.
    default-branch commit explicitly: a tiny `README.md` plus
    `.forgejo/workflows/ci.yml` copied from `config/ci.yml`.
 5. `run.sh` launches `temper serve standalone --config run/config.toml
-   --credentials run/credentials.toml`.
+   --secrets run/credentials.toml`.
 6. After standalone readiness, `run.sh` uses the site-admin token to file one
    unlabeled intake issue. That issue-created webhook is the demonstrated wake
    path.
