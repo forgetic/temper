@@ -164,8 +164,12 @@ fn run_init_collects_writes_and_provisions_offline() {
     assert_eq!(seen.name, "service");
     assert_eq!(seen.webhook_url, "http://127.0.0.1:8314/forgejo/webhook");
     assert!(!seen.existing_repo);
-    // The webhook secret file the adapter reads back is the one we wrote.
+    // The webhook secret and selected workflow files the adapter reads back are the ones we wrote.
     assert!(seen.webhook_secret_file.ends_with("webhook-secret"));
+    assert!(matches!(
+        seen.workflow_path.as_ref(),
+        Some(path) if path.ends_with("workflow.json")
+    ));
 
     // ── a final summary was emitted ──────────────────────────────────────────
     assert!(
@@ -403,6 +407,7 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
             provider_key: Some("sk-key".to_string()),
             provider: Some("deepseek".to_string()),
             provider_url: None,
+            workflow: None,
             bind: None,
         },
         ..Default::default()
@@ -545,6 +550,7 @@ fn non_interactive_with_provider_url_writes_providers_table() {
             provider_key: Some("sk-key".to_string()),
             provider: Some("deepseek".to_string()),
             provider_url: Some("http://localhost:9999/v1".to_string()),
+            workflow: None,
             bind: None,
         },
         ..Default::default()

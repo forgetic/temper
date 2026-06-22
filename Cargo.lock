@@ -1598,6 +1598,7 @@ dependencies = [
 name = "temper-cli-init"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "temper-cli-common",
  "temper-config",
  "temper-engine-io",

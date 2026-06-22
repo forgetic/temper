@@ -281,8 +281,8 @@ fn spawn_temper_run(
     fake_llm_url: &str,
     log: &Path,
 ) -> ChildGuard {
-    // The new CLI is config-file driven: standalone `temper daemon` (no
-    // --service) runs engine + worker + agent in one process. Deployment
+    // The new CLI is config-file driven: `temper serve standalone` runs engine
+    // + worker + agent in one process. Deployment
     // settings go in the config file; secrets (forge admin token, the engineer's
     // role identity, the dummy LLM api-key) go in a companion `credentials.toml`
     // passed via `--secrets`. The fake-LLM base URL is a provider profile
@@ -349,19 +349,20 @@ fn spawn_temper_run(
 
     // Hermeticity: point HOME / XDG_* at an isolated, empty dir under the temp
     // workspace so the spawned daemon can never discover the developer's or CI
-    // user's global ~/.config/temper/credentials.toml. With the explicit
-    // --config the daemon already suppresses default discovery (issue #202), but
+    // user's global ~/.config/temper/credentials.toml. With the explicit global
+    // --config, standalone suppresses default discovery (issue #202), but
     // isolating HOME makes the test independent of the box it runs on.
     let fake_home = workspace.join("home");
     std::fs::create_dir_all(fake_home.join(".config")).expect("fake home creates");
 
     let log_file = log_file(log);
     let child = Command::new(env!("CARGO_BIN_EXE_temper"))
-        .arg("daemon")
         .arg("--config")
         .arg(&config_path)
         .arg("--secrets")
         .arg(&credentials_path)
+        .arg("serve")
+        .arg("standalone")
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))
@@ -373,9 +374,9 @@ fn spawn_temper_run(
         .stdout(Stdio::from(log_file.try_clone().expect("log clones")))
         .stderr(Stdio::from(log_file))
         .spawn()
-        .expect("standalone `temper daemon` binary spawns");
+        .expect("standalone `temper serve standalone` binary spawns");
     ChildGuard {
-        label: "temper daemon",
+        label: "temper serve standalone",
         child,
         log: log.to_path_buf(),
     }

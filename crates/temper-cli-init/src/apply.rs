@@ -10,8 +10,7 @@
 use std::process::ExitCode;
 
 use temper_cli_common::{
-    EX_USAGE, EnvMap, LoadOptions, PathResolver, Prompter, TerminalPrompter, parse_common_args,
-    resolve_targets,
+    EX_USAGE, EnvMap, LoadOptions, PathResolver, Prompter, TerminalPrompter, resolve_targets,
 };
 use temper_config::{Config, Credentials};
 
@@ -25,11 +24,9 @@ Apply a temper deployment bundle to the forge.
 Loads config.toml + credentials.toml, provisions the configured Forgejo repo,
 users, labels, and webhook, then updates credentials.toml with minted tokens.
 
-Usage: temper apply [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] apply [OPTIONS]
 
 Options:
-  --config        <PATH>  Config file or bundle directory to apply
-  --secrets       <PATH>  Credentials file or bundle directory to update
   --existing-repo         Provision onto a repo that already exists
   --yes                   Skip the provisioning confirmation
   -h, --help              Print help";
@@ -59,7 +56,16 @@ struct ParsedApplyArgs {
 
 /// The unified binary's `temper apply` entry point.
 pub fn apply_main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
-    let parsed = match parse_apply_args(args) {
+    apply_main_with_options(args, env, paths, LoadOptions::default())
+}
+
+pub fn apply_main_with_options(
+    args: Vec<String>,
+    env: &EnvMap,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
+    let parsed = match parse_apply_args(args, options) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("temper apply: {error}\n\n{APPLY_USAGE}");
@@ -89,21 +95,23 @@ pub fn apply_main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> Exit
     }
 }
 
-fn parse_apply_args(args: Vec<String>) -> Result<ParsedApplyArgs, String> {
-    let common = parse_common_args(args)?;
-    if common.help {
+fn parse_apply_args(args: Vec<String>, options: LoadOptions) -> Result<ParsedApplyArgs, String> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    {
         return Ok(ParsedApplyArgs {
             help: true,
-            options: common.options,
+            options,
             ..Default::default()
         });
     }
 
     let mut parsed = ParsedApplyArgs {
-        options: common.options,
+        options,
         ..Default::default()
     };
-    for arg in common.rest {
+    for arg in args {
         match arg.as_str() {
             "--existing-repo" => parsed.existing_repo = true,
             "--yes" => parsed.yes = true,
@@ -216,6 +224,7 @@ fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
         name: repo.name.clone(),
         webhook_url: format!("http://{}/forgejo/webhook", resolved.engine.bind),
         webhook_secret_file,
+        workflow_path: resolved.engine.workflow_file.clone(),
         existing_repo: opts.existing_repo,
     };
 
@@ -393,17 +402,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_yes_and_existing_repo() {
-        let parsed = parse_apply_args(vec![
-            "--config".to_string(),
-            "bundle".to_string(),
-            "--yes".to_string(),
-            "--existing-repo".to_string(),
-        ])
+    fn parse_accepts_yes_existing_repo_and_global_options() {
+        let parsed = parse_apply_args(
+            vec!["--yes".to_string(), "--existing-repo".to_string()],
+            LoadOptions {
+                config: Some("bundle".into()),
+                credentials: None,
+            },
+        )
         .expect("parse");
 
         assert_eq!(parsed.options.config, Some("bundle".into()));
         assert!(parsed.yes);
         assert!(parsed.existing_repo);
+    }
+
+    #[test]
+    fn parse_rejects_local_config_flag() {
+        let err = parse_apply_args(
+            vec!["--config".to_string(), "bundle".to_string()],
+            LoadOptions::default(),
+        )
+        .expect_err("--config is global-only");
+
+        assert!(err.contains("--config"), "{err}");
     }
 }

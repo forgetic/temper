@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 
+use temper_forge::CreateRepository;
 use temper_provision::Provisioned;
 
 /// The non-secret + secret inputs the provisioning step needs, distilled from
@@ -31,6 +32,8 @@ pub struct ProvisionRequest {
     pub webhook_url: String,
     /// Path to the freshly written webhook secret the adapter reads back.
     pub webhook_secret_file: PathBuf,
+    /// Path to the workflow file whose labels and role bindings should be provisioned.
+    pub workflow_path: Option<PathBuf>,
     /// Provision onto a pre-existing repo (`--existing-repo`).
     pub existing_repo: bool,
 }
@@ -60,8 +63,7 @@ pub trait Provisioner {
 /// project files are left to explicit operator/template actions.
 pub struct ForgejoProvisioner;
 
-/// Token scopes provisioned role workers need for the embedded basic-delivery
-/// workflow.
+/// Token scopes provisioned role workers need for init-selected local workflows.
 const ROLE_TOKEN_SCOPES: &[temper_forge::TokenScope] = &[
     temper_forge::TokenScope::WriteRepository,
     temper_forge::TokenScope::WriteIssue,
@@ -77,11 +79,19 @@ fn build_init_plan(
     request: &ProvisionRequest,
     webhook: temper_forge::WebhookSpec,
 ) -> Result<temper_provision::ProvisionPlan, String> {
-    let workflow = temper_reference_delivery::basic_delivery_workflow();
-    let config = temper_reference_delivery::runner_config_for(
-        &workflow,
-        temper_reference_delivery::repo_input(),
-    );
+    let workflow = match &request.workflow_path {
+        Some(path) => {
+            temper_reference_delivery::load_workflow(path).map_err(|error| error.to_string())?
+        }
+        None => temper_reference_delivery::basic_delivery_workflow(),
+    };
+    let repository = CreateRepository {
+        owner: request.owner.clone(),
+        name: request.name.clone(),
+        default_branch: "main".to_string(),
+        description: None,
+    };
+    let config = temper_reference_delivery::runner_config_for(&workflow, repository);
     let default_branch = config.repository.default_branch.clone();
     let plan_options = temper_provision::ProvisionOptions {
         existing_repo: request.existing_repo,
@@ -171,6 +181,7 @@ mod tests {
             name: "service".to_string(),
             webhook_url: "http://127.0.0.1:8314/forgejo/webhook".to_string(),
             webhook_secret_file: PathBuf::from("webhook-secret"),
+            workflow_path: None,
             existing_repo: false,
         };
         let webhook = temper_forge::WebhookSpec {

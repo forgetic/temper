@@ -19,16 +19,16 @@ alone.
    `fixtures/basic-delivery.json` and uses the printed URL as Temper's
    DeepSeek-compatible provider URL.
 3. It creates the Forgejo site admin, then runs
-   `temper init --non-interactive --apply --yes` with the fixed repo, forge URL,
-   bind address, admin user, provider, config, and secrets paths. The explicit
+   `temper --config run/config.toml --secrets run/credentials.toml init --non-interactive --apply --yes`
+   with the fixed repo, forge URL, bind address, admin user, and provider. The explicit
    apply step provisions the empty repo, labels, webhook, and writes
    `run/config.toml`, `run/credentials.toml`, `run/workflow.json`, and
    `run/webhook-secret`.
 4. Because init does not seed project content, `run.sh` creates the initial
    default-branch commit explicitly: a tiny `README.md` plus
    `.forgejo/workflows/ci.yml` copied from `config/ci.yml`.
-5. `run.sh` launches `temper serve standalone --config run/config.toml
-   --secrets run/credentials.toml`.
+5. `run.sh` launches
+   `temper --config run/config.toml --secrets run/credentials.toml serve standalone`.
 6. After standalone readiness, `run.sh` uses the site-admin token to file one
    unlabeled intake issue. That issue-created webhook is the demonstrated wake
    path.

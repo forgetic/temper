@@ -11,7 +11,6 @@
 //! config schema, resolution, and writing all live in [`temper_config`], and the
 //! shared file-writing/exit-code helpers in [`temper_cli_common`].
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_cli_common::{
@@ -30,6 +29,8 @@ use temper_config::{
 pub struct ConfigInputs<'a> {
     /// The program arguments after `config` (the subcommand + its flags).
     pub args: Vec<String>,
+    /// Global file-location options parsed before `config`.
+    pub options: LoadOptions,
     /// The injected environment snapshot (used only for `$HOME` / `$XDG_*`
     /// path expansion; no environment variable selects the config files).
     pub env: &'a EnvMap,
@@ -61,7 +62,7 @@ fn load_for(
 pub const USAGE: &str = "\
 Guided or programmatic configuration.
 
-Usage: temper config <COMMAND> [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] config <COMMAND> [OPTIONS]
 
 Commands:
   validate  Load and validate the config + credentials, reporting any problems
@@ -69,13 +70,16 @@ Commands:
   init      Write starter config.toml + credentials.toml templates
 
 Options:
-  --config  <PATH>  Path to configuration file or bundle directory
-  --secrets <PATH>  Explicit secret source directory or credentials.toml
-  --force           (init) overwrite existing files
-  -h, --help        Print help";
+  --force     (init) overwrite existing files
+  -h, --help  Print help";
 
 pub fn main(inputs: ConfigInputs) -> ExitCode {
-    let ConfigInputs { args, env, paths } = inputs;
+    let ConfigInputs {
+        args,
+        options,
+        env,
+        paths,
+    } = inputs;
     let Some((action, rest)) = args.split_first() else {
         println!("{USAGE}");
         return ExitCode::from(EX_USAGE);
@@ -85,9 +89,9 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        "validate" => run("temper config", validate(rest, env, paths)),
-        "show" => run("temper config", show(rest, env, paths)),
-        "init" => run("temper config", init(rest, env, paths)),
+        "validate" => run("temper config", validate(rest, &options, env, paths)),
+        "show" => run("temper config", show(rest, &options, env, paths)),
+        "init" => run("temper config", init(rest, &options, env, paths)),
         other => {
             eprintln!("temper config: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(EX_USAGE)
@@ -95,34 +99,27 @@ pub fn main(inputs: ConfigInputs) -> ExitCode {
     }
 }
 
-/// Parses the `--config` / `--secrets` flags (and, when `allow_force`, the
-/// `--force` flag) from a config-subcommand's args.
-fn parse_options(args: &[String], allow_force: bool) -> Result<(LoadOptions, bool), String> {
-    let mut options = LoadOptions::default();
+/// Parses config-subcommand-local flags. File-location flags are global-only and
+/// are supplied via [`ConfigInputs::options`].
+fn parse_options(args: &[String], allow_force: bool) -> Result<bool, String> {
     let mut force = false;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
+    for arg in args {
         match arg.as_str() {
-            "--config" => {
-                options.config = Some(PathBuf::from(temper_cli_common::next_value(
-                    &mut iter, "--config",
-                )?))
-            }
-            "--secrets" => {
-                options.credentials = Some(PathBuf::from(temper_cli_common::next_value(
-                    &mut iter, arg,
-                )?))
-            }
             "--force" if allow_force => force = true,
             other => return Err(format!("unexpected argument `{other}`")),
         }
     }
-    Ok((options, force))
+    Ok(force)
 }
 
-fn validate(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitCode, String> {
-    let (options, _) = parse_options(args, false)?;
-    let (resolved, loaded) = load_for(&options, env, paths).map_err(|error| error.to_string())?;
+fn validate(
+    args: &[String],
+    options: &LoadOptions,
+    env: &EnvMap,
+    paths: &PathResolver,
+) -> Result<ExitCode, String> {
+    parse_options(args, false)?;
+    let (resolved, loaded) = load_for(options, env, paths).map_err(|error| error.to_string())?;
     if let Some(path) = &loaded.config {
         println!("config:      {}", path.display());
     } else {
@@ -156,16 +153,26 @@ fn validate(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitC
     }
 }
 
-fn show(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitCode, String> {
-    let (options, _) = parse_options(args, false)?;
-    let (resolved, _loaded) = load_for(&options, env, paths).map_err(|error| error.to_string())?;
+fn show(
+    args: &[String],
+    options: &LoadOptions,
+    env: &EnvMap,
+    paths: &PathResolver,
+) -> Result<ExitCode, String> {
+    parse_options(args, false)?;
+    let (resolved, _loaded) = load_for(options, env, paths).map_err(|error| error.to_string())?;
     print!("{}", render(&resolved));
     Ok(ExitCode::SUCCESS)
 }
 
-fn init(args: &[String], env: &EnvMap, paths: &PathResolver) -> Result<ExitCode, String> {
-    let (options, force) = parse_options(args, true)?;
-    let targets = resolve_targets(&options, env, paths)?;
+fn init(
+    args: &[String],
+    options: &LoadOptions,
+    env: &EnvMap,
+    paths: &PathResolver,
+) -> Result<ExitCode, String> {
+    let force = parse_options(args, true)?;
+    let targets = resolve_targets(options, env, paths)?;
 
     let _ = write_new_file(&targets.config, &config_template(), force)?;
     match write_new_file(&targets.credentials, &credentials_template(), force)? {

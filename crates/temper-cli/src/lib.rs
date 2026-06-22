@@ -14,9 +14,10 @@
 mod operators;
 mod responders;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use temper_config::EX_USAGE;
+use temper_config::{EX_USAGE, LoadOptions};
 
 // Re-exported so `src/bin/*` and tests construct the CLI's injected environment
 // snapshot with `temper_cli::CliEnv`.
@@ -46,10 +47,10 @@ Commands:
   agent   Run an agent session (usually invoked by the daemon)
 
 Options:
-  --config  <DIR|FILE>  Path to configuration file or bundle directory
-  --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
-  -h, --help            Print help
-  -V, --version         Print version
+  -c, --config <DIR|FILE>  Path to configuration file or bundle directory
+      --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
+  -h, --help              Print help
+  -V, --version           Print version
 
 Run `temper <command> --help` for subcommand usage.";
 
@@ -85,35 +86,37 @@ pub fn run(cli: CliEnv) -> ExitCode {
         println!("{USAGE}");
         return ExitCode::from(EX_USAGE);
     };
-    let rest = apply_global_args(&command, parsed.rest, parsed.globals);
-    dispatch(&command, rest, &env, &paths)
+    dispatch(&command, parsed.rest, &env, &paths, parsed.globals)
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct ParsedTopLevelArgs {
     command: Option<String>,
     rest: Vec<String>,
-    globals: Vec<String>,
+    globals: LoadOptions,
 }
 
-/// Parses leading global file-location flags before the subcommand. Subcommand
-/// parsers still accept the same flags in their local position; this pass exists
-/// so the long-term UX form (`temper --config … --secrets … serve standalone`)
-/// reaches the same code paths.
+/// Parses leading global file-location flags before the subcommand. The
+/// long-term UX accepts these options only in this leading position, for example
+/// `temper --config … --secrets … serve standalone`.
 fn parse_top_level_args(args: Vec<String>) -> Result<ParsedTopLevelArgs, String> {
     let mut iter = args.into_iter();
-    let mut globals = Vec::new();
+    let mut globals = LoadOptions::default();
     while let Some(arg) = iter.next() {
-        if matches!(arg.as_str(), "--config" | "--secrets") {
-            let value = next_global_value(&mut iter, &arg)?;
-            globals.push(arg);
-            globals.push(value);
-        } else {
-            return Ok(ParsedTopLevelArgs {
-                command: Some(arg),
-                rest: iter.collect(),
-                globals,
-            });
+        match arg.as_str() {
+            "-c" | "--config" => {
+                globals.config = Some(PathBuf::from(next_global_value(&mut iter, &arg)?));
+            }
+            "--secrets" => {
+                globals.credentials = Some(PathBuf::from(next_global_value(&mut iter, &arg)?));
+            }
+            _ => {
+                return Ok(ParsedTopLevelArgs {
+                    command: Some(arg),
+                    rest: iter.collect(),
+                    globals,
+                });
+            }
         }
     }
     Ok(ParsedTopLevelArgs {
@@ -132,36 +135,6 @@ fn next_global_value(
         .ok_or_else(|| format!("{flag} requires a value"))
 }
 
-fn apply_global_args(command: &str, rest: Vec<String>, globals: Vec<String>) -> Vec<String> {
-    if globals.is_empty() {
-        return rest;
-    }
-    match command {
-        "init" | "apply" | "daemon" => prepend_globals(globals, rest),
-        // These commands reserve argv[0] after the command for a nested action
-        // (`config validate`) or component (`serve standalone`), so global flags
-        // must be inserted after that token rather than before it.
-        "config" | "serve" => insert_globals_after_first(rest, globals),
-        _ => rest,
-    }
-}
-
-fn prepend_globals(mut globals: Vec<String>, rest: Vec<String>) -> Vec<String> {
-    globals.extend(rest);
-    globals
-}
-
-fn insert_globals_after_first(rest: Vec<String>, globals: Vec<String>) -> Vec<String> {
-    let mut iter = rest.into_iter();
-    let Some(first) = iter.next() else {
-        return Vec::new();
-    };
-    let mut out = vec![first];
-    out.extend(globals);
-    out.extend(iter);
-    out
-}
-
 /// Dispatch a command + its remaining args over the injected `env` / `paths`
 /// snapshot. Separated from [`run`] for testing.
 pub fn dispatch(
@@ -169,13 +142,19 @@ pub fn dispatch(
     args: Vec<String>,
     env: &temper_cli_common::EnvMap,
     paths: &temper_cli_common::PathResolver,
+    globals: LoadOptions,
 ) -> ExitCode {
     match command {
-        "init" => temper_cli_init::main(args, env, paths),
-        "apply" => temper_cli_init::apply_main(args, env, paths),
-        "serve" => temper_cli_daemon::serve_main(args, env, paths),
-        "config" => temper_cli_config::main(temper_cli_config::ConfigInputs { args, env, paths }),
-        "daemon" => temper_cli_daemon::main(args, env, paths),
+        "init" => temper_cli_init::main_with_options(args, env, paths, globals),
+        "apply" => temper_cli_init::apply_main_with_options(args, env, paths, globals),
+        "serve" => temper_cli_daemon::serve_main_with_options(args, env, paths, globals),
+        "config" => temper_cli_config::main(temper_cli_config::ConfigInputs {
+            args,
+            options: globals,
+            env,
+            paths,
+        }),
+        "daemon" => temper_cli_daemon::main_with_options(args, env, paths, globals),
         // The agent is its own process entry point and reads the worker-injected
         // env through its sanctioned `entry` module (issue #201); it needs no
         // snapshot from here.
@@ -208,7 +187,9 @@ pub fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{USAGE, apply_global_args, parse_top_level_args};
+    use std::path::PathBuf;
+
+    use super::{USAGE, parse_top_level_args};
 
     #[test]
     fn top_level_usage_lists_serve_command() {
@@ -233,89 +214,51 @@ mod tests {
         assert_eq!(parsed.command.as_deref(), Some("serve"));
         assert_eq!(parsed.rest, vec!["standalone".to_string()]);
         assert_eq!(
-            parsed.globals,
-            vec![
-                "--config".to_string(),
-                "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-            ]
+            parsed.globals.config,
+            Some(PathBuf::from("deploy/config.toml"))
+        );
+        assert_eq!(
+            parsed.globals.credentials,
+            Some(PathBuf::from("deploy/credentials.toml"))
         );
     }
 
     #[test]
-    fn global_options_are_prepended_for_apply() {
-        let args = apply_global_args(
-            "apply",
-            vec!["--yes".to_string()],
-            vec![
-                "--config".to_string(),
-                "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-            ],
-        );
+    fn short_config_is_a_global_option() {
+        let parsed = parse_top_level_args(vec![
+            "-c".to_string(),
+            "deploy".to_string(),
+            "init".to_string(),
+            "--yes".to_string(),
+        ])
+        .expect("global args parse");
 
-        assert_eq!(
-            args,
-            vec![
-                "--config".to_string(),
-                "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-                "--yes".to_string(),
-            ]
-        );
+        assert_eq!(parsed.command.as_deref(), Some("init"));
+        assert_eq!(parsed.rest, vec!["--yes".to_string()]);
+        assert_eq!(parsed.globals.config, Some(PathBuf::from("deploy")));
+        assert_eq!(parsed.globals.credentials, None);
     }
 
     #[test]
-    fn global_options_are_inserted_after_config_action() {
-        let args = apply_global_args(
-            "config",
-            vec!["validate".to_string()],
-            vec![
-                "--config".to_string(),
-                "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-            ],
-        );
+    fn config_and_secrets_after_command_are_not_global_options() {
+        let parsed = parse_top_level_args(vec![
+            "serve".to_string(),
+            "standalone".to_string(),
+            "--config".to_string(),
+            "deploy/config.toml".to_string(),
+        ])
+        .expect("top-level parse succeeds");
 
+        assert_eq!(parsed.command.as_deref(), Some("serve"));
         assert_eq!(
-            args,
-            vec![
-                "validate".to_string(),
-                "--config".to_string(),
-                "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn global_options_are_inserted_after_serve_component() {
-        let args = apply_global_args(
-            "serve",
-            vec!["standalone".to_string(), "--help".to_string()],
-            vec![
-                "--config".to_string(),
-                "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-            ],
-        );
-
-        assert_eq!(
-            args,
+            parsed.rest,
             vec![
                 "standalone".to_string(),
                 "--config".to_string(),
                 "deploy/config.toml".to_string(),
-                "--secrets".to_string(),
-                "deploy/credentials.toml".to_string(),
-                "--help".to_string(),
             ]
         );
+        assert_eq!(parsed.globals.config, None);
+        assert_eq!(parsed.globals.credentials, None);
     }
 }

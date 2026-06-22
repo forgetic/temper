@@ -12,7 +12,7 @@
 //! `<dir>/config.toml`, and `--secrets <dir>` resolves to
 //! `<dir>/credentials.toml`. When the explicit path does not exist yet, a
 //! `.toml` suffix is treated as a file and any other path is treated as a
-//! directory; this lets `temper init --config ./bundle` create a new local
+//! directory; this lets `temper --config ./bundle init` create a new local
 //! bundle directory.
 //!
 //! Every function here takes its inputs explicitly — a [`PathResolver`] for the

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Shared parsing for the `--config` / `--secrets` flags every temper binary
-//! accepts, so the slim per-service binaries stay one-liners and the unified
-//! binary parses these the same way.
+//! Shared parsing for the `--config` / `--secrets` flags accepted by slim
+//! per-service binaries. The unified `temper` binary parses these as top-level
+//! global options before dispatching to subcommands.
 
 use std::path::PathBuf;
 

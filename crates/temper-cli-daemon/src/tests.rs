@@ -16,7 +16,7 @@ use temper_config::{EnvMap, ExposeSecret, PathResolver};
 
 use super::{
     DaemonInputs, SERVE_STANDALONE_USAGE, SERVE_USAGE, ServeInvocation, load_for,
-    parse_serve_invocation,
+    parse_daemon_args, parse_serve_invocation,
 };
 
 const POISONED_TOKEN: &str = "POISONED-GLOBAL-TOKEN-DO-NOT-USE";
@@ -269,8 +269,9 @@ fn serve_usage_documents_supported_local_dev_path() {
         SERVE_USAGE.contains("Not implemented"),
         "serve help should make unsupported distributed components explicit"
     );
-    assert!(SERVE_STANDALONE_USAGE.contains("temper serve standalone"));
-    assert!(SERVE_STANDALONE_USAGE.contains("--secrets"));
+    assert!(SERVE_STANDALONE_USAGE.contains("serve standalone"));
+    assert!(!SERVE_STANDALONE_USAGE.contains("--secrets"));
+    assert!(!SERVE_STANDALONE_USAGE.contains("--config"));
     assert!(
         SERVE_STANDALONE_USAGE.contains("temper daemon"),
         "standalone help should identify the compatibility wrapper"
@@ -291,23 +292,26 @@ fn serve_help_forms_are_parsed_without_starting_daemon() {
 }
 
 #[test]
-fn serve_standalone_maps_to_daemon_standalone_args() {
+fn serve_standalone_maps_to_daemon_standalone() {
     assert_eq!(
         parse_serve_invocation(vec!["standalone".to_string()]).expect("standalone command parses"),
-        ServeInvocation::Standalone(Vec::new())
+        ServeInvocation::Standalone
     );
+}
 
-    let args = vec![
-        "standalone".to_string(),
-        "--config".to_string(),
-        "deploy/config.toml".to_string(),
-        "--secrets".to_string(),
-        "deploy/credentials.toml".to_string(),
-    ];
-    assert_eq!(
-        parse_serve_invocation(args.clone()).expect("standalone command parses"),
-        ServeInvocation::Standalone(args[1..].to_vec())
-    );
+#[test]
+fn serve_standalone_rejects_local_config_and_secrets_flags() {
+    for flag in ["--config", "--secrets", "-c"] {
+        let error = parse_serve_invocation(vec![
+            "standalone".to_string(),
+            flag.to_string(),
+            "deploy/config.toml".to_string(),
+        ])
+        .expect_err("file-location flags must be global-only");
+
+        assert!(error.contains(flag), "{error}");
+        assert!(error.contains("global option"), "{error}");
+    }
 }
 
 #[test]
@@ -343,5 +347,16 @@ fn serve_rejects_distributed_components_in_this_shim() {
             .expect_err("distributed serve component should be rejected");
         assert!(error.contains("not implemented"));
         assert!(error.contains("temper serve standalone"));
+    }
+}
+
+#[test]
+fn daemon_rejects_local_config_and_secrets_flags() {
+    for flag in ["--config", "--secrets", "-c"] {
+        let error = parse_daemon_args(vec![flag.to_string(), "deploy/config.toml".to_string()])
+            .expect_err("file-location flags must be global-only");
+
+        assert!(error.contains(flag), "{error}");
+        assert!(error.contains("global option"), "{error}");
     }
 }

@@ -2,8 +2,9 @@
 # Fixed, minimal launcher for the basic-delivery happy-path demo.
 #
 # It boots throwaway Forgejo + forgejo-runner, starts the local jig fake LLM,
-# runs `temper init --apply --yes`, commits the tiny demo project/CI baseline, launches
-# `temper serve standalone`, then files one site-admin intake issue after the
+# runs `temper --config ... --secrets ... init --apply --yes`, commits the tiny
+# demo project/CI baseline, launches `temper --config ... --secrets ... serve
+# standalone`, then files one site-admin intake issue after the
 # webhook listener is ready.
 
 set -eu
@@ -134,6 +135,9 @@ resolve_binaries() {
     ( cd "$WORKSPACE_ROOT" && cargo build -p temper ) || die 'cargo build -p temper failed'
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
 
+    _global_help=$("$RUN_BIN" --help 2>&1 || true)
+    case "$_global_help" in *--config*) ;; *) die 'temper help lacks global --config' ;; esac
+    case "$_global_help" in *--secrets*) ;; *) die 'temper help lacks global --secrets' ;; esac
     _init_help=$("$RUN_BIN" init --help 2>&1 || true)
     case "$_init_help" in *--non-interactive*) ;; *) die 'temper init lacks --non-interactive' ;; esac
     case "$_init_help" in *--apply*) ;; *) die 'temper init lacks --apply' ;; esac
@@ -141,8 +145,8 @@ resolve_binaries() {
     case "$_init_help" in *--provider-url*) ;; *) die 'temper init lacks --provider-url' ;; esac
     case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
-    case "$_serve_help" in *--config*) ;; *) die 'temper serve standalone lacks --config' ;; esac
-    case "$_serve_help" in *--secrets*) ;; *) die 'temper serve standalone lacks --secrets' ;; esac
+    case "$_serve_help" in *--config*) die 'temper serve standalone documents non-canonical --config' ;; *) ;; esac
+    case "$_serve_help" in *--secrets*) die 'temper serve standalone documents non-canonical --secrets' ;; *) ;; esac
 
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
@@ -290,22 +294,21 @@ bootstrap_admin() {
 }
 
 run_temper_init() {
-    log "running temper init --apply --yes --non-interactive for $REPO ..."
+    log "running temper --config/--secrets init --apply --yes --non-interactive for $REPO ..."
     : >"$LOG_DIR/init.log"
     : >"$LOG_DIR/provision.log"
     (
         TEMPER_INIT_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         TEMPER_INIT_PROVIDER_KEY="$INIT_PROVIDER_KEY" \
-            "$RUN_BIN" init --non-interactive --force --apply --yes \
+            "$RUN_BIN" --config "$CONFIG_FILE" --secrets "$CREDENTIALS_FILE" \
+                init --non-interactive --force --apply --yes \
                 --forge "$BASE_URL" \
                 --repo "$REPO" \
                 --bind "$DAEMON_BIND" \
                 --workspace "$RUN_DIR/workspaces" \
                 --admin-user "$ADMIN_USER" \
                 --provider deepseek \
-                --provider-url "$JIG_PROVIDER_URL" \
-                --config "$CONFIG_FILE" \
-                --secrets "$CREDENTIALS_FILE"
+                --provider-url "$JIG_PROVIDER_URL"
     ) >"$LOG_DIR/init.log" 2>&1 || die 'temper init failed (see logs/init.log)'
 
     [ -f "$CONFIG_FILE" ] || die "temper init did not write $CONFIG_FILE"
@@ -411,7 +414,7 @@ boot_run() {
     mkdir -p "$RUN_DIR/workspaces"
     log "starting temper serve standalone at $DAEMON_BIND ..."
     : >"$LOG_DIR/run.log"
-    "$RUN_BIN" serve standalone --config "$CONFIG_FILE" --secrets "$CREDENTIALS_FILE" \
+    "$RUN_BIN" --config "$CONFIG_FILE" --secrets "$CREDENTIALS_FILE" serve standalone \
         >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
