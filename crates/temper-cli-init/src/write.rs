@@ -135,14 +135,40 @@ pub fn write_artifacts(artifacts: &InitArtifacts, force: bool) -> Result<(), Ini
     Ok(())
 }
 
+/// Builds + writes the local `credentials.toml` (chmod 600) before any forge
+/// mutation. It contains only secrets the operator supplied locally: the admin
+/// password (so a later apply can mint a token) and the provider key. Provisioned
+/// role/bot tokens are added only by [`write_provisioned_credentials`].
+pub fn write_local_credentials(
+    answers: &Answers,
+    artifacts: &InitArtifacts,
+    force: bool,
+) -> Result<(), InitError> {
+    let mut forge_users = BTreeMap::new();
+    forge_users.insert(
+        answers.admin_user.clone(),
+        temper_config::forge_user(None, None, Some(answers.admin_password.clone()), None),
+    );
+    write_credentials_with_users(answers, artifacts, forge_users, force)
+}
+
 /// Builds + writes `credentials.toml` (chmod 600) from the admin identity (Q4),
 /// the minted role/bot identities, and the provider key.
-pub fn write_credentials(
+pub fn write_provisioned_credentials(
     answers: &Answers,
     artifacts: &InitArtifacts,
     outcome: &ProvisionOutcome,
     force: bool,
 ) -> Result<(), InitError> {
+    let forge_users = provisioned_forge_users(answers, outcome);
+    write_credentials_with_users(answers, artifacts, forge_users, force)
+}
+
+/// Maps a provisioning outcome into the `[forge.users.*]` credentials table.
+pub fn provisioned_forge_users(
+    answers: &Answers,
+    outcome: &ProvisionOutcome,
+) -> BTreeMap<String, temper_config::ForgeUser> {
     let provisioned = &outcome.provisioned;
     // Map the provisioned role + bot identities into the plain-data seam type,
     // keyed by user/role name, then fold them into forge.users credentials.
@@ -185,7 +211,15 @@ pub fn write_credentials(
             Some(outcome.admin_token.clone()),
         ),
     );
+    forge_users
+}
 
+fn write_credentials_with_users(
+    answers: &Answers,
+    artifacts: &InitArtifacts,
+    forge_users: BTreeMap<String, temper_config::ForgeUser>,
+    force: bool,
+) -> Result<(), InitError> {
     let credentials = build_credentials(&CredentialInputs {
         forge_users,
         provider_key: ProviderKeyInput {
