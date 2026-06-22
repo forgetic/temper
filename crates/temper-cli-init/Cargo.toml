@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The interactive `temper init` command: prompt for forge/admin/provider, write config.toml + workflow.json + a fresh webhook-secret, provision the forge idempotently, and write credentials.toml. Orchestration only — config writing lives in temper-config, provisioning in temper-provision."
+description = "The interactive `temper init` command: prompt for forge/admin/provider, write config.toml + workflow.json + a fresh webhook-secret + local credentials.toml, and optionally provision the forge when --apply is explicit. Orchestration only — config writing lives in temper-config, provisioning in temper-provision."
 
 [dependencies]
 temper-cli-common = { path = "../temper-cli-common" }

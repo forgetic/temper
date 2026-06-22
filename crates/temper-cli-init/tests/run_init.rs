@@ -3,12 +3,13 @@
 //! Full-flow unit test of `temper init`'s testable core, `run_init`, EXCEPT the
 //! live forge call.
 //!
-//! The provisioning step is the only one that touches a network; `run_init`
-//! takes a `&mut dyn Provisioner`, so this test passes a [`StubProvisioner`]
-//! that returns a canned [`Provisioned`] without a forge. Everything else —
-//! collecting answers (including defaults-on-empty), building the documents,
-//! writing config.toml / workflow.json / webhook-secret / credentials.toml, and
-//! the 0600 mode on the two secret files — runs for real against a temp dir.
+//! The provisioning step is the only one that touches a network and now runs
+//! only on the explicit apply path; `run_init` takes a `&mut dyn Provisioner`,
+//! so these tests pass a [`StubProvisioner`] that returns a canned
+//! [`Provisioned`] without a forge. Everything else — collecting answers
+//! (including defaults-on-empty), building the documents, writing config.toml /
+//! workflow.json / webhook-secret / credentials.toml, and the 0600 mode on the
+//! two secret files — runs for real against a temp dir.
 //!
 //! Issue #183's e2e reuses this exact seam: `run_init` + `ScriptedPrompter` +
 //! `InitOptions`, but with a real `ForgejoProvisioner` instead of the stub.
@@ -83,6 +84,8 @@ fn run_init_collects_writes_and_provisions_offline() {
         },
         force: false,
         existing_repo: false,
+        apply: true,
+        yes: true,
         workspace: None,
         ..Default::default()
     };
@@ -197,6 +200,8 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
             credentials: Some(credentials_path.clone()),
         },
         topology: InitTopology::Standalone,
+        apply: true,
+        yes: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
             repo: Some(RepoSelection {
@@ -250,6 +255,89 @@ fn run_init_uses_local_dev_flag_overrides_in_artifacts_and_provisioning() {
 }
 
 #[test]
+fn run_init_without_apply_writes_local_artifacts_and_skips_provisioning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.toml");
+    let credentials_path = dir.path().join("credentials.toml");
+
+    let mut prompter = ScriptedPrompter::new([
+        "http://localhost:3000".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "root".to_string(),
+        "admin-pass".to_string(),
+        "sk-deepseek-xyz".to_string(),
+    ]);
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(config_path.clone()),
+            credentials: Some(credentials_path.clone()),
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    run_init(&mut prompter, &mut provisioner, &opts).expect("local init succeeds");
+
+    assert!(
+        provisioner.seen.is_none(),
+        "init without --apply must not provision"
+    );
+    assert!(config_path.is_file(), "config.toml written");
+    assert!(
+        dir.path().join("workflow.json").is_file(),
+        "workflow.json written"
+    );
+    assert!(
+        dir.path().join("webhook-secret").is_file(),
+        "webhook secret written"
+    );
+    let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
+    assert!(creds.contains("password = \"admin-pass\""), "{creds}");
+    assert!(creds.contains("sk-deepseek-xyz"), "{creds}");
+    assert!(!creds.contains("admin-rest-token"), "{creds}");
+    assert!(!creds.contains("token-architect"), "{creds}");
+    assert!(
+        prompter
+            .notes
+            .iter()
+            .any(|note| note.contains("Skipped forge provisioning")),
+        "summary should say provisioning was skipped: {:?}",
+        prompter.notes
+    );
+}
+
+#[test]
+fn non_interactive_apply_requires_yes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut prompter = ScriptedPrompter::new(Vec::<String>::new());
+    let opts = InitOptions {
+        options: LoadOptions {
+            config: Some(dir.path().join("config.toml")),
+            credentials: Some(dir.path().join("credentials.toml")),
+        },
+        non_interactive: true,
+        apply: true,
+        overrides: InitOverrides {
+            forge_url: Some("http://forge.local:3000".to_string()),
+            admin_user: Some("root".to_string()),
+            admin_password: Some("admin-pass".to_string()),
+            provider_key: Some("sk-key".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut provisioner = StubProvisioner { seen: None };
+
+    let err = run_init(&mut prompter, &mut provisioner, &opts)
+        .expect_err("non-interactive --apply without --yes should fail");
+
+    assert!(err.to_string().contains("requires --yes"), "{err}");
+    assert!(provisioner.seen.is_none());
+    assert!(!dir.path().join("config.toml").exists());
+}
+
+#[test]
 fn run_init_refuses_to_clobber_without_force() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("config.toml");
@@ -272,6 +360,8 @@ fn run_init_refuses_to_clobber_without_force() {
         },
         force: false,
         existing_repo: false,
+        apply: true,
+        yes: true,
         workspace: None,
         ..Default::default()
     };
@@ -300,6 +390,8 @@ fn non_interactive_with_all_overrides_succeeds_without_consuming_answers() {
             credentials: Some(credentials_path.clone()),
         },
         non_interactive: true,
+        apply: true,
+        yes: true,
         overrides: InitOverrides {
             forge_url: Some("http://forge.local:3000".to_string()),
             repo: Some(RepoSelection {
@@ -397,6 +489,8 @@ fn non_interactive_flag_off_ignores_env_overrides() {
             credentials: Some(dir.path().join("credentials.toml")),
         },
         non_interactive: false, // NOT non-interactive
+        apply: true,
+        yes: true,
         overrides: InitOverrides {
             // These would be populated from env in main(), but should be
             // ignored since non_interactive is false.

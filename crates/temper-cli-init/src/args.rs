@@ -92,6 +92,8 @@ pub(crate) struct ParsedInitArgs {
     pub(crate) options: LoadOptions,
     pub(crate) force: bool,
     pub(crate) existing_repo: bool,
+    pub(crate) apply: bool,
+    pub(crate) yes: bool,
     pub(crate) topology: InitTopology,
     pub(crate) overrides: InitOverrides,
     pub(crate) workspace: Option<PathBuf>,
@@ -117,6 +119,8 @@ pub(crate) fn parse_init_args(args: Vec<String>) -> Result<ParsedInitArgs, Strin
         match arg.as_str() {
             "--force" => parsed.force = true,
             "--existing-repo" => parsed.existing_repo = true,
+            "--apply" => parsed.apply = true,
+            "--yes" => parsed.yes = true,
             "--topology" => {
                 let topology = init_value(&mut rest, "--topology")?;
                 parsed.topology = InitTopology::parse(&topology)?;
@@ -194,12 +198,16 @@ mod tests {
             "myuser".to_string(),
             "--force".to_string(),
             "--existing-repo".to_string(),
+            "--apply".to_string(),
+            "--yes".to_string(),
         ])
         .expect("flags parse");
 
         assert!(!parsed.help);
         assert!(parsed.force);
         assert!(parsed.existing_repo);
+        assert!(parsed.apply);
+        assert!(parsed.yes);
         assert!(parsed.non_interactive);
         assert_eq!(parsed.overrides.admin_user.as_deref(), Some("myuser"));
         assert_eq!(parsed.topology, InitTopology::Standalone);

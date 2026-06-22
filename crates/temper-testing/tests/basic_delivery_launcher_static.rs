@@ -1,7 +1,7 @@
 //! Static (source-level) assertions for the `examples/basic-delivery` launcher.
 //!
 //! These tests pin the launcher to the long-term local-dev UX: jig-backed fake
-//! LLM, `temper init --non-interactive`, explicit repo population, and
+//! LLM, `temper init --non-interactive --apply --yes`, explicit repo population, and
 //! `temper serve standalone` before the seed-last intake issue is filed.
 
 use std::{fs, path::PathBuf};
@@ -73,7 +73,7 @@ fn launcher_uses_init_not_legacy_provisioner() {
     let init = section(&script, "run_temper_init() {");
     assert!(init.contains("TEMPER_INIT_ADMIN_PASSWORD=\"$ADMIN_PASSWORD\""));
     assert!(init.contains("TEMPER_INIT_PROVIDER_KEY=\"$INIT_PROVIDER_KEY\""));
-    assert!(init.contains("\"$RUN_BIN\" init --non-interactive --force"));
+    assert!(init.contains("\"$RUN_BIN\" init --non-interactive --force --apply --yes"));
     assert!(init.contains("--forge \"$BASE_URL\""));
     assert!(init.contains("--repo \"$REPO\""));
     assert!(init.contains("--bind \"$DAEMON_BIND\""));
@@ -82,6 +82,10 @@ fn launcher_uses_init_not_legacy_provisioner() {
     assert!(init.contains("--provider-url \"$JIG_PROVIDER_URL\""));
     assert!(init.contains("--config \"$CONFIG_FILE\""));
     assert!(init.contains("--secrets \"$CREDENTIALS_FILE\""));
+    assert!(init.contains("initialized_by=temper_init_apply"));
+    assert!(
+        init.contains("temper init --apply wrote config/credentials and registered $WEBHOOK_URL")
+    );
 }
 
 #[test]
@@ -196,6 +200,8 @@ fn launcher_compatibility_checks_do_not_assume_help_flag_order() {
     let script = read_example("run.sh");
 
     assert!(script.contains("*--non-interactive*)"));
+    assert!(script.contains("*--apply*)"));
+    assert!(script.contains("*--yes*)"));
     assert!(script.contains("*--provider-url*)"));
     assert!(script.contains("*--config*)"));
     assert!(script.contains("*--secrets*)"));

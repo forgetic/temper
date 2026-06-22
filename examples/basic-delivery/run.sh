@@ -2,7 +2,7 @@
 # Fixed, minimal launcher for the basic-delivery happy-path demo.
 #
 # It boots throwaway Forgejo + forgejo-runner, starts the local jig fake LLM,
-# runs `temper init`, commits the tiny demo project/CI baseline, launches
+# runs `temper init --apply --yes`, commits the tiny demo project/CI baseline, launches
 # `temper serve standalone`, then files one site-admin intake issue after the
 # webhook listener is ready.
 
@@ -36,6 +36,8 @@ JIG_REPO="$HOME/src/rust/jig"
 JIG_BIN="$JIG_REPO/target/debug/jig"
 JIG_FIXTURE_PATH="$JIG_REPO/fixtures/basic-delivery.json"
 INIT_PROVIDER_KEY=basic-delivery-jig-dummy-key
+CI_FALLBACK_MISSING_CREDENTIALS='no web-UI credentials configured for the CI read fallback'
+CI_FALLBACK_LOGIN_FAILED='forgejo web-ui login failed'
 
 ADMIN_USER=basicadmin
 ADMIN_EMAIL=basicadmin@example.invalid
@@ -65,10 +67,11 @@ sleep_short() { sleep 0.2 2>/dev/null || sleep 1; }
 
 usage() {
     cat <<EOF
-usage: ./run.sh [start|stop|help]
+usage: ./run.sh [start|stop|validate|help]
 
   start (default)      run the fixed basic-delivery demo
   stop                 tear down a previous run via run/*.pid
+  validate             inspect retained logs for webhook/CI-read diagnostics
   help                 show this message
 
 The demo intentionally has no config knobs: repo, ports, cadences, jig fixture,
@@ -133,6 +136,8 @@ resolve_binaries() {
 
     _init_help=$("$RUN_BIN" init --help 2>&1 || true)
     case "$_init_help" in *--non-interactive*) ;; *) die 'temper init lacks --non-interactive' ;; esac
+    case "$_init_help" in *--apply*) ;; *) die 'temper init lacks --apply' ;; esac
+    case "$_init_help" in *--yes*) ;; *) die 'temper init lacks --yes' ;; esac
     case "$_init_help" in *--provider-url*) ;; *) die 'temper init lacks --provider-url' ;; esac
     case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
@@ -285,13 +290,13 @@ bootstrap_admin() {
 }
 
 run_temper_init() {
-    log "running temper init --non-interactive for $REPO ..."
+    log "running temper init --apply --yes --non-interactive for $REPO ..."
     : >"$LOG_DIR/init.log"
     : >"$LOG_DIR/provision.log"
     (
         TEMPER_INIT_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         TEMPER_INIT_PROVIDER_KEY="$INIT_PROVIDER_KEY" \
-            "$RUN_BIN" init --non-interactive --force \
+            "$RUN_BIN" init --non-interactive --force --apply --yes \
                 --forge "$BASE_URL" \
                 --repo "$REPO" \
                 --bind "$DAEMON_BIND" \
@@ -309,12 +314,12 @@ run_temper_init() {
     [ -f "$WEBHOOK_SECRET_FILE" ] || die "temper init did not write $WEBHOOK_SECRET_FILE"
 
     {
-        printf 'repo=%s initialized_by=temper_init config=%s credentials=%s workflow=%s webhook_secret=%s\n' \
+        printf 'repo=%s initialized_by=temper_init_apply config=%s credentials=%s workflow=%s webhook_secret=%s\n' \
             "$REPO" "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH" "$WEBHOOK_SECRET_FILE"
         printf 'repo=%s webhook registered url=%s\n' "$REPO" "$WEBHOOK_URL"
         printf 'repo=%s provider=deepseek provider_url=%s fixture=%s\n' "$REPO" "$JIG_PROVIDER_URL" "$JIG_FIXTURE_PATH"
     } >>"$LOG_DIR/provision.log"
-    log "temper init wrote config/credentials and registered $WEBHOOK_URL"
+    log "temper init --apply wrote config/credentials and registered $WEBHOOK_URL"
 }
 
 percent_encode() {
@@ -434,6 +439,67 @@ monitor() {
     done
 }
 
+validate_contains() {
+    _file=$1
+    _pattern=$2
+    _description=$3
+    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
+        log "ok: $_description"
+        return 0
+    fi
+    log "missing: $_description (looked in $_file)"
+    return 1
+}
+
+validate_absent() {
+    _file=$1
+    _pattern=$2
+    _description=$3
+    if grep -F -q "$_pattern" "$_file" 2>/dev/null; then
+        log "missing: $_description (unexpectedly found in $_file)"
+        return 1
+    fi
+    log "ok: $_description"
+    return 0
+}
+
+cmd_validate() {
+    _ok=0
+    _run_log="$LOG_DIR/run.log"
+    _provision_log="$LOG_DIR/provision.log"
+
+    [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
+    log "validating basic-delivery logs under $LOG_DIR"
+
+    validate_contains "$_provision_log" 'webhook registered url=' \
+        'repo webhook registration recorded' || _ok=1
+    validate_contains "$_run_log" 'webhook listener up' \
+        'standalone webhook listener reached readiness' || _ok=1
+    validate_contains "$_run_log" 'worker:  capacity:' \
+        'in-process worker capacity reported' || _ok=1
+    validate_contains "$_run_log" 'ready -- watching' \
+        'standalone run reached watching readiness' || _ok=1
+    validate_contains "$_run_log" 'webhook accepted' \
+        'Forgejo delivered at least one accepted webhook' || _ok=1
+    validate_contains "$_run_log" 'webhook wake scan' \
+        'webhook delivery triggered a wake scan' || _ok=1
+    validate_contains "$_run_log" 'worker: assigned job_id=' \
+        'in-process worker accepted at least one assignment' || _ok=1
+    validate_contains "$_run_log" 'worker: result sent' \
+        'in-process worker sent at least one result' || _ok=1
+    validate_absent "$_run_log" "$CI_FALLBACK_MISSING_CREDENTIALS" \
+        'no missing Forgejo web-UI credentials reported for CI read fallback' || _ok=1
+    validate_absent "$_run_log" "$CI_FALLBACK_LOGIN_FAILED" \
+        'no failed Forgejo web-UI login reported for CI read fallback' || _ok=1
+
+    if [ "$_ok" -eq 0 ]; then
+        log 'basic-delivery validation passed'
+    else
+        log 'basic-delivery validation failed; inspect logs/provision.log and logs/run.log'
+    fi
+    return "$_ok"
+}
+
 cmd_start() {
     [ -f "$INTAKE_BODY_PATH" ] || die "missing $INTAKE_BODY_PATH"
     [ -f "$CONFIG_DIR/ci.yml" ] || die "missing $CONFIG_DIR/ci.yml"
@@ -460,6 +526,7 @@ cmd_start() {
 case "${1:-start}" in
     start | "") cmd_start ;;
     stop) cmd_stop ;;
+    validate) cmd_validate ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
 esac
