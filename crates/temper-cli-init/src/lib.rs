@@ -320,7 +320,9 @@ pub fn run_init(
     } else if opts.apply {
         p.note("Skipped forge provisioning at operator confirmation.");
     } else {
-        p.note("Skipped forge provisioning (pass --apply to provision users, labels, and webhooks).");
+        p.note(
+            "Skipped forge provisioning (pass --apply to provision users, labels, and webhooks).",
+        );
     }
     p.note("");
     if applied {

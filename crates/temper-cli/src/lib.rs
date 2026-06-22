@@ -243,6 +243,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn global_options_are_prepended_for_apply() {
         let args = apply_global_args(
             "apply",

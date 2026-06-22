@@ -279,10 +279,19 @@ fn run_init_without_apply_writes_local_artifacts_and_skips_provisioning() {
 
     run_init(&mut prompter, &mut provisioner, &opts).expect("local init succeeds");
 
-    assert!(provisioner.seen.is_none(), "init without --apply must not provision");
+    assert!(
+        provisioner.seen.is_none(),
+        "init without --apply must not provision"
+    );
     assert!(config_path.is_file(), "config.toml written");
-    assert!(dir.path().join("workflow.json").is_file(), "workflow.json written");
-    assert!(dir.path().join("webhook-secret").is_file(), "webhook secret written");
+    assert!(
+        dir.path().join("workflow.json").is_file(),
+        "workflow.json written"
+    );
+    assert!(
+        dir.path().join("webhook-secret").is_file(),
+        "webhook secret written"
+    );
     let creds = std::fs::read_to_string(&credentials_path).expect("credentials.toml written");
     assert!(creds.contains("password = \"admin-pass\""), "{creds}");
     assert!(creds.contains("sk-deepseek-xyz"), "{creds}");

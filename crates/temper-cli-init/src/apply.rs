@@ -167,10 +167,10 @@ struct ApplyBundle {
 }
 
 fn load_apply_bundle(opts: &ApplyOptions) -> Result<ApplyBundle, InitError> {
-    let targets = resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
-    let config = Config::load(&targets.config).map_err(|error| {
-        InitError::Path(format!("load {}: {error}", targets.config.display()))
-    })?;
+    let targets =
+        resolve_targets(&opts.options, &opts.env, &opts.paths).map_err(InitError::Path)?;
+    let config = Config::load(&targets.config)
+        .map_err(|error| InitError::Path(format!("load {}: {error}", targets.config.display())))?;
     let credentials = Credentials::load(&targets.credentials).map_err(|error| {
         InitError::Path(format!("load {}: {error}", targets.credentials.display()))
     })?;
@@ -338,7 +338,10 @@ mod tests {
         assert!(creds.contains("token-architect"), "{creds}");
         assert!(creds.contains("token-engineer"), "{creds}");
         assert!(creds.contains("token-bot"), "{creds}");
-        assert!(creds.contains("sk-key"), "provider secret preserved: {creds}");
+        assert!(
+            creds.contains("sk-key"),
+            "provider secret preserved: {creds}"
+        );
     }
 
     #[test]

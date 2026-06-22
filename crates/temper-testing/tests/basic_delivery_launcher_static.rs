@@ -83,7 +83,9 @@ fn launcher_uses_init_not_legacy_provisioner() {
     assert!(init.contains("--config \"$CONFIG_FILE\""));
     assert!(init.contains("--secrets \"$CREDENTIALS_FILE\""));
     assert!(init.contains("initialized_by=temper_init_apply"));
-    assert!(init.contains("temper init --apply wrote config/credentials and registered $WEBHOOK_URL"));
+    assert!(
+        init.contains("temper init --apply wrote config/credentials and registered $WEBHOOK_URL")
+    );
 }
 
 #[test]
