@@ -158,10 +158,14 @@ fn launcher_passes_workflow_and_serves_reviewer() {
         .split("boot_run() {")
         .nth(1)
         .expect("boot_run function exists");
-    // The config-driven run writes workflow + provider into the generated config.
+    // The config-driven run writes workflow + deterministic jig provider wiring.
     assert!(boot_run.contains("workflow = \"$WORKFLOW_PATH\""));
-    assert!(boot_run.contains("TEMPER_RUN_AUTH"));
+    assert!(boot_run.contains("_provider=deepseek"));
     assert!(boot_run.contains("provider = \"$_provider\""));
+    assert!(boot_run.contains("[agent.providers.deepseek]"));
+    assert!(boot_run.contains("url = \"$JIG_URL\""));
+    assert!(config.contains("TEMPER_REFERENCE_DELIVERY_JIG_BIN="));
+    assert!(!script.contains("TEMPER_RUN_AUTH"));
     // Roles (incl. reviewer) and repos are rendered into the config's TOML arrays.
     assert!(boot_run.contains("$SERVED_ROLES"));
     assert!(boot_run.contains("$CONFIGURED_REPOS"));
@@ -189,10 +193,19 @@ fn launcher_seeds_intake_last() {
         .split("cmd_start() {")
         .nth(1)
         .expect("cmd_start function exists");
-    let boot_index = cmd_start.find("boot_run").expect("boot_run is called");
+    let jig_index = cmd_start
+        .find("\n    boot_jig")
+        .expect("boot_jig is called");
+    let boot_index = cmd_start
+        .find("\n    boot_run\n")
+        .expect("boot_run is called");
     let seed_index = cmd_start
-        .find("seed_intake")
+        .find("\n    seed_intake")
         .expect("seed_intake is called");
+    assert!(
+        jig_index < boot_index,
+        "jig must be ready before temper run starts"
+    );
     assert!(
         boot_index < seed_index,
         "intake must be seeded only after temper run is ready"
@@ -234,5 +247,6 @@ fn launcher_runs_a_single_temper_run_process() {
     assert!(!script.contains("anvil-agent"));
     assert!(!script.contains("--agent-command"));
 
+    assert!(script.contains("temper-reference-delivery-jig"));
     assert!(script.contains("\"$RUN_BIN\" daemon --config"));
 }

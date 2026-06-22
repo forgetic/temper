@@ -4,19 +4,20 @@ Use this page while `./run.sh start` is still running. `./run.sh stop` removes t
 throwaway Forgejo data, so live Forge-state validation must happen before
 teardown. Logs stay under `logs/` for later inspection.
 
-The whole topology is **one process** (`temper run`), so the daemon, the
-in-process worker, and the coding agent all write to a **single log**:
-`logs/run.log`. Daemon lines are prefixed `engine:`; worker lines
-`worker:`.
+The whole Temper topology is **one process** (`temper run`), so the daemon,
+in-process worker, and coding agent all write to a **single log**:
+`logs/run.log`. The local jig LLM is a tiny helper process with its own
+`logs/jig.log`. Daemon lines are prefixed `engine:`; worker lines `worker:`.
 
 ## Where to look
 
 - `logs/provision.log` — one line per repo: seeded intake URLs, webhook
   registration, and the cross-repo parent URL when enabled.
-- `logs/run.log` — the unified daemon + worker + agent. Serving readiness,
-  accepted webhook deliveries + wake scans, daemon job assignments and results
-  (with `repo=` for per-repo attribution), worker register/assign/result lines,
-  cross-repo child materialisation, and mechanical automation/landing.
+- `logs/run.log` — the unified daemon + worker + jig-backed agent. Serving
+  readiness, accepted webhook deliveries + wake scans, daemon job assignments and
+  results (with `repo=` for per-repo attribution), worker register/assign/result
+  lines, cross-repo child materialisation, and mechanical automation/landing.
+- `logs/jig.log` — the deterministic local LLM endpoint URL.
 - `logs/ci-seed.log` — the one-time engineer clone + push that installs the
   bundled pass-through CI before `temper run` starts.
 - `logs/runner.log` — real Forgejo Actions runner job execution.

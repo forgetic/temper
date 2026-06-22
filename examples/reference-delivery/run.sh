@@ -8,12 +8,12 @@
 #   3. admin bootstrap + the production provision binary against the bundled
 #      reference workflow for every configured repo, registering the webhook but
 #      deliberately NOT yet filing intake,
-#   4. one `temper run`: the unified daemon + worker + coding agent on ONE event
-#      loop. The daemon hosts the webhook route, the long poll backstop, the short
-#      mechanical CI/landing backstop, leases, per-role apply tokens, cross-repo
-#      child materialisation, and result appliers; the in-process worker drives
-#      the in-process coding agent for architect, engineer, and reviewer across
-#      every configured repo,
+#   4. a deterministic local jig LLM, then one `temper run`: the unified daemon
+#      + worker + coding agent on ONE event loop. The daemon hosts the webhook
+#      route, the long poll backstop, the short mechanical CI/landing backstop,
+#      leases, per-role apply tokens, cross-repo child materialisation, and
+#      result appliers; the in-process worker drives the in-process coding agent
+#      for architect, engineer, and reviewer across every configured repo,
 #   5. only once `temper run` is ready, a second seed-only provision pass files
 #      the human-authored intake issue(s), so issue-created webhooks demonstrate
 #      the wake path.
@@ -67,7 +67,7 @@ SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
 JIG_PID_FILE="$RUN_DIR/jig.pid"
-JIG_STDIN="$RUN_DIR/jig.stdin"
+JIG_URL_FILE="$RUN_DIR/jig-url"
 # The provisioner writes the live forge identities in the runtime's own
 # credentials.toml format ([forge.users.<role>] + a bot user). The daemon loads
 # it via `temper daemon --secrets`; the launcher only reads a couple of
@@ -137,9 +137,9 @@ usage: $DISPLAY_SCRIPT [start|validate-webhooks|validate-multi-repo|stop|help]
   stop                 tear down a previous run via run/*.pid.
   help                 show this message.
 
-Configuration is read from config/temper.env (no secrets). The default coding
-agent provider is the local jig fake LLM; set TEMPER_RUN_AUTH to a real provider
-only when intentionally using credentials from secrets/.env (gitignored).
+Configuration is read from config/temper.env (no secrets). The coding agent uses
+an automatically launched local jig LLM; secrets/.env (gitignored) is only for
+machine-local overrides such as binary paths.
 EOF
 }
 
@@ -184,8 +184,8 @@ cleanup() {
     # re-run starts fresh; keep logs/ for inspection.
     rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" \
         "$RUN_DIR/ci-seed" "$RUN_DIR/workspaces" \
-        "$RUN_DIR/cross-repo-intake.md" "$RUN_DIR"/run.sh.snapshot.* \
-        "$JIG_STDIN" \
+        "$RUN_DIR/cross-repo-intake.md" "$JIG_URL_FILE" \
+        "$RUN_DIR"/run.sh.snapshot.* \
         2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
     log 'teardown complete'
@@ -204,10 +204,9 @@ cmd_stop() {
 CONFIG_KNOBS="OWNER NAME REPOS DEFAULT_BRANCH WORKFLOW_FILE SERVED_ROLES INTAKE_TITLE INTAKE_BODY_FILE \
 CROSS_REPO_INTAKE CROSS_REPO_INTAKE_TITLE BASE_URL DAEMON_BIND WEBHOOK_URL \
 DAEMON_POLL_CADENCE_SECS DAEMON_MECHANICAL_CADENCE_SECS DAEMON_LEASE_TTL_SECS RUN_SECS \
-TEMPER_RUN_AUTH RUN_MAX_ITERATIONS \
+RUN_MAX_ITERATIONS \
 TEMPER_FORGEJO_GOMAXPROCS TEMPER_FORGEJO_BINARY TEMPER_FORGEJO_RUNNER_BINARY \
-TEMPER_RUN_BIN TEMPER_BUILD_PACKAGE \
-JIG_REPO JIG_BIN JIG_FIXTURE_PATH"
+TEMPER_RUN_BIN TEMPER_REFERENCE_DELIVERY_JIG_BIN TEMPER_BUILD_PACKAGE"
 
 repo_owner() { printf '%s\n' "${1%%/*}"; }
 repo_name() { printf '%s\n' "${1#*/}"; }
@@ -244,9 +243,9 @@ load_config() {
     done
     # shellcheck disable=SC1090,SC1091
     . "$CONFIG_DIR/temper.env"
-    # Optional operator secret overrides (gitignored). This is where the coding
-    # agent's provider credentials live (e.g. TEMPER_DEEPSEEK_API_KEY); they are
-    # exported so the single `temper run` process inherits them.
+    # Optional operator secret overrides (gitignored). The demo uses a local jig
+    # LLM by default, but this file remains available for machine-local binary
+    # path and endpoint overrides.
     if [ -f "$SECRETS_DIR/.env" ]; then
         set -a
         # shellcheck disable=SC1090,SC1091
@@ -279,24 +278,16 @@ load_config() {
     DAEMON_MECHANICAL_CADENCE_SECS=${DAEMON_MECHANICAL_CADENCE_SECS:-2}
     DAEMON_LEASE_TTL_SECS=${DAEMON_LEASE_TTL_SECS:-300}
     RUN_SECS=${RUN_SECS:-600}
-    # Coding-agent LLM provider. The checked-in demo defaults to jig, a local
-    # fake LLM served through Temper's DeepSeek-compatible provider path. Real
-    # providers remain available as an explicit opt-in and require credentials in
-    # secrets/.env or the provider's normal auth file.
-    TEMPER_RUN_AUTH=${TEMPER_RUN_AUTH:-jig}
-    case "$TEMPER_RUN_AUTH" in
-        jig | deepseek | chatgpt-oauth | anthropic-oauth) ;;
-        *) die "TEMPER_RUN_AUTH must be jig|deepseek|chatgpt-oauth|anthropic-oauth, got '$TEMPER_RUN_AUTH'" ;;
-    esac
-    RUN_MAX_ITERATIONS=${RUN_MAX_ITERATIONS:-250}
+    # The role agent talks to a local deterministic jig LLM, so no real provider
+    # credentials are required. The fake completes each role in one or two model
+    # turns; keep the budget small so regressions fail quickly.
+    RUN_MAX_ITERATIONS=${RUN_MAX_ITERATIONS:-8}
     TEMPER_FORGEJO_GOMAXPROCS=${TEMPER_FORGEJO_GOMAXPROCS:-2}
     TEMPER_FORGEJO_BINARY=${TEMPER_FORGEJO_BINARY:-}
     TEMPER_FORGEJO_RUNNER_BINARY=${TEMPER_FORGEJO_RUNNER_BINARY:-}
     TEMPER_RUN_BIN=${TEMPER_RUN_BIN:-}
+    TEMPER_REFERENCE_DELIVERY_JIG_BIN=${TEMPER_REFERENCE_DELIVERY_JIG_BIN:-}
     TEMPER_BUILD_PACKAGE=${TEMPER_BUILD_PACKAGE:-temper}
-    JIG_REPO=${JIG_REPO:-${HOME:-}/src/rust/jig}
-    JIG_BIN=${JIG_BIN:-$JIG_REPO/target/debug/jig}
-    JIG_FIXTURE_PATH=${JIG_FIXTURE_PATH:-$CONFIG_DIR/jig-reference-delivery.json}
 
     require_positive_int DAEMON_POLL_CADENCE_SECS "$DAEMON_POLL_CADENCE_SECS"
     require_positive_int DAEMON_MECHANICAL_CADENCE_SECS "$DAEMON_MECHANICAL_CADENCE_SECS"
@@ -374,10 +365,11 @@ load_config() {
 # --- Binaries -----------------------------------------------------------------
 
 resolve_binaries() {
-    # One unified binary provides everything this example needs: `temper daemon`
-    # (engine + worker + agent), the `temper provision-forgejo` subcommand, and
-    # the `temper validate-reference-delivery` cross-repo Forge-state validator.
+    # One unified binary provides the runtime: `temper daemon` (engine + worker
+    # + agent), `temper provision-forgejo`, and `temper validate-reference-delivery`.
+    # A small temper-testing binary provides the local deterministic jig LLM.
     RUN_BIN=${TEMPER_RUN_BIN:-$WORKSPACE_ROOT/target/debug/temper}
+    JIG_BIN=${TEMPER_REFERENCE_DELIVERY_JIG_BIN:-$WORKSPACE_ROOT/target/debug/temper-reference-delivery-jig}
 
     # Keep the demo entry point self-healing after source changes. Cargo is a
     # cheap no-op when the development binaries are already current; skipping
@@ -386,9 +378,14 @@ resolve_binaries() {
         log "ensuring the Temper development binary is current (cargo build -p $TEMPER_BUILD_PACKAGE)..."
         ( cd "$WORKSPACE_ROOT" && cargo build -p "$TEMPER_BUILD_PACKAGE" ) \
             || die 'Temper cargo build failed'
+        log 'ensuring the reference-delivery jig binary is current (cargo build -p temper-testing --bin temper-reference-delivery-jig)...'
+        ( cd "$WORKSPACE_ROOT" && cargo build -p temper-testing --bin temper-reference-delivery-jig ) \
+            || die 'reference-delivery jig cargo build failed'
     fi
 
     [ -x "$RUN_BIN" ] || die "temper binary not found: $RUN_BIN"
+    [ -x "$JIG_BIN" ] || die "reference-delivery jig binary not found: $JIG_BIN
+       Re-run without TEMPER_SKIP_BUILD=1, or set TEMPER_REFERENCE_DELIVERY_JIG_BIN."
 
     # This example requires the runtime workflow provisioner subcommand and the
     # config-driven `temper daemon` command (engine + worker + agent in one
@@ -414,19 +411,7 @@ resolve_binaries() {
        Set TEMPER_FORGEJO_RUNNER_BINARY, or pre-stage the pinned binary in .cache/forgejo/
        with: cargo test -p temper-forgejo-fixture --test cache -- --ignored"
 
-    if [ "$TEMPER_RUN_AUTH" = "jig" ]; then
-        command -v mkfifo >/dev/null 2>&1 || die 'mkfifo is required for jig stdin management'
-        [ -f "$JIG_FIXTURE_PATH" ] || die "jig fixture not found: $JIG_FIXTURE_PATH"
-        if [ ! -x "$JIG_BIN" ] || [ "${TEMPER_SKIP_BUILD:-0}" != "1" ]; then
-            [ -d "$JIG_REPO" ] || die "jig checkout not found: $JIG_REPO"
-            log 'ensuring the jig fake-LLM binary is current (cargo build -p jig)...'
-            ( cd "$JIG_REPO" && cargo build -p jig ) || die 'jig cargo build failed'
-        fi
-        [ -x "$JIG_BIN" ] || die "jig binary not found: $JIG_BIN"
-        log "coding agent: in-process (temper daemon; provider=jig via $JIG_BIN)"
-    else
-        log "coding agent: in-process (temper daemon; provider from TEMPER_RUN_AUTH=$TEMPER_RUN_AUTH)"
-    fi
+    log 'coding agent: in-process (temper daemon; deterministic local jig LLM, no real provider credentials)'
 }
 
 # --- Forgejo server -----------------------------------------------------------
@@ -713,9 +698,9 @@ percent_encode() {
 }
 
 # Replaces the provisioned commit-message-marker CI with the bundled pass-through
-# workflow so real coder PR heads (ordinary commit messages) clear the landing CI
-# gate. Non-fatal: if this setup fails the topology still boots, but landing CI
-# may not pass.
+# workflow so jig-authored product PR heads (ordinary commit messages) clear the
+# landing CI gate. Non-fatal: if this setup fails the topology still boots, but
+# landing CI may not pass.
 apply_demo_ci() {
     # The engineer `user` may be omitted from credentials.toml when it equals the
     # section key, so fall back to the role name (`engineer`).
@@ -766,7 +751,42 @@ apply_demo_ci() {
     done
 }
 
-# --- temper run ---------------------------------------------------------------
+# --- Jig LLM + temper run -----------------------------------------------------
+
+boot_jig() {
+    mkdir -p "$RUN_DIR" "$LOG_DIR"
+    rm -f "$JIG_URL_FILE"
+    log 'starting deterministic jig LLM for architect/engineer/reviewer roles ...'
+    "$JIG_BIN" --url-file "$JIG_URL_FILE" >"$LOG_DIR/jig.log" 2>&1 &
+    JIG_PID=$!
+    echo "$JIG_PID" >"$JIG_PID_FILE"
+
+    _i=0
+    while [ ! -s "$JIG_URL_FILE" ]; do
+        kill -0 "$JIG_PID" 2>/dev/null || die "reference-delivery jig exited during startup (see logs/jig.log)"
+        _i=$((_i + 1))
+        [ "$_i" -gt 100 ] && die "reference-delivery jig did not become ready (see logs/jig.log)"
+        sleep_short
+    done
+    JIG_URL=$(sed -n '1p' "$JIG_URL_FILE")
+    [ -n "$JIG_URL" ] || die "reference-delivery jig wrote an empty URL (see logs/jig.log)"
+    log "jig LLM ready at $JIG_URL (pid $JIG_PID)"
+}
+
+# Appends the dummy DeepSeek-compatible key consumed by the local jig endpoint.
+# The key is deliberately not a real secret; the URL lives in run/config.toml.
+ensure_jig_agent_credentials() {
+    [ -f "$CREDENTIALS_FILE" ] || die "missing $CREDENTIALS_FILE"
+    if grep -F -q '[agent.providers.deepseek]' "$CREDENTIALS_FILE" 2>/dev/null; then
+        return 0
+    fi
+    cat >>"$CREDENTIALS_FILE" <<EOF
+
+[agent.providers.deepseek]
+type = "api-key"
+key = "sk-jig-reference-delivery"
+EOF
+}
 
 # Resolves the provisioned `bot` automation identity from the secrets file.
 # `temper run` uses it for the mechanical backstop: landing CI-green PRs and the
@@ -791,7 +811,9 @@ resolve_bot_identity() {
 # topology.
 boot_run() {
     resolve_bot_identity
+    ensure_jig_agent_credentials
     ensure_secret_file "$WEBHOOK_SECRET_FILE"
+    [ -n "${JIG_URL:-}" ] || die 'jig LLM URL is not set (boot_jig must run before boot_run)'
     mkdir -p "$RUN_DIR/workspaces"
 
     # The new CLI is config-file driven: standalone `temper daemon` (no
@@ -800,11 +822,7 @@ boot_run() {
     # provisioned credentials.toml via `--secrets` (never on argv).
     _repos_toml=$(printf '"%s", ' $CONFIGURED_REPOS); _repos_toml="[${_repos_toml%, }]"
     _roles_toml=$(printf '"%s", ' $SERVED_ROLES); _roles_toml="[${_roles_toml%, }]"
-    case "$TEMPER_RUN_AUTH" in
-        chatgpt-oauth) _provider=chatgpt ;;
-        anthropic-oauth) _provider=anthropic ;;
-        *) _provider=deepseek ;;
-    esac
+    _provider=deepseek
     _config="$RUN_DIR/config.toml"
     cat >"$_config" <<EOF
 schema_version = 1
@@ -830,9 +848,11 @@ git_base_url = "$BASE_URL"
 [agent]
 provider = "$_provider"
 max_iterations = $RUN_MAX_ITERATIONS
+[agent.providers.deepseek]
+url = "$JIG_URL"
 EOF
 
-    log "starting temper daemon at $DAEMON_BIND (repos: $CONFIGURED_REPOS; roles: $SERVED_ROLES; poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=$_provider) ..."
+    log "starting temper daemon at $DAEMON_BIND (repos: $CONFIGURED_REPOS; roles: $SERVED_ROLES; poll=${DAEMON_POLL_CADENCE_SECS}s mechanical=${DAEMON_MECHANICAL_CADENCE_SECS}s provider=jig/deepseek-compatible) ..."
     : >"$LOG_DIR/run.log"
     (
         FORGEJO_ACCESS_TOKEN="$BOT_TOKEN" \
@@ -1137,6 +1157,7 @@ cmd_start() {
     boot_runner
     bootstrap_and_provision
     apply_demo_ci
+    boot_jig
     boot_run
     seed_intake
     monitor
