@@ -20,7 +20,7 @@ Rows are ordered by the mental model agents usually need: Forge contract and bac
 | `crates/temper-reference-delivery/` | Lightweight reference-delivery workflow, repository, actor, and runner defaults shared by deployable tools. |
 | `crates/temper-wake/` | Host-local authenticated wake socket bus shared by worker, trigger, and tests. |
 | `crates/temper-trigger-forgejo/` | Forgejo webhook receiver that verifies payloads and emits wake hints. |
-| `crates/temper-provision-forgejo-cli/` | Reference-delivery demo / operator CLI for `temper provision-forgejo`: builds a ForgejoForge and runs the backend-agnostic `temper-provision` orchestration, seeds the demo intake issue, writes secrets.env. |
+| `crates/temper-provision-forgejo-cli/` | Reference-delivery demo / operator CLI for `temper provision-forgejo`: builds a ForgejoForge and runs the backend-agnostic `temper-provision` orchestration, seeds the demo intake issue, writes `credentials.toml`. |
 | `crates/temper-forgejo-ops/` | Low-level Forgejo REST helpers outside the portable `Forge` trait. |
 | `crates/temper-interaction-service/` | Deployable REPL/HTTP interaction service, deployment bindings, args, DTOs, and transport glue. |
 | `crates/temper-reference-delivery-validator/` | Operator-facing reference-delivery validator. |

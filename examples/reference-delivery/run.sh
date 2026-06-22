@@ -26,8 +26,12 @@ WEBHOOK_URL=http://$DAEMON_BIND/forgejo/webhook
 OWNER=acme
 NAME=service
 REPO=$OWNER/$NAME
+CANARY_NAME=service-canary
+CANARY_REPO=$OWNER/$CANARY_NAME
+MULTI_REPOS="$REPO $CANARY_REPO"
 DEFAULT_BRANCH=main
 INTAKE_TITLE='Service banner should identify the environment'
+MULTI_INTAKE_TITLE='Ship cross-repo reference delivery'
 INTAKE_BODY_PATH="$CONFIG_DIR/intake-issue.md"
 WORKFLOW_PATH="$CONFIG_DIR/workflow.json"
 
@@ -36,6 +40,7 @@ FORGEJO_RUNNER_VERSION=3.5.1
 FORGEJO_BIN="$WORKSPACE_ROOT/.cache/forgejo/forgejo-$FORGEJO_VERSION-linux-amd64"
 RUNNER_BIN="$WORKSPACE_ROOT/.cache/forgejo/forgejo-runner-$FORGEJO_RUNNER_VERSION-linux-amd64"
 RUN_BIN="$WORKSPACE_ROOT/target/debug/temper"
+WORKER_BIN="$WORKSPACE_ROOT/target/debug/temper-testing-worker"
 JIG_REPO="$HOME/src/rust/jig"
 JIG_BIN="$JIG_REPO/target/debug/jig"
 JIG_FIXTURE_PATH="$JIG_REPO/fixtures/reference-delivery.json"
@@ -58,12 +63,16 @@ STOP_FILE="$RUN_DIR/stop"
 SERVER_PID_FILE="$RUN_DIR/server.pid"
 RUNNER_PID_FILE="$RUN_DIR/runner.pid"
 RUN_PID_FILE="$RUN_DIR/run.pid"
+WORKER_PID_FILE="$RUN_DIR/workers.pid"
 JIG_PID_FILE="$RUN_DIR/jig.pid"
 JIG_STDIN="$RUN_DIR/jig.stdin"
 CONFIG_FILE="$RUN_DIR/config.toml"
 CREDENTIALS_FILE="$RUN_DIR/credentials.toml"
 INIT_WORKFLOW_PATH="$RUN_DIR/workflow.json"
 WEBHOOK_SECRET_FILE="$RUN_DIR/webhook-secret"
+MULTI_INTAKE_BODY_PATH="$RUN_DIR/cross-repo-intake.md"
+MULTI_PARENT_FILE="$RUN_DIR/cross-repo-parent"
+MULTI_WORKER_ROOT="$RUN_DIR/testing-worker"
 
 log() { printf '[run.sh] %s\n' "$*"; }
 die() { printf '[run.sh] error: %s\n' "$*" >&2; exit 1; }
@@ -71,15 +80,18 @@ sleep_short() { sleep 0.2 2>/dev/null || sleep 1; }
 
 usage() {
     cat <<EOF
-usage: ./run.sh [start|stop|validate|help]
+usage: ./run.sh [start|multi-repo|stop|validate|validate-multi-repo|help]
 
-  start (default)      run the fixed reference-delivery demo
+  start (default)      run the fixed reviewer-gated single-repo demo
+  multi-repo           run the cross-repo fan-out demo across $REPO and $CANARY_REPO
   stop                 tear down a previous run via run/*.pid
   validate             inspect retained logs for reviewer-gated landing evidence
+  validate-multi-repo  inspect live Forgejo state for fan-out/landing evidence
   help                 show this message
 
-The demo intentionally has no config knobs: repo, ports, cadences, jig fixture,
-and binary locations are fixed in this script.
+The single-repo demo intentionally has no config knobs: repo, ports, cadences,
+jig fixture, and binary locations are fixed in this script. The multi-repo demo
+is also fixed and provisions exactly $REPO plus $CANARY_REPO.
 EOF
 }
 
@@ -111,13 +123,15 @@ cleanup() {
     [ -d "$RUN_DIR" ] && : >"$STOP_FILE" 2>/dev/null || true
     sleep 1
     stop_pid_file "$RUN_PID_FILE"
+    stop_pid_file "$WORKER_PID_FILE"
     stop_pid_file "$JIG_PID_FILE"
     stop_pid_file "$RUNNER_PID_FILE"
     stop_pid_file "$SERVER_PID_FILE"
     rm -rf "$FORGEJO_DATA" "$RUNNER_DIR" "$STOP_FILE" \
-        "$RUN_DIR/repo-seed" "$RUN_DIR/workspaces" \
+        "$RUN_DIR/repo-seed" "$RUN_DIR/workspaces" "$MULTI_WORKER_ROOT" \
         "$CONFIG_FILE" "$CREDENTIALS_FILE" "$INIT_WORKFLOW_PATH" \
-        "$WEBHOOK_SECRET_FILE" "$JIG_STDIN" \
+        "$WEBHOOK_SECRET_FILE" "$JIG_STDIN" "$MULTI_INTAKE_BODY_PATH" \
+        "$MULTI_PARENT_FILE" \
         2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
     log 'teardown complete'
@@ -128,7 +142,7 @@ cmd_stop() {
     cleanup
 }
 
-resolve_binaries() {
+resolve_common_binaries() {
     command -v curl >/dev/null 2>&1 || die 'curl is required'
     command -v git >/dev/null 2>&1 || die 'git is required'
     command -v mkfifo >/dev/null 2>&1 || die 'mkfifo is required'
@@ -154,11 +168,23 @@ resolve_binaries() {
 
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
+}
+
+resolve_single_binaries() {
+    resolve_common_binaries
     [ -d "$JIG_REPO" ] || die "jig checkout not found: $JIG_REPO"
     [ -f "$JIG_FIXTURE_PATH" ] || die "jig fixture not found: $JIG_FIXTURE_PATH"
     log 'building jig development binary...'
     ( cd "$JIG_REPO" && cargo build -p jig ) || die 'cargo build -p jig failed'
     [ -x "$JIG_BIN" ] || die "jig binary not found: $JIG_BIN"
+}
+
+resolve_multi_binaries() {
+    resolve_common_binaries
+    log 'building temper-testing-worker development binary...'
+    ( cd "$WORKSPACE_ROOT" && cargo build -p temper-testing --bin temper-testing-worker ) \
+        || die 'cargo build -p temper-testing --bin temper-testing-worker failed'
+    [ -x "$WORKER_BIN" ] || die "temper-testing-worker binary not found: $WORKER_BIN"
 }
 
 write_app_ini() {
@@ -537,11 +563,255 @@ cmd_validate() {
     return "$_ok"
 }
 
+credential_field() {
+    _role=$1
+    _field=$2
+    python3 - "$CREDENTIALS_FILE" "$_role" "$_field" <<'PY'
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    raise SystemExit("python3 with tomllib is required to read credentials.toml")
+path, role, field = sys.argv[1:4]
+with open(path, "rb") as fh:
+    data = tomllib.load(fh)
+try:
+    value = data["forge"]["users"][role][field]
+except KeyError:
+    raise SystemExit(f"missing [forge.users.{role}] {field} in {path}")
+if not isinstance(value, str) or not value.strip():
+    raise SystemExit(f"empty [forge.users.{role}] {field} in {path}")
+print(value)
+PY
+}
+
+write_cross_repo_intake_body() {
+    mkdir -p "$RUN_DIR"
+    cat >"$MULTI_INTAKE_BODY_PATH" <<EOF
+A human asks Temper to coordinate one change across two repositories without
+filing duplicate parent intakes. Start from this single parent in $REPO, fan out
+one ready code child per target repository, and let the parent resolve only
+after both child implementations have landed.
+
+Target repositories:
+
+- $REPO
+- $CANARY_REPO
+
+The deterministic reference-delivery architect reads the plan block below and
+must create exactly these child code issues.
+
+<!-- temper:architect-plan
+{
+  "children": [
+    {
+      "slug": "service",
+      "target_repo": "forgejo:$REPO",
+      "title": "Implement service-side cross-repo reference delivery",
+      "body": "Add a small service-side reference-delivery change so the implementation PR has a real product diff."
+    },
+    {
+      "slug": "canary",
+      "target_repo": "forgejo:$CANARY_REPO",
+      "title": "Implement canary-side cross-repo reference delivery",
+      "body": "Add a small canary-side reference-delivery change so the implementation PR has a real product diff."
+    }
+  ]
+}
+-->
+EOF
+}
+
+provision_multi_repo() {
+    log "provisioning fixed multi-repo world: $MULTI_REPOS ..."
+    : >"$LOG_DIR/init.log"
+    : >"$LOG_DIR/provision.log"
+    for _repo in $MULTI_REPOS; do
+        _owner=${_repo%%/*}
+        _name=${_repo#*/}
+        (
+            TEMPER_FORGEJO_ADMIN_TOKEN="$ADMIN_TOKEN" \
+                "$RUN_BIN" provision-forgejo \
+                    --base-url "$BASE_URL" \
+                    --owner "$_owner" \
+                    --name "$_name" \
+                    --out "$CREDENTIALS_FILE" \
+                    --workflow "$WORKFLOW_PATH" \
+                    --seed-intake no
+        ) >>"$LOG_DIR/init.log" 2>&1 || die "provisioning $_repo failed (see logs/init.log)"
+        printf 'repo=%s provisioned_by=temper_provision_forgejo credentials=%s workflow=%s intake_seeded=no\n' \
+            "$_repo" "$CREDENTIALS_FILE" "$WORKFLOW_PATH" >>"$LOG_DIR/provision.log"
+    done
+    printf 'source_repo=%s target_repos=%s expected_children=2\n' "$REPO" "$MULTI_REPOS" >>"$LOG_DIR/provision.log"
+    [ -f "$CREDENTIALS_FILE" ] || die "multi-repo provisioning did not write $CREDENTIALS_FILE"
+    log 'multi-repo repositories, labels, role users, CI, and credentials are provisioned'
+}
+
+start_role_worker() {
+    _role=$1
+    _token=$(credential_field "$_role" token) || die "cannot read token for role $_role"
+    _username=$(credential_field "$_role" user) || die "cannot read username for role $_role"
+    _password=$(credential_field "$_role" password) || die "cannot read password for role $_role"
+    _log="$LOG_DIR/worker-$_role.log"
+    : >"$_log"
+    _architect_args=
+    [ "$_role" = architect ] && _architect_args='--architect closing'
+    log "starting multi-repo $_role worker ..."
+    (
+        TEMPER_FORGEJO_TOKEN="$_token" \
+        TEMPER_FORGEJO_USERNAME="$_username" \
+        TEMPER_FORGEJO_PASSWORD="$_password" \
+        TEMPER_FORGEJO_CI_DIAGNOSTICS=1 \
+            "$WORKER_BIN" \
+                --kind role \
+                --role "$_role" \
+                --user "$_username" \
+                --backend forgejo \
+                --base-url "$BASE_URL" \
+                --clock wall \
+                --root "$MULTI_WORKER_ROOT" \
+                --repo "$REPO" \
+                --repo "$CANARY_REPO" \
+                --workflow "$WORKFLOW_PATH" \
+                --poll-ms 500 \
+                --audit-ms 2000 \
+                --stop-file "$STOP_FILE" \
+                --run-secs "$RUN_SECS" \
+                $_architect_args
+    ) >"$_log" 2>&1 &
+    _pid=$!
+    echo "$_pid" >>"$WORKER_PID_FILE"
+    log "$_role worker running (pid $_pid; $_log)"
+}
+
+start_mechanical_worker() {
+    _token=$(credential_field bot token) || die 'cannot read token for bot'
+    _username=$(credential_field bot user) || die 'cannot read username for bot'
+    _password=$(credential_field bot password) || die 'cannot read password for bot'
+    _log="$LOG_DIR/worker-mechanical.log"
+    : >"$_log"
+    log 'starting multi-repo mechanical worker ...'
+    (
+        TEMPER_FORGEJO_TOKEN="$_token" \
+        TEMPER_FORGEJO_USERNAME="$_username" \
+        TEMPER_FORGEJO_PASSWORD="$_password" \
+        TEMPER_FORGEJO_CI_DIAGNOSTICS=1 \
+            "$WORKER_BIN" \
+                --kind mechanical \
+                --backend forgejo \
+                --base-url "$BASE_URL" \
+                --clock wall \
+                --root "$MULTI_WORKER_ROOT" \
+                --repo "$REPO" \
+                --repo "$CANARY_REPO" \
+                --workflow "$WORKFLOW_PATH" \
+                --poll-ms 500 \
+                --idle-poll-max-ms 1000 \
+                --audit-ms 2000 \
+                --stop-file "$STOP_FILE" \
+                --run-secs "$RUN_SECS"
+    ) >"$_log" 2>&1 &
+    _pid=$!
+    echo "$_pid" >>"$WORKER_PID_FILE"
+    log "mechanical worker running (pid $_pid; $_log)"
+}
+
+boot_multi_workers() {
+    rm -f "$WORKER_PID_FILE"
+    mkdir -p "$MULTI_WORKER_ROOT"
+    start_mechanical_worker
+    start_role_worker architect
+    start_role_worker engineer
+    start_role_worker reviewer
+    printf 'repo_set="%s" workers=mechanical,architect,engineer,reviewer architect=closing reviewer=default ci=forgejo-runner\n' \
+        "$MULTI_REPOS" >>"$LOG_DIR/provision.log"
+}
+
+seed_multi_intake() {
+    write_cross_repo_intake_body
+    log 'filing one cross-repo parent intake in the source repo after workers are running ...'
+    _old_body=$INTAKE_BODY_PATH
+    _old_title=$INTAKE_TITLE
+    INTAKE_BODY_PATH=$MULTI_INTAKE_BODY_PATH
+    INTAKE_TITLE=$MULTI_INTAKE_TITLE
+    seed_intake
+    INTAKE_BODY_PATH=$_old_body
+    INTAKE_TITLE=$_old_title
+    _parent=$(sed -n 's/.*intake_issue_number=\([0-9][0-9]*\).*/\1/p' "$LOG_DIR/provision.log" | tail -n 1)
+    [ -n "$_parent" ] || die 'could not determine cross-repo parent issue number from provision.log'
+    echo "$_parent" >"$MULTI_PARENT_FILE"
+    printf 'repo=%s cross_repo_parent_issue_number=%s expected_children=2 target_repos="%s"\n' \
+        "$REPO" "$_parent" "$MULTI_REPOS" >>"$LOG_DIR/provision.log"
+}
+
+validate_multi_repo_state() {
+    [ -f "$MULTI_PARENT_FILE" ] || die "missing $MULTI_PARENT_FILE; run ./run.sh multi-repo first"
+    _parent=$(cat "$MULTI_PARENT_FILE")
+    _token=$(credential_field bot token) || die 'cannot read validator token from bot credentials'
+    TEMPER_FORGEJO_TOKEN="$_token" \
+        "$RUN_BIN" validate-reference-delivery \
+            --base-url "$BASE_URL" \
+            --source-repo "$REPO" \
+            --parent-number "$_parent" \
+            --expected-children 2 \
+            --repo "$REPO" \
+            --repo "$CANARY_REPO"
+}
+
+cmd_validate_multi_repo() {
+    [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a multi-repo run first"
+    log "validating cross-repo reference-delivery Forge state under $BASE_URL"
+    validate_multi_repo_state
+}
+
+monitor_multi() {
+    log ''
+    log "Forgejo UI:   $BASE_URL"
+    log "Source issue: $BASE_URL/$REPO/issues"
+    log "Canary repo:  $BASE_URL/$CANARY_REPO"
+    log "Logs:         $LOG_DIR/worker-*.log and $LOG_DIR/runner.log"
+    log 'Expected path: one source parent -> two child code issues -> reviewer-approved, green PRs -> child merges -> parent unblocks and merges.'
+    log "Press Ctrl-C (or run './run.sh stop') to tear everything down."
+
+    _waited=0
+    _validated=0
+    while [ ! -f "$STOP_FILE" ]; do
+        sleep 5
+        _waited=$((_waited + 5))
+        kill -0 "$SERVER_PID" 2>/dev/null || { log 'forgejo server exited; shutting down.'; break; }
+        if [ "$_validated" -eq 0 ] && validate_multi_repo_state >"$LOG_DIR/validate-multi-repo.log" 2>&1; then
+            log 'cross-repo validation passed (see logs/validate-multi-repo.log)'
+            _validated=1
+        fi
+        [ "$_waited" -ge "$RUN_SECS" ] && { log "run backstop ($RUN_SECS s) reached; shutting down."; break; }
+    done
+}
+
+cmd_multi_repo() {
+    [ -f "$WORKFLOW_PATH" ] || die "missing $WORKFLOW_PATH"
+    resolve_multi_binaries
+    if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
+        die "a run appears active; stop it first: ./run.sh stop"
+    fi
+
+    mkdir -p "$RUN_DIR" "$LOG_DIR"
+    rm -f "$STOP_FILE" "$MULTI_PARENT_FILE"
+    trap cleanup EXIT INT TERM
+
+    boot_server
+    boot_runner
+    bootstrap_admin
+    provision_multi_repo
+    boot_multi_workers
+    seed_multi_intake
+    monitor_multi
+}
+
 cmd_start() {
     [ -f "$INTAKE_BODY_PATH" ] || die "missing $INTAKE_BODY_PATH"
     [ -f "$WORKFLOW_PATH" ] || die "missing $WORKFLOW_PATH"
     [ -f "$CONFIG_DIR/ci.yml" ] || die "missing $CONFIG_DIR/ci.yml"
-    resolve_binaries
+    resolve_single_binaries
     if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
         die "a run appears active; stop it first: ./run.sh stop"
     fi
@@ -563,8 +833,10 @@ cmd_start() {
 
 case "${1:-start}" in
     start | "") cmd_start ;;
+    multi-repo) cmd_multi_repo ;;
     stop) cmd_stop ;;
     validate) cmd_validate ;;
+    validate-multi-repo) cmd_validate_multi_repo ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
 esac

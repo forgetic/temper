@@ -149,15 +149,12 @@ daemon.
 | `TEMPER_WAKE_DEBOUNCE_MS` | Testing-worker local wake-debounce override. |
 | `TEMPER_FORGEJO_CI_DIAGNOSTICS` | Testing-worker Forgejo CI web-UI diagnostics (any non-blank value enables). |
 
-`provision-forgejo --out` writes a POSIX-sourceable, mode-0600 `roles.env` file
-of generated secrets for the demo/fixture handoff:
-`TEMPER_FORGEJO_OWNER`, `TEMPER_FORGEJO_REPO`, `TEMPER_FORGEJO_USER_<ROLE>`,
-`TEMPER_FORGEJO_TOKEN_<ROLE>`, `TEMPER_FORGEJO_PASSWORD_<ROLE>`,
-`TEMPER_FORGEJO_BOT_USER`, `TEMPER_FORGEJO_BOT_TOKEN`,
-`TEMPER_FORGEJO_BOT_PASSWORD`. Durable values belong in the credentials file /
-secret manager, not in a generated env file. (Role keys uppercase the role id and
-replace each non-`[A-Z0-9]` character with `_`, so `code-reviewer` becomes
-`CODE_REVIEWER`.)
+`provision-forgejo --out` writes a mode-0600 `credentials.toml` file in the same
+schema the daemon and validator read. It contains generated `[forge.users.*]`
+entries for workflow roles and `bot` (user/email/password/token). Durable values
+belong in the credentials file / secret manager; launchers should pass the file
+with `--secrets` or read short-lived child-process env from it rather than
+checking generated tokens into source control.
 
 ### Demo launcher variables
 
@@ -167,21 +164,16 @@ internally (`GOMAXPROCS`, `GITEA_WORK_DIR`, `TEMPER_INIT_ADMIN_PASSWORD`,
 `TEMPER_INIT_PROVIDER_KEY`, and short-lived helper variables for its Python
 snippets).
 
-`examples/reference-delivery/run.sh` still sources `config/temper.env` plus
-optional gitignored local secret files. Those are demo shell knobs, not core
-library APIs:
-
-`OWNER`, `NAME`, `DEFAULT_BRANCH`, `WORKFLOW_FILE`, `INTAKE_TITLE`,
-`INTAKE_BODY_FILE`, `BASE_URL`, `DAEMON_BIND`, `WEBHOOK_URL`,
-`DAEMON_POLL_CADENCE_SECS`, `DAEMON_MECHANICAL_CADENCE_SECS`,
-`DAEMON_LEASE_TTL_SECS`, `RUN_SECS`, `TEMPER_FORGEJO_GOMAXPROCS`,
-`TEMPER_FORGEJO_BINARY`, `TEMPER_FORGEJO_RUNNER_BINARY`, `TEMPER_RUN_BIN`,
-`TEMPER_JIG_REPO`, `TEMPER_JIG_BIN`, `TEMPER_REFERENCE_DELIVERY_JIG_FIXTURE`,
-`TEMPER_BUILD_PACKAGE`, `TEMPER_SKIP_BUILD`, `RUN_MAX_ITERATIONS`,
-`TEMPER_WORKSPACE_ROOT`, the
-`TEMPER_REFERENCE_DELIVERY_*` re-exec/snapshot internals, `REPOS`,
-`SERVED_ROLES`, `CROSS_REPO_INTAKE`, `CROSS_REPO_INTAKE_TITLE`, and
-`GOMAXPROCS` / `GITEA_WORK_DIR` passed to Forgejo/runner child processes.
+`examples/reference-delivery/run.sh` is also fixed and no longer sources
+`config/temper.env` or local secret files. Its normal `start` path sets the same
+child-process implementation variables as the basic demo, plus the local jig
+process wiring used by the reviewer-gated reference workflow. Its `multi-repo`
+path additionally sets per-process `TEMPER_FORGEJO_TOKEN`,
+`TEMPER_FORGEJO_USERNAME`, `TEMPER_FORGEJO_PASSWORD`, and
+`TEMPER_FORGEJO_CI_DIAGNOSTICS` while launching deterministic
+`temper-testing-worker --backend forgejo` role/mechanical workers. Those values
+come from the run-local `credentials.toml` written by demo provisioning and are
+not operator configuration knobs.
 
 Forgejo Actions workflows use GitHub-compatible env names supplied by Forgejo
 Actions (`GITHUB_API_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_TOKEN`).

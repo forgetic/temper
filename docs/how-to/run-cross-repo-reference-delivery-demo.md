@@ -1,82 +1,76 @@
 # Run the cross-repo reference-delivery demo
 
-This recipe runs Temper's local jig-backed operator demo with one parent intake
-issue in the first repo that fans out into child work across the configured repo
-set. It uses deterministic jig role replies, a real throwaway Forgejo, and a real
-host-mode `forgejo-runner`; it does not use provider auth.
+This recipe runs the operator-facing cross-repo fan-out path in
+`examples/reference-delivery/`. It starts with one parent intake issue in
+`acme/service` and deterministic workers fan it out into child code issues in
+both `acme/service` and `acme/service-canary`.
 
-For the conceptual model, read `docs/explanation/cross-repo-workflows.md` first.
+The normal reviewer-gated single-repo demo remains `./run.sh start`; this page
+covers the explicit multi-repo entry point.
 
 ## Prerequisites
 
-Follow `examples/reference-delivery/README.md`. In short:
+Follow `examples/reference-delivery/README.md` for the shared Forgejo and runner
+requirements. The multi-repo path uses deterministic in-tree fake workers rather
+than jig, so it additionally builds `temper-testing-worker` from this workspace
+and does not require provider credentials.
 
-- provide the pinned Forgejo / `forgejo-runner` binaries via the shared cache or
-  explicit `TEMPER_FORGEJO_BINARY` / `TEMPER_FORGEJO_RUNNER_BINARY` paths;
-- run on a host that permits host-mode runner jobs;
-- let `run.sh` build the root `temper` package and the vanilla jig standalone
-  server from the sibling jig checkout, or provide current binary/fixture
-  overrides.
+In short:
 
-## Configure
-
-From `examples/reference-delivery/`, edit `config/temper.env` or export env vars:
-
-```sh
-REPOS="acme/service acme/service-canary"
-CROSS_REPO_INTAKE=auto
-DAEMON_POLL_CADENCE_SECS=120
-DAEMON_MECHANICAL_CADENCE_SECS=2
-RUN_MAX_ITERATIONS=8
-```
-
-`auto` enables cross-repo intake seeding when `REPOS` contains more than one
-repo. Set `CROSS_REPO_INTAKE=0` for independent per-repo intakes, or set
-`REPOS=` and `CROSS_REPO_INTAKE=0` for single-repo mode.
-`DAEMON_POLL_CADENCE_SECS` controls role-worker polling so webhook wakeups remain
-visible; `DAEMON_MECHANICAL_CADENCE_SECS` controls the mechanical CI/landing
-backstop.
+- provide the pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries in
+  `.cache/forgejo/`;
+- run on a host that permits host-mode Forgejo Actions jobs;
+- let the launcher build the root `temper` binary and the `temper-testing-worker`
+  binary.
 
 ## Run
 
 ```sh
 cd examples/reference-delivery
-./run.sh start
+./run.sh multi-repo
 ```
 
-The launcher provisions every configured repo. It seeds exactly one parent issue
-in the first repo. The issue body lists target repositories; the deterministic
-jig architect creates one child code issue per repo. The jig engineer writes a
-real product file in each checkout, the real runner executes CI, the jig reviewer
-approves, and the mechanical worker lands PRs as the provisioned `bot` automation
-user. The bot token performs REST mutations (merges) and the bot's web-UI
-username/password reads Forgejo 7.0.x CI status (ADR 0019). The site admin is
-used only for initial provisioning and never participates in the workflow.
+The launcher boots a throwaway Forgejo, registers a host-mode runner, provisions
+exactly two repositories (`acme/service` and `acme/service-canary`), starts the
+deterministic architect/engineer/reviewer/mechanical worker fleet across that
+repo set, and only then files one unlabeled parent intake in `acme/service`.
 
-## Validate logs and Forge state
+The architect creates one ready code child per target repository. The engineer
+opens real implementation PRs, the real Forgejo runner executes CI, the reviewer
+approves, and the mechanical worker merges PRs once review + CI + dependency
+gates are satisfied. The parent source issue unblocks and closes only after both
+child issues have landed.
 
-In another terminal, before `./run.sh stop` removes the throwaway Forgejo data:
+## Validate live state
+
+While `./run.sh multi-repo` is still running in another terminal:
 
 ```sh
 cd examples/reference-delivery
 ./run.sh validate-multi-repo
 ```
 
-The validator checks per-repo provisioning, webhook registration/delivery,
-jig-backed agent activity, target repos without duplicate parent intakes, and
-live Forge state for the seeded parent including landed child issues.
+The validator reads live Forgejo state with the run-local bot token and checks:
 
-Open Forgejo and confirm:
+- both configured repositories are readable;
+- the source repo has exactly one parent intake and the target repo has no
+  duplicate parent intake with that title;
+- the parent records exactly two child dependencies, one per configured repo;
+- each child carries parent/correlation metadata and is closed; and
+- the parent is closed no earlier than the latest child landing.
 
-1. the source repo has the parent intake issue;
-2. each repo has one child code issue linked from that parent;
-3. each child has a merged implementation PR in its own repo;
-4. the parent unblocks only after all children land.
+The launcher also writes the same validation output to
+`logs/validate-multi-repo.log` once the run converges.
+
+## Manual Forgejo checks
+
+Open Forgejo before running `./run.sh stop` and confirm:
+
+1. `acme/service` has the single parent intake issue;
+2. `acme/service` and `acme/service-canary` each have one child code issue;
+3. each child has a merged implementation PR in its own repository;
+4. each implementation PR has an approving review and a successful Actions run;
+5. `acme/service-canary` has no duplicate copy of the parent intake; and
+6. the parent issue closes after the child issues close.
 
 For event/log names, see `examples/reference-delivery/observability.md`.
-
-## Provider-backed examples
-
-Provider-backed dogfood/product-chat launchers live outside this deterministic
-operator demo. Temper's `examples/reference-delivery/` intentionally stays
-jig-backed and provider-auth-free.
