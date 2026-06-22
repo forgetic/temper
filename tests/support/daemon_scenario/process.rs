@@ -29,10 +29,11 @@ pub(super) fn spawn_daemon(
     log: &Path,
 ) -> ChildGuard {
     // The new CLI is config-file driven: write the engine's deployment settings
-    // to a config file and run `temper daemon --service engine`. Secrets (forge
-    // admin token, CI web-UI creds, the engineer's per-role identity) go in a
-    // companion `credentials.toml` passed via `--secrets`; the deployment
-    // env overrides have been removed from `temper-config`.
+    // to a config file and run `temper --config … --secrets … daemon --service
+    // engine`. Secrets (forge admin token, CI web-UI creds, the engineer's
+    // per-role identity) go in a companion `credentials.toml` passed via the
+    // top-level `--secrets`; the deployment env overrides have been removed
+    // from `temper-config`.
     let config_dir = log.parent().expect("daemon log has a parent dir");
     let config_path = config_dir.join("daemon-config.toml");
     let config = format!(
@@ -84,9 +85,9 @@ pub(super) fn spawn_daemon(
 
     // Hermeticity: point HOME / XDG_* at an isolated, empty dir beside the config
     // so the spawned daemon can never discover a global
-    // ~/.config/temper/credentials.toml. The explicit --config already suppresses
-    // default discovery (issue #202); isolating HOME makes the test independent
-    // of the box it runs on.
+    // ~/.config/temper/credentials.toml. The explicit top-level --config already
+    // suppresses default discovery (issue #202); isolating HOME makes the test
+    // independent of the box it runs on.
     let fake_home = config_path
         .parent()
         .expect("config has a parent dir")
@@ -95,13 +96,13 @@ pub(super) fn spawn_daemon(
 
     let log_file = log_file(log);
     let child = Command::new(env!("CARGO_BIN_EXE_temper"))
-        .arg("daemon")
-        .arg("--service")
-        .arg("engine")
         .arg("--config")
         .arg(&config_path)
         .arg("--secrets")
         .arg(&credentials_path)
+        .arg("daemon")
+        .arg("--service")
+        .arg("engine")
         .env("HOME", &fake_home)
         .env("XDG_CONFIG_HOME", fake_home.join(".config"))
         .env("XDG_STATE_HOME", fake_home.join(".local/state"))
@@ -114,7 +115,7 @@ pub(super) fn spawn_daemon(
         .spawn()
         .expect("temper daemon binary spawns");
     ChildGuard {
-        label: "temper daemon --service engine",
+        label: "temper --config … --secrets … daemon --service engine",
         child,
         log: log.to_path_buf(),
     }

@@ -1,5 +1,5 @@
-# Runtime artifacts the launch script (run.sh, phase B3) creates. The tracked
-# scaffold is config/, secrets/*.example, secrets/.gitignore, and this README.
+# Runtime artifacts the launch script creates. The tracked scaffold is config/,
+# README.md, observability.md, and run.sh.
 /run/
 /logs/
 *.pid

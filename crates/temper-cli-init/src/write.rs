@@ -12,7 +12,13 @@ use temper_config::{
     ConfigInputs, CredentialInputs, ProviderKeyInput, ProviderSecretInput, ProvisionedForgeUser,
     build_config, build_credentials, forge_users_from_provisioned, write_config,
 };
-use temper_reference_delivery::{basic_delivery_workflow, basic_delivery_workflow_json};
+use temper_reference_delivery::{
+    basic_delivery_workflow, basic_delivery_workflow_json, reference_delivery_workflow_json,
+    workflow as reference_delivery_workflow,
+};
+use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
+
+use crate::collect::{WORKFLOW_BASIC_DELIVERY, WORKFLOW_REFERENCE_DELIVERY};
 
 use crate::collect::Answers;
 use crate::provisioner::ProvisionOutcome;
@@ -33,8 +39,8 @@ pub struct InitArtifacts {
     pub credentials_path: PathBuf,
     /// Where `workflow.json` is written.
     pub workflow_path: PathBuf,
-    /// The embedded basic-delivery workflow JSON bytes.
-    pub workflow_json: &'static str,
+    /// The workflow JSON bytes to write into the deployment bundle.
+    pub workflow_json: String,
     /// Where the generated webhook secret is written (chmod 600).
     pub webhook_secret_path: PathBuf,
     /// The freshly generated webhook secret value.
@@ -59,7 +65,8 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
     let workflow_path = config_dir.join("workflow.json");
     let webhook_secret_path = config_dir.join(WEBHOOK_SECRET_FILE);
 
-    let roles = workflow_roles();
+    let workflow = workflow_artifact(&answers.workflow)?;
+    let roles = workflow_roles(&workflow.validated);
     let webhook_secret = generate_secret();
 
     let mut config = build_config(&ConfigInputs {
@@ -87,7 +94,7 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         config,
         credentials_path: targets.credentials,
         workflow_path,
-        workflow_json: basic_delivery_workflow_json(),
+        workflow_json: workflow.json,
         webhook_secret_path,
         webhook_secret,
     })
@@ -123,7 +130,7 @@ pub fn preflight_clobber(artifacts: &InitArtifacts, force: bool) -> Result<(), I
 pub fn write_artifacts(artifacts: &InitArtifacts, force: bool) -> Result<(), InitError> {
     write_config(&artifacts.config, &artifacts.config_path, force)
         .map_err(|error| InitError::Write(error.to_string()))?;
-    write_new_file(&artifacts.workflow_path, artifacts.workflow_json, force)
+    write_new_file(&artifacts.workflow_path, &artifacts.workflow_json, force)
         .map_err(InitError::Write)?;
     write_new_file(
         &artifacts.webhook_secret_path,
@@ -240,10 +247,51 @@ fn write_credentials_with_users(
         .map_err(|error| InitError::Write(error.to_string()))
 }
 
-/// The roles `temper init` drives, derived from the embedded basic-delivery
-/// workflow's queue-subscribing roles (the same set the runner binds).
-fn workflow_roles() -> Vec<String> {
-    basic_delivery_workflow()
+struct WorkflowArtifact {
+    json: String,
+    validated: ValidatedWorkflow,
+}
+
+fn workflow_artifact(selection: &str) -> Result<WorkflowArtifact, InitError> {
+    match selection {
+        WORKFLOW_BASIC_DELIVERY => Ok(WorkflowArtifact {
+            json: basic_delivery_workflow_json().to_string(),
+            validated: basic_delivery_workflow(),
+        }),
+        WORKFLOW_REFERENCE_DELIVERY => Ok(WorkflowArtifact {
+            json: reference_delivery_workflow_json().to_string(),
+            validated: reference_delivery_workflow(),
+        }),
+        path => load_workflow_artifact(path),
+    }
+}
+
+fn load_workflow_artifact(path: &str) -> Result<WorkflowArtifact, InitError> {
+    let json = std::fs::read_to_string(path).map_err(|error| {
+        InitError::Path(format!(
+            "read workflow file {}: {error}",
+            Path::new(path).display()
+        ))
+    })?;
+    let spec: RawWorkflowSpec = serde_json::from_str(&json).map_err(|error| {
+        InitError::Unsupported(format!(
+            "workflow file {} is not valid JSON: {error}",
+            Path::new(path).display()
+        ))
+    })?;
+    let validated = spec.validate().map_err(|errors| {
+        InitError::Unsupported(format!(
+            "workflow file {} failed validation:\n{errors}",
+            Path::new(path).display()
+        ))
+    })?;
+    Ok(WorkflowArtifact { json, validated })
+}
+
+/// The roles `temper init` drives, derived from the selected workflow's
+/// queue-subscribing roles (the same set the runner binds during provisioning).
+fn workflow_roles(workflow: &ValidatedWorkflow) -> Vec<String> {
+    workflow
         .roles()
         .iter()
         .filter(|role| !role.queues.is_empty())

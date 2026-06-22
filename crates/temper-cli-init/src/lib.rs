@@ -11,8 +11,8 @@
 //!    provider API key). No disk or network I/O.
 //! 2. **Preflight** ([`preflight_clobber`]) — check *all* target paths up front
 //!    so the flow never writes file I then aborts at file III.
-//! 3. **Write** `config.toml`, `workflow.json` (the embedded basic-delivery
-//!    bytes), and a freshly generated `webhook-secret` (chmod 600).
+//! 3. **Write** `config.toml`, `workflow.json` (the selected builtin or copied
+//!    workflow bytes), and a freshly generated `webhook-secret` (chmod 600).
 //! 4. **Write** a local `credentials.toml` (chmod 600) with the operator-supplied
 //!    admin password and provider key.
 //! 5. **Optionally provision** the forge idempotently when `--apply` is set
@@ -47,7 +47,7 @@ use temper_cli_common::{EX_USAGE, EnvLookup, EnvMap, LoadOptions, PathResolver, 
 
 use args::parse_init_args;
 
-pub use apply::{APPLY_USAGE, ApplyOptions, apply_main, run_apply};
+pub use apply::{APPLY_USAGE, ApplyOptions, apply_main, apply_main_with_options, run_apply};
 pub use args::{InitOverrides, InitTopology, RepoSelection};
 pub use collect::{Answers, collect_answers};
 pub use provisioner::{ForgejoProvisioner, ProvisionOutcome, ProvisionRequest, Provisioner};
@@ -62,17 +62,16 @@ writes config.toml + workflow.json + a webhook secret + credentials.toml.
 Forge-side provisioning (repo/users/labels/webhook registration) only runs when
 --apply is set; --yes skips that apply confirmation.
 
-Usage: temper init [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] init [OPTIONS]
 
 Options:
-  --config        <PATH>        Where to write config.toml, or bundle directory
-  --secrets       <PATH>        Explicit secret source directory or credentials.toml
   --force                       Overwrite existing local files
   --apply                       After writing local files, provision the forge
   --yes                         With --apply, skip the provisioning confirmation
   --existing-repo               Provision onto a repo that already exists
   --topology      <standalone>  Local topology to initialize (only standalone today)
   --repo          <owner/name>  Managed repository to provision
+  --workflow      <builtin|PATH>  Builtin workflow name or JSON workflow file
   --forge         <URL>         Forgejo URL; skips the Forge URL prompt
   --bind          <ADDR>        Daemon bind / webhook advertise address override
   --workspace     <PATH>        Per-job worker workspace root to write
@@ -175,7 +174,16 @@ impl From<std::io::Error> for InitError {
 /// `env` / `paths` are the snapshot the composition root (`src/bin`) captured;
 /// this reads no `std::env`.
 pub fn main(args: Vec<String>, env: &EnvMap, paths: &PathResolver) -> ExitCode {
-    let parsed = match parse_init_args(args) {
+    main_with_options(args, env, paths, LoadOptions::default())
+}
+
+pub fn main_with_options(
+    args: Vec<String>,
+    env: &EnvMap,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
+    let parsed = match parse_init_args(args, options) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("temper init: {error}\n\n{USAGE}");
@@ -281,6 +289,7 @@ pub fn run_init(
                 name: answers.repo_name.clone(),
                 webhook_url: answers.webhook_url(),
                 webhook_secret_file: artifacts.webhook_secret_path.clone(),
+                workflow_path: Some(artifacts.workflow_path.clone()),
                 existing_repo: opts.existing_repo,
             };
             let provisioned = provisioner
@@ -343,5 +352,7 @@ mod tests {
         assert!(USAGE.contains("Per-job worker workspace root"), "{USAGE}");
         assert!(USAGE.contains("--apply"), "{USAGE}");
         assert!(USAGE.contains("--yes"), "{USAGE}");
+        assert!(!USAGE.contains("  --config"), "{USAGE}");
+        assert!(!USAGE.contains("  --secrets"), "{USAGE}");
     }
 }

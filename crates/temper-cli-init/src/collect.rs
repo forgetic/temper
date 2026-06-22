@@ -12,9 +12,12 @@ use crate::{InitError, InitOverrides, RepoSelection};
 /// registered on the forge.
 pub const DEFAULT_WEBHOOK_ADDR: &str = "http://127.0.0.1:8314";
 
-/// The only workflow `temper init` offers today (the embedded basic-delivery
+/// The default workflow `temper init` offers (the embedded basic-delivery
 /// reference shape).
 pub const WORKFLOW_BASIC_DELIVERY: &str = "basic-delivery";
+
+/// The richer bundled workflow with an explicit reviewer gate.
+pub const WORKFLOW_REFERENCE_DELIVERY: &str = "reference-delivery";
 
 /// The default repository `owner/name` provisioned and driven. Matches the
 /// reference-delivery repo input so the embedded workflow's roles line up.
@@ -32,7 +35,7 @@ pub const PROVIDER_DEEPSEEK: &str = "deepseek";
 pub struct Answers {
     /// The Forgejo base URL (`[forge] url`).
     pub forge_url: String,
-    /// The selected workflow name (only `basic-delivery` today).
+    /// The selected workflow: a builtin name or a JSON file path.
     pub workflow: String,
     /// The webhook bind/advertise address (`[engine] bind`).
     pub webhook_addr: String,
@@ -96,13 +99,13 @@ pub fn collect_answers(
     };
     validate_forge_url(&forge_url)?;
 
-    // Q2 — Workflow. Only basic-delivery (embedded) today.
-    let workflow = p.ask("Workflow", Some(WORKFLOW_BASIC_DELIVERY))?;
-    if workflow != WORKFLOW_BASIC_DELIVERY {
-        return Err(InitError::Unsupported(format!(
-            "unknown workflow `{workflow}`; only `{WORKFLOW_BASIC_DELIVERY}` is supported"
-        )));
-    }
+    // Q2 — Workflow. Builtins are embedded; path-like answers are loaded later
+    // when artifacts are built, keeping this step prompt-only.
+    let workflow = match &overrides.workflow {
+        Some(value) => value.clone(),
+        None => p.ask("Workflow", Some(WORKFLOW_BASIC_DELIVERY))?,
+    };
+    validate_workflow_selection(&workflow)?;
 
     // Q3 — Daemon webhook address.
     let webhook_addr = match &overrides.bind {
@@ -147,7 +150,11 @@ fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitErr
     })?;
     validate_forge_url(&forge_url)?;
 
-    let workflow = WORKFLOW_BASIC_DELIVERY.to_string();
+    let workflow = overrides
+        .workflow
+        .clone()
+        .unwrap_or_else(|| WORKFLOW_BASIC_DELIVERY.to_string());
+    validate_workflow_selection(&workflow)?;
     let webhook_addr = overrides
         .bind
         .clone()
@@ -186,6 +193,24 @@ fn collect_non_interactive(overrides: &InitOverrides) -> Result<Answers, InitErr
         repo_owner: repo.owner,
         repo_name: repo.name,
     })
+}
+
+fn validate_workflow_selection(workflow: &str) -> Result<(), InitError> {
+    if workflow == WORKFLOW_BASIC_DELIVERY || workflow == WORKFLOW_REFERENCE_DELIVERY {
+        return Ok(());
+    }
+    if workflow.contains('/')
+        || workflow.contains('\\')
+        || workflow.ends_with(".json")
+        || workflow.ends_with(".yaml")
+        || workflow.ends_with(".yml")
+    {
+        return Ok(());
+    }
+    Err(InitError::Unsupported(format!(
+        "unknown workflow `{workflow}`; use `{WORKFLOW_BASIC_DELIVERY}`, \
+         `{WORKFLOW_REFERENCE_DELIVERY}`, or a workflow JSON file path"
+    )))
 }
 
 fn validate_forge_url(forge_url: &str) -> Result<(), InitError> {

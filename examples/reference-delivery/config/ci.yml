@@ -1,21 +1,14 @@
 # Bundled CI workflow for the reference-delivery example.
 #
-# The production Forgejo provisioner commits a COMMIT-MESSAGE-MARKER CI workflow
-# ("[ci-pass]") that only a deterministic legacy fake worker can satisfy. This
-# example instead runs the in-process coding agent (`temper run`) against a local
-# jig LLM; its engineer PR-head commits carry ordinary messages, not the demo
-# marker. So `run.sh` overrides the provisioned marker workflow with this
-# pass-through workflow — it commits this file onto each converging repo's default
-# branch before `temper run` starts, so a product diff clears the landing CI gate
-# and the bot can merge.
+# `temper init` intentionally creates an empty/non-auto-initialized repository and
+# does not seed project content. run.sh commits this file explicitly as
+# `.forgejo/workflows/ci.yml` in the repository's first default-branch commit,
+# alongside a tiny README, before `temper serve standalone` starts.
 #
 # It runs directly on the host (`runs-on: host`, no containers) because the
-# bundled forgejo-runner is registered in host mode, and it needs no checkout.
-#
-# A real project replaces this entire file with its real CI (build, test, lint,
-# whatever) and pairs the engineer with a coding agent whose diffs pass it. The
-# reviewer approval and the bot's review + CI landing gates remain the
-# meaningful gates that converge the workflow.
+# bundled forgejo-runner is registered in host mode. The reviewer-gated demo only
+# needs a real CI signal that ordinary jig-authored product diffs can pass; a
+# real project replaces this with its own build/test/lint workflow.
 name: ci
 on: [push]
 jobs:

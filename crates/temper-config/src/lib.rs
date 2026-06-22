@@ -71,7 +71,7 @@ pub use template::{config_template, credentials_template};
 /// Where to find the two files. `None` fields fall back to the default
 /// `~/.config/temper` locations (no environment variable selects the files),
 /// except that an explicit config root pairs with a sibling credentials file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct LoadOptions {
     /// Explicit `--config` path.
     pub config: Option<PathBuf>,

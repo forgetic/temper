@@ -15,8 +15,9 @@
 //! - file-writing helpers ([`write_new_file`]/[`WriteOutcome`], [`restrict_600`],
 //!   [`expand_tilde`], [`resolve_targets`]/[`FileTargets`]).
 //!
-//! The common config-flag types are re-exported so a subcommand crate need not
-//! also depend on `temper-config` just for `--config`/`--secrets` parsing.
+//! The common config-location types are re-exported so a subcommand crate need
+//! not also depend on `temper-config` just to receive top-level `--config` /
+//! `--secrets` options from the dispatcher.
 
 mod prompt;
 
@@ -25,8 +26,8 @@ use std::process::ExitCode;
 
 pub use prompt::{Prompter, ScriptedPrompter, TerminalPrompter};
 
-// Re-exported from `temper-config` so subcommand crates parse the common flags
-// the same way without each depending on `temper-config` directly.
+// Re-exported from `temper-config` so subcommand crates can receive the common
+// file-location options without each depending on `temper-config` directly.
 pub use temper_config::{
     CommonArgs, EX_USAGE, EnvLookup, EnvMap, LoadOptions, PathResolver, parse_common_args,
 };

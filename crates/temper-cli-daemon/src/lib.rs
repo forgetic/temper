@@ -33,8 +33,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_config::{
-    ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadedPaths, PathResolver, Resolved,
-    load_explicit, parse_common_args,
+    ConfigError, EX_USAGE, EnvLookup, LoadInputs, LoadOptions, LoadedPaths, PathResolver, Resolved,
+    load_explicit,
 };
 
 // Exposed (re-exported up through `temper-cli`) for the root package's
@@ -50,14 +50,12 @@ The temper daemon can be run as:
 - Standalone: all services run in one process (engine, workers, agents, etc.)
 - Distributed topology: individual services run as scalable separate processes
 
-Command line flags override env vars, env vars override config file, config file
-override defaults.
+Use top-level `temper --config ... --secrets ... daemon` to select a deployment
+bundle; config files provide runtime settings.
 
-Usage: temper daemon [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] daemon [OPTIONS]
 
 Options:
-  --config  <PATH>  Path to configuration file or bundle directory
-  --secrets <PATH>  Explicit secret source directory or credentials.toml
   --service <NAME>  Which individual service to run (engine, worker). If not
                     given, run as standalone.
   -h, --help        Print help";
@@ -65,7 +63,7 @@ Options:
 pub const SERVE_USAGE: &str = "\
 Run a Temper process.
 
-Usage: temper serve <COMPONENT> [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] serve <COMPONENT> [OPTIONS]
 
 Components:
   standalone  Run all Temper planes in one local process
@@ -84,19 +82,17 @@ Run Temper in standalone mode.
 This is a compatibility wrapper for the existing all-in-one `temper daemon` path
 without `--service`: engine, worker, and agent execution run in one process.
 
-Usage: temper serve standalone [OPTIONS]
+Usage: temper [GLOBAL OPTIONS] serve standalone [OPTIONS]
 
 Options:
-  --config  <DIR|FILE>  Path to configuration file or bundle directory
-  --secrets <DIR|FILE>  Explicit secret source directory or credentials.toml
-  -h, --help            Print help";
+  -h, --help  Print help";
 
 #[derive(Debug, Eq, PartialEq)]
 enum ServeInvocation {
     Help,
     Version,
     StandaloneHelp,
-    Standalone(Vec<String>),
+    Standalone,
 }
 
 /// Which individual daemon service to run (`temper daemon --service <name>`).
@@ -166,6 +162,15 @@ impl std::error::Error for DaemonError {}
 /// unchanged for compatibility. Distributed `serve engine|worker|trigger` modes
 /// are rejected here instead of growing new topology semantics in this PR.
 pub fn serve_main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> ExitCode {
+    serve_main_with_options(args, env, paths, LoadOptions::default())
+}
+
+pub fn serve_main_with_options(
+    args: Vec<String>,
+    env: &dyn EnvLookup,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
     match parse_serve_invocation(args) {
         Ok(ServeInvocation::Help) => {
             println!("{SERVE_USAGE}");
@@ -179,7 +184,7 @@ pub fn serve_main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) 
             println!("{SERVE_STANDALONE_USAGE}");
             ExitCode::SUCCESS
         }
-        Ok(ServeInvocation::Standalone(daemon_args)) => main(daemon_args, env, paths),
+        Ok(ServeInvocation::Standalone) => main_with_options(Vec::new(), env, paths, options),
         Err(error) => {
             eprintln!("temper serve: {error}\n\n{SERVE_USAGE}");
             ExitCode::from(EX_USAGE)
@@ -205,33 +210,46 @@ fn parse_serve_invocation(args: Vec<String>) -> Result<ServeInvocation, String> 
     }
 }
 
-fn parse_serve_standalone(daemon_args: Vec<String>) -> Result<ServeInvocation, String> {
-    if daemon_args.iter().any(|arg| arg == "--service") {
-        return Err(
+fn parse_serve_standalone(args: Vec<String>) -> Result<ServeInvocation, String> {
+    let Some(arg) = args.into_iter().next() else {
+        return Ok(ServeInvocation::Standalone);
+    };
+
+    match arg.as_str() {
+        "-h" | "--help" | "help" => Ok(ServeInvocation::StandaloneHelp),
+        "-V" | "--version" => Ok(ServeInvocation::Version),
+        "--service" => Err(
             "`temper serve standalone` always runs the standalone path; `--service` is not accepted"
                 .to_string(),
-        );
+        ),
+        "-c" | "--config" | "--secrets" => Err(format!(
+            "`{arg}` is a global option; place it before `serve`"
+        )),
+        other => Err(format!("unexpected argument `{other}`")),
     }
-
-    let parsed = parse_common_args(daemon_args.clone())?;
-    if parsed.help {
-        return Ok(ServeInvocation::StandaloneHelp);
-    }
-    if parsed.version {
-        return Ok(ServeInvocation::Version);
-    }
-    if let Some(unexpected) = parsed.rest.first() {
-        return Err(format!("unexpected argument `{unexpected}`"));
-    }
-    Ok(ServeInvocation::Standalone(daemon_args))
 }
 
-/// `temper daemon` entry point: parse the common flags + `--service` from
-/// `args`, build [`DaemonInputs`] over the injected `env` / `paths` snapshot, and
-/// [`run`]. The composition root (`src/bin`) supplies the snapshot; this reads no
-/// `std::env`.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct ParsedDaemonArgs {
+    help: bool,
+    version: bool,
+    service: Option<Service>,
+}
+
+/// `temper daemon` entry point: parse `--service`, build [`DaemonInputs`] over
+/// the injected `env` / `paths` snapshot, and [`run`]. The composition root
+/// (`src/bin`) supplies the snapshot; this reads no `std::env`.
 pub fn main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> ExitCode {
-    let parsed = match parse_common_args(args) {
+    main_with_options(args, env, paths, LoadOptions::default())
+}
+
+pub fn main_with_options(
+    args: Vec<String>,
+    env: &dyn EnvLookup,
+    paths: &PathResolver,
+    options: LoadOptions,
+) -> ExitCode {
+    let parsed = match parse_daemon_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("temper daemon: {error}\n\n{USAGE}");
@@ -242,18 +260,15 @@ pub fn main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> Exi
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let service = match extract_service(&parsed.rest) {
-        Ok(service) => service,
-        Err(error) => {
-            eprintln!("temper daemon: {error}\n\n{USAGE}");
-            return ExitCode::from(EX_USAGE);
-        }
-    };
+    if parsed.version {
+        println!("temper {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
 
     let inputs = DaemonInputs {
-        config: parsed.options.config,
-        credentials: parsed.options.credentials,
-        service,
+        config: options.config,
+        credentials: options.credentials,
+        service: parsed.service,
         env,
         paths,
     };
@@ -266,23 +281,28 @@ pub fn main(args: Vec<String>, env: &dyn EnvLookup, paths: &PathResolver) -> Exi
     }
 }
 
-/// Pulls an optional `--service <name>` out of the leftover args, rejecting any
-/// other stray argument.
-fn extract_service(rest: &[String]) -> Result<Option<Service>, String> {
-    let mut service = None;
-    let mut iter = rest.iter();
+fn parse_daemon_args(args: Vec<String>) -> Result<ParsedDaemonArgs, String> {
+    let mut parsed = ParsedDaemonArgs::default();
+    let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "-h" | "--help" => parsed.help = true,
+            "-V" | "--version" => parsed.version = true,
             "--service" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "--service requires a value".to_string())?;
-                service = Some(Service::parse(value)?);
+                parsed.service = Some(Service::parse(value)?);
+            }
+            "-c" | "--config" | "--secrets" => {
+                return Err(format!(
+                    "`{arg}` is a global option; place it before `daemon`"
+                ));
             }
             other => return Err(format!("unexpected argument `{other}`")),
         }
     }
-    Ok(service)
+    Ok(parsed)
 }
 
 /// Loads the deployment from [`DaemonInputs`] and runs the selected service.

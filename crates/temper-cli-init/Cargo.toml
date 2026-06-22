@@ -16,6 +16,7 @@ temper-workflow = { path = "../temper-workflow" }
 temper-reference-delivery = { path = "../temper-reference-delivery" }
 # Webhook-secret generation (two v4 UUIDs); a workspace dependency already in use.
 uuid = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
