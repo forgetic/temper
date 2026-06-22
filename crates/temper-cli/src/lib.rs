@@ -240,6 +240,31 @@ mod tests {
     }
 
     #[test]
+    fn global_options_are_inserted_after_config_action() {
+        let args = apply_global_args(
+            "config",
+            vec!["validate".to_string()],
+            vec![
+                "--config".to_string(),
+                "deploy/config.toml".to_string(),
+                "--secrets".to_string(),
+                "deploy/credentials.toml".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "validate".to_string(),
+                "--config".to_string(),
+                "deploy/config.toml".to_string(),
+                "--secrets".to_string(),
+                "deploy/credentials.toml".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn global_options_are_inserted_after_serve_component() {
         let args = apply_global_args(
             "serve",
