@@ -14,18 +14,12 @@ path = "src/bin/temper-testing-worker.rs"
 name = "temper-testing-daemon-worker"
 path = "src/bin/temper-testing-daemon-worker.rs"
 
-[[bin]]
-name = "temper-reference-delivery-jig"
-path = "src/bin/temper-reference-delivery-jig.rs"
-
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
 tracing = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-jig-core = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
-jig-server = { git = "http://127.0.0.1:3000/ai/jig.git", rev = "529bc09b807e80158d7ec9d0e08940616d8894c7" }
 temper-forge-model = { path = "../temper-forge-model" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
