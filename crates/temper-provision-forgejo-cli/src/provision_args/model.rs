@@ -27,7 +27,7 @@ pub const USAGE: &str = concat!(
     "  the admin token comes from TEMPER_FORGEJO_ADMIN_TOKEN (required), never argv; ",
     "the workflow file comes from --workflow, defaulting to the bundled ",
     "reference-delivery workflow when unset; --out writes a credentials.toml the ",
-    "daemon loads via --credentials"
+    "daemon loads via --secrets"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]

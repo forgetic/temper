@@ -3,12 +3,12 @@
 //! Hermeticity regression tests for the daemon load path.
 //!
 //! These pin the fix for the original incident: a daemon started with an
-//! explicit `--config` (and no `--credentials`) silently layered in the
+//! explicit `--config` (and no secret source) silently layered in the
 //! operator's global `~/.config/temper/credentials.toml`, so a *poisoned* global
 //! token was used instead of the explicit deployment's secrets. The tests poison
 //! a fake `$HOME`'s global credentials, load via [`super::load_for`] with explicit
-//! paths and an env snapshot that does NOT set `TEMPER_CONFIG` /
-//! `TEMPER_CREDENTIALS`, and assert the poisoned token is never used.
+//! paths and an env snapshot that has no legacy config-file selectors, and
+//! assert the poisoned token is never used.
 
 use std::path::{Path, PathBuf};
 
@@ -71,9 +71,8 @@ fn write_credentials(path: &Path, token: &str) {
 }
 
 /// Plants a poisoned global `~/.config/temper/{config,credentials}.toml` under
-/// `home` and returns an env snapshot whose `HOME` points there — but which sets
-/// neither `TEMPER_CONFIG` nor `TEMPER_CREDENTIALS`. This is exactly the box the
-/// incident happened on: a real operator with a global config + credentials in
+/// `home` and returns an env snapshot whose `HOME` points there. This is exactly
+/// the incident box: a real operator with a global config + credentials in
 /// `$HOME`. The global config declares `admin = "agent"` so the poisoned global
 /// token *would* resolve if discovery were not suppressed.
 fn poison_home(home: &Path) -> EnvMap {
@@ -87,7 +86,7 @@ fn poison_home(home: &Path) -> EnvMap {
     env
 }
 
-/// Explicit `--config` + `--credentials` must use ONLY the explicit pair, even
+/// Explicit `--config` + `--secrets` must use ONLY the explicit pair, even
 /// though a poisoned global credentials file exists under the env snapshot's HOME.
 #[test]
 fn explicit_config_and_credentials_ignore_poisoned_global() {
@@ -142,8 +141,8 @@ fn explicit_config_and_credentials_ignore_poisoned_global() {
 }
 
 /// An explicit config directory is a local bundle root: the daemon loads
-/// `<root>/config.toml` and, when no `--credentials` / `--secrets` is supplied,
-/// the sibling `<root>/credentials.toml` instead of any global credentials file.
+/// `<root>/config.toml` and, when no `--secrets` is supplied, the sibling
+/// `<root>/credentials.toml` instead of any global credentials file.
 #[test]
 fn explicit_config_directory_uses_sibling_credentials_not_global() {
     let dir = scratch("config-dir-bundle");
@@ -181,8 +180,8 @@ fn explicit_config_directory_uses_sibling_credentials_not_global() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The narrower, exact-incident case: explicit `--config` only, no
-/// `--credentials` / `--secrets`, and no sibling credentials file. The poisoned
+/// The narrower, exact-incident case: explicit `--config` only, no secret
+/// source, and no sibling credentials file. The poisoned global credentials must
 /// global credentials must NOT layer in — default `~/.config/temper` discovery is
 /// suppressed, so no credentials are discovered at all (the poisoned token is
 /// absent from the result).
@@ -271,6 +270,7 @@ fn serve_usage_documents_supported_local_dev_path() {
         "serve help should make unsupported distributed components explicit"
     );
     assert!(SERVE_STANDALONE_USAGE.contains("temper serve standalone"));
+    assert!(SERVE_STANDALONE_USAGE.contains("--secrets"));
     assert!(
         SERVE_STANDALONE_USAGE.contains("temper daemon"),
         "standalone help should identify the compatibility wrapper"
@@ -301,13 +301,26 @@ fn serve_standalone_maps_to_daemon_standalone_args() {
         "standalone".to_string(),
         "--config".to_string(),
         "deploy/config.toml".to_string(),
-        "--credentials".to_string(),
+        "--secrets".to_string(),
         "deploy/credentials.toml".to_string(),
     ];
     assert_eq!(
         parse_serve_invocation(args.clone()).expect("standalone command parses"),
         ServeInvocation::Standalone(args[1..].to_vec())
     );
+}
+
+#[test]
+fn serve_standalone_rejects_legacy_secret_source_flag() {
+    let legacy = format!("--{}", "credentials");
+    let error = parse_serve_invocation(vec![
+        "standalone".to_string(),
+        legacy.clone(),
+        "deploy/credentials.toml".to_string(),
+    ])
+    .expect_err("legacy secret-source flag must not be accepted under serve standalone");
+
+    assert!(error.contains(&legacy), "{error}");
 }
 
 #[test]
