@@ -81,6 +81,15 @@ pub fn workflow() -> ValidatedWorkflow {
     spec.validate().expect("reference fixture validates")
 }
 
+/// The bundled **reference-delivery** workflow JSON, verbatim.
+///
+/// This is the canonical copy of `examples/reference-delivery/config/workflow.json`,
+/// embedded at build time so a deployment can select it without carrying an
+/// external workflow source file.
+pub fn reference_delivery_workflow_json() -> &'static str {
+    FIXTURE
+}
+
 /// The bundled **basic-delivery** workflow JSON, verbatim.
 ///
 /// This is the canonical copy of `examples/basic-delivery/config/workflow.json`,
