@@ -1,9 +1,9 @@
 #!/bin/sh
 # Fixed, minimal launcher for the reference-delivery reviewer-gate demo.
 #
-# It follows the long-term Temper UX: `temper --config ... --secrets ... init
+# It follows the long-term Temper UX: `temper --config <bundle-dir> init
 # --apply --yes` writes and provisions a deployment bundle from the checked-in
-# reference workflow, then `temper --config ... --secrets ... serve standalone`
+# reference workflow, then `temper --config <bundle-dir> serve standalone`
 # runs the engine, worker, and agent in one process.
 # The only direct Forgejo API use is demo setup: create the throwaway admin,
 # seed a tiny repository baseline, and file the intake issue after Temper is
@@ -188,7 +188,6 @@ resolve_common_binaries() {
 
     _global_help=$("$RUN_BIN" --help 2>&1 || true)
     case "$_global_help" in *--config*) ;; *) die 'temper help lacks global --config' ;; esac
-    case "$_global_help" in *--secrets*) ;; *) die 'temper help lacks global --secrets' ;; esac
     _init_help=$("$RUN_BIN" init --help 2>&1 || true)
     case "$_init_help" in *--non-interactive*) ;; *) die 'temper init lacks --non-interactive' ;; esac
     case "$_init_help" in *--apply*) ;; *) die 'temper init lacks --apply' ;; esac
@@ -198,7 +197,6 @@ resolve_common_binaries() {
     case "$_init_help" in *--workspace*) ;; *) die 'temper init lacks --workspace' ;; esac
     _serve_help=$("$RUN_BIN" serve standalone --help 2>&1 || true)
     case "$_serve_help" in *--config*) die 'temper serve standalone documents non-canonical --config' ;; *) ;; esac
-    case "$_serve_help" in *--secrets*) die 'temper serve standalone documents non-canonical --secrets' ;; *) ;; esac
 
     [ -x "$FORGEJO_BIN" ] || die "forgejo binary not found: $FORGEJO_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
     [ -x "$RUNNER_BIN" ] || die "forgejo-runner binary not found: $RUNNER_BIN (pre-stage with: cargo test -p temper-forgejo-fixture --test cache -- --ignored)"
@@ -376,13 +374,13 @@ PY
 }
 
 run_temper_init() {
-    log "running temper --config/--secrets init --apply --yes --non-interactive for $REPO with the reference workflow ..."
+    log "running temper --config <bundle-dir> init --apply --yes --non-interactive for $REPO with the reference workflow ..."
     : >"$LOG_DIR/init.log"
     : >"$LOG_DIR/provision.log"
     (
         TEMPER_INIT_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
         TEMPER_INIT_PROVIDER_KEY="$INIT_PROVIDER_KEY" \
-            "$RUN_BIN" --config "$CONFIG_FILE" --secrets "$CREDENTIALS_FILE" \
+            "$RUN_BIN" --config "$RUN_DIR" \
                 init --non-interactive --force --apply --yes \
                 --forge "$BASE_URL" \
                 --repo "$REPO" \
@@ -499,7 +497,7 @@ boot_run() {
     mkdir -p "$RUN_DIR/workspaces"
     log "starting temper serve standalone at $DAEMON_BIND ..."
     : >"$LOG_DIR/run.log"
-    "$RUN_BIN" --config "$CONFIG_FILE" --secrets "$CREDENTIALS_FILE" serve standalone \
+    "$RUN_BIN" --config "$RUN_DIR" serve standalone \
         >"$LOG_DIR/run.log" 2>&1 &
     RUN_PID=$!
     echo "$RUN_PID" >"$RUN_PID_FILE"
