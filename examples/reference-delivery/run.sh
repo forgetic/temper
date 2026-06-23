@@ -142,6 +142,38 @@ cmd_stop() {
     cleanup
 }
 
+assert_no_active_run() {
+    for _file in "$SERVER_PID_FILE" "$RUN_PID_FILE" "$WORKER_PID_FILE" "$RUNNER_PID_FILE" "$JIG_PID_FILE"; do
+        [ -f "$_file" ] || continue
+        while IFS= read -r _pid; do
+            [ -n "$_pid" ] || continue
+            if kill -0 "$_pid" 2>/dev/null; then
+                die "a run appears active (pid $_pid from $_file); stop it first: ./run.sh stop"
+            fi
+        done <"$_file"
+    done
+}
+
+assert_bind_available() {
+    _label=$1
+    _bind=$2
+    python3 - "$_label" "$_bind" <<'PY' || die "fixed bind $_bind is unavailable; stop a previous run with ./run.sh stop or free the port"
+import socket
+import sys
+
+label, bind = sys.argv[1:3]
+host, port_text = bind.rsplit(":", 1)
+port = int(port_text)
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((host, port))
+        sock.listen(1)
+    except OSError as exc:
+        raise SystemExit(f"{label} fixed bind {bind} is unavailable: {exc}")
+PY
+}
+
 resolve_common_binaries() {
     command -v curl >/dev/null 2>&1 || die 'curl is required'
     command -v git >/dev/null 2>&1 || die 'git is required'
@@ -790,9 +822,8 @@ monitor_multi() {
 cmd_multi_repo() {
     [ -f "$WORKFLOW_PATH" ] || die "missing $WORKFLOW_PATH"
     resolve_multi_binaries
-    if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
-        die "a run appears active; stop it first: ./run.sh stop"
-    fi
+    assert_no_active_run
+    assert_bind_available 'Forgejo' "$HOST:$PORT"
 
     mkdir -p "$RUN_DIR" "$LOG_DIR"
     rm -f "$STOP_FILE" "$MULTI_PARENT_FILE"
@@ -812,9 +843,9 @@ cmd_start() {
     [ -f "$WORKFLOW_PATH" ] || die "missing $WORKFLOW_PATH"
     [ -f "$CONFIG_DIR/ci.yml" ] || die "missing $CONFIG_DIR/ci.yml"
     resolve_single_binaries
-    if [ -f "$SERVER_PID_FILE" ] && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
-        die "a run appears active; stop it first: ./run.sh stop"
-    fi
+    assert_no_active_run
+    assert_bind_available 'Forgejo' "$HOST:$PORT"
+    assert_bind_available 'temper serve standalone' "$DAEMON_BIND"
 
     mkdir -p "$RUN_DIR" "$LOG_DIR"
     rm -f "$STOP_FILE"

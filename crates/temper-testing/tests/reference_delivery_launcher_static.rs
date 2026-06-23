@@ -101,6 +101,21 @@ fn launcher_exposes_fixed_multi_repo_fanout_mode() {
 }
 
 #[test]
+fn launcher_preflights_fixed_binds_and_stale_pids() {
+    let script = read_example("run.sh");
+    let cmd_start = script
+        .split("cmd_start() {")
+        .nth(1)
+        .expect("cmd_start function exists");
+
+    assert!(script.contains("assert_no_active_run()"));
+    assert!(script.contains("assert_bind_available()"));
+    assert!(cmd_start.contains("assert_no_active_run"));
+    assert!(cmd_start.contains("assert_bind_available 'Forgejo' \"$HOST:$PORT\""));
+    assert!(cmd_start.contains("assert_bind_available 'temper serve standalone' \"$DAEMON_BIND\""));
+}
+
+#[test]
 fn launcher_keeps_runtime_credentials_in_init_bundle() {
     let script = read_example("run.sh");
 
