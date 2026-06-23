@@ -1,5 +1,8 @@
 use super::*;
-use temper_forge::{CreateIssue, CreateRepository, Forge, IssueState, UpdateIssue};
+use temper_forge::{
+    BranchRef, CreateIssue, CreatePullRequest, CreateRepository, Forge, IssueState, MergeMethod,
+    MergePullRequest, UpdateIssue,
+};
 use temper_forge_memory::MemoryForge;
 use temper_workflow::{ArtifactKindId, render_metadata_block};
 
@@ -110,6 +113,8 @@ fn parent_with_landed_child_backrefs_and_correlation_passes() {
             true,
         )
         .await;
+        create_merged_pr(&forge, &source, child_a.number).await;
+        create_merged_pr(&forge, &target, child_b.number).await;
         let parent_metadata = WorkflowMetadata {
             kind: Some(ArtifactKindId::new("code")),
             dependencies: vec![
@@ -217,6 +222,45 @@ async fn create_issue(
     } else {
         issue
     }
+}
+
+async fn create_merged_pr(forge: &MemoryForge, repo: &RepositoryId, child: ItemNumber) {
+    let metadata = WorkflowMetadata {
+        kind: Some(ArtifactKindId::new("implementation_pr")),
+        parents: vec![ArtifactRef::same_repo(child)],
+        ..WorkflowMetadata::default()
+    };
+    let pull_request = forge
+        .create_pull_request(
+            repo,
+            CreatePullRequest {
+                title: format!("Implement child #{child}"),
+                body: render_metadata_block(&metadata),
+                source: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: format!("fake/pr-for-code-{child}"),
+                },
+                target: BranchRef {
+                    repository_id: repo.clone(),
+                    branch: "main".to_string(),
+                },
+                labels: vec!["implementation".to_string()],
+                assignees: Vec::new(),
+            },
+        )
+        .await
+        .expect("implementation PR created");
+    forge
+        .merge_pull_request(
+            &pull_request.id,
+            MergePullRequest {
+                method: MergeMethod::Squash,
+                commit_title: None,
+                commit_body: None,
+            },
+        )
+        .await
+        .expect("implementation PR merged");
 }
 
 fn child_metadata(source: &RepositoryId, parent: ItemNumber, key: &str) -> WorkflowMetadata {
