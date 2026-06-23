@@ -11,7 +11,8 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use temper_forge::config::ForgejoConfig;
 use temper_forge::{
-    Forge, ForgeError, Issue, IssueQuery, IssueState, ItemNumber, RepositoryId, RepositoryPath,
+    Forge, ForgeError, Issue, IssueQuery, IssueState, ItemNumber, PullRequest, PullRequestQuery,
+    PullRequestState, RepositoryId, RepositoryPath,
 };
 use temper_workflow::{ArtifactRef, WorkflowMetadata, parse_metadata_block};
 
@@ -470,6 +471,7 @@ async fn validate_children<F: Forge + ?Sized>(
             &child_display,
             &child,
         );
+        validate_child_merged_pr(forge, report, &child_repo, &child_display, &child).await?;
     }
     if dependencies.is_empty() {
         return Ok(ChildValidationSummary {
@@ -551,6 +553,57 @@ fn validate_parent_resolution(
             config.parent_number
         )),
     }
+}
+
+async fn validate_child_merged_pr<F: Forge + ?Sized>(
+    forge: &F,
+    report: &mut ValidationReport,
+    child_repo: &RepositoryId,
+    child_display: &str,
+    child: &Issue,
+) -> Result<(), ForgeError> {
+    let merged = forge
+        .list_pull_requests(
+            child_repo,
+            PullRequestQuery {
+                state: Some(PullRequestState::Merged),
+                labels: vec!["implementation".to_string()],
+                ..PullRequestQuery::default()
+            },
+        )
+        .await?;
+    let matches: Vec<PullRequest> = merged
+        .into_iter()
+        .filter(|pull_request| pull_request_references_child(pull_request, child_repo, child))
+        .collect();
+    match matches.as_slice() {
+        [pull_request] => report.ok(format!(
+            "child {child_display}#{} has one merged implementation PR (PR#{})",
+            child.number, pull_request.number
+        )),
+        _ => report.missing(format!(
+            "child {child_display}#{} has one merged implementation PR (found {})",
+            child.number,
+            matches.len()
+        )),
+    }
+    Ok(())
+}
+
+fn pull_request_references_child(
+    pull_request: &PullRequest,
+    child_repo: &RepositoryId,
+    child: &Issue,
+) -> bool {
+    parse_metadata_block(&pull_request.body)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| {
+            metadata.parents.iter().any(|parent| {
+                parent.number == child.number
+                    && parent.resolved_repository(child_repo) == *child_repo
+            })
+        })
 }
 
 fn validate_child_metadata(

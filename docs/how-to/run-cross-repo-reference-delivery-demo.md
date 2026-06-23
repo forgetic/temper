@@ -5,8 +5,8 @@ This recipe runs the operator-facing cross-repo fan-out path in
 `acme/service` and deterministic workers fan it out into child code issues in
 both `acme/service` and `acme/service-canary`.
 
-The normal reviewer-gated single-repo demo remains `./run.sh start`; this page
-covers the explicit multi-repo entry point.
+The cross-repo fan-out path is the checked-in default for `./run.sh start`; the
+reviewer-gated one-repo demo remains available as `./run.sh single-repo`.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ In short:
 
 ```sh
 cd examples/reference-delivery
-./run.sh multi-repo
+./run.sh start        # ./run.sh multi-repo is an alias
 ```
 
 The launcher boots a throwaway Forgejo, registers a host-mode runner, provisions
@@ -43,7 +43,7 @@ child issues have landed.
 
 ## Validate live state
 
-While `./run.sh multi-repo` is still running in another terminal:
+While `./run.sh start` is still running in another terminal:
 
 ```sh
 cd examples/reference-delivery

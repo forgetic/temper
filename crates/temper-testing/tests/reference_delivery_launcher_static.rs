@@ -1,10 +1,9 @@
 //! Static (source-level) assertions for the `examples/reference-delivery`
 //! launcher.
 //!
-//! The default reference demo should dogfood the long-term UX surface in the same
-//! style as `examples/basic-delivery`: provision with `temper init --apply --yes`
-//! and run with `temper serve standalone`. The same launcher also exposes a
-//! separate fixed multi-repo fan-out mode.
+//! The default reference demo should exercise the fixed cross-repo fan-out path:
+//! one source intake fans out into child implementation issues in two repos. The
+//! same launcher keeps a separate reviewer-gated single-repo standalone mode.
 
 use std::{fs, path::PathBuf};
 
@@ -43,12 +42,30 @@ fn read_example(relative: &str) -> String {
 }
 
 #[test]
-fn launcher_uses_init_apply_and_serve_standalone_for_default_start() {
+fn launcher_defaults_to_cross_repo_fanout() {
     let script = read_example("run.sh");
     let cmd_start = script
         .split("cmd_start() {")
         .nth(1)
-        .expect("cmd_start function exists");
+        .expect("cmd_start function exists")
+        .split("cmd_single_repo() {")
+        .next()
+        .expect("cmd_start body is delimited by cmd_single_repo");
+
+    assert!(cmd_start.contains("cmd_multi_repo"));
+    assert!(script.contains("start (default)      run the cross-repo fan-out demo"));
+    assert!(script.contains("multi-repo) cmd_multi_repo"));
+    assert!(script.contains("single-repo) cmd_single_repo"));
+    assert!(script.contains("validate) cmd_validate"));
+}
+
+#[test]
+fn launcher_keeps_init_apply_and_serve_standalone_for_single_repo_mode() {
+    let script = read_example("run.sh");
+    let cmd_single = script
+        .split("cmd_single_repo() {")
+        .nth(1)
+        .expect("cmd_single_repo function exists");
 
     assert!(script.contains("\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" \\\n                init --non-interactive --force --apply --yes"));
     assert!(script.contains("--workflow \"$WORKFLOW_PATH\""));
@@ -56,8 +73,8 @@ fn launcher_uses_init_apply_and_serve_standalone_for_default_start() {
         "\"$RUN_BIN\" --config \"$CONFIG_FILE\" --secrets \"$CREDENTIALS_FILE\" serve standalone"
     ));
 
-    assert!(!cmd_start.contains("provision-forgejo"));
-    assert!(!cmd_start.contains("validate-reference-delivery"));
+    assert!(!cmd_single.contains("provision-forgejo"));
+    assert!(!cmd_single.contains("validate-reference-delivery"));
     assert!(!script.contains("\"$RUN_BIN\" daemon"));
     assert!(!script.contains("temper run"));
     assert!(!script.contains("FORGEJO_ACCESS_TOKEN"));
@@ -72,7 +89,9 @@ fn launcher_is_fixed_and_has_no_operator_env_config_file() {
     assert!(script.contains("DAEMON_BIND=127.0.0.1:38200"));
     assert!(script.contains("REPO=$OWNER/$NAME"));
     assert!(script.contains("JIG_FIXTURE_PATH=\"$JIG_REPO/fixtures/reference-delivery.json\""));
-    assert!(script.contains("The single-repo demo intentionally has no config knobs"));
+    assert!(
+        script.contains("The default reference-delivery demo intentionally provisions exactly")
+    );
     assert!(script.contains("MULTI_REPOS=\"$REPO $CANARY_REPO\""));
 
     assert!(!example_path("config/temper.env").exists());
@@ -98,21 +117,34 @@ fn launcher_exposes_fixed_multi_repo_fanout_mode() {
     assert!(script.contains("--expected-children 2"));
     assert!(script.contains("\"target_repo\": \"forgejo:$CANARY_REPO\""));
     assert!(script.contains("validate-multi-repo) cmd_validate_multi_repo"));
+    assert!(script.contains("field == \"user\""));
+    assert!(script.contains("value = role"));
 }
 
 #[test]
 fn launcher_preflights_fixed_binds_and_stale_pids() {
     let script = read_example("run.sh");
-    let cmd_start = script
-        .split("cmd_start() {")
+    let cmd_multi = script
+        .split("cmd_multi_repo() {")
         .nth(1)
-        .expect("cmd_start function exists");
+        .expect("cmd_multi_repo function exists")
+        .split("cmd_start() {")
+        .next()
+        .expect("cmd_multi_repo body is delimited by cmd_start");
+    let cmd_single = script
+        .split("cmd_single_repo() {")
+        .nth(1)
+        .expect("cmd_single_repo function exists");
 
     assert!(script.contains("assert_no_active_run()"));
     assert!(script.contains("assert_bind_available()"));
-    assert!(cmd_start.contains("assert_no_active_run"));
-    assert!(cmd_start.contains("assert_bind_available 'Forgejo' \"$HOST:$PORT\""));
-    assert!(cmd_start.contains("assert_bind_available 'temper serve standalone' \"$DAEMON_BIND\""));
+    assert!(cmd_multi.contains("assert_no_active_run"));
+    assert!(cmd_multi.contains("assert_bind_available 'Forgejo' \"$HOST:$PORT\""));
+    assert!(cmd_single.contains("assert_no_active_run"));
+    assert!(cmd_single.contains("assert_bind_available 'Forgejo' \"$HOST:$PORT\""));
+    assert!(
+        cmd_single.contains("assert_bind_available 'temper serve standalone' \"$DAEMON_BIND\"")
+    );
 }
 
 #[test]
@@ -146,12 +178,12 @@ fn launcher_serves_reviewer_but_not_owner_or_human() {
 }
 
 #[test]
-fn launcher_seeds_intake_after_standalone_readiness() {
+fn launcher_seeds_intake_after_standalone_readiness_in_single_repo_mode() {
     let script = read_example("run.sh");
     let cmd_start = script
-        .split("cmd_start() {")
+        .split("cmd_single_repo() {")
         .nth(1)
-        .expect("cmd_start function exists");
+        .expect("cmd_single_repo function exists");
 
     let jig_index = cmd_start
         .find("\n    boot_jig")

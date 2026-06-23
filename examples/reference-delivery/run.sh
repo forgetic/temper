@@ -80,18 +80,20 @@ sleep_short() { sleep 0.2 2>/dev/null || sleep 1; }
 
 usage() {
     cat <<EOF
-usage: ./run.sh [start|multi-repo|stop|validate|validate-multi-repo|help]
+usage: ./run.sh [start|multi-repo|single-repo|stop|validate|validate-multi-repo|help]
 
-  start (default)      run the fixed reviewer-gated single-repo demo
-  multi-repo           run the cross-repo fan-out demo across $REPO and $CANARY_REPO
+  start (default)      run the cross-repo fan-out demo across $REPO and $CANARY_REPO
+  multi-repo           alias for start
+  single-repo          run the fixed reviewer-gated single-repo demo
   stop                 tear down a previous run via run/*.pid
-  validate             inspect retained logs for reviewer-gated landing evidence
+  validate             inspect the active run (cross-repo if present, otherwise single-repo logs)
   validate-multi-repo  inspect live Forgejo state for fan-out/landing evidence
   help                 show this message
 
-The single-repo demo intentionally has no config knobs: repo, ports, cadences,
-jig fixture, and binary locations are fixed in this script. The multi-repo demo
-is also fixed and provisions exactly $REPO plus $CANARY_REPO.
+The default reference-delivery demo intentionally provisions exactly $REPO plus
+$CANARY_REPO so one source intake can fan out to two repo-scoped child issues.
+The optional single-repo demo is also fixed: repo, ports, cadences, jig fixture,
+and binary locations are fixed in this script.
 EOF
 }
 
@@ -550,13 +552,13 @@ validate_absent() {
     return 0
 }
 
-cmd_validate() {
+cmd_validate_single() {
     _ok=0
     _run_log="$LOG_DIR/run.log"
     _provision_log="$LOG_DIR/provision.log"
 
     [ -d "$LOG_DIR" ] || die "no logs/ directory yet; start a run first"
-    log "validating reference-delivery logs under $LOG_DIR"
+    log "validating single-repo reference-delivery logs under $LOG_DIR"
 
     validate_contains "$_provision_log" 'webhook registered url=' \
         'repo webhook registration recorded' || _ok=1
@@ -608,9 +610,12 @@ path, role, field = sys.argv[1:4]
 with open(path, "rb") as fh:
     data = tomllib.load(fh)
 try:
-    value = data["forge"]["users"][role][field]
+    user = data["forge"]["users"][role]
 except KeyError:
-    raise SystemExit(f"missing [forge.users.{role}] {field} in {path}")
+    raise SystemExit(f"missing [forge.users.{role}] in {path}")
+value = user.get(field)
+if field == "user" and (not isinstance(value, str) or not value.strip()):
+    value = role
 if not isinstance(value, str) or not value.strip():
     raise SystemExit(f"empty [forge.users.{role}] {field} in {path}")
 print(value)
@@ -777,7 +782,7 @@ seed_multi_intake() {
 }
 
 validate_multi_repo_state() {
-    [ -f "$MULTI_PARENT_FILE" ] || die "missing $MULTI_PARENT_FILE; run ./run.sh multi-repo first"
+    [ -f "$MULTI_PARENT_FILE" ] || die "missing $MULTI_PARENT_FILE; run ./run.sh start first"
     _parent=$(cat "$MULTI_PARENT_FILE")
     _token=$(credential_field bot token) || die 'cannot read validator token from bot credentials'
     TEMPER_FORGEJO_TOKEN="$_token" \
@@ -796,13 +801,21 @@ cmd_validate_multi_repo() {
     validate_multi_repo_state
 }
 
+cmd_validate() {
+    if [ -f "$MULTI_PARENT_FILE" ]; then
+        cmd_validate_multi_repo
+    else
+        cmd_validate_single
+    fi
+}
+
 monitor_multi() {
     log ''
     log "Forgejo UI:   $BASE_URL"
     log "Source issue: $BASE_URL/$REPO/issues"
     log "Canary repo:  $BASE_URL/$CANARY_REPO"
     log "Logs:         $LOG_DIR/worker-*.log and $LOG_DIR/runner.log"
-    log 'Expected path: one source parent -> two child code issues -> reviewer-approved, green PRs -> child merges -> parent unblocks and merges.'
+    log 'Expected path: one source parent -> two child code issues -> reviewer-approved, green PRs -> child PRs merge -> parent closes.'
     log "Press Ctrl-C (or run './run.sh stop') to tear everything down."
 
     _waited=0
@@ -839,6 +852,10 @@ cmd_multi_repo() {
 }
 
 cmd_start() {
+    cmd_multi_repo
+}
+
+cmd_single_repo() {
     [ -f "$INTAKE_BODY_PATH" ] || die "missing $INTAKE_BODY_PATH"
     [ -f "$WORKFLOW_PATH" ] || die "missing $WORKFLOW_PATH"
     [ -f "$CONFIG_DIR/ci.yml" ] || die "missing $CONFIG_DIR/ci.yml"
@@ -865,6 +882,7 @@ cmd_start() {
 case "${1:-start}" in
     start | "") cmd_start ;;
     multi-repo) cmd_multi_repo ;;
+    single-repo) cmd_single_repo ;;
     stop) cmd_stop ;;
     validate) cmd_validate ;;
     validate-multi-repo) cmd_validate_multi_repo ;;
