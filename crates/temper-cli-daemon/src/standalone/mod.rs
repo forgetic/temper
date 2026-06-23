@@ -260,6 +260,7 @@ async fn run_async(
     emit_worker_status(banner::capacity(&role_names, per_role_capacity));
 
     // --- Webhook route (optional) ---
+    let webhook_enabled = daemon_config.webhook_secret_file.is_some();
     let daemon = if let Some(path) = daemon_config.webhook_secret_file.as_ref() {
         let secret = std::fs::read_to_string(path).map_err(|error| {
             format!(
@@ -271,11 +272,6 @@ async fn run_async(
             secret: secret.trim().to_string(),
             targets: role_feed_targets(&repo_ids, &daemon_config.roles, RoleFeedMode::Wake),
         });
-
-        // §7 trigger line: the in-process webhook receiver is up (the standalone
-        // assembly runs engine+worker+agent in one process, so this listener is
-        // co-resident and these events fire on the `temper daemon` path).
-        emit_trigger_status(banner::webhook_listener(&daemon_config.bind.to_string()));
 
         daemon.with_webhook_and_mechanical(
             forge,
@@ -293,11 +289,18 @@ async fn run_async(
     let server = temper_engine::serve(&handle, &daemon, daemon_config.bind)
         .await
         .map_err(|error| format!("serve failed: {error}"))?;
+
+    let local_addr = server.local_addr();
+    if webhook_enabled {
+        // §7 trigger line: emit only after the socket is actually bound. The
+        // standalone assembly runs engine+worker+agent in one process, so this
+        // listener is co-resident and webhook events fire on the daemon path.
+        emit_trigger_status(banner::webhook_listener(&local_addr.to_string()));
+    }
     // Bound-address detail for operators who need the listener socket; the
     // operator-facing readiness banner is the §7 `trigger: webhook listener up
     // …` line (WI-3), so this stays at debug to keep `RUST_LOG=info` to the §7
     // catalog. (The analogous line in the engine daemon handle is already debug.)
-    let local_addr = server.local_addr();
     let message = serving_debug_message(local_addr);
     tracing::debug!(
         target: "temper::engine",

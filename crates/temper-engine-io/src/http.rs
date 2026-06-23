@@ -20,6 +20,7 @@ use skein::http::h1::http_client::{ClientError, HttpClient, HttpClientConfig, Re
 use skein::http::h1::{
     Http1Listener, Http1ListenerConfig, Method, Request as H1Request, Response as H1Response,
 };
+use skein::net::tcp::TcpListenerBuilder;
 use skein::runtime::RuntimeHandle;
 use skein::server::shutdown::ShutdownSignal;
 
@@ -171,9 +172,18 @@ where
     // authenticate at the application layer (webhook HMAC, job protocol), and
     // never derive absolute URLs from Host, so accept-all is the correct policy.
     let config = Http1ListenerConfig::default();
-    let listener =
-        Http1Listener::bind_with_config(bind, move |request: H1Request| handler(request), config)
-            .await?;
+    // On Unix, fixed-port demos and local daemon restarts should not fail just
+    // because the previous listener left accepted connections in TCP teardown.
+    // Keep SO_REUSEPORT off so an active listener still protects the address.
+    let listener_builder = TcpListenerBuilder::new(bind);
+    #[cfg(unix)]
+    let listener_builder = listener_builder.reuse_addr(true);
+    let tcp_listener = listener_builder.bind().await?;
+    let listener = Http1Listener::from_listener(
+        tcp_listener,
+        move |request: H1Request| handler(request),
+        config,
+    );
 
     let local_addr = listener.local_addr()?;
     let shutdown = listener.shutdown_signal();
