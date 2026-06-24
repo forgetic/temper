@@ -108,7 +108,8 @@ mod tests {
 
     #[test]
     fn state_description_keys_admin_identity_without_plaintext_password() {
-        let json = bare_admin_state_description("initadmin", "secret-password", "admin@example.invalid");
+        let json =
+            bare_admin_state_description("initadmin", "secret-password", "admin@example.invalid");
         assert_eq!(json["kind"], "temper-bare-admin-forgejo");
         assert_eq!(json["admin_user"], "initadmin");
         assert_eq!(json["admin_email"], "admin@example.invalid");

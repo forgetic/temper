@@ -26,23 +26,7 @@ pub(super) fn free_port() -> u16 {
         .port()
 }
 
-pub(super) fn create_site_admin(server: &ForgejoServer) -> String {
-    if let Err(error) = server.run_cli(&[
-        "admin",
-        "user",
-        "create",
-        "--username",
-        ADMIN_USER,
-        "--password",
-        ADMIN_PASSWORD,
-        "--email",
-        "basicadmin@example.invalid",
-        "--admin",
-        "--must-change-password=false",
-    ]) && !error.to_string().to_lowercase().contains("exist")
-    {
-        panic!("creating the site admin failed: {error}");
-    }
+pub(super) fn mint_site_admin_token(server: &ForgejoServer) -> String {
     let token = server
         .run_cli(&[
             "admin",
