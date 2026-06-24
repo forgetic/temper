@@ -16,7 +16,25 @@ quirks, read [Forgejo e2e fixture reference](../reference/forgejo-e2e-fixture.md
 For design rationale, read
 [Daemon e2e topology](../explanation/forgejo-e2e-topology.md).
 
-## Run both scenarios
+## Run the calibrated ignored Forgejo suite
+
+Use the dedicated nextest profile when you want the whole ignored Forgejo/e2e
+set (the root daemon/init/run e2es plus the Forgejo smoke/preflight tests):
+
+```sh
+cargo dev-test-e2e
+# equivalent core command:
+cargo nextest run --workspace --run-ignored only -P e2e
+```
+
+The `e2e` profile caps nextest at 4 test threads. That keeps the live Forgejo
+servers, host-mode runners, daemon/worker processes, and root-e2e lock waiters
+within the capacity of typical shared developer/CI hosts. The root package e2es
+still use nextest's `root-forgejo-e2e` test group (`max-threads = 1`) and the
+profile runs with fail-fast disabled, so the profile changes scheduling without
+hiding test failures.
+
+## Run both daemon scenarios
 
 ```sh
 cargo test --test daemon_forgejo_e2e -- --ignored
@@ -103,20 +121,23 @@ rm -rf /tmp/temper-daemon-forgejo-e2e-* /tmp/temper-forgejo-*
 
 ## Running it in CI
 
-Keep this suite separate from the default hermetic job (the repo's
-`cargo dev-test-full` alias runs it via `--include-ignored`). A dedicated job
-should:
+Keep this suite separate from the default hermetic job. `cargo dev-test-full`
+includes ignored tests via `--run-ignored all`, but a dedicated Forgejo/e2e job
+should use the calibrated profile:
 
 1. allow pinned-binary resolution or pre-stage binaries with
    `BENCH_FORGEJO_BINARY` and `BENCH_FORGEJO_RUNNER_BINARY` (or the legacy
    `TEMPER_FORGEJO_*` aliases);
 2. run on a host that permits child processes, localhost ports, and host-mode
    CI jobs (no containers required by the runner label);
-3. invoke:
+3. invoke the calibrated nextest profile:
 
    ```sh
-   cargo test --test daemon_forgejo_e2e -- --ignored
+   cargo dev-test-e2e
    ```
+
+   Use the expanded form (`cargo nextest run --workspace --run-ignored only -P e2e`)
+   when an environment cannot read the repository's Cargo aliases.
 
 The `forgejo_runner` smoke test is a cheaper preflight for host compatibility.
 
